@@ -186,7 +186,9 @@ def test_0003_upgrades_an_existing_database_without_losing_rows(tmp_path: Path):
             )
         )
 
-    assert run_migrations(engine, migrations) == [3]
+    # Everything from 3 up is pending here, so compute it rather than pinning a
+    # literal that every later migration would have to come back and edit.
+    assert run_migrations(engine, migrations) == [m.version for m in migrations if m.version > 2]
 
     with engine.connect() as conn:
         rows = conn.execute(

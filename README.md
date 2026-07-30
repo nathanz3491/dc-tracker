@@ -646,7 +646,7 @@ floors the score at 1, per the PRD's definition of done.
 this row is right" (PRD open question Q4), and it is the only path from a single
 source to 3.
 
-### Four schema additions beyond the PRD's three tables
+### Five schema additions beyond the PRD's three tables
 
 Each unblocks a stated PRD requirement that the three tables cannot hold:
 
@@ -662,6 +662,42 @@ Each unblocks a stated PRD requirement that the three tables cannot hold:
   without such a member, and a source row requires a `project_id` — on a fetch
   failure there is no project. The table also buys idempotent re-runs.
 - **`project.county`** — ISO queues report county, not city.
+- **`risk` table** — the PRD asks which obstacles could stop a project and how that
+  reads through to chip, cloud and power companies. `project.blocker` is one
+  nullable sentence, and the PRD's own list names seven obstacle kinds that a real
+  project has several of at once. See below.
+
+### Risk is a table, because a sentence cannot be cleared or counted
+
+`project.blocker` survives as a **derived** column — the summary of the most severe
+open risk — so the twelve tracked fields and the export shape are unchanged. But the
+obstacles themselves live in `risk`, one row each, because the single column could
+not do four things the PRD asks for:
+
+- **Hold more than one.** Grid capacity *and* local opposition *and* a transformer
+  lead time is the normal case, not an edge case. One column has to pick.
+- **Ever be cleared.** `upsert._resolve` returns the existing value when a field has
+  no claims, so a blocker could be replaced but never set back to NULL. A resolved
+  obstacle sat on the row forever.
+- **Be counted.** "How much planned capacity is blocked on transmission in ERCOT" is
+  the question that carries the read-through, and free text cannot answer it. A
+  closed `category` vocabulary can.
+- **Survive the evidence gate.** The gate requires a non-numeric value to appear
+  verbatim in a quote, but the prompt asked the model to *write* one sentence naming
+  the obstacle — and a written sentence is a paraphrase, so it can never be a
+  verbatim substring. Both blockers in the live database fail the current gate
+  against their own article text; they are survivors of the older label-trusting
+  gate. Coverage was heading to zero, not up.
+
+The last point is why `risk` splits the two apart: `summary` may be a paraphrase,
+and `quote` holds the verified verbatim sentence beside it. That is the same
+distinction `notes` already draws — a summary is never a citable claim — and it means
+the gate did not have to be weakened anywhere to make obstacles storable.
+
+Severity is `watch` / `material` / `blocking`, ordered, and that order is
+load-bearing: it decides which risk becomes `project.blocker`. A source that names an
+obstacle without stating any effect gets `watch`, the conservative direction, because
+`blocker` is the field an operator acts on.
 
 ### The database is not committed
 

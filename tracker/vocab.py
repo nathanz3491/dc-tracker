@@ -36,6 +36,79 @@ Phase = Literal["announced", "permitting", "construction", "operational", "pause
 #: the row to `tracker review` instead of silently asserting "announced".
 DEFAULT_PHASE: Final[str] = "announced"
 
+# --- risk.category ---------------------------------------------------------
+#: What is obstructing a project. Grouped by what an analyst reads through to:
+#: power, government, supply chain, capital, demand, and the site's neighbours.
+#:
+#: A closed vocabulary rather than free text because the whole point is to be able
+#: to ask "how much planned capacity is blocked on transmission" across projects.
+#: One sentence per project cannot answer that; these can.
+RISK_CATEGORIES: Final[tuple[str, ...]] = (
+    # Power
+    "grid_capacity",  # the local grid cannot supply the load
+    "transmission",  # substation or line construction lags the campus
+    # Government
+    "permitting",  # approvals outstanding or taking longer than planned
+    "environmental",  # environmental review, air permit, emissions
+    # Supply chain
+    "equipment_supply",  # transformers, switchgear, chillers
+    "chip_supply",  # accelerator allocation
+    # Capital and demand
+    "financing",  # funding not secured
+    "offtake",  # no committed customer for the capacity
+    # The site's neighbours
+    "community_opposition",  # residents, litigation, referendum, noise
+    "water",  # supply, discharge, or aquifer impact
+    #: A human asserted an obstacle without saying which kind. Reachable only from
+    #: `ingest manual` and the 0004 backfill of the old free-text `blocker` column
+    #: — the extractor always classifies, because an unclassified risk cannot be
+    #: aggregated and aggregation is the reason this table exists.
+    "unclassified",
+)
+
+RiskCategory = Literal[
+    "grid_capacity",
+    "transmission",
+    "permitting",
+    "environmental",
+    "equipment_supply",
+    "chip_supply",
+    "financing",
+    "offtake",
+    "community_opposition",
+    "water",
+    "unclassified",
+]
+
+# --- risk.severity ---------------------------------------------------------
+#: Ordered least to most severe. **The order is load-bearing**: `project.blocker`
+#: is derived as the summary of the most severe open risk, so reordering this tuple
+#: silently changes which obstacle every project reports.
+#:
+#:   watch     — raised, but no stated effect on schedule or scope
+#:   material  — a source says the schedule or the scope moved
+#:   blocking  — work has stopped; should agree with phase paused/cancelled
+RISK_SEVERITIES: Final[tuple[str, ...]] = ("watch", "material", "blocking")
+
+RiskSeverity = Literal["watch", "material", "blocking"]
+
+#: Written when a source names an obstacle but states no effect on the project.
+#: The conservative direction on purpose: overstating severity turns a mention into
+#: a blocker, and `blocker` is the field an operator acts on.
+DEFAULT_RISK_SEVERITY: Final[str] = "watch"
+
+# --- risk.status -----------------------------------------------------------
+#: `open` counts toward `project.blocker`; the other two do not. This is what the
+#: old free-text column could not express — `_resolve` returns the existing value
+#: when a field has no claims, so a `blocker` string could be replaced but never
+#: cleared, and a resolved obstacle sat on the row forever.
+RISK_STATUSES: Final[tuple[str, ...]] = ("open", "resolved", "superseded")
+
+RiskStatus = Literal["open", "resolved", "superseded"]
+
+#: The one status that means "this is obstructing the project today".
+OPEN_RISK_STATUS: Final[str] = "open"
+
 # --- source.source_type ----------------------------------------------------
 SOURCE_TYPES: Final[tuple[str, ...]] = (
     "iso_queue",

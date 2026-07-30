@@ -87,6 +87,29 @@ initial build of the v1 PRD.
   most projects have no blocker. Fields whose absence carries no information are
   reported as unmeasurable rather than as a low score, and the report closes with
   the measurable fields that have the most rows left to fill.
+- **A `risk` table** (`migrations/0004_risk.sql`) — obstacles as typed, dated,
+  severity-ranked rows with their own citation, replacing the single free-text
+  `project.blocker`. That column could not hold more than one obstacle when the
+  PRD's own list names seven; could never be cleared, because `upsert._resolve`
+  returns the existing value when a field has no claims, so a resolved obstacle sat
+  on the row forever; could not be counted, which is what the chip/cloud/power
+  read-through needs; and could not survive the evidence gate, since the prompt
+  asked the model to *write* a sentence and a paraphrase is never a verbatim
+  substring — both blockers in the live database fail the current gate against
+  their own article text.
+
+  `category` is a closed vocabulary mapped to the PRD's obstacle list
+  (`grid_capacity`, `transmission`, `permitting`, `environmental`,
+  `equipment_supply`, `chip_supply`, `financing`, `offtake`,
+  `community_opposition`, `water`, plus `unclassified`). `severity` is
+  `watch`/`material`/`blocking`, **ordered** — that order decides which risk
+  becomes `project.blocker`. `summary` may be a paraphrase and `quote` holds the
+  verified verbatim sentence beside it, the same split `notes` already draws, so
+  the gate needed no weakening.
+
+  0004 backfills any existing `blocker` into an `unclassified` risk carrying the
+  source that asserted it, so upgrading loses nothing. Verified against a copy of
+  the live database: both rows migrated, both cited.
 - **A third discovery tier, `risk_signal`, so obstacle news reaches the queue.**
   Every `signal` term was announcement-shaped — announce, expand, invest, build,
   campus, megawatt — which silently discarded every article about a project going

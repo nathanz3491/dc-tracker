@@ -28,7 +28,16 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
-from tracker.vocab import EVENT_TYPES, PHASES, SOURCE_TYPES, URL_STATUSES, sql_in
+from tracker.vocab import (
+    EVENT_TYPES,
+    PHASES,
+    RISK_CATEGORIES,
+    RISK_SEVERITIES,
+    RISK_STATUSES,
+    SOURCE_TYPES,
+    URL_STATUSES,
+    sql_in,
+)
 
 #: Server-side default matching the SQL, so the drift test sees identical
 #: `dflt_value`. Application code sets timestamps explicitly (upsert.py needs
@@ -89,6 +98,9 @@ class Project(Base):
         back_populates="project", cascade="all, delete-orphan", passive_deletes=True
     )
     events: Mapped[list[Event]] = relationship(
+        back_populates="project", cascade="all, delete-orphan", passive_deletes=True
+    )
+    risks: Mapped[list[Risk]] = relationship(
         back_populates="project", cascade="all, delete-orphan", passive_deletes=True
     )
 
@@ -213,3 +225,55 @@ class Event(Base):
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return f"<Event {self.event_type}@{self.event_date} p={self.project_id}>"
+
+
+class Risk(Base):
+    """One obstacle to one project, typed and cited.
+
+    Replaces the single free-text `project.blocker`, which could hold only one
+    obstacle, could never be cleared once set, and could not be aggregated. That
+    column survives as a value derived from these rows — see
+    `upsert._derive_blocker`.
+    """
+
+    __tablename__ = "risk"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("project.id", ondelete="CASCADE"), nullable=False
+    )
+    category: Mapped[str] = mapped_column(Text, nullable=False)
+    severity: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'open'"))
+
+    #: Allowed to be a paraphrase; `quote` beside it is the evidence.
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    quote: Mapped[str | None] = mapped_column(Text)
+
+    first_seen: Mapped[dt.date | None] = mapped_column(Date)
+    resolved_at: Mapped[dt.date | None] = mapped_column(Date)
+    delay_days: Mapped[int | None] = mapped_column(Integer)
+
+    source_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("source.id", ondelete="SET NULL")
+    )
+
+    project: Mapped[Project] = relationship(back_populates="risks")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id", "category", "first_seen", name="uq_risk_project_category_seen"
+        ),
+        CheckConstraint(sql_in("category", RISK_CATEGORIES), name="ck_risk_category"),
+        CheckConstraint(sql_in("severity", RISK_SEVERITIES), name="ck_risk_severity"),
+        CheckConstraint(sql_in("status", RISK_STATUSES), name="ck_risk_status"),
+        CheckConstraint("quote IS NULL OR length(quote) <= 500", name="ck_risk_quote_len"),
+        CheckConstraint("delay_days IS NULL OR delay_days >= 0", name="ck_risk_delay_days"),
+        CheckConstraint("resolved_at IS NULL OR status <> 'open'", name="ck_risk_resolved_at"),
+        Index("ix_risk_project_id", "project_id"),
+        Index("ix_risk_category", "category"),
+        Index("ix_risk_status", "status"),
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return f"<Risk {self.category}/{self.severity} {self.status} p={self.project_id}>"
