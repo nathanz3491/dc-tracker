@@ -55,6 +55,30 @@ initial build of the v1 PRD.
   been re-read recently, which is how project data gets *updated* rather than only
   added. Placeholder URLs are excluded, being unfetchable by definition.
 - `tracker list --limit N`, which reports the total it capped ("2 of 3").
+- **`tracker ingest geo`** and `tracker/ingest/geo.py` — derives `county`, `lat`
+  and `lon` from two free US Census files (place-to-county crosswalk and the 2024
+  place gazetteer). No API key, no LLM, no per-row cost. Three of the twelve fields
+  are a lookup rather than a research problem: articles write "Mount Pleasant,
+  Wisconsin" without the county, and never print coordinates at all — which is why
+  `lat`/`lon` were 0%, the evidence gate having correctly discarded every
+  unquotable value the model produced. On the live database this moved `county`
+  from 49% to 80% and coordinates from 0% to 89%.
+
+  It refuses to guess two things. A city spanning several counties (Houston and
+  Austin touch four each) leaves `county` NULL and is reported, because choosing
+  one would invent a fact — that is what holds county to 80% rather than 100%. And
+  every derived coordinate discloses in its own excerpt that it is the centre of
+  the place, not the project site.
+
+  Consolidated city-counties are resolved by alias: Census publishes Augusta as
+  "Augusta-Richmond County consolidated government (balance)", and without the
+  alias Augusta GA and Indianapolis IN were the only project cities that failed to
+  match. Exact names always win over aliases.
+- `confidence` now excludes any source whose `extractor` begins with `derived:`
+  before scoring, and `SourceView` carries `extractor` to make that visible. A
+  Census row is a real, checkable citation but it is not testimony about the
+  project; counting it would let one press release plus a lookup read as two
+  independent domains and reach confidence 3.
 - **`tracker gaps`** and `tracker/gaps.py` — per-field coverage measured against
   the rows where the field can legitimately be set, not against every project.
   Raw NULL counts pointed effort at work that cannot succeed: 61 announced

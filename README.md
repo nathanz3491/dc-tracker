@@ -238,6 +238,34 @@ tracker queue --failed        # what could not be read, grouped by host
 tracker sync --retry-failed   # re-attempt them
 ```
 
+### Seeing where the data is thin
+
+```bash
+tracker gaps
+```
+
+Per-field coverage measured against the rows where the field can legitimately be
+set — not against every project. That distinction matters more than it sounds:
+`mw_built` looked 13% covered while 61 of the 90 projects were merely *announced*,
+so nothing was built on any of them and a NULL was the correct answer. Counting
+those as misses pointed effort at work that could never succeed. Fields whose
+absence carries no information (`blocker`, `customer`) report `n/a` rather than a
+low score, and the run ends with the measurable fields that have the most rows left
+to fill.
+
+### Filling county and coordinates without an LLM
+
+```bash
+tracker ingest geo --dry-run
+tracker ingest geo
+```
+
+Derives `county`, `lat` and `lon` from US Census reference data — no API key, no
+LLM, no per-row cost. The two files are gitignored (3.8 MB of national lookup
+tables); the command prints their download URLs if they are missing. See
+"Deriving county and coordinates" below for why this is a lookup rather than a
+search problem, and what it deliberately refuses to guess.
+
 ### Or run the phases separately
 
 ```bash
@@ -454,6 +482,63 @@ paraphrasing the article into a citation that reads correctly but was never
 written — which is precisely how a fabricated number acquires a source. A prompt
 instruction is a request; the gate is a mechanism, and a guess is thrown away
 regardless of what the model claims about it.
+
+**The gate matches values, not field labels.** It used to require a quote *tagged*
+with each field's own name, which quietly made the model's bookkeeping a condition
+of truth. T5@Augusta returned `mw_planned: 200` together with the sentence "…a
+140-acre, 200 megawatt campus in Georgia", filed that quote under `name`, and lost
+the capacity. Measured across the first 90 projects, the labelling requirement
+discarded **89 correctly-evidenced values from 64 projects** — 60 of them `phase`,
+which being NOT NULL silently became the `announced` default, so the stored phase
+distribution described the gate rather than the projects.
+
+A value now survives if any *verified* quote actually asserts it, whichever field
+the model filed it under. This is strictly stronger than what it replaced:
+quantities are compared after normalization (so "1.2GW" evidences `1200.0`), which
+means a genuine sentence citing a *different* number can no longer launder an
+invented value — something the old label-only check permitted, since a labelled
+quote never had to contain the number it was cited for.
+
+Two fields need different treatment and get it. `phase` is a judgement an article
+never spells out, so it matches on wording ("broke ground" → `construction`).
+`blocker` and `notes` are paraphrases — a correct summary like "grid
+interconnection delays" shares no substring with "the project awaits two
+345-kilovolt upgrades" — so they keep the label check.
+
+### Deriving county and coordinates
+
+Three of the twelve fields are a lookup, not a research problem, and no amount of
+searching fixes them:
+
+* An article writes "Mount Pleasant, Wisconsin" and essentially never adds "Racine
+  County", so `county` sat at 44%.
+* Articles do not print coordinates at all, so `lat`/`lon` sat at **0%** — the
+  evidence gate correctly discarded every value the model ever produced for them,
+  because none could be quoted.
+
+`tracker ingest geo` derives all three from two free US Census files (no API key,
+no rate limit). On the current database that moved `county` from 49% to 80% and
+`lat`/`lon` from 0% to 89%, at zero LLM cost.
+
+Two honesty constraints shape it:
+
+1. **A place centroid is not the site.** "Abilene, TX" resolves to the middle of
+   Abilene, kilometres from the campus. Fine for a dot on a national map, wrong for
+   anything else, so every derived coordinate says so in its own excerpt: "the
+   centre of the place, NOT the project site."
+2. **A city spanning several counties has no derivable county.** Houston and Austin
+   touch four each. Picking one would invent a fact, so `county` stays NULL and the
+   run reports which cities were skipped and why. That is what holds `county` to
+   80% rather than 100%, and the remaining 20% is genuinely not derivable from a
+   city name — it needs a site address.
+
+A derived row is a real citation (it points at the Census file, and a reviewer can
+check the mapping by hand) but it is **not testimony about the project**, so
+`confidence` excludes any source whose `extractor` starts with `derived:` before
+scoring. Otherwise one press release plus a Census lookup would read as two
+independent domains and reach confidence 3 — the score reserved for corroborated
+facts. `county`, `lat` and `lon` are all `FILL_ONLY`, so a value an article really
+stated is never overwritten by a lookup.
 
 ### Crawl4AI fetches, it does not extract
 

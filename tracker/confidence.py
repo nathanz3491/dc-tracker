@@ -85,6 +85,12 @@ CONFLICT_TOLERANCE = 0.20
 #: contributed the "strongest source".
 PLACEHOLDER_MARKER = "PLACEHOLDER"
 
+#: `source.extractor` prefix marking a row computed from reference data rather than
+#: read from a publication. Such a source cites a real, checkable document, so it
+#: satisfies traceability — but it is not testimony about the project and must not
+#: move the score. See :func:`compute`.
+DERIVED_PREFIX = "derived:"
+
 #: Multi-part public suffixes we must not truncate to two labels, or
 #: "bbc.co.uk" and "guardian.co.uk" would collapse into one "source".
 _COMPOUND_SUFFIXES = frozenset(
@@ -119,6 +125,7 @@ class SourceView:
     url: str
     fields: str | None = None
     claims: dict[str, object] = dc_field(default_factory=dict)
+    extractor: str | None = None
 
     @classmethod
     def from_row(cls, row) -> SourceView:
@@ -139,7 +146,13 @@ class SourceView:
             url=row.url or "",
             fields=getattr(row, "fields", None),
             claims=parsed,
+            extractor=getattr(row, "extractor", None),
         )
+
+
+def is_derived(source: SourceView) -> bool:
+    """True when this row was computed from reference data, not reported."""
+    return (source.extractor or "").startswith(DERIVED_PREFIX)
 
 
 @dataclass(frozen=True)
@@ -264,6 +277,16 @@ def compute(
     sources = [s for s in sources if PLACEHOLDER_MARKER not in (s.url or "")]
     if placeholders:
         reasons.append(f"ignored {placeholders} placeholder citation(s)")
+
+    # A derived source carries geography, not testimony. The Census confirms that
+    # Mount Pleasant sits in Racine County; it says nothing about whether this data
+    # center exists or how large it is. Counting one as an independent domain would
+    # let a single press release reach 3 by being "corroborated" about a city.
+    derived = sum(1 for s in sources if is_derived(s))
+    sources = [s for s in sources if not is_derived(s)]
+    if derived:
+        reasons.append(f"{derived} derived source(s) do not corroborate")
+
     if not sources:
         return Score(0, (*reasons, "no real citations"))
 
@@ -332,6 +355,7 @@ def needs_review(score: int) -> bool:
 
 __all__ = [
     "CONFLICT_TOLERANCE",
+    "DERIVED_PREFIX",
     "KEY_FIELDS",
     "MIN_FIELDS_FOR_HIGH_CONFIDENCE",
     "OFFICIAL_TYPES",
@@ -345,6 +369,7 @@ __all__ = [
     "find_agreements",
     "find_conflicts",
     "independent_domains",
+    "is_derived",
     "needs_review",
     "registrable_domain",
 ]

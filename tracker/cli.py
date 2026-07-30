@@ -678,6 +678,67 @@ def stats() -> None:
             console.print(table)
 
 
+@ingest_app.command("geo")
+def ingest_geo(
+    data_dir: Annotated[
+        Path | None,
+        typer.Option("--data-dir", help="Where the Census files live.", show_default=False),
+    ] = None,
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="Report without writing.")] = False,
+) -> None:
+    """Derive county and coordinates from US Census reference data.
+
+    No API key, no LLM, no network once the two reference files are downloaded.
+    `county` is left unset for a city that spans several counties, because
+    choosing one would be inventing the answer, and every coordinate is recorded
+    as the centre of the place rather than the project site.
+    """
+    from tracker.ingest.geo import GeoDataMissing
+    from tracker.ingest.geo import run as run_geo
+
+    root = data_dir or (_db_path().parent / "raw" / "census")
+    engine, _ = init_db(_db_path())
+
+    try:
+        release_lock = acquire_write_lock(_db_path())
+    except AlreadyRunning as exc:
+        _fail(str(exc))
+        raise
+    atexit.register(release_lock)
+
+    try:
+        with _explain_db_locks(), session_scope(engine, commit=not dry_run) as session:
+            report = run_geo(session, data_dir=root, dry_run=dry_run)
+    except GeoDataMissing as exc:
+        _fail(str(exc))
+        raise
+
+    if dry_run:
+        console.print("[yellow]dry run[/yellow] — nothing written")
+    console.print(
+        f"considered [bold]{report.considered}[/bold] project(s); "
+        f"filled county on [bold]{report.county_filled}[/bold], "
+        f"coordinates on [bold]{report.coords_filled}[/bold]"
+    )
+    if report.already_complete:
+        console.print(f"[dim]{report.already_complete} already had both[/dim]")
+    if report.no_city:
+        console.print(f"[dim]{report.no_city} have no city to look up[/dim]")
+    if report.spans_counties:
+        console.print(
+            f"[yellow]{report.spans_counties}[/yellow] city/cities span several counties, "
+            "so county stays unset:"
+        )
+        for name in report.multi_county_places:
+            console.print(f"  [dim]{name}[/dim]")
+    if report.unmatched:
+        console.print(
+            f"[yellow]{report.unmatched}[/yellow] city/cities are not in the Census file:"
+        )
+        for name in report.unmatched_places:
+            console.print(f"  [dim]{name}[/dim]")
+
+
 @app.command()
 def gaps() -> None:
     """Per-field coverage, measured against the rows where the field applies.

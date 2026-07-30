@@ -14,6 +14,12 @@ data/*
 !data/raw/
 !data/raw/**
 !data/.gitkeep
+
+# Census reference data is the exception to the rule above: 3.8 MB of national
+# lookup tables that are not evidence of any project claim, are byte-identical for
+# everyone, and are re-downloadable from a stable URL. `tracker ingest geo` names
+# the URLs when they are absent. See README "Deriving county and coordinates".
+data/raw/census/
 !data/exports/
 data/exports/*
 !data/exports/.gitkeep
