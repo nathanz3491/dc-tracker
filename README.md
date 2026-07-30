@@ -545,6 +545,19 @@ still has to match, so a transformer shortage at a steel mill is still dropped, 
 out. The tier is absent-by-default in `load_config`, so a `feeds.toml` predating it
 behaves exactly as before.
 
+Measured over one live poll of all eight feeds: **200 entries, 38 kept by the two
+tiers, 44 by the three.** Of the six the risk tier added, two were real project
+obstacles ("New Jersey town sued for $300m by data center developer", "Behind the New
+York data center pause is legislation…") and four were topical commentary. That ratio
+is the point rather than a disappointment — see the triage note above: the queue is a
+human checkpoint, and over-collecting is cheaper than tuning a filter until it
+silently drops real obstacles.
+
+Short terms are padded (`" sue "`, not `"sue"`) for the same reason `" mw"` is in the
+signal tier: terms are plain substrings, and an unpadded `sue` matched *is·sue·d*,
+which put "PJM Issued First Backup-Generator Warnings" in the queue as litigation
+news on the first live run.
+
 **This is not a lever for `blocker` coverage.** `tracker gaps` reports that field as
 unmeasurable because absence is usually the truth: most projects have no blocker,
 and chasing a percentage there rewards inventing obstacles. The point of the tier is

@@ -281,6 +281,35 @@ def test_risk_term_ignores_the_other_tiers(spec):
     assert spec.risk_term("Microsoft breaks ground on a new campus") is None
 
 
+@pytest.mark.parametrize(
+    "headline",
+    [
+        "PJM Issued First Backup-Generator Warnings During Heat Wave",
+        "The tissue of the argument",
+        "Utilities will reissue the notice",
+    ],
+)
+def test_short_risk_terms_do_not_match_inside_a_word(spec, headline):
+    """Terms are plain substrings, so "sue" hits "issued" unless it is padded.
+
+    Found on a live run: the PJM headline below was queued as litigation news. Same
+    class of bug the signal tier already guards with " mw".
+    """
+    assert spec.risk_term(headline) is None
+
+
+@pytest.mark.parametrize(
+    "headline",
+    [
+        "Residents sue to block the data center",
+        "Town sues data center developer",
+        "Neighbors sued the county over the approval",
+    ],
+)
+def test_the_padded_litigation_terms_still_match(spec, headline):
+    assert spec.risk_term(headline) is not None
+
+
 def test_selection_applies_the_age_cutoff(spec):
     # topic_implied mirrors the shipped config for this outlet.
     entries = parse_feed(

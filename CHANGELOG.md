@@ -201,6 +201,13 @@ initial build of the v1 PRD.
   The list is operator-editable in `seed/feeds.toml` and absent from a config
   entirely means the filter behaves exactly as before.
 
+  Measured over one live poll of all eight feeds: 200 entries, 38 kept by the two
+  tiers, 44 by the three, of which two were real project obstacles and four topical
+  commentary — the same over-collect-and-triage ratio the queue is designed for.
+  Short terms are padded (`" sue "`) like `" mw"` in the signal tier: unpadded,
+  `sue` matched *issued* and queued "PJM Issued First Backup-Generator Warnings" as
+  litigation news.
+
   This is deliberately **not** a lever for `blocker` coverage; `tracker gaps`
   reports that field as unmeasurable precisely because absence is usually the
   truth. The point is to stop discarding the articles where an obstacle is real.

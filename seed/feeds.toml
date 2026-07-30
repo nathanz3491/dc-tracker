@@ -162,8 +162,13 @@ risk_signal = [
   # cheaper than a keyword rule that drops real obstacles.
   "moratorium",
   "lawsuit",
-  "sue",
-  "sued",
+  # Padded, like " mw" in the signal tier above. `normalize_haystack` surrounds the
+  # haystack with spaces and terms are plain substrings, so a bare "sue" matches
+  # inside "issued" — which put "PJM Issued First Backup-Generator Warnings" in the
+  # queue on a live run.
+  " sue ",
+  " sues ",
+  " sued ",
   "permit",
   "zoning",
   "rezoning",
