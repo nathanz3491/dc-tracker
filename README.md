@@ -119,9 +119,33 @@ The keys are not interchangeable, and the wrong host answers *invalid api key* â
 which reads like a bad key rather than a bad URL. `tracker ingest crawl --check`
 tells you which you have in one cheap call.
 
-### Finding and extracting
+### One command for the whole loop
 
-Needs the key set as above:
+```bash
+tracker sync
+```
+
+Four phases: **discover** new candidate articles from the feeds, **extract** them
+into the database, **refresh** existing projects by re-reading their sources, then
+**list** the result. Needs the API key set as above.
+
+Both crawl phases are capped, because each article costs an LLM call:
+
+```bash
+tracker sync --limit 25 --refresh-limit 25 --refresh-days 14
+tracker sync --dry-run          # see what a run would do, spend nothing
+tracker sync --browser          # escalate blocked pages, needs the 'crawl' extra
+tracker sync --skip-discover    # work the existing queue only
+tracker sync --skip-refresh     # new projects only
+```
+
+The refresh phase is what keeps data current rather than merely growing: articles
+get edited, and a campus that was "announced" last quarter is under construction
+now. Re-reading a known citation updates every field it supports. It deliberately
+bypasses the article cache â€” serving a cached copy would guarantee the answer is
+"nothing changed".
+
+### Or run the phases separately
 
 ```bash
 tracker discover --since-days 45

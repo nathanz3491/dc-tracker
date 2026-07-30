@@ -78,6 +78,14 @@ err = Console(stderr=True, width=_width())
 #: Rendered for a NULL field. Deliberately ASCII, for the same reason as TABLE_BOX.
 NA = "-"
 
+#: Shown when a fetch was blocked. The backslash escapes the bracket for Rich,
+#: which would otherwise read "[crawl]" as a style tag and delete the extra's
+#: name from the very message telling the operator what to install.
+BROWSER_HINT = (
+    "[dim]some fetches failed. Several trade-press sites block plain HTTP; "
+    r'retry with --browser after: pip install -e ".\[crawl]" && crawl4ai-setup[/dim]'
+)
+
 #: Set by the top-level --db option and consumed by each subcommand.
 _state: dict[str, object] = {"db": None}
 
@@ -214,7 +222,7 @@ def ingest_crawl(
         bool,
         typer.Option(
             "--browser",
-            help="Allow escalation to Crawl4AI for pages plain HTTP cannot read. Needs the [crawl] extra.",
+            help="Allow escalation to Crawl4AI for pages plain HTTP cannot read. Needs the 'crawl' extra.",
         ),
     ] = False,
     force: Annotated[
@@ -449,6 +457,9 @@ def list_projects(
     sort: Annotated[
         str, typer.Option("--sort", help="mw | investment | date | confidence | name")
     ] = "mw",
+    limit: Annotated[
+        int | None, typer.Option("--limit", help="Show at most this many rows.")
+    ] = None,
 ) -> None:
     """List projects as a table."""
     if phase and phase not in PHASES:
@@ -467,13 +478,26 @@ def list_projects(
     engine = _read_engine()
     with session_scope(engine, commit=False) as session:
         stmt = _filtered(select(Project), company, state, phase, min_confidence)
-        projects = session.scalars(stmt.order_by(*order, Project.id.asc())).all()
+        total = session.scalar(
+            select(func.count()).select_from(
+                _filtered(select(Project.id), company, state, phase, min_confidence).subquery()
+            )
+        )
+        stmt = stmt.order_by(*order, Project.id.asc())
+        if limit:
+            stmt = stmt.limit(limit)
+        projects = session.scalars(stmt).all()
 
         if not projects:
             console.print("[yellow]no projects match[/yellow]")
             return
 
-        table = Table(title=f"{len(projects)} project(s)", header_style="bold", box=TABLE_BOX)
+        shown = (
+            f"{len(projects)} of {total} project(s)"
+            if total > len(projects)
+            else f"{total} project(s)"
+        )
+        table = Table(title=shown, header_style="bold", box=TABLE_BOX)
         table.add_column("id", justify="right")
         table.add_column("company")
         table.add_column("name")
@@ -610,6 +634,185 @@ def stats() -> None:
             for value, count in rows:
                 table.add_row(str(value), str(count))
             console.print(table)
+
+
+@app.command()
+def sync(
+    since_days: Annotated[
+        int, typer.Option("--since-days", help="Discover articles no older than this.")
+    ] = 45,
+    limit: Annotated[
+        int, typer.Option("--limit", help="Max NEW candidates to extract this run.")
+    ] = 15,
+    refresh_days: Annotated[
+        int,
+        typer.Option("--refresh-days", help="Re-read a project's sources older than this."),
+    ] = 30,
+    refresh_limit: Annotated[
+        int, typer.Option("--refresh-limit", help="Max existing sources to re-read.")
+    ] = 15,
+    browser: Annotated[
+        bool,
+        typer.Option(
+            "--browser", help="Escalate blocked pages to Crawl4AI. Needs the 'crawl' extra."
+        ),
+    ] = False,
+    skip_discover: Annotated[
+        bool, typer.Option("--skip-discover", help="Do not poll feeds; work the existing queue.")
+    ] = False,
+    skip_refresh: Annotated[
+        bool, typer.Option("--skip-refresh", help="Do not re-read existing projects' sources.")
+    ] = False,
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="Do everything except write to the database.")
+    ] = False,
+    show_rows: Annotated[int, typer.Option("--rows", help="Projects to list at the end.")] = 30,
+) -> None:
+    """Everything in one command: find new projects, refresh known ones, then list.
+
+    Four phases:
+
+    \b
+      1. discover   poll the feeds and queue new candidate articles
+      2. extract    crawl the queue -> new projects in the database
+      3. refresh    re-read existing projects' sources -> updated fields
+      4. list       show the result
+
+    Both crawl phases are capped (--limit, --refresh-limit) because each article
+    costs an LLM call. Use --dry-run to see what a run would do before paying for
+    it, and raise the caps once you are happy with what it finds.
+    """
+    from tracker.ingest import crawl
+    from tracker.ingest import discover as disc
+    from tracker.llm import MiniMaxExtractor, MissingApiKey
+    from tracker.upsert import recompute_confidence
+
+    settings = get_settings()
+
+    # Checked before any network call: every later phase needs it, and failing
+    # here costs nothing rather than after a round of feed polling.
+    try:
+        extractor = MiniMaxExtractor(settings)
+    except MissingApiKey as exc:
+        _fail(str(exc))
+        return
+
+    escalate = None
+    if browser:
+        from tracker.ingest.fetch import Crawl4AIFetcher
+
+        escalate = Crawl4AIFetcher(settings)
+
+    engine, _ = init_db(_db_path())
+    cache_dir = install_root() / ".cache" / "articles"
+    totals = {"queued": 0, "new": 0, "refreshed": 0, "failed": 0}
+
+    # --- 1. discover --------------------------------------------------------
+    if skip_discover:
+        console.print("[dim]1/4 discover — skipped[/dim]")
+    else:
+        console.rule("[bold]1/4 discover[/bold]", align="left")
+        try:
+            with session_scope(engine) as session:
+                report, _ = disc.run(session, since_days=since_days or None, dry_run=dry_run)
+        except disc.DiscoverError as exc:
+            _fail(str(exc))
+            return
+        totals["queued"] = report.queued
+        console.print(
+            f"polled {report.feeds_polled} feed(s), saw {report.entries_seen} entr(ies), "
+            f"queued [bold]{report.queued}[/bold] new candidate(s)"
+        )
+        for name, reason in report.failures:
+            err.print(f"[yellow]feed {name}[/yellow]: {reason}")
+
+    # --- 2. extract new -----------------------------------------------------
+    console.rule("[bold]2/4 extract new[/bold]", align="left")
+    with session_scope(engine, commit=False) as session:
+        pending_urls = [row.url for row in disc.pending(session, limit=limit)]
+        backlog = len(disc.pending(session))
+
+    if not pending_urls:
+        if dry_run and totals["queued"]:
+            console.print(
+                f"queue is empty here because --dry-run rolled back the "
+                f"{totals['queued']} candidate(s) phase 1 found. A real run would "
+                f"extract up to {limit} of them."
+            )
+        else:
+            console.print("queue is empty — nothing new to extract")
+    else:
+        console.print(f"extracting {len(pending_urls)} of {backlog} queued candidate(s)")
+        with session_scope(engine) as session:
+            new_report = crawl.run(
+                session,
+                pending_urls,
+                extractor=extractor,
+                escalate=escalate,
+                settings=settings,
+                dry_run=dry_run,
+                force=True,
+                cache_dir=cache_dir,
+            )
+        totals["new"] = new_report.inserted
+        totals["failed"] += new_report.fetch_error + new_report.parse_error
+        _print_report(new_report, title="new projects")
+        if backlog > len(pending_urls):
+            console.print(
+                f"[dim]{backlog - len(pending_urls)} candidate(s) still queued; "
+                f"raise --limit or run again[/dim]"
+            )
+
+    # --- 3. refresh existing ------------------------------------------------
+    if skip_refresh:
+        console.print("[dim]3/4 refresh — skipped[/dim]")
+    else:
+        console.rule("[bold]3/4 refresh existing[/bold]", align="left")
+        with session_scope(engine, commit=False) as session:
+            stale = crawl.stale_sources(session, older_than_days=refresh_days, limit=refresh_limit)
+        if not stale:
+            console.print(f"no source read more than {refresh_days} day(s) ago — all current")
+        else:
+            console.print(f"re-reading {len(stale)} source(s) not seen in {refresh_days} day(s)")
+            with session_scope(engine) as session:
+                # cache_dir=None on purpose: the point of refreshing is to find out
+                # whether the article changed, and serving it from the local cache
+                # would guarantee the answer is "no".
+                ref_report = crawl.run(
+                    session,
+                    stale,
+                    extractor=extractor,
+                    escalate=escalate,
+                    settings=settings,
+                    dry_run=dry_run,
+                    force=True,
+                    cache_dir=None,
+                )
+            totals["refreshed"] = ref_report.updated
+            totals["failed"] += ref_report.fetch_error + ref_report.parse_error
+            _print_report(ref_report, title="refreshed projects")
+
+    # Confidence is a cache of a pure function, so recompute after any write.
+    if not dry_run:
+        with session_scope(engine) as session:
+            rescored = recompute_confidence(session)
+        if rescored:
+            console.print(f"[dim]recomputed confidence on {rescored} project(s)[/dim]")
+
+    # --- 4. list ------------------------------------------------------------
+    console.rule("[bold]4/4 projects[/bold]", align="left")
+    if dry_run:
+        console.print("[yellow]dry run — nothing was written[/yellow]")
+    list_projects(
+        company=None, state=None, phase=None, min_confidence=None, sort="mw", limit=show_rows
+    )
+
+    console.print(
+        f"\n[bold]sync complete[/bold]  queued {totals['queued']}  "
+        f"new {totals['new']}  refreshed {totals['refreshed']}  failed {totals['failed']}"
+    )
+    if totals["failed"] and not browser:
+        console.print(BROWSER_HINT)
 
 
 @app.command()

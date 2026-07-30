@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from tracker.config import Settings, get_settings
@@ -484,6 +484,33 @@ def already_done(session: Session, urls: list[str]) -> set[str]:
     return {r.url for r in rows}
 
 
+def stale_sources(session: Session, *, older_than_days: int, limit: int | None = None) -> list[str]:
+    """Source URLs of existing projects that have not been re-read recently.
+
+    This is how a project's data gets *updated* rather than merely added: articles
+    are edited, phases advance, and a campus that was "announced" last quarter is
+    under construction now. Re-running a known citation through the same extract
+    path refreshes every field it supports.
+
+    Placeholder URLs are excluded — they are not fetchable and never will be.
+    Oldest first, so a capped run always makes progress on the most stale rows.
+    """
+    from tracker.confidence import PLACEHOLDER_MARKER
+    from tracker.models import Source
+
+    cutoff = utcnow() - dt.timedelta(days=older_than_days)
+    stmt = (
+        select(Source.url, func.min(Source.fetched_at).label("oldest"))
+        .where(Source.fetched_at < cutoff)
+        .where(Source.url.not_like(f"%{PLACEHOLDER_MARKER}%"))
+        .group_by(Source.url)
+        .order_by("oldest")
+    )
+    if limit:
+        stmt = stmt.limit(limit)
+    return [row[0] for row in session.execute(stmt)]
+
+
 def read_urls(path: Path) -> list[str]:
     """One URL per line; `#` comments and blanks ignored."""
     urls: list[str] = []
@@ -653,5 +680,6 @@ __all__ = [
     "read_urls",
     "record_url",
     "run",
+    "stale_sources",
     "truncate",
 ]

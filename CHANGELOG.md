@@ -47,10 +47,18 @@ initial build of the v1 PRD.
   system could find an article to read, so the database only ever held what an
   operator typed in by hand. Uses stdlib `xml.etree` and `tomllib` — no new
   dependency.
+- **`tracker sync`** — the whole pipeline in one command: discover new candidate
+  articles, extract them, refresh existing projects by re-reading their sources,
+  then list. Both crawl phases are capped since each article costs an LLM call,
+  and `--dry-run` previews a run for free.
+- `crawl.stale_sources()` selects the citations of existing projects that have not
+  been re-read recently, which is how project data gets *updated* rather than only
+  added. Placeholder URLs are excluded, being unfetchable by definition.
+- `tracker list --limit N`, which reports the total it capped ("2 of 3").
 - `tracker/export.py`: deterministic Markdown, CSV and JSON export.
 - `tracker/cli.py`: `init`, `ingest {manual,pjm,crawl}`, `discover`, `queue`,
   `list`, `show`, `stats`, `review`, `verify`, `export`, `version`.
-- 655 tests, green offline with no API key and no network. 93% coverage on both
+- 668 tests, green offline with no API key and no network. 93% coverage on both
   `normalize.py` and `confidence.py`. A `network`-marked test checks the feed URLs
   still resolve.
 
@@ -83,6 +91,10 @@ initial build of the v1 PRD.
 
 Found by running the crawl path against the live MiniMax API for the first time:
 
+- Rich read `[crawl]` in the "install the extra" hint as a style tag and
+  deleted it, so the message told the operator to run `pip install -e "."` —
+  omitting the one thing it existed to communicate. Same bug silently emptied
+  the `--browser` help text.
 - **A placeholder URL is no longer treated as a citation.** It is dropped before
   any weighting, so it can neither supply the "strongest source" nor count
   toward domain independence. Observed live: a real Microsoft project reached

@@ -25,6 +25,19 @@ def invoke(db: Path, *args: str):
     return runner.invoke(app, ["--db", str(db), *args])
 
 
+def set_key(monkeypatch, value: str = "test-key") -> None:
+    """Make an API key visible to a command invoked later in this test.
+
+    Setting the environment variable is not enough on its own: `get_settings` is
+    lru_cached, and any earlier command in the test (the `initialized` fixture runs
+    `init`) has already cached a keyless Settings.
+    """
+    from tracker.config import get_settings
+
+    monkeypatch.setenv("TRACKER_MINIMAX_API_KEY", value)
+    get_settings.cache_clear()
+
+
 @pytest.fixture
 def initialized(tmp_path: Path) -> Path:
     db = tmp_path / "t.db"
@@ -428,6 +441,126 @@ def test_discover_against_the_real_feeds(initialized: Path):
     result = invoke(initialized, "discover", "--since-days", "45")
     assert result.exit_code == 0
     assert "| feeds failed  |     0 |" in result.output, "a feed URL has gone stale"
+
+
+# --- sync: the one-command pipeline -----------------------------------------
+
+
+def test_sync_needs_a_key_before_touching_the_network(initialized: Path):
+    """Every phase needs the LLM, so failing here costs nothing.
+
+    Checked before polling feeds specifically so a missing key does not waste a
+    round of HTTP requests first.
+    """
+    result = invoke(initialized, "sync")
+    assert result.exit_code == 2
+    assert "TRACKER_MINIMAX_API_KEY" in result.output
+
+
+def test_sync_runs_all_four_phases(initialized: Path, monkeypatch):
+    """Phases are labelled 1/4..4/4 so a long run is legible while it happens."""
+    set_key(monkeypatch)
+    result = invoke(initialized, "sync", "--skip-discover", "--skip-refresh", "--limit", "1")
+    assert result.exit_code == 0
+    assert "1/4 discover" in result.output
+    assert "2/4 extract new" in result.output
+    assert "3/4 refresh" in result.output
+    assert "4/4 projects" in result.output
+    assert "sync complete" in result.output
+
+
+def test_sync_reports_an_empty_queue_rather_than_failing(initialized: Path, monkeypatch):
+    set_key(monkeypatch)
+    result = invoke(initialized, "sync", "--skip-discover", "--skip-refresh")
+    assert result.exit_code == 0
+    assert "queue is empty" in result.output
+
+
+def test_sync_reports_nothing_stale_rather_than_failing(seeded: Path, monkeypatch):
+    """Placeholder sources are excluded from refresh, so a seeded-only DB is 'current'."""
+    set_key(monkeypatch)
+    result = invoke(seeded, "sync", "--skip-discover", "--refresh-days", "0")
+    assert result.exit_code == 0
+    assert "all current" in result.output
+
+
+def test_sync_ends_with_the_project_table(seeded: Path, monkeypatch):
+    set_key(monkeypatch)
+    result = invoke(seeded, "sync", "--skip-discover", "--skip-refresh")
+    assert "Microsoft" in result.output
+    assert "project(s)" in result.output
+
+
+def test_sync_suggests_browser_only_when_fetches_failed(seeded: Path, monkeypatch):
+    set_key(monkeypatch)
+    result = invoke(seeded, "sync", "--skip-discover", "--skip-refresh")
+    assert "crawl4ai-setup" not in result.output, "nothing failed, so do not suggest it"
+
+
+def test_the_extras_name_survives_rich_markup():
+    """Rich reads "[crawl]" as a style tag and deletes it.
+
+    That silently stripped the extra's name out of the very message telling the
+    operator what to install, leaving `pip install -e "."`.
+    """
+    import io
+
+    from rich.console import Console
+
+    from tracker.cli import BROWSER_HINT
+
+    buffer = io.StringIO()
+    Console(file=buffer, width=200, no_color=True).print(BROWSER_HINT)
+    assert '".[crawl]"' in buffer.getvalue()
+
+
+def test_list_limit_shows_the_total(seeded: Path):
+    result = invoke(seeded, "list", "--limit", "2")
+    assert result.exit_code == 0
+    assert "2 of 3 project(s)" in result.output, "a capped list must say what it hid"
+
+
+# --- refresh selection ------------------------------------------------------
+
+
+def test_stale_sources_excludes_placeholders(seeded: Path):
+    """A placeholder URL is not fetchable, so refresh must never queue it."""
+    from tracker.db import open_db, session_scope
+    from tracker.ingest.crawl import stale_sources
+
+    with session_scope(open_db(seeded), commit=False) as session:
+        assert stale_sources(session, older_than_days=0) == []
+
+
+def test_stale_sources_returns_oldest_first(initialized: Path):
+    from tracker.db import init_db, session_scope
+    from tracker.ingest.crawl import stale_sources
+    from tracker.models import Source
+
+    pid = with_real_source(initialized)
+    engine, _ = init_db(initialized)
+    with session_scope(engine) as session:
+        # Explicit timestamps rather than "now": with older_than_days=0 the cutoff
+        # is the current instant, and a source written microseconds ago may or may
+        # not be strictly older than it.
+        for url, when in (
+            ("https://news.example.com/older/", dt.datetime(2020, 1, 1)),
+            ("https://news.example.com/newer/", dt.datetime(2024, 1, 1)),
+        ):
+            session.add(
+                Source(
+                    project_id=pid,
+                    url=url,
+                    source_type="trade_press",
+                    fetched_at=when,
+                )
+            )
+    with session_scope(engine, commit=False) as session:
+        urls = stale_sources(session, older_than_days=0)
+        assert urls[:2] == [
+            "https://news.example.com/older/",
+            "https://news.example.com/newer/",
+        ]
 
 
 # --- export -----------------------------------------------------------------
