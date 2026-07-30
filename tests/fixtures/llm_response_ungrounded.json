@@ -1,0 +1,43 @@
+{
+  "projects": [
+    {
+      "name": "Fairwater",
+      "company": "Microsoft",
+      "city": "Mount Pleasant",
+      "state": "WI",
+      "country": "US",
+      "mw_planned": 4200,
+      "investment_usd": 99000000000,
+      "phase": "construction",
+      "expected_online": "2027-07-01",
+      "blocker": "Local opposition has halted all permitting indefinitely.",
+      "events": [],
+      "evidence": [
+        {
+          "field": "name",
+          "quote": "Microsoft has begun construction on Fairwater"
+        },
+        {
+          "field": "company",
+          "quote": "Microsoft will operate the campus itself"
+        },
+        {
+          "field": "city",
+          "quote": "a data\ncenter campus in Mount Pleasant, Wisconsin"
+        },
+        {
+          "field": "state",
+          "quote": "MOUNT PLEASANT, Wis."
+        },
+        {
+          "field": "phase",
+          "quote": "Microsoft has begun construction on Fairwater"
+        },
+        {
+          "field": "expected_online",
+          "quote": "The campus is scheduled to be fully operational in the third quarter of 2027, according to sources familiar with the plan."
+        }
+      ]
+    }
+  ]
+}

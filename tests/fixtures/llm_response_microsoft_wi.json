@@ -1,0 +1,94 @@
+Here is the extracted data:
+
+```json
+{
+  "projects": [
+    {
+      "name": "Fairwater",
+      "company": "Microsoft",
+      "customer": null,
+      "city": "Mount Pleasant",
+      "county": "Racine County",
+      "state": "WI",
+      "country": "US",
+      "mw_planned": 900,
+      "mw_built": 150,
+      "investment_usd": 3300000000,
+      "phase": "construction",
+      "first_announced": "2023-03-01",
+      "expected_online": "2027-07-01",
+      "blocker": "American Transmission Company must complete two 345-kilovolt upgrades before the campus can draw its full load.",
+      "notes": "First phase of 150 MW energized January 2026; remainder expected by July 2027.",
+      "events": [
+        {
+          "event_date": "2023-03-01",
+          "event_type": "announced",
+          "description": "Microsoft announced the Racine County project."
+        },
+        {
+          "event_date": "2023-06-15",
+          "event_type": "groundbreaking",
+          "description": "Construction crews broke ground on the site."
+        },
+        {
+          "event_date": "2026-01-01",
+          "event_type": "energized",
+          "description": "First 150 MW phase energized."
+        }
+      ],
+      "evidence": [
+        {
+          "field": "name",
+          "quote": "Microsoft has begun construction on Fairwater, a data\ncenter campus in Mount Pleasant, Wisconsin, that the company says will draw 900\nmegawatts at full buildout."
+        },
+        {
+          "field": "company",
+          "quote": "Microsoft will operate the campus itself and has not announced any third-party\ntenants."
+        },
+        {
+          "field": "city",
+          "quote": "a data\ncenter campus in Mount Pleasant, Wisconsin"
+        },
+        {
+          "field": "county",
+          "quote": "Microsoft first announced the Racine County project in March 2023."
+        },
+        {
+          "field": "state",
+          "quote": "MOUNT PLEASANT, Wis."
+        },
+        {
+          "field": "mw_planned",
+          "quote": "the company says will draw 900\nmegawatts at full buildout"
+        },
+        {
+          "field": "mw_built",
+          "quote": "The first phase, comprising 150 megawatts of capacity, was energized in\nJanuary 2026 and is now serving production workloads."
+        },
+        {
+          "field": "investment_usd",
+          "quote": "The company\nhas committed $3.3 billion to the site"
+        },
+        {
+          "field": "phase",
+          "quote": "Microsoft has begun construction on Fairwater"
+        },
+        {
+          "field": "first_announced",
+          "quote": "Microsoft first announced the Racine County project in March 2023."
+        },
+        {
+          "field": "expected_online",
+          "quote": "Microsoft expects the\nremainder of the campus to come online by July 2027."
+        },
+        {
+          "field": "blocker",
+          "quote": "The principal obstacle is transmission: American Transmission Company must\ncomplete two 345-kilovolt upgrades before the campus can draw its full load."
+        }
+      ]
+    }
+  ]
+}
+```
+
+Hope this helps!

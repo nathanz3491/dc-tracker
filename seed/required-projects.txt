@@ -1,0 +1,20 @@
+# Required projects, one per line. Checked by `tracker verify`.
+#
+# The PRD's definition of done names 30 specific projects, but that list is not in
+# the PRD text and is not on disk. This file is where it goes when it surfaces;
+# until then `tracker verify` reports progress against a target count instead.
+#
+# Format, either:
+#     Company | Project name
+#     Project name
+#
+# Matching is fuzzy: the company is normalized the same way the dedup key is
+# ("Microsoft Corporation" matches "Microsoft"), and the name matches as a
+# substring in either direction.
+#
+# Examples, commented out because this list is the operator's to fill in and an
+# invented list would look exactly like the real deliverable:
+#
+# Microsoft | Fairwater
+# xAI | Colossus
+# Crusoe | Stargate Abilene

@@ -1,0 +1,44 @@
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Database — a build artifact, reproduced by replaying seed/ + data/raw/.
+# See README "Why the database is not committed".
+*.db
+*.db-wal
+*.db-shm
+
+# Data: ignore everything except the raw source snapshots, which ARE the evidence.
+data/*
+!data/raw/
+!data/raw/**
+!data/.gitkeep
+!data/exports/
+data/exports/*
+!data/exports/.gitkeep
+
+# Ingest run artifacts
+.cache/
+runs/
+rejects*.jsonl
+
+# Operator-private seeds (never share)
+seed/private-*.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
+# Tooling
+.pytest_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml

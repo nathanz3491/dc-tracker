@@ -1,0 +1,15 @@
+Project ID,Name,Commercial Name,Transmission Owner,State,County,MW Capacity,MW Energy,MFO,MW In Service,Fuel,Status,Submitted Date,Projected In Service Date,Actual In Service Date,Withdrawal Date,Withdrawn Remarks
+AG1-001,Cardinal Data Center Load,Cardinal Data Center LLC,AEP,OH,Licking,300,300,300,,Natural Gas,Under Study,04/11/2025,12/01/2027,,,
+AG1-002,Microsoft Mount Pleasant,MS Mt Pleasant,ATC,WI,Racine,,250,250,,Solar,Active,03/01/2023,06/01/2026,,,
+AG1-003,Nova Solar I,Nova Solar I LLC,Dominion,VA,Loudoun,150,150,150,,Solar,Under Study,01/15/2025,09/01/2027,,,
+AG1-004,Aligned Hyperscale Campus,Aligned Data Centers,Dominion,Virginia,Loudoun,,,,,Storage,Active,02/01/2025,,,,
+AG1-005,QTS Datacenter Expansion,QTS Realty Trust,PEPCO,MD,Prince George's,"1,000",,,,Natural Gas,Engineering and Procurement,05/20/2024,03/01/2026,,,
+AG1-006,Vantage Data Center,Vantage Data Centers,Dominion,VA,Loudoun,TBD,,,,Solar,Active,06/01/2025,,,,
+AG1-007,Meta Platforms Colocation,Meta Platforms Inc,AEP,OH,Licking,450,,,,Natural Gas,Unknown Blah,07/01/2024,01/01/2027,,,
+AG1-002,Microsoft Mount Pleasant,MS Mt Pleasant,ATC,WI,Racine,,250,250,,Solar,Active,03/01/2023,06/01/2026,,,
+AG1-008,Microsoft Racine County Campus,Microsoft Racine County,ATC,WI,Racine County,600,,,,Natural Gas,Active,03/01/2023,06/01/2026,,,
+AG1-009,CoreWeave Data Center,CoreWeave Inc,ComEd,IL,DuPage,200,,,,Storage,Withdrawn,08/01/2024,,,11/15/2025,Customer withdrew
+AG1-010,Equinix Data Center,Equinix LLC,PSEG,NJ,Bergen,120,,,120,Natural Gas,In Service,01/01/2022,06/01/2024,07/15/2024,,
+AG1-011,Prairie Wind Farm,Prairie Wind LLC,ComEd,IL,Lee,90,,,,Wind,Active,09/01/2025,,,,
+AG1-012,Applied Digital Compute Campus,Applied Digital Corporation,Xcel,ND,Cass,,,180,,Natural Gas,Suspended,10/01/2024,,,,
+AG1-013,Green Storage Project,Green Storage LLC,Dominion,VA,Fairfax,75,,,,Storage,Active,11/01/2025,,,,

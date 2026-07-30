@@ -1,0 +1,27 @@
+# Normalize every text file to LF, in the index and in the working tree, matching
+# .editorconfig. Without a catch-all, files with no extension or an unrecognized
+# one (.gitignore, requirements.lock, .env.example) fall back to core.autocrlf and
+# get checked out as CRLF, which contradicts .editorconfig and produces spurious
+# whole-file diffs between machines.
+* text=auto eol=lf
+
+# Migrations in particular: their SHA-256 is recorded in `schema_version` and
+# checked on every `tracker init`, so a CRLF checkout would look like a modified
+# migration. db.Migration.checksum normalizes line endings as a second defence.
+*.sql text eol=lf
+
+# Test fixtures and committed source data are EVIDENCE. Preserve their bytes
+# exactly rather than rewriting line endings:
+#   - the crawl tests assert that a stored excerpt is a real substring of the
+#     article fixture, which byte rewriting could break;
+#   - the ISO fixture exercises BOM and encoding handling on purpose;
+#   - data/raw/ holds the actual files an ingest ran against.
+tests/fixtures/** -text
+data/raw/** -text
+
+# Binary, never diffed or converted.
+*.db binary
+*.xlsx binary
+*.xls binary
+*.png binary
+*.jpg binary

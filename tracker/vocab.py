@@ -1,0 +1,134 @@
+"""Closed vocabularies shared by the schema, the normalizer and the CLI.
+
+Single source of truth for every enum-ish TEXT column. `models.py` builds CHECK
+constraints from these tuples and `migrations/*.sql` spells the same values out
+literally; `tests/test_db.py` asserts the two agree, so adding a value here
+without migrating is caught by the drift test rather than at runtime.
+
+Kept import-free on purpose — normalize.py, models.py and cli.py all depend on
+this module, so it must not depend on any of them.
+"""
+
+from __future__ import annotations
+
+from typing import Final, Literal
+
+# --- project.phase ---------------------------------------------------------
+# Ordered from least to most advanced. The order is load-bearing: upsert.py
+# merges two sources by taking the furthest-along phase, and `paused` /
+# `cancelled` are deliberately placed outside that progression because they are
+# not "more advanced" than operational — they override it when asserted by a
+# newer source.
+PHASE_PROGRESSION: Final[tuple[str, ...]] = (
+    "announced",
+    "permitting",
+    "construction",
+    "operational",
+)
+PHASE_TERMINAL: Final[tuple[str, ...]] = ("paused", "cancelled")
+PHASES: Final[tuple[str, ...]] = PHASE_PROGRESSION + PHASE_TERMINAL
+
+Phase = Literal["announced", "permitting", "construction", "operational", "paused", "cancelled"]
+
+#: Written when no source states a phase. `phase` is NOT NULL and the PRD has no
+#: `unknown` member, so we default — but ingest paths must then OMIT `phase` from
+#: `source.fields`, which makes confidence.py's coverage penalty fire and routes
+#: the row to `tracker review` instead of silently asserting "announced".
+DEFAULT_PHASE: Final[str] = "announced"
+
+# --- source.source_type ----------------------------------------------------
+SOURCE_TYPES: Final[tuple[str, ...]] = (
+    "iso_queue",
+    "company_filing",
+    "government_doc",
+    "trade_press",
+    "general_media",
+    "manual",
+)
+
+SourceType = Literal[
+    "iso_queue",
+    "company_filing",
+    "government_doc",
+    "trade_press",
+    "general_media",
+    "manual",
+]
+
+# --- event.event_type ------------------------------------------------------
+EVENT_TYPES: Final[tuple[str, ...]] = (
+    "announced",
+    "permit_filed",
+    "groundbreaking",
+    "energized",
+    "first_customer",
+    "delayed",
+    "expanded",
+)
+
+EventType = Literal[
+    "announced",
+    "permit_filed",
+    "groundbreaking",
+    "energized",
+    "first_customer",
+    "delayed",
+    "expanded",
+]
+
+# --- ingest_url.status -----------------------------------------------------
+#: Terminal state of one URL in one crawl run. The PRD asks for a `fetch_error`
+#: marker but `source.source_type` is a closed enum without one AND a `source`
+#: row requires a project_id — on a fetch failure there is no project. So URL
+#: outcomes live in their own table with their own vocabulary.
+URL_STATUSES: Final[tuple[str, ...]] = (
+    "ok",
+    "fetch_error",
+    "parse_error",
+    "llm_error",
+    "no_project",
+    "skipped",
+)
+
+# --- project fields --------------------------------------------------------
+#: Canonical order for the 12 tracked PRD fields. Used to render `source.fields`
+#: deterministically (so re-ingesting the same input produces byte-identical
+#: rows) and to drive the export column order.
+TRACKED_FIELDS: Final[tuple[str, ...]] = (
+    "name",
+    "company",
+    "customer",
+    "city",
+    "state",
+    "mw_planned",
+    "mw_built",
+    "investment_usd",
+    "phase",
+    "first_announced",
+    "expected_online",
+    "blocker",
+)
+
+#: Every column an ingest path may write, in schema order. `notes` and `county`
+#: are tracked separately from TRACKED_FIELDS because they are engineering
+#: additions, not PRD-required facts, and must not count toward the
+#: "9 of 12 fields populated" definition of done.
+WRITABLE_FIELDS: Final[tuple[str, ...]] = (
+    *TRACKED_FIELDS,
+    "county",
+    "country",
+    "lat",
+    "lon",
+    "notes",
+)
+
+
+def sql_in(column: str, allowed: tuple[str, ...]) -> str:
+    """Render a CHECK constraint body: ``phase IN ('announced', ...)``.
+
+    Used by models.py so the Python vocabulary and the SQL constraint cannot
+    drift within a single definition. The migration files spell the same lists
+    out literally (SQL has no way to import), and the drift test compares them.
+    """
+    values = ", ".join(f"'{v}'" for v in allowed)
+    return f"{column} IN ({values})"

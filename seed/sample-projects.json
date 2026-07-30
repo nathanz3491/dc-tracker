@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "_warning": "READ THIS FIRST. The project names, operators, cities and states below are drawn from widely reported public announcements. Every MW figure, dollar figure and date is the literal string PLACEHOLDER and is NOT a fact. Replace each one with a value you have personally verified against the cited source, and replace each placeholder URL with the exact article or release you verified it against. `tracker ingest manual` REFUSES this file until the placeholders are gone; pass --allow-placeholders only for a smoke test, in which case every PLACEHOLDER is stored as NULL. `events` are left empty on purpose: a milestone with no verifiable date is not a milestone, so add them only once you have a dated citation.",
+  "defaults": {
+    "country": "US",
+    "source_type": "manual"
+  },
+  "projects": [
+    {
+      "name": "Fairwater",
+      "company": "Microsoft",
+      "city": "Mount Pleasant",
+      "county": "Racine County",
+      "state": "WI",
+      "phase": "construction",
+      "mw_planned": "PLACEHOLDER",
+      "investment_usd": "PLACEHOLDER",
+      "first_announced": "PLACEHOLDER",
+      "expected_online": "PLACEHOLDER",
+      "blocker": "PLACEHOLDER",
+      "notes": "Racine County campus. Chosen as a seed record because it is the PRD's own dedup example: PJM-style sources call it 'MS Mt Pleasant' and news calls it 'Microsoft Racine County', which must resolve to one project.",
+      "sources": [
+        {
+          "url": "https://news.microsoft.com/PLACEHOLDER-replace-with-the-exact-release-you-verified/",
+          "source_type": "company_filing",
+          "excerpt": "PLACEHOLDER - paste the 1-3 sentence verbatim quote that supports the values above."
+        }
+      ],
+      "events": []
+    },
+    {
+      "name": "Colossus",
+      "company": "xAI",
+      "city": "Memphis",
+      "county": "Shelby County",
+      "state": "TN",
+      "phase": "operational",
+      "mw_planned": "PLACEHOLDER",
+      "mw_built": "PLACEHOLDER",
+      "investment_usd": "PLACEHOLDER",
+      "first_announced": "PLACEHOLDER",
+      "blocker": "PLACEHOLDER",
+      "notes": "The PRD's own example of a project that predates any interconnection queue entry, which is why the manual path exists at all. Colossus 2 is a separate site and belongs in its own record, not merged into this one.",
+      "sources": [
+        {
+          "url": "https://www.datacenterdynamics.com/PLACEHOLDER-replace-with-the-exact-article-you-verified/",
+          "source_type": "trade_press",
+          "excerpt": "PLACEHOLDER - paste the 1-3 sentence verbatim quote that supports the values above."
+        }
+      ],
+      "events": []
+    },
+    {
+      "name": "Stargate Abilene",
+      "company": "Crusoe",
+      "customer": "OpenAI",
+      "city": "Abilene",
+      "county": "Taylor County",
+      "state": "TX",
+      "phase": "construction",
+      "mw_planned": "PLACEHOLDER",
+      "investment_usd": "PLACEHOLDER",
+      "first_announced": "PLACEHOLDER",
+      "expected_online": "PLACEHOLDER",
+      "blocker": "PLACEHOLDER",
+      "notes": "Included specifically because company != customer: Crusoe builds and operates, OpenAI is the tenant. No other seed record exercises that distinction, and conflating builder with customer is the single most common error in data center reporting.",
+      "sources": [
+        {
+          "url": "https://www.datacenterfrontier.com/PLACEHOLDER-replace-with-the-exact-article-you-verified/",
+          "source_type": "trade_press",
+          "excerpt": "PLACEHOLDER - paste the 1-3 sentence verbatim quote that supports the values above."
+        }
+      ],
+      "events": []
+    }
+  ]
+}

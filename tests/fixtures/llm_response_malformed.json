@@ -1,0 +1,20 @@
+{
+  "projects": [
+    "name": "Fairwater",
+      "company": "Microsoft",
+      "city": "Mount Pleasant",
+      "state": "WI",
+      "mw_planned": 900,
+      "phase": "construction",
+      "events": [],
+      "evidence": [
+        {"field": "name", "quote": "Microsoft has begun construction on Fairwater"},
+        {"field": "company", "quote": "Microsoft will operate the campus itself"},
+        {"field": "city", "quote": "a data\ncenter campus in Mount Pleasant, Wisconsin"},
+        {"field": "state", "quote": "MOUNT PLEASANT, Wis."},
+        {"field": "mw_planned", "quote": "the company says will draw 900\nmegawatts at full buildout"},
+        {"field": "phase", "quote": "Microsoft has begun construction on Fairwater"},
+      ]
+    }
+  ]
+}

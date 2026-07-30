@@ -1,0 +1,649 @@
+"""News-article ingest: fetch, extract with an LLM, gate on evidence, upsert.
+
+The prompt asks the model for a verbatim quote behind every non-null value.
+:func:`evidence_gate` then **discards any value whose quote is missing or is not
+actually present in the fetched text**. That distinction is the whole design:
+a prompt instruction is a request, and models under-comply with requests; the
+gate is a mechanism, and the model cannot win by guessing because guesses are
+thrown away regardless of what it claims.
+
+Structure is two phases per run:
+
+1. all fetching, concurrently, in one `asyncio.run`;
+2. extraction and upsert, serially and synchronously.
+
+Fetching is what benefits from concurrency. LLM calls are the *cost* bottleneck,
+so serializing them keeps spend accounting, rate-limit handling and progress
+reporting trivial, and keeps the SQLAlchemy session single-threaded.
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+import logging
+import re
+import unicodedata
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from tracker.config import Settings, get_settings
+from tracker.ingest.fetch import Fetcher, FetchResult, cache_path, fetch_all
+from tracker.ingest.records import EventRecord, IngestRecord, IngestReport, SourceRecord
+from tracker.llm import Extractor, LLMError, LLMJsonError, LLMReply, parse_json_object
+from tracker.models import IngestUrl, utcnow
+from tracker.normalize import (
+    NormalizationError,
+    is_blank,
+    norm_country,
+    norm_date_detail,
+    norm_excerpt,
+    norm_money_detail,
+    norm_mw_detail,
+    norm_phase,
+    norm_state,
+    norm_text,
+    soft,
+)
+from tracker.prompts import Prompt, load_prompt
+from tracker.upsert import upsert_record
+from tracker.vocab import EVENT_TYPES, TRACKED_FIELDS
+
+log = logging.getLogger(__name__)
+
+#: Hard ceiling on projects taken from one article. An article listing twenty
+#: sites in passing is a roundup, not twenty citable projects.
+MAX_PROJECTS_PER_ARTICLE = 5
+
+#: Marker inserted where the middle of an over-long article was dropped.
+TRUNCATION_MARKER = "\n\n[... middle of article omitted for length ...]\n\n"
+
+#: Domain patterns to source_type. Ordered: first match wins.
+_SOURCE_TYPE_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"(^|\.)sec\.gov$"), "company_filing"),
+    (re.compile(r"^(news|about|blog|ir|investor|newsroom|press)\."), "company_filing"),
+    (re.compile(r"(^|\.)(gov|mil)$"), "government_doc"),
+    (re.compile(r"\.state\.[a-z]{2}\.us$"), "government_doc"),
+    (
+        re.compile(
+            r"(^|\.)(datacenterdynamics|datacenterfrontier|datacenterknowledge|utilitydive"
+            r"|rtoinsider|latitudemedia|heatmap|semianalysis|theregister)\.com$"
+        ),
+        "trade_press",
+    ),
+)
+
+
+class CrawlError(RuntimeError):
+    """The run cannot proceed."""
+
+
+@dataclass
+class ExtractionOutcome:
+    """What one URL produced, for both the report and the ingest_url row."""
+
+    url: str
+    status: str
+    records: list[IngestRecord] = field(default_factory=list)
+    error: str | None = None
+    http_status: int | None = None
+    via: str = "httpx"
+    attempts: int = 1
+    content_sha1: str | None = None
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+
+
+def classify_source_type(url: str) -> str:
+    """Guess how authoritative a URL is.
+
+    Never returns `company_filing`/`government_doc` on a guess about a general
+    domain, because those weights are what let a project reach confidence 2.
+    """
+    host = url.split("//", 1)[-1].split("/", 1)[0].split("@")[-1].split(":")[0].lower()
+    for pattern, source_type in _SOURCE_TYPE_RULES:
+        if pattern.search(host):
+            return source_type
+    return "general_media"
+
+
+def truncate(text: str, limit: int) -> str:
+    """Trim to a character budget, keeping the head and the tail.
+
+    Head-biased with a middle drop: a news lead carries the who/where/how-much,
+    the close often carries timelines and objections, and the middle is where
+    boilerplate and related-links live.
+    """
+    if len(text) <= limit:
+        return text
+    head = int(limit * 0.7)
+    tail = limit - head - len(TRUNCATION_MARKER)
+    if tail <= 0:
+        return text[:limit]
+    return text[:head] + TRUNCATION_MARKER + text[-tail:]
+
+
+def _normalize_for_match(text: str) -> str:
+    """Fold whitespace, unicode and quote style, for substring comparison."""
+    folded = unicodedata.normalize("NFKC", text)
+    folded = (
+        folded.replace("“", '"')
+        .replace("”", '"')
+        .replace("‘", "'")
+        .replace("’", "'")
+        .replace("–", "-")
+        .replace("—", "-")
+    )
+    return re.sub(r"\s+", " ", folded).strip().lower()
+
+
+def evidence_gate(
+    values: dict[str, Any], evidence: list[dict[str, Any]], article_text: str
+) -> tuple[dict[str, Any], dict[str, str], list[str]]:
+    """Keep only values backed by a quote that really appears in the article.
+
+    Returns ``(kept, quotes_by_field, dropped_field_names)``.
+
+    Two checks, and the second is the one that matters. Requiring *an* evidence
+    entry stops the model omitting citations. Requiring the quote to be a real
+    substring of the fetched text stops it *paraphrasing* the article into a quote
+    that sounds right but was never written — which is precisely how a fabricated
+    number acquires a citation.
+    """
+    haystack = _normalize_for_match(article_text)
+    quotes: dict[str, str] = {}
+    for entry in evidence:
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("field")
+        quote = entry.get("quote")
+        if not isinstance(name, str) or not isinstance(quote, str) or not quote.strip():
+            continue
+        if _normalize_for_match(quote) in haystack:
+            quotes.setdefault(name, quote.strip())
+        else:
+            log.warning("evidence quote for %r is not in the article; ignoring", name)
+
+    kept: dict[str, Any] = {}
+    dropped: list[str] = []
+    for name, value in values.items():
+        if value is None:
+            continue
+        # Identity and locality are structural, not claims: they are how we know
+        # which project this is, and the article self-evidently concerns it.
+        if name in {"country"} or name in quotes:
+            kept[name] = value
+        else:
+            dropped.append(name)
+    return kept, quotes, dropped
+
+
+def _coerce(raw: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """Type-coerce one extracted project. Returns (values, disclosure notes).
+
+    Every field goes through `normalize`, which is the direct mitigation for the
+    PRD's top risk: the LLM returning "1000 MW" as a string or a date as prose.
+    """
+    notes: list[str] = []
+
+    def numeric(key: str, parser) -> Any:
+        value = raw.get(key)
+        if is_blank(value):
+            return None
+        try:
+            parsed = parser(value, field=key)
+        except NormalizationError as exc:
+            log.warning("dropping %s: %s", key, exc)
+            return None
+        if parsed.note:
+            notes.append(parsed.note)
+        return parsed.value
+
+    values: dict[str, Any] = {
+        "name": norm_text(raw.get("name")),
+        "company": norm_text(raw.get("company")),
+        "customer": norm_text(raw.get("customer")),
+        "city": norm_text(raw.get("city")),
+        "county": norm_text(raw.get("county")),
+        "state": soft(norm_state, raw.get("state")),
+        "country": soft(norm_country, raw.get("country")) or "US",
+        "mw_planned": numeric("mw_planned", norm_mw_detail),
+        "mw_built": numeric("mw_built", norm_mw_detail),
+        "phase": soft(norm_phase, raw.get("phase")),
+        "blocker": norm_text(raw.get("blocker")),
+        "notes": norm_text(raw.get("notes")),
+    }
+
+    money = numeric("investment_usd", norm_money_detail)
+    values["investment_usd"] = None if money is None else int(money)
+
+    for key in ("first_announced", "expected_online"):
+        value = raw.get(key)
+        if is_blank(value):
+            values[key] = None
+            continue
+        try:
+            parsed = norm_date_detail(value, field=key)
+        except NormalizationError as exc:
+            log.warning("dropping %s: %s", key, exc)
+            values[key] = None
+            continue
+        if parsed.note:
+            notes.append(parsed.note)
+        values[key] = parsed.value
+
+    return values, notes
+
+
+def _events(raw: dict[str, Any], url: str) -> list[EventRecord]:
+    events: list[EventRecord] = []
+    for entry in raw.get("events") or []:
+        if not isinstance(entry, dict):
+            continue
+        event_type = str(entry.get("event_type") or "").strip().lower().replace(" ", "_")
+        if event_type not in EVENT_TYPES:
+            continue
+        try:
+            when = norm_date_detail(entry.get("event_date"), field="event_date").value
+        except NormalizationError:
+            continue
+        description = norm_text(entry.get("description"))
+        if when is None or not description:
+            continue
+        events.append(EventRecord(when, event_type, description, url))
+    return events
+
+
+def build_records(
+    result: FetchResult,
+    payload: dict[str, Any],
+    *,
+    prompt: Prompt,
+    reply: LLMReply,
+    max_projects: int = MAX_PROJECTS_PER_ARTICLE,
+) -> list[IngestRecord]:
+    """Turn a validated LLM payload into IngestRecords. Pure, no I/O."""
+    projects = payload.get("projects")
+    if not isinstance(projects, list):
+        raise LLMJsonError(f"payload has no `projects` list: {payload!r}")
+
+    source_type = classify_source_type(result.url)
+    records: list[IngestRecord] = []
+
+    for raw in projects[:max_projects]:
+        if not isinstance(raw, dict):
+            continue
+        values, coercion_notes = _coerce(raw)
+        evidence = raw.get("evidence") if isinstance(raw.get("evidence"), list) else []
+        kept, quotes, dropped = evidence_gate(values, evidence, result.markdown)
+
+        # Identity: without a company and a locality there is nothing to dedup on,
+        # so the "project" is a passing mention rather than a record.
+        company = kept.get("company") or values.get("company")
+        state = kept.get("state") or values.get("state")
+        city = kept.get("city") or values.get("city")
+        county = kept.get("county") or values.get("county")
+        if not company or not state or not (city or county):
+            log.warning(
+                "dropping a project from %s: needs company, state and a locality "
+                "(got company=%r state=%r city=%r county=%r)",
+                result.url,
+                company,
+                state,
+                city,
+                county,
+            )
+            continue
+
+        claims = dict(kept)
+        claims.update({"company": company, "state": state})
+        if city:
+            claims["city"] = city
+        if county:
+            claims["county"] = county
+        claims.setdefault("name", values.get("name") or f"{company} {city or county}")
+        claims.pop("notes", None)
+
+        notes = list(coercion_notes)
+        if dropped:
+            notes.append(
+                "dropped unsupported value(s) for "
+                + ", ".join(sorted(dropped))
+                + " (the model gave no verbatim quote from the article)"
+            )
+        if values.get("notes"):
+            notes.append(f"extracted summary: {values['notes']}")
+
+        record = IngestRecord(
+            project={
+                "name": claims["name"],
+                "company": company,
+                "state": state,
+                "city": city,
+                "county": county,
+                "country": claims.get("country", "US"),
+            },
+            sources=[
+                SourceRecord(
+                    url=result.url,
+                    source_type=source_type,
+                    fetched_at=result.fetched_at or utcnow(),
+                    excerpt=_excerpt(quotes),
+                    claims=claims,
+                    extractor=f"crawl:{prompt.stamp}:{reply.model}:{result.via}",
+                )
+            ],
+            events=_events(raw, result.url),
+            notes=notes,
+        )
+        records.append(record)
+
+    if len(projects) > max_projects:
+        log.warning(
+            "%s described %d projects; kept the first %d (--max-projects)",
+            result.url,
+            len(projects),
+            max_projects,
+        )
+    return records
+
+
+def _excerpt(quotes: dict[str, str]) -> str | None:
+    """Up to three quotes, preferring the contested quantitative fields.
+
+    `source.excerpt` is capped at 500 characters, so this picks the quotes an
+    operator most needs to see when reviewing the row.
+    """
+    if not quotes:
+        return None
+    priority = ("mw_planned", "investment_usd", "phase", "expected_online", "mw_built", "customer")
+    ordered = [quotes[f] for f in priority if f in quotes]
+    ordered += [q for f, q in sorted(quotes.items()) if f not in priority]
+    # dict.fromkeys dedupes while preserving order: one sentence often supports
+    # several fields, and repeating it wastes the 500-character budget.
+    return norm_excerpt(" ... ".join(list(dict.fromkeys(ordered))[:3]))
+
+
+# --- Extraction -------------------------------------------------------------
+
+
+def extract_one(
+    result: FetchResult,
+    *,
+    prompt: Prompt,
+    extractor: Extractor,
+    settings: Settings | None = None,
+    published_date: str = "unknown",
+) -> ExtractionOutcome:
+    """Run one article through the LLM, with a single corrective retry."""
+    settings = settings or get_settings()
+    outcome = ExtractionOutcome(
+        url=result.url,
+        status="ok",
+        via=result.via,
+        attempts=result.attempts,
+        http_status=result.status,
+        content_sha1=result.sha1 if result.markdown else None,
+    )
+
+    body = truncate(result.markdown, settings.max_input_chars)
+    user = prompt.render_user(
+        url=result.url,
+        published_date=published_date,
+        markdown=body,
+        max_projects=MAX_PROJECTS_PER_ARTICLE,
+    )
+
+    last_error: str | None = None
+    for attempt in range(1, max(1, settings.llm_max_attempts) + 1):
+        message = user
+        if attempt > 1:
+            message = (
+                user + "\n\nYour previous reply was not a single valid JSON object. "
+                "Return ONLY the JSON object, with no prose and no code fences."
+            )
+        try:
+            reply = extractor.complete(system=prompt.system, user=message)
+        except LLMError as exc:
+            outcome.status = "llm_error"
+            outcome.error = str(exc)
+            return outcome
+
+        outcome.prompt_tokens += reply.prompt_tokens or 0
+        outcome.completion_tokens += reply.completion_tokens or 0
+
+        if reply.finish_reason == "length":
+            last_error = "reply truncated at the token limit"
+            log.warning("%s: %s (attempt %d)", result.url, last_error, attempt)
+            continue
+
+        try:
+            payload = parse_json_object(reply.text)
+        except LLMJsonError as exc:
+            last_error = str(exc)
+            log.warning("%s: %s (attempt %d)", result.url, last_error, attempt)
+            continue
+
+        try:
+            outcome.records = build_records(result, payload, prompt=prompt, reply=reply)
+        except LLMJsonError as exc:
+            last_error = str(exc)
+            continue
+
+        outcome.status = "ok" if outcome.records else "no_project"
+        return outcome
+
+    outcome.status = "parse_error"
+    outcome.error = last_error
+    return outcome
+
+
+# --- ingest_url bookkeeping -------------------------------------------------
+
+
+def record_url(session: Session, run_id: str, outcome: ExtractionOutcome) -> None:
+    """Upsert the per-URL outcome.
+
+    This table is why re-running a URL list is cheap: URLs already `ok` are
+    skipped, and `--retry-failed` can target just the ones that were not.
+    """
+    row = session.scalar(select(IngestUrl).where(IngestUrl.url == outcome.url))
+    now = utcnow()
+    if row is None:
+        row = IngestUrl(url=outcome.url, run_id=run_id, first_seen_at=now, attempts=0)
+        session.add(row)
+    row.run_id = run_id
+    row.status = outcome.status
+    row.http_status = outcome.http_status
+    row.via = outcome.via
+    row.attempts = (row.attempts or 0) + outcome.attempts
+    row.error = (outcome.error or None) and outcome.error[:1000]
+    row.content_sha1 = outcome.content_sha1
+    row.last_tried_at = now
+    session.flush()
+
+
+def already_done(session: Session, urls: list[str]) -> set[str]:
+    """URLs a previous run already extracted successfully."""
+    if not urls:
+        return set()
+    rows = session.scalars(
+        select(IngestUrl).where(IngestUrl.url.in_(urls), IngestUrl.status == "ok")
+    ).all()
+    return {r.url for r in rows}
+
+
+def read_urls(path: Path) -> list[str]:
+    """One URL per line; `#` comments and blanks ignored."""
+    urls: list[str] = []
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if not line.lower().startswith(("http://", "https://")):
+            log.warning("skipping %r: not an http(s) URL", line)
+            continue
+        urls.append(line)
+    return list(dict.fromkeys(urls))
+
+
+# --- Run --------------------------------------------------------------------
+
+
+def run(
+    session: Session,
+    urls: list[str],
+    *,
+    prompt_name: str = "extract-v1",
+    fetcher: Fetcher | None = None,
+    escalate: Fetcher | None = None,
+    extractor: Extractor | None = None,
+    settings: Settings | None = None,
+    dry_run: bool = False,
+    force: bool = False,
+    cache_dir: Path | None = None,
+    run_id: str | None = None,
+) -> IngestReport:
+    """Fetch, extract and upsert a list of article URLs.
+
+    `extractor` is injectable and is resolved *before* any fetch, so a missing API
+    key fails immediately rather than after paying for forty page loads — and so
+    tests can supply a fake without needing a key at all.
+    """
+    import asyncio
+
+    settings = settings or get_settings()
+    prompt = load_prompt(prompt_name)
+    if extractor is None:
+        from tracker.llm import default_extractor
+
+        extractor = default_extractor(settings)
+
+    report = IngestReport()
+    run_id = run_id or utcnow().strftime("%Y%m%dT%H%M%S")
+
+    wanted = list(dict.fromkeys(urls))
+    if not force:
+        done = already_done(session, wanted)
+        if done:
+            log.info("skipping %d URL(s) already extracted; --force to redo", len(done))
+            report.filtered += len(done)
+            wanted = [u for u in wanted if u not in done]
+    report.read = len(wanted) + report.filtered
+    if not wanted:
+        return report
+
+    cached, to_fetch = _split_cached(wanted, cache_dir)
+    fetched = (
+        asyncio.run(fetch_all(to_fetch, fetcher=fetcher, escalate=escalate, settings=settings))
+        if to_fetch
+        else []
+    )
+    if cache_dir:
+        _write_cache(fetched, cache_dir)
+
+    for result in [*cached, *fetched]:
+        if not result.ok:
+            report.fetch_error += 1
+            outcome = ExtractionOutcome(
+                url=result.url,
+                status="fetch_error",
+                error=result.error,
+                http_status=result.status,
+                via=result.via,
+                attempts=result.attempts,
+            )
+            log.warning("fetch failed: %s (%s)", result.url, result.error)
+            record_url(session, run_id, outcome)
+            continue
+
+        outcome = extract_one(result, prompt=prompt, extractor=extractor, settings=settings)
+        if outcome.status == "parse_error":
+            report.parse_error += 1
+            log.warning("could not parse a reply for %s: %s", result.url, outcome.error)
+        elif outcome.status == "llm_error":
+            report.parse_error += 1
+            log.error("LLM error for %s: %s", result.url, outcome.error)
+
+        for record in outcome.records:
+            upsert = upsert_record(session, record)
+            report.bump(upsert.action)
+            report.events += upsert.events_written
+            report.conflicts += len(upsert.conflicts)
+            if upsert.duplicate_of is not None:
+                report.duplicates_flagged += 1
+
+        record_url(session, run_id, outcome)
+
+    if dry_run:
+        session.rollback()
+    else:
+        session.commit()
+    return report
+
+
+def _split_cached(urls: list[str], cache_dir: Path | None) -> tuple[list[FetchResult], list[str]]:
+    """Serve article text from disk when we have it.
+
+    Iterating on the prompt is the common inner loop, and it should never re-fetch.
+    """
+    if not cache_dir:
+        return [], urls
+    cached: list[FetchResult] = []
+    remaining: list[str] = []
+    for url in urls:
+        path = cache_path(url, cache_dir)
+        if path.is_file():
+            cached.append(
+                FetchResult(
+                    url,
+                    True,
+                    markdown=path.read_text(encoding="utf-8"),
+                    fetched_at=dt.datetime.fromtimestamp(path.stat().st_mtime).replace(
+                        microsecond=0
+                    ),
+                    via="cache",
+                )
+            )
+        else:
+            remaining.append(url)
+    if cached:
+        log.info("served %d article(s) from %s", len(cached), cache_dir)
+    return cached, remaining
+
+
+def _write_cache(results: list[FetchResult], cache_dir: Path) -> None:
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    for result in results:
+        if result.ok and result.markdown:
+            cache_path(result.url, cache_dir).write_text(result.markdown, encoding="utf-8")
+
+
+def count_populated(record: IngestRecord) -> int:
+    """How many of the 12 tracked PRD fields this record actually carries.
+
+    The definition of done asks for at least 9 of 12 from a known article, so it
+    needs to be measurable.
+    """
+    claims = record.sources[0].claims if record.sources else {}
+    return sum(1 for f in TRACKED_FIELDS if claims.get(f) is not None)
+
+
+__all__ = [
+    "MAX_PROJECTS_PER_ARTICLE",
+    "TRUNCATION_MARKER",
+    "CrawlError",
+    "ExtractionOutcome",
+    "build_records",
+    "classify_source_type",
+    "count_populated",
+    "evidence_gate",
+    "extract_one",
+    "read_urls",
+    "record_url",
+    "run",
+    "truncate",
+]

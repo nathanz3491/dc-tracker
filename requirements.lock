@@ -1,0 +1,40 @@
+# Generated with:  .venv/Scripts/python -m pip freeze --exclude-editable > requirements.lock
+# Serves as this project's lockfile (no uv/poetry available on this machine).
+# Python 3.13.2 on Windows 11. Regenerate after any dependency change.
+#
+# This pins the FULL transitive set for reproducible installs. The supported
+# version ranges live in pyproject.toml; this file is a snapshot, not the spec.
+annotated-doc==0.0.5
+annotated-types==0.8.0
+anyio==4.14.2
+certifi==2026.7.22
+colorama==0.4.6
+coverage==7.15.2
+et_xmlfile==2.0.0
+greenlet==3.5.4
+h11==0.16.0
+httpcore==1.0.9
+httpx==0.28.1
+idna==3.18
+iniconfig==2.3.0
+markdown-it-py==4.2.0
+mdurl==0.1.2
+openpyxl==3.1.5
+packaging==26.2
+pluggy==1.6.0
+pydantic==2.13.4
+pydantic-settings==2.14.2
+pydantic_core==2.46.4
+Pygments==2.20.0
+pytest==9.1.1
+pytest-asyncio==1.4.0
+pytest-cov==7.1.0
+python-dotenv==1.2.2
+respx==0.23.1
+rich==15.0.0
+ruff==0.16.0
+shellingham==1.5.4
+SQLAlchemy==2.0.51
+typer==0.27.0
+typing-inspection==0.4.2
+typing_extensions==4.16.0

@@ -1,0 +1,39 @@
+{
+  "projects": [
+    {
+      "name": "Fairwater",
+      "company": "Microsoft",
+      "city": "Mount Pleasant",
+      "state": "WI",
+      "country": "US",
+      "mw_planned": 900,
+      "phase": "construction",
+      "events": [],
+      "evidence": [
+        {"field": "name", "quote": "Microsoft has begun construction on Fairwater"},
+        {"field": "company", "quote": "Microsoft will operate the campus itself"},
+        {"field": "city", "quote": "a data\ncenter campus in Mount Pleasant, Wisconsin"},
+        {"field": "state", "quote": "MOUNT PLEASANT, Wis."},
+        {"field": "mw_planned", "quote": "the company says will draw 900\nmegawatts at full buildout"},
+        {"field": "phase", "quote": "Microsoft has begun construction on Fairwater"}
+      ]
+    },
+    {
+      "name": "Second Site",
+      "company": "Microsoft",
+      "city": "Madison",
+      "state": "WI",
+      "country": "US",
+      "mw_planned": 150,
+      "phase": "announced",
+      "events": [],
+      "evidence": [
+        {"field": "name", "quote": "Microsoft first announced the Racine County project in March 2023."},
+        {"field": "company", "quote": "Microsoft will operate the campus itself"},
+        {"field": "city", "quote": "MOUNT PLEASANT, Wis."},
+        {"field": "state", "quote": "MOUNT PLEASANT, Wis."},
+        {"field": "mw_planned", "quote": "The first phase, comprising 150 megawatts of capacity, was energized in\nJanuary 2026 and is now serving production workloads."}
+      ]
+    }
+  ]
+}
