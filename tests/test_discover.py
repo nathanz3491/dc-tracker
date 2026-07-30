@@ -460,3 +460,122 @@ def test_run_honours_the_age_window(session, tmp_path: Path):
     # Fixture articles are dated July 2026; "1 day" from the real clock excludes
     # all of them, which proves the cutoff is applied rather than ignored.
     assert queued == []
+
+
+# --- Prioritising the queue toward depth ------------------------------------
+
+
+def tracked(session, company: str, name: str, city: str, state: str = "VA"):
+    from tracker.ingest.records import IngestRecord, SourceRecord
+    from tracker.models import utcnow
+    from tracker.upsert import upsert_record
+
+    return upsert_record(
+        session,
+        IngestRecord(
+            project={"company": company, "name": name, "city": city, "state": state},
+            sources=[
+                SourceRecord(
+                    url=f"https://seed.test/{name.replace(' ', '-')}",
+                    source_type="trade_press",
+                    fetched_at=utcnow(),
+                    claims={"company": company, "city": city, "state": state},
+                )
+            ],
+        ),
+    ).project_id
+
+
+def test_an_article_about_a_tracked_project_is_recognised(session):
+    from tracker.ingest.discover import matches_known_project, project_identities
+
+    pid = tracked(session, "Sabey Data Centers", "Sabey Ashburn Campus", "Ashburn")
+    ids = project_identities(session)
+    assert (
+        matches_known_project(
+            "https://x.test/news/sabey-data-centers-expands-ashburn-campus-70mw/", None, ids
+        )
+        == pid
+    )
+
+
+def test_generic_name_words_do_not_count_as_a_match(session):
+    """ "Campus" and "center" appear in nearly every data-center headline.
+
+    Treating them as distinctive matched every Sabey article to the Ashburn
+    project, including genuinely different sites in other cities.
+    """
+    from tracker.ingest.discover import matches_known_project, project_identities
+
+    tracked(session, "Sabey Data Centers", "Sabey Ashburn Campus", "Ashburn")
+    ids = project_identities(session)
+    assert (
+        matches_known_project(
+            "https://x.test/news/sabey-data-centers-plans-70mw-campus-in-quincy/", None, ids
+        )
+        is None
+    ), "a Quincy campus is not the Ashburn project"
+
+
+def test_a_single_company_token_is_not_enough(session):
+    """ "digital" + "ashburn" hit every Ashburn article by any operator, which
+    inflated one project's apparent coverage from a handful to 154."""
+    from tracker.ingest.discover import matches_known_project, project_identities
+
+    tracked(session, "Digital Realty", "Digital Ashburn Campus", "Ashburn")
+    ids = project_identities(session)
+    assert (
+        matches_known_project("https://x.test/news/cologix-pre-leases-120mw-in-ashburn/", None, ids)
+        is None
+    )
+
+
+def test_an_unrelated_article_is_not_matched(session):
+    from tracker.ingest.discover import matches_known_project, project_identities
+
+    tracked(session, "Sabey Data Centers", "Sabey Ashburn Campus", "Ashburn")
+    ids = project_identities(session)
+    assert matches_known_project("https://x.test/news/meta-hyperion-louisiana/", None, ids) is None
+
+
+def test_known_first_puts_depth_before_breadth(session):
+    from tracker.ingest.discover import pending, pending_split
+
+    tracked(session, "Sabey Data Centers", "Sabey Ashburn Campus", "Ashburn")
+    queue_candidates(
+        session,
+        [
+            Candidate(
+                "https://x.test/brand-new-data-center-campus-500mw/", "A new 500MW campus", "f"
+            ),
+            Candidate(
+                "https://x.test/sabey-data-centers-ashburn-expansion-70mw/",
+                "Sabey expands its Ashburn data center campus by 70MW",
+                "f",
+            ),
+        ],
+        run_id="r",
+        report=DiscoverReport(),
+    )
+
+    assert pending_split(session) == (1, 1)
+    ordered = pending(session, known_first=True)
+    assert "sabey" in ordered[0].url, "the article that deepens a project must come first"
+    # Without the flag the queue keeps its oldest-first order.
+    assert "brand-new" in pending(session)[0].url
+
+
+def test_known_first_still_honours_the_limit(session):
+    from tracker.ingest.discover import pending
+
+    tracked(session, "Sabey Data Centers", "Sabey Ashburn Campus", "Ashburn")
+    queue_candidates(
+        session,
+        [
+            Candidate(f"https://x.test/a{i}-data-center-campus-100mw/", f"New campus {i}", "f")
+            for i in range(5)
+        ],
+        run_id="r",
+        report=DiscoverReport(),
+    )
+    assert len(pending(session, limit=2, known_first=True)) == 2

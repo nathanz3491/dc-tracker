@@ -145,6 +145,25 @@ now. Re-reading a known citation updates every field it supports. It deliberatel
 bypasses the article cache — serving a cached copy would guarantee the answer is
 "nothing changed".
 
+### Depth versus breadth
+
+Every article is one LLM call, so which article you spend it on matters. An
+article about a project **already** in the database becomes a second source —
+filling fields a single article cannot (no press release names its own blocker)
+and lifting confidence from 2 to 3. An article about a new project just adds
+another single-source row.
+
+`tracker sync` therefore crawls depth-first by default: queued candidates whose
+headline or slug names a tracked project go before the rest. `--breadth-first`
+reverses that.
+
+Matching is deliberately strict — the **full** company key plus either the
+locality or a genuinely distinctive name token. Looser rules failed badly in
+testing: a single company token plus a city matched every Ashburn article by any
+operator (154 false hits for one project), and treating "campus" or a repeat of the
+company name as distinctive matched every Sabey article to the Sabey *Ashburn*
+project, including sites in other states.
+
 ### Reaching back for older projects — no API key
 
 A feed only shows what published in the last few days, so a project announced in

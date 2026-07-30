@@ -55,6 +55,11 @@ initial build of the v1 PRD.
   been re-read recently, which is how project data gets *updated* rather than only
   added. Placeholder URLs are excluded, being unfetchable by definition.
 - `tracker list --limit N`, which reports the total it capped ("2 of 3").
+- **The queue is prioritised toward depth.** A queued article covering a project
+  already tracked becomes a SECOND source, which fills fields one article cannot
+  and lifts confidence from 2 to 3; draining oldest-first instead just grew the
+  database sideways into more single-source rows. Measured before the change: 26 of
+  29 projects had exactly one source. `--breadth-first` restores the old order.
 - **`tracker sync --deep`** walks site archives via their sitemaps, following a
   sitemap index one level and preferring article sitemaps over Company/Event ones.
   A measured run found 799 matching URLs going back to 2015, 477 of them new —

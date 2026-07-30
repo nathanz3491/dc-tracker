@@ -532,16 +532,151 @@ def queue_candidates(
     return queued
 
 
-def pending(session: Session, limit: int | None = None) -> list[IngestUrl]:
-    """Queued candidates, oldest published first so backlogs drain in order."""
+# --- Prioritising the queue toward depth ------------------------------------
+#
+# The queue drains oldest-first, which grows the database *sideways*: every run
+# creates more single-source projects. But a queued article that covers a project
+# already tracked is worth far more, because it becomes a SECOND source -- filling
+# fields one article could not, and lifting confidence from 2 to 3.
+#
+# Measured on a real archive: 259 of the queued articles covered 18 of 29 existing
+# projects. Crawling those first is the difference between 29 shallow rows and 18
+# corroborated ones.
+
+
+#: Words that clear a length bar but appear in nearly every data-center headline,
+#: so they are no evidence that an article concerns one particular project.
+_GENERIC_NAME_TOKENS = frozenset(
+    {
+        "campus",
+        "center",
+        "centre",
+        "datacenter",
+        "facility",
+        "project",
+        "expansion",
+        "building",
+        "phase",
+        "north",
+        "south",
+        "east",
+        "west",
+    }
+)
+
+
+@dataclass(frozen=True)
+class ProjectIdentity:
+    """What a queued URL has to mention to be about this project."""
+
+    project_id: int
+    company: str
+    locality: str
+    name_tokens: tuple[str, ...]
+
+
+def project_identities(session: Session) -> list[ProjectIdentity]:
+    from sqlalchemy import select
+
+    from tracker.dedup import city_key, company_key, county_key
+    from tracker.models import Project
+
+    out: list[ProjectIdentity] = []
+    for row in session.scalars(select(Project)):
+        out.append(
+            ProjectIdentity(
+                project_id=row.id,
+                company=company_key(row.company),
+                locality=city_key(row.city) or county_key(row.county),
+                # Only distinctive tokens count as evidence of a *specific*
+                # project. Length alone is not enough: "campus" and "center"
+                # clear any length bar and appear in nearly every data-center
+                # headline, so "Sabey Ashburn Campus" would match every Sabey
+                # article mentioning a campus — including genuinely different
+                # sites in other cities.
+                #
+                # Tokens already in the company name are excluded too. Project
+                # names usually repeat the operator ("Sabey Ashburn Campus"), and
+                # such a token adds no discriminating power: the company check has
+                # already passed, so re-matching it would accept any article by
+                # that operator anywhere.
+                name_tokens=tuple(
+                    t
+                    for t in re.split(r"[^a-z0-9]+", (row.name or "").lower())
+                    if len(t) > 4
+                    and t not in _GENERIC_NAME_TOKENS
+                    and t not in company_key(row.company).split()
+                ),
+            )
+        )
+    return out
+
+
+def matches_known_project(
+    url: str, title: str | None, identities: list[ProjectIdentity]
+) -> int | None:
+    """The id of the project this URL appears to cover, if any.
+
+    Requires the **full** company key plus either the locality or a distinctive
+    name token. Matching on a single company token is far too loose: "digital" and
+    "ashburn" together hit every Ashburn article by any operator, which in testing
+    inflated one project's apparent coverage from a handful to 154.
+    """
+    haystack = normalize_haystack(f"{title or ''} {urlsplit(url).path}")
+    for identity in identities:
+        if not identity.company or identity.company not in haystack:
+            continue
+        if identity.locality and identity.locality in haystack:
+            return identity.project_id
+        if any(token in haystack for token in identity.name_tokens):
+            return identity.project_id
+    return None
+
+
+def pending(
+    session: Session,
+    limit: int | None = None,
+    *,
+    known_first: bool = False,
+) -> list[IngestUrl]:
+    """Queued candidates.
+
+    Ordered oldest-published-first so a backlog drains predictably. With
+    ``known_first`` the ones covering an already-tracked project come first, which
+    spends each LLM call on depth rather than on another single-source row.
+    """
     stmt = (
         select(IngestUrl)
         .where(IngestUrl.status == PENDING_URL_STATUS)
         .order_by(IngestUrl.published_at.asc().nullslast(), IngestUrl.id.asc())
     )
-    if limit:
-        stmt = stmt.limit(limit)
-    return list(session.scalars(stmt))
+    if not known_first:
+        if limit:
+            stmt = stmt.limit(limit)
+        return list(session.scalars(stmt))
+
+    # Scored in Python: the match needs slug normalization that SQL cannot do, and
+    # the queue is hundreds of rows, not millions.
+    rows = list(session.scalars(stmt))
+    identities = project_identities(session)
+    enriching, fresh = [], []
+    for row in rows:
+        (enriching if matches_known_project(row.url, row.title, identities) else fresh).append(row)
+    if enriching:
+        log.info(
+            "%d queued candidate(s) cover a tracked project; crawling those first",
+            len(enriching),
+        )
+    ordered = enriching + fresh
+    return ordered[:limit] if limit else ordered
+
+
+def pending_split(session: Session) -> tuple[int, int]:
+    """(deepens an existing project, would create a new one) over the whole queue."""
+    identities = project_identities(session)
+    rows = list(session.scalars(select(IngestUrl).where(IngestUrl.status == PENDING_URL_STATUS)))
+    deep = sum(1 for r in rows if matches_known_project(r.url, r.title, identities))
+    return deep, len(rows) - deep
 
 
 #: Outcomes worth another attempt: the URL was never successfully read, and the
@@ -709,6 +844,7 @@ __all__ = [
     "DiscoverReport",
     "FeedSpec",
     "FilterSpec",
+    "ProjectIdentity",
     "SitemapSpec",
     "crawl_sitemap",
     "default_feeds_path",
@@ -717,8 +853,11 @@ __all__ = [
     "failure_summary",
     "load_config",
     "load_sitemaps",
+    "matches_known_project",
     "parse_feed",
     "pending",
+    "pending_split",
+    "project_identities",
     "queue_candidates",
     "run",
     "select_candidates",

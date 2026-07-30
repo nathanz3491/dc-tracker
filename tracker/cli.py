@@ -657,6 +657,13 @@ def sync(
             "--browser", help="Escalate blocked pages to Crawl4AI. Needs the 'crawl' extra."
         ),
     ] = False,
+    breadth_first: Annotated[
+        bool,
+        typer.Option(
+            "--breadth-first",
+            help="Drain the queue oldest-first instead of prioritising depth on known projects.",
+        ),
+    ] = False,
     deep: Annotated[
         bool,
         typer.Option(
@@ -807,8 +814,15 @@ def sync(
     # --- 2. extract new -----------------------------------------------------
     console.rule("[bold]2/4 extract new[/bold]", align="left")
     with session_scope(engine, commit=False) as session:
-        pending_urls = [row.url for row in disc.pending(session, limit=limit)]
+        # known_first spends each LLM call on depth: a queued article covering a
+        # project we already track becomes a SECOND source, which fills fields one
+        # article cannot and lifts confidence from 2 to 3. Draining oldest-first
+        # instead just grows the database sideways with more single-source rows.
+        pending_urls = [
+            row.url for row in disc.pending(session, limit=limit, known_first=not breadth_first)
+        ]
         backlog = len(disc.pending(session))
+        deepening, _fresh = disc.pending_split(session)
         # Counted whether or not we are retrying, so the summary can never claim
         # "0 failed" while a dozen articles sit unread.
         unread = disc.failed(session)
@@ -816,6 +830,12 @@ def sync(
         if retry_failed:
             room = max(0, limit - len(pending_urls))
             pending_urls += [row.url for row in unread[:room]]
+
+    if pending_urls and not breadth_first and deepening:
+        console.print(
+            f"[dim]{deepening} of {backlog} queued candidate(s) cover a project already "
+            f"tracked; those go first[/dim]"
+        )
 
     if not pending_urls:
         if dry_run and totals["queued"]:
