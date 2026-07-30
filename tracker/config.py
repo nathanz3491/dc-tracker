@@ -20,12 +20,30 @@ _ROOT_MARKER = "pyproject.toml"
 
 
 def find_project_root(start: Path | None = None) -> Path:
-    """Nearest ancestor containing pyproject.toml, else the starting directory."""
+    """Nearest ancestor of the CWD containing pyproject.toml, else the CWD.
+
+    Use this for things that should follow the *user* — where to put a database
+    when none is configured. For things that ship with the code, use
+    :func:`install_root`.
+    """
     here = (start or Path.cwd()).resolve()
     for candidate in (here, *here.parents):
         if (candidate / _ROOT_MARKER).is_file():
             return candidate
     return here
+
+
+def install_root() -> Path:
+    """The directory containing the `tracker` package.
+
+    Distinct from :func:`find_project_root` on purpose. Repo assets that ship
+    with the code — `migrations/`, and the article cache — must be found relative
+    to the installed package, not relative to wherever the operator happens to be
+    standing. Once the CLI is on PATH, `tracker init` is routinely run from
+    another directory, and a CWD-relative lookup sends it hunting for a
+    `migrations/` folder in the home directory.
+    """
+    return Path(__file__).resolve().parent.parent
 
 
 class Settings(BaseSettings):

@@ -105,8 +105,28 @@ tracker verify                    # progress toward the required project list
 tracker export md > tracker.md    # Markdown table, byte-stable across runs
 ```
 
-Every command takes `--db PATH`; the default is `data/tracker.db`, found by
-walking up from the current directory for `pyproject.toml`.
+Every command takes `--db PATH`. Without it the database is `data/tracker.db`
+under the project root, or `$TRACKER_DB` if set.
+
+### Running `tracker` from anywhere
+
+Launcher scripts in `C:\Users\64887\bin` (already on the user PATH, so no PATH
+change was needed) make `tracker` available from any directory:
+
+- `tracker.cmd` for cmd.exe and PowerShell
+- `tracker` for Git Bash
+
+Both call the project's own virtualenv, so the CLI works without activating it and
+without putting that venv's `python`/`pip` on PATH where they would shadow the
+system interpreter. Both also default `TRACKER_DB` to the project's database —
+otherwise `tracker list` run from elsewhere would resolve `data/tracker.db`
+relative to the current directory and create a stray empty database instead of
+showing your data. An exported `TRACKER_DB` wins over that default, and `--db`
+wins over both.
+
+Assets that ship with the code (`migrations/`, the prompt files, the article
+cache) are located relative to the installed package rather than the current
+directory, which is what lets `tracker init` work from anywhere.
 
 ## Test
 

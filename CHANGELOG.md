@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `migrations/`, the prompt files and the article cache are now located relative
+  to the installed package rather than the current directory. `tracker init` run
+  from outside the project tree previously failed looking for a `migrations/`
+  folder in the operator's home directory — which only surfaced once the CLI was
+  put on PATH.
+
 ### Added
 
 - Project scaffold: `pyproject.toml` (`dc-tracker`, console script `tracker`),

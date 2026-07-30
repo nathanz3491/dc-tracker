@@ -20,7 +20,7 @@ from pathlib import Path
 from sqlalchemy import Engine, create_engine, event, text
 from sqlalchemy.orm import Session, sessionmaker
 
-from tracker.config import find_project_root
+from tracker.config import find_project_root, install_root
 
 log = logging.getLogger(__name__)
 
@@ -61,6 +61,14 @@ class Migration:
 
 
 def migrations_dir() -> Path:
+    """Locate `migrations/`, preferring the copy that ships with the package.
+
+    Package-relative first so `tracker init` works from any directory once the
+    CLI is on PATH; CWD-relative as a fallback for an unusual layout.
+    """
+    beside_package = install_root() / "migrations"
+    if beside_package.is_dir():
+        return beside_package
     return find_project_root() / "migrations"
 
 

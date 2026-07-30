@@ -15,11 +15,13 @@ import pytest
 from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.exc import IntegrityError, OperationalError
 
+from tracker.config import install_root
 from tracker.db import (
     MigrationError,
     discover_migrations,
     init_db,
     make_engine,
+    migrations_dir,
     open_db,
     run_migrations,
     schema_version,
@@ -39,6 +41,30 @@ def test_discover_migrations_is_ordered_and_contiguous():
     assert [m.version for m in migrations] == list(range(1, len(migrations) + 1))
     assert migrations[0].name == "init"
     assert all(m.sql.strip() for m in migrations)
+
+
+def test_migrations_are_found_from_an_unrelated_directory(tmp_path: Path, monkeypatch):
+    """`tracker init` must work from anywhere once the CLI is on PATH.
+
+    Migrations ship with the code, so they are located relative to the installed
+    package. A CWD-relative lookup sent `init` hunting for a `migrations/` folder
+    in whatever directory the operator happened to be standing in.
+    """
+    monkeypatch.chdir(tmp_path)
+    found = migrations_dir()
+    assert found.is_dir(), f"{found} should exist regardless of cwd"
+    assert [m.version for m in discover_migrations()] == [1, 2]
+
+    engine, applied = init_db(tmp_path / "elsewhere.db")
+    assert applied == [1, 2]
+    assert schema_version(engine) == 2
+
+
+def test_install_root_is_independent_of_cwd(tmp_path: Path, monkeypatch):
+    before = install_root()
+    monkeypatch.chdir(tmp_path)
+    assert install_root() == before
+    assert (install_root() / "tracker").is_dir()
 
 
 def test_discover_migrations_rejects_bad_filename(tmp_path: Path):

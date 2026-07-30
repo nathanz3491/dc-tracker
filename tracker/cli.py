@@ -23,7 +23,7 @@ from rich.table import Table
 from sqlalchemy import func, select
 
 from tracker import __version__
-from tracker.config import get_settings
+from tracker.config import get_settings, install_root
 from tracker.db import MigrationError, init_db, open_db, schema_version, session_scope
 from tracker.models import Project, Source
 from tracker.vocab import PHASES
@@ -221,7 +221,6 @@ def ingest_crawl(
     the fetched article; unsupported values are dropped and the drop is recorded
     in the project's notes.
     """
-    from tracker.config import find_project_root
     from tracker.ingest import crawl
     from tracker.llm import MiniMaxExtractor, MissingApiKey
 
@@ -268,7 +267,7 @@ def ingest_crawl(
         escalate = Crawl4AIFetcher(settings)
 
     engine, _ = init_db(_db_path())
-    cache_dir = None if no_cache else find_project_root() / ".cache" / "articles"
+    cache_dir = None if no_cache else install_root() / ".cache" / "articles"
 
     with session_scope(engine) as session:
         report = crawl.run(
@@ -725,10 +724,9 @@ def verify_coverage(
     paste the names into `seed/required-projects.txt` and this reports which are
     present. Until then it reports the count against `--target`.
     """
-    from tracker.config import find_project_root
     from tracker.dedup import company_key
 
-    required = required or find_project_root() / "seed" / "required-projects.txt"
+    required = required or install_root() / "seed" / "required-projects.txt"
 
     engine = _read_engine()
     with session_scope(engine, commit=False) as session:
