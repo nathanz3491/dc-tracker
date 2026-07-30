@@ -593,6 +593,7 @@ def run(
             )
             log.warning("fetch failed: %s (%s)", result.url, result.error)
             record_url(session, run_id, outcome)
+            _checkpoint(session, dry_run)
             continue
 
         outcome = extract_one(result, prompt=prompt, extractor=extractor, settings=settings)
@@ -612,12 +613,29 @@ def run(
                 report.duplicates_flagged += 1
 
         record_url(session, run_id, outcome)
+        _checkpoint(session, dry_run)
 
     if dry_run:
         session.rollback()
-    else:
-        session.commit()
     return report
+
+
+def _checkpoint(session: Session, dry_run: bool) -> None:
+    """Commit after each URL rather than once at the end of the run.
+
+    Two reasons, both learned the hard way on a 150-article run:
+
+    * **Lock contention.** One transaction spanning 150 articles holds SQLite's
+      write lock for around 25 minutes, and anything else touching the database in
+      that window fails with "database is locked" -- taking the whole run with it.
+    * **Durability.** A failure on article 149 previously discarded the other 148.
+      Ingestion is idempotent by design, so committing as it goes means a
+      re-run resumes instead of starting over.
+
+    A dry run holds everything so the outer rollback still discards it.
+    """
+    if not dry_run:
+        session.commit()
 
 
 def _split_cached(urls: list[str], cache_dir: Path | None) -> tuple[list[FetchResult], list[str]]:
