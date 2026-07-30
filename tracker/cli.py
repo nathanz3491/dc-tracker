@@ -8,6 +8,7 @@ guarantee enforced by SQLite itself.
 
 from __future__ import annotations
 
+import atexit
 import contextlib
 import logging
 import os
@@ -24,7 +25,15 @@ from sqlalchemy import func, select
 
 from tracker import __version__
 from tracker.config import get_settings, install_root
-from tracker.db import MigrationError, init_db, open_db, schema_version, session_scope
+from tracker.db import (
+    AlreadyRunning,
+    MigrationError,
+    acquire_write_lock,
+    init_db,
+    open_db,
+    schema_version,
+    session_scope,
+)
 from tracker.models import Project, Source
 from tracker.vocab import PHASES
 
@@ -86,6 +95,18 @@ BROWSER_HINT = (
     r'retry with --browser after: pip install -e ".\[crawl]" && crawl4ai-setup[/dim]'
 )
 
+LOCKED_HELP = """the database is locked by another process.
+
+Something else is writing to it, most often a `tracker sync` still running in
+another window. SQLite allows one writer at a time.
+
+Find it with:
+  Get-CimInstance Win32_Process -Filter "Name like '%python%'" |
+    Select-Object ProcessId, CommandLine
+
+Wait for it to finish, or stop it, then run again. Nothing already committed is
+lost: ingestion is idempotent, so a re-run resumes where this one stopped."""
+
 #: Set by the top-level --db option and consumed by each subcommand.
 _state: dict[str, object] = {"db": None}
 
@@ -126,6 +147,25 @@ def main_callback(
         format="%(message)s",
         handlers=[RichHandler(console=err, show_time=False, show_path=verbose, markup=False)],
     )
+
+
+@contextlib.contextmanager
+def _explain_db_locks():
+    """Turn SQLite's "database is locked" into an actionable message.
+
+    The lock FILE prevents two tracker runs from starting, but it cannot see a
+    writer that predates it, nor any other process holding the file. Without this
+    the operator gets a forty-line SQLAlchemy traceback whose actual meaning --
+    "something else is writing, try later" -- appears only on the last line.
+    """
+    from sqlalchemy.exc import OperationalError
+
+    try:
+        yield
+    except OperationalError as exc:
+        if "database is locked" not in str(exc).lower():
+            raise
+        _fail(LOCKED_HELP)
 
 
 @app.command()
@@ -732,6 +772,17 @@ def sync(
     cache_dir = install_root() / ".cache" / "articles"
     totals = {"queued": 0, "new": 0, "refreshed": 0, "failed": 0}
 
+    # Held for the whole run. SQLite takes one writer, and two overlapping syncs
+    # fail partway through -- after the second has already paid for LLM calls.
+    try:
+        release_lock = acquire_write_lock(_db_path(), command="sync")
+    except AlreadyRunning as exc:
+        _fail(str(exc))
+        return
+    # atexit rather than a `with` block: this command has several early returns,
+    # and registering the release covers all of them including typer.Exit.
+    atexit.register(release_lock)
+
     # --- 1. discover --------------------------------------------------------
     if skip_discover:
         console.print("[dim]1/4 discover — skipped[/dim]")
@@ -848,7 +899,7 @@ def sync(
             console.print("queue is empty — nothing new to extract")
     else:
         console.print(f"extracting {len(pending_urls)} of {backlog} queued candidate(s)")
-        with session_scope(engine) as session:
+        with _explain_db_locks(), session_scope(engine) as session:
             new_report = crawl.run(
                 session,
                 pending_urls,
@@ -879,7 +930,7 @@ def sync(
             console.print(f"no source read more than {refresh_days} day(s) ago — all current")
         else:
             console.print(f"re-reading {len(stale)} source(s) not seen in {refresh_days} day(s)")
-            with session_scope(engine) as session:
+            with _explain_db_locks(), session_scope(engine) as session:
                 # cache_dir=None on purpose: the point of refreshing is to find out
                 # whether the article changed, and serving it from the local cache
                 # would guarantee the answer is "no".
@@ -931,6 +982,8 @@ def sync(
         )
     if (totals["failed"] or unread) and not browser:
         console.print(BROWSER_HINT)
+
+    release_lock()
 
 
 @app.command("search")

@@ -111,6 +111,17 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **Two overlapping runs no longer collide silently.** SQLite takes one writer, so
+  a second `tracker sync` failed partway with a raw forty-line SQLAlchemy
+  traceback — after it had already paid for LLM calls. A lock file now refuses the
+  second run up front, reclaiming the lock if the holding process has died, and any
+  remaining "database is locked" is translated into a message that says what to do.
+- `crawl.run` commits after each URL rather than once per run. One transaction
+  spanning 150 articles held the write lock for around 25 minutes, and a failure at
+  article 149 discarded the other 148.
+
+### Fixed (earlier)
+
 Found by running the crawl path against the live MiniMax API for the first time:
 
 - Rich read `[crawl]` in the "install the extra" hint as a style tag and
