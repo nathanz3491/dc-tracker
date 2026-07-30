@@ -318,6 +318,7 @@ tracker risks                          # every open obstacle, grouped by kind
 tracker risks --severity blocking      # only the ones that have stopped work
 tracker list --risk transmission       # projects waiting on grid work
 tracker stats                          # includes MW at risk per category
+tracker exposure --by company          # capacity behind an obstacle, rolled up
 ```
 
 ```text
@@ -340,6 +341,30 @@ countable: MW blocked on `transmission` is a power and utility signal, MW blocke
 
 Each obstacle shows the verbatim quote behind it, and one that has none says
 `uncited` rather than sitting silently beside the evidenced ones.
+
+`tracker exposure` is the rollup, and it deliberately **does not produce a single
+"MW at risk" number**:
+
+```text
+open-risk exposure by company
++-----------+----------+-------------+-------------+----------+----------+-------+
+| company   | projects | blocking MW | material MW | watch MW | total MW | no MW |
++-----------+----------+-------------+-------------+----------+----------+-------+
+| Microsoft |        1 |           0 |         900 |        0 |      900 |     0 |
+| Sabey     |        1 |          70 |           0 |        0 |       70 |     0 |
++-----------+----------+-------------+-------------+----------+----------+-------+
+```
+
+Collapsing those three columns into one requires deciding how much a `watch` is
+worth against a `blocking`, and that is a judgement rather than anything a source
+stated. `--weighted` adds the single number for whoever wants it, and prints the
+weights it used on the same screen. Projects with an open risk but no cited capacity
+sit in their own `no MW` column rather than being averaged in as zero.
+
+Grouping by anything other than `category` counts each project once, in its most
+severe open category. Grouping by `category` deliberately does not — a project
+obstructed three ways belongs under all three — so that view says so rather than
+inviting you to add the column up.
 
 Every command takes `--db PATH`. Without it the database is `data/tracker.db`
 under the project root, or `$TRACKER_DB` if set.

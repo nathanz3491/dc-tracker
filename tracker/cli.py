@@ -797,6 +797,139 @@ def risks(
         )
 
 
+#: Weights for `exposure --weighted`. **A judgement, not a cited fact**, which is
+#: why the weighted column is opt-in and the weights are printed whenever it is
+#: used. The unweighted view splits the same capacity across severity columns and
+#: lets the reader apply their own.
+SEVERITY_WEIGHTS: dict[str, float] = {"blocking": 1.0, "material": 0.5, "watch": 0.25}
+
+#: What `exposure --by` can group on. `category` comes off the risk; the rest are
+#: `Project` attributes read by name.
+_EXPOSURE_KEYS: tuple[str, ...] = ("category", "state", "company", "customer")
+
+
+@app.command()
+def exposure(
+    by: Annotated[
+        str, typer.Option("--by", help=f"One of: {', '.join(_EXPOSURE_KEYS)}")
+    ] = "category",
+    weighted: Annotated[
+        bool,
+        typer.Option("--weighted", help="Add a single weighted MW column. Weights are printed."),
+    ] = False,
+) -> None:
+    """Planned capacity sitting behind an open obstacle, rolled up.
+
+    The read-through the PRD asks for: capacity blocked on `transmission` or
+    `grid_capacity` is a power and utility signal, capacity blocked on `offtake` or
+    `chip_supply` is a cloud and semiconductor one, and capacity slipping anywhere
+    is deferred revenue for whoever was going to fill it.
+
+    Severity is reported as three columns rather than collapsed into one number.
+    Collapsing needs a weighting, a weighting is a judgement rather than anything a
+    source said, and this tool's whole discipline is not presenting judgements as
+    facts. `--weighted` adds the single number for whoever wants it, and prints the
+    weights it used alongside.
+    """
+    if by not in _EXPOSURE_KEYS:
+        _fail(f"--by must be one of: {', '.join(_EXPOSURE_KEYS)}")
+
+    engine = _read_engine()
+    with session_scope(engine, commit=False) as session:
+        rows = session.execute(
+            select(Risk, Project)
+            .join(Project, Risk.project_id == Project.id)
+            .where(Risk.status == OPEN_RISK_STATUS)
+        ).all()
+
+        if not rows:
+            console.print("[green]no open risks[/green] — nothing is recorded as obstructed")
+            return
+
+        # (group, project_id) -> worst open severity for that project in that group.
+        # Deduplicating per project is what stops a project with three obstacles
+        # being counted three times in a company or state rollup.
+        worst: dict[tuple[str, int], str] = {}
+        projects: dict[int, Project] = {}
+        for risk_row, project in rows:
+            key = risk_row.category if by == "category" else (getattr(project, by) or NA)
+            projects[project.id] = project
+            current = worst.get((key, project.id))
+            if current is None or severity_rank(risk_row.severity) > severity_rank(current):
+                worst[(key, project.id)] = risk_row.severity
+
+        groups: dict[str, dict[str, float | int]] = {}
+        for (key, project_id), severity in worst.items():
+            bucket = groups.setdefault(
+                key,
+                {"projects": 0, "blocking": 0.0, "material": 0.0, "watch": 0.0, "uncosted": 0},
+            )
+            bucket["projects"] += 1
+            mw = projects[project_id].mw_planned
+            if mw is None:
+                bucket["uncosted"] += 1
+            else:
+                bucket[severity] += mw
+
+        def total(bucket) -> float:
+            return sum(bucket[s] for s in RISK_SEVERITIES)
+
+        def weight(bucket) -> float:
+            return sum(bucket[s] * SEVERITY_WEIGHTS[s] for s in RISK_SEVERITIES)
+
+        table = Table(
+            title=f"open-risk exposure by {by}",
+            header_style="bold",
+            title_justify="left",
+            box=TABLE_BOX,
+        )
+        table.add_column(by)
+        table.add_column("projects", justify="right")
+        table.add_column("blocking MW", justify="right")
+        table.add_column("material MW", justify="right")
+        table.add_column("watch MW", justify="right")
+        table.add_column("total MW", justify="right")
+        if weighted:
+            table.add_column("weighted MW", justify="right")
+        table.add_column("no MW", justify="right")
+
+        for key in sorted(groups, key=lambda k: (-weight(groups[k]), -total(groups[k]), k)):
+            bucket = groups[key]
+            cells = [
+                str(key),
+                str(bucket["projects"]),
+                _fmt_mw(bucket["blocking"]),
+                _fmt_mw(bucket["material"]),
+                _fmt_mw(bucket["watch"]),
+                _fmt_mw(total(bucket)),
+            ]
+            if weighted:
+                cells.append(_fmt_mw(weight(bucket)))
+            cells.append(str(bucket["uncosted"]))
+            table.add_row(*cells)
+        console.print(table)
+
+        if by == "category":
+            console.print(
+                "[dim]A project appears under every category obstructing it, so the "
+                "column does not add up to a fleet total.[/dim]"
+            )
+        else:
+            console.print(
+                "[dim]Each project is counted once, in its most severe open category.[/dim]"
+            )
+        console.print(
+            '[dim]"no MW" counts projects with an open risk but no cited capacity. '
+            "They are excluded from the MW columns rather than treated as zero.[/dim]"
+        )
+        if weighted:
+            printed = ", ".join(f"{s}={SEVERITY_WEIGHTS[s]}" for s in reversed(RISK_SEVERITIES))
+            console.print(
+                f"[dim]weighted MW uses {printed} — a judgement of this tool, not "
+                "anything a source stated.[/dim]"
+            )
+
+
 @app.command()
 def stats() -> None:
     """Summary counts by phase, confidence and state."""

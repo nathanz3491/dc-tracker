@@ -446,6 +446,84 @@ def test_stats_breaks_down_by_open_risk(with_risks: Path):
     assert "every category obstructing it" in result.output
 
 
+# --- exposure ---------------------------------------------------------------
+
+
+def test_exposure_splits_capacity_by_severity(with_risks: Path):
+    result = invoke(with_risks, "exposure")
+    assert result.exit_code == 0
+    assert "blocking MW" in result.output
+    assert "material MW" in result.output
+    assert "watch MW" in result.output
+
+
+def test_exposure_does_not_invent_a_single_number_by_default(with_risks: Path):
+    """Collapsing severities needs a weighting, and a weighting is a judgement."""
+    assert "weighted MW" not in invoke(with_risks, "exposure").output
+
+
+def test_exposure_prints_the_weights_when_asked_for_one(with_risks: Path):
+    result = invoke(with_risks, "exposure", "--weighted")
+    assert "weighted MW" in result.output
+    assert "blocking=1.0" in result.output
+    assert "not anything a source stated" in result.output
+
+
+def test_exposure_counts_a_multi_risk_project_once_per_company(with_risks: Path):
+    """Microsoft has two open risks; its capacity must not be double counted."""
+    result = invoke(with_risks, "exposure", "--by", "company")
+    line = next(ln for ln in result.output.splitlines() if "Microsoft" in ln)
+    cells = [c.strip() for c in line.strip("|").split("|")]
+    assert cells[1] == "1", f"expected one project, got {cells}"
+    # Counted in its most severe open category, which is material, not watch.
+    assert cells[2] == "0" and cells[3] == "900"
+
+
+def test_exposure_by_category_discloses_the_double_count(with_risks: Path):
+    """Microsoft legitimately appears under both transmission and water, so the
+    column cannot be added up — and must say so rather than let a reader try."""
+    result = invoke(with_risks, "exposure")
+    assert "does not add up to a fleet total" in result.output
+
+
+def test_exposure_reports_uncosted_projects_separately(tmp_path: Path, initialized: Path):
+    """A project with no cited MW is not zero MW at risk."""
+    curated = tmp_path / "nomw.json"
+    curated.write_text(
+        json.dumps(
+            {
+                "projects": [
+                    {
+                        "name": "Unknown Size",
+                        "company": "Acme",
+                        "city": "Reno",
+                        "state": "NV",
+                        "sources": [{"url": "https://a.test/x"}],
+                        "risks": [{"category": "water", "summary": "Aquifer contested."}],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert invoke(initialized, "ingest", "manual", "--json", str(curated)).exit_code == 0
+    result = invoke(initialized, "exposure")
+    assert "no MW" in result.output
+    assert "rather than treated as zero" in result.output
+
+
+def test_exposure_rejects_an_unknown_grouping(with_risks: Path):
+    result = invoke(with_risks, "exposure", "--by", "nonsense")
+    assert result.exit_code == 2
+    assert "must be one of" in result.output
+
+
+def test_exposure_says_nothing_is_obstructed_when_nothing_is(seeded: Path):
+    result = invoke(seeded, "exposure")
+    assert result.exit_code == 0
+    assert "no open risks" in result.output
+
+
 # --- the read-only guarantee -----------------------------------------------
 
 

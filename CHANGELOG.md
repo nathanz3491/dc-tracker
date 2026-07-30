@@ -117,6 +117,15 @@ initial build of the v1 PRD.
   0004 backfills any existing `blocker` into an `unclassified` risk carrying the
   source that asserted it, so upgrading loses nothing. Verified against a copy of
   the live database: both rows migrated, both cited.
+- **`tracker exposure`** — planned capacity sitting behind an open obstacle, rolled
+  up `--by category | state | company | customer`. Severity is reported as three
+  MW columns rather than collapsed into one number: collapsing needs a weighting,
+  a weighting is a judgement rather than anything a source said, and this tool does
+  not present judgements as facts. `--weighted` adds the single number for whoever
+  wants it and prints the weights it used. Projects with an open risk but no cited
+  capacity are counted in their own column rather than treated as zero MW at risk.
+  Grouping by anything but category counts each project once, in its most severe
+  open category, so a project obstructed three ways is not triple-counted.
 - **`tracker risks`** — obstacles across the database grouped by kind, each with the
   projects it blocks and the planned MW behind them. This is the query one free-text
   sentence per project could not answer, and it is what carries the read-through:
