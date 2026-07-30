@@ -83,6 +83,13 @@ initial build of the v1 PRD.
 
 Found by running the crawl path against the live MiniMax API for the first time:
 
+- **A placeholder URL is no longer treated as a citation.** It is dropped before
+  any weighting, so it can neither supply the "strongest source" nor count
+  toward domain independence. Observed live: a real Microsoft project reached
+  confidence 3 because a placeholder seed row contributed a weight-3
+  `company_filing` for a URL that does not exist. Placeholder-only rows now
+  score 0 and are routed to `tracker review`, which is the whole point of the
+  seed guard.
 - The "dropped unsupported value(s)" note over-reported. Identity fields are
   restored after the evidence gate (a project row cannot exist without them), and
   `notes` is a summary rather than a citable claim — but both were still listed as

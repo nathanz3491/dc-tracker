@@ -216,8 +216,10 @@ def test_list_filters_by_phase(seeded: Path):
 
 
 def test_list_filters_by_min_confidence(seeded: Path):
-    assert "no projects match" in invoke(seeded, "list", "--min-confidence", "3").output
-    assert "3 project(s)" in invoke(seeded, "list", "--min-confidence", "2").output
+    # The seed ships with placeholder URLs, which are not citations, so every
+    # seeded row scores 0 until a real source is ingested for it.
+    assert "no projects match" in invoke(seeded, "list", "--min-confidence", "1").output
+    assert "3 project(s)" in invoke(seeded, "list", "--min-confidence", "0").output
 
 
 def test_list_rejects_an_unknown_phase(seeded: Path):
@@ -284,6 +286,47 @@ def test_stats_summarizes_and_qualifies_its_sums(seeded: Path):
 
 
 # --- discovery queue --------------------------------------------------------
+
+
+def with_real_source(db: Path) -> int:
+    """Insert a project cited by a genuine (non-placeholder) URL. Returns its id."""
+    from tracker.db import init_db, session_scope
+    from tracker.ingest.records import IngestRecord, SourceRecord
+    from tracker.models import utcnow
+    from tracker.upsert import upsert_record
+
+    claims = {
+        "name": "Real Campus",
+        "company": "Verified Corp",
+        "city": "Ames",
+        "state": "IA",
+        "mw_planned": 300.0,
+        "investment_usd": 1_000_000_000,
+        "phase": "construction",
+    }
+    engine, _ = init_db(db)
+    with session_scope(engine) as session:
+        result = upsert_record(
+            session,
+            IngestRecord(
+                project={
+                    "company": "Verified Corp",
+                    "name": "Real Campus",
+                    "city": "Ames",
+                    "state": "IA",
+                },
+                sources=[
+                    SourceRecord(
+                        url="https://news.example.com/real-campus/",
+                        source_type="company_filing",
+                        fetched_at=utcnow(),
+                        excerpt="A real quote.",
+                        claims=claims,
+                    )
+                ],
+            ),
+        )
+        return result.project_id
 
 
 def queue_one(db: Path, url: str = "https://a.test/one/", status: str = "discovered") -> None:
@@ -425,9 +468,21 @@ def test_export_respects_filters(seeded: Path):
 # --- review -----------------------------------------------------------------
 
 
-def test_review_lists_nothing_when_all_rows_are_confident(seeded: Path):
-    """The seed lands at confidence 2, which is the auto-approval threshold."""
+def test_placeholder_seeded_rows_are_routed_to_review(seeded: Path):
+    """A placeholder URL earns no trust, so the row must land in the review queue.
+
+    This is the point of the guard: smoke-test data in a real database has to look
+    untrustworthy rather than quietly claiming a confident score.
+    """
     result = invoke(seeded, "review")
+    assert result.exit_code == 0
+    assert "need review" in result.output
+    assert "placeholder" in result.output.lower()
+
+
+def test_review_is_empty_once_rows_are_confident(initialized: Path):
+    with_real_source(initialized)
+    result = invoke(initialized, "review")
     assert result.exit_code == 0
     assert "nothing to review" in result.output
 
@@ -440,26 +495,29 @@ def test_review_lists_low_confidence_rows_with_reasons(seeded: Path):
     assert "tracker review --verify" in result.output, "must say how to act on it"
 
 
-def test_verify_sets_last_verified_at_and_lifts_confidence(seeded: Path):
-    before = invoke(seeded, "show", "1").output
-    assert "last verified    never" in before
+def test_verify_sets_last_verified_at_and_lifts_confidence(initialized: Path):
+    """Needs a real citation: verification asserts the facts are right, it does not
+    conjure evidence for a row that has none."""
+    pid = with_real_source(initialized)
+    assert "last verified    never" in invoke(initialized, "show", str(pid)).output
 
-    result = invoke(seeded, "review", "--verify", "1")
+    result = invoke(initialized, "review", "--verify", str(pid))
     assert result.exit_code == 0
     assert "is verified" in result.output
     assert "confidence is now 3" in result.output
 
-    after = invoke(seeded, "show", "1").output
+    after = invoke(initialized, "show", str(pid)).output
     assert "last verified    never" not in after
     assert "operator verified" in after
 
 
-def test_unverify_reverses_it(seeded: Path):
-    invoke(seeded, "review", "--verify", "1")
-    result = invoke(seeded, "review", "--unverify", "1")
+def test_unverify_reverses_it(initialized: Path):
+    pid = with_real_source(initialized)
+    invoke(initialized, "review", "--verify", str(pid))
+    result = invoke(initialized, "review", "--unverify", str(pid))
     assert result.exit_code == 0
     assert "no longer verified" in result.output
-    assert "last verified    never" in invoke(seeded, "show", "1").output
+    assert "last verified    never" in invoke(initialized, "show", str(pid)).output
 
 
 def test_verify_rejects_a_missing_project(seeded: Path):

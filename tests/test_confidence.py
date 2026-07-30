@@ -66,6 +66,25 @@ def test_same_outlet_many_articles_is_one_source():
 # --- Floor and ceiling ------------------------------------------------------
 
 
+def test_a_placeholder_url_is_not_a_citation():
+    """Observed live: a real project reached confidence 3 because a placeholder
+    seed row supplied the "strongest source". A URL that does not exist cannot
+    earn trust, however authoritative the source_type claims to be."""
+    fake = src("company_filing", "https://news.microsoft.com/PLACEHOLDER-replace-me/")
+    score = compute([fake])
+    assert score.value == 0
+    assert any("placeholder" in r for r in score.reasons)
+
+
+def test_a_placeholder_does_not_inflate_a_real_citation():
+    real = src("general_media", "https://racinecountyeye.com/a/")
+    fake = src("company_filing", "https://news.microsoft.com/PLACEHOLDER-replace-me/")
+    alone = compute([real])
+    with_fake = compute([real, fake])
+    assert with_fake.value == alone.value, "the placeholder must add nothing"
+    assert "1 independent" not in " ".join(with_fake.reasons)
+
+
 def test_no_sources_is_zero():
     assert compute([]).value == 0
 

@@ -75,6 +75,16 @@ UNCORROBORATED_CEILING = 2
 #: rounding. Matches the PRD's Q2 threshold for flagging a delta in `notes`.
 CONFLICT_TOLERANCE = 0.20
 
+#: A seed-file URL the operator has not replaced yet. `ingest manual` refuses such
+#: a file unless --allow-placeholders is passed for a smoke test, but once that
+#: data is in the database it must not be able to earn trust: a placeholder is not
+#: a citation, and a `company_filing` weight on a URL that does not exist would
+#: hand a project confidence 3 on the strength of nothing.
+#:
+#: Observed live: a real Microsoft project reached 3 because a placeholder seed row
+#: contributed the "strongest source".
+PLACEHOLDER_MARKER = "PLACEHOLDER"
+
 #: Multi-part public suffixes we must not truncate to two labels, or
 #: "bbc.co.uk" and "guardian.co.uk" would collapse into one "source".
 _COMPOUND_SUFFIXES = frozenset(
@@ -248,6 +258,15 @@ def compute(
     if not sources:
         return Score(0, ("no citations",))
 
+    # A placeholder URL is not a citation. Dropped before any weighting so it can
+    # neither supply the "strongest source" nor count toward domain independence.
+    placeholders = sum(1 for s in sources if PLACEHOLDER_MARKER in (s.url or ""))
+    sources = [s for s in sources if PLACEHOLDER_MARKER not in (s.url or "")]
+    if placeholders:
+        reasons.append(f"ignored {placeholders} placeholder citation(s)")
+    if not sources:
+        return Score(0, (*reasons, "no real citations"))
+
     weights = [SOURCE_WEIGHTS.get(s.source_type, 1) for s in sources]
     best = max(weights)
     best_type = sources[weights.index(best)].source_type
@@ -316,6 +335,7 @@ __all__ = [
     "KEY_FIELDS",
     "MIN_FIELDS_FOR_HIGH_CONFIDENCE",
     "OFFICIAL_TYPES",
+    "PLACEHOLDER_MARKER",
     "SOURCE_WEIGHTS",
     "Score",
     "SourceView",

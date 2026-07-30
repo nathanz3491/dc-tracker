@@ -397,6 +397,11 @@ That has not bitten yet; the fix if it does is a `campus` column.
 `0` no citation · `1` weakly cited · `2` solidly cited by one source · `3`
 corroborated or operator-verified.
 
+**A placeholder URL is not a citation** and is dropped before any weighting, so
+a row seeded with `--allow-placeholders` scores 0 and lands in `tracker review`.
+Without that rule a `company_filing` weight on a URL that does not exist handed
+a real project confidence 3 on the strength of nothing.
+
 A single company press release is good evidence but it is one party's account of
 its own project, so a lone source caps at 2 however authoritative. Independence
 is counted by **registrable domain**, not by row: five articles on one outlet are
