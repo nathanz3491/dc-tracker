@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 from sqlalchemy import Engine
 
-from tracker.config import get_settings
+from tracker.config import Settings, get_settings
 from tracker.db import init_db, session_scope
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -37,6 +37,13 @@ def _fast_and_keyless_settings(monkeypatch):
     monkeypatch.setenv("TRACKER_RETRY_BACKOFF_BASE_S", "0")
     monkeypatch.delenv("TRACKER_MINIMAX_API_KEY", raising=False)
     monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
+
+    # Deleting the environment variables is not enough: `.env` is also read, and
+    # once a real one exists on the developer's machine the suite silently starts
+    # depending on it — a test asserting "no key configured" passed on CI and
+    # failed locally. Neutralize the file itself so tests see defaults only.
+    monkeypatch.setitem(Settings.model_config, "env_file", None)
+
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()

@@ -454,7 +454,8 @@ def test_operator_prose_in_notes_is_preserved(session):
     upsert_record(session, rec(notes=["queue MW is generator nameplate"]))
     session.refresh(project)
     assert "Spoke to the county planner" in project.notes
-    assert f"{SOURCE_NOTE_PREFIX} queue MW is generator nameplate" in project.notes
+    assert SOURCE_NOTE_PREFIX in project.notes
+    assert "queue MW is generator nameplate" in project.notes
 
 
 def test_contributed_notes_accumulate_across_records(session):

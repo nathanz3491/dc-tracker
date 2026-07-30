@@ -287,6 +287,24 @@ def test_events_are_extracted_and_cite_the_article(prompt):
     assert all(e.source_url == URL for e in events)
 
 
+def test_the_dropped_note_lists_only_what_was_really_dropped(prompt):
+    """Identity fields are restored after the gate, so they are not "dropped".
+
+    Observed on a live run: the note claimed `name` and `state` had been discarded
+    when both were present on the row. A false statement in the one place an
+    operator looks to judge data quality is worse than no statement.
+    """
+    record = build("llm_response_ungrounded.json", prompt=prompt)[0]
+    dropped_notes = [n for n in record.notes if "dropped unsupported value" in n]
+    assert dropped_notes, "something was ungrounded, so there must be a note"
+    line = dropped_notes[0]
+    claims = record.sources[0].claims
+    for identity in ("name", "company", "city", "state"):
+        if claims.get(identity) is not None:
+            assert identity not in line, f"{identity} is on the row but reported as dropped"
+    assert "notes" not in line, "the summary is recorded separately, not dropped"
+
+
 def test_ungrounded_values_are_dropped_and_disclosed(prompt):
     """Invented capacity and investment must not survive the gate."""
     record = build("llm_response_ungrounded.json", prompt=prompt)[0]

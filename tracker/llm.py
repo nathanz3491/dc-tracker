@@ -99,9 +99,27 @@ class Extractor(Protocol):
 
 # --- JSON recovery ----------------------------------------------------------
 
-_THINK = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+_THINK = re.compile(r"<think>(.*?)</think>", re.DOTALL | re.IGNORECASE)
 _FENCE_OPEN = re.compile(r"^\s*```(?:json|JSON)?\s*", re.MULTILINE)
 _FENCE_CLOSE = re.compile(r"\s*```\s*$", re.MULTILINE)
+
+
+def split_thinking(text: str) -> tuple[str, str]:
+    """Separate a reply into (answer, chain-of-thought).
+
+    The MiniMax M2.x and M3 models put reasoning in ``<think>`` blocks inside the
+    *content* field rather than a separate field, so anything reading the reply has
+    to strip it. Returned rather than discarded so `--check` can report whether the
+    model is spending completion tokens on reasoning — which is what decides
+    whether the JSON budget needs raising.
+    """
+    thinking = " ".join(m.strip() for m in _THINK.findall(text))
+    answer = _THINK.sub("", text).strip()
+    if not thinking and "<think>" in text:
+        # An unterminated block: the reply was cut off mid-thought.
+        thinking = text.split("<think>", 1)[1].strip()
+        answer = text.split("<think>", 1)[0].strip()
+    return answer, thinking
 
 
 def _outermost_object(text: str) -> str:
@@ -307,12 +325,20 @@ class MiniMaxExtractor:
         key" from "no network" before an operator spends a run's worth of fetches.
         """
         started = time.monotonic()
-        reply = self.complete(system="Reply with the single word OK.", user="ping", max_tokens=16)
+        # Not a tiny budget: the M2.x/M3 models emit chain-of-thought inside
+        # <think> blocks in the *content* field, so a 16-token cap is spent
+        # entirely on reasoning and the check reports a truncated thought instead
+        # of the answer. 512 is enough to see a real reply and still costs almost
+        # nothing.
+        reply = self.complete(system="Reply with the single word OK.", user="ping", max_tokens=512)
+        answer, thinking = split_thinking(reply.text)
         return {
             "base_url": self.base_url,
             "model": reply.model,
             "latency_s": round(time.monotonic() - started, 2),
-            "reply": reply.text.strip()[:80],
+            "reply": (answer or "(empty)")[:80],
+            "finish_reason": reply.finish_reason,
+            "thinking_tokens": "yes" if thinking else "no",
             "prompt_tokens": reply.prompt_tokens,
             "completion_tokens": reply.completion_tokens,
         }
@@ -344,4 +370,5 @@ __all__ = [
     "ResponseTruncated",
     "default_extractor",
     "parse_json_object",
+    "split_thinking",
 ]

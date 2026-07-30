@@ -70,6 +70,10 @@ def test_project_dotenv_is_read_from_any_directory(tmp_path: Path, monkeypatch):
     """
     from tracker.config import Settings, get_settings
 
+    # conftest neutralizes env_file for every test; this one is *about* env_file,
+    # so put the real setting back for the duration.
+    monkeypatch.setitem(Settings.model_config, "env_file", (install_root() / ".env", ".env"))
+
     env_file = install_root() / ".env"
     existed = env_file.exists()
     original = env_file.read_bytes() if existed else None

@@ -307,11 +307,19 @@ def build_records(
         claims.setdefault("name", values.get("name") or f"{company} {city or county}")
         claims.pop("notes", None)
 
+        # Report only what was genuinely discarded. `dropped` is the gate's raw
+        # verdict, but identity fields (name, company, city, county, state) are
+        # then restored from the ungated values because a project row cannot exist
+        # without them and the article self-evidently concerns it — and `notes` is
+        # a summary, never a citable claim, so it is recorded separately below.
+        # Listing either as "dropped" told the operator something untrue, which is
+        # corrosive in the one place they look to judge data quality.
+        actually_dropped = sorted(f for f in dropped if f not in claims and f != "notes")
         notes = list(coercion_notes)
-        if dropped:
+        if actually_dropped:
             notes.append(
                 "dropped unsupported value(s) for "
-                + ", ".join(sorted(dropped))
+                + ", ".join(actually_dropped)
                 + " (the model gave no verbatim quote from the article)"
             )
         if values.get("notes"):

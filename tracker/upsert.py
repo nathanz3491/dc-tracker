@@ -23,6 +23,7 @@ for and none of which incremental merging gives you:
 from __future__ import annotations
 
 import datetime as _dt
+import hashlib
 import json
 import logging
 from dataclasses import dataclass
@@ -259,37 +260,56 @@ def _conflict_notes(by_field: dict[str, list[_Claim]]) -> tuple[list[str], list[
     return lines, fields
 
 
-def _merge_notes(existing: str | None, derived: list[str], contributed: list[str]) -> str | None:
+def record_tag(urls: list[str]) -> str:
+    """Short stable id for the set of sources one ingest record carries.
+
+    Used to scope that record's note lines so re-ingesting it *replaces* its own
+    disclosures instead of adding another variant beside them.
+    """
+    joined = "\n".join(sorted(urls))
+    return hashlib.sha1(joined.encode("utf-8"), usedforsecurity=False).hexdigest()[:8]
+
+
+def _merge_notes(
+    existing: str | None, derived: list[str], contributed: list[str], *, tag: str
+) -> str | None:
     """Rebuild the notes block from three kinds of line.
 
     * **Operator prose** — no marker at all. Never touched.
     * **Derived** (:data:`NOTE_PREFIX`) — a pure function of the current claims,
       so it is regenerated wholesale. That is what makes a resolved conflict's
       disclosure *disappear* rather than linger forever.
-    * **Contributed** (:data:`SOURCE_NOTE_PREFIX`) — a statement about one
-      source, e.g. "this MW figure is generator nameplate". These accumulate,
-      deduplicated.
+    * **Contributed** (``[source:<tag>]``) — a statement about one ingest record's
+      sources, e.g. "this MW figure is generator nameplate". Lines carrying *this*
+      record's tag are replaced; lines from other records are preserved.
 
-    The distinction is load-bearing. When two ingest records resolve to the same
-    project (two queue rows for one site), each carries its own disclosure. If
-    contributed lines were regenerated like derived ones, the second record would
-    erase the first's disclosure, the first would restore it on the next run, and
-    `updated_at` would churn on every ingest forever.
+    The tag is what makes both halves of that work. Contributed lines cannot be
+    regenerated wholesale: when two records resolve to one project (two queue rows
+    for one site), each carries its own disclosure, and rebuilding would let them
+    erase each other and churn `updated_at` on every run forever. But they cannot
+    simply accumulate either — re-extracting an article whose wording changed then
+    leaves the stale variant sitting next to the new one, which was observed live:
+    a corrected "dropped value" note appeared beside the wrong one it replaced.
+
+    Scoping by record gives the right answer to both.
     """
+    mine = f"{SOURCE_NOTE_PREFIX}[{tag}]"
     human: list[str] = []
-    kept_contributed: list[str] = []
+    other_contributed: list[str] = []
     for raw in (existing or "").splitlines():
         line = raw.strip()
         if not line:
             continue
+        if line.startswith(mine):
+            continue  # this record's own, superseded by `contributed`
         if line.startswith(SOURCE_NOTE_PREFIX):
-            kept_contributed.append(line)
+            other_contributed.append(line)
         elif line.startswith(NOTE_PREFIX):
             continue  # derived; rebuilt below
         else:
             human.append(line)
 
-    all_contributed = sorted(dict.fromkeys(kept_contributed + contributed))
+    all_contributed = sorted(dict.fromkeys(other_contributed + contributed))
     combined = human + sorted(dict.fromkeys(derived)) + all_contributed
     return "\n".join(combined) or None
 
@@ -348,9 +368,6 @@ def upsert_record(session: Session, rec: IngestRecord, *, force_new: bool = Fals
     duplicate_of: int | None = None
 
     if project is None:
-        candidate = None if force_new else _find_duplicate_candidate(session, key, payload)
-        if candidate is not None:
-            duplicate_of = candidate.id
         project = Project(
             name=payload.get("name") or payload.get("company") or "unnamed",
             company=payload.get("company") or "",
@@ -367,6 +384,16 @@ def upsert_record(session: Session, rec: IngestRecord, *, force_new: bool = Fals
         session.add(project)
         session.flush()
         action = "insert"
+
+    # A possible duplicate is a fact about the CURRENT state of the database, not
+    # about this particular run, so it is recomputed on every upsert rather than
+    # recorded once at insert time. Two consequences, both wanted: re-ingesting a
+    # record does not erase its own duplicate warning (the ambiguity has not gone
+    # away just because the row already exists), and the warning disappears on its
+    # own once an operator resolves it.
+    candidate = None if force_new else _find_duplicate_candidate(session, key, payload)
+    if candidate is not None:
+        duplicate_of = candidate.id
 
     before = _snapshot(project)
 
@@ -416,14 +443,18 @@ def upsert_record(session: Session, rec: IngestRecord, *, force_new: bool = Fals
     # Path disclosures and duplicate proposals are contributed, not derived: they
     # are facts about a particular citation or a particular unresolved ambiguity,
     # and must survive a later record for the same project.
-    contributed = [f"{SOURCE_NOTE_PREFIX} {line}" for line in rec.notes]
     if duplicate_of is not None:
-        contributed.append(
-            f"{SOURCE_NOTE_PREFIX} possible duplicate of project #{duplicate_of}: same company "
+        # Derived, not contributed: recomputed from current state every run.
+        derived.append(
+            f"{NOTE_PREFIX} possible duplicate of project #{duplicate_of}: same company "
             "and state, locality differs only by city/county granularity. Confirm or reject in "
             "`tracker review`."
         )
-    project.notes = _merge_notes(project.notes, derived, contributed)
+
+    tag = record_tag([s.url for s in rec.sources])
+    marker = f"{SOURCE_NOTE_PREFIX}[{tag}]"
+    contributed = [f"{marker} {line}" for line in rec.notes]
+    project.notes = _merge_notes(project.notes, derived, contributed, tag=tag)
 
     # --- Confidence ---------------------------------------------------------
     views = [conf.SourceView.from_row(s) for s in project.sources]
@@ -532,5 +563,6 @@ __all__ = [
     "UpsertResult",
     "derive_fields",
     "recompute_confidence",
+    "record_tag",
     "upsert_record",
 ]

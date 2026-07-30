@@ -50,7 +50,7 @@ initial build of the v1 PRD.
 - `tracker/export.py`: deterministic Markdown, CSV and JSON export.
 - `tracker/cli.py`: `init`, `ingest {manual,pjm,crawl}`, `discover`, `queue`,
   `list`, `show`, `stats`, `review`, `verify`, `export`, `version`.
-- 654 tests, green offline with no API key and no network. 93% coverage on both
+- 655 tests, green offline with no API key and no network. 93% coverage on both
   `normalize.py` and `confidence.py`. A `network`-marked test checks the feed URLs
   still resolve.
 
@@ -81,6 +81,27 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+Found by running the crawl path against the live MiniMax API for the first time:
+
+- The "dropped unsupported value(s)" note over-reported. Identity fields are
+  restored after the evidence gate (a project row cannot exist without them), and
+  `notes` is a summary rather than a citable claim — but both were still listed as
+  dropped. A false statement in the one place an operator looks to judge data
+  quality is worse than no statement.
+- Note lines contributed by an ingest record are now scoped to that record, so
+  re-extracting an article *replaces* its own disclosures instead of leaving a
+  stale variant beside the new one. Observed live: a corrected note appeared next
+  to the wrong one it superseded.
+- The possible-duplicate warning is derived rather than contributed, so it is
+  recomputed from current state every run. It previously vanished when a record
+  was re-ingested, even though the ambiguity had not been resolved.
+- `--check` used a 16-token budget, but the M2.x/M3 models emit chain-of-thought
+  inside `<think>` blocks in the content field, so the entire budget went to
+  reasoning and the check reported a truncated thought instead of the answer. It
+  now also reports `finish_reason` and whether the model spent thinking tokens.
+- The test suite no longer reads the operator's `.env`. Deleting the environment
+  variables was not enough; once a real `.env` existed, a test asserting "no key
+  configured" passed on a clean machine and failed locally.
 - The project's `.env` is read by absolute path. pydantic-settings resolves a
   relative `env_file` against the current directory, so the API key in
   `<project>/.env` was invisible whenever `tracker` ran from anywhere else —
