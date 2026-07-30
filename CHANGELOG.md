@@ -271,6 +271,9 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- README's "Known gaps" still said the crawl path had only been run against
+  fixtures, never live — stale since `de4821c`'s live-run defect fixes and now
+  since `tracker enrich`'s live verification against project #93.
 - **A company-name suffix is no longer treated as a distinctive project token.**
   `project_identities` excluded name tokens that appear in the *normalized* company
   key, but `company_key` strips corporate suffixes — so "STACK Infrastructure" keys

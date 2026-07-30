@@ -956,7 +956,8 @@ gives a present/missing breakdown the moment the real list is pasted in.
   PJM's and MISO's are taken from their real exports. A wrong guess fails loudly
   via `assert_headers` rather than ingesting nothing, and `--map-override`
   corrects a rename without a code change.
-- The crawl path has been exercised against fixtures, not yet against a live
-  MiniMax key.
+- The crawl path has been run live against MiniMax, not only fixtures: an initial
+  live run surfaced four defects (fixed in `de4821c`), and `tracker enrich` was
+  verified live on project #93 (OpenAI Stargate, Abilene).
 - `project.country` is a dead column in v1 (`CHECK country='US'`), kept for
   forward compatibility. No CLI filter exposes it.
