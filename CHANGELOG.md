@@ -244,6 +244,15 @@ initial build of the v1 PRD.
   `normalize.py` and `confidence.py`. A `network`-marked test checks the feed URLs
   still resolve.
 
+### Fixed
+
+- Read commands refuse a database that is behind on migrations, naming `tracker
+  init` as the fix, instead of failing with a raw SQLAlchemy "no such table"
+  traceback. Found on a real v3 database once `risk` landed: `tracker risks`,
+  `show`, `stats` and `exposure` all query a table it does not have. A read command
+  opens the file `mode=ro` and so cannot migrate on the operator's behalf; saying
+  which command will is the only useful thing it can do.
+
 ### Changed
 
 - Four additions beyond the PRD's three-table schema, each unblocking a stated

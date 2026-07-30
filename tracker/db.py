@@ -406,7 +406,7 @@ def init_db(
 
 
 def open_db(db_path: Path | str, *, readonly: bool = True) -> Engine:
-    """Open an existing database, verifying it has been initialized."""
+    """Open an existing database, verifying it has been initialized and upgraded."""
     engine = make_engine(db_path, readonly=readonly)
     with engine.connect() as conn:
         exists = conn.execute(
@@ -414,6 +414,24 @@ def open_db(db_path: Path | str, *, readonly: bool = True) -> Engine:
         ).first()
     if not exists:
         raise MigrationError(f"{db_path} exists but has no `project` table. Run `tracker init`.")
+
+    # Being behind on migrations is not a hypothetical: read commands query tables
+    # that a older database does not have, and without this the operator gets a raw
+    # "no such table: risk" traceback out of SQLAlchemy instead of the one-word fix.
+    # A read command opens the database `mode=ro`, so it cannot migrate on the
+    # operator's behalf even if that were desirable.
+    current = schema_version(engine)
+    try:
+        latest = max((m.version for m in discover_migrations()), default=current)
+    except MigrationError:
+        # No migrations directory to compare against — an unusual install layout,
+        # not a reason to refuse a read.
+        return engine
+    if current < latest:
+        raise MigrationError(
+            f"{db_path} is at schema version {current}, but version {latest} is available.\n"
+            "Run `tracker init` to upgrade it. Existing data is preserved."
+        )
     return engine
 
 

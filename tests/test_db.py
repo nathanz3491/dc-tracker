@@ -244,6 +244,32 @@ def test_open_db_missing_file_says_run_init(tmp_path: Path):
         open_db(tmp_path / "nope.db")
 
 
+def test_open_db_refuses_a_database_behind_on_migrations(tmp_path: Path):
+    """Read commands query tables an older database does not have.
+
+    Observed with a real v3 database once `risk` landed: `tracker risks` produced a
+    raw "no such table" traceback out of SQLAlchemy. A read command opens the file
+    `mode=ro`, so it cannot migrate on the operator's behalf either — the only
+    useful thing it can do is say which command will.
+    """
+    migrations = discover_migrations()
+    db = tmp_path / "behind.db"
+    engine = make_engine(db)
+    run_migrations(engine, migrations[:-1])
+    engine.dispose()
+
+    with pytest.raises(MigrationError, match="tracker init"):
+        open_db(db)
+
+
+def test_open_db_accepts_a_fully_migrated_database(tmp_path: Path):
+    db = tmp_path / "current.db"
+    engine = make_engine(db)
+    run_migrations(engine)
+    engine.dispose()
+    assert open_db(db) is not None
+
+
 # --- Pragmas and guarantees -------------------------------------------------
 
 
