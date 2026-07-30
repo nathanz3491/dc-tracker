@@ -87,6 +87,31 @@ initial build of the v1 PRD.
   most projects have no blocker. Fields whose absence carries no information are
   reported as unmeasurable rather than as a low score, and the report closes with
   the measurable fields that have the most rows left to fill.
+- **A third discovery tier, `risk_signal`, so obstacle news reaches the queue.**
+  Every `signal` term was announcement-shaped — announce, expand, invest, build,
+  campus, megawatt — which silently discarded every article about a project going
+  *wrong*. Measured against the real filter, all of these were dropped for having
+  "no project signal": "Loudoun supervisors reject data center rezoning
+  application", "Georgia Power says transmission upgrades delay data center
+  energization", "Transformer shortage pushes back hyperscale data center
+  timelines", "Moratorium halts new data center development in Fayetteville",
+  "Water use concerns stall Tucson data center vote". So the corpus the extractor
+  ever saw was announcements only, and no schema change can recover an obstacle
+  from an article that was never queued.
+
+  A risk term satisfies the signal tier alone, but `topic` must still match, so a
+  transformer shortage at a steel mill is still dropped and the `exclude` tier
+  still runs first — commentary, analyst notes and share-price coverage stay out.
+  The list is operator-editable in `seed/feeds.toml` and absent from a config
+  entirely means the filter behaves exactly as before.
+
+  This is deliberately **not** a lever for `blocker` coverage; `tracker gaps`
+  reports that field as unmeasurable precisely because absence is usually the
+  truth. The point is to stop discarding the articles where an obstacle is real.
+- Among the queued articles covering a tracked project, the ones reporting an
+  obstacle are crawled first (`pending(spec=...)`, `pending_risk_count`). Those are
+  the highest-value calls available: a project's own press release never names its
+  blocker, so an adversarial second source is the only thing that can record one.
 - **The queue is prioritised toward depth.** A queued article covering a project
   already tracked becomes a SECOND source, which fills fields one article cannot
   and lifts confidence from 2 to 3; draining oldest-first instead just grew the

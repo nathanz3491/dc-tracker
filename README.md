@@ -157,6 +157,11 @@ another single-source row.
 headline or slug names a tracked project go before the rest. `--breadth-first`
 reverses that.
 
+Within that first group, the articles that also carry an obstacle term go first.
+That is the sharpest version of the same argument: the parenthesis above — no press
+release names its own blocker — means an adversarial second source is the *only*
+thing that can record one, so those calls buy something no other article can.
+
 Matching is deliberately strict — the **full** company key plus either the
 locality or a genuinely distinctive name token. Looser rules failed badly in
 testing: a single company token plus a city matched every Ashburn article by any
@@ -427,12 +432,38 @@ Discovery never touches a URL already in the table, whether it was crawled
 successfully or failed. Re-queueing a processed URL would let discovery quietly
 undo the crawl path's bookkeeping.
 
-### Feed filtering is two tiers, and one of them can be implied
+### Feed filtering is three tiers, and two of them can be implied or absent
 
 A `topic` term proves an article is about data centers; a `signal` term proves it
 concerns a specific *project*. Both must match. Commentary about AI power demand
 passes the first and fails the second, which is right — there is nothing in it to
 extract.
+
+A `risk_signal` term satisfies the second tier on its own. That tier exists because
+every `signal` term is announcement-shaped — `announce`, `expand`, `invest`,
+`build`, `campus`, `megawatt` — so the filter silently discarded every article
+about a project going *wrong*. Measured against the real filter, all of these were
+dropped for having "no project signal":
+
+```text
+Loudoun supervisors reject data center rezoning application
+Georgia Power says transmission upgrades delay data center energization
+Transformer shortage pushes back hyperscale data center timelines
+Moratorium halts new data center development in Fayetteville
+Water use concerns stall Tucson data center vote
+```
+
+The corpus the extractor ever saw was therefore announcements only, and no schema
+change recovers an obstacle from an article that was never queued. The `topic` tier
+still has to match, so a transformer shortage at a steel mill is still dropped, and
+`exclude` still runs first — commentary, analyst notes and share-price coverage stay
+out. The tier is absent-by-default in `load_config`, so a `feeds.toml` predating it
+behaves exactly as before.
+
+**This is not a lever for `blocker` coverage.** `tracker gaps` reports that field as
+unmeasurable because absence is usually the truth: most projects have no blocker,
+and chasing a percentage there rewards inventing obstacles. The point of the tier is
+to stop throwing away the articles where an obstacle is genuinely reported.
 
 Two wrinkles that were only obvious once it ran against real feeds:
 

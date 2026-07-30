@@ -183,7 +183,7 @@ def test_industry_commentary_is_rejected_for_lacking_a_project(spec):
     """Passes the topic tier, fails the signal tier -- nothing to extract."""
     keep, reason = spec.matches("The data center industry faces a reckoning")
     assert not keep
-    assert "no project signal" in reason
+    assert "no project or risk signal" in reason
 
 
 def test_unrelated_news_is_rejected_for_lacking_the_topic(spec):
@@ -204,6 +204,81 @@ def test_excluded_headline_shapes_are_dropped(spec, headline):
     keep, reason = spec.matches(headline)
     assert not keep
     assert "excluded" in reason
+
+
+# --- The risk tier ----------------------------------------------------------
+#
+# Every headline below was measured as REJECTED by the two-tier filter, all with
+# "no project signal", because the signal vocabulary is announcement-shaped. That
+# meant the extractor only ever saw articles about projects going well, so an
+# obstacle could not be recorded however good the schema.
+
+
+@pytest.mark.parametrize(
+    "headline",
+    [
+        "Loudoun supervisors reject data center rezoning application",
+        "Residents sue to block Prince William data center project",
+        "Georgia Power says transmission upgrades delay data center energization",
+        "Transformer shortage pushes back hyperscale data center timelines",
+        "Moratorium halts new data center development in Fayetteville",
+        "Water use concerns stall Tucson data center vote",
+        "Ohio regulators approve tariff for large data center loads",
+    ],
+)
+def test_obstacle_headlines_are_kept(spec, headline):
+    keep, reason = spec.matches(headline)
+    assert keep, f"{headline!r} was dropped: {reason}"
+    assert "risk" in reason
+
+
+def test_the_topic_tier_still_gates_an_obstacle_headline(spec):
+    """A risk term alone is not enough: the article must be about data centers.
+
+    Otherwise every transformer shortage and every utility lawsuit in the country
+    enters the queue.
+    """
+    keep, reason = spec.matches("Transformer shortage delays Ohio steel mill expansion")
+    assert not keep
+    assert "topic" in reason
+
+
+def test_exclusions_win_over_a_risk_term(spec):
+    """The exclude tier runs first, so commentary and finance coverage stay out."""
+    for headline in (
+        "Opinion: the data center backlash is overdue",
+        "Analyst pegs data center transformer shortage as 2027 risk",
+        "Nvidia shares fall on data center delay fears",
+    ):
+        keep, reason = spec.matches(headline)
+        assert not keep, headline
+        assert "excluded" in reason
+
+
+def test_an_announcement_signal_is_still_reported_as_such(spec):
+    """Precedence: a plain signal term is preferred, so reasons stay comparable."""
+    keep, reason = spec.matches("Microsoft breaks ground on 900MW data center campus")
+    assert keep
+    assert "risk" not in reason
+
+
+def test_risk_tier_is_optional_in_the_config(tmp_path: Path):
+    """A feeds.toml predating this tier must keep working, unchanged."""
+    older = tmp_path / "older.toml"
+    older.write_text(
+        '[[feed]]\nurl = "https://a.test/rss"\n'
+        '[filter]\ntopic = ["data cent"]\nsignal = ["campus"]\n',
+        encoding="utf-8",
+    )
+    _, spec = load_config(older)
+    assert spec.risk_signal == ()
+    assert not spec.matches("Loudoun rejects data center rezoning")[0]
+
+
+def test_risk_term_ignores_the_other_tiers(spec):
+    """`risk_term` is for ordering the queue, not for deciding what enters it."""
+    assert spec.risk_term("data center construction delayed again") == "delay"
+    assert spec.risk_term("Microsoft breaks ground on a new campus") is None
 
 
 def test_selection_applies_the_age_cutoff(spec):
@@ -563,6 +638,69 @@ def test_known_first_puts_depth_before_breadth(session):
     assert "sabey" in ordered[0].url, "the article that deepens a project must come first"
     # Without the flag the queue keeps its oldest-first order.
     assert "brand-new" in pending(session)[0].url
+
+
+def test_an_obstacle_article_outranks_another_article_on_the_same_project(session):
+    """Both deepen a tracked project, so the tiebreak is which one can add a risk."""
+    from tracker.ingest.discover import pending, pending_risk_count
+
+    spec = load_config()[1]
+    tracked(session, "Sabey Data Centers", "Sabey Ashburn Campus", "Ashburn")
+    queue_candidates(
+        session,
+        [
+            Candidate(
+                "https://x.test/sabey-data-centers-ashburn-expansion-70mw/",
+                "Sabey expands its Ashburn data center campus by 70MW",
+                "f",
+            ),
+            Candidate(
+                "https://x.test/sabey-data-centers-ashburn-rezoning-denied/",
+                "Ashburn board denies Sabey data center rezoning",
+                "f",
+            ),
+        ],
+        run_id="r",
+        report=DiscoverReport(),
+    )
+
+    assert pending_risk_count(session, spec) == 1
+    ordered = pending(session, known_first=True, spec=spec)
+    assert "rezoning" in ordered[0].url, "the article that can record an obstacle must come first"
+    # Without a spec the two are indistinguishable and oldest-first wins.
+    assert "expansion" in pending(session, known_first=True)[0].url
+
+
+def test_an_obstacle_article_about_an_untracked_project_does_not_jump_the_queue(session):
+    """The risk bucket refines depth-first; it does not override it.
+
+    An obstacle article about a project we do not track still only creates another
+    single-source row, so it has no claim on going first.
+    """
+    from tracker.ingest.discover import pending
+
+    spec = load_config()[1]
+    tracked(session, "Sabey Data Centers", "Sabey Ashburn Campus", "Ashburn")
+    queue_candidates(
+        session,
+        [
+            Candidate(
+                "https://x.test/stranger-corp-data-center-lawsuit/",
+                "Residents sue over Stranger Corp data center",
+                "f",
+            ),
+            Candidate(
+                "https://x.test/sabey-data-centers-ashburn-expansion-70mw/",
+                "Sabey expands its Ashburn data center campus by 70MW",
+                "f",
+            ),
+        ],
+        run_id="r",
+        report=DiscoverReport(),
+    )
+
+    ordered = pending(session, known_first=True, spec=spec)
+    assert "sabey" in ordered[0].url
 
 
 def test_known_first_still_honours_the_limit(session):

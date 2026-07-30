@@ -126,6 +126,79 @@ signal = [
   "plans",
 ]
 
+# A third tier, and the second way to satisfy `signal`.
+#
+# Every term above is announcement-shaped, which silently threw away every article
+# about a project going WRONG. Measured against the real filter, all of these were
+# dropped for having "no project signal":
+#
+#   Loudoun supervisors reject data center rezoning application
+#   Georgia Power says transmission upgrades delay data center energization
+#   Transformer shortage pushes back hyperscale data center timelines
+#   Moratorium halts new data center development in Fayetteville
+#   Water use concerns stall Tucson data center vote
+#
+# So the corpus the extractor ever saw was announcements only, and no schema change
+# recovers an obstacle from an article that was never queued. A term here satisfies
+# the signal tier on its own, but `topic` above must still match — a transformer
+# shortage at a steel mill is still dropped.
+#
+# This is NOT a lever for `blocker` coverage. Most projects genuinely have no
+# blocker (see tracker/gaps.py, which reports the field as unmeasurable for exactly
+# that reason). The point is to stop discarding the articles where one is real.
+risk_signal = [
+  # Schedule
+  "delay",
+  "delayed",
+  "postpone",
+  "pause",
+  "paused",
+  "halt",
+  "stalled",
+  "scrapped",
+  # Government and legal. "permit" and "zoning" are knowingly broad — they match
+  # approvals as well as refusals — but permitting is itself one of the risk
+  # categories, and the queue is a triage checkpoint where over-collecting is
+  # cheaper than a keyword rule that drops real obstacles.
+  "moratorium",
+  "lawsuit",
+  "sue",
+  "sued",
+  "permit",
+  "zoning",
+  "rezoning",
+  "referendum",
+  "denied",
+  "rejected",
+  "appeal",
+  "challenge",
+  "injunction",
+  # Community and environment
+  "opposition",
+  "oppose",
+  "protest",
+  "noise",
+  "water use",
+  "aquifer",
+  "groundwater",
+  "emissions",
+  "air quality",
+  # Power
+  "transformer",
+  "substation",
+  "interconnection",
+  "transmission",
+  "curtail",
+  "grid capacity",
+  "tariff",
+  # Commercial
+  "financing",
+  "anchor tenant",
+  "offtake",
+  "shortage",
+  "supply chain",
+]
+
 # Headlines that match the tiers above but are reliably not project news.
 #
 # Tuned against a real discovery run: these categories accounted for most of the

@@ -979,11 +979,24 @@ def sync(
         # project we already track becomes a SECOND source, which fills fields one
         # article cannot and lifts confidence from 2 to 3. Draining oldest-first
         # instead just grows the database sideways with more single-source rows.
+        #
+        # The filter spec refines that further: among the articles covering a
+        # tracked project, the ones reporting an obstacle go first. A press release
+        # never names its own blocker, so those are the only calls that can record
+        # one at all.
+        try:
+            _, queue_spec = disc.load_config()
+        except disc.DiscoverError:
+            queue_spec = None  # ordering is an optimization; a bad config is phase 1's problem
         pending_urls = [
-            row.url for row in disc.pending(session, limit=limit, known_first=not breadth_first)
+            row.url
+            for row in disc.pending(
+                session, limit=limit, known_first=not breadth_first, spec=queue_spec
+            )
         ]
         backlog = len(disc.pending(session))
         deepening, _fresh = disc.pending_split(session)
+        risky = disc.pending_risk_count(session, queue_spec) if queue_spec else 0
         # Counted whether or not we are retrying, so the summary can never claim
         # "0 failed" while a dozen articles sit unread.
         unread = disc.failed(session)
@@ -993,9 +1006,10 @@ def sync(
             pending_urls += [row.url for row in unread[:room]]
 
     if pending_urls and not breadth_first and deepening:
+        detail = f", {risky} of them reporting an obstacle" if risky else ""
         console.print(
             f"[dim]{deepening} of {backlog} queued candidate(s) cover a project already "
-            f"tracked; those go first[/dim]"
+            f"tracked{detail}; those go first[/dim]"
         )
 
     if not pending_urls:

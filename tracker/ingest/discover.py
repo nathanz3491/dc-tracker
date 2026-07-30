@@ -108,6 +108,23 @@ class FilterSpec:
     topic: tuple[str, ...]
     signal: tuple[str, ...]
     exclude: tuple[str, ...] = ()
+    #: Obstacle vocabulary, and the second way to satisfy the signal tier.
+    #:
+    #: Every `signal` term is announcement-shaped -- announce, expand, invest,
+    #: build, campus, megawatt. That is right for finding a project but it silently
+    #: discarded every article about one going wrong: measured against the real
+    #: filter, "Loudoun supervisors reject data center rezoning application" and
+    #: "Georgia Power says transmission upgrades delay data center energization"
+    #: were both dropped for having "no project signal". So the corpus the extractor
+    #: ever saw was announcements only, and no schema change can recover a risk from
+    #: an article that was never queued.
+    #:
+    #: A risk term satisfies the signal tier ALONE, but the `topic` tier still has
+    #: to match, so a transformer-shortage story about a steel mill is still
+    #: dropped. This is deliberately not about raising `blocker` coverage -- see
+    #: tracker/gaps.py, where absence is usually the truth. It is about not throwing
+    #: away the articles where an obstacle genuinely IS reported.
+    risk_signal: tuple[str, ...] = ()
 
     def matches(self, text: str, *, topic_implied: bool = False) -> tuple[bool, str]:
         """Two-tier keyword test. Returns ``(keep, reason)``."""
@@ -122,9 +139,22 @@ class FilterSpec:
 
         found = repr(topic) if topic else "topic implied by the feed"
         signal = next((t for t in self.signal if t in haystack), None)
-        if not signal:
-            return False, f"topic {found} but no project signal"
-        return True, f"{found} + {signal!r}"
+        if signal:
+            return True, f"{found} + {signal!r}"
+        risk = next((t for t in self.risk_signal if t in haystack), None)
+        if risk:
+            return True, f"{found} + risk {risk!r}"
+        return False, f"topic {found} but no project or risk signal"
+
+    def risk_term(self, text: str) -> str | None:
+        """The obstacle term this text carries, if any. Ignores the other tiers.
+
+        Used to prioritise the queue: an article about a tracked project going
+        wrong is the most valuable LLM call available, because no press release
+        names its own blocker.
+        """
+        haystack = normalize_haystack(text)
+        return next((t for t in self.risk_signal if t in haystack), None)
 
 
 @dataclass(frozen=True)
@@ -204,6 +234,10 @@ def load_config(path: Path | None = None) -> tuple[list[FeedSpec], FilterSpec]:
         topic=topic,
         signal=signal,
         exclude=tuple(str(t).lower() for t in raw_filter.get("exclude") or ()),
+        # Optional, unlike topic/signal above: an operator's existing feeds.toml
+        # predates this tier and must keep working. Absent means the filter behaves
+        # exactly as it did before, which is a narrower filter, never a broader one.
+        risk_signal=tuple(str(t).lower() for t in raw_filter.get("risk_signal") or ()),
     )
 
 
@@ -638,12 +672,18 @@ def pending(
     limit: int | None = None,
     *,
     known_first: bool = False,
+    spec: FilterSpec | None = None,
 ) -> list[IngestUrl]:
     """Queued candidates.
 
     Ordered oldest-published-first so a backlog drains predictably. With
     ``known_first`` the ones covering an already-tracked project come first, which
     spends each LLM call on depth rather than on another single-source row.
+
+    Passing ``spec`` splits that first group again, putting the articles that also
+    carry an obstacle term ahead of the rest. Those are the highest-value calls in
+    the queue: a project's own press release never names its blocker, so an
+    adversarial second source is the only way that fact is ever recorded.
     """
     stmt = (
         select(IngestUrl)
@@ -659,15 +699,22 @@ def pending(
     # the queue is hundreds of rows, not millions.
     rows = list(session.scalars(stmt))
     identities = project_identities(session)
-    enriching, fresh = [], []
+    risky, enriching, fresh = [], [], []
     for row in rows:
-        (enriching if matches_known_project(row.url, row.title, identities) else fresh).append(row)
-    if enriching:
+        if not matches_known_project(row.url, row.title, identities):
+            fresh.append(row)
+        elif spec is not None and spec.risk_term(f"{row.title or ''} {urlsplit(row.url).path}"):
+            risky.append(row)
+        else:
+            enriching.append(row)
+    if risky or enriching:
         log.info(
-            "%d queued candidate(s) cover a tracked project; crawling those first",
-            len(enriching),
+            "%d queued candidate(s) cover a tracked project (%d of them report an "
+            "obstacle); crawling those first",
+            len(risky) + len(enriching),
+            len(risky),
         )
-    ordered = enriching + fresh
+    ordered = risky + enriching + fresh
     return ordered[:limit] if limit else ordered
 
 
@@ -677,6 +724,25 @@ def pending_split(session: Session) -> tuple[int, int]:
     rows = list(session.scalars(select(IngestUrl).where(IngestUrl.status == PENDING_URL_STATUS)))
     deep = sum(1 for r in rows if matches_known_project(r.url, r.title, identities))
     return deep, len(rows) - deep
+
+
+def pending_risk_count(session: Session, spec: FilterSpec) -> int:
+    """How many queued candidates for a tracked project report an obstacle.
+
+    Reported separately from `pending_split` so the run summary can say what the
+    ordering actually did, rather than claiming depth-first and leaving the
+    operator to guess which articles that put first.
+    """
+    if not spec.risk_signal:
+        return 0
+    identities = project_identities(session)
+    rows = list(session.scalars(select(IngestUrl).where(IngestUrl.status == PENDING_URL_STATUS)))
+    return sum(
+        1
+        for r in rows
+        if matches_known_project(r.url, r.title, identities)
+        and spec.risk_term(f"{r.title or ''} {urlsplit(r.url).path}")
+    )
 
 
 #: Outcomes worth another attempt: the URL was never successfully read, and the
@@ -856,6 +922,7 @@ __all__ = [
     "matches_known_project",
     "parse_feed",
     "pending",
+    "pending_risk_count",
     "pending_split",
     "project_identities",
     "queue_candidates",
