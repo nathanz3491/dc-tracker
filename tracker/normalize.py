@@ -29,7 +29,14 @@ import unicodedata
 from collections.abc import Callable
 from typing import Any, NamedTuple, TypeVar
 
-from tracker.vocab import DEFAULT_PHASE, EVENT_TYPES, PHASES, SOURCE_TYPES
+from tracker.vocab import (
+    DEFAULT_PHASE,
+    EVENT_TYPES,
+    PHASES,
+    RISK_CATEGORIES,
+    RISK_SEVERITIES,
+    SOURCE_TYPES,
+)
 
 log = logging.getLogger(__name__)
 
@@ -720,6 +727,14 @@ def norm_event_type(raw: Any, *, field: str = "event_type") -> str | None:
     return norm_choice(raw, EVENT_TYPES, field=field)
 
 
+def norm_risk_category(raw: Any, *, field: str = "category") -> str | None:
+    return norm_choice(raw, RISK_CATEGORIES, field=field)
+
+
+def norm_risk_severity(raw: Any, *, field: str = "severity") -> str | None:
+    return norm_choice(raw, RISK_SEVERITIES, field=field)
+
+
 def norm_url(raw: Any, *, field: str = "url") -> str | None:
     """A citation URL. Must be http(s) — a citation you cannot open is not one."""
     if is_blank(raw):
@@ -751,6 +766,8 @@ __all__ = [
     "norm_mw",
     "norm_mw_detail",
     "norm_phase",
+    "norm_risk_category",
+    "norm_risk_severity",
     "norm_source_type",
     "norm_state",
     "norm_text",

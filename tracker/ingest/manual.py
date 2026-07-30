@@ -24,7 +24,13 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 from sqlalchemy.orm import Session
 
-from tracker.ingest.records import EventRecord, IngestRecord, IngestReport, SourceRecord
+from tracker.ingest.records import (
+    EventRecord,
+    IngestRecord,
+    IngestReport,
+    RiskRecord,
+    SourceRecord,
+)
 from tracker.models import utcnow
 from tracker.normalize import (
     NormalizationError,
@@ -39,7 +45,16 @@ from tracker.normalize import (
     norm_url,
 )
 from tracker.upsert import upsert_record
-from tracker.vocab import DEFAULT_PHASE, EVENT_TYPES, PHASES, SOURCE_TYPES
+from tracker.vocab import (
+    DEFAULT_PHASE,
+    DEFAULT_RISK_SEVERITY,
+    EVENT_TYPES,
+    PHASES,
+    RISK_CATEGORIES,
+    RISK_SEVERITIES,
+    SOURCE_TYPES,
+    severity_rank,
+)
 
 log = logging.getLogger(__name__)
 
@@ -101,6 +116,53 @@ class ManualEvent(BaseModel):
         return v
 
 
+class ManualRisk(BaseModel):
+    """One curated obstacle. Field names match `risk` columns exactly."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    category: str
+    summary: str
+    severity: str = DEFAULT_RISK_SEVERITY
+    quote: str | None = None
+    first_seen: str | None = None
+    delay_days: int | None = None
+    source_url: str | None = None
+
+    @field_validator("category")
+    @classmethod
+    def _check_category(cls, v: str) -> str:
+        if v not in RISK_CATEGORIES:
+            raise ValueError(f"category must be one of {', '.join(RISK_CATEGORIES)}")
+        return v
+
+    @field_validator("severity")
+    @classmethod
+    def _check_severity(cls, v: str) -> str:
+        if v not in RISK_SEVERITIES:
+            raise ValueError(f"severity must be one of {', '.join(RISK_SEVERITIES)}")
+        return v
+
+    @field_validator("first_seen")
+    @classmethod
+    def _check_first_seen(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        try:
+            if norm_date(v, field="first_seen") is None:
+                raise ValueError("first_seen must be a resolvable date, not vague language")
+        except NormalizationError as exc:
+            raise ValueError(str(exc)) from exc
+        return v
+
+    @field_validator("delay_days")
+    @classmethod
+    def _check_delay(cls, v: int | None) -> int | None:
+        if v is not None and v < 0:
+            raise ValueError("delay_days cannot be negative")
+        return v
+
+
 class ManualProject(BaseModel):
     """One curated project. Field names match `project` columns exactly."""
 
@@ -121,10 +183,15 @@ class ManualProject(BaseModel):
     phase: str = DEFAULT_PHASE
     first_announced: str | None = None
     expected_online: str | None = None
+    #: Accepted for backward compatibility with curated files written before the
+    #: `risk` table existed. Becomes one `unclassified` risk cited to this record's
+    #: first source — the same thing migration 0004 did to the stored column. Prefer
+    #: `risks` below, which can say which kind of obstacle it is.
     blocker: str | None = None
     notes: str | None = None
     sources: list[ManualSource] = Field(min_length=1)
     events: list[ManualEvent] = Field(default_factory=list)
+    risks: list[ManualRisk] = Field(default_factory=list)
 
     @field_validator("state")
     @classmethod
@@ -163,8 +230,20 @@ class ManualProject(BaseModel):
         """
         urls = {s.url for s in self.sources}
         dangling = [e.source_url for e in self.events if e.source_url not in urls]
+        dangling += [r.source_url for r in self.risks if r.source_url and r.source_url not in urls]
         if dangling:
-            raise ValueError(f"event source_url not listed in this record's sources: {dangling}")
+            raise ValueError(f"source_url not listed in this record's sources: {dangling}")
+        return self
+
+    @model_validator(mode="after")
+    def _one_risk_per_category_and_date(self) -> ManualProject:
+        """The stored UNIQUE is (project, category, first_seen), so two entries
+        agreeing on both would fail on insert. Say so here, where the operator can
+        see which two lines collide."""
+        keys = [(r.category, r.first_seen) for r in self.risks]
+        duplicates = sorted({k for k in keys if keys.count(k) > 1})
+        if duplicates:
+            raise ValueError(f"two risks share a category and first_seen: {duplicates}")
         return self
 
 
@@ -246,6 +325,14 @@ def to_records(parsed: ManualFile, *, digest: str, source_name: str) -> list[Ing
         project, notes = _project_payload(model, defaults)
         claims = {k: v for k, v in project.items() if k != "notes" and v is not None}
 
+        risks = _risk_records(model, default_url=model.sources[0].url)
+        if risks:
+            # Same bookkeeping as the crawl path: record which citation supports the
+            # derived `blocker`, so `source.fields` stays honest about it. The value
+            # is written and never read — `upsert` derives the column from the risk
+            # rows themselves.
+            claims["blocker"] = max(risks, key=lambda r: severity_rank(r.severity)).summary
+
         sources = [
             SourceRecord(
                 url=s.url,
@@ -269,8 +356,40 @@ def to_records(parsed: ManualFile, *, digest: str, source_name: str) -> list[Ing
             )
             for e in model.events
         ]
-        records.append(IngestRecord(project=project, sources=sources, events=events, notes=notes))
+        records.append(
+            IngestRecord(project=project, sources=sources, events=events, risks=risks, notes=notes)
+        )
     return records
+
+
+def _risk_records(model: ManualProject, *, default_url: str) -> list[RiskRecord]:
+    """Curated obstacles, plus the legacy `blocker` string if one is present."""
+    out = [
+        RiskRecord(
+            category=r.category,
+            severity=r.severity,
+            summary=r.summary,
+            quote=norm_excerpt(r.quote),
+            first_seen=norm_date(r.first_seen, field="first_seen") if r.first_seen else None,
+            delay_days=r.delay_days,
+            source_url=r.source_url or default_url,
+        )
+        for r in model.risks
+    ]
+    blocker = norm_text(model.blocker)
+    if blocker and not any(r.category == "unclassified" and r.first_seen is None for r in out):
+        # `unclassified` because a bare sentence does not say which kind it is, and
+        # guessing from keywords would put an uncheckable inference into a field an
+        # operator acts on. `material` because a human bothered to type it.
+        out.append(
+            RiskRecord(
+                category="unclassified",
+                severity="material",
+                summary=blocker,
+                source_url=default_url,
+            )
+        )
+    return out
 
 
 def _project_payload(
@@ -301,7 +420,9 @@ def _project_payload(
         "mw_built": _num(model.mw_built, norm_mw_detail, "mw_built"),
         "investment_usd": None,
         "phase": model.phase,
-        "blocker": norm_text(model.blocker),
+        # `blocker` is deliberately absent: the column is derived from the `risk`
+        # rows, and a curated `blocker` string becomes one of those in
+        # `_risk_records`.
         "notes": norm_text(model.notes),
     }
     if model.investment_usd is not None:
@@ -361,6 +482,7 @@ def run(
             continue
         report.bump(result.action)
         report.events += result.events_written
+        report.risks += result.risks_written
         if result.duplicate_of is not None:
             report.duplicates_flagged += 1
         report.conflicts += len(result.conflicts)
@@ -373,6 +495,7 @@ __all__ = [
     "ManualEvent",
     "ManualFile",
     "ManualProject",
+    "ManualRisk",
     "ManualSource",
     "load",
     "run",

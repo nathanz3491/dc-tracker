@@ -15,8 +15,8 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
-from tracker.ingest.records import EventRecord, IngestRecord, SourceRecord
-from tracker.models import Event, Project, Source
+from tracker.ingest.records import EventRecord, IngestRecord, RiskRecord, SourceRecord
+from tracker.models import Event, Project, Risk, Source
 from tracker.upsert import (
     NOTE_PREFIX,
     SOURCE_NOTE_PREFIX,
@@ -39,6 +39,7 @@ def rec(
     state="WI",
     sources=None,
     events=None,
+    risks=None,
     notes=None,
     confidence_cap=None,
     **project_extra,
@@ -56,6 +57,7 @@ def rec(
         project=project,
         sources=sources if sources is not None else [manual_source()],
         events=events or [],
+        risks=risks or [],
         notes=notes or [],
         confidence_cap=confidence_cap,
     )
@@ -700,8 +702,11 @@ def test_confidence_cache_is_consistent(session):
 def test_every_field_is_cited(session):
     """The executable form of the PRD's central premise: no uncited facts.
 
-    Every non-NULL tracked field on a project must appear in at least one of its
-    sources' `fields` lists.
+    Every non-NULL tracked field on a project must be traceable to a citation.
+    For eleven of the twelve that means appearing in some source's `fields`.
+    `blocker` is the exception: it is derived from the `risk` rows rather than
+    merged from claims, so its citation lives in `risk.source_id`. The invariant is
+    unchanged — only where the evidence is recorded moved.
     """
     upsert_record(
         session,
@@ -711,7 +716,6 @@ def test_every_field_is_cited(session):
                     mw_planned=900.0,
                     investment_usd=3_300_000_000,
                     first_announced="2023-03-01",
-                    blocker="Transmission upgrades pending.",
                 ),
                 SourceRecord(
                     url="https://www.dcd.com/a",
@@ -719,7 +723,16 @@ def test_every_field_is_cited(session):
                     fetched_at=T1,
                     claims={"mw_built": 150.0, "customer": "Microsoft"},
                 ),
-            ]
+            ],
+            risks=[
+                RiskRecord(
+                    category="transmission",
+                    severity="material",
+                    summary="Transmission upgrades pending.",
+                    quote="two 345-kilovolt upgrades",
+                    source_url="https://news.microsoft.com/fairwater/",
+                )
+            ],
         ),
     )
     for project in session.scalars(select(Project)).all():
@@ -727,8 +740,135 @@ def test_every_field_is_cited(session):
         for s in project.sources:
             if s.fields:
                 cited.update(p.strip() for p in s.fields.split(","))
+        source_ids = {s.id for s in project.sources}
+        if any(r.source_id in source_ids for r in project.risks):
+            cited.add("blocker")
         populated = {f for f in TRACKED_FIELDS if getattr(project, f) is not None}
         assert populated <= cited, f"uncited fields on project {project.id}: {populated - cited}"
+        assert project.blocker == "Transmission upgrades pending."
+
+
+# --- Risks and the derived blocker ------------------------------------------
+
+
+def risk(category="transmission", severity="material", summary="Upgrades pending.", **kw):
+    kw.setdefault("source_url", "https://news.microsoft.com/fairwater/")
+    return RiskRecord(category=category, severity=severity, summary=summary, **kw)
+
+
+def test_a_risk_is_written_and_cited(session):
+    result = upsert_record(session, rec(risks=[risk(quote="two 345-kilovolt upgrades")]))
+    assert result.risks_written == 1
+    row = session.scalar(select(Risk))
+    assert (row.category, row.severity, row.status) == ("transmission", "material", "open")
+    assert row.quote == "two 345-kilovolt upgrades"
+    assert row.source_id == session.scalar(select(Source.id))
+
+
+def test_the_blocker_is_the_most_severe_open_risk(session):
+    upsert_record(
+        session,
+        rec(
+            risks=[
+                risk(category="water", severity="watch", summary="Draw questioned."),
+                risk(category="permitting", severity="blocking", summary="Rezoning refused."),
+                risk(category="financing", severity="material", summary="Round unclosed."),
+            ]
+        ),
+    )
+    assert session.scalar(select(Project)).blocker == "Rezoning refused."
+
+
+def test_resolving_a_risk_clears_the_blocker(session):
+    """What the free-text column could never do.
+
+    `_resolve` returns the existing value when a field has no claims, so the old
+    `blocker` string could be replaced but never set back to NULL — a resolved
+    obstacle sat on the row forever.
+    """
+    upsert_record(session, rec(risks=[risk()]))
+    project = session.scalar(select(Project))
+    assert project.blocker == "Upgrades pending."
+
+    session.scalar(select(Risk)).status = "resolved"
+    session.flush()
+
+    upsert_record(session, rec(risks=[]))
+    assert session.scalar(select(Project)).blocker is None
+
+
+def test_reingesting_the_same_risk_writes_nothing(session):
+    """Idempotence, including for an undated risk.
+
+    `first_seen` is nullable and SQLite treats NULLs as distinct, so the UNIQUE
+    constraint does not dedup this case — `_upsert_risks` does, in Python.
+    """
+    upsert_record(session, rec(risks=[risk()]))
+    second = upsert_record(session, rec(risks=[risk()]))
+    assert second.risks_written == 0
+    assert second.action == "unchanged"
+    assert session.scalar(select(func.count()).select_from(Risk)) == 1
+
+
+def test_the_same_category_on_a_new_date_is_a_second_risk(session):
+    upsert_record(session, rec(risks=[risk(first_seen=dt.date(2026, 1, 1))]))
+    upsert_record(session, rec(risks=[risk(first_seen=dt.date(2026, 6, 1))]))
+    assert session.scalar(select(func.count()).select_from(Risk)) == 2
+
+
+def test_re_reading_an_edited_article_updates_the_risk_in_place(session):
+    upsert_record(session, rec(risks=[risk(severity="watch", summary="Upgrades queued.")]))
+    result = upsert_record(session, rec(risks=[risk(severity="blocking", summary="Work halted.")]))
+    assert result.risks_written == 0
+    row = session.scalar(select(Risk))
+    assert (row.severity, row.summary) == ("blocking", "Work halted.")
+    assert session.scalar(select(Project)).blocker == "Work halted."
+
+
+def test_an_operator_resolution_is_not_revived_by_a_re_read(session):
+    """`status` belongs to the operator, not to the extractor. An article that
+    still mentions a settled obstacle is not evidence it came back."""
+    upsert_record(session, rec(risks=[risk()]))
+    session.scalar(select(Risk)).status = "resolved"
+    session.flush()
+
+    upsert_record(session, rec(risks=[risk(summary="Upgrades still pending.")]))
+    assert session.scalar(select(Risk)).status == "resolved"
+    assert session.scalar(select(Project)).blocker is None
+
+
+def test_an_ingest_with_no_risks_does_not_clear_existing_ones(session):
+    """An article that stops mentioning an obstacle is not evidence it is gone."""
+    upsert_record(session, rec(risks=[risk()]))
+    upsert_record(
+        session,
+        rec(
+            sources=[
+                SourceRecord(
+                    url="https://www.dcd.com/b",
+                    source_type="trade_press",
+                    fetched_at=T1,
+                    claims={"mw_planned": 900.0},
+                )
+            ]
+        ),
+    )
+    assert session.scalar(select(func.count()).select_from(Risk)) == 1
+    assert session.scalar(select(Project)).blocker == "Upgrades pending."
+
+
+def test_risks_do_not_move_with_the_claims_merge(session):
+    """`blocker` is in DERIVED_FIELDS, so a claim never sets the column.
+
+    A source may still record a `blocker` claim — that is what keeps
+    `source.fields` honest about which citation supports it — but the value is
+    written and never read.
+    """
+    upsert_record(
+        session,
+        rec(sources=[manual_source(blocker="A claim nobody should read.")], risks=[]),
+    )
+    assert session.scalar(select(Project)).blocker is None
 
 
 def test_source_fields_is_derived_not_supplied(session):

@@ -92,11 +92,18 @@ initial build of the v1 PRD.
   `project.blocker`. That column could not hold more than one obstacle when the
   PRD's own list names seven; could never be cleared, because `upsert._resolve`
   returns the existing value when a field has no claims, so a resolved obstacle sat
-  on the row forever; could not be counted, which is what the chip/cloud/power
-  read-through needs; and could not survive the evidence gate, since the prompt
-  asked the model to *write* a sentence and a paraphrase is never a verbatim
-  substring — both blockers in the live database fail the current gate against
-  their own article text.
+  on the row forever; and could not be counted, which is what the chip/cloud/power
+  read-through needs.
+
+  It also needed a carve-out to be evidenced at all. A blocker sentence is a
+  paraphrase, so it can never be a verbatim substring of its own quote — both
+  blockers in the live database fail `_stated_in` against their own article text —
+  and `_SUMMARY_FIELDS` covers that by trusting the model's *label* over a verified
+  quote. `risks[].quote` is the stronger form of the same idea: the quote must be
+  real **and** must contain wording for the category it is filed under, checked
+  against `_RISK_EVIDENCE` exactly as `phase` is checked against `_PHASE_EVIDENCE`.
+  So `blocker` left `_SUMMARY_FIELDS`; obstacles became storable by tightening the
+  check rather than loosening it.
 
   `category` is a closed vocabulary mapped to the PRD's obstacle list
   (`grid_capacity`, `transmission`, `permitting`, `environmental`,
@@ -110,6 +117,28 @@ initial build of the v1 PRD.
   0004 backfills any existing `blocker` into an `unclassified` risk carrying the
   source that asserted it, so upgrading loses nothing. Verified against a copy of
   the live database: both rows migrated, both cited.
+- Obstacle extraction: `extract-v1` returns a `risks[]` array instead of a
+  `blocker` string, `crawl._risks` gates each entry, and `upsert._upsert_risks`
+  writes them the way `_upsert_events` writes milestones — dedup on
+  `(category, first_seen)` in Python, so re-ingest stays idempotent even for an
+  undated obstacle where the UNIQUE constraint cannot help.
+
+  `project.blocker` is now derived by `upsert._derive_blocker` and is in a new
+  `DERIVED_FIELDS` set that the claims-merge loop skips. Sources still record a
+  `blocker` claim so `source.fields` says which citation supports it, but the value
+  is written and never read. Two consequences worth naming: an obstacle can finally
+  be **cleared** (resolve the risk and the column goes NULL), and the citation for
+  `blocker` now lives in `risk.source_id` — `test_every_field_is_cited` was extended
+  to follow it there rather than dropped.
+
+  An article that stops mentioning an obstacle does not clear it: that is not
+  evidence it is gone. Re-reading updates wording and severity in place but never
+  revives a risk an operator resolved — `status` belongs to the operator.
+- `ingest manual` accepts a `risks` array; a bare `blocker` string still loads and
+  becomes one `unclassified` risk cited to the record's first source, so curated
+  files written before the table keep working. Two curated risks sharing a category
+  and date are refused at validation, where the operator can see which lines
+  collide, rather than as an IntegrityError partway through a write.
 - **A third discovery tier, `risk_signal`, so obstacle news reaches the queue.**
   Every `signal` term was announcement-shaped — announce, expand, invest, build,
   campus, megawatt — which silently discarded every article about a project going

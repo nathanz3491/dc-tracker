@@ -17,7 +17,6 @@ Here is the extracted data:
       "phase": "construction",
       "first_announced": "2023-03-01",
       "expected_online": "2027-07-01",
-      "blocker": "American Transmission Company must complete two 345-kilovolt upgrades before the campus can draw its full load.",
       "notes": "First phase of 150 MW energized January 2026; remainder expected by July 2027.",
       "events": [
         {
@@ -34,6 +33,16 @@ Here is the extracted data:
           "event_date": "2026-01-01",
           "event_type": "energized",
           "description": "First 150 MW phase energized."
+        }
+      ],
+      "risks": [
+        {
+          "category": "transmission",
+          "severity": "material",
+          "summary": "Two 345-kilovolt upgrades must finish before the campus can draw full load.",
+          "quote": "The principal obstacle is transmission: American Transmission Company must\ncomplete two 345-kilovolt upgrades before the campus can draw its full load.",
+          "first_seen": "2026-02-01",
+          "delay_days": null
         }
       ],
       "evidence": [
@@ -80,10 +89,6 @@ Here is the extracted data:
         {
           "field": "expected_online",
           "quote": "Microsoft expects the\nremainder of the campus to come online by July 2027."
-        },
-        {
-          "field": "blocker",
-          "quote": "The principal obstacle is transmission: American Transmission Company must\ncomplete two 345-kilovolt upgrades before the campus can draw its full load."
         }
       ]
     }

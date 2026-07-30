@@ -515,6 +515,7 @@ def run(
             result = upsert_record(session, record, force_new=force_new)
             report.bump(result.action)
             report.events += result.events_written
+            report.risks += result.risks_written
             report.conflicts += len(result.conflicts)
             if result.duplicate_of is not None:
                 report.duplicates_flagged += 1

@@ -37,13 +37,15 @@ from sqlalchemy.orm import Session
 from tracker import confidence as conf
 from tracker.dedup import all_keys, dedup_key, is_cross_granularity_match
 from tracker.ingest.records import IngestRecord
-from tracker.models import Event, Project, Source, utcnow
+from tracker.models import Event, Project, Risk, Source, utcnow
 from tracker.vocab import (
     DEFAULT_PHASE,
+    OPEN_RISK_STATUS,
     PHASE_PROGRESSION,
     PHASE_TERMINAL,
     TRACKED_FIELDS,
     WRITABLE_FIELDS,
+    severity_rank,
 )
 
 log = logging.getLogger(__name__)
@@ -80,6 +82,16 @@ class Policy(Enum):
     PHASE = "phase"
 
 
+#: Fields that are NOT merged from claims at all, because something else owns them.
+#:
+#: * `notes` is assembled by `_merge_notes` from derived and contributed lines.
+#: * `blocker` is derived from the `risk` rows by `_derive_blocker`. Leaving it in
+#:   the merge loop would make it unclearable: `_resolve` returns the existing value
+#:   when a field has no claims, so a resolved obstacle could never go back to NULL.
+#:   Sources still record a `blocker` claim, which is what keeps `source.fields`
+#:   honest about which citation supports it — that value is written, never read.
+DERIVED_FIELDS: frozenset[str] = frozenset({"notes", "blocker"})
+
 #: Per-field merge policy. Any WRITABLE_FIELD absent here defaults to
 #: PREFER_WEIGHT; the explicit table exists so the choices are reviewable.
 FIELD_POLICY: dict[str, Policy] = {
@@ -98,7 +110,7 @@ FIELD_POLICY: dict[str, Policy] = {
     "phase": Policy.PHASE,
     "first_announced": Policy.MIN,
     "expected_online": Policy.PREFER_WEIGHT,
-    "blocker": Policy.PREFER_WEIGHT,
+    # `blocker` is absent on purpose — see DERIVED_FIELDS above.
 }
 
 _PHASE_RANK = {name: i for i, name in enumerate(PHASE_PROGRESSION)}
@@ -111,6 +123,7 @@ class UpsertResult:
     conflicts: list[str] = dc_field(default_factory=list)
     duplicate_of: int | None = None
     events_written: int = 0
+    risks_written: int = 0
 
 
 def derive_fields(claims: dict[str, Any]) -> str | None:
@@ -422,7 +435,7 @@ def upsert_record(session: Session, rec: IngestRecord, *, force_new: bool = Fals
     # --- Recompute every field from all claims ------------------------------
     by_field = _gather(list(project.sources))
     for name in WRITABLE_FIELDS:
-        if name == "notes":
+        if name in DERIVED_FIELDS:
             continue
         current = getattr(project, name)
         chosen = _resolve(name, by_field.get(name, []), current)
@@ -475,9 +488,15 @@ def upsert_record(session: Session, rec: IngestRecord, *, force_new: bool = Fals
     # --- Events -------------------------------------------------------------
     events_written = _upsert_events(session, project, rec)
 
+    # --- Risks, and the blocker derived from them ---------------------------
+    # After the sources exist, so a risk can cite one; before the change check, so
+    # a newly-derived blocker counts as a change.
+    risks_written = _upsert_risks(session, project, rec)
+    project.blocker = _derive_blocker(session, project)
+
     # --- Did anything actually change? -------------------------------------
     if action == "update":
-        if _snapshot(project) == before and not events_written:
+        if _snapshot(project) == before and not events_written and not risks_written:
             action = "unchanged"
         else:
             project.updated_at = utcnow()
@@ -489,6 +508,7 @@ def upsert_record(session: Session, rec: IngestRecord, *, force_new: bool = Fals
         conflicts=conflict_fields,
         duplicate_of=duplicate_of,
         events_written=events_written,
+        risks_written=risks_written,
     )
 
 
@@ -539,6 +559,86 @@ def _upsert_events(session: Session, project: Project, rec: IngestRecord) -> int
     return inserted
 
 
+def _upsert_risks(session: Session, project: Project, rec: IngestRecord) -> int:
+    """Write obstacles, deduplicating on (category, first_seen) per the schema.
+
+    Returns the number of rows inserted; updating an existing risk does not count as
+    a write, so a re-ingest still reports `unchanged`.
+
+    Deduplication happens here rather than being left to the UNIQUE constraint
+    because `first_seen` is nullable and SQLite treats NULLs as distinct — two runs
+    of the same undated risk would insert two rows. A Python dict keyed on
+    ``(category, first_seen)`` handles ``None`` correctly, which is what makes
+    re-ingest idempotent for undated obstacles.
+
+    A risk is never deleted here. An article that has stopped mentioning an obstacle
+    is not evidence the obstacle is gone, so clearing one is an operator action
+    (`tracker review`) or a later source explicitly reporting the resolution.
+    """
+    if not rec.risks:
+        return 0
+    url_to_id = {s.url: s.id for s in project.sources}
+    # Queried rather than read off `project.risks`, for the same reason as events:
+    # rows added earlier in this session may not be on the relationship yet, and a
+    # stale view here re-inserts and trips the UNIQUE constraint.
+    existing = {
+        (r.category, r.first_seen): r
+        for r in session.scalars(select(Risk).where(Risk.project_id == project.id)).all()
+    }
+    inserted = 0
+    for risk in rec.risks:
+        source_id = url_to_id.get(risk.source_url) if risk.source_url else None
+        found = existing.get((risk.category, risk.first_seen))
+        if found is None:
+            session.add(
+                Risk(
+                    project_id=project.id,
+                    category=risk.category,
+                    severity=risk.severity,
+                    status=OPEN_RISK_STATUS,
+                    summary=risk.summary,
+                    quote=risk.quote,
+                    first_seen=risk.first_seen,
+                    delay_days=risk.delay_days,
+                    source_id=source_id,
+                )
+            )
+            inserted += 1
+        else:
+            # Re-reading an edited article updates the wording and the severity, but
+            # never revives a risk an operator resolved: `status` is theirs, not the
+            # extractor's.
+            found.severity = risk.severity
+            found.summary = risk.summary
+            found.quote = risk.quote
+            if risk.delay_days is not None:
+                found.delay_days = risk.delay_days
+            if source_id is not None:
+                found.source_id = source_id
+    session.flush()
+    return inserted
+
+
+def _derive_blocker(session: Session, project: Project) -> str | None:
+    """`project.blocker` = the most severe open risk's summary, else NULL.
+
+    Derived rather than merged, which is what finally lets an obstacle be *cleared*:
+    the old column went through `_resolve`, and that returns the existing value when
+    a field has no claims, so a blocker could be replaced but never set back to NULL.
+
+    Ties break on the lowest id, so the value is stable across runs rather than
+    depending on which row the database happened to return first.
+    """
+    open_risks = session.scalars(
+        select(Risk)
+        .where(Risk.project_id == project.id, Risk.status == OPEN_RISK_STATUS)
+        .order_by(Risk.id.asc())
+    ).all()
+    if not open_risks:
+        return None
+    return max(open_risks, key=lambda r: severity_rank(r.severity)).summary
+
+
 def recompute_confidence(session: Session) -> int:
     """Recompute stored confidence for every project.
 
@@ -557,6 +657,7 @@ def recompute_confidence(session: Session) -> int:
 
 
 __all__ = [
+    "DERIVED_FIELDS",
     "FIELD_POLICY",
     "NOTE_PREFIX",
     "Policy",

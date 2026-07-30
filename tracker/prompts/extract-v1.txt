@@ -23,6 +23,10 @@ RULES
    If you cannot quote the article for a value, that value MUST be null.
    Quotes must be copied character-for-character from the ARTICLE. Do not
    paraphrase, tidy, translate, or join separate sentences into one quote.
+   ONE exception, and only one: "risks[].summary" may be your own wording,
+   because it names an obstacle rather than copying a value. Its supporting
+   quote goes in "risks[].quote" instead of in "evidence", and an entry
+   without one is discarded.
 4. Numbers: digits only. No units, no commas, no currency symbols, no ranges.
      "1,000 MW"      -> 1000
      "1.5 GW"        -> 1500          (convert to megawatts)
@@ -59,12 +63,19 @@ RULES
   "phase":           "announced"|"permitting"|"construction"|"operational"|"paused"|"cancelled"|null,
   "first_announced": "YYYY-MM-DD"|null,
   "expected_online": "YYYY-MM-DD"|null,
-  "blocker":         string|null,
   "notes":           string|null,
   "events": [{
     "event_date":  "YYYY-MM-DD",
     "event_type":  "announced"|"permit_filed"|"groundbreaking"|"energized"|"first_customer"|"delayed"|"expanded",
     "description": string
+  }],
+  "risks": [{
+    "category":    "grid_capacity"|"transmission"|"permitting"|"environmental"|"equipment_supply"|"chip_supply"|"financing"|"offtake"|"community_opposition"|"water",
+    "severity":    "watch"|"material"|"blocking",
+    "summary":     string,
+    "quote":       "<verbatim sentence from the ARTICLE stating this obstacle>",
+    "first_seen":  "YYYY-MM-DD"|null,
+    "delay_days":  integer|null
   }],
   "evidence": [{
     "field": "<one field name from this schema>",
@@ -99,12 +110,40 @@ phase            The furthest stage the article says the project has reached.
                  abandoned or withdrawn.
 first_announced  When the project was first made public, if the article says.
 expected_online  When the first megawatts are expected to come online.
-blocker          ONE sentence naming the single biggest CURRENT obstacle
-                 (transmission, water, litigation, local opposition, permits,
-                 turbine or chip supply). null if the article names none.
 notes            At most two sentences on the latest progress. Also record here
                  any range or ambiguity you collapsed to a single number.
 events           Only milestones whose date you can quote.
+risks            Every obstacle the article reports for THIS project, one entry
+                 each. An empty list is the correct and common answer: most
+                 articles report no obstacle, and inventing one is worse than
+                 omitting it.
+
+                 category   Pick the closest. What each covers:
+                   grid_capacity        the local grid cannot supply the load
+                   transmission         substation or power line work lags the site
+                   permitting           approvals outstanding, refused, or slow
+                   environmental        environmental review, air permit, emissions
+                   equipment_supply     transformers, switchgear, chillers, turbines
+                   chip_supply          GPU or accelerator availability
+                   financing            funding not secured, or a deal fell through
+                   offtake              no committed customer or anchor tenant
+                   community_opposition residents, litigation, referendum, noise
+                   water                water supply, discharge, or aquifer impact
+                 severity   What the article says the effect IS:
+                   watch      named as a concern, no stated effect on the project
+                   material   the article says the schedule or the scope moved
+                   blocking   work has stopped, or approval was refused outright
+                 Use "watch" when the article does not say. Overstating this is
+                 worse than understating it.
+                 summary    ONE sentence in your own words. This one may be a
+                 paraphrase -- it is the only field in this schema that may.
+                 quote      A verbatim sentence from the ARTICLE that states the
+                 obstacle, copied character-for-character. REQUIRED: an entry
+                 without one is discarded.
+                 first_seen The date the article dates the obstacle to, if it
+                 gives one. null otherwise -- do not substitute today's date.
+                 delay_days Only when the article quantifies a slip in days,
+                 weeks or months. Convert to days. null otherwise.
 evidence         One entry per non-null field. The "field" must be a field name
                  from the schema above.
 

@@ -32,7 +32,13 @@ from sqlalchemy.orm import Session
 
 from tracker.config import Settings, get_settings
 from tracker.ingest.fetch import Fetcher, FetchResult, cache_path, fetch_all
-from tracker.ingest.records import EventRecord, IngestRecord, IngestReport, SourceRecord
+from tracker.ingest.records import (
+    EventRecord,
+    IngestRecord,
+    IngestReport,
+    RiskRecord,
+    SourceRecord,
+)
 from tracker.llm import Extractor, LLMError, LLMJsonError, LLMReply, parse_json_object
 from tracker.models import IngestUrl, utcnow
 from tracker.normalize import (
@@ -44,19 +50,26 @@ from tracker.normalize import (
     norm_money_detail,
     norm_mw_detail,
     norm_phase,
+    norm_risk_category,
+    norm_risk_severity,
     norm_state,
     norm_text,
     soft,
 )
 from tracker.prompts import Prompt, load_prompt
 from tracker.upsert import upsert_record
-from tracker.vocab import EVENT_TYPES, TRACKED_FIELDS
+from tracker.vocab import DEFAULT_RISK_SEVERITY, EVENT_TYPES, TRACKED_FIELDS, severity_rank
 
 log = logging.getLogger(__name__)
 
 #: Hard ceiling on projects taken from one article. An article listing twenty
 #: sites in passing is a roundup, not twenty citable projects.
 MAX_PROJECTS_PER_ARTICLE = 5
+
+#: Hard ceiling on obstacles taken from one article for one project. There are ten
+#: categories and a single article realistically reports two or three; a list longer
+#: than this means the model is enumerating speculation rather than reporting.
+MAX_RISKS_PER_PROJECT = 6
 
 #: Marker inserted where the middle of an over-long article was dropped.
 TRUNCATION_MARKER = "\n\n[... middle of article omitted for length ...]\n\n"
@@ -176,6 +189,146 @@ _PHASE_EVIDENCE: dict[str, tuple[str, ...]] = {
     "cancelled": ("cancel", "scrapped", "abandon", "withdrew", "withdrawn", "terminated"),
 }
 
+#: Article wording that evidences each risk category.
+#:
+#: Same mechanism and same reason as `_PHASE_EVIDENCE` above. A risk category is a
+#: *classification*, not a value copied out of the text: an article says "the county
+#: board rejected the rezoning", never `category: community_opposition`. Requiring
+#: the category name to appear verbatim would discard every correct classification,
+#: which is exactly what happened to the old free-text `blocker` field — a
+#: paraphrase can never be a verbatim substring, so the stricter gate was taking its
+#: coverage to zero.
+#:
+#: What is gated is the pairing: the quote must be real (verified against the
+#: fetched article) AND must contain wording for the category claimed. A model that
+#: labels an unrelated sentence `water` gets nothing through.
+_RISK_EVIDENCE: dict[str, tuple[str, ...]] = {
+    "grid_capacity": (
+        "grid capacity",
+        "not enough power",
+        "insufficient power",
+        "capacity constraint",
+        "power constraint",
+        "curtail",
+        "load growth",
+        "cannot supply",
+        "energy shortfall",
+        "queue position",
+        "interconnection",
+    ),
+    "transmission": (
+        "transmission",
+        "substation",
+        "transmission line",
+        "power line",
+        "kilovolt",
+        "kv line",
+        "upgrade the grid",
+        "grid upgrade",
+        "interconnection",
+        "energiz",
+    ),
+    "permitting": (
+        "permit",
+        "zoning",
+        "rezon",
+        "entitlement",
+        "approval",
+        "variance",
+        "moratorium",
+        "special use",
+        "planning commission",
+        "board of supervisors",
+        "council",
+    ),
+    "environmental": (
+        "environmental",
+        "air quality",
+        "air permit",
+        "emissions",
+        "wetland",
+        "endangered",
+        "impact statement",
+        "epa",
+        "pollution",
+    ),
+    "equipment_supply": (
+        "transformer",
+        "switchgear",
+        "chiller",
+        "cooling equipment",
+        "turbine",
+        "generator",
+        "lead time",
+        "supply chain",
+        "shortage",
+        "backlog",
+        "delivery",
+    ),
+    "chip_supply": (
+        "chip",
+        "gpu",
+        "accelerator",
+        "semiconductor",
+        "nvidia",
+        "allocation",
+        "silicon",
+    ),
+    "financing": (
+        "financ",
+        "funding",
+        "capital",
+        "investor",
+        "debt",
+        "loan",
+        "raise",
+        "cost overrun",
+        "budget",
+    ),
+    "offtake": (
+        "tenant",
+        "customer",
+        "lease",
+        "leasing",
+        "offtake",
+        "pre-leas",
+        "preleas",
+        "commitment",
+        "speculative",
+        "unleased",
+    ),
+    "community_opposition": (
+        "opposition",
+        "oppose",
+        "resident",
+        "neighbor",
+        "neighbour",
+        "lawsuit",
+        "sued",
+        "sue",
+        "litigation",
+        "referendum",
+        "petition",
+        "protest",
+        "noise",
+        "backlash",
+        "objection",
+    ),
+    "water": (
+        "water",
+        "aquifer",
+        "groundwater",
+        "gallons",
+        "cooling water",
+        "drought",
+        "wastewater",
+        "discharge",
+    ),
+    # `unclassified` is deliberately absent: it exists for a human assertion via
+    # `ingest manual` and for the 0004 backfill. The extractor must classify, or the
+    # row cannot be aggregated and the table has no purpose.
+}
+
 #: Quantity expressions to hunt for inside a verified quote, per field.
 _MW_EXPR = re.compile(r"[\d][\d.,]*\s*(?:mw|gw|megawatt|gigawatt)s?\b", re.I)
 _MONEY_EXPR = re.compile(
@@ -197,12 +350,20 @@ _DATE_EXPR = re.compile(
 
 #: Fields whose value is a *paraphrase* of the article rather than a copy of it.
 #:
-#: `blocker` is written as "grid interconnection delays" where the article says
-#: "the project awaits two 345-kilovolt upgrades" — a correct summary that shares
-#: no substring with its own evidence. For these, the model's label plus a quote
+#: A summary is written as "grid interconnection delays" where the article says
+#: "the project awaits two 345-kilovolt upgrades" — correct, and sharing no
+#: substring with its own evidence. For these, the model's label plus a quote
 #: verified to be real is the strongest check available; demanding the value
 #: appear verbatim would discard every honest summary.
-_SUMMARY_FIELDS = frozenset({"phase", "blocker", "notes"})
+#:
+#: `blocker` used to be here and no longer is, because it is no longer a value the
+#: model returns: obstacles come back in `risks[]` and the column is derived from
+#: the stored rows. `_risks` applies a strictly stronger form of this same
+#: carve-out — the quote must be real *and* must contain wording for the category
+#: it is filed under, so an unrelated real sentence under a plausible label is not
+#: enough. Trusting the label alone is the weakest link here, and the risk path is
+#: where that was worth removing.
+_SUMMARY_FIELDS = frozenset({"phase", "notes"})
 
 
 def _stated_in(field: str, value: Any, quote: str) -> bool:
@@ -342,7 +503,9 @@ def _coerce(raw: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
         "mw_planned": numeric("mw_planned", norm_mw_detail),
         "mw_built": numeric("mw_built", norm_mw_detail),
         "phase": soft(norm_phase, raw.get("phase")),
-        "blocker": norm_text(raw.get("blocker")),
+        # `blocker` is deliberately absent: it is no longer a claim an article makes
+        # but a value derived from the `risk` rows. See `_risks` below and
+        # `upsert._derive_blocker`.
         "notes": norm_text(raw.get("notes")),
     }
 
@@ -384,6 +547,112 @@ def _events(raw: dict[str, Any], url: str) -> list[EventRecord]:
             continue
         events.append(EventRecord(when, event_type, description, url))
     return events
+
+
+def _risk_quote_supports(category: str, quote: str) -> bool:
+    """Does this quote contain wording for the category it is filed under?"""
+    normalized = _normalize_for_match(quote)
+    return any(token in normalized for token in _RISK_EVIDENCE.get(category, ()))
+
+
+def _risks(raw: dict[str, Any], article_text: str, url: str) -> tuple[list[RiskRecord], list[str]]:
+    """Obstacles from one extracted project. Returns ``(kept, disclosure notes)``.
+
+    Two checks, and both are needed:
+
+    * The quote must really appear in the fetched article. Same anti-fabrication
+      guarantee as `evidence_gate` — a paraphrase dressed as a quote gets nothing
+      through.
+    * The quote must contain wording for the *claimed category*. Without this the
+      model could attach any real sentence to any category, and the aggregation this
+      table exists for would be built on labels nobody checked.
+
+    What is deliberately NOT required is that `summary` be quotable. It is one
+    sentence of the model's own words, and demanding it be a verbatim substring is
+    precisely what took the old `blocker` field's coverage to zero.
+    """
+    haystack = _normalize_for_match(article_text)
+    kept: list[RiskRecord] = []
+    notes: list[str] = []
+    seen: set[tuple[str, dt.date | None]] = set()
+    dropped_unsupported: list[str] = []
+
+    for entry in raw.get("risks") or []:
+        if not isinstance(entry, dict):
+            continue
+
+        category = soft(norm_risk_category, entry.get("category"))
+        if category is None or category not in _RISK_EVIDENCE:
+            # Includes `unclassified`, which is not the extractor's to assert: an
+            # unclassified risk cannot be aggregated, so it would silently be a hole
+            # in the one thing this table is for.
+            log.warning("dropping a risk from %s: unusable category %r", url, entry.get("category"))
+            continue
+
+        summary = norm_text(entry.get("summary"))
+        if not summary:
+            log.warning("dropping a %s risk from %s: no summary", category, url)
+            continue
+
+        quote = entry.get("quote")
+        if not isinstance(quote, str) or not quote.strip():
+            dropped_unsupported.append(category)
+            continue
+        if _normalize_for_match(quote) not in haystack:
+            log.warning("risk quote for %s is not in the article; dropping the risk", category)
+            dropped_unsupported.append(category)
+            continue
+        if not _risk_quote_supports(category, quote):
+            log.warning("risk quote for %s does not state that category; dropping", category)
+            dropped_unsupported.append(category)
+            continue
+
+        first_seen = soft(norm_date_detail, entry.get("first_seen"), field="first_seen")
+        first_seen_value = first_seen.value if first_seen is not None else None
+
+        key = (category, first_seen_value)
+        if key in seen:
+            # The stored UNIQUE is (project, category, first_seen), so two entries
+            # agreeing on both would collide on insert. Keeping the first is the same
+            # accepted cost `event` already documents.
+            continue
+        seen.add(key)
+
+        delay = entry.get("delay_days")
+        delay_days = int(delay) if isinstance(delay, int) and not isinstance(delay, bool) else None
+        if delay_days is not None and delay_days < 0:
+            delay_days = None
+
+        kept.append(
+            RiskRecord(
+                category=category,
+                # Unrecognized severity defaults to `watch` rather than dropping the
+                # risk: the obstacle is real and evidenced, only its stated effect is
+                # unclear, and understating that is the safe direction.
+                severity=soft(norm_risk_severity, entry.get("severity")) or DEFAULT_RISK_SEVERITY,
+                summary=summary,
+                quote=norm_excerpt(quote),
+                first_seen=first_seen_value,
+                delay_days=delay_days,
+                source_url=url,
+            )
+        )
+        if len(kept) >= MAX_RISKS_PER_PROJECT:
+            log.warning(
+                "%s reported more than %d risks; kept the first %d",
+                url,
+                MAX_RISKS_PER_PROJECT,
+                MAX_RISKS_PER_PROJECT,
+            )
+            break
+
+    if dropped_unsupported:
+        notes.append(
+            "dropped unsupported risk(s) for "
+            + ", ".join(sorted(set(dropped_unsupported)))
+            + " (no verbatim quote from the article states them)"
+        )
+    return kept, notes
 
 
 def build_records(
@@ -454,6 +723,17 @@ def build_records(
         if values.get("notes"):
             notes.append(f"extracted summary: {values['notes']}")
 
+        risks, risk_notes = _risks(raw, result.markdown, result.url)
+        notes.extend(risk_notes)
+
+        # A source that reported an obstacle supports `blocker`, even though the
+        # column is derived rather than claimed. Recording it keeps the "every
+        # non-null tracked field appears in some source's `fields`" invariant true
+        # without the merge path ever reading the value: `upsert` skips `blocker` in
+        # the recompute loop and derives it from the `risk` rows instead.
+        if risks:
+            claims["blocker"] = max(risks, key=lambda r: severity_rank(r.severity)).summary
+
         record = IngestRecord(
             project={
                 "name": claims["name"],
@@ -474,6 +754,7 @@ def build_records(
                 )
             ],
             events=_events(raw, result.url),
+            risks=risks,
             notes=notes,
         )
         records.append(record)
@@ -737,6 +1018,7 @@ def run(
             upsert = upsert_record(session, record)
             report.bump(upsert.action)
             report.events += upsert.events_written
+            report.risks += upsert.risks_written
             report.conflicts += len(upsert.conflicts)
             if upsert.duplicate_of is not None:
                 report.duplicates_flagged += 1

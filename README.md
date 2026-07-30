@@ -682,22 +682,39 @@ not do four things the PRD asks for:
 - **Be counted.** "How much planned capacity is blocked on transmission in ERCOT" is
   the question that carries the read-through, and free text cannot answer it. A
   closed `category` vocabulary can.
-- **Survive the evidence gate.** The gate requires a non-numeric value to appear
-  verbatim in a quote, but the prompt asked the model to *write* one sentence naming
-  the obstacle — and a written sentence is a paraphrase, so it can never be a
-  verbatim substring. Both blockers in the live database fail the current gate
-  against their own article text; they are survivors of the older label-trusting
-  gate. Coverage was heading to zero, not up.
+- **Be evidenced without a carve-out.** A blocker sentence is a paraphrase, so it
+  can never be a verbatim substring of its own evidence — both blockers in the live
+  database fail `_stated_in` against their own article text. The gate handles that
+  with `_SUMMARY_FIELDS`, which accepts a paraphrase when the model *labels* a real
+  quote with the field name. That works, but the label is the weakest link: any
+  verified sentence under the right label was enough.
 
-The last point is why `risk` splits the two apart: `summary` may be a paraphrase,
-and `quote` holds the verified verbatim sentence beside it. That is the same
-distinction `notes` already draws — a summary is never a citable claim — and it means
-the gate did not have to be weakened anywhere to make obstacles storable.
+The last point is why `risk` splits the two apart: `summary` may be a paraphrase, and
+`quote` holds the verified verbatim sentence beside it — and the quote must contain
+wording for the *category it is filed under*, checked against `_RISK_EVIDENCE` the
+same way `phase` is checked against `_PHASE_EVIDENCE`. That is strictly stronger than
+the label carve-out it replaces, so `blocker` came out of `_SUMMARY_FIELDS`: obstacles
+became storable by tightening the check, not by loosening it.
 
 Severity is `watch` / `material` / `blocking`, ordered, and that order is
 load-bearing: it decides which risk becomes `project.blocker`. A source that names an
 obstacle without stating any effect gets `watch`, the conservative direction, because
 `blocker` is the field an operator acts on.
+
+Two rules about clearing, both learned from what the old column got wrong:
+
+- **An article that stops mentioning an obstacle does not clear it.** Silence is not
+  evidence. A risk goes away when a source reports the resolution or an operator
+  marks it resolved in `tracker review`.
+- **Re-reading an edited article updates wording and severity, but never revives a
+  risk an operator resolved.** `status` belongs to the operator; the extractor owns
+  the description, not the verdict.
+
+`unclassified` is in the category vocabulary but the extractor may not use it — a
+risk nothing can aggregate is invisible to every rollup, which is the one thing this
+table exists to make possible. It is reachable only from a hand-curated `blocker`
+string and from the 0004 backfill, both of which are a human asserting an obstacle
+without saying which kind.
 
 ### The database is not committed
 

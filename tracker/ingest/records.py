@@ -54,6 +54,29 @@ class EventRecord:
 
 
 @dataclass(frozen=True)
+class RiskRecord:
+    """One obstacle as a single source reports it.
+
+    ``summary`` and ``quote`` are deliberately separate. The summary is one
+    sentence and is allowed to be a paraphrase; the quote is a verbatim sentence
+    the evidence gate has verified against the fetched article. Keeping both is
+    what let obstacles become storable without loosening the gate: a paraphrase can
+    never be a verbatim substring, so demanding that the summary itself be quotable
+    discarded every obstacle the model correctly identified.
+
+    ``source_url`` is resolved to a source_id at upsert, as on ``EventRecord``.
+    """
+
+    category: str
+    severity: str
+    summary: str
+    quote: str | None = None
+    first_seen: dt.date | None = None
+    delay_days: int | None = None
+    source_url: str | None = None
+
+
+@dataclass(frozen=True)
 class IngestRecord:
     """One project as a single ingest path sees it.
 
@@ -65,6 +88,10 @@ class IngestRecord:
     project: dict[str, Any]
     sources: list[SourceRecord]
     events: list[EventRecord] = field(default_factory=list)
+    #: Obstacles this path found. `project.blocker` is derived from the stored rows,
+    #: never written directly, so an ingest path that finds none leaves any existing
+    #: obstacle alone rather than clearing it.
+    risks: list[RiskRecord] = field(default_factory=list)
     #: Set by a path that knows its facts are weak (e.g. an ISO-queue keyword
     #: match). Caps the computed confidence for this record.
     confidence_cap: int | None = None
@@ -92,6 +119,7 @@ class IngestReport:
     fetch_error: int = 0
     parse_error: int = 0
     events: int = 0
+    risks: int = 0
 
     def bump(self, action: str) -> None:
         if action == "insert":
@@ -115,6 +143,7 @@ class IngestReport:
             ("updated", self.updated),
             ("unchanged", self.unchanged),
             ("events", self.events),
+            ("risks", self.risks),
             ("duplicates flagged", self.duplicates_flagged),
             ("field conflicts", self.conflicts),
             ("fetch errors", self.fetch_error),
@@ -122,4 +151,4 @@ class IngestReport:
         ]
 
 
-__all__ = ["EventRecord", "IngestRecord", "IngestReport", "SourceRecord"]
+__all__ = ["EventRecord", "IngestRecord", "IngestReport", "RiskRecord", "SourceRecord"]

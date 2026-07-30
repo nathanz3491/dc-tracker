@@ -10,8 +10,27 @@
       "investment_usd": 99000000000,
       "phase": "construction",
       "expected_online": "2027-07-01",
-      "blocker": "Local opposition has halted all permitting indefinitely.",
       "events": [],
+      "risks": [
+        {
+          "category": "community_opposition",
+          "severity": "blocking",
+          "summary": "Local opposition has halted all permitting indefinitely.",
+          "quote": null
+        },
+        {
+          "category": "water",
+          "severity": "material",
+          "summary": "The campus will exhaust the local aquifer within a decade.",
+          "quote": "Residents have filed suit over the project's projected water draw."
+        },
+        {
+          "category": "financing",
+          "severity": "blocking",
+          "summary": "The project has run out of money.",
+          "quote": "Microsoft will operate the campus itself"
+        }
+      ],
       "evidence": [
         {
           "field": "name",

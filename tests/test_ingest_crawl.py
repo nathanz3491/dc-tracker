@@ -196,18 +196,23 @@ def test_evidence_gate_drops_a_quote_that_is_not_in_the_article(caplog):
 
 
 def test_evidence_gate_tolerates_whitespace_and_quote_style():
-    """A quote reflowed by the model must still match."""
+    """A quote reflowed by the model must still match.
+
+    The article wraps "900\\nmegawatts" across a line; the model returns it as one
+    line with the spacing it feels like. Both the substring check against the
+    article and the value match have to survive that.
+    """
     kept, _, _ = crawl.evidence_gate(
-        {"blocker": "x"},
+        {"mw_planned": 900.0},
         [
             {
-                "field": "blocker",
-                "quote": "The   principal obstacle is transmission: American Transmission Company must complete two 345-kilovolt upgrades",
+                "field": "mw_planned",
+                "quote": "the company says will draw 900   megawatts at full buildout",
             }
         ],
         article(),
     )
-    assert "blocker" in kept
+    assert kept == {"mw_planned": 900.0}
 
 
 def test_evidence_gate_accepts_a_value_stated_under_another_field_label():
@@ -386,6 +391,149 @@ def test_ungrounded_values_are_dropped_and_disclosed(prompt):
     assert "blocker" not in claims
     assert "expected_online" not in claims, "the quote for it was fabricated"
     assert any("dropped unsupported value" in n for n in record.notes)
+
+
+def test_a_supported_risk_is_extracted(prompt):
+    record = build("llm_response_microsoft_wi.json", prompt=prompt)[0]
+    assert len(record.risks) == 1
+    risk = record.risks[0]
+    assert risk.category == "transmission"
+    assert risk.severity == "material"
+    assert risk.summary.startswith("Two 345-kilovolt upgrades")
+    assert risk.first_seen == dt.date(2026, 2, 1)
+    assert risk.source_url == URL
+
+
+def test_a_risk_summary_may_be_a_paraphrase(prompt):
+    """The point of the summary/quote split.
+
+    "Two 345-kilovolt upgrades must finish before the campus can draw full load"
+    shares almost no substring with the sentence evidencing it, and requiring that
+    it did is what took the old free-text `blocker` field's coverage to zero.
+    """
+    risk = build("llm_response_microsoft_wi.json", prompt=prompt)[0].risks[0]
+    assert crawl._normalize_for_match(risk.summary) not in crawl._normalize_for_match(article())
+    assert crawl._normalize_for_match(risk.quote) in crawl._normalize_for_match(article())
+
+
+def test_a_risk_without_a_quote_is_dropped(prompt):
+    record = build("llm_response_ungrounded.json", prompt=prompt)[0]
+    assert not any(r.category == "community_opposition" for r in record.risks)
+
+
+def test_a_risk_whose_quote_is_not_in_the_article_is_dropped(prompt):
+    """Same anti-fabrication guarantee the evidence gate gives every other field."""
+    record = build("llm_response_ungrounded.json", prompt=prompt)[0]
+    assert not any(r.category == "water" for r in record.risks)
+
+
+def test_a_real_quote_under_the_wrong_category_is_dropped(prompt):
+    """The check that `_SUMMARY_FIELDS` could not make.
+
+    "Microsoft will operate the campus itself" is a genuine sentence from the
+    article, so trusting the model's label would let it evidence a financing
+    collapse. `_RISK_EVIDENCE` requires the quote to actually concern the category
+    it is filed under.
+    """
+    record = build("llm_response_ungrounded.json", prompt=prompt)[0]
+    assert not any(r.category == "financing" for r in record.risks)
+
+
+def test_dropped_risks_are_disclosed(prompt):
+    record = build("llm_response_ungrounded.json", prompt=prompt)[0]
+    assert any("dropped unsupported risk" in n for n in record.notes)
+
+
+def test_an_article_reporting_no_obstacle_yields_no_risk(prompt):
+    """The common and correct case. Most projects have no blocker, and inventing
+    one is worse than recording none — see tracker/gaps.py."""
+    record = build("llm_response_two_projects.json", prompt=prompt)[0]
+    assert record.risks == []
+
+
+def test_a_risk_supports_the_derived_blocker_in_source_fields(prompt):
+    """`blocker` is derived from `risk` rows, but it must still be traceable to a
+    citation, or `test_every_field_is_cited` would have nothing to find."""
+    record = build("llm_response_microsoft_wi.json", prompt=prompt)[0]
+    assert record.sources[0].claims["blocker"] == record.risks[0].summary
+
+
+def test_an_unknown_risk_category_is_dropped(prompt):
+    """A category outside the vocabulary cannot be aggregated, and aggregation is
+    the reason the table exists."""
+    risks, _ = crawl._risks(
+        {"risks": [{"category": "traffic", "severity": "watch", "summary": "s", "quote": "x"}]},
+        article(),
+        URL,
+    )
+    assert risks == []
+
+
+def test_the_extractor_may_not_assert_unclassified(prompt):
+    """`unclassified` exists for a human assertion, not for a model that could not
+    decide — an unclassified row is invisible to every rollup."""
+    risks, _ = crawl._risks(
+        {
+            "risks": [
+                {
+                    "category": "unclassified",
+                    "severity": "watch",
+                    "summary": "s",
+                    "quote": "The principal obstacle is transmission",
+                }
+            ]
+        },
+        article(),
+        URL,
+    )
+    assert risks == []
+
+
+def test_an_unrecognized_severity_falls_back_to_watch(prompt):
+    """Conservative direction: the obstacle is real and evidenced, only its stated
+    effect is unclear, and overstating that turns a mention into a blocker."""
+    risks, _ = crawl._risks(
+        {
+            "risks": [
+                {
+                    "category": "transmission",
+                    "severity": "catastrophic",
+                    "summary": "s",
+                    "quote": "The principal obstacle is transmission: American Transmission Company must",
+                }
+            ]
+        },
+        article(),
+        URL,
+    )
+    assert [r.severity for r in risks] == ["watch"]
+
+
+def test_two_risks_of_one_category_and_date_collapse(prompt):
+    """The stored UNIQUE is (project, category, first_seen), so keeping both would
+    fail on insert. Same accepted cost `event` already documents."""
+    entry = {
+        "category": "transmission",
+        "severity": "watch",
+        "summary": "s",
+        "quote": "The principal obstacle is transmission",
+        "first_seen": "2026-02-01",
+    }
+    risks, _ = crawl._risks({"risks": [entry, dict(entry, summary="other")]}, article(), URL)
+    assert len(risks) == 1
+
+
+def test_risks_per_project_are_capped(prompt, monkeypatch):
+    monkeypatch.setattr(crawl, "MAX_RISKS_PER_PROJECT", 2)
+    quote = "The principal obstacle is transmission"
+    entries = [
+        {"category": c, "severity": "watch", "summary": "s", "quote": quote}
+        for c in ("transmission", "grid_capacity", "permitting")
+    ]
+    # All three categories list "interconnection"/"transmission"-adjacent wording,
+    # so the cap rather than the gate is what limits this.
+    risks, _ = crawl._risks({"risks": entries}, article(), URL)
+    assert len(risks) <= 2
 
 
 def test_two_projects_in_one_article_become_two_records(prompt):

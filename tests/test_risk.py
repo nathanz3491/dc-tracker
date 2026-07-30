@@ -9,6 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 from sqlalchemy import Engine, text
 from sqlalchemy.exc import IntegrityError
 
@@ -198,6 +199,141 @@ def test_deleting_a_source_keeps_the_risk(engine: Engine):
         )
         conn.execute(text("DELETE FROM source WHERE id = 7"))
         assert conn.execute(text("SELECT source_id FROM risk")).scalar_one() is None
+
+
+# --- The curated path -------------------------------------------------------
+
+
+def _manual(**project) -> list:
+    from tracker.ingest.manual import ManualFile, to_records
+
+    base = {
+        "name": "Fairwater",
+        "company": "Microsoft",
+        "city": "Mount Pleasant",
+        "state": "WI",
+        "sources": [{"url": "https://news.microsoft.com/fairwater/"}],
+    }
+    parsed = ManualFile.model_validate({"projects": [{**base, **project}]})
+    return to_records(parsed, digest="abc123", source_name="t.json")
+
+
+def test_a_curated_risk_becomes_a_risk_record():
+    record = _manual(
+        risks=[
+            {
+                "category": "water",
+                "severity": "blocking",
+                "summary": "The county refused the withdrawal permit.",
+                "first_seen": "2026-03-01",
+            }
+        ]
+    )[0]
+    assert len(record.risks) == 1
+    assert record.risks[0].category == "water"
+    assert record.risks[0].severity == "blocking"
+    # Cited to this record's source, so the derived blocker is traceable.
+    assert record.risks[0].source_url == "https://news.microsoft.com/fairwater/"
+
+
+def test_a_curated_risk_defaults_to_the_least_severe():
+    record = _manual(risks=[{"category": "water", "summary": "Questions raised."}])[0]
+    assert record.risks[0].severity == DEFAULT_RISK_SEVERITY
+
+
+def test_a_legacy_blocker_string_still_works():
+    """A curated file written before the risk table must keep loading."""
+    record = _manual(blocker="Awaiting an anchor tenant.")[0]
+    assert len(record.risks) == 1
+    assert record.risks[0].category == "unclassified"
+    assert record.risks[0].summary == "Awaiting an anchor tenant."
+
+
+def test_a_placeholder_blocker_becomes_no_risk():
+    """`--allow-placeholders` stores placeholders as NULL, and it must not smuggle
+    one in as an obstacle instead."""
+    assert _manual(blocker="PLACEHOLDER")[0].risks == []
+
+
+def test_a_curated_risk_supports_the_derived_blocker_in_claims():
+    record = _manual(
+        risks=[
+            {"category": "water", "severity": "watch", "summary": "Minor."},
+            {"category": "financing", "severity": "blocking", "summary": "Funding pulled."},
+        ]
+    )[0]
+    assert record.sources[0].claims["blocker"] == "Funding pulled."
+
+
+def test_an_unknown_curated_category_is_refused():
+    from tracker.ingest.manual import ManualFile
+
+    with pytest.raises(ValidationError, match="category must be one of"):
+        ManualFile.model_validate(
+            {
+                "projects": [
+                    {
+                        "name": "n",
+                        "company": "c",
+                        "city": "ci",
+                        "state": "WI",
+                        "sources": [{"url": "https://a.test/x"}],
+                        "risks": [{"category": "traffic", "summary": "s"}],
+                    }
+                ]
+            }
+        )
+
+
+def test_two_curated_risks_of_one_category_and_date_are_refused():
+    """The collision is reported where the operator can see which lines clash,
+    rather than as an IntegrityError halfway through a write."""
+    from tracker.ingest.manual import ManualFile
+
+    with pytest.raises(ValidationError, match="share a category and first_seen"):
+        ManualFile.model_validate(
+            {
+                "projects": [
+                    {
+                        "name": "n",
+                        "company": "c",
+                        "city": "ci",
+                        "state": "WI",
+                        "sources": [{"url": "https://a.test/x"}],
+                        "risks": [
+                            {"category": "water", "summary": "a"},
+                            {"category": "water", "summary": "b"},
+                        ],
+                    }
+                ]
+            }
+        )
+
+
+def test_a_curated_risk_cannot_cite_a_url_the_record_does_not_list():
+    from tracker.ingest.manual import ManualFile
+
+    with pytest.raises(ValidationError, match="not listed in this record"):
+        ManualFile.model_validate(
+            {
+                "projects": [
+                    {
+                        "name": "n",
+                        "company": "c",
+                        "city": "ci",
+                        "state": "WI",
+                        "sources": [{"url": "https://a.test/x"}],
+                        "risks": [
+                            {
+                                "category": "water",
+                                "summary": "s",
+                                "source_url": "https://elsewhere.test/y",
+                            }
+                        ],
+                    }
+                ]
+            }
+        )
 
 
 # --- The 0004 backfill ------------------------------------------------------

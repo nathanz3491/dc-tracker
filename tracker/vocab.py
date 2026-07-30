@@ -202,6 +202,18 @@ WRITABLE_FIELDS: Final[tuple[str, ...]] = (
 )
 
 
+def severity_rank(severity: str) -> int:
+    """Position in :data:`RISK_SEVERITIES`, or -1 for an unrecognized value.
+
+    One definition shared by the extractor and the write path, so "the most severe
+    open risk" cannot mean two different things in two places.
+    """
+    try:
+        return RISK_SEVERITIES.index(severity)
+    except ValueError:
+        return -1
+
+
 def sql_in(column: str, allowed: tuple[str, ...]) -> str:
     """Render a CHECK constraint body: ``phase IN ('announced', ...)``.
 
