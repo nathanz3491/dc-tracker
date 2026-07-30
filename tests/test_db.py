@@ -61,6 +61,31 @@ def test_migrations_are_found_from_an_unrelated_directory(tmp_path: Path, monkey
     assert schema_version(engine) == expected[-1]
 
 
+def test_project_dotenv_is_read_from_any_directory(tmp_path: Path, monkeypatch):
+    """The API key lives in the project's .env, and `tracker` runs from anywhere.
+
+    pydantic-settings resolves a relative `env_file` against the CURRENT
+    directory, so a bare ".env" was invisible outside the project root — which is
+    the normal case now that the CLI is on PATH.
+    """
+    from tracker.config import Settings, get_settings
+
+    env_file = install_root() / ".env"
+    existed = env_file.exists()
+    original = env_file.read_bytes() if existed else None
+    env_file.write_text("TRACKER_MINIMAX_MODEL=FromProjectDotenv\n", encoding="utf-8")
+    try:
+        monkeypatch.chdir(tmp_path)
+        get_settings.cache_clear()
+        assert Settings().minimax_model == "FromProjectDotenv"
+    finally:
+        if original is None:
+            env_file.unlink(missing_ok=True)
+        else:
+            env_file.write_bytes(original)
+        get_settings.cache_clear()
+
+
 def test_install_root_is_independent_of_cwd(tmp_path: Path, monkeypatch):
     before = install_root()
     monkeypatch.chdir(tmp_path)

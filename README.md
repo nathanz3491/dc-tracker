@@ -91,8 +91,37 @@ tracker ingest pjm --csv data/raw/pjm_2025q3.csv --iso pjm --dry-run
 tracker ingest pjm --csv data/raw/pjm_2025q3.csv --iso pjm
 ```
 
-Finding articles, then extracting from them (needs `TRACKER_MINIMAX_API_KEY`;
-see `.env.example`):
+### Setting the API key
+
+Only `ingest crawl` needs it. Copy the example file and fill in one line:
+
+```bash
+cp .env.example .env
+```
+
+```
+TRACKER_MINIMAX_API_KEY=your-key
+```
+
+`.env` is gitignored, and it is read by **absolute path** — so it applies no
+matter which directory you run `tracker` from. Note the `TRACKER_` prefix: every
+setting this tool reads carries it. `TRACKER_MINIMAX_API_KEY` and
+`MINIMAX_API_KEY` are not the same variable, and only the first is read.
+
+If your key came from the China platform (`platform.minimaxi.com`, phone signup)
+rather than the global one (`platform.minimax.io`, email signup), also set:
+
+```
+TRACKER_MINIMAX_BASE_URL=https://api.minimaxi.com/v1
+```
+
+The keys are not interchangeable, and the wrong host answers *invalid api key* —
+which reads like a bad key rather than a bad URL. `tracker ingest crawl --check`
+tells you which you have in one cheap call.
+
+### Finding and extracting
+
+Needs the key set as above:
 
 ```bash
 tracker discover --since-days 45

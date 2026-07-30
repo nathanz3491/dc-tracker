@@ -32,13 +32,17 @@ from tracker.config import Settings, get_settings
 
 log = logging.getLogger(__name__)
 
-KEY_HELP = """MINIMAX_API_KEY is not set.
+KEY_HELP = """TRACKER_MINIMAX_API_KEY is not set.
 
-  PowerShell (this session):
-    $env:TRACKER_MINIMAX_API_KEY = 'your-key'
-
-  Or add it to a .env file beside pyproject.toml (.env is gitignored):
+  Recommended -- add it to the .env file beside pyproject.toml, which is
+  gitignored and is read no matter which directory you run `tracker` from:
     TRACKER_MINIMAX_API_KEY=your-key
+
+  Or just for this shell:
+    PowerShell   $env:TRACKER_MINIMAX_API_KEY = 'your-key'
+    Git Bash     export TRACKER_MINIMAX_API_KEY=your-key
+
+  Note the TRACKER_ prefix: every setting this tool reads carries it.
 
 MiniMax runs two separate platforms and the keys are NOT interchangeable:
   global  platform.minimax.io   (email signup) -> https://api.minimax.io/v1

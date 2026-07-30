@@ -47,9 +47,18 @@ def install_root() -> Path:
 
 
 class Settings(BaseSettings):
+    # Two .env locations, and the order matters. pydantic-settings resolves a
+    # relative env_file against the CURRENT DIRECTORY, so a bare ".env" is
+    # invisible the moment `tracker` is run from anywhere but the project root —
+    # which is the normal case now that the CLI is on PATH. The project's own
+    # .env is therefore given as an absolute path.
+    #
+    # A .env in the current directory is still read, and listed second so it
+    # wins: that makes a per-directory override possible without editing the
+    # project's file.
     model_config = SettingsConfigDict(
         env_prefix="TRACKER_",
-        env_file=".env",
+        env_file=(install_root() / ".env", ".env"),
         env_file_encoding="utf-8",
         extra="ignore",
         case_sensitive=False,

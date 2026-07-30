@@ -31,6 +31,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The project's `.env` is now read by absolute path. pydantic-settings resolves a
+  relative `env_file` against the current directory, so the API key in
+  `<project>/.env` was invisible whenever `tracker` ran from anywhere else —
+  which is the normal case now the CLI is on PATH. A `.env` in the current
+  directory is still read and still takes precedence.
+- The missing-key error named `MINIMAX_API_KEY`; the variable actually read is
+  `TRACKER_MINIMAX_API_KEY`.
 - `migrations/`, the prompt files and the article cache are now located relative
   to the installed package rather than the current directory. `tracker init` run
   from outside the project tree previously failed looking for a `migrations/`
