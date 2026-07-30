@@ -657,6 +657,13 @@ def sync(
             "--browser", help="Escalate blocked pages to Crawl4AI. Needs the 'crawl' extra."
         ),
     ] = False,
+    deep: Annotated[
+        bool,
+        typer.Option(
+            "--deep",
+            help="Also walk site archives (sitemaps) for older projects. No API key needed.",
+        ),
+    ] = False,
     search: Annotated[
         int,
         typer.Option(
@@ -736,6 +743,32 @@ def sync(
         )
         for name, reason in report.failures:
             err.print(f"[yellow]feed {name}[/yellow]: {reason}")
+
+    # --- 1a. archives -------------------------------------------------------
+    if deep and not skip_discover:
+        from tracker.ingest import discover as disc2
+
+        specs = disc2.load_sitemaps()
+        if not specs:
+            console.print("[dim]--deep: no [[sitemap]] entries configured[/dim]")
+        else:
+            import asyncio
+
+            _, filter_spec = disc2.load_config()
+            fetcher = disc2._RawFetcher(settings)
+            found, problems = asyncio.run(disc2.sweep_sitemaps(specs, fetcher, filter_spec))
+            shim = disc2.DiscoverReport()
+            with session_scope(engine, commit=not dry_run) as session:
+                # Queued even on a dry run, so the report says what *would* have
+                # happened; session_scope then rolls it back.
+                disc2.queue_candidates(session, found, run_id="deep", report=shim)
+            totals["queued"] += shim.queued
+            console.print(
+                f"archives: {len(found)} matching URL(s) across {len(specs)} sitemap(s), "
+                f"queued [bold]{shim.queued}[/bold] new ({shim.already_known} already known)"
+            )
+            for problem in problems[:5]:
+                err.print(f"[yellow]{problem}[/yellow]")
 
     # --- 1b. search ---------------------------------------------------------
     # Runs inside phase 1 because it is the same job as polling a feed: turn the

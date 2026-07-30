@@ -174,3 +174,23 @@ exclude = [
   "crypto mine",
   "bitcoin",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Sitemaps, walked by `tracker sync --deep`.
+#
+# A feed shows only what published in the last few days, so a project announced
+# in 2023 never appears in one. Sitemaps solve that without any API key: they
+# list a site's whole archive, they carry lastmod dates, and they exist
+# specifically so machines can read them. datacenterfrontier's article sitemaps
+# hold ~3,400 URLs going back to 2015, of which ~790 match the filter.
+#
+# `max_children` limits how many child sitemaps are fetched when the URL is an
+# index; article sitemaps are preferred over Company/Event/Contact ones, which
+# can never describe a project.
+[[sitemap]]
+name = "datacenterfrontier-archive"
+url = "https://www.datacenterfrontier.com/sitemap.xml"
+source_type = "trade_press"
+topic_implied = true
+max_children = 3

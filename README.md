@@ -145,7 +145,25 @@ now. Re-reading a known citation updates every field it supports. It deliberatel
 bypasses the article cache — serving a cached copy would guarantee the answer is
 "nothing changed".
 
-### Search: go looking instead of waiting
+### Reaching back for older projects — no API key
+
+A feed only shows what published in the last few days, so a project announced in
+2023 never appears in one. Sitemaps fix that for free: they list a site's whole
+archive, they carry `lastmod` dates, and they exist precisely so machines can read
+them.
+
+```bash
+tracker sync --deep
+```
+
+One measured run: **799 matching URLs across an archive going back to 2015, of
+which 477 were new.** They queue up as a backlog, and each subsequent `tracker
+sync` crawls `--limit` of them. Add more archives as `[[sitemap]]` entries in
+[seed/feeds.toml](seed/feeds.toml).
+
+This is the recommended way to fill the database. Search (below) is optional.
+
+### Search: an optional alternative that needs keys
 
 Feeds only surface what was published recently, so a project announced two years
 ago never appears in them. Search reaches back for it.
@@ -161,6 +179,12 @@ Needs two free Google values in `.env` (`TRACKER_GOOGLE_API_KEY` and
 `TRACKER_GOOGLE_CSE_ID`); `tracker search` prints exactly where to get them if
 they are missing, and `--print-only` works without them so you can run the queries
 by hand.
+
+**You probably do not need this.** `--deep` above reaches the same historical
+projects with no key and no quota, and it was added after search precisely because
+setting up two Google credentials to find articles that a sitemap lists for free is
+poor value. Search earns its place only when you want a *specific* project that no
+configured site has covered.
 
 **`--from-llm` lets the model guess, and that is safe for one reason: nothing it
 says is stored.** Asked for candidate projects it returns names from its training

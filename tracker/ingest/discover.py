@@ -236,7 +236,7 @@ def _parse_date(raw: str) -> dt.datetime | None:
     return parsed.replace(microsecond=0)
 
 
-def parse_feed(xml: str, feed: FeedSpec) -> list[Candidate]:
+def parse_feed(xml: str, feed: FeedSpec, *, cap: int | None = None) -> list[Candidate]:
     """Extract entries from an RSS 2.0, Atom, or sitemap document.
 
     All three are handled in one function because they differ only in element
@@ -308,7 +308,7 @@ def parse_feed(xml: str, feed: FeedSpec) -> list[Candidate]:
             )
         )
 
-    return candidates[:MAX_PER_FEED]
+    return candidates[: cap or MAX_PER_FEED]
 
 
 def _slug_to_title(url: str) -> str:
@@ -316,6 +316,143 @@ def _slug_to_title(url: str) -> str:
     slug = url.rstrip("/").rsplit("/", 1)[-1]
     slug = re.sub(r"\.(html?|php|aspx?)$", "", slug, flags=re.I)
     return re.sub(r"[-_]+", " ", slug).strip()
+
+
+# --- Sitemaps ---------------------------------------------------------------
+#
+# Sitemaps are the key-free answer to "find projects announced before today".
+# A feed shows only what published recently; datacenterfrontier's article
+# sitemaps hold 3,395 URLs going back to 2015. They are also published expressly
+# for machines to read, so using them needs no API key and circumvents nothing.
+
+
+@dataclass(frozen=True)
+class SitemapSpec:
+    name: str
+    url: str
+    source_type: str = "general_media"
+    topic_implied: bool = False
+    #: Child sitemaps to fetch when the URL is an index. Newest first.
+    max_children: int = 4
+    #: Ceiling on URLs examined per child, so one enormous sitemap cannot stall a run.
+    max_urls: int = 5000
+
+    def as_feed(self) -> FeedSpec:
+        return FeedSpec(self.name, self.url, self.source_type, self.topic_implied)
+
+
+def is_sitemap_index(xml: str) -> bool:
+    return "<sitemapindex" in xml[:2000]
+
+
+def index_children(xml: str) -> list[str]:
+    """Child sitemap URLs from a <sitemapindex>, article sitemaps first.
+
+    Most sites split by content type, and only the article files are useful --
+    fetching Company.xml or Event.xml spends a request on pages that can never
+    describe a project.
+    """
+    try:
+        root = ET.fromstring(xml.strip())
+    except ET.ParseError:
+        return []
+    locs = [
+        _text(el.find(f"{{{_NS['sitemap']}}}loc"))
+        for el in root.iter(f"{{{_NS['sitemap']}}}sitemap")
+    ]
+    locs = [u for u in locs if u]
+    preferred = [u for u in locs if re.search(r"article|news|post|story", u, re.I)]
+    return preferred or locs
+
+
+async def crawl_sitemap(
+    spec: SitemapSpec, fetcher: Fetcher, filter_spec: FilterSpec
+) -> tuple[list[Candidate], list[str]]:
+    """Walk one sitemap (following an index one level) and return matches.
+
+    Filtering happens here rather than in the caller because a sitemap can yield
+    thousands of URLs and only the matches are worth carrying further.
+    """
+    problems: list[str] = []
+    root_result = await fetcher.fetch(spec.url)
+    if not root_result.ok:
+        return [], [f"{spec.name}: {root_result.error or 'fetch failed'}"]
+
+    targets = [spec.url]
+    if is_sitemap_index(root_result.markdown):
+        children = index_children(root_result.markdown)
+        if not children:
+            return [], [f"{spec.name}: sitemap index listed no children"]
+        targets = children[: spec.max_children]
+        log.info("%s is an index; fetching %d child sitemap(s)", spec.name, len(targets))
+    else:
+        # Already a urlset; reuse the body we have.
+        entries = parse_feed(root_result.markdown, spec.as_feed(), cap=spec.max_urls)
+        return _match_sitemap(entries, filter_spec, spec), problems
+
+    kept: list[Candidate] = []
+    for child in targets:
+        result = await fetcher.fetch(child)
+        if not result.ok:
+            problems.append(f"{spec.name}: child {child} {result.error or 'failed'}")
+            continue
+        try:
+            entries = parse_feed(result.markdown, spec.as_feed(), cap=spec.max_urls)
+        except DiscoverError as exc:
+            problems.append(f"{spec.name}: {exc}")
+            continue
+        kept.extend(_match_sitemap(entries, filter_spec, spec))
+    return kept, problems
+
+
+def _match_sitemap(
+    entries: list[Candidate], filter_spec: FilterSpec, spec: SitemapSpec
+) -> list[Candidate]:
+    out: list[Candidate] = []
+    for candidate in entries:
+        path = urlsplit(candidate.url).path
+        keep, _ = filter_spec.matches(f"{candidate.title} {path}", topic_implied=spec.topic_implied)
+        if keep:
+            out.append(candidate)
+    return out
+
+
+def load_sitemaps(path: Path | None = None) -> list[SitemapSpec]:
+    """[[sitemap]] entries from the feed config. Optional; absent means none."""
+    path = path or default_feeds_path()
+    if not path.is_file():
+        return []
+    data = tomllib.loads(path.read_text(encoding="utf-8"))
+    return [
+        SitemapSpec(
+            name=str(entry.get("name") or entry["url"]),
+            url=str(entry["url"]),
+            source_type=str(entry.get("source_type") or "general_media"),
+            topic_implied=bool(entry.get("topic_implied", False)),
+            max_children=int(entry.get("max_children", 4)),
+            max_urls=int(entry.get("max_urls", 5000)),
+        )
+        for entry in (data.get("sitemap") or [])
+        if entry.get("url")
+    ]
+
+
+async def sweep_sitemaps(
+    specs: list[SitemapSpec], fetcher: Fetcher, filter_spec: FilterSpec
+) -> tuple[list[Candidate], list[str]]:
+    """Walk every configured sitemap. One failing site never stops the others."""
+    found: list[Candidate] = []
+    problems: list[str] = []
+    for spec in specs:
+        try:
+            kept, issues = await crawl_sitemap(spec, fetcher, filter_spec)
+        except Exception as exc:
+            problems.append(f"{spec.name}: {exc}")
+            continue
+        log.info("%s -> %d matching URL(s)", spec.name, len(kept))
+        found.extend(kept)
+        problems.extend(issues)
+    return found, problems
 
 
 # --- Filtering and queueing -------------------------------------------------
@@ -572,14 +709,18 @@ __all__ = [
     "DiscoverReport",
     "FeedSpec",
     "FilterSpec",
+    "SitemapSpec",
+    "crawl_sitemap",
     "default_feeds_path",
     "drop_pending",
     "failed",
     "failure_summary",
     "load_config",
+    "load_sitemaps",
     "parse_feed",
     "pending",
     "queue_candidates",
     "run",
     "select_candidates",
+    "sweep_sitemaps",
 ]

@@ -55,6 +55,12 @@ initial build of the v1 PRD.
   been re-read recently, which is how project data gets *updated* rather than only
   added. Placeholder URLs are excluded, being unfetchable by definition.
 - `tracker list --limit N`, which reports the total it capped ("2 of 3").
+- **`tracker sync --deep`** walks site archives via their sitemaps, following a
+  sitemap index one level and preferring article sitemaps over Company/Event ones.
+  A measured run found 799 matching URLs going back to 2015, 477 of them new —
+  with no API key, no quota, and no credentials to set up, because sitemaps are
+  published expressly for machines to read. This is now the recommended way to
+  fill the database; search is optional.
 - **`tracker/ingest/search.py`** — search-based discovery. `tracker search` runs
   Google's official Custom Search JSON API, and `--from-llm N` has MiniMax propose
   the queries. Model-proposed project names are search leads only: nothing it says
