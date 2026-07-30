@@ -55,10 +55,21 @@ initial build of the v1 PRD.
   been re-read recently, which is how project data gets *updated* rather than only
   added. Placeholder URLs are excluded, being unfetchable by definition.
 - `tracker list --limit N`, which reports the total it capped ("2 of 3").
+- **`tracker/ingest/search.py`** — search-based discovery. `tracker search` runs
+  Google's official Custom Search JSON API, and `--from-llm N` has MiniMax propose
+  the queries. Model-proposed project names are search leads only: nothing it says
+  is stored, and a project appears only after a real article was fetched and its
+  values backed by verbatim quotes. Also `tracker sync --search N`.
+- `tracker queue --failed` and `tracker sync --retry-failed`, plus an always-on
+  report of unread URLs grouped by host. They were previously invisible: `discover`
+  never re-queues a known URL and the pending queue only holds `discovered`, so a
+  run could say "queue is empty, 0 failed" while a dozen articles sat unread.
+- `datacenterknowledge.com` added as a feed: 50 entries per poll, ~22 matching, and
+  unlike datacenterdynamics its articles are fetchable over plain HTTP.
 - `tracker/export.py`: deterministic Markdown, CSV and JSON export.
 - `tracker/cli.py`: `init`, `ingest {manual,pjm,crawl}`, `discover`, `queue`,
   `list`, `show`, `stats`, `review`, `verify`, `export`, `version`.
-- 668 tests, green offline with no API key and no network. 93% coverage on both
+- 701 tests, green offline with no API key and no network. 93% coverage on both
   `normalize.py` and `confidence.py`. A `network`-marked test checks the feed URLs
   still resolve.
 

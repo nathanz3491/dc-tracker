@@ -657,8 +657,19 @@ def sync(
             "--browser", help="Escalate blocked pages to Crawl4AI. Needs the 'crawl' extra."
         ),
     ] = False,
+    search: Annotated[
+        int,
+        typer.Option(
+            "--search",
+            help="Also run this many LLM-proposed Google searches. Needs the Google keys.",
+        ),
+    ] = 0,
     skip_discover: Annotated[
         bool, typer.Option("--skip-discover", help="Do not poll feeds; work the existing queue.")
+    ] = False,
+    retry_failed: Annotated[
+        bool,
+        typer.Option("--retry-failed", help="Also re-attempt URLs a previous run could not read."),
     ] = False,
     skip_refresh: Annotated[
         bool, typer.Option("--skip-refresh", help="Do not re-read existing projects' sources.")
@@ -726,11 +737,52 @@ def sync(
         for name, reason in report.failures:
             err.print(f"[yellow]feed {name}[/yellow]: {reason}")
 
+    # --- 1b. search ---------------------------------------------------------
+    # Runs inside phase 1 because it is the same job as polling a feed: turn the
+    # outside world into queued candidates. Feeds only see what was published
+    # recently; search reaches back for anything already announced.
+    if search:
+        from tracker.ingest import search as srch
+
+        if not settings.has_search_keys():
+            err.print("[yellow]--search needs the Google keys[/yellow]")
+            err.print(srch.SEARCH_KEY_HELP)
+        else:
+            with session_scope(engine, commit=False) as session:
+                known = srch.known_projects(session)
+            try:
+                queries = srch.generate_queries(extractor, count=search, known=known)
+                with session_scope(engine) as session:
+                    s_report, _ = srch.run(
+                        session,
+                        queries,
+                        provider=srch.GoogleCSEProvider(settings),
+                        settings=settings,
+                        dry_run=dry_run,
+                    )
+            except srch.SearchError as exc:
+                err.print(f"[yellow]search skipped[/yellow]: {str(exc).splitlines()[0]}")
+            else:
+                totals["queued"] += s_report.queued
+                console.print(
+                    f"searched {s_report.queries_run} quer(ies), {s_report.hits} hit(s), "
+                    f"queued [bold]{s_report.queued}[/bold] more"
+                )
+                if s_report.quota_exhausted:
+                    err.print("[yellow]daily search quota exhausted[/yellow]")
+
     # --- 2. extract new -----------------------------------------------------
     console.rule("[bold]2/4 extract new[/bold]", align="left")
     with session_scope(engine, commit=False) as session:
         pending_urls = [row.url for row in disc.pending(session, limit=limit)]
         backlog = len(disc.pending(session))
+        # Counted whether or not we are retrying, so the summary can never claim
+        # "0 failed" while a dozen articles sit unread.
+        unread = disc.failed(session)
+        unread_hosts = disc.failure_summary(session)
+        if retry_failed:
+            room = max(0, limit - len(pending_urls))
+            pending_urls += [row.url for row in unread[:room]]
 
     if not pending_urls:
         if dry_run and totals["queued"]:
@@ -811,8 +863,113 @@ def sync(
         f"\n[bold]sync complete[/bold]  queued {totals['queued']}  "
         f"new {totals['new']}  refreshed {totals['refreshed']}  failed {totals['failed']}"
     )
-    if totals["failed"] and not browser:
+    # Always reported, never only when *this* run failed. Unread URLs are invisible
+    # to both `discover` (which never re-queues a known URL) and the pending queue,
+    # so without this a run says "queue is empty, 0 failed" while articles pile up.
+    if unread:
+        console.print(
+            f"[yellow]{len(unread)} URL(s) previously failed and were never read[/yellow]"
+        )
+        for host, count in unread_hosts[:5]:
+            console.print(f"  {count:3}  {host}")
+        console.print(
+            "[dim]list them with `tracker queue --failed`; re-attempt with "
+            "`tracker sync --retry-failed`[/dim]"
+        )
+    if (totals["failed"] or unread) and not browser:
         console.print(BROWSER_HINT)
+
+
+@app.command("search")
+def search_cmd(
+    query: Annotated[
+        list[str] | None,
+        typer.Argument(
+            help="Search queries. Omit and use --from-llm to have the model propose them."
+        ),
+    ] = None,
+    from_llm: Annotated[
+        int,
+        typer.Option("--from-llm", help="Ask MiniMax for this many project search queries."),
+    ] = 0,
+    print_only: Annotated[
+        bool,
+        typer.Option("--print-only", help="Show the queries and stop. No search, no writes."),
+    ] = False,
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="Search but do not queue anything.")
+    ] = False,
+) -> None:
+    """Find candidate articles with Google search instead of waiting for a feed.
+
+    Feeds only surface what was published recently, so a project announced two
+    years ago never appears in them. Search goes looking for it.
+
+    With --from-llm, MiniMax proposes which projects to search for. Those are
+    leads, never facts: nothing the model names is stored, and a project only
+    becomes a row once a real article has been fetched and its values backed by
+    verbatim quotes. If the model invents a project, the search finds nothing.
+    """
+    from tracker.ingest import search as srch
+    from tracker.llm import MiniMaxExtractor, MissingApiKey
+
+    settings = get_settings()
+    queries = list(query or [])
+
+    if from_llm:
+        try:
+            extractor = MiniMaxExtractor(settings)
+        except MissingApiKey as exc:
+            _fail(str(exc))
+            return
+        engine_ro = _read_engine()
+        with session_scope(engine_ro, commit=False) as session:
+            known = srch.known_projects(session)
+        try:
+            queries += srch.generate_queries(extractor, count=from_llm, known=known)
+        except srch.SearchError as exc:
+            _fail(str(exc))
+            return
+
+    if not queries:
+        _fail("give at least one query, or use --from-llm N")
+        return
+
+    if print_only or not settings.has_search_keys():
+        if not print_only:
+            err.print(f"[yellow]search is not configured[/yellow]\n{srch.SEARCH_KEY_HELP}")
+        console.print(f"\n[bold]{len(queries)} quer(ies)[/bold]")
+        for q in queries:
+            console.print(f"  {q}")
+        if not print_only:
+            raise typer.Exit(2)
+        return
+
+    provider = srch.GoogleCSEProvider(settings)
+    engine, _ = init_db(_db_path())
+    with session_scope(engine) as session:
+        report, candidates = srch.run(
+            session, queries, provider=provider, settings=settings, dry_run=dry_run
+        )
+
+    _print_report_rows(
+        report.as_rows(),
+        title=f"search{' (dry run)' if dry_run else ''}",
+        warn={"filtered out"},
+    )
+    for q, reason in report.errors:
+        err.print(f"[yellow]{q[:60]}[/yellow]: {reason.splitlines()[0]}")
+    if report.quota_exhausted:
+        err.print("[yellow]daily search quota exhausted; resets at midnight Pacific[/yellow]")
+
+    if candidates:
+        table = Table(title="queued", header_style="bold", title_justify="left", box=TABLE_BOX)
+        table.add_column("headline")
+        table.add_column("url")
+        for c in candidates[:40]:
+            table.add_row(c.title[:78], c.url[:64])
+        console.print(table)
+        console.print("\n[dim]next:[/dim] tracker sync --skip-discover")
 
 
 @app.command()
@@ -891,6 +1048,12 @@ def utcnow_placeholder():
 @app.command()
 def queue(
     limit: Annotated[int, typer.Option("--limit", help="Rows to show.")] = 40,
+    failed: Annotated[
+        bool,
+        typer.Option(
+            "--failed", help="Show URLs a previous run could not read, instead of pending ones."
+        ),
+    ] = False,
     drop: Annotated[
         bool, typer.Option("--drop", help="Delete the listed candidates instead of showing them.")
     ] = False,
@@ -911,16 +1074,23 @@ def queue(
 
     engine = _read_engine()
     with session_scope(engine, commit=False) as session:
-        rows = disc.pending(session, limit=limit)
-        total = len(disc.pending(session))
+        if failed:
+            rows = disc.failed(session, limit=limit)
+            total = len(disc.failed(session))
+        else:
+            rows = disc.pending(session, limit=limit)
+            total = len(disc.pending(session))
         if not rows:
-            console.print(
-                "[green]queue is empty[/green] — run `tracker discover` to look for articles"
-            )
+            if failed:
+                console.print("[green]no failed URLs[/green]")
+            else:
+                console.print(
+                    "[green]queue is empty[/green] — run `tracker discover` to look for articles"
+                )
             return
 
         table = Table(
-            title=f"{total} queued candidate(s)",
+            title=f"{total} {'unread' if failed else 'queued'} candidate(s)",
             header_style="bold",
             title_justify="left",
             box=TABLE_BOX,

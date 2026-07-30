@@ -71,6 +71,23 @@ class Settings(BaseSettings):
     minimax_base_url: str = "https://api.minimax.io/v1"
     minimax_model: str = "MiniMax-M2.5"
 
+    # --- Google Programmable Search -------------------------------------------
+    # The official Custom Search JSON API. Needs two values, both free:
+    #   key  https://developers.google.com/custom-search/v1/introduction
+    #   cx   https://programmablesearchengine.google.com  (set to search the
+    #        whole web, not a fixed site list)
+    # Free tier is 100 queries/day, which is roughly 1000 candidate URLs.
+    #
+    # Deliberately the official API rather than scraping result pages: scraping
+    # breaks Google's terms, gets blocked, and would contradict this project's
+    # decision not to defeat other sites' access controls either.
+    google_api_key: SecretStr | None = None
+    google_cse_id: str | None = None
+    #: Results requested per query. The API caps a single call at 10.
+    search_results_per_query: int = Field(default=10, ge=1, le=10)
+    #: Queries per run, so a bad query set cannot exhaust the daily quota.
+    search_max_queries: int = Field(default=10, ge=1, le=100)
+
     # --- Database ---------------------------------------------------------
     #: Relative paths resolve against the project root, not the CWD.
     db: Path = Path("data/tracker.db")
@@ -100,6 +117,14 @@ class Settings(BaseSettings):
 
     def has_api_key(self) -> bool:
         return bool(self.minimax_api_key and self.minimax_api_key.get_secret_value().strip())
+
+    def has_search_keys(self) -> bool:
+        return bool(
+            self.google_api_key
+            and self.google_api_key.get_secret_value().strip()
+            and self.google_cse_id
+            and self.google_cse_id.strip()
+        )
 
 
 @lru_cache(maxsize=1)

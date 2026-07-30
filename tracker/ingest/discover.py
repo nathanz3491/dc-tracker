@@ -407,6 +407,40 @@ def pending(session: Session, limit: int | None = None) -> list[IngestUrl]:
     return list(session.scalars(stmt))
 
 
+#: Outcomes worth another attempt: the URL was never successfully read, and the
+#: reason might be transient (a rate limit, a timeout) or fixable (a site that
+#: needs a browser). `no_project` and `ok` are settled and are never retried.
+RETRYABLE_STATUSES = ("fetch_error", "parse_error", "llm_error")
+
+
+def failed(session: Session, limit: int | None = None) -> list[IngestUrl]:
+    """URLs a previous run could not turn into a project.
+
+    These are otherwise invisible: `pending()` only returns `discovered`, and
+    discovery deliberately never re-queues a URL it has already seen. Without this
+    they accumulate silently — a run can report "queue is empty, 0 failed" while a
+    dozen articles sit unread.
+    """
+    stmt = (
+        select(IngestUrl)
+        .where(IngestUrl.status.in_(RETRYABLE_STATUSES))
+        .order_by(IngestUrl.last_tried_at.asc(), IngestUrl.id.asc())
+    )
+    if limit:
+        stmt = stmt.limit(limit)
+    return list(session.scalars(stmt))
+
+
+def failure_summary(session: Session) -> list[tuple[str, int]]:
+    """(host, count) for unread URLs, so the report can name the blocker."""
+    from collections import Counter
+
+    hosts = Counter(
+        urlsplit(row.url).netloc.lower().removeprefix("www.") for row in failed(session)
+    )
+    return sorted(hosts.items(), key=lambda kv: (-kv[1], kv[0]))
+
+
 def drop_pending(session: Session, urls: list[str] | None = None) -> int:
     """Remove queued candidates the operator judged not worth crawling."""
     stmt = select(IngestUrl).where(IngestUrl.status == PENDING_URL_STATUS)
@@ -532,6 +566,7 @@ class _RawFetcher:
 
 __all__ = [
     "MAX_PER_FEED",
+    "RETRYABLE_STATUSES",
     "Candidate",
     "DiscoverError",
     "DiscoverReport",
@@ -539,6 +574,8 @@ __all__ = [
     "FilterSpec",
     "default_feeds_path",
     "drop_pending",
+    "failed",
+    "failure_summary",
     "load_config",
     "parse_feed",
     "pending",

@@ -20,6 +20,20 @@ name = "datacenterdynamics"
 # Covers nothing but data centers, so the topic tier is presumed satisfied
 # and the project signal alone decides. See FeedSpec.topic_implied.
 topic_implied = true
+#
+# DISCOVERY ONLY. The feed is served freely, but the article pages sit behind
+# Cloudflare bot management and return 403 to any non-browser client -- verified
+# identical for our UA, no UA, and curl, so it is not a User-Agent filter.
+#
+# Left enabled anyway because the headlines are still valuable: they tell you
+# WHICH projects exist, and the facts can then be taken from the operator's own
+# release or another outlet. Every DCD URL queued here will fail to fetch, which
+# `tracker queue --failed` lists so it is visible rather than silent.
+#
+# Their robots.txt sets `Content-Signal: search=yes,ai-train=no,use=reference`.
+# We do not train on the content and we store only short attributed excerpts, but
+# the Cloudflare block is a deliberate access control and this project does not
+# try to defeat it. See README "Why DataCenterDynamics is discovery-only".
 url = "https://www.datacenterdynamics.com/en/rss/"
 source_type = "trade_press"
 
@@ -34,6 +48,16 @@ topic_implied = true
 # it is ordered newest-first and carries real lastmod dates, which is all the
 # age filter needs. Titles come from the URL slug.
 url = "https://www.datacenterfrontier.com/sitemap/Article.xml"
+source_type = "trade_press"
+
+[[feed]]
+name = "datacenterknowledge"
+# Covers nothing but data centers, so the topic tier is presumed satisfied
+# and the project signal alone decides. See FeedSpec.topic_implied.
+topic_implied = true
+# The highest-yield feed here: 50 entries per poll, of which ~22 match, and unlike
+# datacenterdynamics its *articles* are fetchable over plain HTTP.
+url = "https://www.datacenterknowledge.com/rss.xml"
 source_type = "trade_press"
 
 [[feed]]

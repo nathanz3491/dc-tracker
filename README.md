@@ -145,6 +145,56 @@ now. Re-reading a known citation updates every field it supports. It deliberatel
 bypasses the article cache — serving a cached copy would guarantee the answer is
 "nothing changed".
 
+### Search: go looking instead of waiting
+
+Feeds only surface what was published recently, so a project announced two years
+ago never appears in them. Search reaches back for it.
+
+```bash
+tracker search "Meta Richland Parish Louisiana data center megawatts"
+tracker search --from-llm 20            # let MiniMax propose the queries
+tracker search --from-llm 20 --print-only   # just show them, search nothing
+tracker sync --search 10                # fold searching into the one-command loop
+```
+
+Needs two free Google values in `.env` (`TRACKER_GOOGLE_API_KEY` and
+`TRACKER_GOOGLE_CSE_ID`); `tracker search` prints exactly where to get them if
+they are missing, and `--print-only` works without them so you can run the queries
+by hand.
+
+**`--from-llm` lets the model guess, and that is safe for one reason: nothing it
+says is stored.** Asked for candidate projects it returns names from its training
+data — some real, some not. Each becomes a *search query* and nothing more. A
+project only becomes a row once a real search returned a real URL, the article
+fetched, and the evidence gate found a verbatim quote for every value. If the model
+invents a project, the search finds nothing and the run moves on. Discovery is
+allowed to be speculative precisely because storage is not.
+
+The official Custom Search JSON API is used rather than scraping result pages.
+Scraping would break Google's terms, and it would contradict this project's
+decision not to defeat other sites' access controls either — see below.
+
+### Why DataCenterDynamics is discovery-only
+
+Its RSS feed is served freely and its headlines are valuable, so it stays enabled.
+But the article pages sit behind Cloudflare bot management and return 403 to any
+non-browser client — verified identical for our User-Agent, no User-Agent, and
+curl, so it is not a UA filter. Their `robots.txt` also sets
+`Content-Signal: search=yes,ai-train=no,use=reference`.
+
+We do not train on the content and we store only short attributed excerpts, but
+the Cloudflare block is a deliberate access control and this project does not try
+to defeat it. So DCD tells you *which* projects exist and the facts come from the
+operator's own release or another outlet. Data Center Knowledge covers the same
+beat and does permit fetching, which is why it was added.
+
+Every blocked URL stays visible rather than disappearing:
+
+```bash
+tracker queue --failed        # what could not be read, grouped by host
+tracker sync --retry-failed   # re-attempt them
+```
+
 ### Or run the phases separately
 
 ```bash

@@ -74,7 +74,7 @@ def test_only_specialist_feeds_imply_the_topic():
     """A general outlet must still prove an article is about data centers."""
     feeds, _ = load_config()
     implied = {f.name for f in feeds if f.topic_implied}
-    assert implied == {"datacenterdynamics", "datacenterfrontier"}
+    assert implied == {"datacenterdynamics", "datacenterfrontier", "datacenterknowledge"}
 
 
 def test_shipped_feeds_cover_both_trade_press_and_company_sources():
