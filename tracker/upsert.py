@@ -409,6 +409,8 @@ def upsert_record(session: Session, rec: IngestRecord, *, force_new: bool = Fals
         duplicate_of = candidate.id
 
     before = _snapshot(project)
+    # Captured before the recompute so a slip can be measured against it.
+    expected_online_before = project.expected_online
 
     # --- Write the citations ------------------------------------------------
     existing_sources = {s.url: s for s in project.sources}
@@ -492,6 +494,10 @@ def upsert_record(session: Session, rec: IngestRecord, *, force_new: bool = Fals
     # After the sources exist, so a risk can cite one; before the change check, so
     # a newly-derived blocker counts as a change.
     risks_written = _upsert_risks(session, project, rec)
+    # After the risks exist, so a measured slip can attach to the obstacle that
+    # best explains it; before the blocker is derived, since neither depends on
+    # the other but the ordering should read in the direction the data flows.
+    events_written += _record_slippage(session, project, expected_online_before)
     project.blocker = _derive_blocker(session, project)
 
     # --- Did anything actually change? -------------------------------------
@@ -617,6 +623,81 @@ def _upsert_risks(session: Session, project: Project, rec: IngestRecord) -> int:
                 found.source_id = source_id
     session.flush()
     return inserted
+
+
+def _record_slippage(session: Session, project: Project, previous: _dt.date | None) -> int:
+    """Record `expected_online` moving later. Returns events written.
+
+    Why an event and not a changed merge policy: `expected_online` stays on
+    PREFER_WEIGHT, so the strongest source still wins the *value*. Switching to
+    newest-wins to make slips visible would throw away the source-quality ordering
+    everywhere else. Recording the movement as history keeps both.
+
+    **`delay_days` is only attributed across a year boundary.** The column stores no
+    precision, and `norm_date_detail` coarsens hedged dates into it: a bare "2027"
+    lands on 2027-01-01 and "late 2027" on 2027-10-01, so a source merely restating
+    the same year more precisely is indistinguishable from a 273-day delay. Every
+    coarsening stays inside the stated year, so a move into a later year cannot be a
+    precision artefact and a move within one year might be. The event is written
+    either way — the tracked value did move, and that is a fact worth logging — but
+    a number is only attached when it means something.
+
+    No risk is invented when none is open. A date moving is not a report of *why*,
+    and manufacturing an obstacle from it would put an uncited guess into the field
+    an operator acts on.
+    """
+    current = project.expected_online
+    if previous is None or current is None or current <= previous:
+        return 0
+
+    slipped_days = (current - previous).days
+    across_years = current.year > previous.year
+    detail = (
+        f"expected_online moved from {previous} to {current} (+{slipped_days} days)"
+        if across_years
+        else (
+            f"expected_online moved from {previous} to {current} within {previous.year}; "
+            "this may be a more precise restatement rather than a delay"
+        )
+    )
+
+    written = 0
+    # Keyed on the NEW target date, so the (project, type, date) unique constraint
+    # gives one row per revised timeline rather than one per run.
+    existing = session.scalar(
+        select(Event).where(
+            Event.project_id == project.id,
+            Event.event_type == "delayed",
+            Event.event_date == current,
+        )
+    )
+    if existing is None:
+        session.add(
+            Event(
+                project_id=project.id,
+                event_date=current,
+                event_type="delayed",
+                description=detail,
+            )
+        )
+        written = 1
+    else:
+        existing.description = detail
+
+    if across_years:
+        open_risks = session.scalars(
+            select(Risk)
+            .where(Risk.project_id == project.id, Risk.status == OPEN_RISK_STATUS)
+            .order_by(Risk.id.asc())
+        ).all()
+        if open_risks:
+            # The most severe open obstacle is the one already presented as this
+            # project's blocker, so it is where a measured slip belongs.
+            worst = max(open_risks, key=lambda r: severity_rank(r.severity))
+            worst.delay_days = slipped_days
+
+    session.flush()
+    return written
 
 
 def _derive_blocker(session: Session, project: Project) -> str | None:

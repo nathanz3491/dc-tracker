@@ -117,6 +117,24 @@ initial build of the v1 PRD.
   0004 backfills any existing `blocker` into an `unclassified` risk carrying the
   source that asserted it, so upgrading loses nothing. Verified against a copy of
   the live database: both rows migrated, both cited.
+- Schedule slippage is measured. When a recomputed `expected_online` lands later
+  than the stored one, `upsert._record_slippage` writes an `event(delayed)` carrying
+  both dates and attaches `delay_days` to the project's most severe open risk.
+  `expected_online` keeps its `PREFER_WEIGHT` policy: switching to newest-wins to
+  make slips visible would have thrown away the source-quality ordering, and
+  recording the movement as history keeps both.
+
+  **A number is only attached across a year boundary.** The column stores no
+  precision and `norm_date_detail` coarsens hedged dates into it — a bare "2027"
+  lands on 2027-01-01 and "late 2027" on 2027-10-01 — so a source restating the same
+  year more precisely is indistinguishable from a 273-day delay. Coarsening always
+  stays inside the stated year, so a move into a later year cannot be an artefact
+  and a move within one might be. The event is written either way, saying which case
+  it is; only the unambiguous one gets counted.
+
+  No risk is invented when none is open. A date moving says the timeline changed,
+  not why, and manufacturing an obstacle from it would put an uncited guess into the
+  field an operator acts on.
 - **`tracker exposure`** — planned capacity sitting behind an open obstacle, rolled
   up `--by category | state | company | customer`. Severity is reported as three
   MW columns rather than collapsed into one number: collapsing needs a weighting,

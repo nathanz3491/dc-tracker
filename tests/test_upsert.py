@@ -871,6 +871,118 @@ def test_risks_do_not_move_with_the_claims_merge(session):
     assert session.scalar(select(Project)).blocker is None
 
 
+# --- Slippage ---------------------------------------------------------------
+
+
+def _with_date(value, url="https://news.microsoft.com/fairwater/", **kw):
+    return rec(sources=[manual_source(url=url, expected_online=value, **kw)])
+
+
+def test_a_slip_into_a_later_year_is_recorded_as_an_event(session):
+    upsert_record(session, _with_date("2027-07-01"))
+    upsert_record(session, _with_date("2028-07-01", url="https://www.dcd.com/a"))
+
+    event = session.scalar(select(Event).where(Event.event_type == "delayed"))
+    assert event is not None
+    assert "2027-07-01 to 2028-07-01" in event.description
+    assert "+366 days" in event.description
+
+
+def test_a_slip_sets_delay_days_on_the_worst_open_risk(session):
+    upsert_record(session, _with_date("2027-07-01", risks=None))
+    upsert_record(
+        session,
+        rec(
+            sources=[manual_source(expected_online="2027-07-01")],
+            risks=[
+                risk(category="water", severity="watch", summary="Minor."),
+                risk(category="transmission", severity="blocking", summary="Work stopped."),
+            ],
+        ),
+    )
+    upsert_record(
+        session,
+        rec(sources=[manual_source(url="https://www.dcd.com/a", expected_online="2029-01-01")]),
+    )
+
+    rows = {r.category: r.delay_days for r in session.scalars(select(Risk)).all()}
+    assert rows["transmission"] is not None, "the slip belongs on the blocking risk"
+    assert rows["water"] is None
+
+
+def test_a_move_within_one_year_is_logged_but_not_counted(session):
+    """`norm_date_detail` coarsens hedged dates, so a bare "2027" lands on
+    2027-01-01 and "late 2027" on 2027-10-01. A source restating the same year more
+    precisely is indistinguishable from a 273-day delay, and the column stores no
+    precision to tell them apart.
+    """
+    # The normalized forms of a bare "2027" and of "late 2027" respectively —
+    # claims reach the write path already coerced.
+    upsert_record(session, rec(sources=[manual_source(expected_online="2027-01-01")]))
+    upsert_record(
+        session,
+        rec(
+            sources=[manual_source(url="https://www.dcd.com/a", expected_online="2027-10-01")],
+            risks=[risk(severity="blocking")],
+        ),
+    )
+
+    event = session.scalar(select(Event).where(Event.event_type == "delayed"))
+    assert event is not None, "the tracked value did move, and that is worth logging"
+    assert "may be a more precise restatement" in event.description
+    assert session.scalar(select(Risk)).delay_days is None, "no number on an ambiguous move"
+
+
+def test_a_date_moving_earlier_is_not_a_delay(session):
+    upsert_record(session, _with_date("2029-01-01"))
+    upsert_record(session, _with_date("2027-01-01", url="https://www.dcd.com/a"))
+    assert session.scalar(select(func.count()).select_from(Event)) == 0
+
+
+def test_a_first_date_is_not_a_delay(session):
+    """NULL to a value is learning the timeline, not the timeline slipping."""
+    upsert_record(session, _with_date("2027-07-01"))
+    assert session.scalar(select(func.count()).select_from(Event)) == 0
+
+
+def test_no_risk_is_invented_from_a_date_change(session):
+    """A date moving says the timeline changed, not why. Manufacturing an obstacle
+    would put an uncited guess into the field an operator acts on."""
+    upsert_record(session, _with_date("2027-07-01"))
+    upsert_record(session, _with_date("2029-01-01", url="https://www.dcd.com/a"))
+    assert session.scalar(select(func.count()).select_from(Risk)) == 0
+    assert session.scalar(select(Project)).blocker is None
+
+
+def test_recording_a_slip_stays_idempotent(session):
+    upsert_record(session, _with_date("2027-07-01"))
+    upsert_record(session, _with_date("2029-01-01", url="https://www.dcd.com/a"))
+    again = upsert_record(session, _with_date("2029-01-01", url="https://www.dcd.com/a"))
+    assert again.action == "unchanged"
+    assert session.scalar(select(func.count()).select_from(Event)) == 1
+
+
+def test_expected_online_still_merges_by_source_weight(session):
+    """The merge policy is untouched: the strongest source wins the value, and the
+    slip is recorded as history beside it rather than by letting recency win."""
+    upsert_record(
+        session,
+        rec(
+            sources=[
+                SourceRecord(
+                    url="https://www.dcd.com/a",
+                    source_type="general_media",
+                    fetched_at=T1,
+                    claims={"expected_online": "2030-01-01"},
+                ),
+                manual_source(expected_online="2027-07-01"),
+            ]
+        ),
+    )
+    # manual (weight 2) beats general_media (weight 1) despite being older.
+    assert session.scalar(select(Project)).expected_online == dt.date(2027, 7, 1)
+
+
 def test_source_fields_is_derived_not_supplied(session):
     """`fields` always matches `claims`, because it is computed from it."""
     upsert_record(session, rec(sources=[manual_source(mw_planned=900.0)]))

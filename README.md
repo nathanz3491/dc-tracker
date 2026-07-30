@@ -366,6 +366,36 @@ severe open category. Grouping by `category` deliberately does not — a project
 obstructed three ways belongs under all three — so that view says so rather than
 inviting you to add the column up.
 
+### Slippage is measured, but only where it is unambiguous
+
+When `expected_online` moves later, a `delayed` event records both dates and
+`delay_days` lands on the project's most severe open risk:
+
+```text
+risks (2)
+  transmission material  2026-02-01  +881d
+    Two 345-kilovolt upgrades outstanding before full load.
+
+events (1)
+  2031-06-01  delayed  expected_online moved from 2029-01-01 to 2031-06-01 (+881 days)
+```
+
+`expected_online` keeps its `PREFER_WEIGHT` merge policy — the strongest source
+still wins the value, and the movement is recorded as history beside it. Switching
+to newest-wins to make slips visible would have discarded the source-quality
+ordering everywhere else.
+
+**The number is only attached across a year boundary.** The column stores no
+precision, and hedged dates get coarsened into it: a bare `2027` becomes 2027-01-01
+and `late 2027` becomes 2027-10-01, so a source simply restating the same year more
+precisely is indistinguishable from a 273-day delay. Every coarsening stays inside
+the stated year, so a move into a later year cannot be an artefact while a move
+within one might be. The event is written either way and says which case it is; only
+the unambiguous one is counted.
+
+And no risk is invented from a date change. A slipping date says the timeline moved,
+not why.
+
 Every command takes `--db PATH`. Without it the database is `data/tracker.db`
 under the project root, or `$TRACKER_DB` if set.
 
