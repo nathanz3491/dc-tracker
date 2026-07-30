@@ -28,7 +28,7 @@ from tracker.export import (
     to_row,
     write_export,
 )
-from tracker.ingest.records import IngestRecord, SourceRecord
+from tracker.ingest.records import IngestRecord, RiskRecord, SourceRecord
 from tracker.models import Project
 from tracker.upsert import SOURCE_NOTE_PREFIX, upsert_record
 from tracker.vocab import TRACKED_FIELDS
@@ -36,8 +36,13 @@ from tracker.vocab import TRACKED_FIELDS
 T0 = dt.datetime(2026, 1, 10, 12, 0, 0)
 
 
-def sample(session, **overrides):
-    """A fully-populated project, so exports exercise every column."""
+def sample(session, *, risks=None, **overrides):
+    """A fully-populated project, so exports exercise every column.
+
+    The obstacle comes in as a `RiskRecord`, not as a `blocker` claim: `blocker` is
+    derived from the risk rows, so a claim alone would leave the column NULL and
+    the export tests would silently stop covering it.
+    """
     claims = {
         "name": "Fairwater",
         "company": "Microsoft",
@@ -73,6 +78,18 @@ def sample(session, **overrides):
                     claims=claims,
                 )
             ],
+            risks=risks
+            if risks is not None
+            else [
+                RiskRecord(
+                    category="transmission",
+                    severity="material",
+                    summary="Transmission upgrades are pending.",
+                    quote="two 345-kilovolt upgrades",
+                    first_seen=dt.date(2026, 2, 1),
+                    source_url="https://news.microsoft.com/fairwater/",
+                )
+            ],
         ),
     )
     return session.scalar(select(Project))
@@ -82,7 +99,11 @@ def sample(session, **overrides):
 
 
 def test_csv_column_tuple_is_frozen():
-    """Downstream consumers index by position; reordering silently breaks them."""
+    """Downstream consumers index by position; reordering silently breaks them.
+
+    New columns go on the END. `risks` reads better beside `blocker`, and putting
+    it there would have moved `confidence` and everything after it along by one.
+    """
     assert CSV_COLUMNS == (
         "id",
         "company",
@@ -103,6 +124,7 @@ def test_csv_column_tuple_is_frozen():
         "sources",
         "source_urls",
         "last_verified_at",
+        "risks",
     )
 
 
@@ -141,6 +163,59 @@ def test_json_carries_a_schema_tag_and_nested_citations(session):
     assert len(project["sources"]) == 1
     assert project["sources"][0]["claims"]["mw_planned"] == 900.0
     assert project["sources"][0]["fields"]
+
+
+def test_json_carries_risks_with_their_evidence(session):
+    sample(session)
+    project = json.loads(render_json(fetch_projects(session)))["projects"][0]
+    assert len(project["risks"]) == 1
+    risk = project["risks"][0]
+    assert risk["category"] == "transmission"
+    assert risk["severity"] == "material"
+    assert risk["status"] == "open"
+    assert risk["first_seen"] == "2026-02-01"
+    # Both, and they are different: the summary paraphrases, the quote is verbatim.
+    assert risk["summary"] == "Transmission upgrades are pending."
+    assert risk["quote"] == "two 345-kilovolt upgrades"
+    # `blocker` is derived from this row, so its citation has to be exportable.
+    assert risk["source_id"] is not None
+    assert project["blocker"] == "Transmission upgrades are pending."
+
+
+def test_csv_lists_open_risks_as_category_severity_pairs(session):
+    sample(
+        session,
+        risks=[
+            RiskRecord(category="water", severity="watch", summary="a"),
+            RiskRecord(category="financing", severity="blocking", summary="b"),
+        ],
+    )
+    rows = list(csv.DictReader(io.StringIO(render_csv(fetch_projects(session)))))
+    assert rows[0]["risks"] == "financing:blocking;water:watch"
+
+
+def test_csv_omits_a_resolved_risk(session):
+    """A flat cell has no room to say "settled", so listing one would read as
+    though the project were still blocked."""
+    from tracker.models import Risk
+
+    sample(session)
+    session.scalar(select(Risk)).status = "resolved"
+    session.flush()
+    rows = list(csv.DictReader(io.StringIO(render_csv(fetch_projects(session)))))
+    assert rows[0]["risks"] == ""
+
+
+def test_json_keeps_a_resolved_risk(session):
+    """Unlike CSV: the nested form has a `status` field to say so, and the history
+    is worth exporting."""
+    from tracker.models import Risk
+
+    sample(session)
+    session.scalar(select(Risk)).status = "resolved"
+    session.flush()
+    project = json.loads(render_json(fetch_projects(session)))["projects"][0]
+    assert [r["status"] for r in project["risks"]] == ["resolved"]
 
 
 def test_json_omits_a_timestamp_unless_asked(session):

@@ -54,10 +54,16 @@ CSV_COLUMNS: tuple[str, ...] = (
     "sources",
     "source_urls",
     "last_verified_at",
+    # Appended, not slotted in beside `blocker` where it reads better: this tuple
+    # is a positional contract, and moving `confidence` along by one would break a
+    # consumer indexing into the row.
+    "risks",
 )
 
 #: Schema tag on JSON exports, so a downstream consumer can detect a change.
-JSON_SCHEMA_TAG = "tracker/1"
+#: Bumped to 2 when `risks` was added to both formats — appending a CSV column is
+#: safe for consumers, but a reader keying on the tag should still be able to tell.
+JSON_SCHEMA_TAG = "tracker/2"
 
 FORMATS = ("md", "csv", "json")
 
@@ -84,12 +90,16 @@ class ExportFilter:
 
 
 def fetch_projects(session: Session, flt: ExportFilter | None = None) -> list[Project]:
-    """Projects in a stable order, with sources and events eagerly loaded.
+    """Projects in a stable order, with sources, events and risks eagerly loaded.
 
     The ordering is by content, not by id, so inserting a project does not
     reshuffle the whole export and produce a noisy diff.
     """
-    stmt = select(Project).options(selectinload(Project.sources), selectinload(Project.events))
+    stmt = select(Project).options(
+        selectinload(Project.sources),
+        selectinload(Project.events),
+        selectinload(Project.risks),
+    )
     if flt is not None:
         stmt = flt.apply(stmt)
     stmt = stmt.order_by(Project.state, Project.company, Project.name, Project.id)
@@ -105,6 +115,22 @@ def _iso(value: Any) -> str | None:
     if isinstance(value, dt.datetime | dt.date):
         return value.isoformat()
     return str(value)
+
+
+def _sorted_risks(project: Project) -> list:
+    """Risks in a content-stable order, so exports stay byte-identical."""
+    return sorted(project.risks, key=lambda r: (r.category, str(r.first_seen or ""), r.status))
+
+
+def _risk_cell(project: Project) -> str:
+    """Open risks as ``category:severity`` pairs, for the flat formats.
+
+    Only open ones: a resolved obstacle is history, and a flat cell has no room to
+    say so without reading as though the project were still blocked.
+    """
+    return ";".join(
+        f"{r.category}:{r.severity}" for r in _sorted_risks(project) if r.status == "open"
+    )
 
 
 def to_row(project: Project) -> dict[str, Any]:
@@ -126,6 +152,7 @@ def to_row(project: Project) -> dict[str, Any]:
         "first_announced": _iso(project.first_announced),
         "expected_online": _iso(project.expected_online),
         "blocker": project.blocker,
+        "risks": _risk_cell(project),
         "confidence": project.confidence,
         "sources": len(urls),
         "source_urls": " ".join(urls),
@@ -179,6 +206,22 @@ def to_json_object(project: Project) -> dict[str, Any]:
                 "source_id": e.source_id,
             }
             for e in sorted(project.events, key=lambda e: (e.event_date, e.event_type))
+        ],
+        "risks": [
+            {
+                "category": r.category,
+                "severity": r.severity,
+                "status": r.status,
+                # `summary` may be a paraphrase; `quote` is the verified verbatim
+                # sentence. A consumer that needs evidence wants the quote.
+                "summary": r.summary,
+                "quote": r.quote,
+                "first_seen": _iso(r.first_seen),
+                "resolved_at": _iso(r.resolved_at),
+                "delay_days": r.delay_days,
+                "source_id": r.source_id,
+            }
+            for r in _sorted_risks(project)
         ],
     }
 

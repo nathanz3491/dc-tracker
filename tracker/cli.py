@@ -36,8 +36,14 @@ from tracker.db import (
 )
 from tracker.gaps import measure as measure_gaps
 from tracker.gaps import worst as worst_gaps
-from tracker.models import Project, Source
-from tracker.vocab import PHASES
+from tracker.models import Project, Risk, Source
+from tracker.vocab import (
+    OPEN_RISK_STATUS,
+    PHASES,
+    RISK_CATEGORIES,
+    RISK_SEVERITIES,
+    severity_rank,
+)
 
 app = typer.Typer(
     name="tracker",
@@ -453,7 +459,7 @@ def ingest_iso(
 # --- queries ----------------------------------------------------------------
 
 
-def _filtered(stmt, company, state, phase, min_confidence):
+def _filtered(stmt, company, state, phase, min_confidence, risk=None, severity=None):
     if company:
         stmt = stmt.where(func.lower(Project.company).like(f"%{company.lower()}%"))
     if state:
@@ -462,6 +468,16 @@ def _filtered(stmt, company, state, phase, min_confidence):
         stmt = stmt.where(Project.phase == phase)
     if min_confidence is not None:
         stmt = stmt.where(Project.confidence >= min_confidence)
+    if risk or severity:
+        # EXISTS rather than a join, so a project with three matching risks is one
+        # row rather than three. Restricted to open risks: filtering on an obstacle
+        # that has been resolved would answer a question nobody asked.
+        sub = select(Risk.id).where(Risk.project_id == Project.id, Risk.status == OPEN_RISK_STATUS)
+        if risk:
+            sub = sub.where(Risk.category == risk)
+        if severity:
+            sub = sub.where(Risk.severity == severity)
+        stmt = stmt.where(sub.exists())
     return stmt
 
 
@@ -496,6 +512,16 @@ def list_projects(
         str | None, typer.Option("--phase", help=f"One of: {', '.join(PHASES)}")
     ] = None,
     min_confidence: Annotated[int | None, typer.Option("--min-confidence", min=0, max=3)] = None,
+    risk: Annotated[
+        str | None,
+        typer.Option("--risk", help=f"Open risk category. One of: {', '.join(RISK_CATEGORIES)}"),
+    ] = None,
+    severity: Annotated[
+        str | None,
+        typer.Option(
+            "--severity", help=f"Open risk severity. One of: {', '.join(RISK_SEVERITIES)}"
+        ),
+    ] = None,
     sort: Annotated[
         str, typer.Option("--sort", help="mw | investment | date | confidence | name")
     ] = "mw",
@@ -506,6 +532,10 @@ def list_projects(
     """List projects as a table."""
     if phase and phase not in PHASES:
         _fail(f"--phase must be one of: {', '.join(PHASES)}")
+    if risk and risk not in RISK_CATEGORIES:
+        _fail(f"--risk must be one of: {', '.join(RISK_CATEGORIES)}")
+    if severity and severity not in RISK_SEVERITIES:
+        _fail(f"--severity must be one of: {', '.join(RISK_SEVERITIES)}")
 
     order = {
         "mw": (Project.mw_planned.desc().nullslast(),),
@@ -519,10 +549,12 @@ def list_projects(
 
     engine = _read_engine()
     with session_scope(engine, commit=False) as session:
-        stmt = _filtered(select(Project), company, state, phase, min_confidence)
+        stmt = _filtered(select(Project), company, state, phase, min_confidence, risk, severity)
         total = session.scalar(
             select(func.count()).select_from(
-                _filtered(select(Project.id), company, state, phase, min_confidence).subquery()
+                _filtered(
+                    select(Project.id), company, state, phase, min_confidence, risk, severity
+                ).subquery()
             )
         )
         stmt = stmt.order_by(*order, Project.id.asc())
@@ -570,6 +602,33 @@ def _confidence_cell(value: int) -> str:
     return f"[{colour}]{value}[/{colour}]"
 
 
+def _severity_style(severity: str) -> str:
+    return {"watch": "yellow", "material": "bright_red", "blocking": "bold red"}.get(
+        severity, "white"
+    )
+
+
+def _open_risk_count(project: Project) -> int:
+    return sum(1 for r in project.risks if r.status == OPEN_RISK_STATUS)
+
+
+def _ordered_risks(risks) -> list:
+    """Most severe first, then open before settled, then by category.
+
+    Stable and content-based rather than by id, so the same data renders the same
+    way whatever order the rows happened to be written in.
+    """
+    return sorted(
+        risks,
+        key=lambda r: (
+            -severity_rank(r.severity),
+            r.status != OPEN_RISK_STATUS,
+            r.category,
+            str(r.first_seen or ""),
+        ),
+    )
+
+
 @app.command()
 def show(project_id: Annotated[int, typer.Argument(help="Project id.")]) -> None:
     """Show one project in full, with every citation."""
@@ -599,6 +658,7 @@ def show(project_id: Annotated[int, typer.Argument(help="Project id.")]) -> None
             ("first announced", str(project.first_announced or NA)),
             ("expected online", str(project.expected_online or NA)),
             ("blocker", project.blocker or NA),
+            ("open risks", str(_open_risk_count(project) or NA)),
             ("confidence", _confidence_cell(project.confidence)),
             ("created", str(project.created_at)),
             ("updated", str(project.updated_at)),
@@ -624,10 +684,117 @@ def show(project_id: Annotated[int, typer.Argument(help="Project id.")]) -> None
             if s.extractor:
                 console.print(f"    via {s.extractor}", style="dim")
 
+        if project.risks:
+            console.print(f"\n[bold]risks[/bold] ({len(project.risks)})")
+            for r in _ordered_risks(project.risks):
+                state = "" if r.status == OPEN_RISK_STATUS else f" [dim]({r.status})[/dim]"
+                dates = str(r.first_seen or NA)
+                if r.resolved_at:
+                    dates += f" → {r.resolved_at}"
+                delay = f"  [red]+{r.delay_days}d[/red]" if r.delay_days else ""
+                console.print(
+                    f"  [cyan]{r.category}[/cyan] [{_severity_style(r.severity)}]"
+                    f"{r.severity}[/{_severity_style(r.severity)}]{state}  {dates}{delay}"
+                )
+                console.print(f"    {r.summary}")
+                # The quote, not the summary, is the evidence: the summary is
+                # allowed to be a paraphrase and the quote is verified verbatim.
+                if r.quote:
+                    console.print(f'    "{r.quote}"', style="dim")
+                else:
+                    console.print("    [yellow]uncited[/yellow]", style="dim")
+
         if project.events:
             console.print(f"\n[bold]events[/bold] ({len(project.events)})")
             for e in sorted(project.events, key=lambda x: x.event_date):
                 console.print(f"  {e.event_date}  [cyan]{e.event_type}[/cyan]  {e.description}")
+
+
+@app.command()
+def risks(
+    category: Annotated[
+        str | None, typer.Option("--category", help=f"One of: {', '.join(RISK_CATEGORIES)}")
+    ] = None,
+    severity: Annotated[
+        str | None, typer.Option("--severity", help=f"One of: {', '.join(RISK_SEVERITIES)}")
+    ] = None,
+    state: Annotated[str | None, typer.Option("--state", help="2-letter code.")] = None,
+    all_statuses: Annotated[
+        bool, typer.Option("--all", help="Include resolved and superseded risks.")
+    ] = False,
+    limit: Annotated[int | None, typer.Option("--limit")] = None,
+) -> None:
+    """Obstacles across the database, grouped by kind, with the MW behind each.
+
+    This is the query the single `blocker` column could not answer: one sentence
+    per project cannot be counted, and counting is what carries the read-through
+    to chip, cloud and power companies.
+    """
+    if category and category not in RISK_CATEGORIES:
+        _fail(f"--category must be one of: {', '.join(RISK_CATEGORIES)}")
+    if severity and severity not in RISK_SEVERITIES:
+        _fail(f"--severity must be one of: {', '.join(RISK_SEVERITIES)}")
+
+    engine = _read_engine()
+    with session_scope(engine, commit=False) as session:
+        stmt = select(Risk, Project).join(Project, Risk.project_id == Project.id)
+        if not all_statuses:
+            stmt = stmt.where(Risk.status == OPEN_RISK_STATUS)
+        if category:
+            stmt = stmt.where(Risk.category == category)
+        if severity:
+            stmt = stmt.where(Risk.severity == severity)
+        if state:
+            stmt = stmt.where(Project.state == state.upper())
+        rows = session.execute(stmt).all()
+
+        if not rows:
+            scope = "" if all_statuses else "open "
+            console.print(f"[green]no {scope}risks match[/green]")
+            return
+
+        by_category: dict[str, list] = {}
+        for risk_row, project in rows:
+            by_category.setdefault(risk_row.category, []).append((risk_row, project))
+
+        shown = 0
+        for cat in sorted(
+            by_category, key=lambda c: (-len(by_category[c]), c)
+        ):  # busiest category first
+            entries = sorted(
+                by_category[cat],
+                key=lambda pair: (-severity_rank(pair[0].severity), pair[1].company, pair[1].id),
+            )
+            mw = sum(p.mw_planned or 0.0 for _, p in entries)
+            unknown_mw = sum(1 for _, p in entries if p.mw_planned is None)
+            heading = f"[bold cyan]{cat}[/bold cyan]  {len(entries)} project(s)"
+            if mw:
+                heading += f", {_fmt_mw(mw)} MW"
+            if unknown_mw:
+                heading += f" [dim](+{unknown_mw} with no cited capacity)[/dim]"
+            console.print(heading)
+
+            for risk_row, project in entries:
+                if limit is not None and shown >= limit:
+                    break
+                style = _severity_style(risk_row.severity)
+                console.print(
+                    f"  [bold]#{project.id}[/bold] {project.company} — {project.name} "
+                    f"({_location(project)})  [{style}]{risk_row.severity}[/{style}]"
+                    f"  {_fmt_mw(project.mw_planned)} MW"
+                )
+                console.print(f"    {risk_row.summary}")
+                if risk_row.quote:
+                    console.print(f'    "{risk_row.quote}"', style="dim")
+                else:
+                    console.print("    [yellow]uncited — confirm in `tracker review`[/yellow]")
+                shown += 1
+            console.print()
+
+        console.print(
+            "[dim]MW sums cover only projects whose capacity is cited; they are a "
+            "floor, not a total.[/dim]"
+        )
 
 
 @app.command()
@@ -676,6 +843,32 @@ def stats() -> None:
             for value, count in rows:
                 table.add_row(str(value), str(count))
             console.print(table)
+
+        risk_rows = session.execute(
+            select(
+                Risk.category,
+                func.count(func.distinct(Risk.project_id)),
+                func.sum(Project.mw_planned),
+            )
+            .join(Project, Risk.project_id == Project.id)
+            .where(Risk.status == OPEN_RISK_STATUS)
+            .group_by(Risk.category)
+            .order_by(func.count(func.distinct(Risk.project_id)).desc(), Risk.category.asc())
+        ).all()
+        if risk_rows:
+            table = Table(
+                title="by open risk", header_style="bold", title_justify="left", box=TABLE_BOX
+            )
+            table.add_column("category")
+            table.add_column("projects", justify="right")
+            table.add_column("MW at risk", justify="right")
+            for value, count, at_risk in risk_rows:
+                table.add_row(str(value), str(count), _fmt_mw(at_risk))
+            console.print(table)
+            console.print(
+                "[dim]MW at risk counts only projects whose capacity is cited, and a "
+                "project appears under every category obstructing it.[/dim]"
+            )
 
 
 @ingest_app.command("geo")
@@ -1461,6 +1654,12 @@ def review(
                 f"confidence {_confidence_cell(p.confidence)}"
             )
             console.print(f"  why: {'; '.join(score.reasons)}")
+            for r in _ordered_risks(p.risks):
+                if r.status == OPEN_RISK_STATUS and r.source_id is None:
+                    console.print(
+                        f"  [yellow]uncited {r.severity} risk[/yellow] "
+                        f"([cyan]{r.category}[/cyan]): {r.summary}"
+                    )
             for s in sorted(p.sources, key=lambda x: x.url):
                 console.print(f"  [cyan]{s.source_type}[/cyan] {s.url}")
             for line in (p.notes or "").splitlines():

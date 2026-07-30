@@ -52,6 +52,61 @@ def seeded(initialized: Path) -> Path:
     return initialized
 
 
+@pytest.fixture
+def with_risks(tmp_path: Path, initialized: Path) -> Path:
+    """Two projects carrying obstacles, curated so the test needs no LLM."""
+    curated = tmp_path / "risky.json"
+    curated.write_text(
+        json.dumps(
+            {
+                "projects": [
+                    {
+                        "name": "Fairwater",
+                        "company": "Microsoft",
+                        "city": "Mount Pleasant",
+                        "state": "WI",
+                        "mw_planned": 900,
+                        "sources": [{"url": "https://news.microsoft.com/fairwater/"}],
+                        "risks": [
+                            {
+                                "category": "transmission",
+                                "severity": "material",
+                                "summary": "Two 345-kilovolt upgrades outstanding.",
+                                "quote": "must complete two 345-kilovolt upgrades",
+                            },
+                            {
+                                "category": "water",
+                                "severity": "watch",
+                                "summary": "Cooling draw questioned locally.",
+                            },
+                        ],
+                    },
+                    {
+                        "name": "Ashburn Campus",
+                        "company": "Sabey",
+                        "city": "Ashburn",
+                        "state": "VA",
+                        "mw_planned": 70,
+                        "sources": [{"url": "https://www.datacenterfrontier.com/sabey/"}],
+                        "risks": [
+                            {
+                                "category": "transmission",
+                                "severity": "blocking",
+                                "summary": "Substation energization slipped.",
+                                "quote": "the on-site substation is not yet energized",
+                            }
+                        ],
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    result = invoke(initialized, "ingest", "manual", "--json", str(curated))
+    assert result.exit_code == 0, result.output
+    return initialized
+
+
 # --- init -------------------------------------------------------------------
 
 
@@ -293,6 +348,102 @@ def test_stats_summarizes_and_qualifies_its_sums(seeded: Path):
     # Sums over partially-cited data are a floor, and must say so rather than
     # implying they are a total.
     assert "floor, not a total" in result.output
+
+
+# --- risks ------------------------------------------------------------------
+
+
+def test_risks_groups_by_category_with_the_capacity_behind_each(with_risks: Path):
+    """The query one free-text `blocker` column could not answer."""
+    result = invoke(with_risks, "risks")
+    assert result.exit_code == 0
+    assert "transmission" in result.output
+    assert "water" in result.output
+    # Two projects are obstructed on transmission, 900 + 70 MW between them.
+    assert "970" in result.output
+
+
+def test_risks_shows_the_quote_not_just_the_summary(with_risks: Path):
+    """The summary may be a paraphrase; the quote is the evidence."""
+    result = invoke(with_risks, "risks")
+    assert "Two 345-kilovolt upgrades outstanding." in result.output
+    assert "must complete two 345-kilovolt upgrades" in result.output
+
+
+def test_risks_marks_an_uncited_obstacle(with_risks: Path):
+    """The water risk was curated without a quote and must not read as evidenced."""
+    result = invoke(with_risks, "risks", "--category", "water")
+    assert "uncited" in result.output
+
+
+def test_risks_filters_by_category_and_severity(with_risks: Path):
+    blocking = invoke(with_risks, "risks", "--severity", "blocking")
+    assert "Sabey" in blocking.output
+    assert "Microsoft" not in blocking.output
+
+    water = invoke(with_risks, "risks", "--category", "water")
+    assert "Microsoft" in water.output
+    assert "Sabey" not in water.output
+
+
+def test_risks_rejects_an_unknown_category(with_risks: Path):
+    result = invoke(with_risks, "risks", "--category", "traffic")
+    assert result.exit_code == 2
+    assert "must be one of" in result.output
+
+
+def test_risks_reports_nothing_rather_than_an_empty_table(seeded: Path):
+    result = invoke(seeded, "risks")
+    assert result.exit_code == 0
+    assert "no open risks match" in result.output
+
+
+def test_list_filters_by_open_risk(with_risks: Path):
+    result = invoke(with_risks, "list", "--risk", "water")
+    assert result.exit_code == 0
+    assert "Microsoft" in result.output
+    assert "Sabey" not in result.output
+
+
+def test_list_filters_by_risk_severity(with_risks: Path):
+    result = invoke(with_risks, "list", "--severity", "blocking")
+    assert "Sabey" in result.output
+    assert "Microsoft" not in result.output
+
+
+def test_list_counts_a_multi_risk_project_once(with_risks: Path):
+    """EXISTS, not a join: Microsoft carries two risks and is still one row."""
+    result = invoke(with_risks, "list", "--company", "Microsoft")
+    assert "1 project(s)" in result.output
+
+
+def test_list_rejects_an_unknown_risk_category(with_risks: Path):
+    result = invoke(with_risks, "list", "--risk", "traffic")
+    assert result.exit_code == 2
+    assert "must be one of" in result.output
+
+
+def test_show_renders_risks_with_their_evidence(with_risks: Path):
+    result = invoke(with_risks, "show", "1")
+    assert result.exit_code == 0
+    assert "risks" in result.output
+    assert "transmission" in result.output
+    assert "must complete two 345-kilovolt upgrades" in result.output
+
+
+def test_the_blocker_is_the_most_severe_open_risk(with_risks: Path):
+    """Sabey's only risk is blocking; Microsoft's worst is material."""
+    assert "Substation energization slipped." in invoke(with_risks, "show", "2").output
+    assert "Two 345-kilovolt upgrades outstanding." in invoke(with_risks, "show", "1").output
+
+
+def test_stats_breaks_down_by_open_risk(with_risks: Path):
+    result = invoke(with_risks, "stats")
+    assert "by open risk" in result.output
+    assert "MW at risk" in result.output
+    # A project appears under every category obstructing it, and that is disclosed
+    # rather than left for the reader to discover by adding the column up.
+    assert "every category obstructing it" in result.output
 
 
 # --- the read-only guarantee -----------------------------------------------

@@ -117,6 +117,23 @@ initial build of the v1 PRD.
   0004 backfills any existing `blocker` into an `unclassified` risk carrying the
   source that asserted it, so upgrading loses nothing. Verified against a copy of
   the live database: both rows migrated, both cited.
+- **`tracker risks`** — obstacles across the database grouped by kind, each with the
+  projects it blocks and the planned MW behind them. This is the query one free-text
+  sentence per project could not answer, and it is what carries the read-through:
+  MW blocked on transmission is a power and utility signal, MW blocked on `offtake`
+  or `chip_supply` is a cloud and semiconductor one. An uncited risk is labelled as
+  such rather than presented alongside quoted ones.
+- `tracker list --risk <category> --severity <level>`, composing with the existing
+  filters. Matching is an EXISTS over *open* risks, so a project obstructed three
+  ways is still one row and a resolved obstacle does not match.
+- `tracker show` renders each risk with its severity, dates, delay and quote;
+  `tracker stats` gains a "by open risk" table with MW at risk; `tracker review`
+  calls out an open `blocking` risk that has no citation.
+- Exports carry risks. CSV appends a `risks` column of open `category:severity`
+  pairs — appended at the end, not slotted in beside `blocker` where it reads
+  better, because that tuple is a positional contract. JSON gains a nested `risks`
+  array including resolved ones, since it has a `status` field to say so. The JSON
+  schema tag moves to `tracker/2`.
 - Obstacle extraction: `extract-v1` returns a `risks[]` array instead of a
   `blocker` string, `crawl._risks` gates each entry, and `upsert._upsert_risks`
   writes them the way `_upsert_events` writes milestones — dedup on

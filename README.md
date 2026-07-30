@@ -311,6 +311,36 @@ tracker verify                    # progress toward the required project list
 tracker export md > tracker.md    # Markdown table, byte-stable across runs
 ```
 
+### What could stop these projects being built
+
+```bash
+tracker risks                          # every open obstacle, grouped by kind
+tracker risks --severity blocking      # only the ones that have stopped work
+tracker list --risk transmission       # projects waiting on grid work
+tracker stats                          # includes MW at risk per category
+```
+
+```text
+transmission  1 project(s), 900 MW
+  #1 Microsoft — Fairwater (Mount Pleasant, WI)  material  900 MW
+    Two 345-kilovolt upgrades outstanding before full load.
+    "must complete two 345-kilovolt upgrades"
+
+water  1 project(s), 900 MW  (+1 with no cited capacity)
+  #1 Microsoft — Fairwater (Mount Pleasant, WI)  watch  900 MW
+    Cooling draw questioned by the county board.
+    uncited — confirm in `tracker review`
+```
+
+Categories map onto the PRD's obstacle list — `grid_capacity`, `transmission`,
+`permitting`, `environmental`, `equipment_supply`, `chip_supply`, `financing`,
+`offtake`, `community_opposition`, `water` — which is what makes the read-through
+countable: MW blocked on `transmission` is a power and utility signal, MW blocked on
+`offtake` or `chip_supply` is a cloud and semiconductor one.
+
+Each obstacle shows the verbatim quote behind it, and one that has none says
+`uncited` rather than sitting silently beside the evidenced ones.
+
 Every command takes `--db PATH`. Without it the database is `data/tracker.db`
 under the project root, or `$TRACKER_DB` if set.
 
