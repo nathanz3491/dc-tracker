@@ -7,6 +7,7 @@ run can never touch the operator's real database.
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 from pathlib import Path
 
@@ -46,7 +47,11 @@ def test_init_creates_the_database(tmp_path: Path):
     result = invoke(db, "init")
     assert result.exit_code == 0
     assert db.exists(), "init must create parent directories"
-    assert "schema version: 2" in result.output
+    # Derived, so adding a migration does not require editing this test.
+    from tracker.db import discover_migrations
+
+    latest = max(m.version for m in discover_migrations())
+    assert f"schema version: {latest}" in result.output
 
 
 def test_init_is_idempotent(initialized: Path):
@@ -276,6 +281,110 @@ def test_stats_summarizes_and_qualifies_its_sums(seeded: Path):
 
 
 # --- the read-only guarantee -----------------------------------------------
+
+
+# --- discovery queue --------------------------------------------------------
+
+
+def queue_one(db: Path, url: str = "https://a.test/one/", status: str = "discovered") -> None:
+    """Insert a queued candidate directly, without polling any feed."""
+    from tracker.db import init_db, session_scope
+    from tracker.models import IngestUrl
+
+    engine, _ = init_db(db)
+    with session_scope(engine) as session:
+        session.add(
+            IngestUrl(
+                url=url,
+                run_id="t",
+                status=status,
+                title="A 900MW data center campus",
+                feed="dcd",
+                published_at=dt.datetime(2026, 7, 20),
+            )
+        )
+
+
+def test_queue_is_empty_on_a_fresh_database(initialized: Path):
+    result = invoke(initialized, "queue")
+    assert result.exit_code == 0
+    assert "queue is empty" in result.output
+    assert "tracker discover" in result.output, "must say how to fill it"
+
+
+def test_queue_lists_a_candidate_with_its_headline(initialized: Path):
+    queue_one(initialized)
+    result = invoke(initialized, "queue")
+    assert result.exit_code == 0
+    assert "900MW data center campus" in result.output, "the headline is what makes it triageable"
+    assert "dcd" in result.output
+    assert "tracker ingest crawl --from-queue" in result.output
+
+
+def test_queue_excludes_already_crawled_urls(initialized: Path):
+    queue_one(initialized, status="ok")
+    assert "queue is empty" in invoke(initialized, "queue").output
+
+
+def test_queue_drop_removes_a_candidate(initialized: Path):
+    queue_one(initialized)
+    result = invoke(initialized, "queue", "--drop", "--url", "https://a.test/one/")
+    assert result.exit_code == 0
+    assert "dropped 1" in result.output
+    assert "queue is empty" in invoke(initialized, "queue").output
+
+
+def test_crawl_from_queue_and_urls_together_is_rejected(initialized: Path, tmp_path: Path):
+    urls = tmp_path / "u.txt"
+    urls.write_text("https://a.test/x\n", encoding="utf-8")
+    result = invoke(initialized, "ingest", "crawl", "--from-queue", "--urls", str(urls))
+    assert result.exit_code == 2
+    assert "not both" in result.output
+
+
+def test_crawl_with_neither_source_explains_the_options(initialized: Path):
+    result = invoke(initialized, "ingest", "crawl")
+    assert result.exit_code == 2
+    assert "--from-queue" in result.output
+    assert "--check" in result.output
+
+
+def test_crawl_from_an_empty_queue_exits_cleanly(initialized: Path):
+    """Nothing to do is not an error, and must not need an API key to discover that."""
+    result = invoke(initialized, "ingest", "crawl", "--from-queue")
+    assert result.exit_code == 0
+    assert "queue is empty" in result.output
+
+
+def test_crawl_from_queue_needs_a_key_and_says_so(initialized: Path):
+    """The key is checked before any fetching, so a missing one costs nothing."""
+    queue_one(initialized)
+    result = invoke(initialized, "ingest", "crawl", "--from-queue")
+    assert result.exit_code == 2
+    assert "MINIMAX_API_KEY" in result.output
+    assert "api.minimaxi.com" in result.output, "must mention the CN/global key split"
+
+
+def test_discover_reports_a_broken_feed_config(initialized: Path, tmp_path: Path):
+    bad = tmp_path / "feeds.toml"
+    bad.write_text('[[feed]]\nurl = "https://a.test/rss"\n', encoding="utf-8")
+    result = invoke(initialized, "discover", "--feeds", str(bad))
+    assert result.exit_code == 2
+    assert "topic" in result.output and "signal" in result.output
+
+
+def test_discover_missing_feed_config_is_actionable(initialized: Path, tmp_path: Path):
+    result = invoke(initialized, "discover", "--feeds", str(tmp_path / "absent.toml"))
+    assert result.exit_code == 2
+    assert "feeds.toml" in result.output
+
+
+@pytest.mark.network
+def test_discover_against_the_real_feeds(initialized: Path):
+    """Deselected by default. Run with `-m network` to check the feeds still work."""
+    result = invoke(initialized, "discover", "--since-days", "45")
+    assert result.exit_code == 0
+    assert "| feeds failed  |     0 |" in result.output, "a feed URL has gone stale"
 
 
 # --- export -----------------------------------------------------------------

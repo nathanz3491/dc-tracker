@@ -16,6 +16,9 @@ Three ingest paths converge on one normalizer and one write path:
 | ISO queue export | `tracker ingest pjm --csv FILE --iso pjm` | Candidate generation and corroborating citations — **not** a project feed, see below |
 | News extraction | `tracker ingest crawl --urls urls.txt` | The 12 tracked fields, pulled from articles by an LLM and gated on quoted evidence |
 
+Articles to extract from come from `tracker discover`, which polls news feeds and
+queues candidates for triage.
+
 Then query: `tracker list`, `tracker show ID`, `tracker stats`, `tracker review`,
 `tracker verify`, `tracker export {md,csv,json}`.
 
@@ -88,12 +91,36 @@ tracker ingest pjm --csv data/raw/pjm_2025q3.csv --iso pjm --dry-run
 tracker ingest pjm --csv data/raw/pjm_2025q3.csv --iso pjm
 ```
 
-News extraction (needs `TRACKER_MINIMAX_API_KEY`; see `.env.example`):
+Finding articles, then extracting from them (needs `TRACKER_MINIMAX_API_KEY`;
+see `.env.example`):
 
 ```bash
+tracker discover --since-days 45
+tracker queue
 tracker ingest crawl --check
-tracker ingest crawl --urls urls.txt
+tracker ingest crawl --from-queue --limit 10
 ```
+
+`discover` polls the feeds in [seed/feeds.toml](seed/feeds.toml), keyword-filters
+the headlines and queues what matches. Nothing is fetched or sent to an LLM at
+that point — `queue` shows you the headlines so you can drop the noise before
+paying for extraction:
+
+```bash
+tracker queue --drop --url https://example.com/not-a-project/
+```
+
+A representative run over seven feeds saw 150 entries, filtered 132, and queued
+18. Of those 18, four were genuine US project announcements. **Precision is
+deliberately not the goal** — the queue is a human checkpoint, and it is cheaper
+to over-collect and triage than to tune a keyword filter until it silently drops
+real projects. Two categories are knowingly left in: industry commentary that
+mentions capacity figures, and non-US projects. The latter cost one LLM call and
+are then dropped correctly, because `norm_state` will not accept "Islamabad" —
+better than a geography keyword rule that also discards real US sites.
+
+You can still supply URLs by hand with `--urls urls.txt` (one per line, `#`
+comments allowed), which is the right thing when you already know what to read.
 
 Reviewing and exporting:
 
@@ -211,6 +238,63 @@ Three MiniMax details that each cost a debugging session if missed:
 (`api.minimaxi.com`) platforms are separate with **non-interchangeable keys** —
 the wrong host answers *invalid api key*, which reads like a bad key rather than
 a bad URL. `tracker ingest crawl --check` tells you which you have in one call.
+
+### Discovery reuses `ingest_url` rather than adding a queue table
+
+A candidate lands in `ingest_url` with status `discovered`. That table already
+existed to record per-URL crawl outcomes, and "a URL nothing has read yet" is just
+one more state in the same lifecycle — so the queue is a status value plus three
+metadata columns (migration `0003`), not a subsystem.
+
+The `title` column earns its place: without it, `tracker queue` could only show a
+bare URL, which is not enough to judge whether an article is worth an LLM call.
+
+Discovery never touches a URL already in the table, whether it was crawled
+successfully or failed. Re-queueing a processed URL would let discovery quietly
+undo the crawl path's bookkeeping.
+
+### Feed filtering is two tiers, and one of them can be implied
+
+A `topic` term proves an article is about data centers; a `signal` term proves it
+concerns a specific *project*. Both must match. Commentary about AI power demand
+passes the first and fails the second, which is right — there is nothing in it to
+extract.
+
+Two wrinkles that were only obvious once it ran against real feeds:
+
+- **URL slugs are hyphenated**, so `data-center` has to match the term
+  `data cent`, and `900MW` has to match `mw`. `normalize_haystack` folds
+  separators and splits digit-letter boundaries. Without it, matching against the
+  URL — the only way to filter a sitemap entry or a feed with empty titles — never
+  matched anything.
+- **The host is not evidence about an article.** `datacenterfrontier.com` contains
+  "datacent", so every article on a specialist outlet satisfied the topic tier
+  from its domain name alone. Matching now uses the URL *path*, and an outlet that
+  genuinely only covers data centers declares `topic_implied = true` — which also
+  fixes the opposite error, where a real headline like "Crusoe expands Abilene
+  campus to 1.2GW" was dropped for never saying "data center".
+
+Data Center Frontier publishes no working feed at all — `/rss/`, `/feed/` and
+`/rss.xml` all 404, and `/?feed=rss2` returns an HTML error page with HTTP 200 —
+so it is configured against its article sitemap instead, which is ordered
+newest-first with real `lastmod` dates.
+
+### Hedged dates resolve to a quarter, not to NULL
+
+`expected_online` is the field announcements hedge most, and treating every hedge
+as unparseable was throwing most of it away. So:
+
+- `late 2027` → 2027-10-01 at **quarter** precision
+- `H1 2027` → 2027-01-01 at **half** precision (a half is a coarser bucket than a
+  quarter — H1 spans January to June, not January to March)
+- `by 2028` → 2028-01-01 at **year** precision, the same as a bare `2028`
+- `next spring`, `soon` → still NULL: with no year to anchor to, any date would be
+  invented outright
+- `before 2028` → still NULL, because it states a *direction* relative to the
+  year, so storing the year itself would point the wrong way
+
+Every coarsened value carries a note recording the original phrasing, so `show`
+and the Markdown export both make it visible that the date is approximate.
 
 ### The evidence gate, not the prompt, is what prevents fabrication
 
@@ -400,7 +484,12 @@ gives a present/missing breakdown the moment the real list is pasted in.
 
 ## Known gaps
 
-- The 30 required projects are not populated. `tracker verify` measures the gap.
+- The 30 required projects are not populated. `tracker verify` measures the gap,
+  and `tracker discover` now supplies candidates to close it.
+- **Discovery finds articles, not projects.** It surfaces what the feeds publish
+  *now*, so a project announced three years ago will not appear unless an outlet
+  writes about it again. Backfilling older projects still needs hand-supplied URLs
+  or the ISO queue path.
 - ERCOT and CAISO column names in `iso_maps.py` are unverified assumptions;
   PJM's and MISO's are taken from their real exports. A wrong guess fails loudly
   via `assert_headers` rather than ingesting nothing, and `--map-override`

@@ -1,0 +1,152 @@
+# Feeds that `tracker discover` polls for new data center project articles.
+#
+# Operator-editable: add or remove entries here without touching code. Override
+# the file entirely with `tracker discover --feeds PATH`.
+#
+# Set `topic_implied = true` for an outlet that only ever covers data centers:
+# the topic keyword tier is then presumed satisfied and the project signal alone
+# decides, so a headline like "Crusoe expands Abilene campus to 1.2GW" is kept
+# even though it never says "data center".
+#
+# `source_type` is a hint recorded on the queued candidate. The crawl path
+# re-derives the real source_type from the article URL, so a wrong hint here
+# affects triage display only, never a stored confidence score.
+#
+# Every URL below is verified to fetch and parse; a feed that stops resolving is
+# reported by `tracker discover` rather than failing the run.
+
+[[feed]]
+name = "datacenterdynamics"
+# Covers nothing but data centers, so the topic tier is presumed satisfied
+# and the project signal alone decides. See FeedSpec.topic_implied.
+topic_implied = true
+url = "https://www.datacenterdynamics.com/en/rss/"
+source_type = "trade_press"
+
+[[feed]]
+name = "datacenterfrontier"
+# Covers nothing but data centers, so the topic tier is presumed satisfied
+# and the project signal alone decides. See FeedSpec.topic_implied.
+topic_implied = true
+# A sitemap, not RSS: this site publishes no working feed. /rss/, /feed/ and
+# /rss.xml all 404, and /?feed=rss2 returns an HTML error page with HTTP 200.
+# /sitemap.xml is a sitemap *index*, so point straight at the article sitemap —
+# it is ordered newest-first and carries real lastmod dates, which is all the
+# age filter needs. Titles come from the URL slug.
+url = "https://www.datacenterfrontier.com/sitemap/Article.xml"
+source_type = "trade_press"
+
+[[feed]]
+name = "utilitydive"
+url = "https://www.utilitydive.com/feeds/news/"
+source_type = "trade_press"
+
+[[feed]]
+name = "microsoft-news"
+url = "https://news.microsoft.com/feed/"
+source_type = "company_filing"
+
+[[feed]]
+name = "google-blog"
+url = "https://blog.google/rss/"
+source_type = "company_filing"
+
+[[feed]]
+name = "aws-blog"
+url = "https://aws.amazon.com/blogs/aws/feed/"
+source_type = "company_filing"
+
+[[feed]]
+name = "meta-newsroom"
+url = "https://about.fb.com/news/feed/"
+source_type = "company_filing"
+
+
+# Keyword filtering is two-tier, and both tiers must match.
+#
+# `topic` establishes that the article is about a data center at all. `signal`
+# establishes that it concerns a specific PROJECT rather than industry commentary
+# — an opinion piece about AI power demand matches `topic` but has no project to
+# extract, and would waste an LLM call.
+[filter]
+topic = [
+  "data cent",
+  "datacent",
+  "hyperscale",
+  "colocation",
+  "compute campus",
+  "ai campus",
+  "ai factory",
+  "gigafactory",
+]
+signal = [
+  "megawatt",
+  " mw",
+  "gigawatt",
+  " gw",
+  "billion",
+  "bn",
+  "million",
+  "campus",
+  "break ground",
+  "breaks ground",
+  "groundbreaking",
+  "announce",
+  "expansion",
+  "expand",
+  "invest",
+  "build",
+  "construct",
+  "site",
+  "facility",
+  "plans",
+]
+
+# Headlines that match the tiers above but are reliably not project news.
+#
+# Tuned against a real discovery run: these categories accounted for most of the
+# false positives. Kept categorical rather than headline-specific, so the list
+# does not silently overfit to whatever was in the news the day it was written.
+#
+# Geographic noise (a data center in Islamabad or Johor Bahru) is deliberately NOT
+# filtered here. Judging a country from a headline is unreliable, and the crawl
+# path already drops any project whose state will not normalize to a US code — so
+# a non-US article costs one LLM call and is then discarded correctly, which is
+# better than a keyword rule that also throws away real US projects.
+exclude = [
+  # Commentary and analysis rather than an announcement
+  "opinion",
+  "podcast",
+  "webinar",
+  "roundup",
+  "explainer",
+  "how to",
+  "what is",
+  "lessons",
+  "signal for",
+  # Market research, not a project
+  "forecast",
+  "outlook",
+  "market size",
+  "predictions",
+  "pegs us",
+  # Events and recruiting
+  "jobs",
+  "hiring",
+  "careers",
+  "job cuts",
+  "summit",
+  "conference",
+  "expo",
+  "awards",
+  # Finance coverage
+  "earnings call transcript",
+  "stock",
+  "shares",
+  "analyst",
+  "etf",
+  # Adjacent industries that match the keywords but are not data centers
+  "cryptomine",
+  "crypto mine",
+  "bitcoin",
+]

@@ -297,25 +297,82 @@ def test_coarse_dates_carry_a_note_about_the_collapse():
 
 
 @pytest.mark.parametrize(
-    "raw",
+    ("raw", "expected", "quarter"),
     [
-        "late 2026",
-        "early 2027",
-        "mid-2026",
-        "by 2028",
-        "next year",
-        "next spring",
-        "end of 2026",
-        "summer 2026",
-        "around 2027",
-        "soon",
+        ("early 2028", dt.date(2028, 1, 1), 1),
+        ("beginning of 2027", dt.date(2027, 1, 1), 1),
+        ("spring 2027", dt.date(2027, 4, 1), 2),
+        ("mid-2026", dt.date(2026, 7, 1), 3),
+        ("mid 2026", dt.date(2026, 7, 1), 3),
+        ("summer 2026", dt.date(2026, 7, 1), 3),
+        ("late 2027", dt.date(2027, 10, 1), 4),
+        ("end of 2026", dt.date(2026, 10, 1), 4),
+        ("fall 2027", dt.date(2027, 10, 1), 4),
+        ("autumn 2027", dt.date(2027, 10, 1), 4),
     ],
 )
-def test_vague_dates_resolve_to_none_not_a_guess(raw):
-    """Pinning vague language to a day would fabricate precision."""
+def test_a_hedge_with_a_year_resolves_to_that_quarter(raw, expected, quarter):
+    """Announcements hedge constantly; discarding every hedge lost most dates.
+
+    A qualifier plus a year is genuinely informative, so it is kept at quarter
+    precision with a note recording the coarsening.
+    """
+    parsed = norm_date_detail(raw, field="expected_online")
+    assert parsed.value == expected
+    assert parsed.precision == "quarter"
+    assert f"Q{quarter}" in parsed.note
+    assert "approximate" in parsed.note
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("H1 2027", dt.date(2027, 1, 1)),
+        ("H2 2027", dt.date(2027, 7, 1)),
+        ("first half of 2027", dt.date(2027, 1, 1)),
+        ("second half of 2026", dt.date(2026, 7, 1)),
+    ],
+)
+def test_halves_keep_their_own_precision(raw, expected):
+    """A half is a coarser bucket than a quarter -- H1 spans Jan-Jun, not Jan-Mar."""
+    parsed = norm_date_detail(raw, field="expected_online")
+    assert parsed.value == expected
+    assert parsed.precision == "half"
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("by 2028", dt.date(2028, 1, 1)),
+        ("around 2027", dt.date(2027, 1, 1)),
+        ("circa 2027", dt.date(2027, 1, 1)),
+        ("approximately 2029", dt.date(2029, 1, 1)),
+        ("sometime in 2028", dt.date(2028, 1, 1)),
+    ],
+)
+def test_a_hedge_with_only_a_year_resolves_to_year_precision(raw, expected):
+    """No more precision than a bare "2028" already gets."""
+    parsed = norm_date_detail(raw, field="expected_online")
+    assert parsed.value == expected
+    assert parsed.precision == "year"
+    assert "approximate" in parsed.note
+
+
+@pytest.mark.parametrize(
+    "raw",
+    ["next year", "next spring", "soon", "late", "mid", "imminent", "eventually", "H2"],
+)
+def test_a_hedge_with_no_year_stays_none(raw):
+    """With nothing to anchor to, any date would be invented outright."""
     parsed = norm_date_detail(raw)
     assert parsed.value is None
-    assert parsed.note is not None and "vaguely" in parsed.note
+    assert parsed.note is not None and "no year to anchor it" in parsed.note
+
+
+@pytest.mark.parametrize("raw", ["before 2028", "after 2027"])
+def test_directional_hedges_stay_none(raw):
+    """ "before 2028" points away from 2028, so storing 2028 would mislead."""
+    assert norm_date_detail(raw).value is None
 
 
 @pytest.mark.parametrize("raw", ["2025-13-01", "2025-02-30", "13/45/2025", "gibberish"])

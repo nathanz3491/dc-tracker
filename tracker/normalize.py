@@ -445,12 +445,55 @@ _MONTHS = {
 }
 _QUARTER_MONTH = {1: 1, 2: 4, 3: 7, 4: 10}
 
-#: Vague temporal language. These carry real meaning to a human but pinning them
-#: to a day would fabricate precision, so they resolve to None and the caller
-#: records the phrase in notes instead.
-_VAGUE = re.compile(
-    r"^(?:early|mid|late|end of|beginning of|by|before|after|around|circa|"
-    r"spring|summer|fall|autumn|winter|next|this|last|soon|tbd|imminent)\b",
+#: Hedged-but-anchored temporal language: a qualifier plus an explicit year.
+#: "late 2027" is genuinely informative — resolving it to a *quarter* keeps the
+#: information at the precision the source actually offered, which is better than
+#: discarding it. The precision is reported as "quarter" and a note records the
+#: coarsening, so nothing downstream mistakes it for a firm date.
+#:
+#: Announcements hedge this way constantly, and treating every hedge as NULL was
+#: throwing away most of `expected_online`.
+_QUALIFIER_QUARTER: dict[str, int] = {
+    "early": 1,
+    "beginning of": 1,
+    "start of": 1,
+    "spring": 2,
+    "mid": 3,
+    "middle of": 3,
+    "summer": 3,
+    "late": 4,
+    "end of": 4,
+    "fall": 4,
+    "autumn": 4,
+    "winter": 4,
+}
+
+_QUALIFIED_YEAR = re.compile(
+    r"^(?P<qual>early|beginning of|start of|spring|mid|middle of|summer|"
+    r"late|end of|fall|autumn|winter)"
+    r"[\s\-–—of]*"
+    r"(?P<year>(?:19|20)\d{2})\.?$",
+    re.I,
+)
+
+#: A hedge with a year but no sub-year signal: "by 2028", "around 2027". Resolved
+#: to year precision, exactly like a bare "2028" already is — no more precision is
+#: implied than the source gave.
+#:
+#: Deliberately excludes "before" and "after": those state a *direction* relative
+#: to the year, so storing the year itself would point the wrong way.
+_HEDGED_YEAR = re.compile(
+    r"^(?:by|around|circa|approx(?:imately)?|roughly|sometime in|in or around)"
+    r"[\s\-–—]*(?P<year>(?:19|20)\d{2})\.?$",
+    re.I,
+)
+
+#: Temporal language with no anchor at all. These stay NULL: there is no year to
+#: attach a quarter to, so any date would be invented outright.
+_UNANCHORED = re.compile(
+    r"^(?:by|before|after|around|circa|next|this|last|soon|tbd|imminent|"
+    r"shortly|eventually|future|later|early|mid|late|end of|beginning of|"
+    r"spring|summer|fall|autumn|winter|h1|h2)\b",
     re.I,
 )
 
@@ -460,8 +503,11 @@ def norm_date_detail(raw: Any, *, field: str = "date") -> ParsedDate:
 
     ISO ``2025-07-01`` → day · ``"March 2025"`` → month (day 1) ·
     ``"Q3 2025"`` → quarter (2025-07-01) · ``"2025"`` → year (2025-01-01).
-    Vague language (``"late 2026"``, ``"next spring"``) → ``None``, because
-    resolving it would invent precision the source never gave.
+
+    A hedge with a year attached is resolved to the quarter it implies:
+    ``"late 2027"`` → 2027-10-01 at quarter precision, with a note. A hedge with
+    no year (``"next spring"``, ``"soon"``) stays ``None``, because there is
+    nothing to anchor it to and any date would be invented outright.
     """
     if is_blank(raw):
         return ParsedDate(None)
@@ -472,8 +518,26 @@ def norm_date_detail(raw: Any, *, field: str = "date") -> ParsedDate:
 
     text = _clean(str(raw))
 
-    if _VAGUE.match(text):
-        return ParsedDate(None, None, f"{field} stated vaguely as {text!r}; left unset")
+    qualified = _QUALIFIED_YEAR.match(text)
+    if qualified:
+        quarter = _QUALIFIER_QUARTER[qualified.group("qual").lower()]
+        year = int(qualified.group("year"))
+        return ParsedDate(
+            _safe_date(year, _QUARTER_MONTH[quarter], 1, field, raw),
+            "quarter",
+            f"{field} stated as {text!r}; read as Q{quarter} {year} and stored as the "
+            "first day of that quarter, so treat it as approximate",
+        )
+
+    hedged = _HEDGED_YEAR.match(text)
+    if hedged:
+        year = int(hedged.group("year"))
+        return ParsedDate(
+            _safe_date(year, 1, 1, field, raw),
+            "year",
+            f"{field} stated as {text!r}; stored as January 1 {year} at year precision, "
+            "so treat it as approximate",
+        )
 
     # ISO 8601, with or without a time component.
     iso = re.match(r"^(\d{4})-(\d{2})-(\d{2})(?:[T ].*)?$", text)
@@ -509,11 +573,19 @@ def norm_date_detail(raw: Any, *, field: str = "date") -> ParsedDate:
             f"{field} given as {text!r}; stored as first day of that quarter",
         )
 
-    # First/second half: H1 2026, 1H26
-    h = re.match(r"^h(?P<h>[12])\s*(?P<y>\d{4})$", text, re.I)
+    # Halves: "H1 2026", "first half of 2026". A coarser bucket than a
+    # quarter -- H1 spans Jan-Jun -- so it keeps its own precision rather than
+    # being flattened into Q1.
+    h = re.match(
+        r"^(?:h(?P<h>[12])|(?P<word>first|second)\s+half\s+of)\s*"
+        r"(?P<y>(?:19|20)\d{2})\.?$",
+        text,
+        re.I,
+    )
     if h:
         year = int(h.group("y"))
-        month = 1 if h.group("h") == "1" else 7
+        first_half = h.group("h") == "1" or (h.group("word") or "").lower() == "first"
+        month = 1 if first_half else 7
         return ParsedDate(
             _safe_date(year, month, 1, field, raw),
             "half",
@@ -547,6 +619,14 @@ def norm_date_detail(raw: Any, *, field: str = "date") -> ParsedDate:
             _safe_date(int(text), 1, 1, field, raw),
             "year",
             f"{field} given only as year {text}; stored as January 1",
+        )
+
+    # Checked last, as a fallback rather than an early gate: "H1 2026" starts with
+    # a qualifier the unanchored pattern also matches, so gating on it up front
+    # would swallow perfectly parseable dates before the format branches ran.
+    if _UNANCHORED.match(text):
+        return ParsedDate(
+            None, None, f"{field} stated as {text!r} with no year to anchor it; left unset"
         )
 
     raise NormalizationError(field, raw, "unrecognized date format")

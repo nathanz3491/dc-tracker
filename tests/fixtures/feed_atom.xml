@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Microsoft News</title>
+  <entry>
+    <title>Microsoft announces $3.3 billion data center investment in Mount Pleasant</title>
+    <link rel="alternate" href="https://news.microsoft.com/2026/07/mount-pleasant-investment/"/>
+    <link rel="edit" href="https://news.microsoft.com/wp-json/edit/1"/>
+    <published>2026-07-19T11:00:00Z</published>
+  </entry>
+  <entry>
+    <title>Microsoft Teams adds new meeting features</title>
+    <link rel="alternate" href="https://news.microsoft.com/2026/07/teams-features/"/>
+    <published>2026-07-18T11:00:00Z</published>
+  </entry>
+</feed>

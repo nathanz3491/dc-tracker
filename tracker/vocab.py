@@ -81,7 +81,10 @@ EventType = Literal[
 #: marker but `source.source_type` is a closed enum without one AND a `source`
 #: row requires a project_id — on a fetch failure there is no project. So URL
 #: outcomes live in their own table with their own vocabulary.
+#: `discovered` comes first because it is the entry state: a feed surfaced the URL
+#: and nothing has read it yet. Every other value is a terminal outcome.
 URL_STATUSES: Final[tuple[str, ...]] = (
+    "discovered",
     "ok",
     "fetch_error",
     "parse_error",
@@ -89,6 +92,9 @@ URL_STATUSES: Final[tuple[str, ...]] = (
     "no_project",
     "skipped",
 )
+
+#: The one status that means "there is work to do here".
+PENDING_URL_STATUS: Final[str] = "discovered"
 
 # --- project fields --------------------------------------------------------
 #: Canonical order for the 12 tracked PRD fields. Used to render `source.fields`

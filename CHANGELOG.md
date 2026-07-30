@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Article discovery.** `tracker discover` polls the RSS/Atom feeds and sitemaps
+  in `seed/feeds.toml`, keyword-filters headlines in two tiers (topic + project
+  signal), and queues matches for triage. `tracker queue` lists and drops
+  candidates; `tracker ingest crawl --from-queue` drains them. This closes the gap
+  where nothing in the system could find an article to read — the database only
+  ever held what an operator typed in by hand.
+- Migration `0003_discovery_queue`: a `discovered` status on `ingest_url` plus
+  `title`, `feed` and `published_at`, so a candidate can be judged from its
+  headline before spending an LLM call on it. Rebuilds the table, since SQLite
+  cannot alter a CHECK constraint.
+- Feed parsing uses stdlib `xml.etree` and `tomllib` — no new dependency.
+
+### Changed
+
+- Hedged dates now resolve instead of vanishing: `late 2027` → 2027-10-01 at
+  quarter precision, `H1 2027` → half precision, `by 2028` → year precision, each
+  with a note recording the original phrasing. Only genuinely unanchored phrasing
+  (`next spring`, `soon`) and directional hedges (`before 2028`) stay NULL. This
+  was discarding most of `expected_online`.
+
 ### Fixed
 
 - `migrations/`, the prompt files and the article cache are now located relative

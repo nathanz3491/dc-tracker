@@ -53,11 +53,12 @@ def test_migrations_are_found_from_an_unrelated_directory(tmp_path: Path, monkey
     monkeypatch.chdir(tmp_path)
     found = migrations_dir()
     assert found.is_dir(), f"{found} should exist regardless of cwd"
-    assert [m.version for m in discover_migrations()] == [1, 2]
+    expected = [m.version for m in discover_migrations()]
+    assert expected, "no migrations discovered"
 
     engine, applied = init_db(tmp_path / "elsewhere.db")
-    assert applied == [1, 2]
-    assert schema_version(engine) == 2
+    assert applied == expected
+    assert schema_version(engine) == expected[-1]
 
 
 def test_install_root_is_independent_of_cwd(tmp_path: Path, monkeypatch):
@@ -105,17 +106,22 @@ def test_migrations_split_into_expected_statement_counts():
     assert len(by_name["init"]) == 11
     # 0002: event + 2 indexes
     assert len(by_name["add_events"]) == 3
+    # 0003: rebuild ingest_url (create, copy, drop, rename) + 2 indexes
+    assert len(by_name["discovery_queue"]) == 6
 
 
 # --- Applying migrations ----------------------------------------------------
 
 
 def test_init_db_applies_then_is_idempotent(db_path: Path):
+    # Derived rather than hardcoded, so adding a migration does not require
+    # editing this test -- contiguity and ordering are asserted separately.
+    expected = [m.version for m in discover_migrations()]
     _, first = init_db(db_path)
-    assert first == [1, 2]
+    assert first == expected
     engine, second = init_db(db_path)
     assert second == [], "re-running init must apply nothing"
-    assert schema_version(engine) == 2
+    assert schema_version(engine) == expected[-1]
 
 
 def test_modified_applied_migration_is_refused(tmp_path: Path):
@@ -131,6 +137,68 @@ def test_modified_applied_migration_is_refused(tmp_path: Path):
     path.write_text("CREATE TABLE a (id INTEGER PRIMARY KEY, extra TEXT);", encoding="utf-8")
     with pytest.raises(MigrationError, match="modified after it was applied"):
         run_migrations(engine, discover_migrations(mig_dir))
+
+
+def test_0003_upgrades_an_existing_database_without_losing_rows(tmp_path: Path):
+    """0003 rebuilds ingest_url via DROP TABLE, so the copy step must be right.
+
+    Exercises the real upgrade path — apply up to v2, write a row, then migrate —
+    rather than only the fresh-install path that every other test takes.
+    """
+    migrations = discover_migrations()
+    engine = make_engine(tmp_path / "upgrade.db")
+    run_migrations(engine, [m for m in migrations if m.version <= 2])
+
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO ingest_url (url, run_id, status, attempts, error) "
+                "VALUES ('https://a.test/1', 'r1', 'ok', 2, 'none')"
+            )
+        )
+
+    assert run_migrations(engine, migrations) == [3]
+
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text("SELECT url, run_id, status, attempts, error, title FROM ingest_url")
+        ).all()
+        assert rows == [("https://a.test/1", "r1", "ok", 2, "none", None)]
+
+        # Indexes are dropped along with the old table and must be recreated.
+        indexes = {
+            r[0]
+            for r in conn.execute(
+                text(
+                    "SELECT name FROM sqlite_master WHERE type='index' "
+                    "AND tbl_name='ingest_url' AND name NOT LIKE 'sqlite_%'"
+                )
+            )
+        }
+        assert indexes == {"ix_ingest_url_status", "ix_ingest_url_published_at"}
+
+    # And the whole point of the migration: the new status is now accepted.
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO ingest_url (url, run_id, status, title, feed) "
+                "VALUES ('https://b.test/2', 'r2', 'discovered', 'A headline', 'dcd')"
+            )
+        )
+
+
+def test_discovered_status_was_rejected_before_0003(tmp_path: Path):
+    """Confirms the migration is what enables it, not something else."""
+    migrations = discover_migrations()
+    engine = make_engine(tmp_path / "old.db")
+    run_migrations(engine, [m for m in migrations if m.version <= 2])
+    with engine.begin() as conn, pytest.raises(IntegrityError):
+        conn.execute(
+            text(
+                "INSERT INTO ingest_url (url, run_id, status) "
+                "VALUES ('https://c.test/3', 'r3', 'discovered')"
+            )
+        )
 
 
 def test_open_db_rejects_uninitialized_file(tmp_path: Path):

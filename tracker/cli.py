@@ -193,6 +193,16 @@ def ingest_crawl(
         Path | None,
         typer.Option("--urls", help="File with one article URL per line; # comments allowed."),
     ] = None,
+    from_queue: Annotated[
+        bool,
+        typer.Option(
+            "--from-queue", help="Crawl what `tracker discover` queued instead of a file."
+        ),
+    ] = False,
+    limit: Annotated[
+        int | None,
+        typer.Option("--limit", help="With --from-queue, take at most this many candidates."),
+    ] = None,
     prompt_name: Annotated[
         str, typer.Option("--prompt", help="Prompt name or path, e.g. extract-v1.")
     ] = "extract-v1",
@@ -240,17 +250,38 @@ def ingest_crawl(
         console.print("[green]ok[/green]")
         return
 
-    if urls is None:
-        _fail("--urls is required (or pass --check to test connectivity)")
+    if from_queue and urls is not None:
+        _fail("pass either --urls or --from-queue, not both")
         return
-    if not urls.is_file():
-        _fail(f"no such file: {urls}")
+    if not from_queue and urls is None:
+        _fail("pass --urls FILE, or --from-queue, or --check to test connectivity")
         return
 
-    url_list = crawl.read_urls(urls)
-    if not url_list:
-        _fail(f"{urls} contains no http(s) URLs")
-        return
+    engine, _ = init_db(_db_path())
+    source_label = "queue"
+
+    if from_queue:
+        from tracker.ingest import discover as disc
+
+        with session_scope(engine, commit=False) as session:
+            url_list = [row.url for row in disc.pending(session, limit=limit)]
+        if not url_list:
+            console.print(
+                "[green]queue is empty[/green] — run `tracker discover` to look for articles"
+            )
+            return
+        # A queued URL is `discovered`, not `ok`, so crawl would process it
+        # anyway; forcing makes that explicit and independent of the skip rule.
+        force = True
+    else:
+        if not urls.is_file():
+            _fail(f"no such file: {urls}")
+            return
+        url_list = crawl.read_urls(urls)
+        if not url_list:
+            _fail(f"{urls} contains no http(s) URLs")
+            return
+        source_label = urls.name
 
     # Resolved before any fetching, so a missing key fails immediately rather
     # than after paying for a page load per URL.
@@ -266,8 +297,8 @@ def ingest_crawl(
 
         escalate = Crawl4AIFetcher(settings)
 
-    engine, _ = init_db(_db_path())
     cache_dir = None if no_cache else install_root() / ".cache" / "articles"
+    console.print(f"[dim]crawling {len(url_list)} URL(s) from {source_label}[/dim]")
 
     with session_scope(engine) as session:
         report = crawl.run(
@@ -282,7 +313,7 @@ def ingest_crawl(
             cache_dir=cache_dir,
         )
 
-    _print_report(report, title=f"ingest crawl: {urls.name}{' (dry run)' if dry_run else ''}")
+    _print_report(report, title=f"ingest crawl: {source_label}{' (dry run)' if dry_run else ''}")
 
 
 @ingest_app.command("pjm")
@@ -581,6 +612,136 @@ def stats() -> None:
             console.print(table)
 
 
+@app.command()
+def discover(
+    feeds: Annotated[
+        Path | None, typer.Option("--feeds", help="Feed config TOML. Defaults to seed/feeds.toml.")
+    ] = None,
+    since_days: Annotated[
+        int, typer.Option("--since-days", help="Ignore articles older than this. 0 for no limit.")
+    ] = 60,
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="Show what would be queued without writing.")
+    ] = False,
+    show: Annotated[
+        bool, typer.Option("--show/--no-show", help="List the candidates found.")
+    ] = True,
+) -> None:
+    """Poll news feeds for candidate articles and queue them for crawling.
+
+    Nothing is fetched or sent to an LLM here — matches land in the queue with
+    their headline so you can triage them with `tracker queue` first.
+    """
+    from tracker.ingest import discover as disc
+
+    engine, _ = init_db(_db_path())
+    try:
+        with session_scope(engine) as session:
+            report, candidates = disc.run(
+                session,
+                feeds_path=feeds,
+                since_days=since_days or None,
+                dry_run=dry_run,
+            )
+    except disc.DiscoverError as exc:
+        _fail(str(exc))
+        return
+
+    _print_report_rows(
+        report.as_rows(),
+        title=f"discover{' (dry run)' if dry_run else ''}",
+        warn={"feeds failed"},
+    )
+
+    for name, reason in report.failures:
+        err.print(f"[yellow]feed {name}[/yellow]: {reason}")
+
+    if show and candidates:
+        table = Table(title="candidates", header_style="bold", title_justify="left", box=TABLE_BOX)
+        table.add_column("published")
+        table.add_column("feed")
+        table.add_column("headline")
+        for candidate in sorted(
+            candidates, key=lambda c: (c.published_at or utcnow_placeholder(), c.url)
+        ):
+            table.add_row(
+                str(candidate.published_at or NA)[:10],
+                candidate.feed,
+                (candidate.title or candidate.url)[:96],
+            )
+        console.print(table)
+
+    if report.queued and not dry_run:
+        console.print(
+            "\n[dim]next:[/dim] tracker queue        [dim]# review what was found[/dim]\n"
+            "[dim]then:[/dim] tracker ingest crawl --from-queue"
+        )
+
+
+def utcnow_placeholder():
+    """Sort key for a candidate with no publication date: treat it as newest."""
+    from tracker.models import utcnow
+
+    return utcnow()
+
+
+@app.command()
+def queue(
+    limit: Annotated[int, typer.Option("--limit", help="Rows to show.")] = 40,
+    drop: Annotated[
+        bool, typer.Option("--drop", help="Delete the listed candidates instead of showing them.")
+    ] = False,
+    url: Annotated[
+        list[str] | None,
+        typer.Option("--url", help="Restrict --drop to these URLs. Repeatable."),
+    ] = None,
+) -> None:
+    """Show articles discovery has queued but nothing has crawled yet."""
+    from tracker.ingest import discover as disc
+
+    if drop:
+        engine, _ = init_db(_db_path())
+        with session_scope(engine) as session:
+            removed = disc.drop_pending(session, list(url) if url else None)
+        console.print(f"dropped {removed} queued candidate(s)")
+        return
+
+    engine = _read_engine()
+    with session_scope(engine, commit=False) as session:
+        rows = disc.pending(session, limit=limit)
+        total = len(disc.pending(session))
+        if not rows:
+            console.print(
+                "[green]queue is empty[/green] — run `tracker discover` to look for articles"
+            )
+            return
+
+        table = Table(
+            title=f"{total} queued candidate(s)",
+            header_style="bold",
+            title_justify="left",
+            box=TABLE_BOX,
+        )
+        table.add_column("published")
+        table.add_column("feed")
+        table.add_column("headline")
+        table.add_column("url")
+        for row in rows:
+            table.add_row(
+                str(row.published_at or NA)[:10],
+                row.feed or NA,
+                (row.title or NA)[:70],
+                row.url[:60],
+            )
+        console.print(table)
+        if total > len(rows):
+            console.print(f"[dim]showing {len(rows)} of {total}; --limit to see more[/dim]")
+        console.print(
+            "\n[dim]crawl them:[/dim] tracker ingest crawl --from-queue\n"
+            "[dim]drop one:  [/dim] tracker queue --drop --url <URL>"
+        )
+
+
 @app.command("export")
 def export_cmd(
     fmt: Annotated[str, typer.Argument(help="md | csv | json")],
@@ -787,18 +948,26 @@ def verify_coverage(
             console.print(f"  [red]missing[/red] {entry}")
 
 
-def _print_report(report, *, title: str) -> None:
+def _print_report_rows(
+    rows: list[tuple[str, int]], *, title: str, warn: set[str] | None = None
+) -> None:
+    bad = {"rejected", "fetch errors", "parse errors"}
+    caution = {"duplicates flagged", "field conflicts"} | (warn or set())
     table = Table(title=title, header_style="bold", title_justify="left", box=TABLE_BOX)
     table.add_column("outcome")
     table.add_column("count", justify="right")
-    for label, count in report.as_rows():
+    for label, count in rows:
         style = None
-        if count and label in {"rejected", "fetch errors", "parse errors"}:
+        if count and label in bad:
             style = "red"
-        elif count and label in {"duplicates flagged", "field conflicts"}:
+        elif count and label in caution:
             style = "yellow"
         table.add_row(label, str(count), style=style)
     console.print(table)
+
+
+def _print_report(report, *, title: str) -> None:
+    _print_report_rows(report.as_rows(), title=title)
 
     if report.rejected:
         err.print(

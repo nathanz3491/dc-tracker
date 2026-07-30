@@ -159,6 +159,14 @@ class IngestUrl(Base):
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     error: Mapped[str | None] = mapped_column(Text)
     content_sha1: Mapped[str | None] = mapped_column(Text)
+
+    # Discovery metadata: NULL for a URL supplied by hand via --urls. The title is
+    # what makes `tracker queue` triageable — a bare URL is not enough to judge
+    # whether an article is worth an LLM call.
+    title: Mapped[str | None] = mapped_column(Text)
+    feed: Mapped[str | None] = mapped_column(Text)
+    published_at: Mapped[dt.datetime | None] = mapped_column(DateTime)
+
     first_seen_at: Mapped[dt.datetime] = mapped_column(
         DateTime, nullable=False, server_default=_NOW
     )
@@ -171,6 +179,7 @@ class IngestUrl(Base):
         CheckConstraint(sql_in("status", URL_STATUSES), name="ck_ingest_url_status"),
         CheckConstraint("attempts >= 0", name="ck_ingest_url_attempts"),
         Index("ix_ingest_url_status", "status"),
+        Index("ix_ingest_url_published_at", "published_at"),
     )
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
