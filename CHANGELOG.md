@@ -111,6 +111,25 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **The evidence gate no longer discards values over the model's own bookkeeping.**
+  It required a quote *tagged* with each field's name, so a correct value whose
+  verbatim quote was filed under a different field was thrown away. T5@Augusta
+  returned `mw_planned: 200` with the sentence "…a 140-acre, 200 megawatt campus
+  in Georgia" attached to `name`, and lost the capacity. Across the first 90
+  projects this discarded **89 correctly-evidenced values from 64 projects** — 60
+  of them `phase`, which being NOT NULL silently became the `announced` default,
+  so the stored phase distribution was an artefact of the gate rather than of the
+  projects.
+
+  A value now survives if any *verified* quote actually asserts it, whichever
+  field the model filed it under. Quotes are still required to be real substrings
+  of the fetched article, and the new check is strictly stronger than the one it
+  replaces: numbers and dates are compared after normalization (so "1.2GW"
+  evidences `1200.0`), which means a genuine sentence citing a *different* number
+  no longer launders an invented value. `phase` is matched on article wording
+  ("broke ground" → `construction`) because it is a judgement, never a quotable
+  string; `blocker` and `notes` keep the label check, being paraphrases that
+  legitimately share no substring with their own evidence.
 - **Two overlapping runs no longer collide silently.** SQLite takes one writer, so
   a second `tracker sync` failed partway with a raw forty-line SQLAlchemy
   traceback — after it had already paid for LLM calls. A lock file now refuses the

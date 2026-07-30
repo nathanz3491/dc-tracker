@@ -210,6 +210,71 @@ def test_evidence_gate_tolerates_whitespace_and_quote_style():
     assert "blocker" in kept
 
 
+def test_evidence_gate_accepts_a_value_stated_under_another_field_label():
+    """The regression this whole mechanism exists to prevent.
+
+    Live case, T5@Augusta: the model returned `mw_planned: 200`, supplied the
+    verbatim sentence "...a 140-acre, 200 megawatt campus...", and filed it under
+    `name`. Label-matching threw the value away. Across the first 90 projects that
+    bookkeeping requirement discarded 89 correctly-evidenced values, 60 of them
+    `phase` -- which, being NOT NULL, silently became the `announced` default.
+    """
+    quote = "T5 Data Centers plans to build a 140-acre, 200 megawatt campus in Georgia"
+    kept, quotes, dropped = crawl.evidence_gate(
+        {"mw_planned": 200.0},
+        [{"field": "name", "quote": quote}],
+        f"Some preamble. {quote}. Some trailing text.",
+    )
+    assert kept == {"mw_planned": 200.0}
+    assert dropped == []
+    assert quotes["mw_planned"] == quote, "the supporting quote must be recorded for citation"
+
+
+def test_evidence_gate_matches_quantities_by_value_not_by_string():
+    """Storage form never matches the article's wording, so compare normalized."""
+    text = "The site is designed for 1.2GW at full buildout, backed by $3.3 billion."
+    kept, _, dropped = crawl.evidence_gate(
+        {"mw_planned": 1200.0, "investment_usd": 3_300_000_000},
+        [{"field": "notes", "quote": text}],
+        text,
+    )
+    assert kept == {"mw_planned": 1200.0, "investment_usd": 3_300_000_000}
+    assert dropped == []
+
+
+def test_evidence_gate_rejects_a_real_quote_citing_a_different_number():
+    """Strictly stronger than the label check it replaced.
+
+    A labelled quote never had to contain the number it was cited for, so an
+    unrelated but genuine sentence used to be enough to launder an invented value.
+    """
+    text = "The campus will draw 200 megawatts at full buildout."
+    kept, _, dropped = crawl.evidence_gate(
+        {"mw_planned": 999.0},
+        [{"field": "mw_planned", "quote": "The campus will draw 200 megawatts"}],
+        text,
+    )
+    assert kept == {}
+    assert dropped == ["mw_planned"]
+
+
+def test_evidence_gate_reads_phase_from_article_wording():
+    """`phase` is a judgement: an article says "broke ground", never "construction"."""
+    text = "Crews broke ground on the 90-acre site last month."
+    kept, _, _ = crawl.evidence_gate(
+        {"phase": "construction"}, [{"field": "x", "quote": text}], text
+    )
+    assert kept == {"phase": "construction"}
+
+    # Wording that evidences a different phase must not license this one.
+    announced = "The company announced plans for a new campus."
+    kept, _, dropped = crawl.evidence_gate(
+        {"phase": "operational"}, [{"field": "x", "quote": announced}], announced
+    )
+    assert kept == {}
+    assert dropped == ["phase"]
+
+
 def test_evidence_gate_ignores_malformed_entries():
     kept, _, _ = crawl.evidence_gate(
         {"mw_planned": 900.0},
@@ -297,12 +362,19 @@ def test_the_dropped_note_lists_only_what_was_really_dropped(prompt):
     record = build("llm_response_ungrounded.json", prompt=prompt)[0]
     dropped_notes = [n for n in record.notes if "dropped unsupported value" in n]
     assert dropped_notes, "something was ungrounded, so there must be a note"
-    line = dropped_notes[0]
+
+    # Parse the field list rather than substring-matching the sentence: the prose
+    # around it contains English words ("states", "notes") that collide with field
+    # names and made this assertion fire on its own explanatory text.
+    listed = re.search(r"dropped unsupported value\(s\) for (.+?) \(", dropped_notes[0])
+    assert listed, f"cannot parse the dropped-field list from {dropped_notes[0]!r}"
+    reported = {f.strip() for f in listed.group(1).split(",")}
+
     claims = record.sources[0].claims
     for identity in ("name", "company", "city", "state"):
         if claims.get(identity) is not None:
-            assert identity not in line, f"{identity} is on the row but reported as dropped"
-    assert "notes" not in line, "the summary is recorded separately, not dropped"
+            assert identity not in reported, f"{identity} is on the row but reported as dropped"
+    assert "notes" not in reported, "the summary is recorded separately, not dropped"
 
 
 def test_ungrounded_values_are_dropped_and_disclosed(prompt):

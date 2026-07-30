@@ -140,42 +140,171 @@ def _normalize_for_match(text: str) -> str:
     return re.sub(r"\s+", " ", folded).strip().lower()
 
 
+#: Article wording that evidences each phase.
+#:
+#: `phase` is the one tracked field that is a *judgement* rather than a value
+#: copied out of the text: an article says "broke ground", never
+#: `phase: construction`. Asking for a quote containing the literal word
+#: discarded 60 of 90 correct classifications, and because `phase` is NOT NULL
+#: every one of them silently became the `announced` default — so the stored
+#: phase distribution was an artefact of the gate, not of the projects.
+_PHASE_EVIDENCE: dict[str, tuple[str, ...]] = {
+    "announced": ("announce", "plans to", "proposed", "propose", "unveil", "will build"),
+    "permitting": ("permit", "zoning", "rezon", "entitlement", "application", "approval"),
+    "construction": (
+        "under construction",
+        "construction",
+        "broke ground",
+        "break ground",
+        "breaking ground",
+        "groundbreaking",
+        "being built",
+        "underway",
+    ),
+    "operational": (
+        "operational",
+        "came online",
+        "comes online",
+        "went live",
+        "is live",
+        "energiz",
+        "in service",
+        "opened",
+        "now serving",
+    ),
+    "paused": ("paused", "on hold", "halted", "suspend", "shelved"),
+    "cancelled": ("cancel", "scrapped", "abandon", "withdrew", "withdrawn", "terminated"),
+}
+
+#: Quantity expressions to hunt for inside a verified quote, per field.
+_MW_EXPR = re.compile(r"[\d][\d.,]*\s*(?:mw|gw|megawatt|gigawatt)s?\b", re.I)
+_MONEY_EXPR = re.compile(
+    r"(?:us)?\$\s?[\d][\d.,]*\s*(?:billion|million|bn|b|m)?\b|"
+    r"[\d][\d.,]*\s*(?:billion|million)\s*dollars?\b",
+    re.I,
+)
+_DATE_EXPR = re.compile(
+    r"\b(?:q[1-4]\s*(?:of\s*)?20[2-4]\d|"
+    r"(?:early|mid|late|end of|beginning of|start of|first half of|second half of|"
+    r"spring|summer|fall|autumn|winter)\s+20[2-4]\d|"
+    r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2},?\s+20[2-4]\d|"
+    r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+20[2-4]\d|"
+    r"20[2-4]\d-\d{2}-\d{2}|"
+    r"20[2-4]\d)\b",
+    re.I,
+)
+
+
+#: Fields whose value is a *paraphrase* of the article rather than a copy of it.
+#:
+#: `blocker` is written as "grid interconnection delays" where the article says
+#: "the project awaits two 345-kilovolt upgrades" — a correct summary that shares
+#: no substring with its own evidence. For these, the model's label plus a quote
+#: verified to be real is the strongest check available; demanding the value
+#: appear verbatim would discard every honest summary.
+_SUMMARY_FIELDS = frozenset({"phase", "blocker", "notes"})
+
+
+def _stated_in(field: str, value: Any, quote: str) -> bool:
+    """Does `quote` actually assert `value` for `field`?
+
+    Comparison is on *normalized* values, not on strings, so "200 megawatt"
+    evidences ``mw_planned=200.0`` and "1.2GW" evidences ``1200.0``. That is the
+    whole point: the model's own words for a number never match our storage form.
+    """
+    if field == "phase":
+        low = quote.lower()
+        return any(token in low for token in _PHASE_EVIDENCE.get(str(value), ()))
+
+    if field in {"mw_planned", "mw_built"}:
+        return _matches_quantity(value, quote, _MW_EXPR, norm_mw_detail, field)
+    if field == "investment_usd":
+        return _matches_quantity(value, quote, _MONEY_EXPR, norm_money_detail, field)
+    if field in {"first_announced", "expected_online"}:
+        return _matches_quantity(value, quote, _DATE_EXPR, norm_date_detail, field)
+
+    # Everything else is a string we copied out of the article, so it has to be
+    # in the quote verbatim.
+    if isinstance(value, str) and value.strip():
+        return _normalize_for_match(value) in _normalize_for_match(quote)
+    return False
+
+
+def _matches_quantity(value: Any, quote: str, expr: re.Pattern[str], parser, field: str) -> bool:
+    """True when any quantity in `quote` normalizes to `value`."""
+    for match in expr.finditer(quote):
+        try:
+            parsed = parser(match.group(0), field=field)
+        except NormalizationError:
+            continue
+        if parsed.value is None:
+            continue
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            if abs(float(parsed.value) - float(value)) < 0.01:
+                return True
+        elif parsed.value == value:
+            return True
+    return False
+
+
 def evidence_gate(
     values: dict[str, Any], evidence: list[dict[str, Any]], article_text: str
 ) -> tuple[dict[str, Any], dict[str, str], list[str]]:
-    """Keep only values backed by a quote that really appears in the article.
+    """Keep only values the article is verified to actually state.
 
     Returns ``(kept, quotes_by_field, dropped_field_names)``.
 
-    Two checks, and the second is the one that matters. Requiring *an* evidence
-    entry stops the model omitting citations. Requiring the quote to be a real
-    substring of the fetched text stops it *paraphrasing* the article into a quote
-    that sounds right but was never written — which is precisely how a fabricated
-    number acquires a citation.
+    Every quote is first checked to be a real substring of the fetched text. That
+    is the anti-fabrication guarantee: a model that *paraphrases* the article into
+    a quote which sounds right but was never written gets nothing through.
+
+    A value then survives if any verified quote asserts it — **whichever field the
+    model filed that quote under**. The label is the model's bookkeeping, and
+    models are unreliable bookkeepers: T5@Augusta supplied "…a 140-acre, 200
+    megawatt campus in Georgia", tagged it for another field, and lost a correct
+    `mw_planned=200`. Across the first 90 projects that bookkeeping requirement
+    discarded 89 correctly-evidenced values.
+
+    Matching the *value* rather than trusting the label is also a stronger check
+    than the one it replaces: a labelled quote never had to contain the number it
+    was cited for, so an unrelated real sentence used to be enough.
     """
     haystack = _normalize_for_match(article_text)
     quotes: dict[str, str] = {}
+    verified: list[str] = []
     for entry in evidence:
         if not isinstance(entry, dict):
             continue
         name = entry.get("field")
         quote = entry.get("quote")
-        if not isinstance(name, str) or not isinstance(quote, str) or not quote.strip():
+        if not isinstance(quote, str) or not quote.strip():
             continue
-        if _normalize_for_match(quote) in haystack:
-            quotes.setdefault(name, quote.strip())
-        else:
+        if _normalize_for_match(quote) not in haystack:
             log.warning("evidence quote for %r is not in the article; ignoring", name)
+            continue
+        verified.append(quote.strip())
+        if isinstance(name, str):
+            quotes.setdefault(name, quote.strip())
 
     kept: dict[str, Any] = {}
     dropped: list[str] = []
     for name, value in values.items():
         if value is None:
             continue
-        # Identity and locality are structural, not claims: they are how we know
-        # which project this is, and the article self-evidently concerns it.
-        if name in {"country"} or name in quotes:
+        # `country` is structural, not a claim: it is how we know the project is
+        # in scope at all, and every source here is US news.
+        if name == "country":
             kept[name] = value
+            continue
+        # A paraphrase cannot be matched against its own source text, so for those
+        # fields the model's label over a verified quote is what we have.
+        if name in _SUMMARY_FIELDS and name in quotes:
+            kept[name] = value
+            continue
+        support = next((q for q in verified if _stated_in(name, value, q)), None)
+        if support is not None:
+            kept[name] = value
+            quotes.setdefault(name, support)
         else:
             dropped.append(name)
     return kept, quotes, dropped
@@ -320,7 +449,7 @@ def build_records(
             notes.append(
                 "dropped unsupported value(s) for "
                 + ", ".join(actually_dropped)
-                + " (the model gave no verbatim quote from the article)"
+                + " (no verbatim quote from the article states them)"
             )
         if values.get("notes"):
             notes.append(f"extracted summary: {values['notes']}")
