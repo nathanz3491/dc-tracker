@@ -34,6 +34,8 @@ from tracker.db import (
     schema_version,
     session_scope,
 )
+from tracker.gaps import measure as measure_gaps
+from tracker.gaps import worst as worst_gaps
 from tracker.models import Project, Source
 from tracker.vocab import PHASES
 
@@ -674,6 +676,53 @@ def stats() -> None:
             for value, count in rows:
                 table.add_row(str(value), str(count))
             console.print(table)
+
+
+@app.command()
+def gaps() -> None:
+    """Per-field coverage, measured against the rows where the field applies.
+
+    A NULL is not always a gap. `mw_built` on an announced project is correct,
+    and most projects genuinely have no `blocker` — so those are reported against
+    a narrower denominator, or as unmeasurable, rather than as a low score that
+    sends you looking for facts that do not exist.
+    """
+    engine = _read_engine()
+    with session_scope(engine, commit=False) as session:
+        total = session.scalar(select(func.count()).select_from(Project)) or 0
+        if not total:
+            console.print("[yellow]database is empty[/yellow] — run `tracker sync` first")
+            return
+
+        rows = measure_gaps(session)
+        table = Table(header_style="bold", box=TABLE_BOX, title_justify="left")
+        table.add_column("field")
+        table.add_column("filled", justify="right")
+        table.add_column("of", justify="right")
+        table.add_column("", justify="right")
+        table.add_column("denominator / why", style="dim")
+
+        for gap in rows:
+            pct = gap.pct
+            if pct is None:
+                shown, style = "n/a", "dim"
+            else:
+                shown = f"{pct}%"
+                style = "green" if pct >= 90 else "yellow" if pct >= 50 else "red"
+            table.add_row(
+                gap.field,
+                str(gap.filled),
+                str(gap.applicable),
+                f"[{style}]{shown}[/{style}]",
+                gap.note or "all projects",
+            )
+        console.print(table)
+
+        headroom = worst_gaps(rows)
+        if headroom:
+            console.print("\n[bold]most missing rows[/bold] (measurable fields only)")
+            for gap in headroom:
+                console.print(f"  {gap.field:16} {gap.missing} of {gap.applicable} to fill")
 
 
 @app.command()

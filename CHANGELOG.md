@@ -55,6 +55,14 @@ initial build of the v1 PRD.
   been re-read recently, which is how project data gets *updated* rather than only
   added. Placeholder URLs are excluded, being unfetchable by definition.
 - `tracker list --limit N`, which reports the total it capped ("2 of 3").
+- **`tracker gaps`** and `tracker/gaps.py` — per-field coverage measured against
+  the rows where the field can legitimately be set, not against every project.
+  Raw NULL counts pointed effort at work that cannot succeed: 61 announced
+  projects were being counted as `mw_built` misses when nothing is built on any of
+  them, and `blocker` looked like a 2%-covered backlog when the truth is that
+  most projects have no blocker. Fields whose absence carries no information are
+  reported as unmeasurable rather than as a low score, and the report closes with
+  the measurable fields that have the most rows left to fill.
 - **The queue is prioritised toward depth.** A queued article covering a project
   already tracked becomes a SECOND source, which fills fields one article cannot
   and lifts confidence from 2 to 3; draining oldest-first instead just grew the
