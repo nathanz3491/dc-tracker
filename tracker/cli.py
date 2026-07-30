@@ -1066,6 +1066,154 @@ def ingest_geo(
 
 
 @app.command()
+def enrich(
+    project_id: Annotated[int, typer.Argument(help="Which project to complete.")],
+    max_rounds: Annotated[
+        int, typer.Option("--max-rounds", help="Stop after this many harvest+extract passes.")
+    ] = 6,
+    max_articles: Annotated[int, typer.Option("--max-articles", help="Articles per round.")] = 25,
+    skip_search: Annotated[
+        bool, typer.Option("--skip-search", help="Do not use the Google search API.")
+    ] = False,
+    skip_archive: Annotated[
+        bool, typer.Option("--skip-archive", help="Do not sweep the sitemap archives.")
+    ] = False,
+    browser: Annotated[
+        bool,
+        typer.Option(
+            "--browser", help="Escalate blocked pages to Crawl4AI. Needs the 'crawl' extra."
+        ),
+    ] = False,
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="Harvest and report without writing or extracting.")
+    ] = False,
+) -> None:
+    """Throw every retrieval method at ONE project until the rounds stop paying.
+
+    `tracker sync` spreads a budget across the database. This does the opposite:
+    it derives what can be derived, drains the queue and the failed URLs, sweeps
+    the sitemap archives, runs gap-targeted web searches if a key is configured,
+    re-reads the project's own citations, then extracts and repeats while rounds
+    are still filling fields.
+
+    Expensive on purpose. It stops when a round fills nothing new, not at a fixed
+    article count.
+    """
+    from tracker.ingest import enrich as enrich_mod
+    from tracker.ingest.fetch import Crawl4AIFetcher, MissingDependency
+
+    escalate = None
+    if browser:
+        try:
+            escalate = Crawl4AIFetcher(get_settings())
+        except MissingDependency as exc:
+            _fail(str(exc))
+            raise
+
+    engine, _ = init_db(_db_path())
+    try:
+        release_lock = acquire_write_lock(_db_path())
+    except AlreadyRunning as exc:
+        _fail(str(exc))
+        raise
+    atexit.register(release_lock)
+
+    census = _db_path().parent / "raw" / "census"
+    try:
+        with _explain_db_locks(), session_scope(engine, commit=not dry_run) as session:
+            report = enrich_mod.run(
+                session,
+                project_id,
+                census_dir=census if census.exists() else None,
+                escalate=escalate,
+                max_rounds=max_rounds,
+                max_articles=max_articles,
+                skip_search=skip_search,
+                skip_archive=skip_archive,
+                dry_run=dry_run,
+            )
+    except LookupError as exc:
+        _fail(str(exc))
+        raise
+
+    _render_enrich(report, dry_run=dry_run)
+
+
+def _render_enrich(report, *, dry_run: bool) -> None:
+    """Print an enrichment run so every claim in it can be audited."""
+    from tracker.gaps import FILLED, NOT_APPLICABLE
+
+    console.print(f"[bold]#{report.project_id}[/bold] {report.label}")
+    if dry_run:
+        console.print("[yellow]dry run[/yellow] — nothing written")
+
+    for name, why in report.skipped:
+        console.print(f"[yellow]{name} unavailable[/yellow]: {why}")
+
+    if report.rounds:
+        table = Table(header_style="bold", box=TABLE_BOX, title_justify="left")
+        table.add_column("round", justify="right")
+        for column in ("queue", "retry", "archive", "search", "refresh"):
+            table.add_column(column, justify="right")
+        table.add_column("read", justify="right")
+        table.add_column("filled")
+        for rnd in report.rounds:
+            found = {h.name: len(h.urls) for h in rnd.harvests}
+            table.add_row(
+                str(rnd.number),
+                *[
+                    str(found[c]) if c in found else NA
+                    for c in ("queue", "retry", "archive", "search", "refresh")
+                ],
+                str(rnd.articles_read),
+                ", ".join(rnd.fields_filled) or NA,
+            )
+        console.print(table)
+        console.print(
+            f"[dim]{NA} in a harvester column means it did not run that round. The archive "
+            "and the project's own citations are swept once — re-sweeping a fixed corpus "
+            "returns the same URLs for thousands of fetches.[/dim]"
+        )
+
+    fields = Table(header_style="bold", box=TABLE_BOX, title_justify="left")
+    fields.add_column("field")
+    fields.add_column("before")
+    fields.add_column("after")
+    before = {s.field: s for s in report.before}
+    for state in report.after:
+        was = before.get(state.field)
+        if state.status == FILLED:
+            shown = "[green]filled[/green]"
+        elif state.status == NOT_APPLICABLE:
+            shown = "[dim]n/a[/dim]"
+        else:
+            shown = "[red]missing[/red]"
+        fields.add_row(
+            state.field,
+            "filled" if was and was.status == FILLED else NA,
+            shown
+            + (f" [dim]{state.reason}[/dim]" if state.reason and state.status != FILLED else ""),
+        )
+    console.print(fields)
+
+    filled, attemptable = report.tracked_score()
+    console.print(
+        f"tracked fields: [bold]{filled} of {attemptable}[/bold] attemptable "
+        f"(of the 12; fields a null is correct for are excluded)"
+    )
+    if report.derived:
+        console.print(f"derived from Census: {', '.join(report.derived)}")
+    if report.gained:
+        console.print(f"[green]gained[/green]: {', '.join(report.gained)}")
+    console.print(
+        f"citations {report.sources_before} -> {report.sources_after}, "
+        f"confidence {report.confidence_before} -> {report.confidence_after}, "
+        f"{report.articles_read} article(s) read"
+    )
+    console.print(f"[dim]stopped: {report.stopped_because}[/dim]")
+
+
+@app.command()
 def gaps() -> None:
     """Per-field coverage, measured against the rows where the field applies.
 

@@ -243,6 +243,50 @@ tracker queue --failed        # what could not be read, grouped by host
 tracker sync --retry-failed   # re-attempt them
 ```
 
+### Completing one project, cost no object
+
+```bash
+tracker enrich 93 --dry-run     # what it would read, spending nothing
+tracker enrich 93
+```
+
+`tracker sync` spreads a budget across the whole database. `tracker enrich` inverts
+that: pick one project and recruit every retrieval method the system has, in rounds,
+until a round stops paying.
+
+Six harvesters, cheapest and most certain first, so an expensive one never runs for a
+field a free one would have filled:
+
+| harvester | cost | what it contributes |
+|---|---|---|
+| derive | free | `county`, `lat`, `lon` from Census data |
+| queue | free | already-discovered candidates whose slug names this project |
+| retry | fetch | this project's URLs that previously failed |
+| archive | fetch | sitemap sweep filtered to this project — the key-free search |
+| search | API | Google CSE, queried against this project's *own* gaps |
+| refresh | fetch | re-read its existing citations, which get edited |
+
+Each round harvests, extracts, re-measures, and repeats. It stops when a round fills
+nothing new, when no harvester has an unread article, or when every field is filled —
+not at a fixed article count. `--max-rounds` and `--max-articles` exist only so a bug
+cannot spend without limit.
+
+Search queries are **templates anchored on the project**, not LLM-invented: the
+project is already known, so there is nothing to infer, and an unanchored query like
+"data center investment billion" returns the industry rather than the site. Every
+query carries the quoted company and locality.
+
+`--dry-run` harvests and reports without fetching or extracting. That matters here
+specifically: `crawl.run(dry_run=True)` still fetches every page and still pays for
+every LLM call — it only declines to commit — so on the most expensive command in the
+tool, extraction is skipped outright instead.
+
+**Its reach is capped by the corpus, not by the budget.** Measured on a 94-project
+database with no search key: 17 projects had unread archive articles and 77 had none,
+because the configured archives simply never covered them. The two Google keys are
+both free and are what lifts that ceiling; without them, `enrich` on a project the
+trade press ignored will honestly report that it found nothing to read.
+
 ### Seeing where the data is thin
 
 ```bash

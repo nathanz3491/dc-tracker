@@ -609,6 +609,18 @@ class ProjectIdentity:
     name_tokens: tuple[str, ...]
 
 
+def _company_words(company: str | None) -> frozenset[str]:
+    """Every word that belongs to the operator's name, raw and normalized.
+
+    Both forms are needed: the raw name carries suffixes `company_key` strips, and
+    the key carries alias substitutions the raw name does not (Facebook -> meta).
+    """
+    from tracker.dedup import company_key
+
+    raw = re.split(r"[^a-z0-9]+", (company or "").lower())
+    return frozenset(w for w in [*raw, *company_key(company).split()] if w)
+
+
 def project_identities(session: Session) -> list[ProjectIdentity]:
     from sqlalchemy import select
 
@@ -634,12 +646,22 @@ def project_identities(session: Session) -> list[ProjectIdentity]:
                 # such a token adds no discriminating power: the company check has
                 # already passed, so re-matching it would accept any article by
                 # that operator anywhere.
+                #
+                # Excluded against the RAW company name, not only the normalized
+                # key. `company_key` strips corporate suffixes, so "STACK
+                # Infrastructure" keys to "stack" and left "infrastructure" looking
+                # distinctive in "STACK Infrastructure Hillsboro Campus" — while
+                # every STACK article's slug contains "stack-infrastructure". That
+                # made a company-wide piece ("raises $400 million", "expansion into
+                # Asia-Pacific") match one Hillsboro project. Any operator whose
+                # name ends in a stripped word — Infrastructure, Data Centers,
+                # Energy, Systems, Realty — leaked the same way.
                 name_tokens=tuple(
                     t
                     for t in re.split(r"[^a-z0-9]+", (row.name or "").lower())
                     if len(t) > 4
                     and t not in _GENERIC_NAME_TOKENS
-                    and t not in company_key(row.company).split()
+                    and t not in _company_words(row.company)
                 ),
             )
         )

@@ -123,6 +123,71 @@ def measure(session: Session, fields: tuple[str, ...] = REPORT_FIELDS) -> list[F
     return out
 
 
+#: Per-project applicability. Whole-database coverage uses a SQL predicate over
+#: many rows; for one project the same question is answered from the row itself,
+#: and the *reason* has to be reportable so an all-out enrichment run can say
+#: "this field cannot be filled" rather than "this field failed".
+#:
+#: Only `mw_built` is decidable this way. `blocker` and `customer` genuinely may
+#: not exist, but nothing on the row proves it, so they stay MISSING and the
+#: caller is told that a null may well be correct.
+_NOT_BUILT_PHASES: Final[frozenset[str]] = frozenset(
+    {"announced", "permitting", "paused", "cancelled"}
+)
+
+#: A null here is frequently the truth, so an enrichment run must not report
+#: failure when it comes back empty.
+OFTEN_ABSENT: Final[dict[str, str]] = {
+    "blocker": "most projects have no obstacle to report",
+    "customer": "a self-built campus has no external customer",
+}
+
+FILLED: Final = "filled"
+MISSING: Final = "missing"
+NOT_APPLICABLE: Final = "not_applicable"
+
+
+@dataclass(frozen=True)
+class FieldState:
+    """One field of one project: what it holds, and whether a null is a gap."""
+
+    field: str
+    value: object = None
+    status: str = MISSING
+    reason: str | None = None
+
+    @property
+    def is_gap(self) -> bool:
+        """True when this field is worth spending an LLM call on."""
+        return self.status == MISSING
+
+
+def for_project(project: Project, fields: tuple[str, ...] = REPORT_FIELDS) -> list[FieldState]:
+    """Field-by-field state for a single project.
+
+    Pure: takes the loaded row, touches no session. That keeps it usable both
+    before and after an enrichment round without re-querying.
+    """
+    out: list[FieldState] = []
+    for name in fields:
+        value = getattr(project, name, None)
+        if value is not None:
+            out.append(FieldState(name, value, FILLED))
+            continue
+        if name == "mw_built" and (project.phase or "") in _NOT_BUILT_PHASES:
+            out.append(
+                FieldState(
+                    name,
+                    None,
+                    NOT_APPLICABLE,
+                    f"phase is {project.phase} — nothing is built yet, so null is correct",
+                )
+            )
+            continue
+        out.append(FieldState(name, None, MISSING, OFTEN_ABSENT.get(name)))
+    return out
+
+
 def worst(gaps: list[FieldGap], limit: int = 3) -> list[FieldGap]:
     """The measurable fields with the most missing rows — where effort pays."""
     ranked = [g for g in gaps if g.measurable and g.missing]
@@ -130,4 +195,16 @@ def worst(gaps: list[FieldGap], limit: int = 3) -> list[FieldGap]:
     return ranked[:limit]
 
 
-__all__ = ["REPORT_FIELDS", "UNMEASURABLE", "FieldGap", "measure", "worst"]
+__all__ = [
+    "FILLED",
+    "MISSING",
+    "NOT_APPLICABLE",
+    "OFTEN_ABSENT",
+    "REPORT_FIELDS",
+    "UNMEASURABLE",
+    "FieldGap",
+    "FieldState",
+    "for_project",
+    "measure",
+    "worst",
+]

@@ -340,6 +340,7 @@ def run(
     *,
     data_dir: Path,
     dry_run: bool = False,
+    only_project_id: int | None = None,
 ) -> GeoReport:
     """Fill `county`, `lat` and `lon` from Census reference data.
 
@@ -347,6 +348,9 @@ def run(
     values land as claims on a citable source row and `source.fields` stays
     derived rather than asserted. All three columns are FILL_ONLY, so a value an
     article actually stated is never overwritten by a lookup.
+
+    `only_project_id` narrows the pass to one row, so a single-project command does
+    not silently rewrite the whole database as a side effect.
     """
     from tracker.ingest.records import IngestRecord, SourceRecord
     from tracker.models import Project, utcnow
@@ -355,7 +359,10 @@ def run(
     places = load_places(data_dir)
     report = GeoReport()
 
-    projects = list(session.scalars(select(Project).order_by(Project.id)))
+    stmt = select(Project).order_by(Project.id)
+    if only_project_id is not None:
+        stmt = stmt.where(Project.id == only_project_id)
+    projects = list(session.scalars(stmt))
     for project in projects:
         if project.county is not None and project.lat is not None:
             report.already_complete += 1

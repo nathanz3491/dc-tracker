@@ -79,6 +79,31 @@ initial build of the v1 PRD.
   Census row is a real, checkable citation but it is not testimony about the
   project; counting it would let one press release plus a lookup read as two
   independent domains and reach confidence 3.
+- **`tracker enrich ID`** and `tracker/ingest/enrich.py` — throws every retrieval
+  method at ONE project, in rounds, until a round stops paying. `tracker sync`
+  spreads a budget across the database; this inverts it for when you want one row
+  complete. Six harvesters run cheapest-first (derive → queue → retry → archive →
+  search → refresh) so an expensive one never runs for a field a free one fills,
+  and the loop stops on "a round filled nothing new", not at a fixed article count.
+
+  Search queries are templates anchored on the project's quoted company and
+  locality rather than LLM-generated: the project is already known, so there is
+  nothing to infer, and an unanchored "data center investment billion" returns the
+  industry instead of the site.
+
+  `--dry-run` harvests and reports **without fetching or extracting**.
+  `crawl.run(dry_run=True)` still fetches every page and still pays for every LLM
+  call — it only declines to commit — and on the most expensive command in the tool
+  a preview that bills you is a trap.
+
+  Fields a null is correct for are excluded from its score rather than counted as
+  failures, so a project with nothing built is not marked down for having no
+  `mw_built`. Measured ceiling on a 94-project database with no search key: 17
+  projects had unread archive articles and 77 had none, because the configured
+  archives never covered them — the honest limit is the corpus, not the budget.
+- `tracker/gaps.py` gained `for_project()`, per-field state for a single project
+  (`filled` / `missing` / `not_applicable`), and `geo.run()` gained
+  `only_project_id` so a single-project command cannot silently rewrite every row.
 - **`tracker gaps`** and `tracker/gaps.py` — per-field coverage measured against
   the rows where the field can legitimately be set, not against every project.
   Raw NULL counts pointed effort at work that cannot succeed: 61 announced
@@ -246,6 +271,18 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **A company-name suffix is no longer treated as a distinctive project token.**
+  `project_identities` excluded name tokens that appear in the *normalized* company
+  key, but `company_key` strips corporate suffixes — so "STACK Infrastructure" keys
+  to `stack` and left `infrastructure` looking distinctive in "STACK Infrastructure
+  Hillsboro Campus", while every STACK slug contains `stack-infrastructure`.
+  Company-wide stories ("raises $400 million to fund growth", "expansion into
+  Asia-Pacific markets") were harvested as evidence about one Hillsboro project: 8
+  false matches for that project alone, and any operator whose name ends in a
+  stripped word — Infrastructure, Data Centers, Energy, Systems, Realty — leaked the
+  same way. Tokens are now excluded against the raw company name as well as the key,
+  which keeps the Facebook → meta aliasing working. Found while testing `tracker
+  enrich`, which read 7 such articles and filled nothing.
 - Read commands refuse a database that is behind on migrations, naming `tracker
   init` as the fix, instead of failing with a raw SQLAlchemy "no such table"
   traceback. Found on a real v3 database once `risk` landed: `tracker risks`,
