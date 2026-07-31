@@ -296,6 +296,61 @@ def lookup(
     return places.get((state.strip().upper(), place_key(city)))
 
 
+def county_names(data_dir: Path) -> dict[tuple[str, str], str]:
+    """(state, county_key) -> the county's official Census name.
+
+    Stored county values arrive from whatever an article happened to write, so the
+    same place appears several ways: "Loudoun, VA" ten times and "Loudoun County,
+    VA" six. That splits every GROUP BY and breaks any join from a project to a
+    county planning portal.
+
+    Census is the authority worth canonicalising against because it carries the
+    *correct* suffix per jurisdiction, which no rule can infer: Louisiana has
+    parishes, Alaska has boroughs and census areas, and Virginia has independent
+    cities that are county equivalents ("Manassas city").
+    """
+    from tracker.dedup import county_key
+
+    path = data_dir / COUNTY_FILE
+    if not path.exists():
+        raise GeoDataMissing(f"missing {path.name} in {data_dir}\n  <-  {SOURCE_URLS[COUNTY_FILE]}")
+
+    out: dict[tuple[str, str], str] = {}
+    with path.open(encoding="latin-1", newline="") as handle:
+        for row in csv.DictReader(handle, delimiter="|"):
+            state = (row.get("STATE") or "").strip().upper()
+            name = (row.get("COUNTYNAME") or "").strip()
+            if state and name:
+                out.setdefault((state, county_key(name)), name)
+    return out
+
+
+def canonicalise_counties(
+    session: Session, data_dir: Path, *, dry_run: bool = False
+) -> list[tuple[str, str]]:
+    """Rewrite stored county values to their official Census spelling.
+
+    Returns the (before, after) pairs changed. Touches only the spelling, never
+    which county a project is in: the match is on `county_key`, which already
+    strips the suffix, so "Loudoun" and "Loudoun County" resolve to the same row
+    and only the display form moves.
+    """
+    from sqlalchemy import select as _select
+
+    from tracker.dedup import county_key
+    from tracker.models import Project
+
+    official = county_names(data_dir)
+    changed: list[tuple[str, str]] = []
+    for project in session.scalars(_select(Project).where(Project.county.is_not(None))):
+        want = official.get((project.state, county_key(project.county)))
+        if want and want != project.county:
+            changed.append((project.county, want))
+            if not dry_run:
+                project.county = want
+    return changed
+
+
 @dataclass
 class GeoReport:
     """What one `enrich geo` pass did, and what it deliberately did not do."""
@@ -308,6 +363,8 @@ class GeoReport:
     unmatched: int = 0
     no_city: int = 0
     unmatched_places: list[str] = dc_field(default_factory=list)
+    #: (before, after) county spellings canonicalised against Census.
+    county_renames: list[tuple[str, str]] = dc_field(default_factory=list)
     multi_county_places: list[str] = dc_field(default_factory=list)
 
 
@@ -358,6 +415,10 @@ def run(
 
     places = load_places(data_dir)
     report = GeoReport()
+
+    # Canonicalise before deriving: the derived values use Census spellings, so
+    # leaving the existing ones alone would mean one database holding both forms.
+    report.county_renames = canonicalise_counties(session, data_dir, dry_run=dry_run)
 
     stmt = select(Project).order_by(Project.id)
     if only_project_id is not None:
@@ -436,6 +497,8 @@ __all__ = [
     "GeoDataMissing",
     "GeoReport",
     "Place",
+    "canonicalise_counties",
+    "county_names",
     "load_places",
     "lookup",
     "place_aliases",

@@ -129,10 +129,24 @@ SourceType = Literal[
 ]
 
 # --- event.event_type ------------------------------------------------------
+#: Milestones. Ordered as they occur, but NOT a progression: these belong to five
+#: independent tracks (see `tracker.tracks`), and a project can reach a late
+#: construction milestone while an early power one is still outstanding.
+#:
+#: `land_acquired`, `permit_approved`, `interconnection_agreement`, `site_work` and
+#: `equipment_install` were added in migration 0005. They are the transitions the
+#: PRD calls the most important judgement in the whole exercise —
+#: 判断一个项目究竟走到了哪一步 — and `project.phase`, being one enum with four
+#: states, could not express any of them.
 EVENT_TYPES: Final[tuple[str, ...]] = (
     "announced",
+    "land_acquired",
     "permit_filed",
+    "permit_approved",
+    "interconnection_agreement",
+    "site_work",
     "groundbreaking",
+    "equipment_install",
     "energized",
     "first_customer",
     "delayed",
@@ -141,8 +155,13 @@ EVENT_TYPES: Final[tuple[str, ...]] = (
 
 EventType = Literal[
     "announced",
+    "land_acquired",
     "permit_filed",
+    "permit_approved",
+    "interconnection_agreement",
+    "site_work",
     "groundbreaking",
+    "equipment_install",
     "energized",
     "first_customer",
     "delayed",

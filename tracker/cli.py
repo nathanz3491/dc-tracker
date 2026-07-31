@@ -630,6 +630,48 @@ def _ordered_risks(risks) -> list:
 
 
 @app.command()
+def _print_standing(project) -> None:
+    """Per-track position, the binding blocker, and what to watch for.
+
+    This is the PRD's central ask — 判断一个项目究竟走到了哪一步 — which a single
+    `phase` enum cannot answer. Nothing here is stored: it is derived from the
+    project's own dated, cited events and open risks, so it cannot disagree with
+    the evidence.
+    """
+    from tracker.tracks import TRACK_LABELS, standing
+
+    stand = standing(project.id, project.events, project.risks)
+    table = Table(title="where it stands", header_style="bold", box=TABLE_BOX, title_justify="left")
+    table.add_column("track")
+    table.add_column("reached")
+    table.add_column("blocked by")
+    for state in stand.tracks:
+        if state.complete:
+            reached = "[green]complete[/green]"
+        elif state.reached:
+            reached = f"[yellow]{state.status}[/yellow]"
+        else:
+            reached = f"[dim]{state.status}[/dim]"
+        blocked = ", ".join(state.blockers)
+        if blocked and state.blocker_severity:
+            blocked += f" [dim]({state.blocker_severity})[/dim]"
+        table.add_row(TRACK_LABELS[state.track], reached, blocked or NA)
+    console.print()
+    console.print(table)
+
+    binding = stand.binding_blocker
+    if binding:
+        console.print(
+            f"binding constraint: [red]{TRACK_LABELS[binding.track]}[/red] — "
+            f"{', '.join(binding.blockers)}"
+        )
+    if stand.watch_for:
+        # The PRD's final question, in `tracker.tracks`: what signal proves the
+        # project is still advancing.
+        console.print(f"[bold]watch for:[/bold] {stand.watch_for}")
+
+
+@app.command()
 def show(project_id: Annotated[int, typer.Argument(help="Project id.")]) -> None:
     """Show one project in full, with every citation."""
     from tracker.confidence import compute_for_project
@@ -670,6 +712,8 @@ def show(project_id: Annotated[int, typer.Argument(help="Project id.")]) -> None
 
         score = compute_for_project(project, project.sources)
         console.print(f"\n[dim]why confidence {score.value}:[/dim] {'; '.join(score.reasons)}")
+
+        _print_standing(project)
 
         if project.notes:
             console.print("\n[bold]notes[/bold]")

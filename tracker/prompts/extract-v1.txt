@@ -66,7 +66,7 @@ RULES
   "notes":           string|null,
   "events": [{
     "event_date":  "YYYY-MM-DD",
-    "event_type":  "announced"|"permit_filed"|"groundbreaking"|"energized"|"first_customer"|"delayed"|"expanded",
+    "event_type":  "announced"|"land_acquired"|"permit_filed"|"permit_approved"|"interconnection_agreement"|"site_work"|"groundbreaking"|"equipment_install"|"energized"|"first_customer"|"delayed"|"expanded",
     "description": string
   }],
   "risks": [{
@@ -113,6 +113,24 @@ expected_online  When the first megawatts are expected to come online.
 notes            At most two sentences on the latest progress. Also record here
                  any range or ambiguity you collapsed to a single number.
 events           Only milestones whose date you can quote.
+
+                 These matter more than `phase`, which has four states and
+                 cannot say where a project really stands. A campus can own its
+                 land and still be years deep in an interconnection queue; the
+                 events are what distinguish them. What each means:
+                   announced                 a project at this location is public
+                   land_acquired             land bought, or an option taken
+                   permit_filed              an application submitted
+                   permit_approved           an application GRANTED (not merely
+                                             filed; these are often years apart)
+                   interconnection_agreement power secured from the utility
+                   site_work                 grading or earthworks begun
+                   groundbreaking            building construction begun
+                   equipment_install         servers, generators or cooling going in
+                   energized                 drawing power / in service
+                   first_customer            a tenant signed or named
+                   delayed                   a date slipped
+                   expanded                  scope or capacity increased
 risks            Every obstacle the article reports for THIS project, one entry
                  each. An empty list is the correct and common answer: most
                  articles report no obstacle, and inventing one is worse than
