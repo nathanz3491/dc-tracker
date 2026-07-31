@@ -963,3 +963,76 @@ def test_read_commands_do_not_modify_the_database(seeded: Path):
     for command in (["list"], ["stats"], ["show", "1"]):
         assert invoke(seeded, *command).exit_code == 0
     assert _logical_snapshot(seeded) == before
+
+
+# --- machine-readable output -------------------------------------------------
+
+
+def parse_json_output(result):
+    """The payload a --json run wrote to stdout."""
+    import json
+
+    return json.loads(result.stdout)
+
+
+def test_json_version():
+    result = runner.invoke(app, ["--json", "version"])
+    assert result.exit_code == 0
+    assert parse_json_output(result)["name"] == "dc-tracker"
+
+
+def test_json_show_carries_the_tier_and_the_standing(seeded):
+    """A consumer must be able to tell a quoted figure from a 待确认 one.
+
+    Without `basis`, a web page would render a guess identically to a fact — the
+    exact conflation the PRD forbids.
+    """
+    result = invoke(seeded, "--json", "show", "1")
+    assert result.exit_code == 0
+    payload = parse_json_output(result)
+
+    assert "basis" in payload, "the tier of every value must be machine-readable"
+    assert payload["basis"]["name"] in {"reported", "derived", "unconfirmed", "inferred"}
+    assert "standing" in payload
+    assert {t["track"] for t in payload["standing"]["tracks"]} == {
+        "site_control",
+        "permits",
+        "power",
+        "construction",
+        "commercial",
+    }
+
+
+def test_json_list_matches_the_export_shape(seeded):
+    """One object shape, whichever command produced it."""
+    listed = parse_json_output(invoke(seeded, "--json", "list"))
+    shown = parse_json_output(invoke(seeded, "--json", "show", "1"))
+    assert listed["projects"], "expected at least one project"
+    assert set(shown) == set(listed["projects"][0])
+
+
+def test_json_gaps_reports_measurability(seeded):
+    payload = parse_json_output(invoke(seeded, "--json", "gaps"))
+    by_field = {f["field"]: f for f in payload["fields"]}
+    assert by_field["blocker"]["measurable"] is False, "absence is usually the truth"
+    assert by_field["name"]["pct"] == 100
+
+
+def test_json_stats_names_the_sums_as_a_floor(seeded):
+    """The key names must stop a consumer reading a floor as an industry total."""
+    payload = parse_json_output(invoke(seeded, "--json", "stats"))
+    assert "mw_planned_cited_sum" in payload
+    assert "mw_planned_cited_projects" in payload
+
+
+def test_json_errors_are_json_too(seeded):
+    """A script piping stdout to a parser must not get prose on the failure path."""
+    result = invoke(seeded, "--json", "show", "9999")
+    assert result.exit_code != 0
+    assert "error" in parse_json_output(result)
+
+
+def test_json_output_is_deterministic(seeded):
+    first = invoke(seeded, "--json", "list").stdout
+    second = invoke(seeded, "--json", "list").stdout
+    assert first == second

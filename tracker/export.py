@@ -63,7 +63,7 @@ CSV_COLUMNS: tuple[str, ...] = (
 #: Schema tag on JSON exports, so a downstream consumer can detect a change.
 #: Bumped to 2 when `risks` was added to both formats — appending a CSV column is
 #: safe for consumers, but a reader keying on the tag should still be able to tell.
-JSON_SCHEMA_TAG = "tracker/2"
+JSON_SCHEMA_TAG = "tracker/3"
 
 FORMATS = ("md", "csv", "json")
 
@@ -160,9 +160,59 @@ def to_row(project: Project) -> dict[str, Any]:
     }
 
 
+def _standing_json(project: Project) -> dict[str, Any]:
+    """Per-track position, the binding constraint, and the signal to watch.
+
+    Derived, not stored, so it is computed here rather than read from a column. A
+    consumer — a web page, a spreadsheet, another script — should not have to
+    reimplement the reasoning in `tracker.tracks` to know where a project stands.
+    """
+    from tracker.tracks import standing
+
+    stand = standing(project.id, project.events, project.risks)
+    binding = stand.binding_blocker
+    return {
+        "tracks": [
+            {
+                "track": state.track,
+                "status": state.status,
+                "reached": list(state.reached),
+                "implied": sorted(state.implied),
+                "complete": state.complete,
+                "blockers": list(state.blockers),
+                "blocker_severity": state.blocker_severity,
+                "next_milestone": state.next_milestone,
+            }
+            for state in stand.tracks
+        ],
+        "binding_blocker": binding.track if binding else None,
+        "watch_for": stand.watch_for,
+    }
+
+
+def _basis_json(project: Project) -> dict[str, str]:
+    """Which tier each non-null field rests on: reported, derived, unconfirmed…
+
+    The PRD's central rule is that a model's answer must not be taken as fact, so a
+    machine-readable consumer needs this as much as the terminal does. Without it a
+    web page would render a 待确认 guess identically to a quoted figure.
+    """
+    from tracker.gaps import basis
+    from tracker.vocab import WRITABLE_FIELDS
+
+    out: dict[str, str] = {}
+    for field in WRITABLE_FIELDS:
+        tier = basis(project, field)
+        if tier is not None:
+            out[field] = tier
+    return out
+
+
 def to_json_object(project: Project) -> dict[str, Any]:
     """Nested dict per project, preserving the citation structure."""
     return {
+        "basis": _basis_json(project),
+        "standing": _standing_json(project),
         "id": project.id,
         "name": project.name,
         "company": project.company,
@@ -193,6 +243,7 @@ def to_json_object(project: Project) -> dict[str, Any]:
                 "fetched_at": _iso(s.fetched_at),
                 "excerpt": s.excerpt,
                 "fields": s.fields,
+                "unconfirmed_fields": s.unconfirmed_fields,
                 "claims": json.loads(s.claims) if s.claims else None,
                 "extractor": s.extractor,
             }

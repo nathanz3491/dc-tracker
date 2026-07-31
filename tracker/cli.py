@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import atexit
 import contextlib
+import json
 import logging
 import os
 import sys
@@ -120,9 +121,31 @@ lost: ingestion is idempotent, so a re-run resumes where this one stopped."""
 _state: dict[str, object] = {"db": None}
 
 
+def json_mode() -> bool:
+    """True when the caller asked for machine-readable output."""
+    return bool(_state.get("json"))
+
+
+def emit(payload: object) -> None:
+    """Write the JSON payload for a command, once, on stdout.
+
+    Deterministic like `tracker export`: sorted keys and a trailing newline, so a
+    run can be diffed and piped. `ensure_ascii=False` because project names and the
+    待确认 marker are not ASCII and escaping them helps nobody.
+    """
+    console.print_json(json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str))
+
+
 def _fail(message: str, code: int = 2) -> None:
-    """Print an operator-facing error and exit without a traceback."""
-    err.print(f"[bold red]error[/bold red] {message}")
+    """Print an operator-facing error and exit without a traceback.
+
+    In JSON mode the error is emitted as JSON too — a script that pipes stdout to a
+    parser should not get prose on one path and a payload on the other.
+    """
+    if json_mode():
+        emit({"error": message})
+    else:
+        err.print(f"[bold red]error[/bold red] {message}")
     raise typer.Exit(code)
 
 
@@ -149,10 +172,21 @@ def main_callback(
         ),
     ] = None,
     verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Show debug logging.")] = False,
+    as_json: Annotated[
+        bool,
+        typer.Option(
+            "--json",
+            help="Emit machine-readable JSON on stdout instead of tables.",
+        ),
+    ] = False,
 ) -> None:
     _state["db"] = db
+    _state["json"] = as_json
     logging.basicConfig(
-        level=logging.DEBUG if verbose else logging.INFO,
+        # Logs go to stderr, so `tracker --json list | jq` stays clean even at
+        # --verbose. Warnings are raised to ERROR in JSON mode because an
+        # incidental warning is noise to a script that only wants the payload.
+        level=logging.DEBUG if verbose else (logging.ERROR if as_json else logging.INFO),
         format="%(message)s",
         handlers=[RichHandler(console=err, show_time=False, show_path=verbose, markup=False)],
     )
@@ -180,6 +214,9 @@ def _explain_db_locks():
 @app.command()
 def version() -> None:
     """Print the version."""
+    if json_mode():
+        emit({"name": "dc-tracker", "version": __version__})
+        return
     console.print(f"dc-tracker {__version__}")
 
 
@@ -563,6 +600,20 @@ def list_projects(
             stmt = stmt.limit(limit)
         projects = session.scalars(stmt).all()
 
+        if json_mode():
+            # The same per-project shape `tracker export json` emits, so a consumer
+            # does not have to learn two schemas for the same object.
+            from tracker.export import to_json_object
+
+            emit(
+                {
+                    "count": len(projects),
+                    "total": total,
+                    "projects": [to_json_object(p) for p in projects],
+                }
+            )
+            return
+
         if not projects:
             console.print("[yellow]no projects match[/yellow]")
             return
@@ -687,6 +738,12 @@ def show(project_id: Annotated[int, typer.Argument(help="Project id.")]) -> None
         project = session.get(Project, project_id)
         if project is None:
             _fail(f"no project with id {project_id}", code=1)
+            return
+
+        if json_mode():
+            from tracker.export import to_json_object
+
+            emit(to_json_object(project))
             return
 
         facts = Table(show_header=False, box=None)
@@ -1020,6 +1077,35 @@ def stats() -> None:
             )
             or 0
         )
+
+        if json_mode():
+            grouped = {
+                label: {
+                    str(value): count
+                    for value, count in session.execute(
+                        select(column, func.count()).group_by(column).order_by(column)
+                    ).all()
+                }
+                for label, column in (
+                    ("phase", Project.phase),
+                    ("confidence", Project.confidence),
+                    ("state", Project.state),
+                )
+            }
+            emit(
+                {
+                    "projects": total,
+                    "citations": sources,
+                    # A floor, not a total: only projects that cite a figure
+                    # contribute. Named so a consumer cannot mistake it for the
+                    # industry's capacity.
+                    "mw_planned_cited_sum": mw,
+                    "mw_planned_cited_projects": with_mw,
+                    "investment_usd_cited_sum": investment,
+                    "by": grouped,
+                }
+            )
+            return
 
         console.print(f"[bold]{total}[/bold] projects, [bold]{sources}[/bold] citations")
         console.print(
@@ -1462,6 +1548,28 @@ def gaps() -> None:
             return
 
         rows = measure_gaps(session)
+
+        if json_mode():
+            emit(
+                {
+                    "projects": total,
+                    "fields": [
+                        {
+                            "field": g.field,
+                            "filled": g.filled,
+                            "applicable": g.applicable,
+                            "missing": g.missing,
+                            "pct": g.pct,
+                            "measurable": g.measurable,
+                            "note": g.note,
+                        }
+                        for g in rows
+                    ],
+                    "worst": [g.field for g in worst_gaps(rows)],
+                }
+            )
+            return
+
         table = Table(header_style="bold", box=TABLE_BOX, title_justify="left")
         table.add_column("field")
         table.add_column("filled", justify="right")
