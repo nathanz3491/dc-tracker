@@ -41,7 +41,12 @@ tracker = "tracker.cli:main"
 [tool.hatch.build.targets.wheel]
 packages = ["tracker"]
 # Prompts and migrations are data the runtime reads, not just repo files.
-artifacts = ["tracker/prompts/*.txt"]
+# The console's static assets are listed for the same reason, and because
+# hatchling honours VCS ignore rules: `.gitignore` carries unanchored `dist/`,
+# `build/` and `.cache/` patterns, so a vendored file under a directory with one
+# of those names would be silently absent from the wheel. The vendor tree is
+# flattened to avoid that, and this is the belt to that pair of braces.
+artifacts = ["tracker/prompts/*.txt", "tracker/webui/static/**"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

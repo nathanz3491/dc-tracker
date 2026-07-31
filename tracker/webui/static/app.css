@@ -1,0 +1,144 @@
+/* Console styles that are not Meridian's.
+ *
+ * Two kinds of rule live here and nothing else. First, the handful of things the
+ * `.dc` mockup expressed with its runtime's `style-hover` / `style-focus`
+ * attributes, which have no equivalent in real HTML and become classes. Second,
+ * the provenance vocabulary — the one piece of visual language this product owns
+ * rather than inherits.
+ *
+ * COLOUR MEANS TRUST, NEVER CATEGORY. Carried over from the mockup and from
+ * `tracker export html` before it, because it is the product's whole thesis: this
+ * is the only tracker of these projects that tells you which numbers are quoted
+ * and which are not, so the palette should carry that rather than decorate around
+ * it. Phase gets a hue only on the map, where a legend explains it.
+ */
+
+body {
+  margin: 0;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 20px;
+}
+
+/* Meridian's one focus recipe, for elements that are not DS components. */
+:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--background),
+              0 0 0 4px color-mix(in oklab, var(--ring) 45%, transparent);
+  border-radius: 6px;
+}
+
+@keyframes dcRise      { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+@keyframes dcSlideLeft { from { opacity: 0; transform: translateX(28px); } to { opacity: 1; transform: none; } }
+@keyframes dcPop       { 0% { opacity: 0; transform: scale(.94); } 60% { transform: scale(1.015); } 100% { opacity: 1; transform: scale(1); } }
+
+.dc-rise  { animation: dcRise 320ms cubic-bezier(.22,1,.36,1); }
+.dc-pop   { animation: dcPop 160ms cubic-bezier(.34,1.56,.64,1); }
+.dc-slide { animation: dcSlideLeft 220ms cubic-bezier(.22,1,.36,1); }
+
+/* ---- Provenance -----------------------------------------------------------
+   The underline under a value says where it came from, and the four are
+   deliberately distinguishable without colour as well as with it — solid,
+   dotted, dashed, none — because colour alone is never a state signal.
+
+     reported     quoted verbatim in a fetched article        solid, ink
+     derived      a Census lookup, deterministic              dotted, muted
+     unconfirmed  待确认: extracted, nothing quotable          dotted, amber
+     inferred     a model's judgement over recorded facts     dashed, violet
+     defaulted    nobody said anything; NOT NULL needed one   dashed, muted
+     missing      NULL, which is often the correct answer     none, faded
+*/
+.dc-v            { cursor: help; }
+.dc-v--reported  { color: var(--foreground); }
+.dc-v--derived   { color: var(--muted-foreground); border-bottom: 1.5px dotted var(--muted-foreground); }
+.dc-v--unconfirmed { color: var(--warning); border-bottom: 1.5px dotted var(--warning); }
+.dc-v--inferred  { color: var(--chart-5); border-bottom: 1.5px dashed var(--chart-5); }
+.dc-v--defaulted { color: var(--muted-foreground); border-bottom: 1.5px dashed color-mix(in oklab, var(--muted-foreground) 55%, transparent); }
+.dc-v--missing   { color: var(--muted-foreground); opacity: .6; }
+
+/* ---- Segmented control (header view switch, map mode) -------------------- */
+.dc-seg      { display: flex; gap: 2px; padding: 3px; background: var(--muted); border-radius: 12px; }
+.dc-seg-btn  {
+  height: 30px; padding: 0 14px; border: 0; border-radius: 9px; cursor: pointer;
+  font: 500 13px var(--font-sans); background: transparent; color: var(--muted-foreground);
+  transition: background var(--duration-fast) var(--ease-swift), color var(--duration-fast) var(--ease-swift);
+}
+.dc-seg-btn:hover      { color: var(--foreground); }
+.dc-seg-btn[aria-pressed="true"] { background: var(--surface); color: var(--foreground); }
+
+/* ---- Table rows and the sticky identity columns -------------------------- */
+.dc-row            { cursor: pointer; background: var(--surface); }
+.dc-row:hover      { background: color-mix(in oklab, var(--muted) 60%, var(--surface)); }
+.dc-row:hover .dc-sticky { background: color-mix(in oklab, var(--muted) 60%, var(--surface)); }
+.dc-row--open,
+.dc-row--open .dc-sticky { background: var(--accent-soft); }
+.dc-sticky         { position: sticky; z-index: 2; background: var(--surface); }
+.dc-cell           { max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dc-cell--wide     { max-width: 230px; }
+.dc-num            { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+
+/* ---- Track strip --------------------------------------------------------- */
+.dc-seg-cell { display: inline-block; width: 12px; height: 8px; border-radius: 2px; }
+.dc-seg-cell--reached { background: var(--foreground); opacity: .88; }
+.dc-seg-cell--implied { background: var(--foreground); opacity: .34; }
+.dc-seg-cell--blocked { background: var(--danger); opacity: .88; }
+.dc-seg-cell--todo    { background: var(--muted); }
+
+/* ---- Cards that are buttons (map list, command palette) ------------------ */
+.dc-tile {
+  display: grid; gap: 6px; width: 100%; padding: 12px 14px; text-align: left;
+  border: 1px solid var(--border); border-radius: 14px; background: var(--surface); cursor: pointer;
+  transition: box-shadow var(--duration-fast) var(--ease-swift), border-color var(--duration-fast) var(--ease-swift);
+}
+.dc-tile:hover       { border-color: var(--input); box-shadow: var(--shadow-hover); }
+.dc-tile--on         { border-color: var(--input); background: var(--accent-soft); }
+
+/* ---- Drawer -------------------------------------------------------------- */
+.dc-scrim { position: absolute; inset: 0; background: color-mix(in oklab, var(--scrim) 45%, transparent); backdrop-filter: blur(3px); }
+.dc-drawer {
+  position: relative; margin-left: auto; width: min(1040px, 100vw); height: 100%;
+  display: flex; flex-direction: column; background: var(--background);
+  border-left: 1px solid var(--border); box-shadow: var(--shadow-lift);
+}
+.dc-xbtn {
+  flex: none; width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--surface);
+  color: var(--muted-foreground); cursor: pointer;
+}
+.dc-xbtn:hover { background: var(--muted); color: var(--foreground); }
+
+/* ---- Terminal log -------------------------------------------------------- */
+.dc-log {
+  margin: 0; padding: 14px 16px; max-height: 60vh; overflow: auto;
+  background: color-mix(in oklab, var(--muted) 60%, var(--surface));
+  border-radius: 14px; border: 1px solid var(--border);
+  font-family: var(--font-mono); font-size: 12px; line-height: 1.65;
+  white-space: pre-wrap; word-break: break-word;
+}
+.dc-log b { color: var(--primary); font-weight: 500; }
+
+/* A wide table scrolls inside its own container; the page never scrolls
+   sideways. Stated as a rule in Meridian's layout section, easy to lose. */
+.dc-scroll-x { overflow-x: auto; max-width: 100%; }
+
+/* Vertically the table does NOT get its own scroll region — the page scrolls and
+   the table is as long as the data. A nested scroller reads as "there are only
+   twenty projects" when there are 124, because the page moves and the rows do
+   not.
+
+   The column headers therefore scroll away, and that is a real cost accepted for
+   a real reason rather than an oversight. `.mrd-table-wrap` needs `overflow-x:
+   auto` so a 13-column table scrolls sideways in its own box instead of widening
+   the page; CSS then computes the *other* axis to `auto` as well, which makes the
+   wrapper a scroll container, and a `position: sticky` header inside one sticks
+   to that container rather than to the viewport. You can have the horizontal
+   scroller or the sticky header, not both, without restructuring the table into
+   two synchronised elements.
+
+   Row identity survives regardless: the id and company columns stay pinned while
+   you scroll sideways, which is the axis that actually loses you. --dc-header-h
+   is still measured and published for anything else that needs to sit clear of
+   the app header. */
+:root { --dc-header-h: 60px; }

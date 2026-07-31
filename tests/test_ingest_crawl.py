@@ -235,6 +235,45 @@ def test_evidence_gate_accepts_a_value_stated_under_another_field_label():
     assert quotes["mw_planned"] == quote, "the supporting quote must be recorded for citation"
 
 
+def test_evidence_gate_records_the_quote_that_states_the_value_not_the_label():
+    """A mislabelled quote must not become the citation for a value it contradicts.
+
+    The gate deliberately accepts a value evidenced under any label, because models
+    are unreliable bookkeepers. The same unreliability means the quote a model
+    *filed* under a field is not necessarily the one that proves it. That was
+    harmless while these quotes only fed `_excerpt`, which blends three of them,
+    but `source.quotes` now persists the pairing and the console prints one
+    sentence beneath one value.
+
+    Here the model files the investment sentence under `mw_planned`. The capacity
+    is still evidenced -- by the other sentence -- so it survives, and the recorded
+    quote must be the one with 900 in it.
+    """
+    mw_quote = "the company says will draw 900\nmegawatts at full buildout"
+    money_quote = "a $3.3 billion investment"
+    text = f"Preamble. {mw_quote}. Also {money_quote} was announced."
+
+    _, quotes, dropped = crawl.evidence_gate(
+        {"mw_planned": 900.0},
+        [{"field": "mw_planned", "quote": money_quote}, {"field": "notes", "quote": mw_quote}],
+        text,
+    )
+    assert dropped == []
+    assert "900" in quotes["mw_planned"]
+    assert quotes["mw_planned"] != money_quote
+
+
+def test_evidence_gate_keeps_a_correct_label_over_an_equivalent_alternative():
+    """The upgrade only fires when the labelled quote does not state the value."""
+    quote = "the company says will draw 900\nmegawatts at full buildout"
+    _, quotes, _ = crawl.evidence_gate(
+        {"mw_planned": 900.0},
+        [{"field": "mw_planned", "quote": quote}],
+        article(),
+    )
+    assert quotes["mw_planned"] == quote.strip()
+
+
 def test_evidence_gate_matches_quantities_by_value_not_by_string():
     """Storage form never matches the article's wording, so compare normalized."""
     text = "The site is designed for 1.2GW at full buildout, backed by $3.3 billion."
@@ -401,6 +440,30 @@ def test_ungrounded_values_are_kept_as_unconfirmed_never_as_fact(prompt):
         assert field not in source.confirmed_claims(), f"{field} must not count as a fact"
 
     assert any("unconfirmed" in n for n in record.notes), "the operator must be told"
+
+
+def test_quotes_are_recorded_only_for_values_the_gate_confirmed(prompt):
+    """`source.quotes` must never vouch for a 待确认 value.
+
+    The gate collects a quote for every *labelled* evidence entry, including ones
+    whose value it then discards, and `claims` additionally carries identity fields
+    restored from the ungated values. Pairing either with a sentence would dress an
+    unconfirmed value as a quoted fact — which is the one thing the tier exists to
+    stop.
+    """
+    source = build("llm_response_ungrounded.json", prompt=prompt)[0].sources[0]
+    assert set(source.quotes) <= set(source.confirmed_claims()), (
+        "a quote was recorded for a field no verbatim sentence confirmed"
+    )
+    assert not (set(source.quotes) & set(source.unconfirmed))
+
+
+def test_quotes_pair_each_confirmed_value_with_its_own_sentence(prompt):
+    source = build("llm_response_microsoft_wi.json", prompt=prompt)[0].sources[0]
+    assert source.quotes, "a grounded extraction must record its sentences"
+    assert set(source.quotes) <= set(source.confirmed_claims())
+    if "mw_planned" in source.quotes:
+        assert "900" in source.quotes["mw_planned"]
 
 
 def test_a_supported_risk_is_extracted(prompt):

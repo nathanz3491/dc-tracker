@@ -1,0 +1,29 @@
+/* Meridian base layer: page defaults, focus recipe, and the two ambient
+ * utilities the brand leans on (drafting-grid dots, loading shimmer). */
+*,*::before,*::after{box-sizing:border-box;border-color:var(--border)}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--background);color:var(--foreground);font-family:var(--font-sans);font-size:var(--text-body-sm);line-height:var(--leading-body-sm);-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+::selection{background:var(--primary);color:var(--primary-foreground)}
+a{color:var(--primary);text-decoration:none;text-underline-offset:4px}
+a:hover{color:var(--primary-hover);text-decoration:underline}
+a:active{color:var(--primary-active)}
+h1,h2,h3,h4,h5,h6{margin:0;font-weight:var(--weight-semibold);color:var(--foreground);text-wrap:balance}
+p{margin:0}
+code,kbd,pre,samp{font-family:var(--font-mono)}
+button,input,select,textarea{font:inherit;color:inherit}
+
+/* The one focus ring in the system. */
+.mrd-focus{outline:none}
+.mrd-focus:focus-visible{box-shadow:0 0 0 2px var(--background),0 0 0 4px color-mix(in oklab,var(--ring) 45%,transparent)}
+.mrd-focus-inset:focus-visible{box-shadow:inset 0 0 0 2px color-mix(in oklab,var(--ring) 45%,transparent)}
+
+/* Drafting-grid canvas — the workbench background behind specimens. */
+.mrd-dotgrid{background-image:radial-gradient(var(--dot-color) 1px,transparent 1.5px);background-size:22px 22px}
+/* Honey glow wash, used under heroes. */
+.mrd-glow{background-image:radial-gradient(58% 46% at 50% 0%,var(--glow-color),transparent 72%)}
+/* Loading shimmer: a light sweep across a muted base. */
+.mrd-shimmer{background-image:linear-gradient(90deg,transparent 0%,var(--glow-color) 50%,transparent 100%);background-size:200% 100%;background-repeat:no-repeat;animation:shimmer 1.6s ease-in-out infinite}
+
+.mrd-sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border-width:0}
+
+@media (prefers-reduced-motion:reduce){*,::before,::after{animation-duration:0.01ms!important;animation-iteration-count:1!important;transition-duration:0.01ms!important;scroll-behavior:auto!important}}

@@ -63,7 +63,9 @@ CSV_COLUMNS: tuple[str, ...] = (
 #: Schema tag on JSON exports, so a downstream consumer can detect a change.
 #: Bumped to 2 when `risks` was added to both formats — appending a CSV column is
 #: safe for consumers, but a reader keying on the tag should still be able to tell.
-JSON_SCHEMA_TAG = "tracker/3"
+#: 4 adds per-field `prov` (tier + the sentence behind the value) and `quotes` on
+#: each source. Both are additive; `basis` is unchanged for readers keying on it.
+JSON_SCHEMA_TAG = "tracker/4"
 
 FORMATS = ("md", "csv", "json", "html")
 
@@ -190,28 +192,45 @@ def _standing_json(project: Project) -> dict[str, Any]:
     }
 
 
-def _basis_json(project: Project) -> dict[str, str]:
-    """Which tier each non-null field rests on: reported, derived, unconfirmed…
+def _provenance_json(project: Project) -> tuple[dict[str, str], dict[str, Any]]:
+    """Per-field tier, and the evidence behind it.
 
     The PRD's central rule is that a model's answer must not be taken as fact, so a
     machine-readable consumer needs this as much as the terminal does. Without it a
     web page would render a 待确认 guess identically to a quoted figure.
+
+    Two shapes, because they answer different questions and cost different amounts:
+    ``basis`` is the flat field -> tier map consumers have keyed on since schema 2
+    and is kept unchanged; ``prov`` adds the sentence, whether that sentence is the
+    one recorded for this field or the source's whole excerpt, and which citation
+    it came from.
     """
-    from tracker.gaps import basis
+    from tracker.gaps import provenance
     from tracker.vocab import WRITABLE_FIELDS
 
-    out: dict[str, str] = {}
+    basis_out: dict[str, str] = {}
+    prov_out: dict[str, Any] = {}
     for field in WRITABLE_FIELDS:
-        tier = basis(project, field)
-        if tier is not None:
-            out[field] = tier
-    return out
+        result = provenance(project, field)
+        if result is None:
+            continue
+        basis_out[field] = result.tier
+        prov_out[field] = {
+            "tier": result.tier,
+            "quote": result.quote,
+            "quote_is_exact": result.quote_is_exact,
+            "source_url": result.source_url,
+            "source_index": result.source_index,
+        }
+    return basis_out, prov_out
 
 
 def to_json_object(project: Project) -> dict[str, Any]:
     """Nested dict per project, preserving the citation structure."""
+    basis_map, prov_map = _provenance_json(project)
     return {
-        "basis": _basis_json(project),
+        "basis": basis_map,
+        "prov": prov_map,
         "standing": _standing_json(project),
         "id": project.id,
         "name": project.name,
@@ -245,6 +264,10 @@ def to_json_object(project: Project) -> dict[str, Any]:
                 "fields": s.fields,
                 "unconfirmed_fields": s.unconfirmed_fields,
                 "claims": json.loads(s.claims) if s.claims else None,
+                # Parallel to `claims`: the same field names, mapped to the
+                # sentence that got each value through the evidence gate. NULL for
+                # every citation stored before migration 0007.
+                "quotes": json.loads(s.quotes) if s.quotes else None,
                 "extractor": s.extractor,
             }
             for s in sorted(project.sources, key=lambda s: s.url)

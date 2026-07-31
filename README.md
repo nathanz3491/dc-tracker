@@ -384,6 +384,57 @@ The coordinate panel is a plot, not a map: there is no coastline because there i
 boundary data here, and drawing one would be illustration rather than reporting.
 Positions are city centres, not sites.
 
+### The console: the same dataset, live, with the commands as buttons
+
+```bash
+tracker serve
+```
+
+Opens `http://127.0.0.1:8765/`. Six views — Projects, Map, Queue, Coverage,
+Commands, Runs — reading the database on every request, so it reflects what a run
+just did without re-exporting anything.
+
+**Different from `tracker export html`, and both are worth having.** The export is
+one self-contained file you can email; it is frozen at the moment it was written
+and cannot run anything. The console is a server: live, and able to execute the
+commands that change the data.
+
+Hovering any value shows the sentence behind it. That works because the evidence
+gate's per-field quotes are now stored (`source.quotes`, migration 0007) rather
+than collapsed into one excerpt — see "Provenance is per field, not per source"
+below. Citations recorded before that migration fall back to the source excerpt
+and the page says so rather than passing a paragraph off as the sentence behind
+one number.
+
+**Running commands from the browser.** The Commands view is built by introspecting
+the CLI itself, so it cannot fall behind: every flag appears with its real type,
+default and help. Output streams into the Runs view and is kept per run under
+`data/runs/`.
+
+Three things bound what that can do, and they are the reason it is safe to leave
+open:
+
+* **The bind address.** Loopback only. `--host` anything else is refused without
+  `--allow-remote`, because anyone who can reach the port can start a run.
+* **No shell, ever.** A request names a command and a flag object; the server
+  validates both against the catalog and builds an argument *list*. Nothing is
+  concatenated into a command line, so `;`, backticks and `&&` are inert. An
+  unknown flag is an error rather than something passed through — which is how a
+  `--db` or an `--out` would otherwise arrive.
+* **Spending is confirmed.** `sync`, `enrich`, `infer`, `search` and
+  `ingest crawl` spend real LLM tokens, and the console will not start one until
+  you type its name. A stray click cannot cost money.
+
+`tracker serve --no-run` drops the runner entirely and serves the views read-only.
+
+**No network requests at all** — React, d3, three.js, Lucide, the Census boundary
+file and all three webfonts are vendored under `tracker/webui/static/vendor/`
+(3 MB), and the server sends a `default-src 'self'` CSP so a CDN URL creeping back
+in fails loudly instead of quietly reintroducing the dependency. The front end has
+no build step and the repo has no `package.json`: React is a UMD global, the
+Meridian component bundle is already compiled, and `htm` supplies JSX-like
+templates from tagged template literals.
+
 ### Seeing where the data is thin
 
 ```bash
@@ -863,6 +914,44 @@ names alone cannot, because "mount pleasant" and "racine" share nothing.
 
 Accepted residual risk: two distinct campuses for one company in one city merge.
 That has not bitten yet; the fix if it does is a `campus` column.
+
+### Provenance is per field, not per source
+
+`evidence_gate` has always known the verbatim sentence behind each individual
+value — that is what lets a value through. But `_excerpt()` then concatenated the
+best three into one ≤500-character `source.excerpt` and the field association was
+thrown away. Nothing downstream could answer "which sentence says this project is
+900 MW?", so `tracker show` printed the same paragraph under all twelve fields, as
+though one excerpt evidenced every one of them.
+
+Migration 0007 adds `source.quotes`, a JSON object keyed the same way as
+`source.claims`, and `gaps.provenance()` reads the pair. Three details are
+load-bearing:
+
+* **The quote comes from the source whose value won the merge**, not from the
+  strongest source that mentions the field. For a field two sources disagree on
+  those are different rows, and quoting the loser would print a sentence stating a
+  figure the project does not have. `provenance()` therefore asks
+  `upsert.claims_by_field()` for the same ordering the write path used rather than
+  re-deriving it.
+* **A fallback is labelled as one.** The 264 citations recorded before the
+  migration have no per-field quote and never will — those words were not written
+  down. They fall back to the source excerpt with `quote_is_exact: false`, and
+  every surface says which it is showing.
+* **The gate now prefers the quote that states the value** over the one the model
+  filed the field under. It already accepted a value evidenced under any label,
+  because models are unreliable bookkeepers; the same unreliability means a
+  labelled quote need not contain the number it was filed against. Harmless while
+  these only fed a three-quote blend, not harmless once one sentence sits beneath
+  one value.
+
+### `defaulted` is not 待确认
+
+A fifth tier, and the distinction is not pedantic. `phase` is NOT NULL, ingest
+paths deliberately omit it from `source.fields` when no source states one, and the
+column falls back to `announced`. Reporting that as 待确认 asserted that a source
+had claimed it and failed to prove it. Nobody had claimed anything. On the live
+database 37 values were being mislabelled that way.
 
 ### Confidence, and why one source never reaches 3
 

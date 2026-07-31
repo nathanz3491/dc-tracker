@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>dc-tracker console</title>
+
+<!--
+  Every asset below is served from this process. No CDN, no webfont host, no map
+  tiles: the same rule `tracker export html` follows, for the same reason — a
+  console that goes blank because unpkg is having a bad morning is worse than one
+  that ships 3 MB. The server sends a Content-Security-Policy of `default-src
+  'self'`, so a CDN URL creeping back in fails loudly rather than quietly
+  reintroducing the dependency.
+
+  No build step either. React is the UMD global, Meridian's bundle is already
+  compiled to React.createElement, and `htm` gives JSX-like templates out of
+  tagged template literals. This repo has no package.json and does not need one.
+-->
+<link rel="stylesheet" href="/static/vendor/meridian/styles.css" />
+<link rel="stylesheet" href="/static/app.css" />
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' rx='3' fill='%23a05e1c'/><rect x='3' y='4' width='10' height='2.4' rx='1' fill='%23fffdf8'/><rect x='3' y='9.6' width='10' height='2.4' rx='1' fill='%23fffdf8'/></svg>" />
+</head>
+<body>
+<div id="root"></div>
+
+<noscript>
+  <div style="padding:32px;max-width:60ch;font-family:system-ui">
+    <h1>The console needs JavaScript</h1>
+    <p>Everything it shows is also available from the command line — <code>tracker
+    list</code>, <code>tracker show &lt;id&gt;</code>, <code>tracker risks</code> —
+    and <code>tracker export html</code> writes a page that needs no server.</p>
+  </div>
+</noscript>
+
+<script src="/static/vendor/react.js"></script>
+<script src="/static/vendor/react-dom.js"></script>
+<script src="/static/vendor/htm.js"></script>
+<script src="/static/vendor/lucide.js"></script>
+<script src="/static/vendor/d3.js"></script>
+<script src="/static/vendor/topojson-client.js"></script>
+<script src="/static/vendor/meridian/_ds_bundle.js"></script>
+<script src="/static/vendor/dc-map.js"></script>
+<script src="/static/vendor/dc-map3d.js"></script>
+<script src="/static/vendor/dc-campus.js"></script>
+<script type="module" src="/static/app.js"></script>
+</body>
+</html>

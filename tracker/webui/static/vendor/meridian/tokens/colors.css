@@ -1,0 +1,105 @@
+/* Meridian color tokens — warm edition. Cream canvas, honey accent, espresso
+ * ink. Copied verbatim from src/app/globals.css in the source repo. Every
+ * component derives its color from these variables, so the whole system
+ * re-skins by editing this file alone. */
+:root {
+  /* Surfaces & ink */
+  --background: #faf6ef;
+  --surface: #fffdf8;
+  --foreground: #2e2620;
+  --muted: #f3ecdf;
+  /* ~6:1 on --background — clearly secondary, still AA for body text. */
+  --muted-foreground: #6b5c4f;
+  --border: #eae0d0;
+  --input: #e0d3be;
+  --ring: #a05e1c;
+
+  /* Brand — honey */
+  --primary: #a05e1c;
+  --primary-hover: #8a5115;
+  --primary-active: #703f0f;
+  --primary-foreground: #fffaf2;
+  --accent-soft: #f5e6cc;
+  --accent-foreground: #7e4e14;
+
+  --secondary: #f3ecdf;
+  --secondary-foreground: #2e2620;
+
+  /* Semantic */
+  --success: #3f6033;
+  --success-hover: #345028;
+  --success-soft: #e3edd8;
+  --warning: #8a680a;
+  --warning-hover: #755808;
+  --warning-soft: #f5ebc4;
+  --danger: #b8433a;
+  --danger-hover: #9e372f;
+  --danger-foreground: #fff5f3;
+  --danger-soft: #f9deda;
+
+  /* Data */
+  --chart-1: #be7627;
+  --chart-2: #7a9b5e;
+  --chart-3: #c96f4a;
+  --chart-4: #b4606b;
+  --chart-5: #9383b3;
+
+  /* Atmosphere: drafting-grid dots, honey glow, overlay scrim */
+  --dot-color: rgb(84 58 24 / 0.08);
+  --glow-color: rgb(222 168 96 / 0.24);
+  --scrim: #2e2620;
+
+  /* Semantic aliases — read these in product code. */
+  --text-body: var(--foreground);
+  --text-secondary: var(--muted-foreground);
+  --text-on-brand: var(--primary-foreground);
+  --surface-page: var(--background);
+  --surface-card: var(--surface);
+  --surface-sunken: var(--muted);
+  --line-hairline: var(--border);
+  --line-control: var(--input);
+  --focus-ring: var(--ring);
+}
+
+.dark {
+  --background: #1b1410;
+  --surface: #251b14;
+  --foreground: #f3eadb;
+  --muted: #2d231b;
+  /* ~7:1 on --background (AAA) while staying muted. */
+  --muted-foreground: #b0a089;
+  --border: #372a1f;
+  --input: #423325;
+  --ring: #dca75f;
+
+  --primary: #dca75f;
+  --primary-hover: #e9b87a;
+  --primary-active: #f0c68d;
+  --primary-foreground: #2a1d0e;
+  --accent-soft: rgb(220 167 95 / 0.15);
+  --accent-foreground: #eac08a;
+
+  --secondary: #2d231b;
+  --secondary-foreground: #f3eadb;
+
+  --success: #a3c48c;
+  --success-hover: #b4d0a0;
+  --success-soft: rgb(163 196 140 / 0.14);
+  --warning: #dfb75c;
+  --warning-hover: #e8c775;
+  --warning-soft: rgb(223 183 92 / 0.14);
+  --danger: #e0806f;
+  --danger-hover: #e89484;
+  --danger-foreground: #2a1410;
+  --danger-soft: rgb(224 128 111 / 0.14);
+
+  --chart-1: #e0ac62;
+  --chart-2: #a3c48c;
+  --chart-3: #e08b66;
+  --chart-4: #d4888f;
+  --chart-5: #b9a6cf;
+
+  --dot-color: rgb(255 230 200 / 0.06);
+  --glow-color: rgb(222 168 96 / 0.1);
+  --scrim: #0c0805;
+}

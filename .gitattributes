@@ -25,3 +25,9 @@ data/raw/** -text
 *.xls binary
 *.png binary
 *.jpg binary
+
+# Vendored third-party front-end assets. Excluded from LF normalization for the
+# same reason as tests/fixtures: these bytes are published upstream and a
+# checksum against them should match what is in the tree.
+tracker/webui/static/vendor/** -text
+*.woff2 binary

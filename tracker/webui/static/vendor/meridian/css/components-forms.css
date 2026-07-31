@@ -1,0 +1,102 @@
+/* Forms: fields, choice controls. SUBSET — see vendor/meridian/README.md.
+ *
+ * Upstream this file also carries sliders, file dropzones, calendars, time
+ * pickers, comboboxes and search bars. The console uses Input, Select, Switch
+ * and Label, so those are what is vendored; adding a component from another
+ * family means copying its block across too, or it renders unstyled. */
+
+/* ---- Field shell (Input) ------------------------------------------------- */
+.mrd-field{display:flex;width:100%;align-items:center;overflow:hidden;border:1px solid var(--input);border-radius:var(--radius-lg);background:var(--surface);color:var(--foreground);box-shadow:var(--shadow-card);transition:color var(--duration-fast) var(--ease-swift),box-shadow var(--duration-fast) var(--ease-swift),border-color var(--duration-fast) var(--ease-swift)}
+.mrd-field:hover{border-color:color-mix(in oklab,var(--ring) 45%,transparent)}
+.mrd-field:focus-within{border-color:var(--ring);box-shadow:0 0 0 2px color-mix(in oklab,var(--ring) 25%,transparent)}
+.mrd-field--sm{height:var(--control-h-sm);gap:var(--space-1-5);padding:0 var(--space-2-5);font-size:var(--text-control-sm)}
+.mrd-field--sm svg{width:0.875rem;height:0.875rem}
+.mrd-field--md{height:var(--control-h-md);gap:var(--space-2);padding:0 var(--space-3);font-size:var(--text-control-md)}
+.mrd-field--md svg{width:1rem;height:1rem}
+.mrd-field--lg{height:var(--control-h-lg);gap:var(--space-2);padding:0 14px;font-size:var(--text-control-lg)}
+.mrd-field--lg svg{width:1rem;height:1rem}
+.mrd-field--error{border-color:var(--danger)}
+.mrd-field--error:hover,.mrd-field--error:focus-within{border-color:var(--danger);box-shadow:0 0 0 2px color-mix(in oklab,var(--danger) 20%,transparent)}
+.mrd-field--success{border-color:var(--success)}
+.mrd-field--success:hover,.mrd-field--success:focus-within{border-color:var(--success);box-shadow:0 0 0 2px color-mix(in oklab,var(--success) 20%,transparent)}
+.mrd-field[data-disabled="true"]{cursor:not-allowed;opacity:0.55}
+.mrd-field svg{flex-shrink:0}
+.mrd-field-icon{display:flex;align-items:center;color:var(--muted-foreground)}
+.mrd-field input{height:100%;width:100%;min-width:0;flex:1;cursor:text;border:0;background:transparent;color:inherit;font-size:inherit;outline:none}
+.mrd-field input::placeholder{color:var(--muted-foreground)}
+.mrd-field-addon{display:flex;height:100%;align-self:stretch;align-items:center;background:var(--muted);color:var(--muted-foreground);user-select:none}
+.mrd-field-addon--l{border-right:1px solid var(--input)}
+.mrd-field-addon--r{border-left:1px solid var(--input)}
+.mrd-field--sm .mrd-field-addon{padding:0 var(--space-2-5);margin:0 -10px}
+.mrd-field--md .mrd-field-addon{padding:0 var(--space-3);margin:0 -12px}
+.mrd-field--lg .mrd-field-addon{padding:0 14px;margin:0 -14px}
+.mrd-field-aux{display:flex;flex-shrink:0;align-items:center;justify-content:center;border:0;background:transparent;border-radius:var(--radius-sm);color:var(--muted-foreground);cursor:pointer;outline:none;transition:color var(--duration-fast) var(--ease-swift),transform var(--duration-fast) var(--ease-swift)}
+.mrd-field-aux:hover{color:var(--foreground)}
+.mrd-field-aux:active{transform:scale(0.9)}
+.mrd-shake{animation:var(--animate-shake)}
+
+/* ---- Textarea ------------------------------------------------------------ */
+.mrd-textarea{display:flex;min-height:5rem;width:100%;resize:vertical;border:1px solid var(--input);border-radius:var(--radius-lg);background:var(--surface);padding:var(--space-2) var(--space-3);font-family:var(--font-sans);font-size:var(--text-control-md);line-height:1.5rem;color:var(--foreground);box-shadow:var(--shadow-card);outline:none;transition:color var(--duration-fast) var(--ease-swift),box-shadow var(--duration-fast) var(--ease-swift),border-color var(--duration-fast) var(--ease-swift)}
+.mrd-textarea::placeholder{color:var(--muted-foreground)}
+.mrd-textarea:hover{border-color:color-mix(in oklab,var(--ring) 45%,transparent)}
+.mrd-textarea:focus{border-color:var(--ring);box-shadow:0 0 0 2px color-mix(in oklab,var(--ring) 25%,transparent)}
+.mrd-textarea:disabled{cursor:not-allowed;opacity:0.55}
+.mrd-textarea--error{border-color:var(--danger)}
+.mrd-textarea--error:focus{border-color:var(--danger);box-shadow:0 0 0 2px color-mix(in oklab,var(--danger) 20%,transparent)}
+.mrd-textarea--success{border-color:var(--success)}
+.mrd-count{font-family:var(--font-mono);font-size:var(--text-kbd);color:var(--muted-foreground);text-align:right}
+
+/* ---- Select -------------------------------------------------------------- */
+.mrd-select-wrap{position:relative;display:inline-flex;width:100%;align-items:center}
+.mrd-select{width:100%;appearance:none;cursor:pointer;border:1px solid var(--input);border-radius:var(--radius-lg);background:var(--surface);color:var(--foreground);box-shadow:var(--shadow-card);outline:none;transition:color var(--duration-fast) var(--ease-swift),box-shadow var(--duration-fast) var(--ease-swift),border-color var(--duration-fast) var(--ease-swift)}
+.mrd-select:hover{border-color:color-mix(in oklab,var(--ring) 45%,transparent)}
+.mrd-select:focus-visible{border-color:var(--ring);box-shadow:0 0 0 2px color-mix(in oklab,var(--ring) 25%,transparent)}
+.mrd-select:disabled{cursor:not-allowed;opacity:0.55}
+.mrd-select--sm{height:var(--control-h-sm);padding:0 var(--space-8) 0 var(--space-2-5);font-size:var(--text-control-sm)}
+.mrd-select--md{height:var(--control-h-md);padding:0 2.25rem 0 var(--space-3);font-size:var(--text-control-md)}
+.mrd-select--lg{height:var(--control-h-lg);padding:0 2.25rem 0 14px;font-size:var(--text-control-lg)}
+.mrd-select--error{border-color:var(--danger)}
+.mrd-select-caret{position:absolute;right:var(--space-3);pointer-events:none;color:var(--muted-foreground);display:flex}
+.mrd-select-lead{position:absolute;left:var(--space-3);pointer-events:none;color:var(--muted-foreground);display:flex}
+.mrd-select--with-icon.mrd-select--sm{padding-left:var(--space-8)}
+.mrd-select--with-icon.mrd-select--md{padding-left:2.25rem}
+.mrd-select--with-icon.mrd-select--lg{padding-left:2.5rem}
+
+/* ---- Checkbox / Radio ---------------------------------------------------- */
+.mrd-choice-row{display:flex;align-items:flex-start;gap:var(--space-2-5)}
+.mrd-choice-label{font-size:var(--text-body-sm);line-height:1.25rem;color:var(--foreground);cursor:pointer}
+.mrd-choice-desc{margin-top:2px;font-size:var(--text-caption);line-height:var(--leading-caption);color:var(--muted-foreground)}
+.mrd-cbox{display:inline-flex;width:18px;height:18px;flex-shrink:0;align-items:center;justify-content:center;border:1px solid var(--input);border-radius:var(--radius-checkbox);background:var(--surface);color:transparent;cursor:pointer;padding:0;box-shadow:var(--shadow-card);outline:none;transition:all var(--duration-fast) var(--ease-spring)}
+.mrd-cbox:hover{border-color:color-mix(in oklab,var(--ring) 45%,transparent)}
+.mrd-cbox:focus-visible{box-shadow:0 0 0 2px var(--background),0 0 0 4px color-mix(in oklab,var(--ring) 45%,transparent)}
+.mrd-cbox[data-state="checked"],.mrd-cbox[data-state="mixed"]{border-color:var(--primary);background:var(--primary);color:var(--primary-foreground)}
+.mrd-cbox[data-state="checked"] svg,.mrd-cbox[data-state="mixed"] svg{width:0.75rem;height:0.75rem;animation:var(--animate-pop)}
+.mrd-cbox:disabled,.mrd-cbox[aria-disabled="true"]{pointer-events:none;opacity:0.55}
+.mrd-cbox--error{border-color:var(--danger)}
+.mrd-radio{display:inline-flex;width:18px;height:18px;margin-top:2px;flex-shrink:0;align-items:center;justify-content:center;border:1px solid var(--input);border-radius:var(--radius-full);background:var(--surface);cursor:pointer;padding:0;box-shadow:var(--shadow-card);outline:none;transition:all var(--duration-fast) var(--ease-swift)}
+.mrd-radio:hover{border-color:color-mix(in oklab,var(--ring) 45%,transparent)}
+.mrd-radio:focus-visible{box-shadow:0 0 0 2px var(--background),0 0 0 4px color-mix(in oklab,var(--ring) 45%,transparent)}
+.mrd-radio[data-state="checked"]{border-color:var(--primary);background:var(--primary)}
+.mrd-radio-dot{width:6px;height:6px;border-radius:var(--radius-full);background:var(--primary-foreground);transform:scale(0);transition:transform var(--duration-fast) var(--ease-out-back)}
+.mrd-radio[data-state="checked"] .mrd-radio-dot{transform:scale(1)}
+
+/* ---- Switch -------------------------------------------------------------- */
+.mrd-switch{position:relative;display:inline-flex;flex-shrink:0;align-items:center;border:0;padding:0;border-radius:var(--radius-full);background:var(--input);cursor:pointer;outline:none;transition:background-color var(--duration-fast) var(--ease-swift)}
+.mrd-switch:focus-visible{box-shadow:0 0 0 2px var(--background),0 0 0 4px color-mix(in oklab,var(--ring) 45%,transparent)}
+.mrd-switch[data-state="checked"]{background:var(--primary)}
+.mrd-switch[data-state="checked"]:hover{background:var(--primary-hover)}
+.mrd-switch:disabled{pointer-events:none;opacity:0.55}
+.mrd-switch--sm{height:1rem;width:1.75rem}
+.mrd-switch--md{height:1.25rem;width:2.25rem}
+.mrd-switch-thumb{pointer-events:none;position:relative;z-index:1;display:flex;align-items:center;justify-content:center;border-radius:var(--radius-full);background:#fff;box-shadow:0 1px 2px rgb(0 0 0 / 0.15);transform:translateX(2px);transition:transform var(--duration-fast) var(--ease-out-back)}
+.mrd-switch--sm .mrd-switch-thumb{width:0.75rem;height:0.75rem}
+.mrd-switch--md .mrd-switch-thumb{width:1rem;height:1rem}
+.mrd-switch--sm[data-state="checked"] .mrd-switch-thumb{transform:translateX(14px)}
+.mrd-switch--md[data-state="checked"] .mrd-switch-thumb{transform:translateX(18px)}
+.mrd-switch-track-label{position:absolute;font-family:var(--font-mono);font-size:9px;font-weight:var(--weight-semibold);letter-spacing:0.04em;color:var(--muted-foreground)}
+
+/* ---- Form group ---------------------------------------------------------- */
+.mrd-formgroup{display:grid;gap:var(--space-1-5)}
+.mrd-help{font-size:var(--text-caption);line-height:var(--leading-caption);color:var(--muted-foreground)}
+.mrd-error{display:flex;align-items:center;gap:var(--space-1-5);font-size:var(--text-caption);line-height:var(--leading-caption);color:var(--danger)}
+.mrd-success-msg{display:flex;align-items:center;gap:var(--space-1-5);font-size:var(--text-caption);line-height:var(--leading-caption);color:var(--success)}

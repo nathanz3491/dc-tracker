@@ -12,6 +12,59 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **`tracker serve`** and `tracker/webui/` — a local console on 127.0.0.1 that
+  reads the database live and can run the CLI. Six views (Projects, Map, Queue,
+  Coverage, Commands, Runs) built from the Meridian design system, ported from a
+  Claude Design mockup. Distinct from `tracker export html`, which stays: the
+  export is one emailable file frozen at write time, this is a server.
+
+  The runner is the security boundary and is deliberately narrow. `POST /api/run`
+  takes a command name and a flag object, validates both against a catalog
+  introspected from Typer, and builds an argv **list** — no shell, so `;` and
+  backticks are inert, and an unknown flag is an error rather than something
+  passed through. `--db` is injected by the server rather than accepted from the
+  request, so a run cannot be pointed at another database and cannot silently
+  resolve a default from its working directory. The five LLM-spending commands
+  require their own name typed back. One run at a time, because SQLite takes one
+  writer and the second would die partway through having already paid for its
+  calls. `--no-run` serves the views without the runner.
+
+  No network requests at all: React, htm, d3, topojson, three.js, Lucide, the
+  Census boundary TopoJSON and three OFL webfonts are vendored (3 MB, flattened
+  because `.gitignore` carries unanchored `dist/` and `build/` rules), and the
+  server sends `default-src 'self'`. No build step and no `package.json` — the
+  Meridian bundle is already compiled to `React.createElement` and `htm` supplies
+  the templates.
+
+  Run history is files, not a table: `data/runs/<id>.jsonl` plus an index. A
+  command's stdout is operational exhaust with a different lifetime from the
+  tracked data, and the schema is not the place for it. "Projects changed" is
+  counted by comparing `updated_at` across the run rather than diffed, because
+  field-level history does not exist and a count that is true beats a
+  reconstruction.
+
+- **`source.quotes`** (migration `0007_source_quotes.sql`) and
+  **`gaps.provenance()`** — the sentence behind each individual value, not one
+  excerpt per source. `evidence_gate` always computed the pairing; `_excerpt()`
+  then collapsed it and threw the association away, so `tracker show` printed the
+  same paragraph under all twelve fields. `provenance()` returns the tier, the
+  quote, whether that quote is the field's own or the source excerpt falling back,
+  and which citation it came from. It reuses `upsert.claims_by_field()` so the
+  quote comes from the source whose value actually won the merge — for a contested
+  `mw_planned`, quoting the strongest *tier* would print a sentence stating a
+  number the row does not hold. `basis()` is now the tier half of it, so there is
+  one definition rather than two that can drift. `tracker export json` gains `prov`
+  and per-source `quotes`; schema tag `tracker/4`.
+
+- **A `defaulted` provenance tier.** `phase` is NOT NULL and falls back to
+  `announced` when no source states one; reporting that as 待确认 asserted a source
+  had claimed it and failed to prove it. 37 values on the live database were
+  mislabelled that way. `tracker show` renders it quietly rather than in red.
+
+- `tracker/required.py` — the required-project matching extracted from
+  `tracker verify` so the console and the command cannot disagree about what
+  "present" means.
+
 - Project scaffold: `pyproject.toml` (`dc-tracker`, console script `tracker`),
   `.gitignore`, `.gitattributes`, `.editorconfig`, `.env.example`,
   `requirements.lock` (pinned transitive set; there is no uv/poetry here).
@@ -362,6 +415,12 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **`_print_standing` was registered as a CLI command.** A stray `@app.command()`
+  on a private helper put a broken `-print-standing` in `tracker --help`; it took
+  a `project` string argument and would have crashed on any invocation.
+- **`stats` and `gaps` emitted no JSON at all on an empty database.** Both
+  returned early with prose even under `--json`, so a consumer piping stdout into
+  a parser got something unparseable instead of "zero projects".
 - README's "Known gaps" still said the crawl path had only been run against
   fixtures, never live — stale since `de4821c`'s live-run defect fixes and now
   since `tracker enrich`'s live verification against project #93.

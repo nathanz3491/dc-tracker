@@ -1,0 +1,25 @@
+/* Navigation: tabs. SUBSET — see vendor/meridian/README.md.
+ *
+ * Upstream this file also carries Navbar, Sidebar, Breadcrumb, Pagination,
+ * Menu and Stepper. The console's chrome is a header it draws itself and a
+ * segmented control; the only Meridian navigation component it mounts is Tabs
+ * (the detail drawer's Stats / Risks / Sources), so that is what is vendored. */
+
+/* ---- Tabs ---------------------------------------------------------------- */
+.mrd-tabs{width:100%}
+.mrd-tablist{display:inline-flex}
+.mrd-tablist--default{gap:var(--space-1);border-radius:var(--radius-lg);background:var(--muted);padding:var(--space-1)}
+.mrd-tablist--pills{gap:var(--space-1-5)}
+.mrd-tablist--underline{gap:var(--space-4);border-bottom:1px solid var(--border)}
+.mrd-tab{position:relative;display:inline-flex;align-items:center;justify-content:center;gap:var(--space-2);white-space:nowrap;border:0;background:transparent;font-family:var(--font-sans);font-size:var(--text-control-sm);font-weight:var(--weight-medium);color:var(--muted-foreground);cursor:pointer;user-select:none;outline:none;transition:all var(--duration-base) var(--ease-spring)}
+.mrd-tab>svg{width:1rem;height:1rem;flex-shrink:0}
+.mrd-tab:focus-visible{box-shadow:0 0 0 2px var(--background),0 0 0 4px color-mix(in oklab,var(--ring) 45%,transparent)}
+.mrd-tab:hover{color:var(--foreground)}
+.mrd-tab:disabled{pointer-events:none;opacity:0.55}
+.mrd-tab--default{border-radius:var(--radius-md);padding:6px var(--space-3)}
+.mrd-tab--default[data-state="active"]{background:var(--surface);color:var(--foreground);box-shadow:var(--shadow-card)}
+.mrd-tab--pills{border-radius:var(--radius-full);padding:6px 14px}
+.mrd-tab--pills[data-state="active"]{background:var(--accent-soft);color:var(--accent-foreground)}
+.mrd-tab--underline{border-radius:0;padding:var(--space-2) var(--space-3);margin-bottom:-1px;border-bottom:2px solid transparent}
+.mrd-tab--underline[data-state="active"]{color:var(--foreground);border-bottom-color:var(--primary)}
+.mrd-tabpanel{margin-top:var(--space-4);animation:var(--animate-fade-in)}

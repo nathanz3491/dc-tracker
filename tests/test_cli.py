@@ -933,36 +933,12 @@ def test_shipped_required_list_is_a_template_not_invented_data():
     assert active == [], "the required list must ship empty for the operator to fill in"
 
 
-def _logical_snapshot(db: Path) -> dict[str, list[tuple]]:
-    """Every row of every table, for comparing data rather than bytes.
-
-    Raw file bytes are the wrong instrument here: SQLite in WAL mode checkpoints
-    the write-ahead log into the main file at times of its own choosing, so the
-    file legitimately changes without any data changing. That made a byte
-    comparison pass or fail depending on when garbage collection closed the
-    previous connection.
-    """
-    import sqlite3
-    from contextlib import closing
-
-    # `sqlite3.connect` as a context manager commits but does NOT close, which
-    # leaks the handle and raises ResourceWarning under pytest.
-    with closing(sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True)) as conn:
-        tables = [
-            r[0]
-            for r in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
-            )
-        ]
-        return {t: list(conn.execute(f"SELECT * FROM {t} ORDER BY rowid")) for t in sorted(tables)}
-
-
-def test_read_commands_do_not_modify_the_database(seeded: Path):
+def test_read_commands_do_not_modify_the_database(seeded: Path, logical_snapshot):
     """PRD: only init, ingest and review may write."""
-    before = _logical_snapshot(seeded)
+    before = logical_snapshot(seeded)
     for command in (["list"], ["stats"], ["show", "1"]):
         assert invoke(seeded, *command).exit_code == 0
-    assert _logical_snapshot(seeded) == before
+    assert logical_snapshot(seeded) == before
 
 
 # --- machine-readable output -------------------------------------------------

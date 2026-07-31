@@ -148,6 +148,12 @@ class Source(Base):
     #: "9 of 12" definition of done keep counting only quote-backed facts, while
     #: the value itself survives to be shown as 待确认 rather than deleted.
     unconfirmed_fields: Mapped[str | None] = mapped_column(Text)
+    #: JSON object, field -> the verbatim sentence the evidence gate verified for
+    #: that value. Parallel to `claims`, which holds the values themselves. NULL on
+    #: every row written before migration 0007 and on any source whose path has no
+    #: per-field quotes to give (ISO queues, the Census lookup, manual seeds);
+    #: `gaps.provenance` falls back to `excerpt` and says so.
+    quotes: Mapped[str | None] = mapped_column(Text)
     extractor: Mapped[str | None] = mapped_column(Text)
 
     project: Mapped[Project] = relationship(back_populates="sources")

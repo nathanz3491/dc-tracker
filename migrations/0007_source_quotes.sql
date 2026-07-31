@@ -1,0 +1,25 @@
+-- 0007_source_quotes: keep the sentence behind each value, not just one per source.
+--
+-- `evidence_gate` already knows it. It returns `(kept, quotes_by_field, dropped)`,
+-- where `quotes_by_field` is the verified verbatim sentence that let each
+-- individual value through the gate. Until now that mapping was thrown away one
+-- line later: `_excerpt()` concatenated the top three quotes into `source.excerpt`
+-- and the field association was lost.
+--
+-- The cost of losing it is that nothing downstream can answer "which sentence says
+-- this project is 900 MW?". `tracker show` and the export dashboard can only print
+-- the whole excerpt under every value, which reads as though one paragraph
+-- evidenced all twelve fields. It does not.
+--
+-- Stored as a JSON object, field -> quote, rather than a `quote` column on a new
+-- per-claim table. `source.claims` already carries the values as JSON keyed the
+-- same way, so this is the parallel column to that one, and the pair stays
+-- readable as "what this source said, and the words it said it in".
+--
+-- Nullable, and no backfill is possible: the quotes for the 264 citations already
+-- stored were never written down. `gaps.provenance()` therefore falls back to
+-- `source.excerpt` for those rows and reports `quote_is_exact = false`, so a
+-- reader is told the difference rather than shown a paragraph as though it were
+-- the sentence.
+
+ALTER TABLE source ADD COLUMN quotes TEXT;

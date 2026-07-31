@@ -500,7 +500,16 @@ def evidence_gate(
         support = next((q for q in verified if _stated_in(name, value, q)), None)
         if support is not None:
             kept[name] = value
-            quotes.setdefault(name, support)
+            # Prefer the quote that actually states the value over the one the
+            # model *labelled* for this field above. Same reasoning as the gate
+            # itself: models are unreliable bookkeepers, and a labelled quote was
+            # never required to contain the number it was filed under. That was
+            # tolerable while these quotes only fed `_excerpt`, which blends three
+            # of them for display. It is not tolerable now that `source.quotes`
+            # persists the pairing and the UI shows one sentence beneath one
+            # value — a mislabelled quote would state something the row does not.
+            if name not in quotes or not _stated_in(name, value, quotes[name]):
+                quotes[name] = support
         else:
             dropped.append(name)
     return kept, quotes, dropped
@@ -799,6 +808,13 @@ def build_records(
                     excerpt=_excerpt(quotes),
                     claims=claims,
                     unconfirmed=frozenset(unconfirmed),
+                    # Only what the gate confirmed. `quotes` can also hold the
+                    # model's labels for values that were dropped, and `claims`
+                    # additionally carries identity fields restored from the
+                    # ungated values and the 待确认 set — none of those have a
+                    # verified sentence behind them, and pairing one with a quote
+                    # would dress an unconfirmed value as a quoted fact.
+                    quotes={k: q for k, q in quotes.items() if k in kept},
                     extractor=f"crawl:{prompt.stamp}:{reply.model}:{result.via}",
                 )
             ],

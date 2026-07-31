@@ -71,3 +71,34 @@ def session(engine: Engine):
 @pytest.fixture
 def fixtures_dir() -> Path:
     return FIXTURES
+
+
+@pytest.fixture
+def logical_snapshot():
+    """Every row of every table, for comparing data rather than bytes.
+
+    Raw file bytes are the wrong instrument for "did this write?": SQLite in WAL
+    mode checkpoints the write-ahead log into the main file at times of its own
+    choosing, so the file legitimately changes without any data changing. A byte
+    comparison then passes or fails depending on when garbage collection closed
+    the previous connection.
+
+    A fixture rather than a module-level helper so the CLI tests and the console
+    tests share one definition of the guarantee.
+    """
+    import sqlite3
+    from contextlib import closing
+
+    def snapshot(db: Path) -> dict[str, list[tuple]]:
+        # `sqlite3.connect` as a context manager commits but does NOT close,
+        # which leaks the handle and raises ResourceWarning under pytest.
+        with closing(sqlite3.connect(f"file:{Path(db).as_posix()}?mode=ro", uri=True)) as conn:
+            tables = [
+                r[0]
+                for r in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+                )
+            ]
+            return {t: conn.execute(f"SELECT * FROM {t}").fetchall() for t in sorted(tables)}
+
+    return snapshot

@@ -35,7 +35,7 @@ from tracker.db import (
     schema_version,
     session_scope,
 )
-from tracker.gaps import DERIVED, INFERRED, UNCONFIRMED, basis
+from tracker.gaps import DEFAULTED, DERIVED, INFERRED, UNCONFIRMED, basis
 from tracker.gaps import measure as measure_gaps
 from tracker.gaps import worst as worst_gaps
 from tracker.models import Project, Risk, Source
@@ -238,6 +238,67 @@ def init() -> None:
     console.print(f"schema version: {schema_version(engine)}")
     if rescored:
         console.print(f"recomputed confidence on {rescored} project(s)")
+
+
+@app.command()
+def serve(
+    port: Annotated[int, typer.Option("--port", help="Port to listen on.")] = 8765,
+    host: Annotated[
+        str, typer.Option("--host", help="Interface to bind. Loopback unless overridden.")
+    ] = "127.0.0.1",
+    open_browser: Annotated[
+        bool, typer.Option("--open/--no-open", help="Open a browser when the server starts.")
+    ] = True,
+    run: Annotated[
+        bool,
+        typer.Option(
+            "--run/--no-run",
+            help="Allow the page to execute commands. --no-run makes it read-only.",
+        ),
+    ] = True,
+    allow_remote: Annotated[
+        bool,
+        typer.Option("--allow-remote", help="Permit a non-loopback --host. Read the warning."),
+    ] = False,
+) -> None:
+    """Open the console: the database as a live page, with the commands as buttons.
+
+    Different from `tracker export html`, and both are worth having. The export is
+    one self-contained file you can email, frozen at the moment it was written.
+    This reads the database on every request and can run the commands that change
+    it — which is also why it binds loopback and refuses anything else without
+    `--allow-remote`. Anyone who can reach this port can start a `sync`.
+    """
+    from tracker.webui import assets
+    from tracker.webui.server import serve as run_server
+
+    if host not in {"127.0.0.1", "localhost", "::1"} and not allow_remote:
+        _fail(
+            f"--host {host} would expose the command runner to the network.\n"
+            "Anyone who can reach that address could start a run that spends LLM "
+            "tokens and writes to the database. Pass --allow-remote if that is "
+            "genuinely what you want."
+        )
+
+    missing = assets.missing_vendor()
+    if missing:
+        _fail(
+            "the console's vendored front-end files are missing:\n  "
+            + "\n  ".join(missing)
+            + f"\n\nExpected under {assets.STATIC_ROOT}. This is an incomplete "
+            "install rather than a configuration problem."
+        )
+
+    path = _db_path()
+    if not path.is_file():
+        _fail(f"database not found: {path}\nRun `tracker init` first.")
+
+    console.print(f"database: [bold]{path}[/bold]")
+    console.print(f"console:  [bold]http://{host}:{port}/[/bold]")
+    if not run:
+        console.print("[dim]read-only: the page cannot execute commands[/dim]")
+    console.print("[dim]stop with Ctrl-C[/dim]")
+    run_server(path, host=host, port=port, open_browser=open_browser, allow_write=run)
 
 
 # --- ingest -----------------------------------------------------------------
@@ -681,7 +742,6 @@ def _ordered_risks(risks) -> list:
     )
 
 
-@app.command()
 def _print_standing(project) -> None:
     """Per-track position, the binding blocker, and what to watch for.
 
@@ -757,10 +817,18 @@ def show(project_id: Annotated[int, typer.Argument(help="Project id.")]) -> None
             is one the model produced and no quote in any fetched article supports.
             It is shown rather than deleted — deleting cost 194 values across 92 of
             124 projects — but a reader must never mistake it for a fact.
+
+            `defaulted` is deliberately quieter than 待确认 and says something
+            different: nobody claimed anything, and the NOT NULL column is showing
+            its schema default. Printing that in red as "待确认" asserted that a
+            source had offered "announced" and failed to prove it, which was untrue
+            of every project whose phase no article mentions.
             """
             tier = basis(project, field)
             if tier == UNCONFIRMED:
                 return f"[red]{rendered}[/red] [red]待确认[/red]"
+            if tier == DEFAULTED:
+                return f"[dim]{rendered}[/dim] [dim](default — no source states it)[/dim]"
             if tier == DERIVED:
                 return f"{rendered} [dim](derived)[/dim]"
             if tier == INFERRED:
@@ -1065,6 +1133,21 @@ def stats() -> None:
     with session_scope(engine, commit=False) as session:
         total = session.scalar(select(func.count()).select_from(Project)) or 0
         if not total:
+            # Under --json, emit the empty payload rather than prose. A consumer
+            # that pipes stdout into a parser should get "zero projects", not
+            # something unparseable that reads as a crash.
+            if json_mode():
+                emit(
+                    {
+                        "projects": 0,
+                        "citations": 0,
+                        "mw_planned_cited_sum": 0.0,
+                        "mw_planned_cited_projects": 0,
+                        "investment_usd_cited_sum": 0,
+                        "by": {"phase": {}, "confidence": {}, "state": {}},
+                    }
+                )
+                return
             console.print("[yellow]database is empty[/yellow] — run `tracker ingest ...` first")
             return
 
@@ -1544,6 +1627,10 @@ def gaps() -> None:
     with session_scope(engine, commit=False) as session:
         total = session.scalar(select(func.count()).select_from(Project)) or 0
         if not total:
+            # As in `stats`: --json must still be parseable on an empty database.
+            if json_mode():
+                emit({"projects": 0, "fields": [], "worst": []})
+                return
             console.print("[yellow]database is empty[/yellow] — run `tracker sync` first")
             return
 
@@ -2312,9 +2399,9 @@ def verify_coverage(
     paste the names into `seed/required-projects.txt` and this reports which are
     present. Until then it reports the count against `--target`.
     """
-    from tracker.dedup import company_key
+    from tracker import required as required_list
 
-    required = required or install_root() / "seed" / "required-projects.txt"
+    required = required or required_list.default_path()
 
     engine = _read_engine()
     with session_scope(engine, commit=False) as session:
@@ -2335,44 +2422,20 @@ def verify_coverage(
             )
             return
 
-        wanted = [
-            line.strip()
-            for line in required.read_text(encoding="utf-8").splitlines()
-            if line.strip() and not line.strip().startswith("#")
-        ]
+        wanted = required_list.load(required)
         if not wanted:
             console.print(f"\n[dim]{required.name} is empty.[/dim]")
             return
 
-        haystack = [
-            (company_key(p.company), (p.name or "").lower(), p.state or "", p.id) for p in projects
-        ]
-        missing: list[str] = []
-        found: list[tuple[str, int]] = []
-        for entry in wanted:
-            needle_company, _, needle_name = (
-                entry.partition("|") if "|" in entry else ("", "", entry)
-            )
-            ck = company_key(needle_company.strip()) if needle_company.strip() else ""
-            nn = needle_name.strip().lower()
-            hit = next(
-                (
-                    pid
-                    for ck_p, name_p, _state, pid in haystack
-                    if (not ck or ck == ck_p) and (not nn or nn in name_p or name_p in nn)
-                ),
-                None,
-            )
-            if hit is None:
-                missing.append(entry)
-            else:
-                found.append((entry, hit))
-
-        console.print(f"\nrequired list: [bold]{len(found)}/{len(wanted)}[/bold] present")
-        for entry, pid in found:
-            console.print(f"  [green]ok[/green]      #{pid}  {entry}")
-        for entry in missing:
-            console.print(f"  [red]missing[/red] {entry}")
+        matches = required_list.match(projects, wanted)
+        present = sum(1 for m in matches if m.met)
+        console.print(f"\nrequired list: [bold]{present}/{len(wanted)}[/bold] present")
+        for m in matches:
+            if m.met:
+                console.print(f"  [green]ok[/green]      #{m.project_id}  {m.entry}")
+        for m in matches:
+            if not m.met:
+                console.print(f"  [red]missing[/red] {m.entry}")
 
 
 def _print_report_rows(

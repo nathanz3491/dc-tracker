@@ -1,0 +1,34 @@
+/* Meridian type scale. Three faces: Inter (sans, UI + body), Instrument Serif
+ * (display — heroes and section titles only), JetBrains Mono (code, overlines,
+ * figure labels). Sizes are the literal values used in the source components. */
+:root {
+  /* Display scale — pair with --font-display for editorial headings, or
+   * --font-sans + 600 weight for product headings. */
+  --text-display-2xl: 3.75rem; /* 60px */ --leading-display-2xl: 1.05; --tracking-display-2xl: -0.03em;
+  --text-display-xl: 3rem;     /* 48px */ --leading-display-xl: 1.1;   --tracking-display-xl: -0.025em;
+  --text-display-lg: 2.25rem;  /* 36px */ --leading-display-lg: 1.15;  --tracking-display-lg: -0.02em;
+  --text-display-md: 1.875rem; /* 30px */ --leading-display-md: 1.375; --tracking-display-md: -0.015em;
+  --text-display-sm: 1.5rem;   /* 24px */ --leading-display-sm: 1.375; --tracking-display-sm: -0.01em;
+  --text-display-xs: 1.25rem;  /* 20px */ --leading-display-xs: 1.5;   --tracking-display-xs: -0.005em;
+
+  /* Body scale */
+  --text-body-lg: 1.125rem; --leading-body-lg: 1.75rem;
+  --text-body: 1rem;        --leading-body: 1.5rem;
+  --text-body-sm: 0.875rem; --leading-body-sm: 1.25rem;
+  --text-caption: 0.75rem;  --leading-caption: 1.25rem;
+
+  /* Control text — the odd sizes are deliberate, not rounded to a grid. */
+  --text-control-sm: 13px;
+  --text-control-md: 0.875rem;
+  --text-control-lg: 15px;
+  --text-kbd: 11px;
+
+  /* Overline / eyebrow: mono, uppercase, wide */
+  --tracking-overline: 0.16em;
+  --tracking-label: 0.08em;
+
+  --weight-normal: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+}

@@ -39,6 +39,13 @@ class SourceRecord:
     #: `source.fields`, which is what `confidence` and the "9 of 12" count read.
     #: A project field takes an unconfirmed value only when no confirmed one exists.
     unconfirmed: frozenset[str] = frozenset()
+    #: field -> the verbatim sentence that got that value through the evidence gate.
+    #: `excerpt` is up to three of these concatenated for display, so it cannot say
+    #: which sentence evidenced which value; this can. Empty for a path with nothing
+    #: quotable to offer — an ISO queue row or a Census lookup asserts values without
+    #: any prose behind them, and inventing one would be the fabrication the gate
+    #: exists to prevent.
+    quotes: dict[str, str] = field(default_factory=dict)
 
     def tracked_claims(self) -> dict[str, Any]:
         """Claims restricted to real project columns with a non-None value."""

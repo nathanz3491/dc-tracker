@@ -136,7 +136,7 @@ def derive_fields(claims: dict[str, Any]) -> str | None:
     return ",".join(present) or None
 
 
-def _claim_value(raw: Any) -> Any:
+def claim_value(raw: Any) -> Any:
     """Coerce a claim to something JSON can round-trip losslessly."""
     if hasattr(raw, "isoformat"):
         return raw.isoformat()
@@ -163,7 +163,7 @@ class _Claim:
     confirmed: bool = True
 
 
-def _gather(sources: list[Source]) -> dict[str, list[_Claim]]:
+def claims_by_field(sources: list[Source]) -> dict[str, list[_Claim]]:
     """field -> every claim about it, strongest first."""
     out: dict[str, list[_Claim]] = {}
     for s in sources:
@@ -441,7 +441,7 @@ def upsert_record(session: Session, rec: IngestRecord, *, force_new: bool = Fals
     # --- Write the citations ------------------------------------------------
     existing_sources = {s.url: s for s in project.sources}
     for sr in rec.sources:
-        claims = {k: _claim_value(v) for k, v in sr.tracked_claims().items()}
+        claims = {k: claim_value(v) for k, v in sr.tracked_claims().items()}
         blob = json.dumps(claims, sort_keys=True, ensure_ascii=False) if claims else None
         row = existing_sources.get(sr.url)
         if row is None:
@@ -459,6 +459,11 @@ def upsert_record(session: Session, rec: IngestRecord, *, force_new: bool = Fals
         row.unconfirmed_fields = derive_fields(
             {k: v for k, v in claims.items() if k in sr.unconfirmed}
         )
+        # Sorted so a re-ingest of the same article writes byte-identical JSON and
+        # the idempotence test keeps holding, exactly as `claims` above.
+        row.quotes = (
+            json.dumps(sr.quotes, sort_keys=True, ensure_ascii=False) if sr.quotes else None
+        )
         row.extractor = sr.extractor
         # fetched_at is only advanced, never rewound: a cached re-read must not
         # make an old citation look newer than a genuinely newer one.
@@ -467,7 +472,7 @@ def upsert_record(session: Session, rec: IngestRecord, *, force_new: bool = Fals
     session.flush()
 
     # --- Recompute every field from all claims ------------------------------
-    by_field = _gather(list(project.sources))
+    by_field = claims_by_field(list(project.sources))
     for name in WRITABLE_FIELDS:
         if name in DERIVED_FIELDS:
             continue

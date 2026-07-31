@@ -1,0 +1,43 @@
+/* Data display: table and stat card. SUBSET — see vendor/meridian/README.md.
+ *
+ * Upstream this file also carries List, Avatar, Timeline, OrgChart and
+ * MapEmbed. The console uses Table (with its sortable headers, compact density
+ * and sticky header) and StatCard; the rest is left out. */
+
+/* ---- Table --------------------------------------------------------------- */
+.mrd-table-wrap{width:100%;overflow-x:auto}
+.mrd-table-wrap--bordered{border:1px solid var(--border);border-radius:var(--radius-xl)}
+.mrd-table{width:100%;border-collapse:collapse;caption-side:bottom;font-size:var(--text-body-sm)}
+.mrd-table th{font-family:var(--font-sans);font-size:var(--text-caption);font-weight:var(--weight-medium);text-transform:uppercase;letter-spacing:var(--tracking-label);color:var(--muted-foreground);text-align:left;border-bottom:1px solid var(--border);white-space:nowrap}
+.mrd-table td{border-bottom:1px solid var(--border);color:var(--foreground);vertical-align:middle}
+.mrd-table tbody tr{transition:background-color var(--duration-fast) var(--ease-swift)}
+.mrd-table tbody tr:hover{background:color-mix(in oklab,var(--muted) 60%,transparent)}
+.mrd-table tbody tr[aria-selected="true"]{background:color-mix(in oklab,var(--accent-soft) 40%,transparent)}
+.mrd-table tfoot td{background:color-mix(in oklab,var(--muted) 50%,transparent);font-weight:var(--weight-medium)}
+.mrd-table caption{padding-top:var(--space-3);font-size:var(--text-caption);color:var(--muted-foreground);text-align:left}
+.mrd-table--comfortable th,.mrd-table--comfortable td{padding:var(--space-3) var(--space-4)}
+.mrd-table--compact th{padding:var(--space-2) var(--space-3)}
+.mrd-table--compact td{padding:6px var(--space-3)}
+.mrd-table--striped tbody tr:nth-child(even){background:color-mix(in oklab,var(--muted) 40%,transparent)}
+.mrd-table--bordered td:not(:last-child),.mrd-table--bordered th:not(:last-child){border-right:1px solid var(--border)}
+.mrd-table--sticky thead th{position:sticky;top:0;z-index:1;background:var(--surface)}
+.mrd-th-sort{display:inline-flex;align-items:center;gap:var(--space-1-5);border:0;background:none;padding:0;font:inherit;color:inherit;text-transform:inherit;letter-spacing:inherit;cursor:pointer;border-radius:var(--radius-md);outline:none;transition:color var(--duration-fast) var(--ease-swift)}
+.mrd-th-sort:hover{color:var(--foreground)}
+.mrd-th-sort>svg{width:0.875rem;height:0.875rem;opacity:0.6}
+.mrd-th-sort[aria-sort]>svg{opacity:1;color:var(--primary)}
+.mrd-align-right{text-align:right}
+.mrd-align-center{text-align:center}
+.mrd-grid-shell{border:1px solid var(--border);border-radius:var(--radius-xl);background:var(--surface);overflow:hidden}
+.mrd-grid-bar{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:var(--space-3);border-top:1px solid var(--border);padding:var(--space-3) var(--space-4);font-size:var(--text-caption);color:var(--muted-foreground)}
+.mrd-skel{border-radius:var(--radius-lg);background:var(--muted)}
+
+/* ---- Stat card ----------------------------------------------------------- */
+.mrd-stat-label{font-size:var(--text-caption);font-weight:var(--weight-medium);text-transform:uppercase;letter-spacing:var(--tracking-label);color:var(--muted-foreground)}
+.mrd-stat-value{font-size:var(--text-display-sm);font-weight:var(--weight-semibold);letter-spacing:-0.02em;font-variant-numeric:tabular-nums;color:var(--foreground)}
+.mrd-stat-icon{display:grid;width:var(--space-8);height:var(--space-8);flex-shrink:0;place-items:center;border-radius:var(--radius-lg);background:var(--muted);color:var(--muted-foreground)}
+.mrd-stat-icon>svg{width:1rem;height:1rem}
+.mrd-delta{display:inline-flex;align-items:center;gap:var(--space-1);border-radius:var(--radius-full);padding:2px var(--space-2);font-size:var(--text-caption);font-weight:var(--weight-medium);font-variant-numeric:tabular-nums}
+.mrd-delta>svg{width:0.75rem;height:0.75rem}
+.mrd-delta--up{background:var(--success-soft);color:var(--success)}
+.mrd-delta--down{background:var(--danger-soft);color:var(--danger)}
+.mrd-stat-hint{font-size:var(--text-caption);color:var(--muted-foreground)}
