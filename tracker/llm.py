@@ -229,12 +229,16 @@ class MiniMaxExtractor:
     test suite must be importable and runnable on a machine with no key.
     """
 
-    def __init__(self, settings: Settings | None = None) -> None:
+    def __init__(self, settings: Settings | None = None, *, model: str | None = None) -> None:
         self.settings = settings or get_settings()
         if not self.settings.has_api_key():
             raise MissingApiKey(KEY_HELP)
         self.base_url = self.settings.minimax_base_url.rstrip("/")
-        self.model = self.settings.minimax_model
+        # `model` overrides the configured extraction model. Reasoning and
+        # extraction want different tiers: extraction is high-volume transcription
+        # where speed pays, while inferring a project's binding constraint is one
+        # call and wants the strongest model available.
+        self.model = model or self.settings.minimax_model
 
     @property
     def endpoint(self) -> str:
@@ -356,6 +360,12 @@ def _retry_after(response: httpx.Response) -> float | None:
 
 def default_extractor(settings: Settings | None = None) -> Extractor:
     return MiniMaxExtractor(settings)
+
+
+def reasoning_extractor(settings: Settings | None = None) -> Extractor:
+    """The model for judgement rather than transcription. See `tracker.infer`."""
+    settings = settings or get_settings()
+    return MiniMaxExtractor(settings, model=settings.minimax_reasoning_model)
 
 
 __all__ = [

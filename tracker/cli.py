@@ -1367,6 +1367,80 @@ def _render_enrich(report, *, dry_run: bool) -> None:
 
 
 @app.command()
+def infer(
+    project_ids: Annotated[list[int], typer.Argument(help="Project ids to analyse.")],
+    model: Annotated[
+        str | None,
+        typer.Option("--model", help="Override the reasoning model.", show_default=False),
+    ] = None,
+) -> None:
+    """Ask a reasoning model what is obstructing a project and what to watch for.
+
+    The PRD asks for two things no article contains — an analysis of the
+    difficulties a project may hit, and the signal that would show it is still
+    advancing. Those are judgements drawn from the facts, not facts to be found.
+
+    **It cannot write a fact.** Only obstacles and next-signals are accepted;
+    anything quantitative the model volunteers is dropped and reported. Investment,
+    capacity and dates are 关键数字 and must come from a document, so inference is
+    barred from them in code rather than by asking the model nicely.
+
+    Nothing here is stored yet — the analysis is printed for review.
+    """
+    from tracker.infer import analyse
+    from tracker.llm import MissingApiKey, reasoning_extractor
+
+    settings = get_settings()
+    try:
+        extractor = reasoning_extractor(settings)
+        if model:
+            from tracker.llm import MiniMaxExtractor
+
+            extractor = MiniMaxExtractor(settings, model=model)
+    except MissingApiKey as exc:
+        _fail(str(exc))
+        raise
+
+    engine = _read_engine()
+    with session_scope(engine, commit=False) as session:
+        for project_id in project_ids:
+            project = session.get(Project, project_id)
+            if project is None:
+                err.print(f"[yellow]no project with id {project_id}[/yellow]")
+                continue
+
+            console.print(f"\n[bold]#{project.id}[/bold] {project.company} — {project.name}")
+            analysis = analyse(project, extractor=extractor)
+            if analysis.rejected:
+                console.print(
+                    f"[yellow]refused to accept[/yellow] {', '.join(analysis.rejected)} "
+                    "— a model may not assert a fact"
+                )
+            if analysis.empty:
+                console.print("[dim]no conclusion the facts support[/dim]")
+                continue
+
+            if analysis.obstacles:
+                table = Table(header_style="bold", box=TABLE_BOX, title_justify="left")
+                table.add_column("likely obstacle")
+                table.add_column("severity")
+                table.add_column("conf", justify="right")
+                table.add_column("reasoning")
+                for risk in analysis.obstacles:
+                    table.add_row(
+                        f"[magenta]{risk.category}[/magenta]",
+                        risk.severity,
+                        f"{risk.confidence:.2f}",
+                        risk.reasoning,
+                    )
+                console.print(table)
+            for signal in analysis.signals:
+                console.print(f"[bold]watch for[/bold] ({signal.confidence:.2f}): {signal.signal}")
+                console.print(f"  [dim]{signal.reasoning}[/dim]")
+            console.print(f"[dim]inferred by {analysis.model}; not stored as fact[/dim]")
+
+
+@app.command()
 def gaps() -> None:
     """Per-field coverage, measured against the rows where the field applies.
 

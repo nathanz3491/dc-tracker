@@ -71,6 +71,14 @@ class Settings(BaseSettings):
     minimax_base_url: str = "https://api.minimax.io/v1"
     minimax_model: str = "MiniMax-M2.5"
 
+    #: Model used for *reasoning* rather than extraction — `tracker infer`.
+    #:
+    #: A separate setting because the two jobs want different models. Extraction is
+    #: a high-volume transcription task where a fast model is right; inferring what
+    #: is obstructing a project is one call per project and wants the strongest
+    #: reasoning available. Verified present on both MiniMax platforms.
+    minimax_reasoning_model: str = "MiniMax-M3"
+
     # --- Web search ------------------------------------------------------------
     # Which backend `tracker search` and `tracker enrich` use: "auto" picks the
     # first one that has a key, in the order google, brave, serper.
