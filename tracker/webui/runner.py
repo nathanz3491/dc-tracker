@@ -128,14 +128,30 @@ class Runner:
         before = _project_stamps(self.db_path)
         env = {
             **os.environ,
-            # Rich would otherwise wrap to a terminal width it cannot detect and
-            # emit ANSI colour into the log file.
+            # Keep the colour. Rich's output is not decorated text — red means a
+            # rejection, amber means 待确认, dim means a hint — and stripping it
+            # threw away the CLI's own signalling at exactly the moment someone is
+            # reading the output. The browser parses the escapes back out.
+            #
+            # Three variables, and all three are load-bearing. `FORCE_COLOR` makes
+            # Rich treat a pipe as a terminal. `NO_COLOR` has to be *removed*
+            # rather than left alone: it strips colour even from a forced
+            # terminal, so inheriting one from the environment would silently
+            # undo this. And `COLORTERM` pins the SGR dialect, because without it
+            # the same command emits 8-bit codes on POSIX and truecolor on
+            # Windows, which would make the parser's job platform-dependent.
+            #
+            # Safe because no command uses a live widget — a Progress bar or a
+            # status spinner would start redrawing with \r once Rich believes it
+            # is interactive, and the log would fill with half-drawn frames.
             "COLUMNS": "160",
-            "NO_COLOR": "1",
-            "TERM": "dumb",
+            "FORCE_COLOR": "1",
+            "COLORTERM": "truecolor",
             "PYTHONIOENCODING": "utf-8",
             "PYTHONUNBUFFERED": "1",
         }
+        env.pop("NO_COLOR", None)
+        env.pop("TTY_COMPATIBLE", None)  # newer Rich checks this before FORCE_COLOR
         try:
             # argv came from catalog.build_argv: a validated list, never a shell
             # string. No shell=True anywhere, so metacharacters are inert.

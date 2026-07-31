@@ -131,6 +131,20 @@ class Settings(BaseSettings):
     #: Relative paths resolve against the project root, not the CWD.
     db: Path = Path("data/tracker.db")
 
+    # --- Console -----------------------------------------------------------
+    #: Password for `tracker serve`. Unset means no gate, which is right for a
+    #: loopback console — reaching it already means having the machine.
+    #:
+    #: `SecretStr`, and read from the environment rather than taken as a CLI flag,
+    #: for two different reasons. Typer and Rich print local variables in
+    #: tracebacks, so a plain `str` would leak it into any crash output pasted
+    #: into a bug report; and a `--password` flag would land in shell history and
+    #: in `ps` output for every user on the machine.
+    #:
+    #: Publishing the console (a tunnel, a reverse proxy) without setting this is
+    #: refused — see `tracker serve --tunnel`.
+    console_password: SecretStr | None = None
+
     # --- Fetching ---------------------------------------------------------
     fetch_concurrency: int = Field(default=4, ge=1, le=32)
     politeness_delay_s: float = Field(default=1.0, ge=0.0)

@@ -53,6 +53,15 @@
       this._tip.style.cssText = "position:absolute;pointer-events:none;opacity:0;transition:opacity 120ms cubic-bezier(.4,0,.2,1);z-index:5;background:var(--surface);border:1px solid var(--border);border-radius:999px;box-shadow:var(--shadow-pop);padding:6px 12px;font:500 12px/1.35 var(--font-sans,system-ui);color:var(--foreground);white-space:nowrap";
       this.appendChild(this._tip);
 
+      this._onZoomCmd = (e) => {
+        const how = e && e.detail && e.detail.how;
+        if (how === "in") this.zoomBy(1.6);
+        else if (how === "out") this.zoomBy(1 / 1.6);
+        else this.resetZoom();
+      };
+      this.addEventListener("dc-zoom-cmd", this._onZoomCmd);
+      window.addEventListener("dc-reset-view", () => this.resetZoom());
+
       this._ro = new ResizeObserver(() => this.render());
       this._ro.observe(this);
       this._mo = new MutationObserver(() => this.render());
@@ -131,8 +140,14 @@
       const primary = this.tok("--primary");
       const danger = this.tok("--danger");
 
+      // Geography lives in `world` and scales with the zoom. Marks do NOT:
+      // see `applyZoom`. The legend stays outside both so it never moves.
+      const world = mk("g");
+      svg.appendChild(world);
+      this._world = world;
+
       const gStates = mk("g");
-      svg.appendChild(gStates);
+      world.appendChild(gStates);
 
       this._states.features.forEach((f) => {
         const ab = ABBR[f.id];
@@ -166,7 +181,7 @@
       meshEl.setAttribute("stroke", border);
       meshEl.setAttribute("stroke-width", "0.8");
       meshEl.setAttribute("pointer-events", "none");
-      svg.appendChild(meshEl);
+      world.appendChild(meshEl);
 
       // --- company clusters
       const pts = projects.map((p) => ({ p: p, xy: p.lat != null ? projection([p.lon, p.lat]) : null })).filter((d) => d.xy);
@@ -188,7 +203,7 @@
           ring.setAttribute("stroke-width", "1");
           ring.setAttribute("stroke-dasharray", "3 4");
           ring.setAttribute("pointer-events", "none");
-          svg.appendChild(ring);
+          world.appendChild(ring);
           const lbl = mk("text");
           lbl.setAttribute("x", cx); lbl.setAttribute("y", cy - r - 5);
           lbl.setAttribute("text-anchor", "middle");
@@ -198,7 +213,7 @@
           lbl.setAttribute("letter-spacing", ".08em");
           lbl.setAttribute("pointer-events", "none");
           lbl.textContent = co.toUpperCase() + " ×" + group.length;
-          svg.appendChild(lbl);
+          world.appendChild(lbl);
         });
       }
 
@@ -218,7 +233,7 @@
           t.setAttribute("letter-spacing", ".06em");
           t.setAttribute("pointer-events", "none");
           t.textContent = ab;
-          svg.appendChild(t);
+          world.appendChild(t);
         });
       }
 
@@ -226,6 +241,8 @@
       const rScale = d3.scaleSqrt().domain([0, 1200]).range([0, compact ? 15 : 26]);
       const gPts = mk("g");
       svg.appendChild(gPts);
+      this._gPts = gPts;
+      this._marks = [];
       let ci2 = 0;
       const coColor = {};
       projects.forEach((p) => { if (!(p.company in coColor)) coColor[p.company] = this.tok(CHART[ci2++ % CHART.length]); });
@@ -242,6 +259,7 @@
         const g = mk("g");
         g.style.cursor = "pointer";
         g.setAttribute("transform", "translate(" + x + "," + y + ")");
+        this._marks.push({ g: g, x: x, y: y });
 
         if (blocking) {
           const halo = mk("circle");
@@ -336,6 +354,75 @@
         ht.textContent = "no cited capacity";
         svg.appendChild(ht);
       }
+
+      this.bindZoom();
+      this.applyZoom();
+    }
+
+    /* Zoom.
+     *
+     * Geography scales; marks do not. Scaling the bubbles too would be the
+     * obvious implementation and the wrong one — the reason to zoom this map is
+     * that a dozen Northern Virginia projects sit on top of each other, and
+     * bubbles that grow with the map stay exactly as overlapped as they were.
+     * Keeping them a fixed size is what makes zooming useful.
+     */
+    applyZoom() {
+      const t = this._zoomT || { k: 1, x: 0, y: 0 };
+      if (this._world) {
+        this._world.setAttribute("transform", `translate(${t.x},${t.y}) scale(${t.k})`);
+      }
+      (this._marks || []).forEach((m) => {
+        m.g.setAttribute("transform", `translate(${m.x * t.k + t.x},${m.y * t.k + t.y})`);
+      });
+      this.dispatchEvent(new CustomEvent("dc-zoom", {
+        bubbles: true, composed: true, detail: { k: t.k },
+      }));
+    }
+
+    bindZoom() {
+      if (this._zoomBound || typeof d3.zoom !== "function") return;
+      this._zoomBound = true;
+      this._zoomT = this._zoomT || { k: 1, x: 0, y: 0 };
+      this._zoom = d3.zoom()
+        .scaleExtent([1, 12])
+        // Panning is bounded to the viewport so the country cannot be dragged
+        // off screen and lost, which with no visible edge is easy to do.
+        .translateExtent([[0, 0], [this.clientWidth || 640, this.clientHeight || 360]])
+        .on("zoom", (event) => {
+          this._zoomT = event.transform;
+          this.applyZoom();
+        });
+      const sel = d3.select(this._svg);
+      sel.call(this._zoom);
+      // A double-click belongs to the project under the cursor, not to the map.
+      sel.on("dblclick.zoom", null);
+      this._svg.style.cursor = "grab";
+    }
+
+    /* Button-driven zoom is applied instantly and animated in CSS.
+     *
+     * d3's own `.transition().call(zoom.scaleBy, k)` silently did nothing here —
+     * the node's __zoom never advanced — while the same call without the
+     * transition worked. Rather than ship a smooth animation that depends on
+     * behaviour I could not explain, the transform is set directly and the
+     * easing is a CSS transition switched on only for this path. Wheel and drag
+     * stay instant, which is what they should be anyway. */
+    _eased(fn) {
+      this.classList.add("dc-map--easing");
+      clearTimeout(this._easeT);
+      this._easeT = setTimeout(() => this.classList.remove("dc-map--easing"), 280);
+      fn();
+    }
+
+    zoomBy(factor) {
+      if (!this._zoom) return;
+      this._eased(() => d3.select(this._svg).call(this._zoom.scaleBy, factor));
+    }
+
+    resetZoom() {
+      if (!this._zoom) return;
+      this._eased(() => d3.select(this._svg).call(this._zoom.transform, d3.zoomIdentity));
     }
 
     tip(e, text) {

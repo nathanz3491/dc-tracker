@@ -22,6 +22,7 @@ from urllib.parse import parse_qs, urlsplit
 from tracker import __version__
 from tracker.db import MigrationError, open_db, schema_version, session_scope
 from tracker.webui import assets, catalog, runs
+from tracker.webui.auth import COOKIE, Gate, cookie_value
 from tracker.webui.runner import Busy, Runner
 
 log = logging.getLogger(__name__)
@@ -39,9 +40,12 @@ GZIP_MIN = 8192
 class Console:
     """Shared state one server instance hands to every request."""
 
-    def __init__(self, db_path: Path, *, allow_write: bool = True) -> None:
+    def __init__(
+        self, db_path: Path, *, allow_write: bool = True, password: str | None = None
+    ) -> None:
         self.db_path = db_path
         self.allow_write = allow_write
+        self.gate = Gate(password=password)
         self.runner = Runner(db_path)
         self._schema_version: int | None = None
 
@@ -102,9 +106,11 @@ class Handler(BaseHTTPRequestHandler):
         if self.command != "HEAD":
             self.wfile.write(body)
 
-    def _json(self, payload: Any, status: int = 200) -> None:
+    def _json(
+        self, payload: Any, status: int = 200, *, extra: dict[str, str] | None = None
+    ) -> None:
         body = json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8")
-        self._send(status, body, "application/json; charset=utf-8")
+        self._send(status, body, "application/json; charset=utf-8", extra=extra)
 
     def _error(self, status: int, message: str) -> None:
         self._json({"error": message}, status=status)
@@ -121,12 +127,73 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError("request body must be a JSON object")
         return data
 
+    # --- the gate ---------------------------------------------------------
+
+    @property
+    def _session(self) -> str | None:
+        return cookie_value(self.headers.get("Cookie"))
+
+    @property
+    def _authed(self) -> bool:
+        return self.console.gate.valid(self._session)
+
+    def _client(self) -> str:
+        """Who is knocking, for the lockout counter.
+
+        Behind a tunnel every request arrives from 127.0.0.1, so the socket
+        address would put the whole internet in one bucket — which is not wrong
+        so much as blunt. `CF-Connecting-IP` is trusted *only* when the socket is
+        loopback, i.e. when the request really did come through the local
+        cloudflared process; a header on a direct connection is ignored.
+        """
+        peer = self.client_address[0]
+        if peer in {"127.0.0.1", "::1"}:
+            forwarded = (
+                self.headers.get("CF-Connecting-IP")
+                or self.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+            )
+            if forwarded:
+                return forwarded
+        return peer
+
+    def _https(self) -> bool:
+        """Whether the browser reached us over TLS, for the Secure cookie flag."""
+        return (self.headers.get("X-Forwarded-Proto") or "").lower() == "https"
+
+    def _set_session_cookie(self, token: str | None) -> dict[str, str]:
+        if token is None:
+            value = f"{COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"
+        else:
+            # SameSite=Lax is doing real work: it is what stops another site
+            # POSTing to /api/run with this cookie attached. HttpOnly keeps it
+            # out of reach of any script that gets injected into the page.
+            value = f"{COOKIE}={token}; Path=/; Max-Age={self.console.gate.session_ttl}; HttpOnly; SameSite=Lax"
+        if self._https():
+            value += "; Secure"
+        return {"Set-Cookie": value}
+
+    def _same_origin(self) -> bool:
+        """Reject a cross-site state-changing request outright.
+
+        SameSite=Lax already blocks the cookie on a cross-site POST, so this is
+        the second lock rather than the first. Requests with no Origin at all
+        (curl, the tests) are allowed: the cookie is the credential, and refusing
+        them would break scripting the console without adding safety.
+        """
+        origin = self.headers.get("Origin")
+        if not origin:
+            return True
+        host = self.headers.get("Host", "")
+        return urlsplit(origin).netloc == host
+
     # --- routes -----------------------------------------------------------
 
     def do_GET(self) -> None:  # BaseHTTPRequestHandler's naming contract
         parsed = urlsplit(self.path)
         route, query = parsed.path, parse_qs(parsed.query)
         try:
+            if not self._authed:
+                return self._unauthenticated(route)
             self._route_get(route, query)
         except MigrationError as exc:
             self._error(503, str(exc))
@@ -139,6 +206,26 @@ class Handler(BaseHTTPRequestHandler):
             self._error(500, "internal error; see the server log")
 
     do_HEAD = do_GET
+
+    def _unauthenticated(self, route: str) -> None:
+        """Serve the login form, and otherwise nothing at all.
+
+        Deliberately blanket: no static assets, no health check, no dataset. The
+        only thing an anonymous request can obtain is `login.html`, which is
+        self-contained and describes nothing about the data behind it.
+
+        `/api/` and `/static/` both get a 401 rather than the form. Returning the
+        login HTML with a 200 to a request for `app.js` withholds the asset, which
+        is the security part, but it also hands a browser a page where it asked
+        for a script — so a session that expires mid-visit fails as a parse error
+        instead of as "you are signed out".
+        """
+        if route.startswith(("/api/", "/static/")):
+            return self._error(401, "sign in first")
+        page = assets.STATIC_ROOT / "login.html"
+        if not page.is_file():
+            return self._error(500, "the console's login page is missing from this install")
+        self._send(200, page.read_bytes(), "text/html; charset=utf-8")
 
     def _route_get(self, route: str, query: dict[str, list[str]]) -> None:
         if route in {"/", "/index.html"}:
@@ -175,6 +262,15 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError as exc:
             return self._error(400, str(exc))
         try:
+            if not self._same_origin():
+                return self._error(403, "cross-site request refused")
+            if parsed.path == "/api/login":
+                return self._login(body)
+            if not self._authed:
+                return self._error(401, "sign in first")
+            if parsed.path == "/api/logout":
+                self.console.gate.revoke(self._session)
+                return self._json({"ok": True}, extra=self._set_session_cookie(None))
             if parsed.path == "/api/run":
                 return self._start_run(body)
             if parsed.path == "/api/run/cancel":
@@ -187,6 +283,31 @@ class Handler(BaseHTTPRequestHandler):
             self._error(500, "internal error; see the server log")
 
     # --- handlers ---------------------------------------------------------
+
+    def _login(self, body: dict[str, Any]) -> None:
+        gate = self.console.gate
+        if not gate.required:
+            return self._json({"ok": True, "note": "no password is configured"})
+
+        client = self._client()
+        remaining = gate.locked_for(client)
+        if remaining:
+            # Say it is a lockout and for how long. Answering "wrong password"
+            # here would have an operator who mistyped twice sit there retyping a
+            # correct password and never getting in.
+            minutes = max(1, round(remaining / 60))
+            return self._json(
+                {"error": f"Too many attempts. Locked for about {minutes} more minute(s)."},
+                status=429,
+            )
+
+        token = gate.attempt(str(body.get("password") or ""), client=client)
+        if token is None:
+            log.warning("console: failed sign-in from %s", client)
+            return self._json({"error": "Wrong password."}, status=401)
+
+        log.info("console: signed in from %s", client)
+        self._json({"ok": True}, extra=self._set_session_cookie(token))
 
     def _page(self) -> None:
         index = assets.STATIC_ROOT / "index.html"
@@ -220,6 +341,7 @@ class Handler(BaseHTTPRequestHandler):
                 schema_version=self.console.schema_version,
             )
         payload["allow_write"] = self.console.allow_write
+        payload["password_protected"] = self.console.gate.required
         self._json(payload)
 
     def _start_run(self, body: dict[str, Any]) -> None:
@@ -295,9 +417,10 @@ def serve(
     port: int = DEFAULT_PORT,
     open_browser: bool = True,
     allow_write: bool = True,
+    password: str | None = None,
 ) -> None:
     """Run the console until interrupted."""
-    console = Console(db_path, allow_write=allow_write)
+    console = Console(db_path, allow_write=allow_write, password=password)
     handler = type("BoundHandler", (Handler,), {"console": console})
     httpd = ThreadingHTTPServer((host, port), handler)
     httpd.daemon_threads = True

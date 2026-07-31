@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="robots" content="noindex, nofollow" />
+<title>dc-tracker console</title>
+
+<!--
+  Self-contained on purpose. Everything else the console serves — the app, the
+  vendored bundles, the fonts — sits behind the gate, so this page cannot link to
+  any of it. The styles below are the Meridian tokens copied inline rather than
+  imported, which is a small duplication bought deliberately: it means an
+  unauthenticated request reaches exactly one file and learns nothing about what
+  is behind it.
+-->
+<style>
+  :root {
+    --background:#faf6ef; --surface:#fffdf8; --foreground:#2e2620; --muted:#f3ecdf;
+    --muted-foreground:#6b5c4f; --border:#eae0d0; --input:#e0d3be; --ring:#a05e1c;
+    --primary:#a05e1c; --primary-hover:#8a5115; --primary-foreground:#fffaf2;
+    --danger:#b8433a; --danger-soft:#f9deda; --warning:#8a680a; --warning-soft:#f5ebc4;
+    --dot:rgb(84 58 24 / 0.08);
+    --sans:"Inter",ui-sans-serif,system-ui,sans-serif;
+    --serif:"Instrument Serif",Georgia,serif;
+    --mono:"JetBrains Mono",ui-monospace,"SF Mono",Menlo,monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --background:#1b1410; --surface:#251b14; --foreground:#f3eadb; --muted:#2d231b;
+      --muted-foreground:#b0a089; --border:#372a1f; --input:#423325; --ring:#dca75f;
+      --primary:#dca75f; --primary-hover:#e9b87a; --primary-foreground:#2a1d0e;
+      --danger:#e0806f; --danger-soft:rgb(224 128 111 / 0.14);
+      --warning:#dfb75c; --warning-soft:rgb(223 183 92 / 0.14);
+      --dot:rgb(255 230 200 / 0.06);
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin:0; min-height:100vh; display:grid; place-items:center; padding:24px;
+    background:var(--background); color:var(--foreground);
+    font:400 14px/20px var(--sans);
+    background-image: radial-gradient(var(--dot) 1px, transparent 1.5px);
+    background-size: 22px 22px;
+  }
+  .card {
+    width:min(420px,100%); background:var(--surface); border:1px solid var(--border);
+    border-radius:20px; padding:28px 26px;
+    box-shadow:0 4px 8px -2px rgb(84 58 24 / .08), 0 16px 40px -12px rgb(84 58 24 / .18);
+  }
+  .brand { display:flex; align-items:baseline; gap:9px; margin-bottom:4px; }
+  .brand b { font:500 26px var(--serif); letter-spacing:-.015em; }
+  .brand span { font:400 12px var(--mono); color:var(--muted-foreground); }
+  h1 { margin:14px 0 6px; font:500 20px/1.3 var(--serif); letter-spacing:-.01em; }
+  p.lede { margin:0 0 20px; color:var(--muted-foreground); line-height:20px; }
+  label {
+    display:block; margin-bottom:6px; font-size:12px; font-weight:500;
+    text-transform:uppercase; letter-spacing:.08em; color:var(--muted-foreground);
+  }
+  input {
+    width:100%; height:40px; padding:0 12px; font:400 15px var(--sans);
+    color:var(--foreground); background:var(--background);
+    border:1px solid var(--input); border-radius:10px; outline:none;
+    transition:border-color 150ms, box-shadow 150ms;
+  }
+  input:focus { border-color:var(--ring); box-shadow:0 0 0 2px color-mix(in oklab,var(--ring) 25%,transparent); }
+  button {
+    width:100%; height:40px; margin-top:14px; border:0; border-radius:10px;
+    font:500 14px var(--sans); color:var(--primary-foreground); background:var(--primary);
+    cursor:pointer; transition:background 150ms;
+  }
+  button:hover:not(:disabled) { background:var(--primary-hover); }
+  button:disabled { opacity:.55; cursor:not-allowed; }
+  .msg {
+    display:none; margin-top:14px; padding:10px 13px; border-radius:12px;
+    font-size:13px; line-height:19px;
+  }
+  .msg--err  { display:block; background:var(--danger-soft);  color:var(--danger); }
+  .msg--warn { display:block; background:var(--warning-soft); color:var(--warning); }
+  .note {
+    margin:20px 0 0; padding-top:16px; border-top:1px solid var(--border);
+    font-size:12px; line-height:18px; color:var(--muted-foreground);
+  }
+  code { font-family:var(--mono); font-size:11px; }
+</style>
+</head>
+<body>
+  <main class="card">
+    <div class="brand"><b>dc-tracker</b><span>console</span></div>
+    <h1>This console runs commands</h1>
+    <p class="lede">It reads and writes a real database and can spend LLM tokens.
+      Sign in to continue.</p>
+
+    <form id="f" autocomplete="off">
+      <label for="pw">Password</label>
+      <input id="pw" name="password" type="password" autocomplete="current-password"
+             autofocus required />
+      <button id="go" type="submit">Sign in</button>
+    </form>
+
+    <div id="msg" class="msg"></div>
+
+    <p class="note">Sessions last 12 hours. Repeated failures lock the gate for
+      15 minutes — if you are locked out and it was you, wait rather than retrying.</p>
+  </main>
+
+<script>
+  const form = document.getElementById("f");
+  const input = document.getElementById("pw");
+  const button = document.getElementById("go");
+  const msg = document.getElementById("msg");
+
+  const show = (text, kind) => {
+    msg.textContent = text;
+    msg.className = "msg msg--" + kind;
+  };
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    button.disabled = true;
+    msg.className = "msg";
+    try {
+      const res = await fetch("/api/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Console": "1" },
+        body: JSON.stringify({ password: input.value }),
+      });
+      if (res.ok) {
+        // Replace rather than assign: the login page should not sit in history
+        // behind the console.
+        window.location.replace("/");
+        return;
+      }
+      const body = await res.json().catch(() => ({}));
+      show(body.error || "Sign-in failed.", res.status === 429 ? "warn" : "err");
+      input.select();
+    } catch {
+      show("The console did not answer. Is it still running?", "err");
+    } finally {
+      button.disabled = false;
+    }
+  });
+</script>
+</body>
+</html>

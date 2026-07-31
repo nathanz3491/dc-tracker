@@ -12,6 +12,9 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import os
+import re
+import sys
 import threading
 from http.client import HTTPConnection
 
@@ -219,6 +222,36 @@ def test_catalog_refuses_what_it_does_not_know(cmd, flags, expect):
     assert expect in str(exc.value)
 
 
+def test_a_repeatable_flag_takes_a_list_and_repeats_itself():
+    """The Queue's per-article Crawl button needs exactly one URL through.
+
+    `--url` is `list[str]` on the CLI, so click marks it `multiple` and the
+    catalog reads that rather than keeping its own list of which flags repeat.
+    """
+    one = catalog.build_argv("ingest crawl", {"--url": "https://a.example/x"})
+    assert one[-2:] == ["--url", "https://a.example/x"]
+    many = catalog.build_argv(
+        "ingest crawl", {"--url": ["https://a.example/x", "https://b.example/y"]}
+    )
+    assert many[-4:] == ["--url", "https://a.example/x", "--url", "https://b.example/y"]
+
+
+@pytest.mark.parametrize("cmd,flag", [("ingest crawl", "--prompt"), ("sync", "--limit")])
+def test_a_list_is_refused_where_the_cli_takes_one_value(cmd, flag):
+    """Otherwise it stringifies to "['a', 'b']" and goes through as one argument."""
+    with pytest.raises(catalog.InvalidRequest) as exc:
+        catalog.build_argv(cmd, {flag: ["a", "b"]})
+    assert "single value" in str(exc.value)
+
+
+def test_crawling_one_url_still_needs_the_confirmation(seeded_db):
+    """The button is two-step in the UI; the server rule behind it is unchanged."""
+    runner = Runner(seeded_db)
+    with pytest.raises(catalog.InvalidRequest) as exc:
+        runner.start("ingest crawl", {"--url": "https://a.example/x"})
+    assert "spends LLM tokens" in str(exc.value)
+
+
 def test_a_shell_metacharacter_that_survives_is_still_only_one_argument():
     """Text flags accept anything; it just never becomes shell syntax.
 
@@ -318,6 +351,316 @@ def test_a_read_only_console_refuses_to_run_anything(seeded_db):
     finally:
         httpd.shutdown()
         httpd.server_close()
+
+
+# --- colour -----------------------------------------------------------------
+
+
+def _run_gaps(extra_env: dict[str, str], drop: tuple[str, ...] = ()) -> str:
+    import subprocess
+
+    env = {**os.environ, "COLUMNS": "160", "PYTHONIOENCODING": "utf-8", **extra_env}
+    for key in drop:
+        env.pop(key, None)
+    result = subprocess.run(
+        [sys.executable, "-m", "tracker", "gaps"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=env,
+        timeout=120,
+    )
+    return result.stdout
+
+
+SGR = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def test_forcing_colour_actually_produces_escapes():
+    """`FORCE_COLOR` alone is not enough on Windows, and it fails silently.
+
+    Rich honours it — `is_terminal` goes True — and then picks
+    `ColorSystem.WINDOWS`, which paints via the console API rather than writing
+    escapes. Down a pipe that API does nothing, so the markup is stripped and
+    nothing replaces it. `cli._forced_colour` names an ANSI dialect to fix it;
+    this asserts the fix rather than the flag.
+    """
+    out = _run_gaps({"FORCE_COLOR": "1", "COLORTERM": "truecolor"}, drop=("NO_COLOR",))
+    assert SGR.search(out), "colour was forced and no escape sequences came out"
+
+
+def test_piping_without_asking_stays_plain():
+    """The default has not changed: `tracker gaps > file` is still plain text."""
+    out = _run_gaps({}, drop=("FORCE_COLOR", "NO_COLOR"))
+    assert not SGR.search(out)
+
+
+def test_no_color_beats_force_color():
+    """https://no-color.org — set means no colour, whatever else was asked for."""
+    out = _run_gaps({"FORCE_COLOR": "1", "NO_COLOR": "1"})
+    assert not SGR.search(out)
+
+
+def test_the_runner_asks_for_colour_and_removes_what_would_suppress_it():
+    """Reading the env the runner builds, rather than running a whole crawl."""
+    import inspect
+
+    from tracker.webui import runner as runner_mod
+
+    source = inspect.getsource(runner_mod.Runner._execute)
+    assert '"FORCE_COLOR": "1"' in source
+    # Inheriting either of these from the operator's shell would silently undo it.
+    assert 'env.pop("NO_COLOR", None)' in source
+    assert 'env.pop("TTY_COMPATIBLE", None)' in source
+    assert '"TERM"' not in source, "TERM=dumb would make Rich a dumb terminal and kill colour"
+
+
+# --- the gate ---------------------------------------------------------------
+
+PASSWORD = "correct horse battery"
+
+
+@pytest.fixture
+def gated(seeded_db):
+    """A console with a password, on an ephemeral loopback port."""
+    from http.server import ThreadingHTTPServer
+
+    console = Console(seeded_db, allow_write=True, password=PASSWORD)
+    handler = type("Bound", (Handler,), {"console": console})
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    httpd.daemon_threads = True
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        yield httpd.server_address, console
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def raw(address, path, method="GET", body=None, cookie=None, headers=None):
+    """A request that keeps the response headers, for cookie assertions."""
+    conn = HTTPConnection(*address, timeout=30)
+    head = {"Content-Type": "application/json", **(headers or {})}
+    if cookie:
+        head["Cookie"] = cookie
+    conn.request(method, path, body=json.dumps(body) if body is not None else None, headers=head)
+    response = conn.getresponse()
+    payload = response.read().decode("utf-8")
+    result = (response.status, dict(response.getheaders()), payload)
+    conn.close()
+    return result
+
+
+def sign_in(address, password=PASSWORD):
+    status, headers, _ = raw(address, "/api/login", "POST", {"password": password})
+    cookie = headers.get("Set-Cookie", "").split(";")[0]
+    return status, cookie
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/dataset",
+        "/api/commands",
+        "/api/runs",
+        "/api/health",
+        "/static/app.js",
+        "/static/app.css",
+    ],
+)
+def test_nothing_is_served_before_signing_in(gated, path):
+    """Blanket, not just the page.
+
+    An anonymous request reaches exactly one file. Serving the app bundle or a
+    health check to the open internet would leak the shape of what is behind the
+    gate for no benefit.
+    """
+    address, _ = gated
+    status, _, body = raw(address, path)
+    assert status == 401, f"{path} was served to an anonymous request"
+    assert "sign in" in body
+    # And specifically not the asset itself.
+    assert "React" not in body and "dc-tracker console" not in body
+
+
+def test_a_navigation_gets_the_form_but_an_asset_gets_a_401(gated):
+    """Both withhold the asset; only one of them is usable.
+
+    Answering a request for `app.js` with the login page and a 200 hands a
+    browser HTML where it asked for a script, so an expired session surfaces as a
+    parse error rather than as "you are signed out".
+    """
+    address, _ = gated
+    status, _, body = raw(address, "/")
+    assert status == 200 and "This console runs commands" in body
+    assert raw(address, "/static/app.js")[0] == 401
+
+
+def test_the_login_page_leaks_nothing(gated):
+    address, _ = gated
+    _, _, body = raw(address, "/")
+    for leak in ("Fairwater", "Microsoft", "/api/dataset", "vendor/", "tracker serve"):
+        assert leak not in body, f"the login page mentions {leak}"
+
+
+def test_signing_in_sets_an_httponly_lax_session_cookie(gated):
+    address, _ = gated
+    status, headers, _ = raw(address, "/api/login", "POST", {"password": PASSWORD})
+    assert status == 200
+    cookie = headers["Set-Cookie"]
+    assert "HttpOnly" in cookie, "a script must not be able to read the session"
+    assert "SameSite=Lax" in cookie, "this is what blocks a cross-site POST to /api/run"
+    assert "Path=/" in cookie
+    # Not marked Secure here: the test connection is plain http, and marking it
+    # Secure would mean the browser never sent it back.
+    assert "Secure" not in cookie
+
+
+def test_a_session_opens_every_route(gated):
+    address, _ = gated
+    _, cookie = sign_in(address)
+    for path in ("/api/dataset", "/api/commands", "/api/health", "/static/app.js"):
+        status, _, _ = raw(address, path, cookie=cookie)
+        assert status == 200, path
+    status, _, body = raw(address, "/", cookie=cookie)
+    assert "This console runs commands" not in body, "still on the login page"
+
+
+def test_a_wrong_password_is_401_and_grants_nothing(gated):
+    address, _ = gated
+    status, cookie = sign_in(address, "wrong")
+    assert status == 401
+    assert not cookie
+    assert raw(address, "/api/dataset")[0] == 401
+
+
+def test_a_forged_cookie_is_not_a_session(gated):
+    address, _ = gated
+    from tracker.webui.auth import COOKIE
+
+    for forged in (f"{COOKIE}=x", f"{COOKIE}=", f"{COOKIE}=" + "a" * 43, "other=1"):
+        assert raw(address, "/api/dataset", cookie=forged)[0] == 401
+
+
+def test_signing_out_revokes_the_session(gated):
+    address, _ = gated
+    _, cookie = sign_in(address)
+    assert raw(address, "/api/dataset", cookie=cookie)[0] == 200
+    assert raw(address, "/api/logout", "POST", {}, cookie=cookie)[0] == 200
+    assert raw(address, "/api/dataset", cookie=cookie)[0] == 401
+
+
+def test_a_run_cannot_be_started_without_a_session(gated):
+    """The whole reason the gate exists."""
+    address, _ = gated
+    status, _, body = raw(address, "/api/run", "POST", {"cmd": "gaps", "flags": {}})
+    assert status == 401
+    assert "sign in" in body
+
+
+def test_a_cross_site_post_is_refused(gated):
+    """Second lock. SameSite=Lax is the first, but it lives in the browser."""
+    address, _ = gated
+    _, cookie = sign_in(address)
+    status, _, body = raw(
+        address,
+        "/api/run",
+        "POST",
+        {"cmd": "gaps", "flags": {}},
+        cookie=cookie,
+        headers={"Origin": "https://evil.example"},
+    )
+    assert status == 403
+    assert "cross-site" in body
+
+
+def test_repeated_failures_lock_the_gate(gated):
+    """A published URL means an unattended login form.
+
+    A short password is only safe if guessing is slow. Eight tries then fifteen
+    minutes makes even a small keyspace unreachable, and the lockout says so
+    rather than repeating "wrong password" at someone who mistyped.
+    """
+    address, console = gated
+    for _ in range(console.gate.max_failures):
+        assert sign_in(address, "wrong")[0] == 401
+    status, _, body = raw(address, "/api/login", "POST", {"password": "wrong"})
+    assert status == 429
+    assert "Locked" in body
+    # And the lockout holds even for the right password, or it is not a lockout.
+    assert raw(address, "/api/login", "POST", {"password": PASSWORD})[0] == 429
+
+
+def test_the_gate_closes_globally_not_just_per_client(gated):
+    """Per-client lockout alone is the wrong shape against a published URL.
+
+    The counter keys on `CF-Connecting-IP`, so an attacker with a thousand
+    addresses would get a thousand budgets. The global counter is what makes the
+    guess rate a property of the gate rather than of the address pool — and it is
+    what lets a short password be safe.
+    """
+    address, console = gated
+    limit = console.gate.global_max_failures
+    for i in range(limit):
+        # A different client every time: the per-client limit is never reached.
+        raw(
+            address,
+            "/api/login",
+            "POST",
+            {"password": "wrong"},
+            headers={"CF-Connecting-IP": f"203.0.113.{i % 250}"},
+        )
+    status, _, body = raw(
+        address,
+        "/api/login",
+        "POST",
+        {"password": PASSWORD},
+        headers={"CF-Connecting-IP": "198.51.100.7"},
+    )
+    assert status == 429, "a fresh address walked straight past the lockout"
+    assert "Locked" in body
+
+
+def test_a_correct_password_clears_the_global_counter(gated):
+    """One person fumbling twice must not spend everyone's budget."""
+    address, console = gated
+    for _ in range(3):
+        sign_in(address, "wrong")
+    assert console.gate._global.count == 3
+    assert sign_in(address)[0] == 200
+    assert console.gate._global.count == 0
+
+
+def test_no_password_configured_means_no_gate(server):
+    """Loopback default: reaching 127.0.0.1 already means having the machine."""
+    address, console = server
+    assert console.gate.required is False
+    assert request(address, "/api/dataset")[0] == 200
+
+
+def test_the_password_check_is_constant_time():
+    """Compare with hmac, so the secret cannot be recovered from timing."""
+    import inspect
+
+    from tracker.webui import auth
+
+    source = inspect.getsource(auth.Gate.attempt)
+    assert "compare_digest" in source
+    assert "==" not in source.split("compare_digest")[1].split("\n")[0]
+
+
+def test_a_tunnel_client_ip_is_only_trusted_from_loopback():
+    """CF-Connecting-IP is a header, and headers are writable.
+
+    It is read only when the socket itself is loopback — which behind cloudflared
+    it always is, and from a direct remote connection it never is.
+    """
+    import inspect
+
+    from tracker.webui import server as server_mod
+
+    source = inspect.getsource(server_mod.Handler._client)
+    assert "127.0.0.1" in source and "CF-Connecting-IP" in source
 
 
 # --- assets -----------------------------------------------------------------

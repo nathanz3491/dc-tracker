@@ -88,11 +88,34 @@ def _utf8(stream) -> None:
         stream.reconfigure(encoding="utf-8", errors="replace")
 
 
+def _forced_colour() -> dict[str, object]:
+    """Console kwargs for when the caller has asked for colour down a pipe.
+
+    `FORCE_COLOR` alone is not enough on Windows, and the failure is silent.
+    Rich honours it — `is_terminal` becomes True — but then
+    `_detect_color_system` takes the Windows branch, finds `legacy_windows`, and
+    picks `ColorSystem.WINDOWS`, which paints by calling the console API instead
+    of writing escape sequences. Down a pipe that API does nothing, so the output
+    arrives with the markup stripped and no colour in its place. `COLORTERM` is
+    only ever read on the POSIX side, so it cannot help either.
+
+    Naming an ANSI dialect and switching legacy mode off is what actually
+    produces escapes. Worth having for anyone piping this on Windows, not only
+    for `tracker serve`, which is what surfaced it.
+
+    `NO_COLOR` still wins: https://no-color.org says an application should not
+    emit colour when it is set, whatever else it was told.
+    """
+    if os.environ.get("NO_COLOR") is not None or not os.environ.get("FORCE_COLOR"):
+        return {}
+    return {"color_system": "truecolor", "legacy_windows": False}
+
+
 _utf8(sys.stdout)
 _utf8(sys.stderr)
 
-console = Console(width=_width(), soft_wrap=False)
-err = Console(stderr=True, width=_width())
+console = Console(width=_width(), soft_wrap=False, **_forced_colour())
+err = Console(stderr=True, width=_width(), **_forced_colour())
 
 #: Rendered for a NULL field. Deliberately ASCII, for the same reason as TABLE_BOX.
 NA = "-"
@@ -260,6 +283,13 @@ def serve(
         bool,
         typer.Option("--allow-remote", help="Permit a non-loopback --host. Read the warning."),
     ] = False,
+    tunnel: Annotated[
+        bool,
+        typer.Option(
+            "--tunnel",
+            help="Publish through a Cloudflare quick tunnel. Requires TRACKER_CONSOLE_PASSWORD.",
+        ),
+    ] = False,
 ) -> None:
     """Open the console: the database as a live page, with the commands as buttons.
 
@@ -268,9 +298,18 @@ def serve(
     This reads the database on every request and can run the commands that change
     it — which is also why it binds loopback and refuses anything else without
     `--allow-remote`. Anyone who can reach this port can start a `sync`.
+
+    Set `TRACKER_CONSOLE_PASSWORD` to put a password in front of it. On loopback
+    that is optional; with `--tunnel` it is required, because a quick tunnel is a
+    public URL and what is behind it runs commands.
     """
     from tracker.webui import assets
+    from tracker.webui.auth import MIN_PASSWORD_LEN
     from tracker.webui.server import serve as run_server
+    from tracker.webui.tunnel import CloudflaredMissing, quick_tunnel
+
+    secret = get_settings().console_password
+    password = secret.get_secret_value() if secret else None
 
     if host not in {"127.0.0.1", "localhost", "::1"} and not allow_remote:
         _fail(
@@ -278,6 +317,27 @@ def serve(
             "Anyone who can reach that address could start a run that spends LLM "
             "tokens and writes to the database. Pass --allow-remote if that is "
             "genuinely what you want."
+        )
+
+    # A tunnel is a public URL handed to anyone who learns it, in front of a
+    # process that runs commands. Refusing rather than warning is the point: a
+    # warning scrolls past, and there is no safe reading of "published and open".
+    if tunnel and not password:
+        _fail(
+            "--tunnel publishes this console on a public URL, and it has no password.\n\n"
+            "Set one first — in .env (gitignored) or the environment:\n"
+            "  TRACKER_CONSOLE_PASSWORD=...\n\n"
+            "Anything that reaches the URL can otherwise run `sync`, spend LLM "
+            "tokens and write to the database."
+        )
+    # A floor against a typo, not a strength policy. What makes a short password
+    # safe here is the rate limit — 40 failed attempts across all clients closes
+    # the gate for 15 minutes, which puts even a 7-character keyspace tens of
+    # millions of years out of reach. See tracker/webui/auth.py.
+    if password and len(password) < MIN_PASSWORD_LEN:
+        _fail(
+            f"TRACKER_CONSOLE_PASSWORD is under {MIN_PASSWORD_LEN} characters. "
+            "That is short enough to be a typo rather than a secret."
         )
 
     missing = assets.missing_vendor()
@@ -295,10 +355,41 @@ def serve(
 
     console.print(f"database: [bold]{path}[/bold]")
     console.print(f"console:  [bold]http://{host}:{port}/[/bold]")
+    console.print(
+        "[green]password protected[/green]"
+        if password
+        else "[yellow]no password[/yellow] — fine on loopback, never publish it like this"
+    )
     if not run:
         console.print("[dim]read-only: the page cannot execute commands[/dim]")
+
+    public = None
+    if tunnel:
+        try:
+            public = quick_tunnel(port)
+        except CloudflaredMissing as exc:
+            _fail(str(exc))
+        except TimeoutError as exc:
+            _fail(str(exc))
+        console.print(f"public:   [bold]{public.url}[/bold]")
+        console.print(
+            "[yellow]that URL is reachable by anyone who has it.[/yellow] "
+            "It stops working when this command does."
+        )
+
     console.print("[dim]stop with Ctrl-C[/dim]")
-    run_server(path, host=host, port=port, open_browser=open_browser, allow_write=run)
+    try:
+        run_server(
+            path,
+            host=host,
+            port=port,
+            open_browser=open_browser and not tunnel,
+            allow_write=run,
+            password=password,
+        )
+    finally:
+        if public is not None:
+            public.stop()
 
 
 # --- ingest -----------------------------------------------------------------
@@ -347,6 +438,10 @@ def ingest_crawl(
     urls: Annotated[
         Path | None,
         typer.Option("--urls", help="File with one article URL per line; # comments allowed."),
+    ] = None,
+    url: Annotated[
+        list[str] | None,
+        typer.Option("--url", help="A single article URL. Repeatable."),
     ] = None,
     from_queue: Annotated[
         bool,
@@ -405,17 +500,35 @@ def ingest_crawl(
         console.print("[green]ok[/green]")
         return
 
-    if from_queue and urls is not None:
-        _fail("pass either --urls or --from-queue, not both")
+    chosen = [
+        name
+        for name, given in (("--urls", urls), ("--url", url), ("--from-queue", from_queue))
+        if given
+    ]
+    if len(chosen) > 1:
+        _fail(f"pass only one of --urls, --url or --from-queue (got {', '.join(chosen)})")
         return
-    if not from_queue and urls is None:
-        _fail("pass --urls FILE, or --from-queue, or --check to test connectivity")
+    if not chosen:
+        _fail("pass --urls FILE, --url URL, --from-queue, or --check to test connectivity")
         return
 
     engine, _ = init_db(_db_path())
     source_label = "queue"
 
-    if from_queue:
+    if url:
+        # Deduped like `read_urls` does, so passing the same link twice costs one
+        # call rather than two.
+        url_list = list(dict.fromkeys(u.strip() for u in url if u.strip()))
+        bad = [u for u in url_list if not u.lower().startswith(("http://", "https://"))]
+        if bad:
+            _fail(f"not an http(s) URL: {bad[0]}")
+            return
+        source_label = url_list[0] if len(url_list) == 1 else f"{len(url_list)} URLs"
+        # Same reasoning as the queue path below: a URL named explicitly is one
+        # the operator wants read now, and the skip rule would otherwise make a
+        # second attempt at an already-seen link do nothing at all.
+        force = True
+    elif from_queue:
         from tracker.ingest import discover as disc
 
         with session_scope(engine, commit=False) as session:

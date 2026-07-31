@@ -85,6 +85,9 @@ class Flag:
     default: Any = None
     help: str = ""
     choices: tuple[str, ...] = ()
+    #: Typer's `list[str]` options, which the CLI accepts more than once
+    #: (`--url A --url B`). A request may send a list for these and only these.
+    repeatable: bool = False
 
     def as_json(self) -> dict[str, Any]:
         return {
@@ -95,6 +98,7 @@ class Flag:
             "d": self.default,
             "h": self.help,
             "o": list(self.choices),
+            "many": self.repeatable,
         }
 
 
@@ -173,6 +177,10 @@ def _flags_for(command) -> tuple[Flag, ...]:
                 default=_jsonable(getattr(param, "default", None)),
                 help=getattr(param, "help", "") or "",
                 choices=choices,
+                # Click marks a `list[str]` option `multiple`. Read it rather
+                # than keeping a hand-written list, so a new repeatable option
+                # works without anyone remembering this file exists.
+                repeatable=bool(getattr(param, "multiple", False)),
             )
         )
     return tuple(out)
@@ -273,20 +281,31 @@ def build_argv(cmd: str, flags: dict[str, Any], *, db_path: Any = None) -> list[
             if bool(raw_value):
                 argv.append(flag.name)
             continue
-        value = str(raw_value)
-        if flag.choices and value not in flag.choices:
-            raise InvalidRequest(
-                f"{raw_name} must be one of: {', '.join(flag.choices)} (got {value!r})"
-            )
-        if flag.kind in {"int", "float"}:
-            try:
-                float(value)
-            except ValueError:
-                raise InvalidRequest(f"{raw_name} must be a number (got {value!r})") from None
-        if flag.positional:
-            positionals.append(value)
+
+        # A list is only ever allowed where the CLI itself takes the option more
+        # than once. Anywhere else it would silently stringify to "['a', 'b']"
+        # and be passed as one nonsense argument.
+        if isinstance(raw_value, list | tuple):
+            if not flag.repeatable:
+                raise InvalidRequest(f"{raw_name} takes a single value, not a list")
+            values = [str(v) for v in raw_value if str(v).strip()]
         else:
-            argv += [flag.name, value]
+            values = [str(raw_value)]
+
+        for value in values:
+            if flag.choices and value not in flag.choices:
+                raise InvalidRequest(
+                    f"{raw_name} must be one of: {', '.join(flag.choices)} (got {value!r})"
+                )
+            if flag.kind in {"int", "float"}:
+                try:
+                    float(value)
+                except ValueError:
+                    raise InvalidRequest(f"{raw_name} must be a number (got {value!r})") from None
+            if flag.positional:
+                positionals.append(value)
+            else:
+                argv += [flag.name, value]
 
     missing = [
         f.name for f in command.flags if f.required and f.name not in (flags or {}) and f.positional

@@ -61,6 +61,28 @@ def _iso_of(project) -> str | None:
     return None
 
 
+def _nulls(project) -> dict[str, dict[str, Any]]:
+    """Why each empty tracked field is empty.
+
+    A NULL is not always a gap, and the table has been unable to say so. Most of
+    the dashes on screen are correct answers — `mw_built` on a project that has
+    not broken ground, `customer` on a self-built campus — and rendering them
+    identically to a genuinely unknown value makes the dataset look thin when it
+    is merely honest.
+
+    `gaps.for_project` already draws that line and nothing was reading it.
+    """
+    from tracker.gaps import FILLED, for_project
+    from tracker.vocab import TRACKED_FIELDS
+
+    out: dict[str, dict[str, Any]] = {}
+    for state in for_project(project, TRACKED_FIELDS):
+        if state.status == FILLED:
+            continue
+        out[state.field] = {"status": state.status, "reason": state.reason}
+    return out
+
+
 def _queue(session: Session) -> list[dict[str, Any]]:
     from tracker.ingest import discover
 
@@ -206,6 +228,8 @@ def build(session: Session, *, db_path: str, schema_version: int) -> dict[str, A
     for project in rows:
         payload = to_json_object(project)
         payload["iso"] = _iso_of(project)
+        payload["nulls"] = _nulls(project)
+        payload["filled"] = sum(1 for f in TRACKED_FIELDS if getattr(project, f, None) is not None)
         projects.append(payload)
 
     citations = sum(len(p["sources"]) for p in projects)

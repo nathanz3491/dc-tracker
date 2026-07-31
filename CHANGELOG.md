@@ -12,6 +12,105 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **The console on a phone.** It worked and was miserable: at 490px the sticky
+  header took 15% of the screen, the filter card was 558px tall, and the first
+  data row sat at y=1137 behind a table showing 321px of a 2112px grid. Below
+  720px the table is now a card list — thirteen columns has no good phone form,
+  and shrinking the type to force one is worse than changing shape. The header
+  drops to a logo and a scrollable view strip, filters collapse behind a count,
+  the map takes 60vh and the `compact` mode `dc-map` already had, and the intro
+  prose, coverage strip and tier legend step aside (all three are in Help). 940px
+  of chrome above the first card became 355px. Coarse pointers get 36px targets
+  regardless of width.
+
+- **A Help view.** The three ideas that make the rest legible — evidence tiers
+  with the live swatches rather than a picture of them, the five tracks and why
+  power is never inferred, confidence 0–3 — plus what each view is for, what
+  costs money, and the keyboard. Deliberately does not repeat the README, so the
+  two cannot disagree.
+
+- **Colour in the run log.** `runner.py` set `NO_COLOR=1` and `TERM=dumb`, which
+  threw away the CLI's own signalling at the one moment someone is reading the
+  output. Now forced on and parsed back out of the ANSI stream into styled spans
+  (`static/ansi.js`), on a fixed dark terminal surface in both themes — amber on
+  cream is a different colour and barely legible, so this is the one surface that
+  does not follow the page.
+
+  `FORCE_COLOR=1` alone was not enough, and failed silently: Rich honours it,
+  then takes the Windows branch of `_detect_color_system`, finds `legacy_windows`
+  and picks `ColorSystem.WINDOWS`, which paints by calling the console API rather
+  than writing escapes — down a pipe that API does nothing and the markup is
+  simply stripped. `cli._forced_colour` names an ANSI dialect and turns legacy
+  mode off, which fixes it for anyone piping this on Windows, not only for the
+  console. `NO_COLOR` still wins, per no-color.org.
+
+- **Zoom and pan on the map.** Wheel, drag, and +/−/reset. Geography scales;
+  **the marks deliberately do not**. Scaling the bubbles too is the obvious
+  implementation and the wrong one — the reason to zoom this map is that a dozen
+  Northern Virginia projects sit on top of each other, and bubbles that grow with
+  the map stay exactly as overlapped. Button-driven zoom eases in CSS; wheel and
+  drag stay instant, because a transition on a continuous gesture reads as lag.
+
+- **`tracker ingest crawl --url URL`**, repeatable, beside the existing
+  `--urls FILE`. Reading one link no longer means writing a file first. The
+  console's Queue view uses it for a per-article Crawl button, two-step rather
+  than typing the command name: that ceremony is proportionate to 25 LLM calls
+  and absurd for one. The server-side rule is unchanged — the UI supplies the
+  confirmation only after the operator has confirmed. `catalog.build_argv` learned
+  repeatable flags, reading click's own `multiple` rather than keeping a list, and
+  refuses a list anywhere the CLI takes a single value.
+
+- **`docs/`** — `architecture.md` (how the CLI, database and console fit
+  together; no English equivalent existed), `README.md` as an index that says
+  which documents you can skip, and the two Chinese documents `guide.zh-CN.md`
+  and `architecture.zh-CN.md`. No English `guide.md`: the root README already is
+  one, and two documents over the same ground is how one of them becomes wrong.
+
+- **`tracker serve --tunnel`** publishes the console through a Cloudflare quick
+  tunnel, and **refuses to start without `TRACKER_CONSOLE_PASSWORD`**. Refusing
+  rather than warning is the point: a warning scrolls past, and there is no safe
+  reading of "published and open" in front of a process that runs commands.
+
+  The gate (`webui/auth.py`) is not localhost-grade. Everything is behind it —
+  before signing in the whole site is one self-contained login page and every API
+  route is 401, so not even the frontend is served. Constant-time comparison.
+  Session tokens are random, server-side and revocable; the cookie is `HttpOnly`
+  and `SameSite=Lax`, which is what actually stops another site POSTing to
+  `/api/run`, with an Origin check behind it. Eight failures locks one client for
+  15 minutes and **forty across all clients locks the gate** — per-IP limiting
+  alone is the wrong shape against a published URL, where an attacker rotates
+  addresses. That global limit is what makes a short password safe: 40 attempts
+  per 15 minutes is ~3,800 a day against a 36⁷ keyspace, or about 57 million
+  years.
+
+  `find_cloudflared` prefers a real executable over npm's `.CMD` shim, which
+  swallowed both stdout and the exit status, and checks the binary actually runs
+  before starting a tunnel. Found the hard way: npm's postinstall had left a
+  7.9 MB `cloudflared.exe` where the real one is 54 MB, and every launch died with
+  WinError 193 and no output at all.
+
+- **Honest density in the projects table.** It read as empty — 653 of the cells
+  were dashes — because the default columns included fields that are legitimately
+  null on most rows. Columns are now **ordered by their measured coverage** from
+  `gaps.measure()`, defaulting to those above 50% with the rest one switch away
+  and the switch saying how many it is hiding. Self-maintaining: as coverage
+  improves, columns promote themselves. Visible cells went from ~46% populated to
+  95%, with nothing hidden and no figure massaged.
+
+  Alongside it: a real per-row `9/12`, a coverage strip carrying the three best
+  *and* three worst fields with true numerators and denominators, and a distinct
+  style for a null that is empty *correctly* (`mw_built` before ground is broken)
+  versus one that is simply unknown — `gaps.for_project` already drew that line
+  and nothing was reading it. 61 of 653 empty cells turn out to be the former.
+
+- **Motion**, on Meridian's own tokens rather than hand-written curves: staggered
+  row entrance capped at twelve, drawer scrim fade, track segments filling left to
+  right, coverage bars growing from zero, log lines fading in, and header totals
+  counting up on first arrival only — a number that re-animates on every keystroke
+  is noise. Everything is a keyframe or a transition so `base.css`'s global
+  `prefers-reduced-motion` rule reaches all of it; the count-up is the one timer
+  and checks the query itself.
+
 - **`tracker serve`** and `tracker/webui/` — a local console on 127.0.0.1 that
   reads the database live and can run the CLI. Six views (Projects, Map, Queue,
   Coverage, Commands, Runs) built from the Meridian design system, ported from a

@@ -619,12 +619,44 @@ def test_queue_drop_removes_a_candidate(initialized: Path):
     assert "queue is empty" in invoke(initialized, "queue").output
 
 
-def test_crawl_from_queue_and_urls_together_is_rejected(initialized: Path, tmp_path: Path):
+@pytest.mark.parametrize(
+    "extra",
+    [
+        ["--from-queue", "--urls", "URLS"],
+        ["--from-queue", "--url", "https://a.test/x"],
+        ["--urls", "URLS", "--url", "https://a.test/x"],
+    ],
+)
+def test_crawl_sources_are_mutually_exclusive(initialized: Path, tmp_path: Path, extra):
+    """Three ways in now, and still only one at a time.
+
+    The message names which two were given rather than saying "not both", which
+    stopped being accurate once `--url` existed.
+    """
     urls = tmp_path / "u.txt"
     urls.write_text("https://a.test/x\n", encoding="utf-8")
-    result = invoke(initialized, "ingest", "crawl", "--from-queue", "--urls", str(urls))
+    args = [str(urls) if part == "URLS" else part for part in extra]
+    result = invoke(initialized, "ingest", "crawl", *args)
     assert result.exit_code == 2
-    assert "not both" in result.output
+    assert "only one of" in result.output
+
+
+def test_crawl_accepts_a_single_url_without_a_file(initialized: Path):
+    """The Queue's Crawl button needs this; so does anyone with one link to read.
+
+    No API key in the test environment, so it fails at the extractor — after
+    argument handling, which is the part under test. What must NOT happen is a
+    complaint about --urls.
+    """
+    result = invoke(initialized, "ingest", "crawl", "--url", "https://a.test/x")
+    assert "--urls" not in result.output
+    assert "no such file" not in result.output
+
+
+def test_crawl_rejects_a_url_that_is_not_one(initialized: Path):
+    result = invoke(initialized, "ingest", "crawl", "--url", "not-a-url")
+    assert result.exit_code == 2
+    assert "not an http(s) URL" in result.output
 
 
 def test_crawl_with_neither_source_explains_the_options(initialized: Path):

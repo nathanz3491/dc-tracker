@@ -435,6 +435,16 @@ no build step and the repo has no `package.json`: React is a UMD global, the
 Meridian component bundle is already compiled, and `htm` supplies JSX-like
 templates from tagged template literals.
 
+### Documentation
+
+| Where | What |
+| --- | --- |
+| This file | Everything: install, keys, every command, and the reasoning behind each design decision. |
+| [docs/architecture.md](docs/architecture.md) | How the CLI, the database and the console fit together — and why the browser never computes a judgement of its own. |
+| [docs/guide.zh-CN.md](docs/guide.zh-CN.md) | 中文使用指南 |
+| [docs/architecture.zh-CN.md](docs/architecture.zh-CN.md) | 架构说明（中文） |
+| The console's **Help** tab | The three ideas — evidence tiers, five tracks, confidence — where you are actually looking. |
+
 ### Seeing where the data is thin
 
 ```bash

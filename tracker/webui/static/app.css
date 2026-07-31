@@ -30,13 +30,45 @@ body {
   border-radius: 6px;
 }
 
-@keyframes dcRise      { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
-@keyframes dcSlideLeft { from { opacity: 0; transform: translateX(28px); } to { opacity: 1; transform: none; } }
-@keyframes dcPop       { 0% { opacity: 0; transform: scale(.94); } 60% { transform: scale(1.015); } 100% { opacity: 1; transform: scale(1); } }
+/* ---- Motion ---------------------------------------------------------------
+   Every duration and easing comes from Meridian's motion tokens. The three
+   keyframes that used to live here duplicated `rise`, `pop` and `slide-left-fade`
+   from the vendor bundle with the same curves written out as literals — which is
+   how two sets of timings drift apart.
 
-.dc-rise  { animation: dcRise 320ms cubic-bezier(.22,1,.36,1); }
-.dc-pop   { animation: dcPop 160ms cubic-bezier(.34,1.56,.64,1); }
-.dc-slide { animation: dcSlideLeft 220ms cubic-bezier(.22,1,.36,1); }
+   Everything below is a keyframe or a transition, never a JS timer moving an
+   element. That is what lets `base.css`'s global `prefers-reduced-motion` rule
+   collapse all of it to 0.01ms in one place. The single exception is the number
+   count-up, which checks the media query itself. */
+@keyframes dcSlideLeft { from { opacity: 0; transform: translateX(28px); } to { opacity: 1; transform: none; } }
+@keyframes dcSegFill   { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+
+.dc-rise  { animation: rise var(--duration-slow) var(--ease-spring) both; }
+.dc-pop   { animation: pop 160ms var(--ease-out-back) both; }
+.dc-slide { animation: dcSlideLeft 220ms var(--ease-spring) both; }
+
+/* Rows and cards arrive in sequence, but the stagger is capped at twelve — the
+   caller clamps `--i`, because a 124-step cascade is a slideshow, not a
+   flourish, and the last row would arrive four seconds late. */
+.dc-enter {
+  animation: rise var(--duration-base) var(--ease-spring) both;
+  animation-delay: calc(var(--i, 0) * 22ms);
+}
+
+/* Scrim fades; the panel it dims slides. Appearing instantly made the drawer
+   feel like a page change rather than a layer. */
+.dc-scrim { animation: fade-in var(--duration-base) var(--ease-swift) both; }
+
+/* Track segments fill left to right when the drawer opens, so the strip reads
+   as a progression rather than a row of blocks. */
+.dc-drawer .dc-seg-cell {
+  transform-origin: left center;
+  animation: dcSegFill var(--duration-base) var(--ease-spring) both;
+  animation-delay: calc(var(--i, 0) * 40ms);
+}
+
+/* Coverage bars grow from zero on arrival, same reasoning. */
+.dc-bar { transform-origin: left center; animation: dcSegFill var(--duration-slow) var(--ease-spring) both; }
 
 /* ---- Provenance -----------------------------------------------------------
    The underline under a value says where it came from, and the four are
@@ -57,6 +89,15 @@ body {
 .dc-v--inferred  { color: var(--chart-5); border-bottom: 1.5px dashed var(--chart-5); }
 .dc-v--defaulted { color: var(--muted-foreground); border-bottom: 1.5px dashed color-mix(in oklab, var(--muted-foreground) 55%, transparent); }
 .dc-v--missing   { color: var(--muted-foreground); opacity: .6; }
+/* Empty *correctly*: the field cannot apply to this row — `mw_built` before
+   ground is broken. Fainter than `missing`, and with no underline, so it reads
+   as "nothing to see" rather than "nothing found".
+
+   A minority of empty cells, not most: 61 of 653 on the live database. The thing
+   that actually makes the table read as populated is the default column set,
+   which is chosen by measured coverage — this only stops the remaining dashes
+   being over-read. */
+.dc-v--na        { color: var(--muted-foreground); opacity: .3; }
 
 /* ---- Segmented control (header view switch, map mode) -------------------- */
 .dc-seg      { display: flex; gap: 2px; padding: 3px; background: var(--muted); border-radius: 12px; }
@@ -86,6 +127,14 @@ body {
 .dc-seg-cell--blocked { background: var(--danger); opacity: .88; }
 .dc-seg-cell--todo    { background: var(--muted); }
 
+/* ---- Queue row ----------------------------------------------------------- */
+.dc-queue-row {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+}
+
 /* ---- Cards that are buttons (map list, command palette) ------------------ */
 .dc-tile {
   display: grid; gap: 6px; width: 100%; padding: 12px 14px; text-align: left;
@@ -109,19 +158,101 @@ body {
 }
 .dc-xbtn:hover { background: var(--muted); color: var(--foreground); }
 
-/* ---- Terminal log -------------------------------------------------------- */
+/* ---- Terminal log ---------------------------------------------------------
+   The one surface in the console that does not follow the page theme, and that
+   is deliberate. The colours in here are the CLI's own ANSI output, chosen
+   against a dark terminal; amber on cream is a different colour and barely
+   legible. Fidelity to what the terminal shows beats consistency with the page.
+
+   Palette is the standard 16, tuned for contrast rather than copied from any
+   one terminal: every foreground clears 4.5:1 on --t-bg. */
 .dc-log {
+  --t-bg: #17120e;
+  --t-fg: #e8e0d4;
+  --t-black: #2a231c;          --t-bright-black: #6b6157;
+  --t-red: #e0705f;            --t-bright-red: #f08b78;
+  --t-green: #93b877;          --t-bright-green: #a9cd8c;
+  --t-yellow: #d6a94e;         --t-bright-yellow: #ecc26a;
+  --t-blue: #7fa6cc;           --t-bright-blue: #9dbfe0;
+  --t-magenta: #bb9ad4;        --t-bright-magenta: #d0b3e6;
+  --t-cyan: #78b7b0;           --t-bright-cyan: #96d0c9;
+  --t-white: #d6cec2;          --t-bright-white: #f6f1e8;
+
   margin: 0; padding: 14px 16px; max-height: 60vh; overflow: auto;
-  background: color-mix(in oklab, var(--muted) 60%, var(--surface));
+  background: var(--t-bg); color: var(--t-fg);
   border-radius: 14px; border: 1px solid var(--border);
   font-family: var(--font-mono); font-size: 12px; line-height: 1.65;
   white-space: pre-wrap; word-break: break-word;
+  /* Rich draws its tables with +-| at a fixed width; a proportional fallback
+     would shear them apart. */
+  font-variant-ligatures: none;
+  tab-size: 4;
 }
-.dc-log b { color: var(--primary); font-weight: 500; }
+.dc-log-line { display: block; animation: fade-in var(--duration-fast) var(--ease-swift) both; }
+.dc-log-line:nth-child(n + 60) { animation: none; }
 
 /* A wide table scrolls inside its own container; the page never scrolls
    sideways. Stated as a rule in Meridian's layout section, easy to lose. */
 .dc-scroll-x { overflow-x: auto; max-width: 100%; }
+
+/* ---- Project cards (narrow screens) --------------------------------------
+   Below the breakpoint the table stops being a table. Thirteen columns has no
+   good phone form: shrinking the type to fit is worse than changing shape, and
+   panning a 2112px grid through a 320px window is not reading. */
+.dc-pcard {
+  display: grid; gap: 8px; width: 100%; text-align: left;
+  padding: 14px 16px; border: 1px solid var(--border); border-radius: 16px;
+  background: var(--surface); cursor: pointer;
+  transition: border-color var(--duration-fast) var(--ease-swift),
+              box-shadow var(--duration-fast) var(--ease-swift);
+}
+.dc-pcard:hover  { border-color: var(--input); box-shadow: var(--shadow-hover); }
+.dc-pcard--open  { border-color: var(--input); background: var(--accent-soft); }
+.dc-pcard-top    { display: flex; align-items: baseline; gap: 8px; }
+.dc-pcard-name   { flex: 1; min-width: 0; font-size: 15px; font-weight: 600; line-height: 20px; }
+.dc-pcard-meta   {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px;
+  font-family: var(--font-mono); font-size: 12px; color: var(--muted-foreground);
+}
+.dc-pcard-facts  { display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: baseline; }
+
+/* ---- Narrow screens ------------------------------------------------------- */
+@media (max-width: 720px) {
+  /* The header was 161px and sticky — 15% of a phone screen permanently spent on
+     chrome. Logo and views only; the counts move into the page. */
+  .dc-head        { padding: 10px 14px !important; gap: 8px 12px !important; }
+  .dc-head-counts { display: none; }
+  .dc-seg {
+    order: 3; width: 100%; overflow-x: auto; flex-wrap: nowrap;
+    scrollbar-width: none; -webkit-overflow-scrolling: touch;
+  }
+  .dc-seg::-webkit-scrollbar { display: none; }
+  .dc-seg-btn     { flex: none; padding: 0 11px; font-size: 12px; }
+
+  .dc-view        { padding: 16px 14px 48px !important; gap: 12px !important; }
+
+  /* Cards, drawer and dialogs all lose a step of padding. 24px of gutter on a
+     375px screen is 13% of the width. */
+  .dc-drawer-body { padding: 16px 14px 40px !important; }
+  .dc-drawer-head { padding: 14px 14px 12px !important; }
+  .dc-drawer-tabs { padding: 6px 14px 0 !important; }
+
+  /* Coverage rows are a fixed 150px + 64px grid; on 375px that is 57% of the
+     width spent before the bar starts. */
+  .dc-gap-row     { grid-template-columns: minmax(0, 1fr) !important; gap: 6px !important; }
+  .dc-exposure-row{ grid-template-columns: minmax(0, 1fr) !important; gap: 6px !important; }
+  .dc-queue-row   { grid-template-columns: minmax(0, 1fr) !important; gap: 8px !important; }
+
+  .dc-log         { font-size: 11px; max-height: 50vh; }
+}
+
+/* Coarse pointers get real targets regardless of width — a 22px chip is fine
+   with a mouse and a coin toss with a thumb. */
+@media (pointer: coarse) {
+  .dc-pcard      { padding: 16px; }
+  .dc-seg-btn    { height: 36px; }
+  .mrd-btn--sm   { min-height: 36px; }
+}
 
 /* Vertically the table does NOT get its own scroll region — the page scrolls and
    the table is as long as the data. A nested scroller reads as "there are only
@@ -142,3 +273,25 @@ body {
    is still measured and published for anything else that needs to sit clear of
    the app header. */
 :root { --dc-header-h: 60px; }
+
+/* ---- Map zoom -------------------------------------------------------------
+   Only the button path eases; wheel and drag stay instant, because a transition
+   on a continuous gesture reads as lag rather than as polish. */
+dc-map.dc-map--easing svg > g,
+dc-map.dc-map--easing svg > g > g {
+  transition: transform 240ms var(--ease-spring);
+}
+dc-map svg { cursor: grab; }
+dc-map svg:active { cursor: grabbing; }
+
+/* Getting to the data on a phone.
+   Measured before this: 940px of chrome above the first card. The intro
+   paragraph, the coverage strip and the tier legend are all worth having on a
+   desktop and are all in the way on a 390px screen — the legend and the concepts
+   both live in Help, which is where someone looks when they need them. */
+@media (max-width: 720px) {
+  .dc-intro  { display: none; }
+  .dc-cover  { display: none; }
+  .dc-legend { display: none !important; }
+  .dc-view h1 { font-size: 22px !important; }
+}
