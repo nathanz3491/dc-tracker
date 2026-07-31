@@ -76,13 +76,16 @@ def test_a_project_can_be_advanced_on_one_track_and_untouched_on_another():
     Land bought and ground broken, but no interconnection agreement — to a single
     `phase` enum this is just "construction", which hides the thing that decides
     whether it ever runs.
+
+    Permits are not asserted here: breaking ground implies an approved permit (see
+    `IMPLIED_BY`), so power is the track that genuinely stays open.
     """
     stand = standing(1, [ev("announced"), ev("land_acquired"), ev("groundbreaking")], [])
 
     assert stand.track("site_control").complete
     assert stand.track("construction").status == "groundbreaking"
-    assert stand.track("power").status == UNKNOWN
-    assert stand.track("permits").status == UNKNOWN
+    assert stand.track("power").status == UNKNOWN, "built is not energised"
+    assert stand.track("permits").complete, "you cannot break ground unpermitted"
 
 
 def test_a_track_reports_its_latest_milestone_not_its_first():
@@ -237,3 +240,85 @@ def test_a_project_with_no_evidence_reads_as_unknown_not_as_finished():
     stand = standing(1, [], [])
     assert all(t.status == UNKNOWN for t in stand.tracks)
     assert not any(t.complete for t in stand.tracks)
+
+
+# --- cross-track implication -------------------------------------------------
+
+
+def test_a_built_project_implies_land_and_permits():
+    """Reading real output made this obvious.
+
+    Sabey Ashburn showed construction `complete` beside three `unknown` tracks,
+    which reads as a data fault rather than a finding. You cannot pour a building on
+    land you do not control, nor break ground without an approved permit.
+    """
+    stand = standing(1, [ev("equipment_install")], [])
+
+    assert stand.track("site_control").complete
+    assert stand.track("permits").complete
+    assert stand.track("construction").complete
+
+
+def test_construction_does_not_imply_power_and_that_is_the_point():
+    """Building ahead of power is routine and is THE bottleneck of this cycle.
+
+    A finished shell waiting on a substation is exactly what this tracker exists to
+    surface. Implying an interconnection agreement from construction would erase the
+    most valuable signal in the dataset.
+    """
+    stand = standing(1, [ev("equipment_install")], [])
+    power = stand.track("power")
+
+    assert power.status == UNKNOWN, "a built site is not necessarily an energised one"
+    assert not power.complete
+    assert stand.watch_for is not None
+    assert "interconnection" in stand.watch_for
+
+
+def test_construction_does_not_imply_a_customer():
+    """Speculative builds with no signed tenant are common."""
+    stand = standing(1, [ev("groundbreaking")], [])
+    assert stand.track("commercial").status == UNKNOWN
+
+
+def test_an_energised_site_implies_permits_and_land():
+    stand = standing(1, [ev("energized")], [])
+    assert stand.track("site_control").complete
+    assert stand.track("permits").complete
+    assert stand.track("power").complete
+
+
+def test_an_implied_milestone_is_distinguishable_from_a_reported_one():
+    """A deduction is not a citation, and the row must be able to say which."""
+    implied = standing(1, [ev("groundbreaking")], []).track("permits")
+    assert implied.only_implied
+    assert "permit_approved" in implied.implied
+
+    reported = standing(1, [ev("groundbreaking"), ev("permit_approved")], []).track("permits")
+    assert not reported.only_implied, "an event we actually read is not implied"
+    assert "permit_approved" not in reported.implied
+
+
+def test_implication_never_invents_a_milestone_out_of_nothing():
+    stand = standing(1, [], [])
+    assert all(t.status == UNKNOWN for t in stand.tracks)
+    assert all(not t.implied for t in stand.tracks)
+
+
+def test_every_implication_names_real_milestones():
+    """A typo in IMPLIED_BY would silently imply nothing."""
+    from tracker.tracks import IMPLIED_BY
+
+    known = {m for ms in TRACK_MILESTONES.values() for m in ms}
+    for trigger, implied in IMPLIED_BY.items():
+        assert trigger in known, f"{trigger} is on no track"
+        for milestone in implied:
+            assert milestone in known, f"{trigger} implies unknown milestone {milestone}"
+
+
+def test_implication_is_not_circular():
+    """A milestone must not imply itself, directly or via its own ladder."""
+    from tracker.tracks import IMPLIED_BY
+
+    for trigger, implied in IMPLIED_BY.items():
+        assert trigger not in implied, f"{trigger} implies itself"

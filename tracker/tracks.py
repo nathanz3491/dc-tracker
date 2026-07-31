@@ -74,6 +74,37 @@ TRACK_MILESTONES: Final[dict[str, tuple[str, ...]]] = {
     "commercial": ("first_customer",),
 }
 
+#: Milestones that a reached milestone necessarily implies on *other* tracks.
+#:
+#: Reading a real project made the need obvious: Sabey Ashburn showed construction
+#: `complete` beside three `unknown` tracks, which reads as a data fault rather than
+#: as a finding. You cannot pour a building on land you do not control, and in the
+#: US you cannot break ground on a project of this scale without an approved permit.
+#:
+#: **Power is deliberately absent, and that omission is the point.** Building ahead
+#: of power is routine and is the defining bottleneck of this cycle: a finished
+#: shell waiting on a substation is exactly the situation this tracker exists to
+#: surface. Implying `interconnection_agreement` from construction would erase the
+#: single most valuable signal in the dataset. `energized` does imply an
+#: interconnection agreement, but that is within the power track and the cumulative
+#: rule already covers it.
+#:
+#: `first_customer` is absent for the same kind of reason: speculative builds with
+#: no signed tenant are common.
+IMPLIED_BY: Final[dict[str, tuple[str, ...]]] = {
+    # Site work means the developer controls the site.
+    "site_work": ("announced", "land_acquired"),
+    # Breaking ground requires a building permit, and the land under it.
+    "groundbreaking": ("announced", "land_acquired", "permit_filed", "permit_approved"),
+    "equipment_install": ("announced", "land_acquired", "permit_filed", "permit_approved"),
+    # A live site was permitted and built, whatever we happened to read.
+    "energized": ("announced", "land_acquired", "permit_filed", "permit_approved"),
+    # An approval presupposes an application.
+    "permit_approved": ("permit_filed",),
+    # Land was bought for a project that had been decided on.
+    "land_acquired": ("announced",),
+}
+
 #: Risk category to the track it blocks. Complete over RISK_CATEGORIES except
 #: `unclassified`, which by definition cannot be placed.
 RISK_TRACK: Final[dict[str, str]] = {
@@ -116,11 +147,21 @@ class TrackState:
     reached: tuple[str, ...] = ()
     blockers: tuple[str, ...] = ()
     blocker_severity: str | None = None
+    #: Of `reached`, the milestones nothing was read for — deduced from a later
+    #: milestone on another track (see :data:`IMPLIED_BY`). Kept distinct because a
+    #: deduction is not a citation, and an operator checking the row should be able
+    #: to see which is which.
+    implied: frozenset[str] = frozenset()
 
     @property
     def status(self) -> str:
         """The latest milestone reached on this track."""
         return self.reached[-1] if self.reached else UNKNOWN
+
+    @property
+    def only_implied(self) -> bool:
+        """True when nothing on this track was actually reported."""
+        return bool(self.reached) and set(self.reached) <= self.implied
 
     @property
     def next_milestone(self) -> str | None:
@@ -210,7 +251,16 @@ def standing(project_id: int, events, risks) -> ProjectStanding:
     `category`/`severity`/`status` respectively. Kept structural rather than
     ORM-typed so this module stays importable and testable without a database.
     """
-    reached_types = {getattr(e, "event_type", None) for e in events}
+    observed = {getattr(e, "event_type", None) for e in events}
+
+    # Close over the implications: a project that installed equipment controls its
+    # land and holds its permits, whether or not any article said so. Without this,
+    # a built project reported three tracks as `unknown`, which reads as a fault.
+    implied: set[str] = set()
+    for milestone in observed:
+        implied.update(IMPLIED_BY.get(milestone or "", ()))
+    implied -= observed
+    reached_types = observed | implied
 
     by_track: dict[str, list] = {t: [] for t in TRACKS}
     severity: dict[str, str] = {}
@@ -236,12 +286,14 @@ def standing(project_id: int, events, risks) -> ProjectStanding:
                 reached=tuple(m for m in ladder if m in reached_types),
                 blockers=tuple(dict.fromkeys(by_track[name])),
                 blocker_severity=severity.get(name),
+                implied=frozenset(m for m in ladder if m in implied),
             )
         )
     return ProjectStanding(project_id=project_id, tracks=tuple(states))
 
 
 __all__ = [
+    "IMPLIED_BY",
     "NEXT_SIGNAL",
     "RISK_TRACK",
     "TRACKS",

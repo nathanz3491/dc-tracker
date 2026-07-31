@@ -653,6 +653,11 @@ def _print_standing(project) -> None:
             reached = f"[yellow]{state.status}[/yellow]"
         else:
             reached = f"[dim]{state.status}[/dim]"
+        if state.only_implied:
+            # Deduced from a later milestone, not read anywhere. A built site must
+            # hold its land and permits; saying so beats printing "unknown", but a
+            # deduction is not a citation and must not look like one.
+            reached += " [dim](implied)[/dim]"
         blocked = ", ".join(state.blockers)
         if blocked and state.blocker_severity:
             blocked += f" [dim]({state.blocker_severity})[/dim]"
