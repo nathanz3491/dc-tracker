@@ -79,6 +79,32 @@ initial build of the v1 PRD.
   Census row is a real, checkable citation but it is not testimony about the
   project; counting it would let one press release plus a lookup read as two
   independent domains and reach confidence 3.
+- **Search is pluggable, with Brave and Serper alongside Google.** `PROVIDERS` maps
+  a name to a class and `build_provider()` resolves it; `TRACKER_SEARCH_PROVIDER`
+  pins one, and `auto` (the default) takes whichever backend holds a key. An
+  explicit name without its key fails loudly rather than falling back to a
+  different engine, because silently searching somewhere else is worse than
+  stopping.
+
+  Brave is the recommended addition: an independent index rather than a Google or
+  Bing reseller, so it widens coverage instead of re-asking the same engine — one
+  header, no cloud account, 2000 queries/month free. Its free tier answers HTTP 429
+  for *pacing* (about one query a second) and not only for an exhausted monthly
+  allowance, so a first 429 is retried after a pause instead of ending the run.
+  Serper is included too but is Google's index under a simpler API, so it widens
+  the quota rather than the coverage.
+
+  **There is no Bing backend: Microsoft retired the standalone Bing Search APIs on
+  2025-08-11**, and their documentation page now carries `is_retired: true`, so no
+  new subscription key can be created. The successor, Grounding with Bing Search in
+  Azure AI Foundry, is licensed for grounding a model's reply rather than for
+  building a stored database of facts and citations — precisely what this tool
+  does. Asking for it by name prints that explanation, with the Brave drop-in,
+  rather than "unknown provider".
+
+  `Settings.has_search_keys()` now means "some backend is configured";
+  `has_google_keys()` is the specific check, and `GoogleCSEProvider` uses it so a
+  Brave-only setup cannot construct it and fail later at request time.
 - **`tracker enrich ID`** and `tracker/ingest/enrich.py` — throws every retrieval
   method at ONE project, in rounds, until a round stops paying. `tracker sync`
   spreads a budget across the database; this inverts it for when you want one row

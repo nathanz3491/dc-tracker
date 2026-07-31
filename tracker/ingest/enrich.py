@@ -275,22 +275,21 @@ def harvest_search(
 ) -> Harvest:
     """Google CSE, aimed at this project's gaps. Needs keys."""
     from tracker.ingest.search import (
-        GoogleCSEProvider,
         QuotaExhausted,
         SearchError,
+        build_provider,
         is_useful_host,
     )
 
     if provider is None:
-        if not settings.has_search_keys():
-            return Harvest(
-                "search",
-                skipped=(
-                    "no Google keys — set TRACKER_GOOGLE_API_KEY and TRACKER_GOOGLE_CSE_ID "
-                    "(both free) to add web search"
-                ),
-            )
-        provider = GoogleCSEProvider(settings)
+        try:
+            provider = build_provider(settings)
+        except SearchError as exc:
+            # Not configured is not a failure: every other harvester still runs.
+            # The full message is kept rather than a one-line summary, because it
+            # names each backend and its variable — this is the single most useful
+            # thing the report can tell an operator whose enrich run came up short.
+            return Harvest("search", skipped=str(exc).strip())
 
     queries = search_queries(project, gaps)
     if not queries:

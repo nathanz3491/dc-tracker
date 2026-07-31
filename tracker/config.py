@@ -71,19 +71,43 @@ class Settings(BaseSettings):
     minimax_base_url: str = "https://api.minimax.io/v1"
     minimax_model: str = "MiniMax-M2.5"
 
-    # --- Google Programmable Search -------------------------------------------
-    # The official Custom Search JSON API. Needs two values, both free:
+    # --- Web search ------------------------------------------------------------
+    # Which backend `tracker search` and `tracker enrich` use: "auto" picks the
+    # first one that has a key, in the order google, brave, serper.
+    #
+    # Every option is an official API. Scraping result pages is deliberately not
+    # offered: it breaks the search engines' terms, gets blocked in practice, and
+    # would contradict this project's decision not to defeat other sites' access
+    # controls either.
+    #
+    # There is no "bing" option. Microsoft **retired** the standalone Bing Search
+    # APIs on 2025-08-11 (their own docs page carries `is_retired: true`), so no
+    # new subscription key can be created. Its successor, Grounding with Bing
+    # Search in Azure AI Foundry, is licensed for grounding a model's reply rather
+    # than for building a database of stored facts and citations, which is exactly
+    # what this tool does. Brave is the closest drop-in: an independent index, a
+    # free tier, one header, no cloud account.
+    search_provider: str = "auto"
+
+    # Google Programmable Search — the official Custom Search JSON API. Two values,
+    # both free:
     #   key  https://developers.google.com/custom-search/v1/introduction
     #   cx   https://programmablesearchengine.google.com  (set to search the
     #        whole web, not a fixed site list)
-    # Free tier is 100 queries/day, which is roughly 1000 candidate URLs.
-    #
-    # Deliberately the official API rather than scraping result pages: scraping
-    # breaks Google's terms, gets blocked, and would contradict this project's
-    # decision not to defeat other sites' access controls either.
+    # Free tier is 100 queries/day, roughly 1000 candidate URLs.
     google_api_key: SecretStr | None = None
     google_cse_id: str | None = None
-    #: Results requested per query. The API caps a single call at 10.
+
+    # Brave Search — independent index, one key, no cloud account.
+    #   https://api-dashboard.search.brave.com  (free tier: 2000 queries/month)
+    brave_api_key: SecretStr | None = None
+
+    # Serper — Google results over a simple JSON API, 2500 free credits.
+    #   https://serper.dev
+    serper_api_key: SecretStr | None = None
+
+    #: Results requested per query. Google caps a single call at 10; Brave allows
+    #: 20 but 10 keeps every backend comparable and the quota predictable.
     search_results_per_query: int = Field(default=10, ge=1, le=10)
     #: Queries per run, so a bad query set cannot exhaust the daily quota.
     search_max_queries: int = Field(default=10, ge=1, le=100)
@@ -118,13 +142,42 @@ class Settings(BaseSettings):
     def has_api_key(self) -> bool:
         return bool(self.minimax_api_key and self.minimax_api_key.get_secret_value().strip())
 
-    def has_search_keys(self) -> bool:
+    def has_google_keys(self) -> bool:
         return bool(
             self.google_api_key
             and self.google_api_key.get_secret_value().strip()
             and self.google_cse_id
             and self.google_cse_id.strip()
         )
+
+    def has_brave_key(self) -> bool:
+        return bool(self.brave_api_key and self.brave_api_key.get_secret_value().strip())
+
+    def has_serper_key(self) -> bool:
+        return bool(self.serper_api_key and self.serper_api_key.get_secret_value().strip())
+
+    def resolve_search_provider(self) -> str | None:
+        """Which backend to use, or None when nothing is configured.
+
+        "auto" takes the first backend holding a key. An explicit name is honoured
+        even without a key, so the provider itself can raise the error that names
+        the missing variable — a silent fallback to a different engine would be
+        worse than a clear failure.
+        """
+        name = (self.search_provider or "auto").strip().lower()
+        if name != "auto":
+            return name
+        if self.has_google_keys():
+            return "google"
+        if self.has_brave_key():
+            return "brave"
+        if self.has_serper_key():
+            return "serper"
+        return None
+
+    def has_search_keys(self) -> bool:
+        """True when some search backend is usable."""
+        return bool(self.resolve_search_provider())
 
 
 @lru_cache(maxsize=1)

@@ -199,10 +199,32 @@ tracker search --from-llm 20 --print-only   # just show them, search nothing
 tracker sync --search 10                # fold searching into the one-command loop
 ```
 
-Needs two free Google values in `.env` (`TRACKER_GOOGLE_API_KEY` and
-`TRACKER_GOOGLE_CSE_ID`); `tracker search` prints exactly where to get them if
-they are missing, and `--print-only` works without them so you can run the queries
-by hand.
+Needs one search key in `.env`. Three backends are supported, and whichever key
+you add is picked up automatically:
+
+| backend | variables | free tier | notes |
+|---|---|---|---|
+| **Brave** | `TRACKER_BRAVE_API_KEY` | 2000/month | Independent index, one header, no cloud account |
+| Google | `TRACKER_GOOGLE_API_KEY` + `TRACKER_GOOGLE_CSE_ID` | 100/day | Custom Search JSON API |
+| Serper | `TRACKER_SERPER_API_KEY` | 2500 credits | Google's results, simpler API |
+
+Pin one explicitly with `TRACKER_SEARCH_PROVIDER=brave`. `tracker search` prints
+exactly where to get each key if none is set, and `--print-only` works without any
+of them so you can run the queries by hand.
+
+Brave is the one to reach for if you want coverage Google does not already give
+you: it runs its own index, whereas Serper is Google's results under a different
+API and so widens the *quota* rather than the coverage.
+
+**There is no Bing backend, because the Bing Search API no longer exists.**
+Microsoft retired the standalone Bing Search APIs on 2025-08-11 — their own
+documentation page carries `is_retired: true` — so no new subscription key can be
+created. The successor, Grounding with Bing Search in Azure AI Foundry, is
+licensed for grounding a model's reply rather than for building a stored database
+of facts and citations, which is exactly what this tool does; it is the wrong
+instrument here regardless of the plumbing. Asking for it by name
+(`TRACKER_SEARCH_PROVIDER=bing`) prints that explanation rather than "unknown
+provider".
 
 **You probably do not need this.** `--deep` above reaches the same historical
 projects with no key and no quota, and it was added after search precisely because
@@ -283,8 +305,8 @@ tool, extraction is skipped outright instead.
 
 **Its reach is capped by the corpus, not by the budget.** Measured on a 94-project
 database with no search key: 17 projects had unread archive articles and 77 had none,
-because the configured archives simply never covered them. The two Google keys are
-both free and are what lifts that ceiling; without them, `enrich` on a project the
+because the configured archives simply never covered them. A search key is what lifts
+that ceiling — see the backend table below; without one, `enrich` on a project the
 trade press ignored will honestly report that it found nothing to read.
 
 ### Seeing where the data is thin

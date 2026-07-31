@@ -1148,7 +1148,12 @@ def _render_enrich(report, *, dry_run: bool) -> None:
         console.print("[yellow]dry run[/yellow] — nothing written")
 
     for name, why in report.skipped:
-        console.print(f"[yellow]{name} unavailable[/yellow]: {why}")
+        # A skip reason can be several lines (the search help names every backend
+        # and its variable). Lead with the headline, dim the instructions.
+        head, _, rest = why.partition("\n")
+        console.print(f"[yellow]{name} unavailable[/yellow]: {head}")
+        if rest.strip():
+            console.print(f"[dim]{rest.strip()}[/dim]")
 
     if report.rounds:
         table = Table(header_style="bold", box=TABLE_BOX, title_justify="left")
@@ -1420,7 +1425,7 @@ def sync(
         from tracker.ingest import search as srch
 
         if not settings.has_search_keys():
-            err.print("[yellow]--search needs the Google keys[/yellow]")
+            err.print("[yellow]--search needs a search backend[/yellow]")
             err.print(srch.SEARCH_KEY_HELP)
         else:
             with session_scope(engine, commit=False) as session:
@@ -1431,7 +1436,7 @@ def sync(
                     s_report, _ = srch.run(
                         session,
                         queries,
-                        provider=srch.GoogleCSEProvider(settings),
+                        provider=srch.build_provider(settings),
                         settings=settings,
                         dry_run=dry_run,
                     )
@@ -1649,7 +1654,11 @@ def search_cmd(
             raise typer.Exit(2)
         return
 
-    provider = srch.GoogleCSEProvider(settings)
+    try:
+        provider = srch.build_provider(settings)
+    except srch.SearchError as exc:
+        _fail(str(exc))
+        return
     engine, _ = init_db(_db_path())
     with session_scope(engine) as session:
         report, candidates = srch.run(

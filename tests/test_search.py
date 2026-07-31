@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import json
 
+import httpx
 import pytest
+import respx
 from sqlalchemy import select
 
 from tracker.ingest import search as srch
@@ -386,3 +388,212 @@ def test_the_provider_uses_the_official_api_not_a_scraped_page():
     """Scraping result pages breaks Google's terms and would contradict this
     project's refusal to defeat other sites' access controls."""
     assert GoogleCSEProvider.ENDPOINT == "https://www.googleapis.com/customsearch/v1"
+
+
+# --- Backend selection ------------------------------------------------------
+#
+# Bing is the backend people ask for and the one that no longer exists: Microsoft
+# retired the standalone Bing Search APIs on 2025-08-11. These tests pin the
+# behaviour that an operator who asks for it gets the reason, not a shrug.
+
+
+def settings_with(**kwargs):
+    """Settings that ignore the operator's real .env."""
+    from tracker.config import Settings
+
+    Settings.model_config["env_file"] = None
+    return Settings(minimax_api_key="x", **kwargs)
+
+
+def test_bing_is_refused_with_the_reason_not_unknown_provider():
+    with pytest.raises(SearchError) as exc:
+        srch.build_provider(settings_with(brave_api_key="k"), name="bing")
+    message = str(exc.value)
+    assert "retired" in message.lower()
+    assert "2025-08-11" in message, "say when, so the claim is checkable"
+    assert "TRACKER_BRAVE_API_KEY" in message, "name the drop-in replacement"
+
+
+def test_an_unknown_provider_lists_the_real_ones():
+    with pytest.raises(SearchError, match="unknown search provider"):
+        srch.build_provider(settings_with(brave_api_key="k"), name="altavista")
+
+
+def test_auto_picks_whichever_backend_has_a_key():
+    assert isinstance(srch.build_provider(settings_with(brave_api_key="k")), srch.BraveProvider)
+    assert isinstance(srch.build_provider(settings_with(serper_api_key="k")), srch.SerperProvider)
+    google = settings_with(google_api_key="k", google_cse_id="cx")
+    assert isinstance(srch.build_provider(google), srch.GoogleCSEProvider)
+
+
+def test_an_explicit_provider_without_its_key_fails_loudly():
+    """Never silently fall back to a different engine than the one asked for."""
+    both = settings_with(brave_api_key="k", search_provider="google")
+    with pytest.raises(SearchError):
+        srch.build_provider(both)
+
+
+def test_no_keys_at_all_raises_the_help():
+    with pytest.raises(SearchError, match="TRACKER_BRAVE_API_KEY"):
+        srch.build_provider(settings_with())
+
+
+def test_the_google_provider_no_longer_accepts_a_brave_only_setup():
+    """Regression: `has_search_keys` widened to "any backend"."""
+    with pytest.raises(SearchError):
+        GoogleCSEProvider(settings_with(brave_api_key="k"))
+
+
+def test_the_key_help_names_every_backend():
+    for token in ("TRACKER_BRAVE_API_KEY", "TRACKER_GOOGLE_API_KEY", "TRACKER_SERPER_API_KEY"):
+        assert token in srch.SEARCH_KEY_HELP
+    assert "TRACKER_SEARCH_PROVIDER" in srch.SEARCH_KEY_HELP
+
+
+def test_every_backend_uses_an_official_api_not_a_scraped_page():
+    """Scraping result pages breaks the engines' terms and would contradict this
+    project's refusal to defeat other sites' access controls."""
+    endpoints = {name: cls.ENDPOINT for name, cls in srch.PROVIDERS.items()}
+    assert endpoints == {
+        "google": "https://www.googleapis.com/customsearch/v1",
+        "brave": "https://api.search.brave.com/res/v1/web/search",
+        "serper": "https://google.serper.dev/search",
+    }
+
+
+# --- Brave over the wire ----------------------------------------------------
+
+
+@respx.mock
+def test_brave_parses_its_own_response_shape():
+    """Brave names the snippet "description", not "snippet"."""
+    respx.get(srch.BraveProvider.ENDPOINT).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "web": {
+                    "results": [
+                        {
+                            "url": "https://dcf.example/stack-hillsboro",
+                            "title": "STACK expands in Hillsboro",
+                            "description": "The campus will draw 230 megawatts.",
+                        },
+                        {"title": "no url, must be dropped"},
+                    ]
+                }
+            },
+        )
+    )
+    hits = srch.BraveProvider(settings_with(brave_api_key="k")).search("stack hillsboro")
+    assert len(hits) == 1
+    assert hits[0].url == "https://dcf.example/stack-hillsboro"
+    assert hits[0].snippet == "The campus will draw 230 megawatts."
+    assert hits[0].query == "stack hillsboro"
+
+
+@respx.mock
+def test_brave_sends_the_key_as_a_header_not_a_query_parameter():
+    """A key in the URL leaks into logs and referrers."""
+    route = respx.get(srch.BraveProvider.ENDPOINT).mock(
+        return_value=httpx.Response(200, json={"web": {"results": []}})
+    )
+    srch.BraveProvider(settings_with(brave_api_key="secret-key")).search("q")
+
+    request = route.calls.last.request
+    assert request.headers["X-Subscription-Token"] == "secret-key"
+    assert "secret-key" not in str(request.url)
+
+
+@respx.mock
+def test_brave_retries_once_through_the_per_second_rate_limit(monkeypatch):
+    """The free tier answers 429 for pacing, not only for an exhausted quota.
+
+    Treating the first 429 as fatal would abandon a run that a one-second pause
+    would have completed.
+    """
+    monkeypatch.setattr(srch.BraveProvider, "RATE_LIMIT_PAUSE_S", 0)
+    route = respx.get(srch.BraveProvider.ENDPOINT).mock(
+        side_effect=[
+            httpx.Response(429, text="Too Many Requests"),
+            httpx.Response(200, json={"web": {"results": [{"url": "https://a.example/x"}]}}),
+        ]
+    )
+    hits = srch.BraveProvider(settings_with(brave_api_key="k")).search("q")
+    assert [h.url for h in hits] == ["https://a.example/x"]
+    assert route.call_count == 2
+
+
+@respx.mock
+def test_brave_gives_up_after_a_second_rate_limit(monkeypatch):
+    monkeypatch.setattr(srch.BraveProvider, "RATE_LIMIT_PAUSE_S", 0)
+    respx.get(srch.BraveProvider.ENDPOINT).mock(return_value=httpx.Response(429))
+    with pytest.raises(QuotaExhausted, match="2000 per month"):
+        srch.BraveProvider(settings_with(brave_api_key="k")).search("q")
+
+
+@respx.mock
+def test_brave_names_the_variable_when_the_key_is_rejected():
+    respx.get(srch.BraveProvider.ENDPOINT).mock(return_value=httpx.Response(401, text="nope"))
+    with pytest.raises(SearchError, match="TRACKER_BRAVE_API_KEY"):
+        srch.BraveProvider(settings_with(brave_api_key="k")).search("q")
+
+
+@respx.mock
+def test_brave_asks_for_us_english_results():
+    """The tracker is US-only; foreign hits cost an LLM call to discover and drop."""
+    route = respx.get(srch.BraveProvider.ENDPOINT).mock(
+        return_value=httpx.Response(200, json={"web": {"results": []}})
+    )
+    srch.BraveProvider(settings_with(brave_api_key="k")).search("q", limit=10)
+    params = route.calls.last.request.url.params
+    assert params["country"] == "us"
+    assert params["search_lang"] == "en"
+
+
+@respx.mock
+def test_serper_parses_organic_results():
+    respx.post(srch.SerperProvider.ENDPOINT).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "organic": [
+                    {
+                        "link": "https://dcf.example/a",
+                        "title": "A",
+                        "snippet": "230 megawatts",
+                    },
+                    {"title": "no link"},
+                ]
+            },
+        )
+    )
+    hits = srch.SerperProvider(settings_with(serper_api_key="k")).search("q")
+    assert [h.url for h in hits] == ["https://dcf.example/a"]
+    assert hits[0].snippet == "230 megawatts"
+
+
+@respx.mock
+def test_a_provider_swap_needs_no_change_anywhere_else():
+    """The point of the protocol: `run()` never learns which engine answered."""
+    respx.get(srch.BraveProvider.ENDPOINT).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "web": {
+                    "results": [
+                        {
+                            "url": "https://www.datacenterfrontier.com/x/stack-hillsboro-230mw",
+                            "title": "STACK breaks ground on 230 MW Hillsboro data center campus",
+                            "description": "megawatts",
+                        }
+                    ]
+                }
+            },
+        )
+    )
+    hits = srch.BraveProvider(settings_with(brave_api_key="k")).search("q")
+    _, spec = load_config()
+    candidates = hits_to_candidates(hits, spec, report=SearchReport())
+    assert [c.url for c in candidates] == [
+        "https://www.datacenterfrontier.com/x/stack-hillsboro-230mw"
+    ]

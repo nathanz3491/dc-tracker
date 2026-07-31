@@ -49,24 +49,49 @@ from tracker.models import utcnow
 
 log = logging.getLogger(__name__)
 
-SEARCH_KEY_HELP = """Google search is not configured.
+SEARCH_KEY_HELP = """Web search is not configured. Pick one backend and add its key to .env.
 
-Two values are needed, both free:
+  Brave   — independent index, one key, no cloud account. 2000 queries/month free.
+            https://api-dashboard.search.brave.com
+            TRACKER_BRAVE_API_KEY=your-key
 
-  1. An API key for the Custom Search JSON API
-     https://developers.google.com/custom-search/v1/introduction
-  2. A Programmable Search Engine id ("cx"), set to search the entire web
-     https://programmablesearchengine.google.com
+  Google  — Custom Search JSON API. Two values, 100 queries/day free.
+            https://developers.google.com/custom-search/v1/introduction
+            https://programmablesearchengine.google.com  (set it to the whole web)
+            TRACKER_GOOGLE_API_KEY=your-key
+            TRACKER_GOOGLE_CSE_ID=your-cx-id
 
-Add both to .env:
+  Serper  — Google results over a simpler API. 2500 free credits.
+            https://serper.dev
+            TRACKER_SERPER_API_KEY=your-key
 
-  TRACKER_GOOGLE_API_KEY=your-key
-  TRACKER_GOOGLE_CSE_ID=your-cx-id
+Whichever you add is picked up automatically. To pin one explicitly:
 
-The free tier is 100 queries/day, about 1000 candidate URLs.
+  TRACKER_SEARCH_PROVIDER=brave
 
-Without them you can still generate queries and run them yourself:
+Without any key you can still generate queries and run them yourself:
   tracker search --from-llm 20 --print-only
+"""
+
+#: Why "bing" is not one of the options. Raised by name so an operator who asks
+#: for it gets the reason rather than "unknown provider".
+BING_RETIRED_HELP = """There is no Bing backend, because the Bing Search API no longer exists.
+
+Microsoft retired the standalone Bing Search APIs on 2025-08-11 — their own
+documentation now carries `is_retired: true` — so no new subscription key can be
+created for them.
+
+The successor, Grounding with Bing Search in Azure AI Foundry, is licensed for
+grounding a model's reply, not for building a stored database of facts and
+citations. That is precisely what this tool does, so it is the wrong instrument
+here regardless of the plumbing.
+
+Brave is the closest drop-in: an independent index (not a Google or Bing
+reseller), a free tier, one header, no cloud account.
+
+  https://api-dashboard.search.brave.com
+  TRACKER_BRAVE_API_KEY=your-key
+  TRACKER_SEARCH_PROVIDER=brave
 """
 
 #: How many project ideas to ask the model for at once. Larger batches drift into
@@ -146,7 +171,9 @@ class GoogleCSEProvider:
 
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or get_settings()
-        if not self.settings.has_search_keys():
+        # `has_search_keys` now means "some backend is configured", so it would let
+        # this class start on a Brave-only setup and fail at request time.
+        if not self.settings.has_google_keys():
             raise SearchError(SEARCH_KEY_HELP)
 
     def search(self, query: str, *, limit: int = 10) -> list[SearchHit]:
@@ -192,6 +219,170 @@ class GoogleCSEProvider:
             for item in payload.get("items") or []
             if item.get("link")
         ]
+
+
+class BraveProvider:
+    """Brave Search API.
+
+    The recommended alternative now that Bing's API is retired: an independent
+    index rather than a Google or Bing reseller, so it genuinely widens coverage
+    instead of re-asking the same engine.
+
+    Two quirks worth knowing. The free tier is rate limited to roughly one query a
+    second and answers HTTP 429 the instant you exceed it, which is a *pacing*
+    problem rather than an exhausted quota — so it is retried after a pause before
+    being treated as fatal. And `count` is capped at 20.
+    """
+
+    ENDPOINT = "https://api.search.brave.com/res/v1/web/search"
+
+    #: Seconds to wait out the free tier's per-second limit before giving up on a
+    #: query. Brave does not always send Retry-After, so this is a fixed pause.
+    RATE_LIMIT_PAUSE_S = 1.5
+
+    def __init__(self, settings: Settings | None = None) -> None:
+        self.settings = settings or get_settings()
+        if not self.settings.has_brave_key():
+            raise SearchError(SEARCH_KEY_HELP)
+
+    def search(self, query: str, *, limit: int = 10) -> list[SearchHit]:
+        import time
+
+        headers = {
+            "Accept": "application/json",
+            "X-Subscription-Token": self.settings.brave_api_key.get_secret_value(),
+        }
+        params = {
+            "q": query,
+            "count": min(limit, 20),
+            # US English: the tracker is US-only, and this cuts the non-US noise
+            # that otherwise costs an LLM call to discover and discard.
+            "country": "us",
+            "search_lang": "en",
+            "result_filter": "web",
+        }
+
+        for attempt in (1, 2):
+            try:
+                response = httpx.get(
+                    self.ENDPOINT,
+                    params=params,
+                    headers=headers,
+                    timeout=httpx.Timeout(30.0, connect=10.0),
+                )
+            except httpx.RequestError as exc:
+                raise SearchError(f"search request failed: {exc}") from exc
+
+            if response.status_code == 429 and attempt == 1:
+                # Almost always the one-query-per-second free tier rather than the
+                # monthly allowance, so pace and retry once before calling it spent.
+                time.sleep(self.RATE_LIMIT_PAUSE_S)
+                continue
+            break
+
+        if response.status_code == 429:
+            raise QuotaExhausted(
+                "Brave rate limit still hit after pausing (HTTP 429). The free tier "
+                "allows about one query per second and 2000 per month."
+            )
+        if response.status_code in (401, 403):
+            raise SearchError(
+                "Brave refused the request (HTTP "
+                f"{response.status_code}). Usually TRACKER_BRAVE_API_KEY is wrong or "
+                f"the subscription is inactive.\n\nResponse: {response.text[:400]}"
+            )
+        if response.status_code >= 400:
+            raise SearchError(f"search returned HTTP {response.status_code}: {response.text[:400]}")
+
+        payload = response.json()
+        results = (payload.get("web") or {}).get("results") or []
+        return [
+            SearchHit(
+                url=item.get("url", ""),
+                title=item.get("title", ""),
+                # Brave calls the snippet "description".
+                snippet=item.get("description", ""),
+                query=query,
+            )
+            for item in results
+            if item.get("url")
+        ]
+
+
+class SerperProvider:
+    """Serper — Google's results over a simpler API and a larger free allowance.
+
+    Not an independent index: it returns Google results, so it widens the *quota*
+    rather than the coverage. Useful when the Google CSE daily cap is the binding
+    constraint, not when Google itself is missing the articles.
+    """
+
+    ENDPOINT = "https://google.serper.dev/search"
+
+    def __init__(self, settings: Settings | None = None) -> None:
+        self.settings = settings or get_settings()
+        if not self.settings.has_serper_key():
+            raise SearchError(SEARCH_KEY_HELP)
+
+    def search(self, query: str, *, limit: int = 10) -> list[SearchHit]:
+        try:
+            response = httpx.post(
+                self.ENDPOINT,
+                headers={
+                    "X-API-KEY": self.settings.serper_api_key.get_secret_value(),
+                    "Content-Type": "application/json",
+                },
+                json={"q": query, "num": min(limit, 10), "gl": "us", "hl": "en"},
+                timeout=httpx.Timeout(30.0, connect=10.0),
+            )
+        except httpx.RequestError as exc:
+            raise SearchError(f"search request failed: {exc}") from exc
+
+        if response.status_code == 429:
+            raise QuotaExhausted("Serper credits are exhausted (HTTP 429).")
+        if response.status_code in (401, 403):
+            raise SearchError(
+                f"Serper refused the request (HTTP {response.status_code}). Usually "
+                f"TRACKER_SERPER_API_KEY is wrong.\n\nResponse: {response.text[:400]}"
+            )
+        if response.status_code >= 400:
+            raise SearchError(f"search returned HTTP {response.status_code}: {response.text[:400]}")
+
+        payload = response.json()
+        return [
+            SearchHit(
+                url=item.get("link", ""),
+                title=item.get("title", ""),
+                snippet=item.get("snippet", ""),
+                query=query,
+            )
+            for item in payload.get("organic") or []
+            if item.get("link")
+        ]
+
+
+#: Every backend by name. Adding one is a single entry plus a class; nothing else
+#: in the system knows which engine answered.
+PROVIDERS: dict[str, type] = {
+    "google": GoogleCSEProvider,
+    "brave": BraveProvider,
+    "serper": SerperProvider,
+}
+
+
+def build_provider(settings: Settings | None = None, name: str | None = None):
+    """The configured search backend, or a SearchError explaining what is missing."""
+    settings = settings or get_settings()
+    chosen = (name or settings.resolve_search_provider() or "").strip().lower()
+
+    if not chosen:
+        raise SearchError(SEARCH_KEY_HELP)
+    if chosen == "bing":
+        raise SearchError(BING_RETIRED_HELP)
+    if chosen not in PROVIDERS:
+        known = ", ".join(sorted(PROVIDERS))
+        raise SearchError(f"unknown search provider {chosen!r}. Available: {known}")
+    return PROVIDERS[chosen](settings)
 
 
 class QuotaExhausted(SearchError):
@@ -382,15 +573,20 @@ def run(
 
 
 __all__ = [
+    "BING_RETIRED_HELP",
     "LLM_BATCH",
+    "PROVIDERS",
     "QUERY_PROMPT_SYSTEM",
     "SEARCH_KEY_HELP",
+    "BraveProvider",
     "GoogleCSEProvider",
     "QuotaExhausted",
     "SearchError",
     "SearchHit",
     "SearchProvider",
     "SearchReport",
+    "SerperProvider",
+    "build_provider",
     "generate_queries",
     "hits_to_candidates",
     "is_useful_host",
