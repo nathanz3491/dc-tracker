@@ -566,3 +566,143 @@ def test_report_survives_a_project_with_no_gaps_and_no_sources(session):
     assert Path is not None  # import is used by the module under test
     assert isinstance(report.before, list) and isinstance(report.after, list)
     assert session.scalars(select(Source)).all() == []
+
+
+# --- Batch enrichment -------------------------------------------------------
+
+
+def test_the_archive_is_swept_once_for_the_whole_batch(session, monkeypatch):
+    """The efficiency that makes a 30-project run possible at all.
+
+    Sweeping inside the per-project loop re-fetches ~1,700 URLs across a dozen
+    sitemaps for every project, to obtain identical bytes.
+    """
+    sweeps = []
+
+    def fake_sweep(settings, fetcher=None):
+        sweeps.append(1)
+        return enrich.ArchiveSweep(candidates=[], problems=[])
+
+    monkeypatch.setattr(enrich, "sweep_archives", fake_sweep)
+    ids = [add_project(session, city=c, company=f"Op {c}").id for c in ("Reno", "Mesa", "Plano")]
+
+    enrich.run_many(
+        session, ids, fetcher=FakeFetcher(), extractor=FakeLLM(), skip_search=True, dry_run=True
+    )
+    assert len(sweeps) == 1, f"swept {len(sweeps)} times for 3 projects"
+
+
+def test_the_budget_is_shared_across_projects(session):
+    """One obscure project must not consume a run aimed at thirty."""
+    ids = []
+    for city in ("Reno", "Mesa", "Plano"):
+        project = add_project(session, city=city, company=f"Op {city}")
+        ids.append(project.id)
+        for i in range(6):
+            add_queued(session, f"https://x.com/op-{city.lower()}-{i}", f"Op {city} {city} campus")
+
+    batch = enrich.run_many(
+        session,
+        ids,
+        fetcher=FakeFetcher(),
+        extractor=FakeLLM(),
+        skip_search=True,
+        skip_archive=True,
+        max_articles=4,
+        max_articles_per_round=2,
+        target_fields=None,
+    )
+    assert batch.articles_read <= 4, f"read {batch.articles_read}, budget was 4"
+    assert batch.budget_exhausted
+
+
+def test_a_project_stops_at_the_target_leaving_budget_for_the_next(session):
+    """Taking a project from 9 to 10 costs the same call as another from 6 to 7."""
+    project = add_project(
+        session,
+        city="Hillsboro",
+        customer="A Tenant",
+        mw_planned=230.0,
+        mw_built=1.0,
+        investment_usd=1,
+        phase="construction",
+        first_announced=dt.date(2024, 3, 4),
+        expected_online=dt.date(2027, 1, 1),
+    )
+    add_queued(session, "https://x.com/stack-hillsboro-t", "STACK Hillsboro campus")
+
+    # name, company, customer, city, state, mw_planned, mw_built, investment_usd,
+    # phase, first_announced, expected_online = 11 filled already.
+    batch = enrich.run_many(
+        session,
+        [project.id],
+        fetcher=FakeFetcher(),
+        extractor=FakeLLM(),
+        skip_search=True,
+        skip_archive=True,
+        target_fields=9,
+    )
+    assert batch.articles_read == 0, "already past the target; must not spend"
+    assert "target" in batch.reports[0].stopped_because
+
+
+def test_select_prefers_projects_closest_to_the_target(session):
+    # name, company, city, state, phase, mw_planned, investment_usd,
+    # first_announced = 8 of 12, so one field short of the target.
+    near = add_project(
+        session,
+        city="Reno",
+        company="Near Co",
+        mw_planned=10.0,
+        investment_usd=1,
+        phase="construction",
+        first_announced=dt.date(2024, 1, 1),
+    )
+    far = add_project(session, city="Mesa", company="Far Co")  # 5 of 12
+
+    chosen = enrich.select_projects(session, 2, target=9)
+    assert chosen[0] == near.id, "the project needing one more field comes first"
+    assert far.id in chosen
+
+
+def test_select_skips_projects_already_at_the_target(session):
+    done = add_project(
+        session,
+        city="Reno",
+        company="Done Co",
+        customer="T",
+        mw_planned=1.0,
+        mw_built=1.0,
+        investment_usd=1,
+        phase="construction",
+        first_announced=dt.date(2024, 1, 1),
+        expected_online=dt.date(2027, 1, 1),
+        blocker="x",
+    )
+    todo = add_project(session, city="Mesa", company="Todo Co")
+
+    chosen = enrich.select_projects(session, 10, target=9)
+    assert done.id not in chosen, "nothing to gain, so it must not be selected"
+    assert todo.id in chosen
+
+
+def test_select_breaks_ties_toward_larger_projects(session):
+    small = add_project(session, city="Reno", company="Small Co", mw_planned=20.0)
+    big = add_project(session, city="Mesa", company="Big Co", mw_planned=1000.0)
+    chosen = enrich.select_projects(session, 2, target=9)
+    assert chosen.index(big.id) < chosen.index(small.id)
+
+
+def test_the_batch_report_counts_projects_over_the_bar(session):
+    ids = [add_project(session, city=c, company=f"Op {c}").id for c in ("Reno", "Mesa")]
+    batch = enrich.run_many(
+        session,
+        ids,
+        fetcher=FakeFetcher(),
+        extractor=FakeLLM(),
+        skip_search=True,
+        skip_archive=True,
+    )
+    assert len(batch.reports) == 2
+    assert batch.reached_before(9) == 0
+    assert batch.reached(9) >= 0

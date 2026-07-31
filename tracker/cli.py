@@ -1067,7 +1067,22 @@ def ingest_geo(
 
 @app.command()
 def enrich(
-    project_id: Annotated[int, typer.Argument(help="Which project to complete.")],
+    project_ids: Annotated[
+        list[int] | None,
+        typer.Argument(help="Project ids to complete. Omit and use --select to choose for you."),
+    ] = None,
+    select: Annotated[
+        int,
+        typer.Option("--select", help="Choose this many projects automatically, best first."),
+    ] = 0,
+    target: Annotated[
+        int,
+        typer.Option("--target", help="Stop a project once it holds this many of the 12 fields."),
+    ] = 9,
+    budget: Annotated[
+        int,
+        typer.Option("--budget", help="Total articles for the whole run, shared across projects."),
+    ] = 200,
     max_rounds: Annotated[
         int, typer.Option("--max-rounds", help="Stop after this many harvest+extract passes.")
     ] = 6,
@@ -1088,19 +1103,29 @@ def enrich(
         bool, typer.Option("--dry-run", help="Harvest and report without writing or extracting.")
     ] = False,
 ) -> None:
-    """Throw every retrieval method at ONE project until the rounds stop paying.
+    """Throw every retrieval method at one or more projects until rounds stop paying.
 
-    `tracker sync` spreads a budget across the database. This does the opposite:
-    it derives what can be derived, drains the queue and the failed URLs, sweeps
-    the sitemap archives, runs gap-targeted web searches if a key is configured,
-    re-reads the project's own citations, then extracts and repeats while rounds
-    are still filling fields.
+    `tracker sync` spreads a budget across the database and, because the queue is
+    mostly new-project candidates, it grows sideways. This does the opposite: it
+    derives what can be derived, drains the queue and the failed URLs, sweeps the
+    sitemap archives, runs gap-targeted web searches if a key is configured,
+    re-reads the project's own citations, then extracts and repeats.
 
-    Expensive on purpose. It stops when a round fills nothing new, not at a fixed
-    article count.
+        tracker enrich 90 93            two projects by id
+        tracker enrich --select 30      the 30 worth finishing, chosen for you
+
+    `--select` orders by how close a project already is to `--target`, because
+    taking one project from 8 fields to 9 costs a single article while taking
+    another from 4 to 9 may not get there at all. `--budget` is shared across the
+    whole run, and a project stops at `--target` so the rest goes to the next one.
+    The archives are swept ONCE for the batch.
     """
     from tracker.ingest import enrich as enrich_mod
     from tracker.ingest.fetch import Crawl4AIFetcher, MissingDependency
+
+    if not project_ids and not select:
+        _fail("give at least one project id, or use --select N to choose automatically")
+        return
 
     escalate = None
     if browser:
@@ -1121,13 +1146,27 @@ def enrich(
     census = _db_path().parent / "raw" / "census"
     try:
         with _explain_db_locks(), session_scope(engine, commit=not dry_run) as session:
-            report = enrich_mod.run(
+            wanted = list(project_ids or [])
+            if select:
+                chosen = enrich_mod.select_projects(session, select, target=target)
+                wanted += [p for p in chosen if p not in wanted]
+                if not wanted:
+                    console.print(
+                        f"[green]nothing to do[/green] — every project already holds "
+                        f"{target} of the 12 tracked fields"
+                    )
+                    return
+                console.print(f"selected {len(chosen)} project(s), closest to target first")
+
+            batch = enrich_mod.run_many(
                 session,
-                project_id,
+                wanted,
+                target_fields=target,
+                max_articles=budget,
+                max_articles_per_round=max_articles,
+                max_rounds=max_rounds,
                 census_dir=census if census.exists() else None,
                 escalate=escalate,
-                max_rounds=max_rounds,
-                max_articles=max_articles,
                 skip_search=skip_search,
                 skip_archive=skip_archive,
                 dry_run=dry_run,
@@ -1136,7 +1175,50 @@ def enrich(
         _fail(str(exc))
         raise
 
-    _render_enrich(report, dry_run=dry_run)
+    if len(batch.reports) == 1:
+        _render_enrich(batch.reports[0], dry_run=dry_run)
+        return
+    _render_batch(batch, target=target, dry_run=dry_run)
+
+
+def _render_batch(batch, *, target: int, dry_run: bool) -> None:
+    """One row per project, plus what the batch as a whole achieved."""
+    if dry_run:
+        console.print("[yellow]dry run[/yellow] — nothing written")
+    if batch.sweep_note:
+        console.print(f"[dim]archive: {batch.sweep_note} (swept once for the batch)[/dim]")
+
+    table = Table(header_style="bold", box=TABLE_BOX, title_justify="left")
+    table.add_column("id", justify="right")
+    table.add_column("project")
+    table.add_column("fields", justify="right")
+    table.add_column("read", justify="right")
+    table.add_column("gained")
+    for report in batch.reports:
+        before, _ = report.score_before()
+        after, attemptable = report.tracked_score()
+        moved = f"{before} -> {after} of {attemptable}"
+        style = "green" if after >= target else "yellow" if after > before else "dim"
+        table.add_row(
+            str(report.project_id),
+            report.label[:46],
+            f"[{style}]{moved}[/{style}]",
+            str(report.articles_read),
+            ", ".join(report.gained)[:44] or NA,
+        )
+    console.print(table)
+
+    hit_before = batch.reached_before(target)
+    hit_after = batch.reached(target)
+    console.print(
+        f"projects at >={target} of 12: [bold]{hit_before} -> {hit_after}[/bold] "
+        f"of {len(batch.reports)}   ({batch.articles_read} article(s) read)"
+    )
+    if batch.budget_exhausted:
+        console.print(
+            "[yellow]article budget spent[/yellow] before every project was reached; "
+            "raise --budget to continue"
+        )
 
 
 def _render_enrich(report, *, dry_run: bool) -> None:

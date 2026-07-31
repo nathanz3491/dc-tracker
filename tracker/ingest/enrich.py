@@ -37,7 +37,7 @@ from dataclasses import field as dc_field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from sqlalchemy import select
+from sqlalchemy import literal, select
 from sqlalchemy.orm import Session
 
 from tracker.config import Settings, get_settings
@@ -139,14 +139,23 @@ class EnrichReport:
         return tuple(s.field for s in self.after if s.field in was and s.status == FILLED)
 
     def tracked_score(self) -> tuple[int, int]:
-        """(filled, attemptable) over the 12 PRD fields.
+        """(filled, attemptable) over the 12 PRD fields, after the run."""
+        return report_score(self.after)
 
-        The denominator excludes fields a null is *correct* for, so a project with
-        nothing built is not marked down for having no `mw_built`.
-        """
-        states = [s for s in self.after if s.field in TRACKED_FIELDS]
-        attemptable = [s for s in states if s.status != NOT_APPLICABLE]
-        return sum(1 for s in attemptable if s.status == FILLED), len(attemptable)
+    def score_before(self) -> tuple[int, int]:
+        """The same, before the run — so a batch report can show movement."""
+        return report_score(self.before)
+
+
+def report_score(states: list[FieldState]) -> tuple[int, int]:
+    """(filled, attemptable) over the 12 tracked fields for one project's states.
+
+    Attemptable excludes fields a null is *correct* for, so a project with nothing
+    built is not marked down for having no `mw_built`.
+    """
+    tracked = [s for s in states if s.field in TRACKED_FIELDS]
+    attemptable = [s for s in tracked if s.status != NOT_APPLICABLE]
+    return sum(1 for s in attemptable if s.status == FILLED), len(attemptable)
 
 
 def _label(project: Project) -> str:
@@ -238,55 +247,90 @@ def harvest_retry(session: Session, project_id: int) -> Harvest:
     return Harvest("retry", hits, note=f"{len(rows)} previously-failed URL(s)")
 
 
-def harvest_archive(
-    session: Session,
-    project_id: int,
-    *,
-    settings: Settings,
-    fetcher: Fetcher | None = None,
-) -> Harvest:
-    """Sitemap archives, filtered to this project.
+@dataclass
+class ArchiveSweep:
+    """One walk of every configured sitemap, reusable across projects.
 
-    This is the key-free search. The archives hold thousands of URLs going back
-    years, and `matches_known_project` reduces them to the handful about this
-    project — which is what a search engine would have done, without the API.
+    Sweeping is the expensive part -- ~1,700 matching URLs over a dozen sitemaps,
+    each a fetch. The *matching* is free. So a multi-project run sweeps once and
+    filters the same corpus per project; doing it inside the per-project loop
+    would have re-fetched every archive thirty times to obtain identical bytes.
     """
+
+    candidates: list = dc_field(default_factory=list)
+    problems: list[str] = dc_field(default_factory=list)
+    skipped: str | None = None
+
+    @property
+    def note(self) -> str:
+        note = f"{len(self.candidates)} archived URL(s) swept"
+        if self.problems:
+            note += f"; {len(self.problems)} sitemap problem(s)"
+        return note
+
+
+def sweep_archives(settings: Settings, fetcher: Fetcher | None = None) -> ArchiveSweep:
+    """Walk every configured sitemap once."""
     import asyncio
 
     from tracker.ingest.discover import (
         _RawFetcher,
         load_config,
         load_sitemaps,
-        matches_known_project,
-        newsroom_companies,
-        project_identities,
         sweep_sitemaps,
     )
 
-    implied = newsroom_companies()
-
     specs = load_sitemaps()
     if not specs:
-        return Harvest("archive", skipped="no [[sitemap]] entries configured")
-
-    identities = [i for i in project_identities(session) if i.project_id == project_id]
-    if not identities:
-        return Harvest("archive", skipped="project has no company/locality to match on")
+        return ArchiveSweep(skipped="no [[sitemap]] entries configured")
 
     _, spec = load_config()
     candidates, problems = asyncio.run(
         sweep_sitemaps(specs, fetcher or _RawFetcher(settings), spec)
     )
+    return ArchiveSweep(candidates=candidates, problems=problems)
+
+
+def harvest_archive(
+    session: Session,
+    project_id: int,
+    *,
+    settings: Settings,
+    fetcher: Fetcher | None = None,
+    sweep: ArchiveSweep | None = None,
+) -> Harvest:
+    """Sitemap archives, filtered to this project.
+
+    This is the key-free search. The archives hold thousands of URLs going back
+    years, and `matches_known_project` reduces them to the handful about this
+    project — which is what a search engine would have done, without the API.
+
+    `sweep` supplies an already-walked corpus so a multi-project run pays the
+    fetch cost once.
+    """
+    from tracker.ingest.discover import (
+        matches_known_project,
+        newsroom_companies,
+        project_identities,
+    )
+
+    if sweep is None:
+        sweep = sweep_archives(settings, fetcher)
+    if sweep.skipped:
+        return Harvest("archive", skipped=sweep.skipped)
+
+    identities = [i for i in project_identities(session) if i.project_id == project_id]
+    if not identities:
+        return Harvest("archive", skipped="project has no company/locality to match on")
+
+    implied = newsroom_companies()
     hits = [
         c.url
-        for c in candidates
+        for c in sweep.candidates
         if matches_known_project(c.url, c.title, identities, implied_companies=implied)
         == project_id
     ]
-    note = f"{len(candidates)} archived URL(s) swept"
-    if problems:
-        note += f"; {len(problems)} sitemap problem(s)"
-    return Harvest("archive", hits, note=note)
+    return Harvest("archive", hits, note=sweep.note)
 
 
 def harvest_search(
@@ -371,8 +415,16 @@ def run(
     skip_search: bool = False,
     skip_archive: bool = False,
     dry_run: bool = False,
+    sweep: ArchiveSweep | None = None,
+    target_fields: int | None = None,
 ) -> EnrichReport:
-    """Recruit every method against one project until rounds stop paying."""
+    """Recruit every method against one project until rounds stop paying.
+
+    `target_fields` stops once this many of the 12 tracked fields are filled,
+    leaving the rest of a shared budget for the next project. The PRD's bar is 9;
+    pushing a project from 9 to 10 costs the same call as pushing another from 6
+    to 7, and the second is worth more.
+    """
     from tracker.ingest import crawl
 
     settings = settings or get_settings()
@@ -401,6 +453,11 @@ def run(
         if not any(s.is_gap for s in gaps):
             report.stopped_because = "every field is filled"
             break
+        if target_fields is not None:
+            filled, _ = report_score(gaps)
+            if filled >= target_fields:
+                report.stopped_because = f"reached the {target_fields}-field target"
+                break
 
         current = Round(number=number)
         current.harvests.append(harvest_queue(session, project_id))
@@ -409,7 +466,9 @@ def run(
             # The archive is a fixed corpus: sweeping it twice returns the same
             # URLs at the cost of thousands of fetches, so it runs once.
             current.harvests.append(
-                harvest_archive(session, project_id, settings=settings, fetcher=fetcher)
+                harvest_archive(
+                    session, project_id, settings=settings, fetcher=fetcher, sweep=sweep
+                )
             )
         if not skip_search:
             current.harvests.append(
@@ -481,6 +540,119 @@ def run(
     return report
 
 
+#: The PRD's bar: nine of the twelve tracked fields populated.
+DEFAULT_TARGET_FIELDS = 9
+
+
+@dataclass
+class BatchReport:
+    """A multi-project run: what each project gained, and what the batch cost."""
+
+    reports: list[EnrichReport] = dc_field(default_factory=list)
+    sweep_note: str | None = None
+    budget_exhausted: bool = False
+
+    @property
+    def articles_read(self) -> int:
+        return sum(r.articles_read for r in self.reports)
+
+    def reached(self, target: int) -> int:
+        return sum(1 for r in self.reports if r.tracked_score()[0] >= target)
+
+    def reached_before(self, target: int) -> int:
+        return sum(1 for r in self.reports if r.score_before()[0] >= target)
+
+
+def select_projects(
+    session: Session, limit: int, *, target: int = DEFAULT_TARGET_FIELDS
+) -> list[int]:
+    """The projects worth spending a bounded budget on, best first.
+
+    Ordered by how close each already is to `target`, then by planned capacity.
+    Two reasons, and the first is the important one:
+
+    * **Closest-first converts the most projects per call.** Taking a project from
+      8 fields to 9 costs one article; taking one from 4 to 9 costs several and may
+      not get there. The PRD asks for 20-30 projects done properly, so the metric
+      is how many clear the bar, not how many fields move in total.
+    * **Capacity breaks ties toward the projects that matter.** A 1 GW campus is
+      worth completing before a 20 MW one.
+
+    Projects already at or past the target are excluded — they need nothing.
+    """
+    from sqlalchemy import case, desc
+
+    filled = sum(
+        (case((getattr(Project, f).is_not(None), 1), else_=0) for f in TRACKED_FIELDS),
+        start=literal(0),
+    )
+    rows = session.execute(
+        select(Project.id, filled.label("n"))
+        .where(filled < target)
+        .order_by(desc("n"), desc(Project.mw_planned.is_not(None)), desc(Project.mw_planned))
+        .limit(limit)
+    ).all()
+    return [row[0] for row in rows]
+
+
+def run_many(
+    session: Session,
+    project_ids: list[int],
+    *,
+    settings: Settings | None = None,
+    target_fields: int | None = DEFAULT_TARGET_FIELDS,
+    max_articles: int = 200,
+    max_articles_per_round: int = MAX_ARTICLES_PER_ROUND,
+    max_rounds: int = MAX_ROUNDS,
+    skip_archive: bool = False,
+    dry_run: bool = False,
+    **kwargs,
+) -> BatchReport:
+    """Enrich several projects under one shared article budget.
+
+    The archive is swept **once** and the same corpus is filtered per project.
+    Sweeping inside the per-project loop would re-fetch ~1,700 URLs across a dozen
+    sitemaps for every project in the batch, to obtain identical bytes.
+
+    `max_articles` is the budget for the whole batch, not per project, so one
+    obscure project cannot consume a run aimed at thirty.
+    """
+    settings = settings or get_settings()
+    batch = BatchReport()
+
+    sweep = None
+    if not skip_archive and not dry_run:
+        sweep = sweep_archives(settings, kwargs.get("fetcher"))
+        batch.sweep_note = sweep.skipped or sweep.note
+    elif not skip_archive:
+        # A dry run reports what it would harvest, and the sweep is read-only.
+        sweep = sweep_archives(settings, kwargs.get("fetcher"))
+        batch.sweep_note = sweep.skipped or sweep.note
+
+    spent = 0
+    for project_id in project_ids:
+        remaining = max_articles - spent
+        if remaining <= 0:
+            batch.budget_exhausted = True
+            log.info("article budget of %d spent; %d project(s) not reached", max_articles, 0)
+            break
+        report = run(
+            session,
+            project_id,
+            settings=settings,
+            max_articles=min(max_articles_per_round, remaining),
+            max_rounds=max_rounds,
+            skip_archive=skip_archive,
+            dry_run=dry_run,
+            sweep=sweep,
+            target_fields=target_fields,
+            **kwargs,
+        )
+        spent += report.articles_read
+        batch.reports.append(report)
+    return batch
+
+
 def _derive(
     session: Session, project_id: int, *, census_dir: Path | None, dry_run: bool
 ) -> tuple[str, ...]:
@@ -514,9 +686,12 @@ def _derive(
 
 
 __all__ = [
+    "DEFAULT_TARGET_FIELDS",
     "MAX_ARTICLES_PER_ROUND",
     "MAX_QUERIES",
     "MAX_ROUNDS",
+    "ArchiveSweep",
+    "BatchReport",
     "EnrichReport",
     "Harvest",
     "Round",
@@ -526,6 +701,10 @@ __all__ = [
     "harvest_retry",
     "harvest_search",
     "project_urls",
+    "report_score",
     "run",
+    "run_many",
     "search_queries",
+    "select_projects",
+    "sweep_archives",
 ]
