@@ -79,6 +79,26 @@ initial build of the v1 PRD.
   Census row is a real, checkable citation but it is not testimony about the
   project; counting it would let one press release plus a lookup read as two
   independent domains and reach confidence 3.
+- **Operator newsrooms as sources.** Seven company press-release archives added as
+  `[[sitemap]]` entries. A release opens with the three fields that are hardest to
+  find anywhere else — "X announces a $N billion campus, online in YEAR" — and is
+  `company_filing`, weight 3. Measured across the whole database beforehand: trade
+  press yielded 0.57 of those three fields per citation, and the *two* company
+  sources in it yielded 1.50. The vein was untouched, not exhausted.
+
+  A `company` field marks an entry as an operator's own newsroom, which does two
+  things. `matches_known_project` stops requiring the company in the slug, because
+  the domain already proves it — measured, that took the yield from 15 articles
+  over 8 projects to 28 over 13, since a release titled "New Hillsboro campus
+  announced" names the city and not the company. And `classify_source_type` learns
+  the host is first-party. The locality-or-name-token requirement is unchanged, so
+  precision holds: a careers page still matches nothing.
+
+  Not included, with reasons recorded in `seed/feeds.toml`: QTS 404s; Flexential
+  and Iron Mountain answer 403/429; STACK, Switch, Vantage, EdgeConneX and
+  news.microsoft.com serve child sitemaps only to browser-like clients (curl 200,
+  httpx 403 on the same URL — a TLS-fingerprint rule). Their robots.txt explicitly
+  permits crawling and advertises the sitemap, so those need `--browser`.
 - **A Bocha (博查) backend**, for networks where the other three cannot be signed
   up for — its registration works from mainland China with no Cloudflare
   challenge. It handles the trap that Bocha answers **HTTP 200 with the real
@@ -322,6 +342,13 @@ initial build of the v1 PRD.
 - README's "Known gaps" still said the crawl path had only been run against
   fixtures, never live — stale since `de4821c`'s live-run defect fixes and now
   since `tracker enrich`'s live verification against project #93.
+- **A first-party press release scored below the trade-press rewrite of it.**
+  `classify_source_type` recognised a company only by subdomain — `news.microsoft
+  .com`, `about.fb.com`, `blog.google` — so an operator publishing at
+  `www.stackinfra.com/news/…` fell through to `general_media`, weight 1, against
+  trade press's 2. The single most authoritative source for capacity, investment
+  and timeline was the lowest-weighted one. It now consults the operator hosts
+  declared in `seed/feeds.toml`.
 - **A foreign-language quote could evidence a project's `phase`.** Every other
   field is protected from a translated repost for free, because "230兆瓦" matches
   no MW pattern, "12亿美元" no currency pattern, and neither matches any English

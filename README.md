@@ -187,6 +187,44 @@ sync` crawls `--limit` of them. Add more archives as `[[sitemap]]` entries in
 
 This is the recommended way to fill the database. Search (below) is optional.
 
+### Operator press releases, and why they matter most
+
+The three hardest fields — `investment_usd`, `expected_online`, `first_announced` —
+are hardest because a trade-press article rewrites an announcement and drops the
+numbers. The press release itself opens with all three: *"X announces a $N billion
+campus, online in 2027."*
+
+Measured across the database before adding any: trade press yielded **0.57** of
+those three fields per citation, the two company sources in it yielded **1.50**,
+and `company_filing` is weight 3 against trade press's 2. The vein was untouched
+rather than exhausted — 2 citations out of 124.
+
+Newsrooms are `[[sitemap]]` entries carrying a `company`:
+
+```toml
+[[sitemap]]
+name = "cologix-newsroom"
+url = "https://cologix.com/news-sitemap.xml"
+source_type = "company_filing"
+company = "Cologix"
+topic_implied = true
+```
+
+`company` does two things. It tells `classify_source_type` the host is first-party,
+without which `www.operator.com/news/…` scores `general_media` — ranking the
+announcement below the rewrite. And it lets `matches_known_project` stop requiring
+the company in the slug, since the domain already proves it: a release titled "New
+Hillsboro campus announced" names the city, not the company. Measured, that took
+the yield from 15 articles over 8 projects to 28 over 13. The
+locality-or-name-token requirement stays, so a careers page still matches nothing.
+
+Several operators serve their child sitemaps only to browser-like clients — curl
+gets 200 and httpx 403 on the same URL, a TLS-fingerprint rule. Their robots.txt
+explicitly permits crawling and advertises the sitemap, so this is an over-broad
+WAF rule rather than a policy; `--browser` reaches them once the `[crawl]` extra is
+installed. They are listed with their status in
+[seed/feeds.toml](seed/feeds.toml) rather than failing every run.
+
 ### Search: an optional alternative that needs keys
 
 Feeds only surface what was published recently, so a project announced two years

@@ -24,6 +24,7 @@ import logging
 import re
 import unicodedata
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -111,17 +112,43 @@ class ExtractionOutcome:
     completion_tokens: int = 0
 
 
-def classify_source_type(url: str) -> str:
+def classify_source_type(url: str, *, operator_hosts: frozenset[str] | None = None) -> str:
     """Guess how authoritative a URL is.
 
     Never returns `company_filing`/`government_doc` on a guess about a general
     domain, because those weights are what let a project reach confidence 2.
+
+    `operator_hosts` carries the data center operators' own domains, taken from the
+    newsroom entries in `seed/feeds.toml`. Without it the subdomain rules below
+    recognise `news.microsoft.com` and `about.fb.com` but not
+    `www.stackinfra.com/news/…`, so a first-party press release — the single most
+    authoritative source there is for capacity, investment and timeline — was
+    scored `general_media`, weight 1. That is the opposite of what it deserves.
     """
     host = url.split("//", 1)[-1].split("/", 1)[0].split("@")[-1].split(":")[0].lower()
+    if operator_hosts and host.removeprefix("www.") in operator_hosts:
+        return "company_filing"
     for pattern, source_type in _SOURCE_TYPE_RULES:
         if pattern.search(host):
             return source_type
     return "general_media"
+
+
+@lru_cache(maxsize=1)
+def operator_hosts() -> frozenset[str]:
+    """Domains belonging to data center operators, from the newsroom sitemaps.
+
+    Cached: it reads and parses `seed/feeds.toml`, and it is consulted once per
+    extracted article. An empty set is returned if the config cannot be read —
+    misclassifying a source is far better than failing an ingest run over it.
+    """
+    try:
+        from tracker.ingest.discover import newsroom_companies
+
+        return frozenset(newsroom_companies())
+    except Exception as exc:
+        log.warning("could not read operator newsrooms: %s", exc)
+        return frozenset()
 
 
 def truncate(text: str, limit: int) -> str:
@@ -676,7 +703,7 @@ def build_records(
     if not isinstance(projects, list):
         raise LLMJsonError(f"payload has no `projects` list: {payload!r}")
 
-    source_type = classify_source_type(result.url)
+    source_type = classify_source_type(result.url, operator_hosts=operator_hosts())
     records: list[IngestRecord] = []
 
     for raw in projects[:max_projects]:

@@ -935,3 +935,41 @@ def test_an_english_quote_still_evidences_a_phase():
         {"phase": "construction"}, [{"field": "phase", "quote": english}], english
     )
     assert kept == {"phase": "construction"}
+
+
+def test_a_first_party_release_outranks_trade_press():
+    """The bug the newsroom path would have hit on day one.
+
+    The subdomain rules recognise `news.microsoft.com` and `about.fb.com`, but
+    STACK publishes at `www.stackinfra.com/news/...`. Without the operator
+    registry that falls through to `general_media`, weight 1 — scoring a
+    first-party announcement below the trade-press rewrite of it.
+    """
+    url = "https://www.stackinfra.com/news/new-hillsboro-campus/"
+    assert crawl.classify_source_type(url) == "general_media"
+    assert (
+        crawl.classify_source_type(url, operator_hosts=frozenset({"stackinfra.com"}))
+        == "company_filing"
+    )
+
+
+def test_the_operator_registry_does_not_override_a_known_outlet():
+    """A trade-press domain must keep its own classification."""
+    assert (
+        crawl.classify_source_type(
+            "https://www.datacenterfrontier.com/article/1",
+            operator_hosts=frozenset({"stackinfra.com"}),
+        )
+        == "trade_press"
+    )
+
+
+def test_an_unreadable_feed_config_does_not_stop_ingest(monkeypatch):
+    """Misclassifying a source beats failing the run over a config problem."""
+    crawl.operator_hosts.cache_clear()
+    monkeypatch.setattr(
+        "tracker.ingest.discover.newsroom_companies",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("bad toml")),
+    )
+    assert crawl.operator_hosts() == frozenset()
+    crawl.operator_hosts.cache_clear()

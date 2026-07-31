@@ -279,6 +279,89 @@ max_children = 3
 # archive article and 77 had none — the corpus, not the budget, was the ceiling
 # on `tracker enrich`.
 
+# ---------------------------------------------------------------------------
+# Operator newsrooms.
+#
+# A press release is `company_filing` (weight 3) and opens with the three fields
+# that are hardest to find anywhere else: "X announces a $N billion campus, online
+# in YEAR". Measured across the whole database, trade press yields 0.57 of those
+# three fields per citation; the two company sources in it yield 1.50.
+#
+# `company` marks the entry as an operator's OWN newsroom. Everything on
+# stackinfra.com is published by STACK, so `matches_known_project` need not find
+# the company in the slug as well — measured, dropping that redundant requirement
+# took the yield from 15 articles over 8 projects to 28 over 13, because a release
+# titled "New Hillsboro campus announced" names the city and not the company.
+# It also tells `classify_source_type` that the host is first-party, which it
+# cannot otherwise tell for `www.operator.com/news/...`.
+#
+# Not listed, and why: QTS 404s, Flexential and Iron Mountain answer 403/429, and
+# STACK, Switch, Vantage, EdgeConneX and news.microsoft.com serve their child
+# sitemaps only to browser-like clients (curl gets 200, httpx gets 403 on the same
+# URL — a TLS-fingerprint rule). Their robots.txt explicitly permits crawling and
+# advertises the sitemap, so those are reachable with `--browser` once the
+# `[crawl]` extra is installed; they are left out rather than failing every run.
+
+[[sitemap]]
+name = "meta-newsroom-archive"
+url = "https://about.fb.com/sitemap.xml"
+source_type = "company_filing"
+company = "Meta"
+topic_implied = true
+max_urls = 20000
+
+[[sitemap]]
+name = "databank-newsroom"
+url = "https://www.databank.com/sitemap.xml"
+source_type = "company_filing"
+company = "DataBank"
+topic_implied = true
+max_children = 8
+max_urls = 20000
+
+[[sitemap]]
+name = "ntt-newsroom"
+url = "https://services.global.ntt/en-us/sitemap.xml"
+source_type = "company_filing"
+company = "NTT Global Data Centers Americas"
+topic_implied = true
+max_children = 8
+max_urls = 20000
+
+[[sitemap]]
+name = "prime-newsroom"
+url = "https://primedatacenters.com/post-sitemap.xml"
+source_type = "company_filing"
+company = "Prime Data Centers"
+topic_implied = true
+max_urls = 20000
+
+[[sitemap]]
+name = "cologix-newsroom"
+url = "https://cologix.com/news-sitemap.xml"
+source_type = "company_filing"
+company = "Cologix"
+topic_implied = true
+max_urls = 20000
+
+[[sitemap]]
+name = "sabey-newsroom"
+url = "https://sabeydatacenters.com/sitemap.xml"
+source_type = "company_filing"
+company = "Sabey Data Centers"
+topic_implied = true
+max_children = 8
+max_urls = 20000
+
+[[sitemap]]
+name = "cyrusone-newsroom"
+url = "https://cyrusone.com/sitemap.xml"
+source_type = "company_filing"
+company = "CyrusOne"
+topic_implied = true
+max_urls = 20000
+
+
 # datacenterknowledge is NOT here despite being the highest-yield *feed*, because
 # it publishes no article sitemap: /sitemap.xml is a navigation file listing
 # contact-us, advertise and submit-your-news, and /sitemap/Article.xml — the path

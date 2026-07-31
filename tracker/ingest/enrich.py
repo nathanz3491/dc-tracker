@@ -188,14 +188,25 @@ def project_urls(session: Session, project_id: int) -> set[str]:
 
 def harvest_queue(session: Session, project_id: int) -> Harvest:
     """Queued candidates whose slug or headline names this project."""
-    from tracker.ingest.discover import matches_known_project, project_identities
+    from tracker.ingest.discover import (
+        matches_known_project,
+        newsroom_companies,
+        project_identities,
+    )
+
+    implied = newsroom_companies()
 
     identities = [i for i in project_identities(session) if i.project_id == project_id]
     if not identities:
         return Harvest("queue", skipped="project has no company/locality to match on")
 
     rows = session.scalars(select(IngestUrl).where(IngestUrl.status == "discovered")).all()
-    hits = [r.url for r in rows if matches_known_project(r.url, r.title, identities) == project_id]
+    hits = [
+        r.url
+        for r in rows
+        if matches_known_project(r.url, r.title, identities, implied_companies=implied)
+        == project_id
+    ]
     return Harvest("queue", hits, note=f"{len(rows)} candidate(s) in the queue")
 
 
@@ -208,15 +219,22 @@ def harvest_retry(session: Session, project_id: int) -> Harvest:
     from tracker.ingest.discover import (
         RETRYABLE_STATUSES,
         matches_known_project,
+        newsroom_companies,
         project_identities,
     )
 
+    implied = newsroom_companies()
     identities = [i for i in project_identities(session) if i.project_id == project_id]
     if not identities:
         return Harvest("retry", skipped="project has no company/locality to match on")
 
     rows = session.scalars(select(IngestUrl).where(IngestUrl.status.in_(RETRYABLE_STATUSES))).all()
-    hits = [r.url for r in rows if matches_known_project(r.url, r.title, identities) == project_id]
+    hits = [
+        r.url
+        for r in rows
+        if matches_known_project(r.url, r.title, identities, implied_companies=implied)
+        == project_id
+    ]
     return Harvest("retry", hits, note=f"{len(rows)} previously-failed URL(s)")
 
 
@@ -240,9 +258,12 @@ def harvest_archive(
         load_config,
         load_sitemaps,
         matches_known_project,
+        newsroom_companies,
         project_identities,
         sweep_sitemaps,
     )
+
+    implied = newsroom_companies()
 
     specs = load_sitemaps()
     if not specs:
@@ -257,7 +278,10 @@ def harvest_archive(
         sweep_sitemaps(specs, fetcher or _RawFetcher(settings), spec)
     )
     hits = [
-        c.url for c in candidates if matches_known_project(c.url, c.title, identities) == project_id
+        c.url
+        for c in candidates
+        if matches_known_project(c.url, c.title, identities, implied_companies=implied)
+        == project_id
     ]
     note = f"{len(candidates)} archived URL(s) swept"
     if problems:

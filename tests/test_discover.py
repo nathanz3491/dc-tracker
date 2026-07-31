@@ -746,3 +746,95 @@ def test_known_first_still_honours_the_limit(session):
         report=DiscoverReport(),
     )
     assert len(pending(session, limit=2, known_first=True)) == 2
+
+
+# --- Operator newsrooms -----------------------------------------------------
+
+
+def newsroom_config(tmp_path):
+    """A feeds file with one operator newsroom and one trade-press archive."""
+    path = tmp_path / "feeds.toml"
+    path.write_text(
+        """
+[[feed]]
+name = "x"
+url = "https://x.test/rss"
+
+[filter]
+topic = ["data cent"]
+signal = ["campus"]
+
+[[sitemap]]
+name = "stack-newsroom"
+url = "https://www.stackinfra.com/sitemap_index.xml"
+source_type = "company_filing"
+company = "STACK Infrastructure"
+topic_implied = true
+
+[[sitemap]]
+name = "trade-archive"
+url = "https://www.datacenterfrontier.com/sitemap.xml"
+source_type = "trade_press"
+""",
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_a_newsroom_entry_records_its_operator(tmp_path):
+    specs = {s.name: s for s in discover.load_sitemaps(newsroom_config(tmp_path))}
+    assert specs["stack-newsroom"].company == "STACK Infrastructure"
+    assert specs["trade-archive"].company is None, "trade press belongs to no operator"
+
+
+def test_newsroom_companies_maps_host_to_company_key(tmp_path):
+    mapping = discover.newsroom_companies(newsroom_config(tmp_path))
+    assert mapping == {"stackinfra.com": "stack"}, "www. is stripped; the key is normalized"
+
+
+def test_the_domain_can_stand_in_for_the_company(tmp_path):
+    """The measured win: 15 articles over 8 projects became 28 over 13.
+
+    A release on the operator's own site is titled "New Hillsboro campus
+    announced" — it names the city, not the company, because the reader already
+    knows whose site they are on.
+    """
+    identity = discover.ProjectIdentity(
+        project_id=7, company="stack", locality="hillsboro", name_tokens=()
+    )
+    url = "https://www.stackinfra.com/news/new-hillsboro-campus-announced/"
+
+    assert discover.matches_known_project(url, None, [identity]) is None
+    implied = discover.newsroom_companies(newsroom_config(tmp_path))
+    assert discover.matches_known_project(url, None, [identity], implied_companies=implied) == 7
+
+
+def test_an_implied_company_still_needs_a_locality_or_name_token(tmp_path):
+    """Precision is unchanged: the domain replaces one requirement, not both.
+
+    Otherwise every corporate page — careers, leadership, an ESG report — would
+    match every project that operator owns.
+    """
+    identity = discover.ProjectIdentity(
+        project_id=7, company="stack", locality="hillsboro", name_tokens=()
+    )
+    implied = discover.newsroom_companies(newsroom_config(tmp_path))
+    for path in ("/news/our-commitment-to-sustainability/", "/company/leadership/"):
+        assert (
+            discover.matches_known_project(
+                f"https://www.stackinfra.com{path}", None, [identity], implied_companies=implied
+            )
+            is None
+        )
+
+
+def test_one_operators_domain_does_not_imply_another_operators_projects(tmp_path):
+    mine = discover.ProjectIdentity(
+        project_id=7, company="stack", locality="hillsboro", name_tokens=()
+    )
+    theirs = discover.ProjectIdentity(
+        project_id=8, company="vantage", locality="hillsboro", name_tokens=()
+    )
+    implied = discover.newsroom_companies(newsroom_config(tmp_path))
+    url = "https://www.stackinfra.com/news/new-hillsboro-campus/"
+    assert discover.matches_known_project(url, None, [theirs, mine], implied_companies=implied) == 7
