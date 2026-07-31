@@ -23,6 +23,7 @@ from tracker.export import (
     fetch_projects,
     render,
     render_csv,
+    render_html,
     render_json,
     render_md,
     to_row,
@@ -388,3 +389,74 @@ def test_write_export_creates_parents_and_uses_lf(tmp_path):
 
 def test_write_export_with_no_path_is_a_noop():
     write_export("x", None)  # must not raise
+
+
+@pytest.fixture
+def html_projects(session):
+    """One fully-populated project, fetched the way the exporter fetches."""
+    sample(session)
+    return fetch_projects(session)
+
+
+# --- HTML dashboard ----------------------------------------------------------
+
+
+def test_html_inlines_the_dataset_rather_than_fetching_it(html_projects):
+    """It has to open by double-click.
+
+    `fetch()` from a `file://` page is blocked as cross-origin, so a build that
+    loaded a sibling .json would show an empty table unless the reader happened to
+    be running a web server.
+    """
+    html = render_html(html_projects)
+    assert '<script type="application/json" id="data">' in html
+    assert html_projects[0].company in html
+    assert "__DATA__" not in html, "the placeholder must be consumed"
+
+
+def test_html_makes_no_external_requests(html_projects):
+    """Offline and self-contained: no CDN, no webfont, no tile server.
+
+    Anything loaded over the network would make the file useless on a plane and
+    would leak the reader's interest in these projects to a third party.
+    """
+    html = render_html(html_projects)
+    for attr in ('src="http', "src='http", 'href="http', "href='http"):
+        # Citation links in the DATA payload are fine — they are content, not
+        # subresources — so only markup outside the payload is checked.
+        markup = html.split('id="data">')[0] + html.split("</script>")[-1]
+        assert attr not in markup, f"template pulls a subresource: {attr}"
+    assert "@import" not in html
+    assert "fonts.googleapis" not in html
+
+
+def test_html_escapes_a_script_tag_hiding_in_the_data(html_projects):
+    """The HTML tokenizer ends a script element at `</script>` regardless of
+    JSON or JavaScript context, so a project whose notes quote one would truncate
+    the whole dataset and leave a page that cannot parse."""
+    html_projects[0].notes = "trouble: </script><script>alert(1)</script>"
+    html = render_html(html_projects)
+    payload = html.split('id="data">')[1].split("</script>")[0]
+    assert "</script" not in payload
+    assert r"<\/script" in payload
+    # And the payload is still valid JSON once unescaped the way a browser does.
+    assert json.loads(payload.replace(r"<\/", "</"))["count"] == len(html_projects)
+
+
+def test_html_is_byte_stable_across_runs(html_projects):
+    assert render_html(html_projects) == render_html(html_projects)
+
+
+def test_html_carries_the_tier_of_every_value(html_projects):
+    """The page colours values by provenance, so it needs `basis` per project."""
+    html = render_html(html_projects)
+    payload = json.loads(html.split('id="data">')[1].split("</script>")[0].replace(r"<\/", "</"))
+    assert "basis" in payload["projects"][0]
+    assert "standing" in payload["projects"][0]
+
+
+def test_html_is_a_registered_format():
+    from tracker.export import FORMATS, RENDERERS
+
+    assert "html" in FORMATS
+    assert RENDERERS["html"] is render_html

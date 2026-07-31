@@ -79,6 +79,29 @@ initial build of the v1 PRD.
   Census row is a real, checkable citation but it is not testimony about the
   project; counting it would let one press release plus a lookup read as two
   independent domains and reach confidence 3.
+- **`tracker export html`** and `tracker/templates/dashboard.html` — the whole
+  dataset as one self-contained page: sortable table over the 12 fields, a
+  five-segment track strip per project, filters (state, phase, blocked-on,
+  confidence, quoted-only), a per-project drawer with citations and milestones,
+  capacity-behind-an-obstacle bars, and a coordinate plot.
+
+  No network requests of any kind — no CDN, no webfont, no tile server — so it
+  works offline and can be emailed. The dataset is inlined rather than fetched from
+  a sibling `.json` because `fetch()` from a `file://` page is blocked as
+  cross-origin, and a two-file build would open to an empty table unless the reader
+  happened to be running a web server.
+
+  Colour means **trust, never category**: the five tracks are a sequence so they get
+  an ordinal neutral ramp, and every hue is reserved for how much to believe a value
+  (amber for 待确认, blue for inferred) or for something being wrong (rose for a
+  blocked track). The signature element is a provenance ledger that recomputes on
+  every filter, so "what do the figures I am currently looking at rest on" is always
+  on screen — the question this dataset exists to answer.
+
+  Every measurement is set in a monospace stack with tabular figures and prose in the
+  system sans, so number columns align and the family itself distinguishes a
+  measurement from a description. Contrast verified in-browser against WCAG AA:
+  muted labels 4.83:1 on surface, 待确认 amber 10.04:1, blocked rose 7.17:1.
 - **Operator newsrooms as sources.** Seven company press-release archives added as
   `[[sitemap]]` entries. A release opens with the three fields that are hardest to
   find anywhere else — "X announces a $N billion campus, online in YEAR" — and is

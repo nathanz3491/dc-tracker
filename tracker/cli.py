@@ -2165,7 +2165,7 @@ def queue(
 
 @app.command("export")
 def export_cmd(
-    fmt: Annotated[str, typer.Argument(help="md | csv | json")],
+    fmt: Annotated[str, typer.Argument(help="md | csv | json | html")],
     out: Annotated[Path | None, typer.Option("--out", help="Write here instead of stdout.")] = None,
     company: Annotated[str | None, typer.Option("--company")] = None,
     state: Annotated[str | None, typer.Option("--state")] = None,

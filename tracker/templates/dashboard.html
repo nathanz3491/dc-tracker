@@ -1,0 +1,1031 @@
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>US data center construction tracker</title>
+
+<!--
+  Self-contained. No network requests of any kind: the dataset is inlined below as
+  application/json, every style and script is here, and there are no webfonts.
+
+  Inlined rather than fetched from a sibling .json on purpose — fetch() from a
+  file:// page is blocked as cross-origin, so a two-file build would silently
+  require a web server and this has to open by double-click.
+
+  Design note, since it explains every colour decision: in this page colour means
+  TRUST, never category. The five tracks are a sequence, so they get an ordinal
+  neutral ramp. Every hue is reserved for how much to believe a value, or for
+  something being wrong. That is the product's whole thesis — it is the only
+  tracker of these projects that tells you which numbers are quoted and which are
+  not — so the palette carries it rather than decorating around it.
+-->
+
+<style>
+  /* Palette. Dark because of the actual use: long sessions on dense numbers under
+     one desk lamp. Not pure black — #000 on an LCD crushes the low end of the
+     ramp and there is no headroom left for a lifted surface. */
+  :root {
+    --bg: oklch(0.17 0.012 250);
+    --surface: oklch(0.215 0.014 250);
+    --surface-hi: oklch(0.26 0.016 250);
+    --line: oklch(0.31 0.014 250);
+    --line-soft: oklch(0.245 0.012 250);
+    --ink: oklch(0.95 0.004 250);
+    --ink-2: oklch(0.78 0.008 250);
+    --ink-3: oklch(0.62 0.01 250);
+
+    /* Epistemic status. Two different kinds of bad, deliberately different hues:
+       amber = doubt about the DATA, rose = a problem with the PROJECT. */
+    --caution: oklch(0.8 0.15 78);      /* 待确认 — extracted, nothing quotable */
+    --caution-dim: oklch(0.34 0.06 78);
+    --alarm: oklch(0.72 0.16 18);       /* blocked */
+    --alarm-dim: oklch(0.32 0.07 18);
+    --judged: oklch(0.79 0.11 200);     /* inferred by a model */
+    --judged-dim: oklch(0.32 0.05 200);
+
+    /* Ordinal ramp for the five tracks. Reached segments step lighter. */
+    --t0: oklch(0.28 0.01 250);
+    --t1: oklch(0.55 0.012 250);
+    --t2: oklch(0.86 0.008 250);
+
+    --mono: ui-monospace, "SF Mono", "Cascadia Mono", "Roboto Mono", Menlo,
+      Consolas, "Liberation Mono", monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
+      Arial, sans-serif;
+
+    --z-sticky: 10;
+    --z-dialog: 40;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 400 14px/1.5 var(--sans);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Every measurement is set in mono with tabular figures, so columns of numbers
+     line up and a reader can compare them by eye. Prose stays in the sans. That
+     split is how engineering documents already work. */
+  .num, td.num, .mono {
+    font-family: var(--mono);
+    font-variant-numeric: tabular-nums;
+  }
+
+  a { color: var(--judged); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+  a:hover { color: var(--ink); }
+
+  :focus-visible {
+    outline: 2px solid var(--caution);
+    outline-offset: 2px;
+    border-radius: 2px;
+  }
+
+  .wrap { max-width: 1600px; margin: 0 auto; padding: 0 20px 96px; }
+
+  /* --- Masthead ---------------------------------------------------------- */
+  header.masthead {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 28px;
+    align-items: baseline;
+    padding: 26px 0 18px;
+    border-bottom: 1px solid var(--line);
+  }
+  .masthead h1 {
+    margin: 0;
+    font: 600 19px/1.2 var(--sans);
+    letter-spacing: -0.01em;
+  }
+  .masthead .sub { color: var(--ink-3); font-size: 13px; }
+  .masthead .sub b { color: var(--ink-2); font-weight: 500; }
+
+  /* --- Provenance ledger: the signature element -------------------------- */
+  /* For whatever is currently filtered, what is the trust composition of the
+     values on screen. Persistent, because "which of these numbers is actually
+     sourced" is the question this dataset exists to answer, and it changes every
+     time you filter. */
+  .ledger {
+    margin: 18px 0 0;
+    padding: 14px 16px;
+    background: var(--surface);
+    border: 1px solid var(--line-soft);
+  }
+  .ledger-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 16px;
+    margin-bottom: 10px;
+  }
+  .ledger-head h2 {
+    margin: 0;
+    font: 500 12px/1 var(--sans);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+  .ledger-head .count { color: var(--ink-3); font-size: 12px; font-family: var(--mono); }
+  .bar {
+    display: flex;
+    height: 10px;
+    background: var(--t0);
+    overflow: hidden;
+  }
+  .bar span { display: block; transition: width 220ms cubic-bezier(0.22, 1, 0.36, 1); }
+  .bar .s-reported { background: var(--t2); }
+  .bar .s-derived { background: var(--t1); }
+  .bar .s-unconfirmed { background: var(--caution); }
+  .bar .s-inferred { background: var(--judged); }
+  .ledger-key {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 20px;
+    margin-top: 10px;
+    font-size: 12px;
+    color: var(--ink-3);
+  }
+  .ledger-key b { font-family: var(--mono); color: var(--ink-2); font-weight: 500; }
+  .swatch {
+    display: inline-block;
+    width: 9px; height: 9px;
+    margin-right: 6px;
+    vertical-align: baseline;
+  }
+  .swatch.s-reported { background: var(--t2); }
+  .swatch.s-derived { background: var(--t1); }
+  .swatch.s-unconfirmed { background: var(--caution); }
+  .swatch.s-inferred { background: var(--judged); }
+
+  /* --- Filters ----------------------------------------------------------- */
+  .controls {
+    position: sticky;
+    top: 0;
+    z-index: var(--z-sticky);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 14px;
+    align-items: center;
+    padding: 12px 0;
+    margin-bottom: 2px;
+    background: var(--bg);
+    border-bottom: 1px solid var(--line);
+  }
+  .controls label { color: var(--ink-3); font-size: 12px; }
+  select, input[type="search"] {
+    font: 400 13px var(--sans);
+    color: var(--ink);
+    background: var(--surface);
+    border: 1px solid var(--line);
+    padding: 6px 8px;
+    min-width: 0;
+  }
+  input[type="search"] { min-width: 200px; }
+  select:hover, input[type="search"]:hover { border-color: var(--ink-3); }
+  .check { display: inline-flex; align-items: center; gap: 7px; color: var(--ink-2); font-size: 13px; }
+  .check input { accent-color: var(--caution); }
+  button.reset {
+    font: 400 13px var(--sans);
+    color: var(--ink-2);
+    background: none;
+    border: 1px solid var(--line);
+    padding: 6px 10px;
+    cursor: pointer;
+  }
+  button.reset:hover { color: var(--ink); border-color: var(--ink-3); }
+
+  /* --- Table ------------------------------------------------------------- */
+  .scroll { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  thead th {
+    position: sticky;
+    /* Measured from the filter bar at runtime, not guessed. A hardcoded 49px was
+       8.5px short of its real height, and rows scrolled up into the gap and showed
+       through above the column labels. */
+    top: var(--controls-h, 58px);
+    z-index: 5;
+    background: var(--bg);
+    text-align: left;
+    font: 500 11px/1 var(--sans);
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    padding: 10px 10px;
+    border-bottom: 1px solid var(--line);
+    white-space: nowrap;
+    cursor: pointer;
+    user-select: none;
+  }
+  thead th:hover { color: var(--ink); }
+  thead th[aria-sort] { color: var(--ink); }
+  thead th.right, td.right { text-align: right; }
+  tbody td {
+    padding: 9px 10px;
+    border-bottom: 1px solid var(--line-soft);
+    vertical-align: top;
+  }
+  tbody tr { cursor: pointer; }
+  tbody tr:hover td { background: var(--surface); }
+  tbody tr:focus-visible { outline-offset: -2px; }
+  .co { color: var(--ink); }
+  .pname { color: var(--ink-3); font-size: 12px; }
+  .loc { color: var(--ink-2); white-space: nowrap; }
+
+  /* Tier marking. Applied to the VALUE, not to a badge in another column, so a
+     reader never has to look somewhere else to know whether to believe it. */
+  .v-derived { border-bottom: 1px dotted var(--t1); }
+  .v-derived::after { content: "∴"; color: var(--ink-3); font-size: 11px; margin-left: 3px; }
+  .v-unconfirmed { color: var(--caution); border-bottom: 1px dashed var(--caution-dim); }
+  .v-inferred { color: var(--judged); border-bottom: 1px dashed var(--judged-dim); }
+
+  /* --- Track strip -------------------------------------------------------
+     Five segments, one per track, in the order a project advances. Reads as a
+     one-line diagram: the whole portfolio's stage is scannable down the column. */
+  .strip { display: flex; gap: 2px; }
+  .seg {
+    width: 13px; height: 13px;
+    background: var(--t0);
+    position: relative;
+  }
+  .seg.part { background: var(--t1); }
+  .seg.done { background: var(--t2); }
+  .seg.implied {
+    background: repeating-linear-gradient(
+      135deg, var(--t1) 0 2px, transparent 2px 4px
+    );
+    border: 1px solid var(--t1);
+  }
+  .seg.blocked { background: var(--alarm); }
+  .seg.blocked.watch { background: var(--alarm-dim); }
+
+  .blk { color: var(--alarm); white-space: nowrap; }
+  .conf {
+    display: inline-block;
+    min-width: 16px;
+    font-family: var(--mono);
+    color: var(--ink-3);
+  }
+  .conf.c3 { color: var(--t2); }
+  .conf.c0 { color: var(--alarm); }
+
+  .empty { padding: 40px 0; color: var(--ink-3); }
+
+  /* --- Panels: exposure + distribution ----------------------------------- */
+  .panels {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
+    gap: 22px;
+    margin-top: 34px;
+  }
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--line-soft);
+    padding: 16px;
+  }
+  .panel h2 {
+    margin: 0 0 4px;
+    font: 500 12px/1 var(--sans);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+  .panel .note { margin: 0 0 14px; color: var(--ink-3); font-size: 12px; max-width: 62ch; }
+
+  .exp-row {
+    display: grid;
+    grid-template-columns: 148px 1fr 72px;
+    gap: 10px;
+    align-items: center;
+    padding: 3px 0;
+    font-size: 12px;
+  }
+  .exp-row .cat { color: var(--ink-2); }
+  .exp-track { background: var(--bg); height: 12px; }
+  .exp-fill {
+    height: 100%;
+    background: var(--alarm);
+    transition: width 260ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  .exp-row .mw { text-align: right; font-family: var(--mono); color: var(--ink-2); }
+
+  /* A distribution plot, not a map: there is no coastline here because we have no
+     boundary data, and inventing one would be drawing rather than reporting.
+     Graticule + projected positions is what the data actually supports. */
+  svg.plot { width: 100%; height: auto; display: block; }
+  svg.plot .grat { stroke: var(--line-soft); stroke-width: 1; fill: none; }
+  svg.plot .glab { fill: var(--ink-3); font: 9px var(--mono); }
+  svg.plot circle { fill: var(--t1); fill-opacity: 0.75; stroke: var(--bg); stroke-width: 0.75; }
+  svg.plot circle.blocked { fill: var(--alarm); }
+  svg.plot circle:hover { fill: var(--ink); }
+
+  /* --- Detail dialog -----------------------------------------------------
+     Native <dialog>: an absolutely-positioned panel would be clipped by the
+     table's own horizontal scroll container. */
+  dialog {
+    width: min(760px, 94vw);
+    max-height: 88vh;
+    padding: 0;
+    color: var(--ink);
+    background: var(--surface);
+    border: 1px solid var(--line);
+    z-index: var(--z-dialog);
+  }
+  dialog::backdrop { background: oklch(0.12 0.01 250 / 0.76); }
+  .d-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    align-items: flex-start;
+    padding: 18px 20px 14px;
+    border-bottom: 1px solid var(--line);
+  }
+  .d-head h3 { margin: 0 0 3px; font: 600 16px/1.3 var(--sans); }
+  .d-head .where { color: var(--ink-3); font-size: 13px; }
+  .d-body { padding: 18px 20px 24px; overflow-y: auto; }
+  .d-body h4 {
+    margin: 22px 0 8px;
+    font: 500 11px/1 var(--sans);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+  .d-body h4:first-child { margin-top: 0; }
+  .kv { display: grid; grid-template-columns: 150px 1fr; gap: 3px 14px; font-size: 13px; }
+  .kv dt { color: var(--ink-3); }
+  .kv dd { margin: 0; }
+  .watch {
+    margin: 16px 0 0;
+    padding: 12px 14px;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    font-size: 13px;
+  }
+  .watch .lab { color: var(--caution); font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; }
+  .src { padding: 10px 0; border-bottom: 1px solid var(--line-soft); font-size: 12px; }
+  .src .stype { color: var(--ink-3); font-family: var(--mono); margin-right: 8px; }
+  .src blockquote {
+    margin: 6px 0 0;
+    padding-left: 11px;
+    border-left: 1px solid var(--line);
+    color: var(--ink-2);
+  }
+  .tl { display: grid; grid-template-columns: 92px 1fr; gap: 3px 12px; font-size: 13px; }
+  .tl dt { color: var(--ink-3); font-family: var(--mono); }
+  .tl dd { margin: 0; }
+  button.close {
+    font: 400 13px var(--sans);
+    color: var(--ink-2);
+    background: none;
+    border: 1px solid var(--line);
+    padding: 5px 10px;
+    cursor: pointer;
+    flex: none;
+  }
+  button.close:hover { color: var(--ink); border-color: var(--ink-3); }
+
+  footer.foot {
+    margin-top: 40px;
+    padding-top: 16px;
+    border-top: 1px solid var(--line);
+    color: var(--ink-3);
+    font-size: 12px;
+    max-width: 88ch;
+  }
+
+  @media (max-width: 820px) {
+    .wrap { padding: 0 12px 64px; }
+    thead th { top: 92px; }
+    .kv, .tl { grid-template-columns: 1fr; }
+    .kv dt { margin-top: 8px; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
+  }
+</style>
+
+<script type="application/json" id="data">__DATA__</script>
+
+<div class="wrap">
+  <header class="masthead">
+    <h1>US data center construction tracker</h1>
+    <div class="sub">
+      <b id="m-projects">0</b> projects ·
+      <b id="m-mw">0</b> MW planned, where a source states one ·
+      <b id="m-cited">0</b> citations
+    </div>
+  </header>
+
+  <section class="ledger" aria-labelledby="ledger-h">
+    <div class="ledger-head">
+      <h2 id="ledger-h">What the visible figures rest on</h2>
+      <span class="count" id="ledger-count"></span>
+    </div>
+    <div class="bar" id="ledger-bar" role="img" aria-labelledby="ledger-h"></div>
+    <div class="ledger-key" id="ledger-key"></div>
+  </section>
+
+  <div class="controls">
+    <input type="search" id="q" placeholder="Company, project, city" aria-label="Search company, project or city" />
+    <label>State <select id="f-state"></select></label>
+    <label>Phase <select id="f-phase"></select></label>
+    <label>Blocked on <select id="f-track"></select></label>
+    <label>Confidence <select id="f-conf"></select></label>
+    <span class="check">
+      <input type="checkbox" id="f-quoted" />
+      <label for="f-quoted">Quoted figures only</label>
+    </span>
+    <button class="reset" id="reset" type="button">Clear filters</button>
+  </div>
+
+  <div class="scroll">
+    <table id="tbl">
+      <thead>
+        <tr id="head"></tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+  <p class="empty" id="empty" hidden>Nothing matches these filters.</p>
+
+  <div class="panels">
+    <section class="panel">
+      <h2>Capacity behind an obstacle</h2>
+      <p class="note">
+        Planned MW of the visible projects whose obstacle falls in each category. A
+        project counts under every category obstructing it, so this does not add up
+        to a fleet total.
+      </p>
+      <div id="exposure"></div>
+    </section>
+
+    <section class="panel">
+      <h2>Where they are</h2>
+      <p class="note">
+        Visible projects at their recorded coordinates, sized by planned MW. Rose
+        marks a project with an open obstacle. Coordinates are the centre of the
+        city, not the site.
+      </p>
+      <svg class="plot" id="plot" viewBox="0 0 640 360" role="img"
+           aria-label="Projects plotted by longitude and latitude"></svg>
+    </section>
+  </div>
+
+  <footer class="foot">
+    Every value traces to a citation. A figure set plainly is quoted verbatim from a
+    source; <span class="v-derived">dotted</span> is derived from US Census
+    reference data; <span class="v-unconfirmed">amber</span> is 待确认 — extracted
+    but no quote in any fetched article supports it, so do not rely on it;
+    <span class="v-inferred">blue</span> is a model's judgement, not an observation.
+    Capacity and investment sums cover only projects that cite a figure, so they are
+    a floor rather than an industry total.
+  </footer>
+</div>
+
+<dialog id="detail" aria-labelledby="d-title">
+  <div class="d-head">
+    <div>
+      <h3 id="d-title"></h3>
+      <div class="where" id="d-where"></div>
+    </div>
+    <button class="close" id="d-close" type="button">Close</button>
+  </div>
+  <div class="d-body" id="d-body"></div>
+</dialog>
+
+<script>
+(() => {
+  "use strict";
+
+  const DATA = JSON.parse(document.getElementById("data").textContent);
+  const PROJECTS = DATA.projects || [];
+
+  const TRACKS = ["site_control", "permits", "power", "construction", "commercial"];
+  const TRACK_LABEL = {
+    site_control: "Site control",
+    permits: "Permits",
+    power: "Power",
+    construction: "Construction",
+    commercial: "Customer & finance",
+  };
+  // Short forms for the table, where "Customer & finance" clipped mid-word.
+  const TRACK_SHORT = {
+    site_control: "Site",
+    permits: "Permits",
+    power: "Power",
+    construction: "Build",
+    commercial: "Customer",
+  };
+  const TIERS = ["reported", "derived", "unconfirmed", "inferred"];
+  const TIER_LABEL = {
+    reported: "quoted from a source",
+    derived: "derived from reference data",
+    unconfirmed: "待确认 — unquoted",
+    inferred: "a model's judgement",
+  };
+  // The twelve the brief asks for. Identity fields are always present, so the
+  // ledger would read as 100% quoted if they were counted; these are the ones
+  // whose provenance is actually in question.
+  const LEDGER_FIELDS = [
+    "mw_planned", "mw_built", "investment_usd", "first_announced",
+    "expected_online", "customer", "county", "lat", "phase", "blocker",
+  ];
+
+  const $ = (id) => document.getElementById(id);
+  const el = (tag, cls, text) => {
+    const n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text != null) n.textContent = text;
+    return n;
+  };
+
+  const fmtMW = (v) =>
+    v == null ? "—" : Number(v).toLocaleString("en-US", { maximumFractionDigits: 0 });
+  const fmtUSD = (v) => {
+    if (v == null) return "—";
+    if (v >= 1e9) return "$" + (v / 1e9).toFixed(v >= 1e10 ? 0 : 1) + "B";
+    if (v >= 1e6) return "$" + Math.round(v / 1e6) + "M";
+    return "$" + Number(v).toLocaleString("en-US");
+  };
+  const uniq = (xs) => [...new Set(xs.filter(Boolean))].sort();
+
+  /* ---- filter state ---- */
+  const F = { q: "", state: "", phase: "", track: "", conf: "", quoted: false };
+
+  function options(sel, values, allLabel) {
+    sel.replaceChildren();
+    sel.append(new Option(allLabel, ""));
+    for (const v of values) sel.append(new Option(v.label ?? v, v.value ?? v));
+  }
+
+  options($("f-state"), uniq(PROJECTS.map((p) => p.state)), "All");
+  options($("f-phase"), uniq(PROJECTS.map((p) => p.phase)), "All");
+  options(
+    $("f-track"),
+    TRACKS.map((t) => ({ value: t, label: TRACK_LABEL[t] })),
+    "Anything"
+  );
+  options(
+    $("f-conf"),
+    [3, 2, 1, 0].map((c) => ({ value: String(c), label: c + " and above" })),
+    "Any"
+  );
+
+  function visible() {
+    const q = F.q.trim().toLowerCase();
+    return PROJECTS.filter((p) => {
+      if (F.state && p.state !== F.state) return false;
+      if (F.phase && p.phase !== F.phase) return false;
+      if (F.conf !== "" && (p.confidence ?? 0) < Number(F.conf)) return false;
+      if (F.track) {
+        const t = (p.standing?.tracks || []).find((x) => x.track === F.track);
+        if (!t || !t.blockers.length) return false;
+      }
+      if (F.quoted) {
+        // Any 待确认 or inferred value disqualifies the row: the point of the
+        // switch is a view containing nothing you would have to caveat.
+        const tiers = Object.values(p.basis || {});
+        if (tiers.some((t) => t === "unconfirmed" || t === "inferred")) return false;
+      }
+      if (q) {
+        const hay = [p.company, p.name, p.city, p.county, p.customer, p.state]
+          .filter(Boolean).join(" ").toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+  }
+
+  /* ---- sorting ---- */
+  const COLUMNS = [
+    { key: "company", label: "Operator", get: (p) => p.company },
+    { key: "location", label: "Location", get: (p) => `${p.state} ${p.city || p.county || ""}` },
+    { key: "phase", label: "Phase", get: (p) => p.phase },
+    { key: "standing", label: "Site · Permit · Power · Build · Cust", get: reachedCount, num: true },
+    { key: "mw_planned", label: "MW planned", get: (p) => p.mw_planned, num: true },
+    { key: "mw_built", label: "MW built", get: (p) => p.mw_built, num: true },
+    { key: "investment_usd", label: "Investment", get: (p) => p.investment_usd, num: true },
+    { key: "first_announced", label: "Announced", get: (p) => p.first_announced },
+    { key: "expected_online", label: "Online", get: (p) => p.expected_online },
+    { key: "customer", label: "Customer", get: (p) => p.customer },
+    { key: "blocker", label: "Blocked on", get: (p) => p.standing?.binding_blocker },
+    { key: "confidence", label: "Conf", get: (p) => p.confidence, num: true },
+  ];
+
+  function reachedCount(p) {
+    return (p.standing?.tracks || []).reduce((n, t) => n + t.reached.length, 0);
+  }
+
+  let sortKey = "mw_planned";
+  let sortDesc = true;
+
+  function sorted(rows) {
+    const col = COLUMNS.find((c) => c.key === sortKey) || COLUMNS[0];
+    const copy = rows.slice();
+    copy.sort((a, b) => {
+      const x = col.get(a), y = col.get(b);
+      // Nulls always sink, whichever way the column is sorted: a project with no
+      // figure is not "the smallest", it is unknown, and floating it to the top of
+      // a descending sort would misrepresent it.
+      if (x == null && y == null) return a.id - b.id;
+      if (x == null) return 1;
+      if (y == null) return -1;
+      const c = col.num ? Number(x) - Number(y) : String(x).localeCompare(String(y));
+      return (sortDesc ? -c : c) || a.id - b.id;
+    });
+    return copy;
+  }
+
+  /* ---- rendering ---- */
+  function tierClass(p, field) {
+    const t = p.basis?.[field];
+    return t && t !== "reported" ? " v-" + t : "";
+  }
+
+  function valueCell(p, field, text, extra) {
+    const td = el("td", (extra || "") + " num");
+    const span = el("span", ("v " + tierClass(p, field)).trim(), text);
+    if (p.basis?.[field] && p.basis[field] !== "reported") {
+      span.title = TIER_LABEL[p.basis[field]] || p.basis[field];
+    }
+    td.append(span);
+    return td;
+  }
+
+  function stripCell(p) {
+    const td = el("td");
+    const strip = el("div", "strip");
+    for (const name of TRACKS) {
+      const t = (p.standing?.tracks || []).find((x) => x.track === name);
+      const seg = el("span", "seg");
+      let label = TRACK_LABEL[name] + ": ";
+      if (!t || (!t.reached.length && !t.blockers.length)) {
+        label += "nothing recorded";
+      } else {
+        if (t.complete) seg.classList.add("done");
+        else if (t.reached.length) seg.classList.add("part");
+        if (t.reached.length && t.reached.every((m) => t.implied.includes(m))) {
+          seg.classList.add("implied");
+        }
+        if (t.blockers.length) {
+          seg.classList.add("blocked");
+          if (t.blocker_severity === "watch") seg.classList.add("watch");
+        }
+        label += t.complete ? "complete" : t.status;
+        if (t.blockers.length) label += " — blocked by " + t.blockers.join(", ");
+      }
+      seg.title = label;
+      strip.append(seg);
+    }
+    td.append(strip);
+    return td;
+  }
+
+  function renderHead() {
+    const tr = $("head");
+    tr.replaceChildren();
+    for (const col of COLUMNS) {
+      const th = el("th", col.num ? "right" : null, col.label);
+      th.tabIndex = 0;
+      if (col.key === sortKey) th.setAttribute("aria-sort", sortDesc ? "descending" : "ascending");
+      const activate = () => {
+        if (sortKey === col.key) sortDesc = !sortDesc;
+        else { sortKey = col.key; sortDesc = !!col.num; }
+        render();
+      };
+      th.addEventListener("click", activate);
+      th.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); activate(); }
+      });
+      tr.append(th);
+    }
+  }
+
+  function renderRows(rows) {
+    const body = $("rows");
+    body.replaceChildren();
+    const frag = document.createDocumentFragment();
+    for (const p of rows) {
+      const tr = el("tr");
+      tr.tabIndex = 0;
+      tr.addEventListener("click", () => openDetail(p));
+      tr.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") { e.preventDefault(); openDetail(p); }
+      });
+
+      const first = el("td");
+      first.append(el("div", "co", p.company));
+      first.append(el("div", "pname", p.name || ""));
+      tr.append(first);
+
+      tr.append(el("td", "loc", [p.city || p.county || "—", p.state].filter(Boolean).join(", ")));
+      tr.append(valueCell(p, "phase", p.phase || "—"));
+      tr.append(stripCell(p));
+      tr.append(valueCell(p, "mw_planned", fmtMW(p.mw_planned), "right"));
+      tr.append(valueCell(p, "mw_built", fmtMW(p.mw_built), "right"));
+      tr.append(valueCell(p, "investment_usd", fmtUSD(p.investment_usd), "right"));
+      tr.append(valueCell(p, "first_announced", p.first_announced || "—", "right"));
+      tr.append(valueCell(p, "expected_online", p.expected_online || "—", "right"));
+      tr.append(valueCell(p, "customer", p.customer || "—"));
+
+      const blocked = p.standing?.binding_blocker;
+      tr.append(el("td", blocked ? "blk" : null, blocked ? TRACK_SHORT[blocked] : "—"));
+
+      const conf = el("td", "right");
+      const c = p.confidence ?? 0;
+      conf.append(el("span", "conf c" + c, String(c)));
+      tr.append(conf);
+
+      frag.append(tr);
+    }
+    body.append(frag);
+    $("empty").hidden = rows.length > 0;
+  }
+
+  function renderLedger(rows) {
+    const counts = Object.fromEntries(TIERS.map((t) => [t, 0]));
+    let total = 0;
+    for (const p of rows) {
+      for (const f of LEDGER_FIELDS) {
+        const t = p.basis?.[f];
+        if (!t) continue;
+        counts[t] = (counts[t] || 0) + 1;
+        total++;
+      }
+    }
+
+    const bar = $("ledger-bar");
+    bar.replaceChildren();
+    for (const t of TIERS) {
+      const seg = el("span", "s-" + t);
+      seg.style.width = total ? (100 * counts[t]) / total + "%" : "0%";
+      bar.append(seg);
+    }
+
+    const key = $("ledger-key");
+    key.replaceChildren();
+    for (const t of TIERS) {
+      const item = el("span");
+      item.append(el("i", "swatch s-" + t));
+      const pct = total ? Math.round((100 * counts[t]) / total) : 0;
+      item.append(el("b", null, pct + "%"));
+      item.append(document.createTextNode(" " + TIER_LABEL[t]));
+      key.append(item);
+    }
+    $("ledger-count").textContent =
+      total + " recorded values across " + rows.length + " project(s)";
+  }
+
+  function renderExposure(rows) {
+    const byCat = new Map();
+    for (const p of rows) {
+      const seen = new Set();
+      for (const t of p.standing?.tracks || []) {
+        for (const cat of t.blockers) {
+          if (seen.has(cat)) continue;
+          seen.add(cat);
+          byCat.set(cat, (byCat.get(cat) || 0) + (p.mw_planned || 0));
+        }
+      }
+    }
+    const host = $("exposure");
+    host.replaceChildren();
+    const entries = [...byCat.entries()].sort((a, b) => b[1] - a[1]);
+    if (!entries.length) {
+      host.append(el("p", "note", "No visible project records an open obstacle."));
+      return;
+    }
+    const max = Math.max(...entries.map((e) => e[1])) || 1;
+    for (const [cat, mw] of entries) {
+      const row = el("div", "exp-row");
+      row.append(el("span", "cat", cat.replace(/_/g, " ")));
+      const track = el("div", "exp-track");
+      const fill = el("div", "exp-fill");
+      fill.style.width = (100 * mw) / max + "%";
+      track.append(fill);
+      row.append(track);
+      row.append(el("span", "mw", mw ? fmtMW(mw) + " MW" : "no MW"));
+      host.append(row);
+    }
+  }
+
+  function renderPlot(rows) {
+    const svg = $("plot");
+    svg.replaceChildren();
+    const NS = "http://www.w3.org/2000/svg";
+    // `attrs` defaults to {}: mk("title") is called without any, and
+    // Object.entries(undefined) throws — which killed the entire circle loop
+    // after the graticule had already drawn, leaving a plot with no projects on it.
+    const mk = (tag, attrs = {}) => {
+      const n = document.createElementNS(NS, tag);
+      for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
+      return n;
+    };
+    // Conic-ish projection over the contiguous US window, enough to place points
+    // recognisably without pretending to be cartography.
+    const W = 640, H = 360, PAD = 26;
+    const LON = [-125, -66], LAT = [24, 50];
+    const x = (lon) => PAD + ((lon - LON[0]) / (LON[1] - LON[0])) * (W - 2 * PAD);
+    const y = (lat) => H - PAD - ((lat - LAT[0]) / (LAT[1] - LAT[0])) * (H - 2 * PAD);
+
+    for (let lon = -120; lon <= -70; lon += 10) {
+      svg.append(mk("line", { class: "grat", x1: x(lon), y1: PAD, x2: x(lon), y2: H - PAD }));
+      const lab = mk("text", { class: "glab", x: x(lon) + 3, y: H - PAD + 12 });
+      lab.textContent = Math.abs(lon) + "°W";
+      svg.append(lab);
+    }
+    for (let lat = 25; lat <= 50; lat += 5) {
+      svg.append(mk("line", { class: "grat", x1: PAD, y1: y(lat), x2: W - PAD, y2: y(lat) }));
+      const lab = mk("text", { class: "glab", x: 3, y: y(lat) - 3 });
+      lab.textContent = lat + "°N";
+      svg.append(lab);
+    }
+
+    const placed = rows.filter((p) => p.lat != null && p.lon != null);
+    // Largest first so a small project is never hidden under a big one.
+    placed.sort((a, b) => (b.mw_planned || 0) - (a.mw_planned || 0));
+    for (const p of placed) {
+      const mw = p.mw_planned || 0;
+      const r = 3 + Math.sqrt(mw) / 7;
+      const c = mk("circle", {
+        cx: x(p.lon).toFixed(1),
+        cy: y(p.lat).toFixed(1),
+        r: Math.min(r, 22).toFixed(1),
+      });
+      if (p.standing?.binding_blocker) c.classList.add("blocked");
+      const t = mk("title");
+      t.textContent =
+        `${p.company} — ${p.name || ""} (${p.city || p.county || ""}, ${p.state})` +
+        (mw ? ` · ${fmtMW(mw)} MW` : "");
+      c.append(t);
+      c.addEventListener("click", () => openDetail(p));
+      svg.append(c);
+    }
+    if (!placed.length) {
+      const lab = mk("text", { class: "glab", x: W / 2 - 90, y: H / 2 });
+      lab.textContent = "No visible project has coordinates.";
+      svg.append(lab);
+    }
+  }
+
+  /* ---- detail ---- */
+  const dlg = $("detail");
+
+  function openDetail(p) {
+    $("d-title").textContent = `${p.company} — ${p.name || "(unnamed)"}`;
+    $("d-where").textContent = [
+      [p.city, p.county, p.state].filter(Boolean).join(", "),
+      p.phase,
+      "confidence " + (p.confidence ?? 0),
+    ].join(" · ");
+
+    const body = $("d-body");
+    body.replaceChildren();
+
+    if (p.standing?.watch_for) {
+      const box = el("div", "watch");
+      box.append(el("div", "lab", "Watch for"));
+      box.append(el("div", null, p.standing.watch_for));
+      if (p.standing.binding_blocker) {
+        box.append(
+          el("div", "blk", "Binding constraint: " + TRACK_LABEL[p.standing.binding_blocker])
+        );
+      }
+      body.append(box);
+    }
+
+    body.append(el("h4", null, "Where it stands"));
+    const dl = el("dl", "kv");
+    for (const t of p.standing?.tracks || []) {
+      dl.append(el("dt", null, TRACK_LABEL[t.track]));
+      let text = t.complete ? "complete" : t.status.replace(/_/g, " ");
+      if (t.reached.length && t.reached.every((m) => t.implied.includes(m))) text += " (implied)";
+      if (t.blockers.length) text += " — blocked by " + t.blockers.join(", ");
+      dl.append(el("dd", null, text));
+    }
+    body.append(dl);
+
+    body.append(el("h4", null, "Recorded values"));
+    const vals = el("dl", "kv");
+    const FIELDS = [
+      ["mw_planned", "MW planned", fmtMW],
+      ["mw_built", "MW built", fmtMW],
+      ["investment_usd", "Investment", fmtUSD],
+      ["first_announced", "First announced", String],
+      ["expected_online", "Expected online", String],
+      ["customer", "Customer", String],
+      ["county", "County", String],
+      ["blocker", "Blocker", String],
+    ];
+    for (const [field, label, fmt] of FIELDS) {
+      vals.append(el("dt", null, label));
+      const dd = el("dd");
+      const v = p[field];
+      const span = el("span", ("num " + tierClass(p, field)).trim(), v == null ? "—" : fmt(v));
+      if (p.basis?.[field] && p.basis[field] !== "reported") {
+        span.title = TIER_LABEL[p.basis[field]];
+      }
+      dd.append(span);
+      vals.append(dd);
+    }
+    body.append(vals);
+
+    if (p.events?.length) {
+      body.append(el("h4", null, "Milestones"));
+      const tl = el("dl", "tl");
+      for (const e of p.events.slice().sort((a, b) => String(a.event_date).localeCompare(b.event_date))) {
+        tl.append(el("dt", null, e.event_date));
+        tl.append(el("dd", null, (e.event_type || "").replace(/_/g, " ") + (e.description ? " — " + e.description : "")));
+      }
+      body.append(tl);
+    }
+
+    if (p.risks?.length) {
+      body.append(el("h4", null, "Obstacles"));
+      const rl = el("dl", "kv");
+      for (const r of p.risks) {
+        rl.append(el("dt", null, (r.category || "").replace(/_/g, " ")));
+        rl.append(el("dd", null, `${r.severity} · ${r.status} — ${r.summary || ""}`));
+      }
+      body.append(rl);
+    }
+
+    body.append(el("h4", null, `Citations (${p.sources?.length || 0})`));
+    for (const s of (p.sources || []).slice().sort((a, b) => a.url.localeCompare(b.url))) {
+      const box = el("div", "src");
+      const line = el("div");
+      line.append(el("span", "stype", s.source_type));
+      const a = el("a", null, s.url);
+      a.href = s.url;
+      a.rel = "noopener noreferrer";
+      a.target = "_blank";
+      line.append(a);
+      box.append(line);
+      if (s.fields) box.append(el("div", "pname", "supports: " + s.fields));
+      if (s.unconfirmed_fields) {
+        box.append(el("div", "pname", "unconfirmed here: " + s.unconfirmed_fields));
+      }
+      if (s.excerpt) box.append(el("blockquote", null, s.excerpt));
+      body.append(box);
+    }
+
+    if (p.notes) {
+      body.append(el("h4", null, "Notes"));
+      body.append(el("div", "pname", p.notes));
+    }
+
+    dlg.showModal();
+  }
+
+  $("d-close").addEventListener("click", () => dlg.close());
+  dlg.addEventListener("click", (e) => { if (e.target === dlg) dlg.close(); });
+
+  /* ---- wiring ---- */
+  function render() {
+    const rows = sorted(visible());
+    renderHead();
+    renderRows(rows);
+    renderLedger(rows);
+    renderExposure(rows);
+    renderPlot(rows);
+  }
+
+  const bind = (id, key, prop = "value") => {
+    const node = $(id);
+    node.addEventListener(prop === "checked" ? "change" : "input", () => {
+      F[key] = node[prop];
+      render();
+    });
+  };
+  bind("q", "q");
+  bind("f-state", "state");
+  bind("f-phase", "phase");
+  bind("f-track", "track");
+  bind("f-conf", "conf");
+  bind("f-quoted", "quoted", "checked");
+
+  $("reset").addEventListener("click", () => {
+    Object.assign(F, { q: "", state: "", phase: "", track: "", conf: "", quoted: false });
+    $("q").value = "";
+    for (const id of ["f-state", "f-phase", "f-track", "f-conf"]) $(id).value = "";
+    $("f-quoted").checked = false;
+    render();
+  });
+
+  // Keep the table header parked directly under the filter bar at every width.
+  // The bar wraps to two lines on narrow screens, so this cannot be a constant.
+  const syncStickyOffset = () => {
+    const h = $("q").closest(".controls").getBoundingClientRect().height;
+    document.documentElement.style.setProperty("--controls-h", Math.round(h) + "px");
+  };
+  syncStickyOffset();
+  addEventListener("resize", syncStickyOffset, { passive: true });
+
+  $("m-projects").textContent = PROJECTS.length.toLocaleString("en-US");
+  $("m-mw").textContent = fmtMW(PROJECTS.reduce((n, p) => n + (p.mw_planned || 0), 0));
+  $("m-cited").textContent = PROJECTS.reduce((n, p) => n + (p.sources?.length || 0), 0);
+
+  render();
+})();
+</script>

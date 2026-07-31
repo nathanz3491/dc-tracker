@@ -65,7 +65,7 @@ CSV_COLUMNS: tuple[str, ...] = (
 #: safe for consumers, but a reader keying on the tag should still be able to tell.
 JSON_SCHEMA_TAG = "tracker/3"
 
-FORMATS = ("md", "csv", "json")
+FORMATS = ("md", "csv", "json", "html")
 
 
 @dataclass(frozen=True)
@@ -336,6 +336,49 @@ def render_json(projects: Sequence[Project], *, generated_at: str | None = None)
     return json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
 
 
+#: Where the dataset is spliced into the template.
+_HTML_DATA_TOKEN = "__DATA__"
+
+
+def template_path() -> Path:
+    """The dashboard template, resolved next to the installed package."""
+    from tracker.config import install_root
+
+    return install_root() / "tracker" / "templates" / "dashboard.html"
+
+
+def render_html(projects: Sequence[Project], *, generated_at: str | None = None) -> str:
+    """One self-contained HTML file: the dataset inlined into the template.
+
+    Inlined rather than fetched from a sibling `.json` deliberately. `fetch()` from
+    a `file://` page is blocked as cross-origin, so a two-file build would open to
+    an empty table unless the reader happened to be running a web server — which
+    defeats the point of a deliverable someone can double-click.
+
+    `</script>` inside the payload has to be broken up: the HTML tokenizer ends a
+    script element at that byte sequence regardless of JSON or JavaScript context,
+    so a project whose notes quoted a script tag would truncate the whole dataset
+    and produce a page that fails to parse.
+    """
+    payload = json.dumps(
+        {
+            "schema": JSON_SCHEMA_TAG,
+            "count": len(projects),
+            "projects": [to_json_object(p) for p in projects],
+            **({"generated_at": generated_at} if generated_at else {}),
+        },
+        sort_keys=True,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    payload = payload.replace("</", "<\\/")
+
+    template = template_path().read_text(encoding="utf-8")
+    if _HTML_DATA_TOKEN not in template:
+        raise ValueError(f"{template_path().name} has no {_HTML_DATA_TOKEN} placeholder")
+    return template.replace(_HTML_DATA_TOKEN, payload, 1)
+
+
 def render_md(projects: Sequence[Project], *, generated_at: str | None = None) -> str:
     """Markdown: a summary table, then one section per project with its citations.
 
@@ -425,7 +468,7 @@ def render_md(projects: Sequence[Project], *, generated_at: str | None = None) -
     return "\n".join(lines)
 
 
-RENDERERS = {"md": render_md, "csv": render_csv, "json": render_json}
+RENDERERS = {"md": render_md, "csv": render_csv, "json": render_json, "html": render_html}
 
 
 def render(fmt: str, projects: Sequence[Project], *, generated_at: str | None = None) -> str:
@@ -457,6 +500,7 @@ __all__ = [
     "fetch_projects",
     "render",
     "render_csv",
+    "render_html",
     "render_json",
     "render_md",
     "to_json_object",

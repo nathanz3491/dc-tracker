@@ -355,6 +355,35 @@ because the configured archives simply never covered them. A search key is what 
 that ceiling — see the backend table below; without one, `enrich` on a project the
 trade press ignored will honestly report that it found nothing to read.
 
+### The whole dataset as one page
+
+```bash
+tracker export html --out data/exports/tracker.html
+```
+
+One self-contained file: open it by double-click. Sortable table over the 12
+fields, a five-segment track strip per project so stage is scannable down the
+column, filters for state / phase / blocked-on / confidence / quoted-only, a drawer
+per project with its citations and milestones, capacity-behind-an-obstacle bars,
+and a coordinate plot.
+
+**No network requests at all** — no CDN, no webfont, no map tiles — so it works
+offline and survives being emailed. The dataset is inlined rather than fetched from
+a sibling `.json` on purpose: `fetch()` from a `file://` page is blocked as
+cross-origin, so a two-file build would open to an empty table unless the reader
+happened to be running a web server.
+
+Two deliberate choices worth knowing. **Colour means trust, never category** — the
+five tracks get a neutral ordinal ramp, and every hue is reserved for how much to
+believe a value (amber = 待确认, blue = inferred) or for something being wrong
+(rose = a blocked track). And the header strip is a **provenance ledger** that
+recomputes on every filter, so the trust composition of whatever you are looking at
+is always visible rather than something you have to go and check.
+
+The coordinate panel is a plot, not a map: there is no coastline because there is no
+boundary data here, and drawing one would be illustration rather than reporting.
+Positions are city centres, not sites.
+
 ### Seeing where the data is thin
 
 ```bash
