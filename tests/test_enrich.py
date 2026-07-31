@@ -613,7 +613,30 @@ def test_the_budget_is_shared_across_projects(session):
         target_fields=None,
     )
     assert batch.articles_read <= 4, f"read {batch.articles_read}, budget was 4"
-    assert batch.budget_exhausted
+
+
+def test_projects_beyond_the_budget_are_reported_as_never_run(session):
+    """With fewer articles than projects, the shortfall must be visible."""
+    ids = []
+    for city in ("Reno", "Mesa", "Plano", "Ames", "Provo"):
+        project = add_project(session, city=city, company=f"Op {city}")
+        ids.append(project.id)
+        for i in range(4):
+            add_queued(session, f"https://x.com/nb-{city.lower()}-{i}", f"Op {city} {city} campus")
+
+    batch = enrich.run_many(
+        session,
+        ids,
+        fetcher=FakeFetcher(),
+        extractor=FakeLLM(),
+        skip_search=True,
+        skip_archive=True,
+        max_articles=2,
+        target_fields=None,
+    )
+    assert batch.articles_read <= 2
+    assert batch.budget_exhausted, "three projects never ran; the report must say so"
+    assert len(batch.reports) < len(ids)
 
 
 def test_a_project_stops_at_the_target_leaving_budget_for_the_next(session):
@@ -706,3 +729,33 @@ def test_the_batch_report_counts_projects_over_the_bar(session):
     assert len(batch.reports) == 2
     assert batch.reached_before(9) == 0
     assert batch.reached(9) >= 0
+
+
+def test_the_budget_is_divided_fairly_not_first_come_first_served(session):
+    """Measured failure: a flat per-round cap let five projects eat a 120 budget.
+
+    Twenty-five selected projects never ran at all. The run is judged on how many
+    projects clear the target, so every one selected has to get a turn.
+    """
+    ids = []
+    for city in ("Reno", "Mesa", "Plano", "Ames"):
+        project = add_project(session, city=city, company=f"Op {city}")
+        ids.append(project.id)
+        for i in range(10):
+            add_queued(session, f"https://x.com/op-{city.lower()}-{i}", f"Op {city} {city} campus")
+
+    batch = enrich.run_many(
+        session,
+        ids,
+        fetcher=FakeFetcher(),
+        extractor=FakeLLM(),
+        skip_search=True,
+        skip_archive=True,
+        max_articles=8,
+        max_articles_per_round=25,
+        target_fields=None,
+    )
+    assert len(batch.reports) == 4, "every selected project must get a turn"
+    assert all(r.articles_read <= 2 for r in batch.reports), (
+        f"one project took more than its share: {[r.articles_read for r in batch.reports]}"
+    )

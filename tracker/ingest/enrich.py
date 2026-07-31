@@ -629,18 +629,32 @@ def run_many(
         sweep = sweep_archives(settings, kwargs.get("fetcher"))
         batch.sweep_note = sweep.skipped or sweep.note
 
+    # Divide the budget rather than letting the first project take what it likes.
+    # Measured: with a flat per-round cap of 25 and a budget of 120, five projects
+    # consumed the lot and twenty-five never ran. A fair share means every selected
+    # project gets a turn, which matters because the run is judged on how many
+    # projects clear the target, not on how much any one of them moves.
+    fair_share = max(1, max_articles // max(1, len(project_ids)))
+    per_project = min(max_articles_per_round, fair_share)
+
     spent = 0
+    unreached = list(project_ids)
     for project_id in project_ids:
         remaining = max_articles - spent
         if remaining <= 0:
             batch.budget_exhausted = True
-            log.info("article budget of %d spent; %d project(s) not reached", max_articles, 0)
+            log.info(
+                "article budget of %d spent; %d project(s) never ran",
+                max_articles,
+                len(unreached),
+            )
             break
+        unreached.remove(project_id)
         report = run(
             session,
             project_id,
             settings=settings,
-            max_articles=min(max_articles_per_round, remaining),
+            max_articles=min(per_project, remaining),
             max_rounds=max_rounds,
             skip_archive=skip_archive,
             dry_run=dry_run,

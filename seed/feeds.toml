@@ -302,12 +302,19 @@ max_children = 3
 # advertises the sitemap, so those are reachable with `--browser` once the
 # `[crawl]` extra is installed; they are left out rather than failing every run.
 
+# `topic_implied` is true ONLY for pure-play operators, whose every page really is
+# about a data center. It is false for diversified companies even though the
+# newsroom is theirs: Meta's publishes Instagram teen-safety settings and "Facebook
+# Campus", a social product whose name matches the `campus` project signal, and
+# NTT's covers a whole telecom business. Measured with it wrongly set true, a
+# 120-article batch read Meta product announcements and NTT service pages, and 101
+# of 163 URLs produced no project at all.
 [[sitemap]]
 name = "meta-newsroom-archive"
 url = "https://about.fb.com/sitemap.xml"
 source_type = "company_filing"
 company = "Meta"
-topic_implied = true
+topic_implied = false
 max_urls = 20000
 
 [[sitemap]]
@@ -324,7 +331,7 @@ name = "ntt-newsroom"
 url = "https://services.global.ntt/en-us/sitemap.xml"
 source_type = "company_filing"
 company = "NTT Global Data Centers Americas"
-topic_implied = true
+topic_implied = false
 max_children = 8
 max_urls = 20000
 
