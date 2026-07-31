@@ -202,19 +202,27 @@ tracker sync --search 10                # fold searching into the one-command lo
 Needs one search key in `.env`. Three backends are supported, and whichever key
 you add is picked up automatically:
 
-| backend | variables | free tier | notes |
-|---|---|---|---|
-| **Brave** | `TRACKER_BRAVE_API_KEY` | 2000/month | Independent index, one header, no cloud account |
-| Google | `TRACKER_GOOGLE_API_KEY` + `TRACKER_GOOGLE_CSE_ID` | 100/day | Custom Search JSON API |
-| Serper | `TRACKER_SERPER_API_KEY` | 2500 credits | Google's results, simpler API |
+| backend | variables | free tier | card to sign up | index |
+|---|---|---|---|---|
+| **Serper** | `TRACKER_SERPER_API_KEY` | 2500 queries | no | Google |
+| Google | `TRACKER_GOOGLE_API_KEY` + `TRACKER_GOOGLE_CSE_ID` | 100/day | no | Google |
+| Brave | `TRACKER_BRAVE_API_KEY` | 2000/month | yes | Brave's own |
 
-Pin one explicitly with `TRACKER_SEARCH_PROVIDER=brave`. `tracker search` prints
+Pin one explicitly with `TRACKER_SEARCH_PROVIDER=serper`. `tracker search` prints
 exactly where to get each key if none is set, and `--print-only` works without any
 of them so you can run the queries by hand.
 
-Brave is the one to reach for if you want coverage Google does not already give
-you: it runs its own index, whereas Serper is Google's results under a different
-API and so widens the *quota* rather than the coverage.
+**Serper is the least friction and the best default here.** It returns Google's
+index, which has the deepest coverage of US data center trade press, and its
+signup states "2,500 free queries, no credit card required" — one variable, done.
+Google's own Custom Search API is the same index for free but caps at 100/day and
+takes two setup steps (a Cloud API key plus a Programmable Search Engine set to
+the whole web).
+
+Brave earns its place only when you want results Google does not have: it runs an
+independent index rather than reselling one, so it genuinely widens coverage
+rather than the quota. That is a real advantage, but its free tier asks for a card
+at signup, so reach for it second.
 
 **There is no Bing backend, because the Bing Search API no longer exists.**
 Microsoft retired the standalone Bing Search APIs on 2025-08-11 — their own

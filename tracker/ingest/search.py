@@ -51,19 +51,22 @@ log = logging.getLogger(__name__)
 
 SEARCH_KEY_HELP = """Web search is not configured. Pick one backend and add its key to .env.
 
-  Brave   — independent index, one key, no cloud account. 2000 queries/month free.
-            https://api-dashboard.search.brave.com
-            TRACKER_BRAVE_API_KEY=your-key
+  Serper  — easiest. Google's index, one variable, and the signup states
+            "2,500 free queries, no credit card required".
+            https://serper.dev
+            TRACKER_SERPER_API_KEY=your-key
 
-  Google  — Custom Search JSON API. Two values, 100 queries/day free.
+  Google  — the same index direct. 100 queries/day free, no card, but two
+            setup steps instead of one.
             https://developers.google.com/custom-search/v1/introduction
             https://programmablesearchengine.google.com  (set it to the whole web)
             TRACKER_GOOGLE_API_KEY=your-key
             TRACKER_GOOGLE_CSE_ID=your-cx-id
 
-  Serper  — Google results over a simpler API. 2500 free credits.
-            https://serper.dev
-            TRACKER_SERPER_API_KEY=your-key
+  Brave   — an independent index, so it finds what Google does not. 2000
+            queries/month free, but the signup asks for a card.
+            https://api-dashboard.search.brave.com
+            TRACKER_BRAVE_API_KEY=your-key
 
 Whichever you add is picked up automatically. To pin one explicitly:
 
