@@ -146,6 +146,47 @@ FILLED: Final = "filled"
 MISSING: Final = "missing"
 NOT_APPLICABLE: Final = "not_applicable"
 
+#: How a stored value came to be. The PRD draws exactly this line —
+#: 不能直接把AI的回答当作事实 — so a reader must never have to guess which they are
+#: looking at.
+REPORTED: Final = "reported"  # a verbatim quote in a fetched article supports it
+DERIVED: Final = "derived"  # computed from reference data (Census), deterministic
+UNCONFIRMED: Final = "unconfirmed"  # 待确认: extracted, but nothing quotable backs it
+INFERRED: Final = "inferred"  # a model's judgement over the recorded facts
+
+
+def basis(project, field: str) -> str | None:
+    """Which tier the project's current value for `field` rests on.
+
+    Derived rather than stored, for the same reason `confidence` is recomputed: a
+    column recording provenance would drift the moment a source changed. Priority
+    is strongest-first, so a field one source merely guessed at but another
+    actually quoted reads as `reported`.
+    """
+    if getattr(project, field, None) is None:
+        return None
+
+    tiers: set[str] = set()
+    for source in getattr(project, "sources", ()) or ():
+        confirmed = {f.strip() for f in (source.fields or "").split(",") if f.strip()}
+        unconfirmed = {f.strip() for f in (source.unconfirmed_fields or "").split(",") if f.strip()}
+        extractor = source.extractor or ""
+        if field in confirmed:
+            if extractor.startswith("derived:"):
+                tiers.add(DERIVED)
+            elif extractor.startswith("inferred:"):
+                tiers.add(INFERRED)
+            else:
+                tiers.add(REPORTED)
+        elif field in unconfirmed:
+            tiers.add(UNCONFIRMED)
+
+    for tier in (REPORTED, DERIVED, INFERRED, UNCONFIRMED):
+        if tier in tiers:
+            return tier
+    # A value with no citation at all: only reachable for a hand-edited row.
+    return UNCONFIRMED
+
 
 @dataclass(frozen=True)
 class FieldState:
@@ -196,14 +237,19 @@ def worst(gaps: list[FieldGap], limit: int = 3) -> list[FieldGap]:
 
 
 __all__ = [
+    "DERIVED",
     "FILLED",
+    "INFERRED",
     "MISSING",
     "NOT_APPLICABLE",
     "OFTEN_ABSENT",
+    "REPORTED",
     "REPORT_FIELDS",
+    "UNCONFIRMED",
     "UNMEASURABLE",
     "FieldGap",
     "FieldState",
+    "basis",
     "for_project",
     "measure",
     "worst",

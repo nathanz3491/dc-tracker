@@ -293,7 +293,14 @@ def compute(
     weights = [SOURCE_WEIGHTS.get(s.source_type, 1) for s in sources]
     best = max(weights)
     best_type = sources[weights.index(best)].source_type
-    domains = independent_domains(sources)
+    # Corroboration is counted only over citations that support a confirmed value.
+    # `source.fields` lists quote-backed values only, so an empty one means every
+    # claim that source made is 待确认 — and counting it as an independent domain
+    # took a project from 2 to 3 purely for having a second URL full of unquoted
+    # guesses. That is a guess buying the trust of a quote, which the tier exists to
+    # prevent. Such a source is still a citation, so the floor rule below still
+    # grants it 1: it just cannot corroborate anything.
+    domains = independent_domains(s for s in sources if (s.fields or "").strip())
     conflicts = find_conflicts(sources)
     agreements = find_agreements(sources)
 

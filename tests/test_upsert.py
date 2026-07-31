@@ -1022,3 +1022,143 @@ def test_a_project_needs_a_locality(session):
     # The failed statement poisons the transaction; roll back so the fixture's
     # commit on teardown does not raise a second, confusing error.
     session.rollback()
+
+
+# --- the 待确认 tier ----------------------------------------------------------
+
+
+def unconfirmed_source(url="https://news.microsoft.com/fairwater/", *, mark=(), **claims):
+    """A citation where `mark` names the claims no quote supports."""
+    base = {"name": "Fairwater", "company": "Microsoft", "city": "Mount Pleasant", "state": "WI"}
+    base.update(claims)
+    return SourceRecord(
+        url=url,
+        source_type=claims.pop("source_type", None) or "manual",
+        fetched_at=T0,
+        excerpt="A quote.",
+        claims=base,
+        unconfirmed=frozenset(mark),
+    )
+
+
+def test_an_unconfirmed_value_is_stored_but_not_counted_as_a_fact(session):
+    """The PRD's third outcome: mark it, do not guess, do not delete it.
+
+    `source.fields` is what `confidence`, the traceability test and the 9-of-12
+    count all read, so an unconfirmed value must be absent from it while still
+    reaching the project row.
+    """
+    upsert_record(
+        session,
+        rec(
+            sources=[
+                unconfirmed_source(
+                    mw_planned=900.0, investment_usd=5_000_000_000, mark=("investment_usd",)
+                )
+            ]
+        ),
+    )
+    project = session.scalars(select(Project)).one()
+    source = project.sources[0]
+
+    assert project.investment_usd == 5_000_000_000, "kept, not destroyed"
+    assert "investment_usd" not in (source.fields or ""), "must not count as a fact"
+    assert "investment_usd" in (source.unconfirmed_fields or ""), "must be flagged"
+    assert "mw_planned" in (source.fields or "")
+
+
+def test_a_confirmed_value_always_beats_an_unconfirmed_one(session):
+    """Whatever the other source's weight or recency."""
+    weak = SourceRecord(
+        url="https://weak.example/a",
+        source_type="general_media",
+        fetched_at=T0,
+        claims={
+            "name": "Fairwater",
+            "company": "Microsoft",
+            "city": "Mount Pleasant",
+            "state": "WI",
+            "mw_planned": 100.0,
+        },
+    )
+    strong = SourceRecord(
+        url="https://strong.example/b",
+        source_type="company_filing",
+        fetched_at=T0,
+        claims={
+            "name": "Fairwater",
+            "company": "Microsoft",
+            "city": "Mount Pleasant",
+            "state": "WI",
+            "mw_planned": 999.0,
+        },
+        unconfirmed=frozenset({"mw_planned"}),
+    )
+    upsert_record(session, rec(sources=[weak]))
+    upsert_record(session, rec(sources=[strong]))
+
+    project = session.scalars(select(Project)).one()
+    assert project.mw_planned == 100.0, "a quoted value outranks an unquoted one"
+
+
+def test_an_unconfirmed_value_cannot_win_a_max_policy_either(session):
+    """MAX/MIN/PHASE scan every claim, so the filter cannot live in one policy."""
+    upsert_record(session, rec(sources=[unconfirmed_source(mw_built=10.0)]))
+    upsert_record(
+        session,
+        rec(
+            sources=[
+                unconfirmed_source("https://other.example/b", mw_built=9999.0, mark=("mw_built",))
+            ]
+        ),
+    )
+    project = session.scalars(select(Project)).one()
+    assert project.mw_built == 10.0, "MAX must ignore the unconfirmed higher value"
+
+
+def test_an_unconfirmed_value_fills_a_field_nothing_else_covers(session):
+    """The whole point: a flagged candidate beats a hole."""
+    upsert_record(
+        session,
+        rec(sources=[unconfirmed_source(expected_online="2027-01-01", mark=("expected_online",))]),
+    )
+    project = session.scalars(select(Project)).one()
+    assert project.expected_online is not None
+
+
+def test_an_unconfirmed_value_does_not_raise_confidence(session):
+    """Otherwise a guess would buy the trust a quote earns.
+
+    Both upserts use the SAME url, so no second domain is introduced and the only
+    variable is the unconfirmed claim.
+    """
+    upsert_record(session, rec(sources=[unconfirmed_source(mw_planned=900.0)]))
+    quoted_only = session.scalars(select(Project)).one().confidence
+
+    upsert_record(
+        session,
+        rec(
+            sources=[
+                unconfirmed_source(mw_planned=900.0, investment_usd=1, mark=("investment_usd",))
+            ]
+        ),
+    )
+    with_a_guess = session.scalars(select(Project)).one().confidence
+    assert with_a_guess <= quoted_only, "an unquoted claim must not buy confidence"
+
+
+def test_a_citation_supporting_only_guesses_does_not_corroborate(session):
+    """A second URL full of 待确认 values must not lift a project from 2 to 3."""
+    upsert_record(session, rec(sources=[unconfirmed_source(mw_planned=900.0)]))
+    one_source = session.scalars(select(Project)).one().confidence
+
+    all_guessed = SourceRecord(
+        url="https://guesses.example/x",
+        source_type="company_filing",
+        fetched_at=T0,
+        claims={"investment_usd": 7, "expected_online": "2030-01-01"},
+        unconfirmed=frozenset({"investment_usd", "expected_online"}),
+    )
+    upsert_record(session, rec(sources=[all_guessed]))
+    after = session.scalars(select(Project)).one().confidence
+    assert after <= one_source, "a citation supporting nothing corroborates nothing"

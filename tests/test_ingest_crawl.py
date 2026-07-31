@@ -365,32 +365,42 @@ def test_the_dropped_note_lists_only_what_was_really_dropped(prompt):
     operator looks to judge data quality is worse than no statement.
     """
     record = build("llm_response_ungrounded.json", prompt=prompt)[0]
-    dropped_notes = [n for n in record.notes if "dropped unsupported value" in n]
-    assert dropped_notes, "something was ungrounded, so there must be a note"
+    flagged = [n for n in record.notes if "unconfirmed" in n]
+    assert flagged, "something was ungrounded, so there must be a note"
 
     # Parse the field list rather than substring-matching the sentence: the prose
     # around it contains English words ("states", "notes") that collide with field
     # names and made this assertion fire on its own explanatory text.
-    listed = re.search(r"dropped unsupported value\(s\) for (.+?) \(", dropped_notes[0])
-    assert listed, f"cannot parse the dropped-field list from {dropped_notes[0]!r}"
+    listed = re.search(r"unconfirmed \(待确认\): (.+?) —", flagged[0])
+    assert listed, f"cannot parse the unconfirmed list from {flagged[0]!r}"
     reported = {f.strip() for f in listed.group(1).split(",")}
 
-    claims = record.sources[0].claims
+    source = record.sources[0]
     for identity in ("name", "company", "city", "state"):
-        if claims.get(identity) is not None:
-            assert identity not in reported, f"{identity} is on the row but reported as dropped"
-    assert "notes" not in reported, "the summary is recorded separately, not dropped"
+        if source.claims.get(identity) is not None:
+            assert identity not in reported, f"{identity} is on the row but reported unconfirmed"
+    assert "notes" not in reported, "the summary is recorded separately"
+    assert reported == set(source.unconfirmed), "the note and the flag must agree"
 
 
-def test_ungrounded_values_are_dropped_and_disclosed(prompt):
-    """Invented capacity and investment must not survive the gate."""
+def test_ungrounded_values_are_kept_as_unconfirmed_never_as_fact(prompt):
+    """The PRD's 待确认 tier: mark it, do not guess, and do not delete it either.
+
+    Destroying these was throwing away real information to avoid the risk of
+    storing a bad value — 194 of them across 92 of 124 projects. What must never
+    happen is one being mistaken for a fact, so each is excluded from
+    `confirmed_claims`, which is the set `source.fields`, `confidence` and the
+    9-of-12 count all read.
+    """
     record = build("llm_response_ungrounded.json", prompt=prompt)[0]
-    claims = record.sources[0].claims
-    assert "mw_planned" not in claims, "4200 MW was never stated in the article"
-    assert "investment_usd" not in claims
-    assert "blocker" not in claims
-    assert "expected_online" not in claims, "the quote for it was fabricated"
-    assert any("dropped unsupported value" in n for n in record.notes)
+    source = record.sources[0]
+
+    for field in ("mw_planned", "investment_usd", "expected_online"):
+        assert field in source.claims, f"{field} must survive as a candidate"
+        assert field in source.unconfirmed, f"{field} must be flagged 待确认"
+        assert field not in source.confirmed_claims(), f"{field} must not count as a fact"
+
+    assert any("unconfirmed" in n for n in record.notes), "the operator must be told"
 
 
 def test_a_supported_risk_is_extracted(prompt):

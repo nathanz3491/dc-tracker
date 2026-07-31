@@ -740,6 +740,20 @@ def build_records(
         claims.setdefault("name", values.get("name") or f"{company} {city or county}")
         claims.pop("notes", None)
 
+        # The PRD's 待确认 tier: a value the model extracted but no quote supports is
+        # kept and flagged, not destroyed. Measured before this existed, the gate
+        # was deleting 194 such values across 92 of 124 projects — nearly half of
+        # everything found for `expected_online`.
+        #
+        # They enter `claims` like any other value so they can be resolved and
+        # displayed, and `SourceRecord.unconfirmed` keeps them out of
+        # `source.fields`, which is what confidence and the 9-of-12 count read.
+        unconfirmed = {
+            f for f in dropped if f not in claims and f != "notes" and values.get(f) is not None
+        }
+        for name in unconfirmed:
+            claims[name] = values[name]
+
         # Report only what was genuinely discarded. `dropped` is the gate's raw
         # verdict, but identity fields (name, company, city, county, state) are
         # then restored from the ungated values because a project row cannot exist
@@ -747,13 +761,12 @@ def build_records(
         # a summary, never a citable claim, so it is recorded separately below.
         # Listing either as "dropped" told the operator something untrue, which is
         # corrosive in the one place they look to judge data quality.
-        actually_dropped = sorted(f for f in dropped if f not in claims and f != "notes")
         notes = list(coercion_notes)
-        if actually_dropped:
+        if unconfirmed:
             notes.append(
-                "dropped unsupported value(s) for "
-                + ", ".join(actually_dropped)
-                + " (no verbatim quote from the article states them)"
+                "unconfirmed (待确认): "
+                + ", ".join(sorted(unconfirmed))
+                + " — extracted but no verbatim quote from the article states them"
             )
         if values.get("notes"):
             notes.append(f"extracted summary: {values['notes']}")
@@ -785,6 +798,7 @@ def build_records(
                     fetched_at=result.fetched_at or utcnow(),
                     excerpt=_excerpt(quotes),
                     claims=claims,
+                    unconfirmed=frozenset(unconfirmed),
                     extractor=f"crawl:{prompt.stamp}:{reply.model}:{result.via}",
                 )
             ],

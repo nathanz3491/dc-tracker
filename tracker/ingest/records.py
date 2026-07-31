@@ -33,10 +33,20 @@ class SourceRecord:
     excerpt: str | None = None
     claims: dict[str, Any] = field(default_factory=dict)
     extractor: str | None = None
+    #: Claim names this source asserted with no quote the evidence gate could
+    #: verify — the PRD's 待确认 tier. They live in `claims` like any other value so
+    #: they can be resolved and displayed, but they are excluded from
+    #: `source.fields`, which is what `confidence` and the "9 of 12" count read.
+    #: A project field takes an unconfirmed value only when no confirmed one exists.
+    unconfirmed: frozenset[str] = frozenset()
 
     def tracked_claims(self) -> dict[str, Any]:
         """Claims restricted to real project columns with a non-None value."""
         return {k: v for k, v in self.claims.items() if k in WRITABLE_FIELDS and v is not None}
+
+    def confirmed_claims(self) -> dict[str, Any]:
+        """Tracked claims that a verbatim quote actually supports."""
+        return {k: v for k, v in self.tracked_claims().items() if k not in self.unconfirmed}
 
     def tracked_field_count(self) -> int:
         """How many of the 12 PRD fields this source supports."""

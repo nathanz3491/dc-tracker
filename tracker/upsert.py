@@ -156,6 +156,11 @@ class _Claim:
     fetched_at: Any
     source_type: str
     url: str
+    #: False for a value the evidence gate could not tie to a quote. Such a claim
+    #: is a last resort: `_resolve` uses it only when no confirmed claim exists,
+    #: so a 待确认 value can never displace a quote-backed one however heavy its
+    #: source or however recently it was fetched.
+    confirmed: bool = True
 
 
 def _gather(sources: list[Source]) -> dict[str, list[_Claim]]:
@@ -171,18 +176,31 @@ def _gather(sources: list[Source]) -> dict[str, list[_Claim]]:
             continue
         if not isinstance(claims, dict):
             continue
+        unconfirmed = {f.strip() for f in (s.unconfirmed_fields or "").split(",") if f.strip()}
         for name, value in claims.items():
             if name not in WRITABLE_FIELDS or value is None:
                 continue
             out.setdefault(name, []).append(
-                _Claim(value, _weight(s.source_type), s.fetched_at, s.source_type, s.url)
+                _Claim(
+                    value,
+                    _weight(s.source_type),
+                    s.fetched_at,
+                    s.source_type,
+                    s.url,
+                    confirmed=name not in unconfirmed,
+                )
             )
-    # Strongest source first, then most recently fetched. `url` is the final
-    # tiebreaker so the ordering is total and therefore reproducible — without
-    # it, two equally-weighted same-timestamp sources could resolve differently
-    # between runs and break idempotence.
+    # Confirmed first, then strongest source, then most recently fetched. `url` is
+    # the final tiebreaker so the ordering is total and therefore reproducible —
+    # without it, two equally-weighted same-timestamp sources could resolve
+    # differently between runs and break idempotence.
+    #
+    # `confirmed` leads because a quote-backed value must never be displaced by a
+    # 待确认 one, however authoritative or recent that source is.
     for claims_list in out.values():
-        claims_list.sort(key=lambda c: (c.weight, c.fetched_at or _EPOCH, c.url), reverse=True)
+        claims_list.sort(
+            key=lambda c: (c.confirmed, c.weight, c.fetched_at or _EPOCH, c.url), reverse=True
+        )
     return out
 
 
@@ -196,9 +214,17 @@ def _coerce_like(value: Any, template: Any) -> Any:
 
 
 def _resolve(field_name: str, claims: list[_Claim], existing: Any) -> Any:
-    """Apply the field's policy to choose one value."""
+    """Apply the field's policy to choose one value.
+
+    Unconfirmed (待确认) claims are discarded outright whenever any confirmed claim
+    exists for the field. Done here, once, rather than inside each policy: MAX and
+    MIN scan every claim and PHASE takes the furthest-along, so any of the three
+    would otherwise let an unquoted value beat a quoted one.
+    """
     if not claims:
         return existing
+    if any(c.confirmed for c in claims):
+        claims = [c for c in claims if c.confirmed]
     policy = FIELD_POLICY.get(field_name, Policy.PREFER_WEIGHT)
 
     if policy is Policy.FILL_ONLY:
@@ -426,7 +452,13 @@ def upsert_record(session: Session, rec: IngestRecord, *, force_new: bool = Fals
         row.source_type = sr.source_type
         row.excerpt = sr.excerpt
         row.claims = blob
-        row.fields = derive_fields(claims)
+        # `fields` lists only what a verbatim quote supports. Everything that reads
+        # it — confidence scoring, the traceability test, the "9 of 12" count —
+        # therefore keeps counting facts, not 待确认 candidates.
+        row.fields = derive_fields(sr.confirmed_claims())
+        row.unconfirmed_fields = derive_fields(
+            {k: v for k, v in claims.items() if k in sr.unconfirmed}
+        )
         row.extractor = sr.extractor
         # fetched_at is only advanced, never rewound: a cached re-read must not
         # make an old citation look newer than a genuinely newer one.

@@ -143,6 +143,11 @@ class Source(Base):
     excerpt: Mapped[str | None] = mapped_column(Text)
     fields: Mapped[str | None] = mapped_column(Text)
     claims: Mapped[str | None] = mapped_column(Text)
+    #: Values this source asserted with no quote the gate could verify. Kept
+    #: separate from `fields` so `confidence`, the traceability test and the
+    #: "9 of 12" definition of done keep counting only quote-backed facts, while
+    #: the value itself survives to be shown as 待确认 rather than deleted.
+    unconfirmed_fields: Mapped[str | None] = mapped_column(Text)
     extractor: Mapped[str | None] = mapped_column(Text)
 
     project: Mapped[Project] = relationship(back_populates="sources")

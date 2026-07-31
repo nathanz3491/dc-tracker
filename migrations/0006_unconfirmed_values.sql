@@ -1,0 +1,23 @@
+-- 0006_unconfirmed_values: the 待确认 tier the PRD asks for.
+--
+--   遇到无法确认的信息，可以标记为"待确认"，不要猜测
+--
+-- The evidence gate had two outcomes: a value backed by a verbatim quote was
+-- stored, and a value without one was destroyed. The PRD names a third — retain
+-- it, marked unconfirmed, and never treat it as fact — and the second outcome was
+-- throwing away real information to avoid the risk of storing a bad value.
+--
+-- Measured before this change: 194 extracted values destroyed across 92 of 124
+-- projects. `expected_online` stood at 29 filled with 25 discarded, so nearly half
+-- of what the model found was being deleted rather than flagged.
+--
+-- `source.fields` continues to list ONLY quote-backed values, so `confidence`
+-- scoring, the traceability test and the "9 of 12" definition of done all keep
+-- their current meaning untouched. Unconfirmed values live in a parallel column,
+-- are stored in `claims` so they can be resolved and displayed, and are chosen for
+-- a project field only when no confirmed claim exists.
+--
+-- Deliberately no column on `project`: a field's tier is derivable from its
+-- sources, exactly like `confidence`, so the two can never drift apart.
+
+ALTER TABLE source ADD COLUMN unconfirmed_fields TEXT;

@@ -34,6 +34,7 @@ from tracker.db import (
     schema_version,
     session_scope,
 )
+from tracker.gaps import DERIVED, INFERRED, UNCONFIRMED, basis
 from tracker.gaps import measure as measure_gaps
 from tracker.gaps import worst as worst_gaps
 from tracker.models import Project, Risk, Source
@@ -686,20 +687,41 @@ def show(project_id: Annotated[int, typer.Argument(help="Project id.")]) -> None
         facts = Table(show_header=False, box=None)
         facts.add_column(style="dim")
         facts.add_column()
+
+        def cell(field: str, rendered: str) -> str:
+            """Mark a value the PRD would call 待确认.
+
+            Red because the tier has to be impossible to miss: an unconfirmed value
+            is one the model produced and no quote in any fetched article supports.
+            It is shown rather than deleted — deleting cost 194 values across 92 of
+            124 projects — but a reader must never mistake it for a fact.
+            """
+            tier = basis(project, field)
+            if tier == UNCONFIRMED:
+                return f"[red]{rendered}[/red] [red]待确认[/red]"
+            if tier == DERIVED:
+                return f"{rendered} [dim](derived)[/dim]"
+            if tier == INFERRED:
+                return f"[magenta]{rendered}[/magenta] [magenta](inferred)[/magenta]"
+            return rendered
+
         for label, value in [
-            ("name", project.name),
-            ("company", project.company),
-            ("customer", project.customer or NA),
+            ("name", cell("name", project.name)),
+            ("company", cell("company", project.company)),
+            ("customer", cell("customer", project.customer or NA)),
             ("location", _location(project)),
-            ("county", project.county or NA),
-            ("coordinates", f"{project.lat}, {project.lon}" if project.lat else NA),
-            ("phase", project.phase),
-            ("MW planned", _fmt_mw(project.mw_planned)),
-            ("MW built", _fmt_mw(project.mw_built)),
-            ("investment", _fmt_usd(project.investment_usd)),
-            ("first announced", str(project.first_announced or NA)),
-            ("expected online", str(project.expected_online or NA)),
-            ("blocker", project.blocker or NA),
+            ("county", cell("county", project.county or NA)),
+            (
+                "coordinates",
+                cell("lat", f"{project.lat}, {project.lon}") if project.lat else NA,
+            ),
+            ("phase", cell("phase", project.phase)),
+            ("MW planned", cell("mw_planned", _fmt_mw(project.mw_planned))),
+            ("MW built", cell("mw_built", _fmt_mw(project.mw_built))),
+            ("investment", cell("investment_usd", _fmt_usd(project.investment_usd))),
+            ("first announced", cell("first_announced", str(project.first_announced or NA))),
+            ("expected online", cell("expected_online", str(project.expected_online or NA))),
+            ("blocker", cell("blocker", project.blocker or NA)),
             ("open risks", str(_open_risk_count(project) or NA)),
             ("confidence", _confidence_cell(project.confidence)),
             ("created", str(project.created_at)),
