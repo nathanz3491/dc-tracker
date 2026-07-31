@@ -106,6 +106,13 @@ class Settings(BaseSettings):
     #   https://serper.dev
     serper_api_key: SecretStr | None = None
 
+    # Bocha (博查) — registers from mainland China with no Cloudflare challenge,
+    # which is the whole reason it is here. Its index is Chinese-web-heavy and
+    # thin on US trade press at article depth; see BochaProvider for the measured
+    # detail before relying on it for citations.
+    #   https://open.bochaai.com
+    bocha_api_key: SecretStr | None = None
+
     #: Results requested per query. Google caps a single call at 10; Brave allows
     #: 20 but 10 keeps every backend comparable and the quota predictable.
     search_results_per_query: int = Field(default=10, ge=1, le=10)
@@ -156,6 +163,9 @@ class Settings(BaseSettings):
     def has_serper_key(self) -> bool:
         return bool(self.serper_api_key and self.serper_api_key.get_secret_value().strip())
 
+    def has_bocha_key(self) -> bool:
+        return bool(self.bocha_api_key and self.bocha_api_key.get_secret_value().strip())
+
     def resolve_search_provider(self) -> str | None:
         """Which backend to use, or None when nothing is configured.
 
@@ -173,6 +183,8 @@ class Settings(BaseSettings):
             return "brave"
         if self.has_serper_key():
             return "serper"
+        if self.has_bocha_key():
+            return "bocha"
         return None
 
     def has_search_keys(self) -> bool:

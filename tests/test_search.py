@@ -458,7 +458,126 @@ def test_every_backend_uses_an_official_api_not_a_scraped_page():
         "google": "https://www.googleapis.com/customsearch/v1",
         "brave": "https://api.search.brave.com/res/v1/web/search",
         "serper": "https://google.serper.dev/search",
+        "bocha": "https://api.bochaai.com/v1/web-search",
     }
+
+
+# --- Bocha over the wire ----------------------------------------------------
+
+
+@respx.mock
+def test_bocha_parses_its_own_response_shape():
+    """Bocha names the title "name" and nests results under data.webPages.value."""
+    respx.post(srch.BochaProvider.ENDPOINT).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "code": 200,
+                "data": {
+                    "webPages": {
+                        "value": [
+                            {
+                                "name": "STACK expands in Hillsboro",
+                                "url": "https://dcf.example/stack-hillsboro",
+                                "snippet": "230 megawatts",
+                                "summary": "longer text",
+                            },
+                            {"name": "no url, must be dropped"},
+                        ]
+                    }
+                },
+            },
+        )
+    )
+    hits = srch.BochaProvider(settings_with(bocha_api_key="k")).search("stack hillsboro")
+    assert len(hits) == 1
+    assert hits[0].url == "https://dcf.example/stack-hillsboro"
+    assert hits[0].title == "STACK expands in Hillsboro"
+    assert hits[0].snippet == "230 megawatts"
+
+
+@respx.mock
+def test_bocha_treats_an_error_code_in_a_200_body_as_a_failure():
+    """It answers HTTP 200 with the real status in `code`, so the status line lies."""
+    respx.post(srch.BochaProvider.ENDPOINT).mock(
+        return_value=httpx.Response(200, json={"code": 401, "msg": "invalid api key"})
+    )
+    with pytest.raises(SearchError, match="invalid api key"):
+        srch.BochaProvider(settings_with(bocha_api_key="k")).search("q")
+
+
+@respx.mock
+def test_bocha_sends_the_key_as_a_bearer_header():
+    route = respx.post(srch.BochaProvider.ENDPOINT).mock(
+        return_value=httpx.Response(200, json={"code": 200, "data": {"webPages": {"value": []}}})
+    )
+    srch.BochaProvider(settings_with(bocha_api_key="secret-key")).search("q")
+
+    request = route.calls.last.request
+    assert request.headers["Authorization"] == "Bearer secret-key"
+    assert "secret-key" not in str(request.url)
+
+
+@respx.mock
+def test_bocha_survives_a_missing_data_block():
+    respx.post(srch.BochaProvider.ENDPOINT).mock(
+        return_value=httpx.Response(200, json={"code": 200})
+    )
+    assert srch.BochaProvider(settings_with(bocha_api_key="k")).search("q") == []
+
+
+def test_bocha_is_the_last_backend_auto_picks():
+    """Its index is thin on US trade press, so it should never displace a better one."""
+    both = settings_with(serper_api_key="s", bocha_api_key="b")
+    assert both.resolve_search_provider() == "serper"
+    assert settings_with(bocha_api_key="b").resolve_search_provider() == "bocha"
+
+
+# --- Host filtering ---------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        # Chinese portals and UGC: reposts and translations of US coverage, never
+        # first-hand. Measured: one Bocha query returned five of these at once.
+        "https://www.sohu.com/a/722030929_100161396",
+        "https://zhuanlan.zhihu.com/p/584323426",
+        "https://www.toutiao.com/article/123",
+        "https://m.blog.csdn.net/x",
+        "https://juejin.cn/post/1",
+        "https://guba.eastmoney.com/news",
+        "https://xueqiu.com/4434592433/316920250",
+        "https://www.163.com/dy/article/x.html",
+        "https://new.qq.com/rain/a/x",
+        # Document dumps and academic indexes
+        "https://max.book118.com/html/2019/x.shtm",
+        "https://www.researchgate.net/publication/1",
+        "https://dl.acm.org/doi/10.1145/1",
+    ],
+)
+def test_second_hand_and_academic_hosts_are_dropped(url):
+    """Each of these would otherwise cost a fetch and an LLM call to discard.
+
+    Worse than the cost: a quote from a Chinese translation cannot support an
+    English value through the evidence gate, so nothing citable comes back either.
+    """
+    assert not is_useful_host(url)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://www.datacenterfrontier.com/hyperscale/article/1/stack-hillsboro",
+        "https://www.datacenterknowledge.com/supercomputers/x",
+        "https://www.utilitydive.com/news/x/",
+        "https://news.microsoft.com/source/features/x/",
+        "https://racinecountyeye.com/2026/06/24/x/",
+    ],
+)
+def test_real_reporting_still_passes(url):
+    """The blocklist must not swallow the outlets this tracker actually cites."""
+    assert is_useful_host(url)
 
 
 # --- Brave over the wire ----------------------------------------------------
@@ -597,3 +716,66 @@ def test_a_provider_swap_needs_no_change_anywhere_else():
     assert [c.url for c in candidates] == [
         "https://www.datacenterfrontier.com/x/stack-hillsboro-230mw"
     ]
+
+
+# --- Language filtering -----------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Stack Infrastructure扩建多伦多数据中心,新增48MW容量_园区_开发_工程",
+        "Stack Infrastructure计划在美国凤凰城建立新的数据中心园区_知乎",
+        "豪掷 2000 亿美元,消息称 Meta 正洽谈 AI 数据中心园区新项目_公司_人民币",
+    ],
+)
+def test_translated_reposts_are_filtered_by_script(text):
+    """Real Bocha headlines. A blocklist cannot keep up with the long tail."""
+    assert not srch.looks_english(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "STACK breaks ground on 230 MW Hillsboro data center campus",
+        "Meta's $10B Louisiana data center clears final permit",
+        "",
+        "2026 Q3",
+        "Crusoe / Abilene, TX — 1.2GW",
+    ],
+)
+def test_english_headlines_survive(text):
+    assert srch.looks_english(text)
+
+
+@respx.mock
+def test_a_chinese_result_never_becomes_a_candidate():
+    """End to end: even when the keyword filter would match, script rejects it."""
+    respx.post(srch.BochaProvider.ENDPOINT).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "code": 200,
+                "data": {
+                    "webPages": {
+                        "value": [
+                            {
+                                # Mentions "data center" and a MW figure, so the
+                                # two-tier keyword filter alone would keep it.
+                                "name": "Stack Infrastructure在美国部署新的data center园区 230MW",
+                                "url": "https://example.cn/a/514732496",
+                                "snippet": "230兆瓦 data center campus megawatts",
+                            }
+                        ]
+                    }
+                },
+            },
+        )
+    )
+    hits = srch.BochaProvider(settings_with(bocha_api_key="k")).search("q")
+    assert hits, "the provider itself must still return the hit"
+
+    _, spec = load_config()
+    report = SearchReport()
+    assert hits_to_candidates(hits, spec, report=report) == []
+    assert report.filtered == 1

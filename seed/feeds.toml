@@ -272,3 +272,33 @@ url = "https://www.datacenterfrontier.com/sitemap.xml"
 source_type = "trade_press"
 topic_implied = true
 max_children = 3
+
+# Adding archives is the key-free way to widen coverage, and it is usually a
+# better buy than a search key: no account, no card, no CAPTCHA, no quota. With
+# only datacenterfrontier configured, 17 of 94 tracked projects had an unread
+# archive article and 77 had none — the corpus, not the budget, was the ceiling
+# on `tracker enrich`.
+
+# datacenterknowledge is NOT here despite being the highest-yield *feed*, because
+# it publishes no article sitemap: /sitemap.xml is a navigation file listing
+# contact-us, advertise and submit-your-news, and /sitemap/Article.xml — the path
+# its sister site datacenterfrontier uses — is a 404. Measured yield was 0 URLs.
+# Its RSS feed above remains the way to reach it.
+
+[[sitemap]]
+name = "utilitydive-archive"
+url = "https://www.utilitydive.com/sitemap.xml"
+source_type = "trade_press"
+# NOT topic_implied: Utility Dive covers the whole power sector, so a headline
+# must still say "data center" (or similar) to be about one of these projects.
+topic_implied = false
+# An index of MONTHLY archives, newest first, going back years — so max_children
+# is a reach-back window in months rather than a handful of section files. The
+# first two children are the footer and topic listings, which match nothing and
+# cost two fetches. 26 therefore reaches roughly two years back.
+#
+# Measured: 75 matching URLs, of which 0 covered an already-tracked project. So
+# this buys BREADTH (utility-side coverage of new projects and of grid obstacles)
+# and not depth. If the queue is already long, --skip it.
+max_children = 26
+max_urls = 20000

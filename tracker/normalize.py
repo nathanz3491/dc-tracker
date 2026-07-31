@@ -116,6 +116,46 @@ def is_blank(raw: Any) -> bool:
     return False
 
 
+#: Above this share of CJK characters, text is not US reporting. Deliberately
+#: low: an English article about a US project contains no CJK at all, so anything
+#: past a stray character means a translated repost.
+_CJK_LIMIT = 0.10
+
+
+def looks_english(text: str | None) -> bool:
+    """Is this text plausibly from an English-language source?
+
+    Used in two places, for two different reasons.
+
+    Search filtering: a host blocklist only stops the reposters you already know
+    about, and a Chinese-web-heavy index has an endless long tail — `dahe.cn`,
+    `topnews.cn`, `uyijian.zhiding.cn` all turned up in one measured run.
+    Script is the property that generalises.
+
+    The evidence gate: quantities and dates are safe from a foreign-language
+    source because "230兆瓦" matches no MW pattern, but `phase` is a
+    `_SUMMARY_FIELD` whose carve-out trusts the model's label over a verified
+    quote — so without a language check, a Chinese sentence could evidence
+    `phase=construction`. Measured; it did.
+
+    Absent text returns True: silence is not evidence of a foreign source, and the
+    keyword filter downstream is the thing that should reject an empty title.
+    """
+    if not text:
+        return True
+    cjk = sum(
+        1
+        for ch in text
+        if "一" <= ch <= "鿿"  # CJK unified ideographs
+        or "぀" <= ch <= "ヿ"  # hiragana and katakana
+        or "가" <= ch <= "힯"  # hangul
+    )
+    letters = sum(1 for ch in text if ch.isalpha())
+    if not letters:
+        return True
+    return (cjk / letters) <= _CJK_LIMIT
+
+
 def _clean(raw: str) -> str:
     """Normalize unicode, collapse whitespace, strip.
 
@@ -753,6 +793,7 @@ __all__ = [
     "ParsedDate",
     "ParsedNumber",
     "is_blank",
+    "looks_english",
     "norm_coord",
     "norm_country",
     "norm_date",

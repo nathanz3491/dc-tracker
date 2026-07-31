@@ -44,6 +44,7 @@ from tracker.models import IngestUrl, utcnow
 from tracker.normalize import (
     NormalizationError,
     is_blank,
+    looks_english,
     norm_country,
     norm_date_detail,
     norm_excerpt,
@@ -459,7 +460,14 @@ def evidence_gate(
             continue
         # A paraphrase cannot be matched against its own source text, so for those
         # fields the model's label over a verified quote is what we have.
-        if name in _SUMMARY_FIELDS and name in quotes:
+        #
+        # The language check closes the one hole that carve-out opens. Every other
+        # field is protected from a foreign-language source for free, because
+        # "230兆瓦" matches no MW pattern and no English phase keyword — but a
+        # summary field skips value matching entirely, so a Chinese sentence could
+        # evidence `phase=construction`. Measured against a real translated repost:
+        # it did, while every quantity on the same article was correctly dropped.
+        if name in _SUMMARY_FIELDS and name in quotes and looks_english(quotes[name]):
             kept[name] = value
             continue
         support = next((q for q in verified if _stated_in(name, value, q)), None)

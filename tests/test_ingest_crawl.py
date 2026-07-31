@@ -900,3 +900,38 @@ def test_html_to_text_strips_markup_and_keeps_paragraphs():
 def test_should_escalate(result, expected):
     """A browser is worth trying for a block or a JS shell, not for a 404."""
     assert should_escalate(result) is expected
+
+
+def test_a_foreign_language_quote_cannot_evidence_a_phase():
+    """The one hole the summary-field carve-out opened.
+
+    Quantities and dates are protected from a translated repost for free: "230兆瓦"
+    matches no MW pattern. But `phase` is a `_SUMMARY_FIELD`, so the gate trusts
+    the model's *label* over a verified quote -- and measured against a real
+    Chinese repost, `phase=construction` sailed through while every number on the
+    same article was correctly dropped.
+    """
+    chinese = (
+        "Stack Infrastructure正计划在美国俄勒冈州希尔斯伯勒市开发230兆瓦"
+        "数据中心园区，投资12亿美元，预计2027年投入运营。"
+    )
+    values = {
+        "mw_planned": 230.0,
+        "investment_usd": 1_200_000_000,
+        "phase": "construction",
+        "city": "Hillsboro",
+    }
+    kept, _, dropped = crawl.evidence_gate(
+        values, [{"field": f, "quote": chinese} for f in values], chinese
+    )
+    assert kept == {}, "nothing may be evidenced by a translated repost"
+    assert set(dropped) == set(values)
+
+
+def test_an_english_quote_still_evidences_a_phase():
+    """The language check must not break the ordinary path."""
+    english = "Crews broke ground on the Hillsboro campus in March."
+    kept, _, _ = crawl.evidence_gate(
+        {"phase": "construction"}, [{"field": "phase", "quote": english}], english
+    )
+    assert kept == {"phase": "construction"}

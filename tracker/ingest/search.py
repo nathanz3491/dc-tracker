@@ -46,6 +46,7 @@ from tracker.ingest.discover import (
 )
 from tracker.llm import Extractor, LLMError, parse_json_object
 from tracker.models import utcnow
+from tracker.normalize import looks_english
 
 log = logging.getLogger(__name__)
 
@@ -67,6 +68,12 @@ SEARCH_KEY_HELP = """Web search is not configured. Pick one backend and add its 
             queries/month free, but the signup asks for a card.
             https://api-dashboard.search.brave.com
             TRACKER_BRAVE_API_KEY=your-key
+
+  Bocha   — registers from mainland China with no Cloudflare challenge, when the
+            three above cannot be signed up for. Its index is Chinese-web-heavy
+            and thin on US trade press, so expect far fewer citable hits.
+            https://open.bochaai.com
+            TRACKER_BOCHA_API_KEY=your-key
 
 Whichever you add is picked up automatically. To pin one explicitly:
 
@@ -103,7 +110,16 @@ LLM_BATCH = 25
 
 #: Domains that are never worth queueing: aggregators, directories and
 #: encyclopaedias carry no first-hand project reporting.
+#:
+#: The second and third groups were added after measuring Bocha, whose index is
+#: Chinese-web-heavy: a single query returned sohu, zhihu, toutiao, csdn,
+#: researchgate and an ACM paper, and every one passed the original filter. Each
+#: would have cost a fetch and an LLM call to discover it was a translated repost
+#: or an unrelated academic paper — and any excerpt stored from one could not
+#: satisfy the evidence gate, which requires a verbatim quote supporting an
+#: English value.
 _SKIP_HOSTS = (
+    # Social, directories, encyclopaedias
     "wikipedia.org",
     "linkedin.com",
     "facebook.com",
@@ -120,6 +136,40 @@ _SKIP_HOSTS = (
     "bloomberg.com/profile",
     "datacentermap.com",
     "baxtel.com",
+    # Chinese portals and UGC platforms. They repost and translate US coverage
+    # rather than reporting it, so they are second-hand by construction.
+    "sohu.com",
+    "zhihu.com",
+    "toutiao.com",
+    "csdn.net",
+    "juejin.cn",
+    "jianshu.com",
+    "cnblogs.com",
+    "163.com",
+    "qq.com",
+    "sina.com.cn",
+    "baidu.com",
+    "eastmoney.com",
+    "xueqiu.com",
+    "weibo.com",
+    "bilibili.com",
+    "douban.com",
+    "ce.cn",
+    "china.com.cn",
+    "chinaaet.com",
+    "ofweek.com",
+    # Document dumps and academic indexes: never project news, and often large
+    # PDFs that waste the fetch budget.
+    "book118.com",
+    "docin.com",
+    "doc88.com",
+    "researchgate.net",
+    "dl.acm.org",
+    "ieee.org",
+    "arxiv.org",
+    "semanticscholar.org",
+    "sciencedirect.com",
+    "zaixian-fanyi.com",
 )
 
 
@@ -364,12 +414,97 @@ class SerperProvider:
         ]
 
 
+class BochaProvider:
+    """Bocha (博查) web search.
+
+    Registers from mainland China without a Cloudflare challenge, which is why it
+    is here: Serper's signup, Brave's and Google's are all awkward or blocked from
+    that network, and a backend you cannot sign up for is worth nothing.
+
+    **Its index is Chinese-web-heavy, and that is a real limitation for this
+    tool.** Measured against the live API: a query for a tracked project returned
+    sohu, zhihu, xueqiu and 163; `site:datacenterfrontier.com` returned only that
+    site's *homepage*; and querying the exact headline of an article already in the
+    database returned no trade-press URL at all. The engine works — it simply does
+    not index US data center trade press at article depth, and no query tuning
+    fixes an index gap.
+
+    So it is best treated as a way to learn that a project *exists*, not as a way
+    to obtain the citation. `_SKIP_HOSTS` carries the Chinese portals it favours,
+    so its reposts are dropped before they cost a fetch and an LLM call.
+    """
+
+    ENDPOINT = "https://api.bochaai.com/v1/web-search"
+
+    def __init__(self, settings: Settings | None = None) -> None:
+        self.settings = settings or get_settings()
+        if not self.settings.has_bocha_key():
+            raise SearchError(SEARCH_KEY_HELP)
+
+    def search(self, query: str, *, limit: int = 10) -> list[SearchHit]:
+        try:
+            response = httpx.post(
+                self.ENDPOINT,
+                headers={
+                    "Authorization": f"Bearer {self.settings.bocha_api_key.get_secret_value()}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "query": query,
+                    "count": min(limit, 50),
+                    "freshness": "noLimit",
+                    # Ask for the page summary too: it costs nothing extra and gives
+                    # the keyword filter more than a one-line snippet to judge.
+                    "summary": True,
+                },
+                timeout=httpx.Timeout(60.0, connect=15.0),
+            )
+        except httpx.RequestError as exc:
+            raise SearchError(f"search request failed: {exc}") from exc
+
+        if response.status_code == 429:
+            raise QuotaExhausted("Bocha rate limit or balance exhausted (HTTP 429).")
+        if response.status_code in (401, 403):
+            raise SearchError(
+                f"Bocha refused the request (HTTP {response.status_code}). Usually "
+                f"TRACKER_BOCHA_API_KEY is wrong or out of credit."
+                f"\n\nResponse: {response.text[:400]}"
+            )
+        if response.status_code >= 400:
+            raise SearchError(f"search returned HTTP {response.status_code}: {response.text[:400]}")
+
+        payload = response.json()
+        # Bocha answers HTTP 200 with an error code in the body, so the status line
+        # alone does not tell you the call succeeded.
+        if isinstance(payload, dict) and payload.get("code") not in (200, None):
+            raise SearchError(
+                f"Bocha returned code {payload.get('code')}: "
+                f"{payload.get('msg') or payload.get('message') or payload}"
+            )
+
+        data = (payload or {}).get("data") or {}
+        pages = data.get("webPages") or {}
+        results = pages.get("value") or [] if isinstance(pages, dict) else []
+        return [
+            SearchHit(
+                url=item.get("url", ""),
+                # Bocha calls the title "name".
+                title=item.get("name", ""),
+                snippet=item.get("snippet") or item.get("summary") or "",
+                query=query,
+            )
+            for item in results
+            if isinstance(item, dict) and item.get("url")
+        ]
+
+
 #: Every backend by name. Adding one is a single entry plus a class; nothing else
 #: in the system knows which engine answered.
 PROVIDERS: dict[str, type] = {
     "google": GoogleCSEProvider,
     "brave": BraveProvider,
     "serper": SerperProvider,
+    "bocha": BochaProvider,
 }
 
 
@@ -507,6 +642,12 @@ def hits_to_candidates(
         if not is_useful_host(hit.url):
             report.filtered += 1
             continue
+        if not looks_english(f"{hit.title} {hit.snippet}"):
+            # A translated repost: it cannot satisfy the evidence gate for any
+            # numeric field, so fetching it would buy nothing.
+            log.debug("skip %s (not English-language)", hit.url)
+            report.filtered += 1
+            continue
         haystack = f"{hit.title} {hit.snippet} {urlsplit(hit.url).path}"
         keep, reason = spec.matches(haystack)
         if not keep:
@@ -581,6 +722,7 @@ __all__ = [
     "PROVIDERS",
     "QUERY_PROMPT_SYSTEM",
     "SEARCH_KEY_HELP",
+    "BochaProvider",
     "BraveProvider",
     "GoogleCSEProvider",
     "QuotaExhausted",

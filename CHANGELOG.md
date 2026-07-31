@@ -79,6 +79,28 @@ initial build of the v1 PRD.
   Census row is a real, checkable citation but it is not testimony about the
   project; counting it would let one press release plus a lookup read as two
   independent domains and reach confidence 3.
+- **A Bocha (博查) backend**, for networks where the other three cannot be signed
+  up for — its registration works from mainland China with no Cloudflare
+  challenge. It handles the trap that Bocha answers **HTTP 200 with the real
+  status in the body's `code` field**, so the status line alone does not mean the
+  call succeeded.
+
+  Measured honestly, its index does not fit this tool. A project query returned
+  sohu, zhihu, xueqiu and 163; `site:datacenterfrontier.com` returned that site's
+  *homepage* rather than any article; and querying the **exact headline** of an
+  article already in the database returned no trade-press URL at all. It is an
+  index-coverage gap, not a query-syntax one. End to end against the live API:
+  10 hits, 10 filtered, 0 survived. Useful for learning that a project exists,
+  not for obtaining a citation — so it resolves **last** in `auto` order and can
+  never displace a better index.
+- **A language gate on search candidates** (`normalize.looks_english`). A host
+  blocklist only stops the reposters you already know; one measured Bocha run
+  surfaced `dahe.cn`, `topnews.cn` and `uyijian.zhiding.cn`, and the long tail is
+  endless. Script is the property that generalises, so a candidate whose title and
+  snippet are more than 10% CJK is dropped before it costs a fetch and an LLM call.
+- `_SKIP_HOSTS` gained the Chinese portals and UGC platforms that Bocha favours,
+  plus document dumps and academic indexes. Every one of sohu, zhihu, toutiao,
+  csdn, researchgate and dl.acm.org passed the old filter.
 - **Search is pluggable, with Brave and Serper alongside Google.** `PROVIDERS` maps
   a name to a class and `build_provider()` resolves it; `TRACKER_SEARCH_PROVIDER`
   pins one, and `auto` (the default) takes whichever backend holds a key. An
@@ -300,6 +322,15 @@ initial build of the v1 PRD.
 - README's "Known gaps" still said the crawl path had only been run against
   fixtures, never live — stale since `de4821c`'s live-run defect fixes and now
   since `tracker enrich`'s live verification against project #93.
+- **A foreign-language quote could evidence a project's `phase`.** Every other
+  field is protected from a translated repost for free, because "230兆瓦" matches
+  no MW pattern, "12亿美元" no currency pattern, and neither matches any English
+  phase keyword. But `phase` is a `_SUMMARY_FIELD`, and that carve-out trusts the
+  model's *label* over a verified quote — precisely so an honest paraphrase is not
+  discarded for sharing no substring with its own evidence. It had no language
+  check. Measured against a real Chinese repost of a US announcement,
+  `phase=construction` was stored while every quantity in the same sentence was
+  correctly dropped. The carve-out now requires its quote to look English too.
 - **A company-name suffix is no longer treated as a distinctive project token.**
   `project_identities` excluded name tokens that appear in the *normalized* company
   key, but `company_key` strips corporate suffixes — so "STACK Infrastructure" keys
