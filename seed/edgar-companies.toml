@@ -1,0 +1,164 @@
+# Companies whose SEC filings `tracker ingest edgar` reads.
+#
+# Operator-editable: add a company here without touching code.
+#
+# WHY A LIST AT ALL, rather than searching the whole of EDGAR.
+#
+# EDGAR full-text search takes a `ciks` filter and it is the difference between
+# a usable source and an unusable one. Measured on the live API:
+#
+#   q="data center campus", no filter   -> 1,066 hits, and the first three are
+#                                          all the same shell company
+#   q="data center", ciks=0001326801    ->   105 hits, every one of them Meta
+#
+# Unfiltered phrase search is dominated by micro-cap shells and crypto miners
+# that mention data centers in passing. Scoping by company makes precision a
+# property of the query rather than something to filter for afterwards, so this
+# file IS the precision mechanism.
+#
+# `sics` is accepted by the API and silently ignored — 6798, 6770 and no filter
+# all return an identical 4,868 hits — so filtering by industry is not an option.
+#
+# CIKs MUST be the 10-digit zero-padded form. `1326801` returns zero hits where
+# `0001326801` returns 105; the API does not pad for you and does not complain.
+# Resolve one from https://www.sec.gov/files/company_tickers.json.
+#
+# `kind` records why the company is here, and nothing reads it yet:
+#   hyperscaler  the end customer whose capex we are ultimately tracking
+#   neocloud     AI-native operators, often their own tenant
+#   landlord     wholesale/colocation REITs and developers
+#
+# A note on the landlords. Their filings are wall-to-wall data center, which
+# sounds ideal and is not: the section extractor has a fixed character budget and
+# on a pure-play REIT there is no "data center section" to find, so recall drops
+# to roughly 20% against 90%+ for the hyperscalers. What survives is portfolio
+# aggregate rather than per-project detail. They are kept because lease footnotes
+# name tenants, which is the one thing nothing else gives us — but expect thin
+# returns per call and consider `--forms 10-Q` for them.
+
+[[company]]
+name = "Meta"
+cik = "0001326801"
+kind = "hyperscaler"
+
+[[company]]
+name = "Alphabet"
+cik = "0001652044"
+kind = "hyperscaler"
+
+[[company]]
+name = "Microsoft"
+cik = "0000789019"
+kind = "hyperscaler"
+
+[[company]]
+name = "Amazon"
+cik = "0001018724"
+kind = "hyperscaler"
+
+[[company]]
+name = "Oracle"
+cik = "0001341439"
+kind = "hyperscaler"
+
+[[company]]
+name = "CoreWeave"
+cik = "0001769628"
+kind = "neocloud"
+
+[[company]]
+name = "Nebius"
+cik = "0001513845"
+kind = "neocloud"
+
+[[company]]
+name = "IREN"
+cik = "0001878848"
+kind = "neocloud"
+
+[[company]]
+name = "Cipher Mining"
+cik = "0001819989"
+kind = "neocloud"
+
+[[company]]
+name = "TeraWulf"
+cik = "0001083301"
+kind = "neocloud"
+
+[[company]]
+name = "Applied Digital"
+cik = "0001144879"
+kind = "neocloud"
+
+[[company]]
+name = "Galaxy Digital"
+cik = "0001859392"
+kind = "neocloud"
+
+[[company]]
+name = "Core Scientific"
+cik = "0001839341"
+kind = "neocloud"
+
+[[company]]
+name = "Hut 8"
+cik = "0001964789"
+kind = "neocloud"
+
+[[company]]
+name = "Riot Platforms"
+cik = "0001167419"
+kind = "neocloud"
+
+[[company]]
+name = "Digital Realty"
+cik = "0001297996"
+kind = "landlord"
+
+[[company]]
+name = "Equinix"
+cik = "0001101239"
+kind = "landlord"
+
+[[company]]
+name = "Iron Mountain"
+cik = "0001020569"
+kind = "landlord"
+
+[[company]]
+name = "American Tower"
+cik = "0001053507"
+kind = "landlord"
+
+[[company]]
+name = "DigitalBridge"
+cik = "0001679688"
+kind = "landlord"
+
+
+# Phrases handed to full-text search, ANDed with the company scope above.
+#
+# Kept broad on purpose. Precision comes from `ciks`, so a narrow phrase only
+# costs recall — "data center" against one company's filings is already precise.
+#
+# The lease phrases are here for a specific measured gap. After two rounds of
+# ingestion only 30% of projects could be attributed to a buyer at all, and the
+# unattributed remainder is almost entirely wholesale developers building for
+# somebody they have not named in the press. A lease disclosure is the one public
+# document that does name the counterparty, so these phrases target the single
+# weakest field rather than adding more of what already works.
+[search]
+phrases = [
+  "\"data center\"",
+  "\"data centre\"",
+  "\"lease agreement\" \"data center\"",
+  "\"anchor tenant\"",
+  "\"build-to-suit\"",
+]
+
+# 10-K and 10-Q together were 97% of hits in testing, and they are where the
+# facts live: investment in the cash-flow statement, in-service dates in MD&A,
+# tenant names in the ASC 842 lease footnotes. 8-K catches the announcement of a
+# single large lease, which is exactly the customer-attribution fact we want.
+forms = ["10-K", "10-Q", "8-K"]

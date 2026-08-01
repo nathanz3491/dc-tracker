@@ -118,6 +118,19 @@ async function api(path, options) {
     ...options,
     body: options?.body ? JSON.stringify(options.body) : undefined,
   });
+
+  // An expired session used to be invisible: the page kept showing the data it
+  // had, every request 401'd silently, and each feature reported its own
+  // misleading local reason — the 3D map said "unavailable offline" when what
+  // had actually happened was that the cookie ran out. Stale numbers that look
+  // live are worse than no page, so go back to the gate.
+  if (res.status === 401 && !path.endsWith("/login")) {
+    window.location.replace("/");
+    // Never settles: the reload is already in flight and resolving here would
+    // let callers render an error for the frame before it happens.
+    return new Promise(() => {});
+  }
+
   const text = await res.text();
   let payload = null;
   try { payload = text ? JSON.parse(text) : null; } catch { payload = { error: text }; }
@@ -214,15 +227,34 @@ function Eyebrow({ figure, title, children }) {
     </div>`;
 }
 
+/* A value, with the sentence behind it one hover — or one tap — away.
+ *
+ * Hover alone made the product's central interaction unreachable on a phone: no
+ * pointer, no quote, and the underline styles sat there implying something you
+ * could not do. So a click toggles it too, which costs a mouse user nothing and
+ * gives a touch user the feature at all.
+ *
+ * `stopPropagation`, because in the table a row click opens the drawer and on a
+ * card the whole thing is a button — without it, asking for a quote would also
+ * navigate.
+ *
+ * Keyboard deliberately does NOT get a tab stop here. Twelve fields across 124
+ * rows is 1,488 of them, which would wreck the one thing keyboard navigation is
+ * for. The keyboard path to the same evidence already exists and is better: the
+ * row is focusable, Enter opens the drawer, and the drawer lists every field
+ * with its tier and its quote inline.
+ */
 function Value({ project, field, text, extra, onQuote }) {
   const tier = tierOf(project, field);
   // An empty cell that is empty *correctly* reads differently from one that is
-  // simply unknown. Most of the dashes in this table are the former.
+  // simply unknown.
   const na = tier === "missing" && (project.nulls || {})[field]?.status === "not_applicable";
   return html`
     <span class=${`dc-v dc-v--${na ? "na" : tier}`} style=${extra}
           onMouseEnter=${(e) => onQuote(e, project, field)}
-          onMouseLeave=${() => onQuote(null)}>${text ?? fmt(field, project[field])}</span>`;
+          onMouseLeave=${() => onQuote(null, project, field, { hover: true })}
+          onClick=${(e) => { e.stopPropagation(); onQuote(e, project, field, { sticky: true }); }}
+          >${text ?? fmt(field, project[field])}</span>`;
 }
 
 /* Column order and the default column set, both taken from measurement.
@@ -297,19 +329,56 @@ function QuotePopover({ quote }) {
 
 function useQuote() {
   const [quote, setQuote] = useState(null);
-  const show = useCallback((event, project, field) => {
-    if (event === null) return setQuote(null);
+  //: A tapped quote stays until dismissed; a hovered one follows the pointer.
+  //: Without the distinction, moving the mouse off a cell would instantly close
+  //: a popover the reader had just tapped open.
+  const sticky = useRef(false);
+
+  const show = useCallback((event, project, field, opts = {}) => {
+    if (event === null) {
+      if (opts.hover && sticky.current) return; // mouse left; the tap holds it
+      sticky.current = false;
+      return setQuote(null);
+    }
+    const key = `${project.id}:${field}`;
+    if (opts.sticky && sticky.current && quote?.key === key) {
+      // Tapping the same value again closes it.
+      sticky.current = false;
+      return setQuote(null);
+    }
+    if (opts.sticky) sticky.current = true;
+
     const r = event.currentTarget.getBoundingClientRect();
     const W = 400, H = 150;
     const below = r.bottom + H + 16 < window.innerHeight;
     const q = quoteOf(project, field);
     setQuote({
+      key,
       x: Math.max(10, Math.min(r.left, window.innerWidth - W - 12)),
       y: below ? r.bottom + 8 : Math.max(10, r.top - H - 8),
       text: q.text, exact: q.exact, hasQuote: !!provOf(project, field)?.quote,
-      tier: tierOf(project, field),
+      tier: tierOf(project, field), sticky: !!opts.sticky,
     });
-  }, []);
+  }, [quote]);
+
+  // A tapped popover needs a way out that is not another tap on the same cell.
+  useEffect(() => {
+    if (!quote?.sticky) return;
+    const dismiss = () => { sticky.current = false; setQuote(null); };
+    const onKey = (e) => { if (e.key === "Escape") dismiss(); };
+    // Bubble phase, not capture. A value's own handler calls stopPropagation, so
+    // a tap on a value never reaches this — which is what lets tapping the same
+    // value twice toggle it shut instead of closing and immediately reopening.
+    document.addEventListener("click", dismiss);
+    document.addEventListener("keydown", onKey);
+    window.addEventListener("scroll", dismiss, { passive: true });
+    return () => {
+      document.removeEventListener("click", dismiss);
+      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("scroll", dismiss);
+    };
+  }, [quote?.sticky, quote?.key]);
+
   return [quote, show];
 }
 
@@ -545,7 +614,7 @@ function ProjectsView({ data, onOpen, openId }) {
         ? html`
           <div style=${{ display: "grid", gap: 9 }}>
             ${rows.map((p, i) => html`
-              <div key=${p.id} class="dc-enter" style=${{ "--i": Math.min(i, 12) }}>
+              <div key=${p.id} class=${i < 12 ? "dc-enter" : undefined} style=${i < 12 ? { "--i": i } : undefined}>
                 <${ProjectCard} p=${p} data=${data} open=${openId === p.id}
                                 onOpen=${onOpen} onQuote=${showQuote} />
               </div>`)}
@@ -579,8 +648,8 @@ function ProjectsView({ data, onOpen, openId }) {
             <//><//>
             <${TableBody}>
               ${rows.map((p, i) => html`
-                <tr key=${p.id} class=${`dc-row dc-enter${openId === p.id ? " dc-row--open" : ""}`}
-                    style=${{ "--i": Math.min(i, 12) }}
+                <tr key=${p.id} class=${`dc-row${i < 12 ? " dc-enter" : ""}${openId === p.id ? " dc-row--open" : ""}`}
+                    style=${i < 12 ? { "--i": i } : undefined}
                     role="button" tabindex="0"
                     aria-label=${`${p.company} ${p.name}, ${place(p)}, confidence ${p.confidence}`}
                     onClick=${() => onOpen(p.id)}

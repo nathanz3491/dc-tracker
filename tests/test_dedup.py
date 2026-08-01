@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from tracker import dedup
 from tracker.dedup import (
     city_key,
     company_key,
@@ -171,3 +172,61 @@ def test_same_company_and_state_is_a_weaker_signal():
     b = dedup_key("Google", "Cedar Rapids", None, "IA")
     assert same_company_and_state(a, b) is True
     assert is_cross_granularity_match(a, b) is False, "different cities are not a granularity issue"
+
+
+# --- One campus, several parties ---------------------------------------------
+
+
+def test_a_consortium_string_yields_every_party():
+    assert dedup.company_parts("OpenAI/Oracle") == {"openai", "oracle"}
+    assert dedup.company_parts("OpenAI, Oracle & SoftBank") == {"openai", "oracle", "softbank"}
+    assert dedup.company_parts("Amazon Web Services, Inc.") == {"amazon"}
+
+
+def test_the_abilene_case_is_recognised():
+    """One campus stored four times, because four companies are attached to it.
+
+    Crusoe builds it, Oracle leases it, OpenAI occupies it. Every dedup key was
+    correct and the building was one, so grouping by end customer counted 1.2 GW
+    four times.
+    """
+    rows = [
+        ("Stargate Abilene", "Crusoe"),
+        ("Stargate", "OpenAI/Oracle"),
+        ("Stargate", "OpenAI"),
+        ("Stargate - Abilene", "Oracle"),
+    ]
+    for i, (a_name, a_co) in enumerate(rows):
+        for b_name, b_co in rows[i + 1 :]:
+            assert dedup.looks_like_the_same_site(
+                a_name, a_co, b_name, b_co, locality="Abilene"
+            ), f"{a_co} vs {b_co}"
+
+
+def test_one_busy_locality_is_not_one_project():
+    """Ashburn holds fourteen campuses from fourteen real operators.
+
+    Locality alone must never imply a duplicate, or the densest markets in the
+    country collapse into a single row.
+    """
+    rows = [
+        ("Ashburn Campus", "Digital Realty"),
+        ("North Ashburn Campus", "Equinix"),
+        ("VA2 Data Center", "RagingWire Data Centers"),
+        ("Shellhorn DC-1", "QTS Data Centers"),
+        ("Dulles Berry", "Vizsla Ventures"),
+    ]
+    for i, (a_name, a_co) in enumerate(rows):
+        for b_name, b_co in rows[i + 1 :]:
+            assert not dedup.looks_like_the_same_site(
+                a_name, a_co, b_name, b_co, locality="Ashburn"
+            ), f"{a_co} vs {b_co}"
+
+
+def test_the_locality_is_never_a_distinctive_token():
+    """Otherwise every project in a town matches every other one."""
+    assert dedup.distinctive_name_tokens("Ashburn Campus", locality="Ashburn") == frozenset()
+
+
+def test_generic_industry_words_are_not_distinctive():
+    assert dedup.distinctive_name_tokens("Data Center Campus Phase II") == frozenset()

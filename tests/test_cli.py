@@ -1044,3 +1044,98 @@ def test_json_output_is_deterministic(seeded):
     first = invoke(seeded, "--json", "list").stdout
     second = invoke(seeded, "--json", "list").stdout
     assert first == second
+
+
+def test_an_error_message_is_not_eaten_by_rich_markup(initialized: Path, monkeypatch):
+    """Error text is data, and Rich reads `[...]` as a style tag.
+
+    The crawl4ai message tells you to run `pip install -e ".[crawl]"`. Rich did
+    not recognise `[crawl]` as a style, dropped it, and printed
+    `pip install -e "."` — the instruction for fixing the problem, broken by the
+    same mechanism it was describing.
+    """
+    set_key(monkeypatch)
+    result = invoke(initialized, "ingest", "crawl", "--url", "https://a.test/x", "--browser")
+    assert result.exit_code == 2
+    assert '".[crawl]"' in result.output
+
+
+def test_browser_without_the_extra_fails_on_the_flag(initialized: Path, monkeypatch):
+    """Not twenty pages in.
+
+    The crawl4ai import lives in `__aenter__`, so building the fetcher never
+    raised and the friendly message was unreachable — the run got as far as the
+    first page that needed escalating before anything noticed.
+    """
+    set_key(monkeypatch)
+    result = invoke(initialized, "ingest", "crawl", "--url", "https://a.test/x", "--browser")
+    assert "crawl4ai is not installed" in result.output
+    assert "context manager" not in result.output
+
+
+@pytest.fixture
+def bracketed(tmp_path: Path, initialized: Path) -> Path:
+    """A project whose name and obstacle contain brackets Rich will eat.
+
+    The contents matter. Rich only swallows a bracket group it can attempt to
+    parse as a style, so `[Phase 2]`, `[345kV]` and `[Holdings]` all survive
+    untouched — an earlier version of this fixture used those and proved nothing.
+    A single lowercase word does get eaten, and `[redacted]`, `[sic]` and
+    `[updated]` are all things that turn up in real press copy.
+    """
+    curated = tmp_path / "brackets.json"
+    curated.write_text(
+        json.dumps(
+            {
+                "projects": [
+                    {
+                        "name": "Stargate [redacted]",
+                        "company": "Acme [updated]",
+                        "city": "Abilene",
+                        "state": "TX",
+                        "mw_planned": 900,
+                        "sources": [{"url": "https://example.test/a"}],
+                        "risks": [
+                            {
+                                "category": "transmission",
+                                "severity": "material",
+                                "summary": "Blocked on the [north] interconnect.",
+                                "quote": "the [north] line is not built",
+                            }
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert invoke(initialized, "ingest", "manual", "--json", str(curated)).exit_code == 0
+    return initialized
+
+
+@pytest.mark.parametrize(
+    ("command", "must_contain"),
+    [
+        (["list"], "Stargate [redacted]"),
+        (["list"], "Acme [updated]"),
+        (["show", "1"], "Stargate [redacted]"),
+        (["show", "1"], "[north]"),
+        (["risks"], "[north]"),
+    ],
+)
+def test_brackets_in_data_survive_rich_markup(bracketed: Path, command, must_contain):
+    """Rich reads `[...]` as a style tag and drops what it does not recognise.
+
+    Same mechanism that turned `pip install -e ".[crawl]"` into
+    `pip install -e "."`, but here it silently mangles the operator's own data:
+    a project called `Stargate [redacted]` printed as `Stargate`.
+    """
+    result = invoke(bracketed, *command)
+    assert result.exit_code == 0, result.output
+    assert must_contain in result.output
+
+
+def test_a_bracketed_name_is_not_silently_truncated(bracketed: Path):
+    """The failure mode is deletion, not corruption, which is why it hid."""
+    out = invoke(bracketed, "list").output
+    assert "Stargate [redacted]" in out and "Stargate  " not in out

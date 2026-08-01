@@ -73,6 +73,25 @@ MAX_PROJECTS_PER_ARTICLE = 5
 #: than this means the model is enumerating speculation rather than reporting.
 MAX_RISKS_PER_PROJECT = 6
 
+#: Dollars per megawatt above which an investment figure is not about this site.
+#:
+#: The failure this catches is specific and common: an article about one campus
+#: quotes the *programme* it belongs to. "OpenAI's $500 billion Stargate" appears
+#: in a piece about a single 1,167 MW location, the gate verifies the number
+#: really is in the text — it is — and the site is recorded at $165 billion.
+#: Nothing about the evidence is wrong. The number is simply not this project's.
+#:
+#: The threshold is read off the live distribution rather than assumed, and it
+#: lands in a genuine gap rather than cutting through a cluster. Across 41
+#: projects citing both figures: median $6.2M/MW, upper quartile $11.1M/MW, the
+#: bulk of the range topping out at $23.3M/MW — then nothing until $83.3M, $141.4M
+#: and $190.9M, all three of which are programme totals or scale errors.
+#:
+#: Deliberately generous. A campus that buys its own accelerators legitimately
+#: costs far more per megawatt than one leasing shell space, and this must not
+#: fire on those.
+MAX_USD_PER_MW = 50_000_000
+
 #: Marker inserted where the middle of an over-long article was dropped.
 TRUNCATION_MARKER = "\n\n[... middle of article omitted for length ...]\n\n"
 
@@ -574,6 +593,32 @@ def _coerce(raw: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
     return values, notes
 
 
+def _implausible_investment(claims: dict[str, Any]) -> str | None:
+    """A disclosure note when the money and the megawatts cannot both be this site.
+
+    Returns the note, or None when the pair is plausible or one of them is absent.
+
+    This is the one check here that the evidence gate cannot make. The gate asks
+    "did the article say this number", and for a programme total quoted in a piece
+    about one campus the answer is yes. Only the *ratio* to the capacity on the
+    same row reveals that the number belongs to something larger.
+    """
+    money = claims.get("investment_usd")
+    mw = claims.get("mw_planned")
+    if not isinstance(money, (int, float)) or not isinstance(mw, (int, float)):
+        return None
+    if isinstance(money, bool) or isinstance(mw, bool) or mw <= 0 or money <= 0:
+        return None
+    per_mw = money / mw
+    if per_mw <= MAX_USD_PER_MW:
+        return None
+    return (
+        f"investment_usd of ${int(money):,} against {mw:g} MW is ${per_mw / 1e6:,.0f}M per MW, "
+        f"above the ${MAX_USD_PER_MW / 1e6:,.0f}M plausibility ceiling — usually a programme-wide "
+        "total quoted in an article about one site. Kept as 待确认 rather than stored as fact."
+    )
+
+
 def _events(raw: dict[str, Any], url: str) -> list[EventRecord]:
     events: list[EventRecord] = []
     for entry in raw.get("events") or []:
@@ -763,6 +808,14 @@ def build_records(
         for name in unconfirmed:
             claims[name] = values[name]
 
+        # A quoted figure can be real and still not be about this project. Demoted
+        # to 待确认 rather than deleted, which is the same answer migration 0006
+        # gave for values the gate could not verify: keep it, refuse to call it a
+        # fact, and let a human see what the source actually said.
+        scale_note = _implausible_investment(claims)
+        if scale_note:
+            unconfirmed.add("investment_usd")
+
         # Report only what was genuinely discarded. `dropped` is the gate's raw
         # verdict, but identity fields (name, company, city, county, state) are
         # then restored from the ungated values because a project row cannot exist
@@ -775,8 +828,10 @@ def build_records(
             notes.append(
                 "unconfirmed (待确认): "
                 + ", ".join(sorted(unconfirmed))
-                + " — extracted but no verbatim quote from the article states them"
+                + " — extracted but not established as this project's own figure"
             )
+        if scale_note:
+            notes.append(scale_note)
         if values.get("notes"):
             notes.append(f"extracted summary: {values['notes']}")
 

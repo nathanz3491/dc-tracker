@@ -35,7 +35,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from tracker import confidence as conf
-from tracker.dedup import all_keys, dedup_key, is_cross_granularity_match
+from tracker.dedup import (
+    all_keys,
+    dedup_key,
+    is_cross_granularity_match,
+    looks_like_the_same_site,
+)
 from tracker.ingest.records import IngestRecord
 from tracker.models import Event, Project, Risk, Source, utcnow
 from tracker.vocab import (
@@ -369,6 +374,14 @@ def _find_duplicate_candidate(
       "racine"). This is the PRD's own example.
     * **Cross-granularity name match.** The locality names agree once the
       County/Parish word is discounted ("Racine" vs "Racine County").
+    * **Same site, different party.** One campus routinely has three companies
+      attached — one builds it, one leases it, one occupies it — and each spelling
+      produces its own key, so the site is stored several times over. Measured:
+      the Abilene Stargate campus existed four times, as Crusoe, as Oracle, as
+      OpenAI and as "OpenAI/Oracle", each carrying the same 1.2 GW. Every key was
+      correct and the building was one. This case does not share a company prefix
+      with anything, so it needs its own query. See
+      `dedup.looks_like_the_same_site` for why locality alone is not the test.
     """
     incoming = all_keys(
         payload.get("company"), payload.get("city"), payload.get("county"), payload.get("state")
@@ -380,6 +393,24 @@ def _find_duplicate_candidate(
             continue
         existing = all_keys(row.company, row.city, row.county, row.state)
         if incoming & existing or is_cross_granularity_match(key, row.dedup_key):
+            return row
+
+    # Same locality, different company. Scoped by the locality half of the key so
+    # this stays one indexed-ish scan rather than a comparison against every row.
+    locality_suffix = "|" + key.split("|", 1)[1]
+    neighbours = session.scalars(
+        select(Project).where(Project.dedup_key.like("%" + locality_suffix))
+    ).all()
+    for row in neighbours:
+        if row.dedup_key == key:
+            continue
+        if looks_like_the_same_site(
+            payload.get("name"),
+            payload.get("company"),
+            row.name,
+            row.company,
+            locality=payload.get("city") or payload.get("county"),
+        ):
             return row
     return None
 
@@ -584,15 +615,22 @@ def _upsert_events(session: Session, project: Project, rec: IngestRecord) -> int
         source_id = url_to_id.get(ev.source_url) if ev.source_url else None
         found = existing.get((ev.event_type, ev.event_date))
         if found is None:
-            session.add(
-                Event(
-                    project_id=project.id,
-                    event_date=ev.event_date,
-                    event_type=ev.event_type,
-                    description=ev.description,
-                    source_id=source_id,
-                )
+            row = Event(
+                project_id=project.id,
+                event_date=ev.event_date,
+                event_type=ev.event_type,
+                description=ev.description,
+                source_id=source_id,
             )
+            session.add(row)
+            # Registered immediately, because ONE record can carry two events
+            # with the same (type, date) and the map above only knows what was
+            # already in the table. Without this the second one is added too and
+            # the flush below dies on uq_event_project_type_date, taking the whole
+            # run with it. Seen live on an SEC filing that listed two capacity
+            # expansions dated the same day — an article rarely does, which is why
+            # this survived until filings became a source.
+            existing[(ev.event_type, ev.event_date)] = row
             inserted += 1
         else:
             found.description = ev.description
@@ -633,19 +671,25 @@ def _upsert_risks(session: Session, project: Project, rec: IngestRecord) -> int:
         source_id = url_to_id.get(risk.source_url) if risk.source_url else None
         found = existing.get((risk.category, risk.first_seen))
         if found is None:
-            session.add(
-                Risk(
-                    project_id=project.id,
-                    category=risk.category,
-                    severity=risk.severity,
-                    status=OPEN_RISK_STATUS,
-                    summary=risk.summary,
-                    quote=risk.quote,
-                    first_seen=risk.first_seen,
-                    delay_days=risk.delay_days,
-                    source_id=source_id,
-                )
+            row = Risk(
+                project_id=project.id,
+                category=risk.category,
+                severity=risk.severity,
+                status=OPEN_RISK_STATUS,
+                summary=risk.summary,
+                quote=risk.quote,
+                first_seen=risk.first_seen,
+                delay_days=risk.delay_days,
+                source_id=source_id,
             )
+            session.add(row)
+            # Registered immediately, for the same reason as in `_upsert_events`:
+            # the map only knows what was already stored, so two same-key risks in
+            # one record would both insert and trip the UNIQUE constraint. The
+            # crawl path happens to dedup its own risks before getting here, but
+            # `ingest manual` does not, and this write path should not depend on
+            # every caller remembering.
+            existing[(risk.category, risk.first_seen)] = row
             inserted += 1
         else:
             # Re-reading an edited article updates the wording and the severity, but

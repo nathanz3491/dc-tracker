@@ -975,6 +975,115 @@ def test_should_escalate(result, expected):
     assert should_escalate(result) is expected
 
 
+# --- escalation lifecycle ----------------------------------------------------
+
+
+class _RecordingBrowser:
+    """Stands in for Crawl4AIFetcher, and insists on the same contract.
+
+    Refusing to fetch before `__aenter__` is the point: that is exactly what the
+    real one does, and what nothing was doing for it.
+    """
+
+    def __init__(self):
+        self.entered = 0
+        self.exited = 0
+        self.fetched: list[str] = []
+        self._open = False
+
+    async def __aenter__(self):
+        self.entered += 1
+        self._open = True
+        return self
+
+    async def __aexit__(self, *exc):
+        self.exited += 1
+        self._open = False
+
+    async def fetch(self, url):
+        if not self._open:
+            raise RuntimeError("Crawl4AIFetcher must be used as an async context manager")
+        self.fetched.append(url)
+        return FetchResult(url, True, markdown="x" * 5000, via="crawl4ai", fetched_at=NOW)
+
+
+class _Blocked:
+    """Plain HTTP that gets a 403, which is what triggers escalation."""
+
+    async def fetch(self, url):
+        return FetchResult(url, False, status=403, via="httpx", fetched_at=NOW)
+
+
+class _Fine:
+    async def fetch(self, url):
+        return FetchResult(url, True, markdown="y" * 5000, via="httpx", fetched_at=NOW)
+
+
+async def test_the_browser_fetcher_is_started_before_it_is_used():
+    """`--browser` never worked: nobody entered the context manager.
+
+    The CLI built a `Crawl4AIFetcher` and handed it down; `crawl.run` owns the
+    `asyncio.run`, so no synchronous caller could enter it, and the first page
+    that needed escalating died with "must be used as an async context manager".
+    `fetch_all` is the only place inside the loop, so it is the place that does it.
+    """
+    from tracker.ingest.fetch import fetch_all
+
+    browser = _RecordingBrowser()
+    results = await fetch_all(["https://blocked.test/a"], fetcher=_Blocked(), escalate=browser)
+    assert browser.entered == 1
+    assert browser.fetched == ["https://blocked.test/a"]
+    assert results[0].via == "crawl4ai"
+
+
+async def test_the_browser_is_shut_down_afterwards():
+    """Chromium does not exit on its own and outlives the command that spawned it."""
+    from tracker.ingest.fetch import fetch_all
+
+    browser = _RecordingBrowser()
+    await fetch_all(["https://blocked.test/a"], fetcher=_Blocked(), escalate=browser)
+    assert browser.exited == 1
+
+
+async def test_the_browser_starts_once_for_many_pages():
+    from tracker.ingest.fetch import fetch_all
+
+    browser = _RecordingBrowser()
+    urls = [f"https://blocked.test/{i}" for i in range(5)]
+    await fetch_all(urls, fetcher=_Blocked(), escalate=browser)
+    assert browser.entered == 1, "one browser per run, not one per page"
+    assert len(browser.fetched) == 5
+
+
+async def test_the_browser_never_starts_when_nothing_needs_it():
+    """Launching Chromium costs seconds and a process; most runs never escalate."""
+    from tracker.ingest.fetch import fetch_all
+
+    browser = _RecordingBrowser()
+    await fetch_all(["https://fine.test/a"], fetcher=_Fine(), escalate=browser)
+    assert browser.entered == 0
+    assert browser.exited == 0
+
+
+async def test_a_browser_that_will_not_start_degrades_loudly(caplog):
+    """A missing Chromium must not take the whole run down with it.
+
+    The plain-HTTP result still stands, the failure is logged once rather than
+    per URL, and `tracker queue --failed` will show what could not be read.
+    """
+    from tracker.ingest.fetch import fetch_all
+
+    class _Broken(_RecordingBrowser):
+        async def __aenter__(self):
+            raise RuntimeError("chromium is not installed")
+
+    urls = [f"https://blocked.test/{i}" for i in range(3)]
+    with caplog.at_level("ERROR"):
+        results = await fetch_all(urls, fetcher=_Blocked(), escalate=_Broken())
+    assert [r.status for r in results] == [403, 403, 403]
+    assert sum("could not start the browser" in r.message for r in caplog.records) == 1
+
+
 def test_a_foreign_language_quote_cannot_evidence_a_phase():
     """The one hole the summary-field carve-out opened.
 
@@ -1046,3 +1155,51 @@ def test_an_unreadable_feed_config_does_not_stop_ingest(monkeypatch):
     )
     assert crawl.operator_hosts() == frozenset()
     crawl.operator_hosts.cache_clear()
+
+
+# --- Money that is real but not this project's -------------------------------
+
+
+def test_a_programme_total_quoted_for_one_site_is_demoted_not_stored():
+    """The gate cannot catch this and the ratio can.
+
+    An article about one 1,167 MW campus quotes the programme it belongs to. The
+    number really is in the text, so the evidence gate passes it; only its ratio
+    to the capacity on the same row shows it belongs to something larger.
+    """
+    note = crawl._implausible_investment({"investment_usd": 165_000_000_000, "mw_planned": 1167})
+    assert note is not None
+    assert "programme-wide" in note
+    assert "待确认" in note
+
+
+@pytest.mark.parametrize(
+    ("usd", "mw"),
+    [
+        (25_000_000_000, 1200),  # Stargate Abilene, real
+        (4_700_000_000, 350),  # Fairwater, real
+        (25_000_000_000, 1400),  # Lighthouse, real
+        (173_000_000, 700),  # AMD, real and cheap per MW
+    ],
+)
+def test_real_figures_are_left_alone(usd: int, mw: float):
+    """A GPU-heavy campus legitimately costs far more per MW than a shell.
+
+    The ceiling sits in a measured gap — the live distribution runs to $23M/MW and
+    then jumps to $83M — so it must not clip the top of the real range.
+    """
+    assert crawl._implausible_investment({"investment_usd": usd, "mw_planned": mw}) is None
+
+
+@pytest.mark.parametrize(
+    "claims",
+    [
+        {},
+        {"investment_usd": 5_000_000_000},
+        {"mw_planned": 300},
+        {"investment_usd": 5_000_000_000, "mw_planned": 0},
+        {"investment_usd": True, "mw_planned": 300},
+    ],
+)
+def test_the_check_needs_both_numbers_to_say_anything(claims: dict):
+    assert crawl._implausible_investment(claims) is None

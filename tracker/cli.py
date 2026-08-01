@@ -21,6 +21,7 @@ import typer
 from rich import box
 from rich.console import Console
 from rich.logging import RichHandler
+from rich.markup import escape
 from rich.table import Table
 from sqlalchemy import func, select
 
@@ -164,11 +165,17 @@ def _fail(message: str, code: int = 2) -> None:
 
     In JSON mode the error is emitted as JSON too — a script that pipes stdout to a
     parser should not get prose on one path and a payload on the other.
+
+    The message is escaped, because it is data. Rich reads `[...]` as a style tag
+    and silently drops what it does not recognise, which had been quietly
+    corrupting the one message where it hurts most: the crawl4ai error tells you
+    to run `pip install -e ".[crawl]"` and it was printing `pip install -e "."` —
+    the instruction for fixing the problem, broken by the same mechanism.
     """
     if json_mode():
         emit({"error": message})
     else:
-        err.print(f"[bold red]error[/bold red] {message}")
+        err.print(f"[bold red]error[/bold red] {escape(message)}")
     raise typer.Exit(code)
 
 
@@ -561,8 +568,15 @@ def ingest_crawl(
 
     escalate = None
     if browser:
-        from tracker.ingest.fetch import Crawl4AIFetcher
+        from tracker.ingest.fetch import Crawl4AIFetcher, MissingDependency
 
+        # Fail on the flag, not twenty pages in. `__aenter__` holds the import,
+        # so nothing before this point would have noticed the extra was absent.
+        try:
+            Crawl4AIFetcher.ensure_available()
+        except MissingDependency as exc:
+            _fail(str(exc))
+            return
         escalate = Crawl4AIFetcher(settings)
 
     cache_dir = None if no_cache else install_root() / ".cache" / "articles"
@@ -811,9 +825,9 @@ def list_projects(
         for p in projects:
             table.add_row(
                 str(p.id),
-                p.company,
-                p.name,
-                _location(p),
+                escape(p.company),
+                escape(p.name),
+                escape(_location(p)),
                 p.phase,
                 _fmt_mw(p.mw_planned),
                 _fmt_usd(p.investment_usd),
@@ -923,7 +937,7 @@ def show(project_id: Annotated[int, typer.Argument(help="Project id.")]) -> None
         facts.add_column(style="dim")
         facts.add_column()
 
-        def cell(field: str, rendered: str) -> str:
+        def cell(field: str, rendered: object) -> str:
             """Mark a value the PRD would call 待确认.
 
             Red because the tier has to be impossible to miss: an unconfirmed value
@@ -937,6 +951,11 @@ def show(project_id: Annotated[int, typer.Argument(help="Project id.")]) -> None
             source had offered "announced" and failed to prove it, which was untrue
             of every project whose phase no article mentions.
             """
+            # Escaped here rather than at `add_row`, because the strings this
+            # returns are markup by design and escaping them afterwards would
+            # print the `[dim]` tags literally. A project name really can carry a
+            # bracket — "Stargate (Phase [2])" — and Rich would eat it.
+            rendered = escape(str(rendered))
             tier = basis(project, field)
             if tier == UNCONFIRMED:
                 return f"[red]{rendered}[/red] [red]待确认[/red]"
@@ -952,7 +971,7 @@ def show(project_id: Annotated[int, typer.Argument(help="Project id.")]) -> None
             ("name", cell("name", project.name)),
             ("company", cell("company", project.company)),
             ("customer", cell("customer", project.customer or NA)),
-            ("location", _location(project)),
+            ("location", escape(_location(project))),
             ("county", cell("county", project.county or NA)),
             (
                 "coordinates",
@@ -970,7 +989,7 @@ def show(project_id: Annotated[int, typer.Argument(help="Project id.")]) -> None
             ("created", str(project.created_at)),
             ("updated", str(project.updated_at)),
             ("last verified", str(project.last_verified_at or "never")),
-            ("dedup key", project.dedup_key),
+            ("dedup key", escape(project.dedup_key)),
         ]:
             facts.add_row(label, str(value))
         console.print(facts)
@@ -1005,11 +1024,11 @@ def show(project_id: Annotated[int, typer.Argument(help="Project id.")]) -> None
                     f"  [cyan]{r.category}[/cyan] [{_severity_style(r.severity)}]"
                     f"{r.severity}[/{_severity_style(r.severity)}]{state}  {dates}{delay}"
                 )
-                console.print(f"    {r.summary}")
+                console.print(f"    {escape(r.summary)}")
                 # The quote, not the summary, is the evidence: the summary is
                 # allowed to be a paraphrase and the quote is verified verbatim.
                 if r.quote:
-                    console.print(f'    "{r.quote}"', style="dim")
+                    console.print(f'    "{escape(r.quote)}"', style="dim")
                 else:
                     console.print("    [yellow]uncited[/yellow]", style="dim")
 
@@ -1092,9 +1111,9 @@ def risks(
                     f"({_location(project)})  [{style}]{risk_row.severity}[/{style}]"
                     f"  {_fmt_mw(project.mw_planned)} MW"
                 )
-                console.print(f"    {risk_row.summary}")
+                console.print(f"    {escape(risk_row.summary)}")
                 if risk_row.quote:
-                    console.print(f'    "{risk_row.quote}"', style="dim")
+                    console.print(f'    "{escape(risk_row.quote)}"', style="dim")
                 else:
                     console.print("    [yellow]uncited — confirm in `tracker review`[/yellow]")
                 shown += 1
@@ -1240,6 +1259,146 @@ def exposure(
 
 
 @app.command()
+def capex(
+    rows: Annotated[int, typer.Option("--rows", help="Buyers to show.")] = 20,
+    include_terminal: Annotated[
+        bool,
+        typer.Option("--include-terminal", help="Count paused and cancelled projects too."),
+    ] = False,
+) -> None:
+    """Capacity and spend by the company actually buying it.
+
+    The database is keyed on the site; this is the other axis — how much each end
+    customer has in flight, when it lands, and how exposed it is. Much
+    hyperscaler capacity is built by wholesale developers and leased, so the
+    operator on the building is often not the buyer.
+
+    Attribution is a named tenant where a source gives one, the operator itself
+    where the operator is an end user building for its own use, and an explicit
+    unattributed row otherwise. Every figure is a floor: a project whose capacity
+    nobody has cited contributes zero.
+    """
+    from tracker import capex as capex_mod
+
+    engine = _read_engine()
+    with session_scope(engine, commit=False) as session:
+        positions = capex_mod.rollup(session, include_terminal=include_terminal)
+        cover = capex_mod.coverage(session)
+        years = capex_mod.horizon(positions)
+        blockers = {p.key: capex_mod.blocking_risk(session, p.key) for p in positions if p.key}
+        suspects = capex_mod.suspect_attributions(session)
+        dupes = capex_mod.suspected_duplicates(session)
+        dupe_mw = capex_mod.double_counted_mw(dupes)
+
+    if json_mode():
+        emit(
+            {
+                "coverage": cover,
+                "positions": [
+                    {
+                        "customer": p.name,
+                        "key": p.key,
+                        "projects": p.projects,
+                        "self_built": p.self_built,
+                        "mw_planned": p.mw_planned,
+                        "mw_built": p.mw_built,
+                        "mw_unbuilt": p.mw_unbuilt,
+                        "investment_usd": p.investment_usd,
+                        "mw_by_year": p.mw_by_year,
+                        "projects_at_risk": p.at_risk_projects,
+                        "mw_at_risk": p.mw_at_risk,
+                        "slipped": p.slipped,
+                        "worst_open_risk": blockers.get(p.key),
+                        "phases": p.phases,
+                    }
+                    for p in positions
+                ],
+            }
+        )
+        return
+
+    if not positions:
+        console.print("[yellow]no projects to attribute[/yellow]")
+        return
+
+    table = Table(
+        title="capacity by end customer",
+        header_style="bold",
+        title_justify="left",
+        box=TABLE_BOX,
+    )
+    table.add_column("customer")
+    table.add_column("proj", justify="right")
+    table.add_column("MW planned", justify="right")
+    table.add_column("MW built", justify="right")
+    table.add_column("investment", justify="right")
+    # Only the next few years; older dates are projects that should already be
+    # online and are a data-quality signal rather than a pipeline.
+    shown_years = [y for y in years if y >= capex_mod.as_of().year][:4]
+    for year in shown_years:
+        table.add_column(f"MW {year}", justify="right")
+    table.add_column("at risk", justify="right")
+    table.add_column("slipped", justify="right")
+    table.add_column("worst risk")
+
+    for position in positions[:rows]:
+        name = position.name[:30]
+        if position.key and position.self_built == position.projects:
+            name += " *"
+        cells = [
+            name,
+            str(position.projects),
+            _fmt_mw(position.mw_planned) if position.mw_planned else NA,
+            _fmt_mw(position.mw_built) if position.mw_built else NA,
+            _fmt_usd(position.investment_usd) if position.investment_usd else NA,
+        ]
+        cells += [
+            _fmt_mw(position.mw_by_year[y]) if position.mw_by_year.get(y) else NA
+            for y in shown_years
+        ]
+        cells += [
+            _fmt_mw(position.mw_at_risk) if position.mw_at_risk else NA,
+            str(position.slipped) if position.slipped else NA,
+            escape(blockers.get(position.key) or NA),
+        ]
+        table.add_row(*cells)
+    console.print(table)
+
+    console.print(
+        f"[dim]* every project attributed by ownership rather than a named tenant.[/dim]\n"
+        f"[dim]attributed: [bold]{cover['attributed_pct']:.0f}%[/bold] of "
+        f"{int(cover['projects'])} projects "
+        f"({cover['named_tenant_pct']:.0f}% by a named tenant, "
+        f"{cover['self_built_pct']:.0f}% self-built). "
+        f"{cover['with_capacity_pct']:.0f}% cite a capacity; "
+        f"{cover['in_timeline_pct']:.0f}% cite both capacity and a date, "
+        f"so only those reach the year columns.[/dim]"
+    )
+    console.print(
+        "[dim]sums cover only cited figures — every number is a floor, not a total.[/dim]"
+    )
+    if dupes:
+        console.print(
+            f"\n[yellow]{len(dupes)} pair(s)[/yellow] of rows look like one campus stored twice, "
+            f"holding [bold]{_fmt_mw(dupe_mw)} MW[/bold] that is counted more than once above. "
+            "One site often has a builder, a landlord and an occupier, and each name makes its "
+            "own row:"
+        )
+        for pair in dupes[:5]:
+            console.print(
+                f"  [dim]{pair.locality}, {pair.state}: "
+                f"#{pair.a_id} {pair.a_company} vs #{pair.b_id} {pair.b_company}[/dim]"
+            )
+    if suspects:
+        console.print(
+            f"\n[yellow]{len(suspects)} project(s)[/yellow] name a tracked operator as their "
+            "customer, which is usually an extraction error rather than a lease:"
+        )
+        for project_id, operator, customer in suspects[:5]:
+            console.print(f"  [dim]#{project_id} {operator} -> customer {customer!r}[/dim]")
+
+
+@app.command()
 def stats() -> None:
     """Summary counts by phase, confidence and state."""
     engine = _read_engine()
@@ -1355,6 +1514,95 @@ def stats() -> None:
                 "[dim]MW at risk counts only projects whose capacity is cited, and a "
                 "project appears under every category obstructing it.[/dim]"
             )
+
+
+@ingest_app.command("edgar")
+def ingest_edgar(
+    per_company: Annotated[
+        int,
+        typer.Option("--per-company", help="Filings per company per phrase. The cost dial."),
+    ] = 2,
+    company: Annotated[
+        str | None,
+        typer.Option("--company", help="Restrict to one company by name.", show_default=False),
+    ] = None,
+    companies_file: Annotated[
+        Path | None,
+        typer.Option("--companies", help="Company list TOML.", show_default=False),
+    ] = None,
+    since_days: Annotated[
+        int,
+        typer.Option("--since-days", help="Ignore filings older than this. 0 for no limit."),
+    ] = 730,
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="Prepare the filings but extract nothing.")
+    ] = False,
+    force: Annotated[
+        bool, typer.Option("--force", help="Re-extract filings already read.")
+    ] = False,
+) -> None:
+    """Read SEC filings — the one publisher that cannot lock us out.
+
+    Filings state the three things we cover worst: investment in the cash-flow
+    statement, in-service dates in MD&A, and the end customer in the lease
+    footnotes. Publication is a legal obligation, so unlike a newsroom there is no
+    bot filter to be refused by.
+
+    Each filing costs one LLM call, like any article, and `--per-company` is the
+    dial. A filing is far larger than the model budget, so the relevant section is
+    selected first rather than the document truncated — see `tracker/ingest/edgar.py`.
+
+    Needs `TRACKER_USER_AGENT` set to a real contact; SEC blocks the placeholder.
+    """
+    from tracker.ingest import edgar
+    from tracker.ingest.crawl import run as run_crawl
+
+    settings = get_settings()
+    cache_dir = install_root() / ".cache" / "articles"
+    engine, _ = init_db(_db_path())
+
+    try:
+        report, urls = edgar.prepare(
+            companies_path=companies_file,
+            cache_dir=cache_dir,
+            settings=settings,
+            per_company=per_company,
+            only=company,
+            since_days=since_days or None,
+        )
+    except edgar.EdgarError as exc:
+        _fail(str(exc))
+        raise
+
+    _print_report_rows(report.as_rows(), title="edgar")
+
+    if not urls:
+        console.print("[yellow]nothing to extract[/yellow]")
+        return
+    if dry_run:
+        console.print(
+            f"[yellow]dry run[/yellow] — {len(urls)} filing(s) prepared and cached, "
+            "none extracted. Re-run without --dry-run to read them."
+        )
+        return
+
+    if not settings.has_api_key():
+        _fail(
+            f"{len(urls)} filing(s) are prepared, but extraction needs TRACKER_MINIMAX_API_KEY.\n"
+            "The prepared text is cached, so setting the key and re-running costs no fetches."
+        )
+
+    try:
+        release_lock = acquire_write_lock(_db_path(), command="ingest edgar")
+    except AlreadyRunning as exc:
+        _fail(str(exc))
+        raise
+    atexit.register(release_lock)
+
+    console.rule("[bold]extract[/bold]", align="left")
+    with _explain_db_locks(), session_scope(engine) as session:
+        crawl_report = run_crawl(session, urls, cache_dir=cache_dir, force=force)
+    _print_report(crawl_report, title="ingest edgar")
 
 
 @ingest_app.command("geo")
@@ -1482,11 +1730,15 @@ def enrich(
 
     escalate = None
     if browser:
+        # Checked here rather than caught around the constructor: the import
+        # lives in `__aenter__`, so building the fetcher never raises and the
+        # friendly message below was unreachable.
         try:
-            escalate = Crawl4AIFetcher(get_settings())
+            Crawl4AIFetcher.ensure_available()
         except MissingDependency as exc:
             _fail(str(exc))
-            raise
+            return
+        escalate = Crawl4AIFetcher(get_settings())
 
     engine, _ = init_db(_db_path())
     try:
@@ -1888,8 +2140,15 @@ def sync(
 
     escalate = None
     if browser:
-        from tracker.ingest.fetch import Crawl4AIFetcher
+        from tracker.ingest.fetch import Crawl4AIFetcher, MissingDependency
 
+        # Fail on the flag, not twenty pages in. `__aenter__` holds the import,
+        # so nothing before this point would have noticed the extra was absent.
+        try:
+            Crawl4AIFetcher.ensure_available()
+        except MissingDependency as exc:
+            _fail(str(exc))
+            return
         escalate = Crawl4AIFetcher(settings)
 
     engine, _ = init_db(_db_path())
@@ -1914,7 +2173,15 @@ def sync(
         console.rule("[bold]1/4 discover[/bold]", align="left")
         try:
             with session_scope(engine) as session:
-                report, _ = disc.run(session, since_days=since_days or None, dry_run=dry_run)
+                report, _ = disc.run(
+                    session,
+                    since_days=since_days or None,
+                    dry_run=dry_run,
+                    # Feeds that syndicate the whole article write it into the same
+                    # cache the extract phase reads, so phase 2 below never requests
+                    # a page that would answer 403.
+                    cache_dir=cache_dir,
+                )
         except disc.DiscoverError as exc:
             _fail(str(exc))
             return
@@ -2215,7 +2482,7 @@ def search_cmd(
         table.add_column("headline")
         table.add_column("url")
         for c in candidates[:40]:
-            table.add_row(c.title[:78], c.url[:64])
+            table.add_row(escape(c.title[:78]), escape(c.url[:64]))
         console.print(table)
         console.print("\n[dim]next:[/dim] tracker sync --skip-discover")
 
@@ -2250,6 +2517,7 @@ def discover(
                 feeds_path=feeds,
                 since_days=since_days or None,
                 dry_run=dry_run,
+                cache_dir=install_root() / ".cache" / "articles",
             )
     except disc.DiscoverError as exc:
         _fail(str(exc))
@@ -2350,9 +2618,9 @@ def queue(
         for row in rows:
             table.add_row(
                 str(row.published_at or NA)[:10],
-                row.feed or NA,
-                (row.title or NA)[:70],
-                row.url[:60],
+                escape(row.feed or NA),
+                escape((row.title or NA)[:70]),
+                escape(row.url[:60]),
             )
         console.print(table)
         if total > len(rows):
@@ -2483,7 +2751,7 @@ def review(
                 if r.status == OPEN_RISK_STATUS and r.source_id is None:
                     console.print(
                         f"  [yellow]uncited {r.severity} risk[/yellow] "
-                        f"([cyan]{r.category}[/cyan]): {r.summary}"
+                        f"([cyan]{r.category}[/cyan]): {escape(r.summary)}"
                     )
             for s in sorted(p.sources, key=lambda x: x.url):
                 console.print(f"  [cyan]{s.source_type}[/cyan] {s.url}")

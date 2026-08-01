@@ -67,6 +67,41 @@ _COMPANY_ALIASES: dict[str, str] = {
 #: Louisiana uses Parish, Alaska uses Borough and Census Area.
 _COUNTY_SUFFIXES = ("county", "parish", "borough", "census area", "municipality", "city and county")
 
+#: Wording a source uses when it will not name the tenant.
+#:
+#: These are not identities and must not be treated as ones. Measured on the live
+#: database, 4 of the 12 populated `customer` values were of this shape —
+#: "Fortune 100 technology company", "Publicly-traded global enterprise
+#: (technology company based in the San Francisco Bay Area)". Left as-is they
+#: each become a distinct "customer" in any rollup, so a capacity-by-customer
+#: table shows four one-project tenants that are probably two real ones, and
+#: probably ones already named elsewhere in the table.
+#:
+#: Matched as substrings of the folded value, because the phrasing varies
+#: endlessly and only the hedge is stable.
+_UNDISCLOSED_MARKERS = (
+    "fortune 100",
+    "fortune 500",
+    "undisclosed",
+    "unnamed",
+    "not disclosed",
+    "confidential",
+    "publicly traded",
+    "publicly-traded",
+    "global enterprise",
+    "hyperscale customer",
+    "hyperscaler customer",
+    "major technology",
+    "leading technology",
+    "large technology",
+    "investment grade",
+    "investment-grade",
+    "anchor tenant",
+    "single tenant",
+    "us-based technology",
+    "a technology company",
+)
+
 
 @dataclass(frozen=True)
 class Locality:
@@ -117,6 +152,36 @@ def company_key(company: str | None) -> str:
                 break
         else:
             return slug
+
+
+def is_undisclosed(customer: str | None) -> bool:
+    """True when a `customer` value hedges instead of naming anybody.
+
+    A source that says "a Fortune 100 technology company" has declined to
+    identify the tenant. That is worth recording — it tells you the capacity is
+    committed — but it is not an identity, and the distinction matters the moment
+    anything groups by customer.
+    """
+    if not customer:
+        return False
+    slug = _slug(customer)
+    return any(marker in slug for marker in _UNDISCLOSED_MARKERS)
+
+
+def customer_key(customer: str | None) -> str:
+    """Normalized end-customer identity, or ``""`` when none is really named.
+
+    Deliberately delegates to :func:`company_key`: a tenant is a company, and
+    "Amazon Web Services" must fold to the same key whether it appears as the
+    operator of its own campus or as somebody else's customer. Without that,
+    a rollup by customer double-counts the same buyer under two spellings.
+
+    Hedged values (see :func:`is_undisclosed`) return ``""`` rather than a key
+    made out of the hedge.
+    """
+    if is_undisclosed(customer):
+        return ""
+    return company_key(customer)
 
 
 def county_key(county: str | None) -> str:
@@ -218,6 +283,134 @@ def is_cross_granularity_match(a: str, b: str) -> bool:
     return bool(a_name) and bool(b_name) and a_name == b_name
 
 
+#: Words that appear in half the project names in the industry and identify
+#: nothing. A name token has to be rarer than these to suggest two rows are the
+#: same site.
+_GENERIC_NAME_TOKENS = frozenset(
+    {
+        "data",
+        "center",
+        "centre",
+        "datacenter",
+        "datacentre",
+        "campus",
+        "project",
+        "site",
+        "facility",
+        "expansion",
+        "phase",
+        "building",
+        "park",
+        "technology",
+        "tech",
+        "digital",
+        "cloud",
+        "ai",
+        "the",
+        "and",
+        "of",
+        "at",
+        "north",
+        "south",
+        "east",
+        "west",
+        "i",
+        "ii",
+        "iii",
+        "iv",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+    }
+)
+
+#: Separators a source uses when one campus has several parties behind it:
+#: "OpenAI/Oracle", "OpenAI, Oracle", "Oracle & Crusoe".
+_PARTY_SPLIT = re.compile(r"[/,&+]| and ")
+
+
+def company_parts(company: str | None) -> set[str]:
+    """Every operator named in a company string, as keys.
+
+    ``"OpenAI/Oracle"`` → ``{"openai", "oracle"}``.
+
+    A big campus routinely has three companies attached — one builds it, one
+    leases it, one occupies it — and sources name whichever they care about. Each
+    spelling produces its own `dedup_key`, so the same site lands in the database
+    several times. Recovering the parts is what lets those rows recognise each
+    other.
+    """
+    if not company:
+        return set()
+    # A legal suffix that survives the split is a fragment, not a party:
+    # "Amazon Web Services, Inc." is one company, and comma-splitting it leaves
+    # "Inc." behind. `company_key` cannot strip that on its own, because it only
+    # removes a suffix that follows something.
+    parts = {company_key(part) for part in _PARTY_SPLIT.split(company)}
+    return {p for p in parts if p and p not in _COMPANY_SUFFIXES}
+
+
+def shares_a_party(a: str | None, b: str | None) -> bool:
+    """True when two company strings name at least one operator in common."""
+    if not a or not b:
+        return False
+    common = company_parts(a) & company_parts(b)
+    return bool(common)
+
+
+def distinctive_name_tokens(name: str | None, *, locality: str | None = None) -> frozenset[str]:
+    """Name words that could identify a specific site.
+
+    Generic industry vocabulary is dropped, and so is the locality: every project
+    in Ashburn has "Ashburn" in its name, and treating that as distinctive would
+    make fourteen unrelated campuses look like one.
+    """
+    if not name:
+        return frozenset()
+    drop = set(_GENERIC_NAME_TOKENS)
+    if locality:
+        drop.update(_slug(locality).split())
+    return frozenset(t for t in _slug(name).split() if t not in drop and len(t) > 2)
+
+
+def looks_like_the_same_site(
+    a_name: str | None,
+    a_company: str | None,
+    b_name: str | None,
+    b_company: str | None,
+    *,
+    locality: str | None = None,
+) -> bool:
+    """Two rows in one locality that are probably one campus seen twice.
+
+    **The narrow case this exists for**, measured on the live database: the
+    Abilene Stargate campus was stored four times, as `crusoe|city:abilene|TX`,
+    `openai|city:abilene|TX`, `oracle|city:abilene|TX` and
+    `openai oracle|city:abilene|TX`. Crusoe builds it, Oracle leases it and OpenAI
+    occupies it, so all three companies are real and the keys are all correct —
+    the site is simply one building. Grouping by end customer then counted 1.2 GW
+    four times, which is exactly the number `tracker capex` exists to report.
+
+    Deliberately NOT "same locality means duplicate". Ashburn holds fourteen
+    projects from fourteen genuinely different operators, and Santa Clara,
+    Hillsboro, Chicago and Phoenix are all the same. Locality alone is evidence of
+    nothing. What separates Abilene is that the *name* survives across the rows
+    while the company changes, or that one company string names the other's
+    operator.
+
+    Like everything else in this module, a match proposes a review candidate and
+    never merges anything.
+    """
+    if shares_a_party(a_company, b_company):
+        return True
+    shared = distinctive_name_tokens(a_name, locality=locality) & distinctive_name_tokens(
+        b_name, locality=locality
+    )
+    return bool(shared)
+
+
 def same_company_and_state(a: str, b: str) -> bool:
     """True when two dedup keys share company and state but not locality.
 
@@ -235,10 +428,16 @@ __all__ = [
     "Locality",
     "city_key",
     "company_key",
+    "company_parts",
     "county_key",
+    "customer_key",
     "dedup_key",
+    "distinctive_name_tokens",
     "is_cross_granularity_match",
+    "is_undisclosed",
     "locality",
     "looks_like_county",
+    "looks_like_the_same_site",
     "same_company_and_state",
+    "shares_a_party",
 ]

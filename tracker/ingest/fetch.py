@@ -16,12 +16,14 @@ the PRD's framing. The reasons:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import logging
 import re
 import sys
 from dataclasses import dataclass
 from datetime import datetime
+from html import unescape
 from pathlib import Path
 from typing import Protocol
 from urllib.parse import urlsplit
@@ -91,25 +93,32 @@ def html_to_text(html: str) -> str:
 
     Deliberately a small regex pass rather than a parser dependency. Its only job
     is to give the model prose to quote from; the evidence gate later checks each
-    quote against this same text, so both sides see identical input and precision
-    of markup handling does not affect correctness.
+    quote against this same text, so both sides see identical input.
+
+    **Entities are decoded with `html.unescape`, not a hand-written table.** The
+    table this replaces held nine *named* entities and no numeric ones, and the
+    docstring justified that by saying both sides of the gate see the same text so
+    markup precision cannot affect correctness. That reasoning holds for matching a
+    quote and fails for reading a value out of one: `crawl._stated_in` re-parses
+    quantities from the quote with `_MONEY_EXPR` and `norm_money_detail`, and those
+    patterns require the unit to sit next to its number.
+
+    Measured on SEC filings, where `&#160;` appears 17,469 times across 39
+    documents and routinely separates a figure from its unit:
+
+        "$ 13.5 &#160;billion"  ->  $13              (a 10^9 error)
+        "393 &#160;MW"          ->  no match at all, the value silently lost
+
+    News HTML mostly emits `&nbsp;`, which the old table did cover, so this stayed
+    invisible until a numeric-entity-heavy source arrived. The `\\xa0` that
+    unescaping produces is folded to a space by the whitespace pass below.
     """
     text = _COMMENTS.sub("", html)
     text = _DROP_TAGS.sub(" ", text)
     text = _BR.sub("\n", text)
     text = _BLOCK_END.sub("\n\n", text)
     text = _TAG.sub(" ", text)
-    text = (
-        text.replace("&nbsp;", " ")
-        .replace("&amp;", "&")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", '"')
-        .replace("&#39;", "'")
-        .replace("&rsquo;", "'")
-        .replace("&ldquo;", '"')
-        .replace("&rdquo;", '"')
-    )
+    text = unescape(text)
     lines = [re.sub(r"[ \t ]+", " ", line).strip() for line in text.splitlines()]
     return _BLANKS.sub("\n\n", "\n".join(lines)).strip()
 
@@ -159,6 +168,14 @@ class HttpxFetcher:
         )
 
 
+_MISSING_CRAWL4AI = (
+    "crawl4ai is not installed. It is an optional extra:\n"
+    '  python -m pip install -e ".[crawl]"\n'
+    "  crawl4ai-setup            # downloads the Chromium build\n\n"
+    "The default httpx fetcher needs neither."
+)
+
+
 class Crawl4AIFetcher:
     """Headless-browser fetch via Crawl4AI. Optional, for pages httpx cannot get."""
 
@@ -166,16 +183,26 @@ class Crawl4AIFetcher:
         self.settings = settings or get_settings()
         self._crawler = None
 
+    @staticmethod
+    def ensure_available() -> None:
+        """Raise now if the optional extra is missing.
+
+        Constructing the fetcher cannot tell you this — the import lives in
+        `__aenter__`, which does not run until the first page needs escalating,
+        by which point the command has already fetched half its work. Callers
+        offering `--browser` check this before starting so the failure lands on
+        the flag rather than twenty pages in.
+        """
+        try:
+            import crawl4ai  # noqa: F401
+        except ImportError as exc:
+            raise MissingDependency(_MISSING_CRAWL4AI) from exc
+
     async def __aenter__(self) -> Crawl4AIFetcher:
         try:
             from crawl4ai import AsyncWebCrawler, BrowserConfig
         except ImportError as exc:
-            raise MissingDependency(
-                "crawl4ai is not installed. It is an optional extra:\n"
-                '  python -m pip install -e ".[crawl]"\n'
-                "  crawl4ai-setup            # downloads the Chromium build\n\n"
-                "The default httpx fetcher needs neither."
-            ) from exc
+            raise MissingDependency(_MISSING_CRAWL4AI) from exc
 
         _assert_proactor_loop()
         self._crawler = AsyncWebCrawler(config=BrowserConfig(headless=True, verbose=False))
@@ -298,24 +325,68 @@ async def fetch_all(
 
     The per-host gate plus the politeness delay matter: fanning ten simultaneous
     requests at one newsroom is how a scraper earns a block.
+
+    **This is also where the escalation fetcher is started and stopped.** A
+    browser fetcher is an async context manager — it has to launch Chromium and
+    tear it down — and only code already inside the event loop can enter it. Every
+    caller here is synchronous (`crawl.run` owns the `asyncio.run`), so if this
+    function did not do it, nobody could: `--browser` raised "must be used as an
+    async context manager" the first time a page needed escalating, on every path
+    that offered the flag.
+
+    It is entered lazily, on the first page that actually needs it. Most runs
+    never escalate, and launching a browser for them would cost several seconds
+    and a Chromium process for nothing.
     """
     settings = settings or get_settings()
     primary = fetcher or HttpxFetcher(settings)
     gate = asyncio.Semaphore(settings.fetch_concurrency)
     host_gates: dict[str, asyncio.Semaphore] = {}
 
+    #: The started escalation fetcher, once something has needed it. `False`
+    #: means starting it failed and we are not going to keep retrying — a missing
+    #: Chromium fails the same way for every URL, and twenty identical tracebacks
+    #: help nobody.
+    started: Fetcher | bool | None = None
+    start_lock = asyncio.Lock()
+
     def host_gate(url: str) -> asyncio.Semaphore:
         host = urlsplit(url).netloc.lower()
         return host_gates.setdefault(host, asyncio.Semaphore(1))
+
+    async def browser() -> Fetcher | None:
+        """The escalation fetcher, started on first use. None if unavailable."""
+        nonlocal started
+        if started is not None:
+            return started or None
+        async with start_lock:
+            if started is None:
+                enter = getattr(escalate, "__aenter__", None)
+                if enter is None:
+                    started = escalate  # a plain fetcher, e.g. a test double
+                else:
+                    try:
+                        started = await enter()
+                    except Exception as exc:
+                        # Loud, once. The pages still get their plain-HTTP result,
+                        # and `tracker queue --failed` will show what could not be
+                        # read, so this degrades visibly rather than silently.
+                        log.error(
+                            "could not start the browser fetcher, continuing without it: %s", exc
+                        )
+                        started = False
+        return started or None
 
     async def one(url: str) -> FetchResult:
         async with gate, host_gate(url):
             result = await fetch_with_retry(primary, url)
             if escalate is not None and should_escalate(result):
-                log.info("escalating %s to a browser (status=%s)", url, result.status)
-                escalated = await fetch_with_retry(escalate, url, attempts=2)
-                if escalated.ok:
-                    result = escalated
+                browser_fetcher = await browser()
+                if browser_fetcher is not None:
+                    log.info("escalating %s to a browser (status=%s)", url, result.status)
+                    escalated = await fetch_with_retry(browser_fetcher, url, attempts=2)
+                    if escalated.ok:
+                        result = escalated
             if settings.politeness_delay_s:
                 await asyncio.sleep(settings.politeness_delay_s)
             return result
@@ -323,7 +394,15 @@ async def fetch_all(
     # dict.fromkeys dedupes while preserving order, so a repeated URL in the
     # input file is fetched once.
     unique = list(dict.fromkeys(urls))
-    return await asyncio.gather(*(one(u) for u in unique))
+    try:
+        return await asyncio.gather(*(one(u) for u in unique))
+    finally:
+        # Chromium does not exit on its own, and a leaked one survives the
+        # command that started it.
+        exit_ = getattr(escalate, "__aexit__", None)
+        if started and exit_ is not None:
+            with contextlib.suppress(Exception):
+                await exit_(None, None, None)
 
 
 __all__ = [

@@ -12,6 +12,102 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **A plausibility ceiling on `investment_usd` against `mw_planned`**
+  (`crawl._implausible_investment`, $50M/MW). The evidence gate can only confirm
+  that a figure was quoted in the article, not that it is *this project's*
+  figure — an article about one 1,167 MW campus quoting "OpenAI's $500 billion
+  Stargate" verifies fine and would otherwise store the programme total as the
+  site's own investment. The threshold was read off the live distribution rather
+  than assumed: 41 projects citing both figures cluster under $23.3M/MW with
+  nothing until $83.3M+, so it sits in a real gap. A figure over the ceiling is
+  demoted to 待确认 rather than dropped, the same treatment migration 0006 gives
+  any value the gate can't otherwise verify.
+
+- **`dedup.looks_like_the_same_site`, `company_parts`, `shares_a_party`,
+  `distinctive_name_tokens`**: recognise when two rows in one locality are
+  probably one campus stored under different company names — a builder, a
+  landlord and a tenant each producing their own `dedup_key`. Measured: the
+  Abilene Stargate campus existed four times (Crusoe, Oracle, OpenAI,
+  "OpenAI/Oracle"), each correctly keyed and each carrying the full 1.2 GW, which
+  is exactly what made `tracker capex` overcount before this. Locality alone is
+  not the test — Ashburn alone holds fourteen genuinely distinct projects — so a
+  match requires either a shared company token or a distinctive shared name
+  token once generic industry words and the locality itself are discounted.
+  `upsert._find_duplicate_candidate` now also scans same-locality neighbours
+  through this check; like every other dedup signal here, a match proposes a
+  review candidate and never merges automatically.
+
+- **`tracker ingest edgar`**: SEC filings as a source (`tracker/ingest/edgar.py`).
+  Every other source here is somebody's website, and the good ones increasingly
+  answer 403 to anything that is not a browser; a filing is a legal obligation to
+  publish, served from a government host with a documented rate limit instead of a
+  bot filter. Filings are also where the fields this project covers worst actually
+  live — investment in the cash-flow statement, in-service dates in MD&A, the end
+  customer in the lease footnotes. Precision comes from scoping EDGAR full-text
+  search by CIK rather than by phrase (unscoped, "data center campus" returns
+  1,066 hits led by shell companies); a 369,000-character 10-Q is reduced by
+  scoring paragraphs on evidence density and keeping the best ~6% with their
+  neighbours, rather than truncated head-and-tail as a news article would be; and
+  an 8-K exhibit that is actually a credit agreement is dropped before it costs a
+  call, by legal-vocabulary density (0.3 for a 10-Q, 20.1 for a financing
+  exhibit). The module only ever produces article text — the selected section is
+  written into the same cache `discover.cache_feed_text` writes to, and `crawl.run`
+  reads and extracts it exactly as it would a news article. New
+  `seed/edgar-companies.toml` (company name, CIK, `kind`) drives which filings are
+  read and doubles as the end-user classification `tracker capex` uses. Needs
+  `TRACKER_USER_AGENT` set to a real contact; the command refuses to start on the
+  shipped placeholder rather than collect a run's worth of 403s.
+
+- **`tracker capex`**: capacity and spend rolled up by the company actually buying
+  it, not the site building it (`tracker/capex.py`). The database is keyed on
+  `(operator, locality, state)`; much hyperscaler capacity is built by wholesale
+  developers and leased, so the operator on a building is often not the tenant.
+  Attribution is a named tenant where a source gives one (folded through
+  `dedup.customer_key` so Meta/Facebook are one buyer), otherwise the operator
+  itself where the operator is a known end user (from `edgar-companies.toml`'s
+  `kind`, plus a short hard-coded list of private companies — OpenAI, xAI,
+  Anthropic and others — that file nothing with the SEC and would otherwise be
+  invisible), otherwise an explicit unattributed row rather than a silent drop.
+  Every figure is a floor: a project whose capacity nobody has cited contributes
+  zero. The footer states what fraction of projects the rollup can actually speak
+  for, flags projects that name a tracked operator as their own customer
+  (usually an extraction error, not a lease — never auto-corrected, only flagged,
+  for the same reason `dedup` refuses to auto-merge across granularity), and
+  flags likely duplicate rows for one physical site stored under a builder's name
+  and a tenant's name both. Never infers a tenant: who signed a lease is a fact
+  with a documented answer, and `tracker infer` exists to keep judgement and fact
+  apart.
+
+- **`dedup.is_undisclosed`**: recognises when a `customer` value hedges rather
+  than names anybody — "a Fortune 100 technology company", "publicly-traded
+  global enterprise" — so `tracker capex` doesn't count four hedges as four
+  distinct one-project tenants. Matched on live data: 4 of 12 populated `customer`
+  values were this shape.
+
+- **Five feeds added to break a single-outlet dependency**
+  (`bisnow-datacenter`, `constructiondive`, `semianalysis`, `qts-newsroom`,
+  `coreweave-blog`, and others in `seed/feeds.toml`). Measured before adding: 130
+  of ~180 editorial citations came from one domain, capping 109 of 124 projects
+  below confidence 3 (`confidence.compute` requires two independent registrable
+  domains). Each entry's match count is what `discover` actually saw on a real
+  poll, not an estimate; `coreweave-blog` and `openai-blog` are deliberately not
+  `topic_implied`, since their feeds are mostly product news that would otherwise
+  queue GPU benchmarks as data center articles.
+
+- **`discover.cache_feed_text`**: when a feed syndicates the full article body
+  (RSS `content:encoded`, Atom `<content>`) rather than a teaser, the body is
+  written straight into the article cache and the crawl phase never has to
+  request the page. Several outlets — the state nonprofit newsrooms among them —
+  serve their feed freely and then answer 403 to any non-browser request for the
+  article itself; every one of those articles was previously unreadable. Not a
+  bypass: nothing is fetched that the publisher did not hand over, and it's the
+  syndication feed used for the purpose a syndication feed exists for. A short-body
+  guard (`MIN_USEFUL_CHARS`, the same floor the fetcher itself uses) stops a
+  summary-only feed from caching a teaser as though it were the article, and an
+  existing cache entry is never overwritten, since a real fetch is more complete
+  than a feed excerpt. `tracker discover` and `tracker sync` both report `bodies
+  from feed` in their counts now.
+
 - **The console on a phone.** It worked and was miserable: at 490px the sticky
   header took 15% of the screen, the filter card was 558px tall, and the first
   data row sat at y=1137 behind a table showing 321px of a 2112px grid. Below
@@ -513,6 +609,97 @@ initial build of the v1 PRD.
   still resolve.
 
 ### Fixed
+
+- **An expired console session was invisible.** Every API call 401'd once the
+  session cookie ran out, but the page kept showing whatever it already had and
+  each feature reported its own misleading local reason — the 3D map said "3d
+  unavailable offline" when the actual cause was an expired login. `api()` now
+  redirects to `/` on a 401 rather than letting the caller render a stale page
+  as if it were live.
+
+- **A failed module/atlas load in the map and 3D-campus widgets was cached
+  forever.** `p = p || import(...)` memoises the *rejected* promise too, so one
+  transient failure (a dropped connection, or the 401 above hitting the module
+  fetch) left the widget reporting "unavailable offline" for the rest of the
+  page's life even after the cause was gone. The promise is now cleared on
+  failure and the note becomes a "tap to retry" control
+  (`dc-campus.js`, `dc-map.js`, `dc-map3d.js`).
+
+- **A quote popover was unreachable on a touchscreen.** It only ever opened on
+  `mouseenter`, so a phone or tablet — no hover — could see the underline
+  styling implying a quote existed but never see the quote itself. A click/tap
+  now toggles it open and sticky (dismissed by Escape, an outside tap, or
+  scrolling) alongside the existing hover behavior; deliberately not given a
+  keyboard tab stop, since 124 rows × 12 fields is 1,488 tab stops for a feature
+  the drawer already exposes per-field with a real tab order.
+
+- **Two events or risks with the same `(type, date)` in one record crashed the
+  whole run.** `_upsert_events`/`_upsert_risks` looked up "already have this
+  one?" in a map built once from what was already in the table before the
+  record started, so a second same-key row within the same record was never
+  seen as a duplicate — both were added, and the flush hit
+  `uq_event_project_type_date`, failing the entire upsert including everything
+  else the record carried. Seen live on an SEC filing listing two capacity
+  expansions dated the same day, a shape a news article rarely produces, which
+  is why this survived until filings became a source. Fixed by registering each
+  new row into the map immediately after adding it, not just what pre-existed.
+
+- **`html_to_text` mis-read numeric HTML entities**, silently dropping or
+  corrupting figures next to them. `&#160;` (a non-breaking space, written
+  numerically rather than as `&nbsp;`) appears 17,469 times across 39 SEC
+  filings and routinely sits between a number and its unit: `"$ 13.5&#160;billion"`
+  parsed as `$13` — a billion-fold error — and `"393&#160;MW"` matched nothing at
+  all, silently losing the value. The old table hand-covered nine named entities
+  and no numeric ones; replaced with `html.unescape`, which handles both. News
+  HTML mostly emits `&nbsp;` (covered already), so this stayed invisible until a
+  numeric-entity-heavy source — filings — arrived.
+
+- **The entrance animation smeared the page.** A ghost of the coverage strip kept
+  being painted at the bottom of the viewport, below the table, after scrolling.
+
+  `animation-fill-mode: both` retains the final keyframe, and `rise` ends on a
+  transform — an identity one, but a transform. That makes the element a
+  containing block for every `position: sticky` descendant and keeps it
+  composited indefinitely. The table has sticky id and company columns inside
+  every row, so 124 rows were each holding a transform, and so was the container
+  wrapping the whole table.
+
+  Three changes: `backwards` instead of `both` everywhere, so the transform
+  exists only while the animation is actually running; the entrance class is
+  applied to the first twelve rows rather than all 124, since animating a hundred
+  rows at once is a hundred compositing layers for no visible gain; and anything
+  containing a sticky descendant — the table rows and the view container — fades
+  without moving. Translation is a nice-to-have, not breaking `position: sticky`
+  is not. Verified: zero sticky containers hold a transform, and the sticky
+  columns stay pinned while the table scrolls sideways.
+
+- **`--browser` never worked, on any path.** `enrich --browser`, `sync --browser`
+  and `ingest crawl --browser` all built a `Crawl4AIFetcher` and passed it down
+  without ever entering it, so the first page that needed escalating died with
+  `Crawl4AIFetcher must be used as an async context manager`.
+
+  Nobody could have entered it from where it was built: launching Chromium is
+  async and every caller is synchronous — `crawl.run` owns the `asyncio.run`. So
+  `fetch_all` now starts and stops it, being the only code already inside the
+  loop. Lazily, on the first page that actually needs it, because most runs never
+  escalate and a browser costs seconds and a process. It is started once per run
+  however many pages escalate, and always shut down afterwards: Chromium does not
+  exit on its own and a leaked one outlives the command. A browser that fails to
+  start now logs once and lets the run finish on plain HTTP, rather than raising
+  the same traceback for every URL.
+
+- **`--browser` without the optional extra failed in the wrong place.** The
+  `crawl4ai` import lives in `__aenter__`, so constructing the fetcher could not
+  raise `MissingDependency` and `enrich`'s `try/except` around it was unreachable
+  — the run got as far as the first escalation before noticing. All three
+  commands now call `Crawl4AIFetcher.ensure_available()` up front, so the failure
+  lands on the flag.
+
+- **Rich ate the install instruction.** `_fail` printed its message as markup, so
+  the crawl4ai error told you to run `pip install -e "."` — Rich did not
+  recognise `[crawl]` as a style and dropped it. The message explaining how to
+  fix the problem was broken by the same mechanism. Error text is data and is now
+  escaped.
 
 - **`_print_standing` was registered as a CLI command.** A stray `@app.command()`
   on a private helper put a broken `-print-standing` in `tracker --help`; it took

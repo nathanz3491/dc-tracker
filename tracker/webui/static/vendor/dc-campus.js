@@ -18,7 +18,13 @@
 (function () {
   const THREE_URL = "/static/vendor/three.module.js";
   let threeP = null;
-  const getThree = () => (threeP = threeP || import(THREE_URL));
+  // A failed load is not cached. `p = p || import(...)` memoises the
+  // *rejected* promise, so one transient failure — an expired session
+  // 401ing the module fetch, a dropped connection — became permanent for
+  // the life of the page, and the element went on reporting "unavailable
+  // offline" long after the cause was gone.
+  const getThree = () =>
+    (threeP = threeP || import(THREE_URL).catch((e) => { threeP = null; throw e; }));
 
   class DCCampus extends HTMLElement {
     static get observedAttributes() { return ["project"]; }
@@ -59,7 +65,21 @@
 
     async boot() {
       let THREE;
-      try { THREE = await getThree(); } catch (e) { this._note.textContent = "3d unavailable offline"; return; }
+      try { THREE = await getThree(); }
+      catch (e) {
+        // Recoverable, not terminal. Un-caching the promise above is only
+        // half of it — without a way back, the element sits on this message
+        // for the life of the page even once the cause is gone.
+        this._note.textContent = "3d unavailable — tap to retry";
+        this._note.style.cursor = "pointer";
+        this._note.onclick = () => {
+          this._note.onclick = null;
+          this._note.style.cursor = "";
+          this._note.textContent = "schematic loading…";
+          this.boot();
+        };
+        return;
+      }
       if (!window.DCTRACKER) await new Promise((r) => window.addEventListener("dctracker-ready", r, { once: true }));
       this.THREE = THREE;
       this._note.remove();

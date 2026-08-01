@@ -71,10 +71,26 @@ def test_shipped_feeds_have_unique_names():
 
 
 def test_only_specialist_feeds_imply_the_topic():
-    """A general outlet must still prove an article is about data centers."""
+    """A general outlet must still prove an article is about data centers.
+
+    Deliberately an exact allowlist rather than a rule. `topic_implied` switches
+    off half the filter, so every addition should be an argued decision that fails
+    this test until someone writes the argument down — which is what the comments
+    below are. A rule-shaped assertion would let a general outlet in silently.
+    """
     feeds, _ = load_config()
     implied = {f.name for f in feeds if f.topic_implied}
-    assert implied == {"datacenterdynamics", "datacenterfrontier", "datacenterknowledge"}
+    assert implied == {
+        # Publications that cover nothing but data centers.
+        "datacenterdynamics",
+        "datacenterfrontier",
+        "datacenterknowledge",
+        # Bisnow's data-center vertical, not its national feed. Every article in
+        # this one is about a data center; `bisnow-national` is not here.
+        "bisnow-datacenter",
+        # A pure-play operator's own newsroom, like the [[sitemap]] entries.
+        "qts-newsroom",
+    }
 
 
 def test_shipped_feeds_cover_both_trade_press_and_company_sources():
@@ -148,6 +164,94 @@ def test_parses_sitemap_and_recovers_a_title_from_the_slug():
 def test_unparseable_xml_raises_a_named_error():
     with pytest.raises(DiscoverError, match="not parseable XML"):
         parse_feed(fixture("feed_broken.xml"), FeedSpec("x", "https://a.test/rss"))
+
+
+# --- Syndicated article bodies ----------------------------------------------
+#
+# Several outlets serve the feed freely and answer 403 to any non-browser request
+# for the article, while syndicating the whole article inside the feed. Caching
+# that body is what makes them readable; see discover.cache_feed_text.
+
+_FULL_TEXT_RSS = """<?xml version="1.0"?>
+<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <item>
+      <title>County rejects the Fairwater rezoning</title>
+      <link>https://blocked.test/2026/07/fairwater-rezoning/</link>
+      <description>A 300-word teaser that is not the article.</description>
+      <content:encoded><![CDATA[<p>%s</p>]]></content:encoded>
+    </item>
+    <item>
+      <title>Summary only, no body</title>
+      <link>https://blocked.test/2026/07/summary-only/</link>
+      <description>Teaser.</description>
+    </item>
+  </channel>
+</rss>
+"""
+
+
+def _full_text_feed(body: str) -> str:
+    return _FULL_TEXT_RSS % body
+
+
+def test_rss_content_encoded_is_captured_as_the_body():
+    entries = parse_feed(_full_text_feed("The board voted 5-2."), FeedSpec("x", "https://a.test/f"))
+    assert "The board voted 5-2." in entries[0].content
+    assert entries[1].content == "", "an item without content:encoded has no body"
+
+
+def test_description_is_never_used_as_the_body():
+    """A teaser read as the article would make the gate reject real values.
+
+    `description` holds a summary. If it were cached as the body, the evidence
+    gate would verify the handful of quotes that happen to appear in the teaser
+    and mark everything else unsupported — worse than having no body at all,
+    because the result looks like a successful extraction.
+    """
+    entries = parse_feed(_full_text_feed("Body."), FeedSpec("x", "https://a.test/f"))
+    assert "teaser" not in entries[0].content.lower()
+
+
+def test_cache_feed_text_writes_a_body_the_crawl_path_will_find(tmp_path):
+    from tracker.ingest.fetch import cache_path
+
+    body = "The county board voted to reject the rezoning application. " * 12
+    entries = parse_feed(_full_text_feed(body), FeedSpec("x", "https://a.test/f"))
+    assert discover.cache_feed_text(entries, tmp_path) == 1
+
+    written = cache_path(entries[0].url, tmp_path)
+    assert written.is_file()
+    text = written.read_text(encoding="utf-8")
+    assert "voted to reject the rezoning" in text
+    # The headline leads, as it would in the fetched page.
+    assert text.startswith("County rejects the Fairwater rezoning")
+
+
+def test_cache_feed_text_skips_bodies_too_short_to_be_an_article(tmp_path):
+    entries = parse_feed(_full_text_feed("Three words here."), FeedSpec("x", "https://a.test/f"))
+    assert discover.cache_feed_text(entries, tmp_path) == 0
+    assert not list(tmp_path.iterdir())
+
+
+def test_cache_feed_text_never_overwrites_a_real_fetch(tmp_path):
+    """A fetched page is the more complete artefact; feeds truncate."""
+    from tracker.ingest.fetch import cache_path
+
+    body = "The county board voted to reject the rezoning application. " * 12
+    entries = parse_feed(_full_text_feed(body), FeedSpec("x", "https://a.test/f"))
+    existing = cache_path(entries[0].url, tmp_path)
+    existing.parent.mkdir(parents=True, exist_ok=True)
+    existing.write_text("the genuinely fetched article", encoding="utf-8")
+
+    assert discover.cache_feed_text(entries, tmp_path) == 0
+    assert existing.read_text(encoding="utf-8") == "the genuinely fetched article"
+
+
+def test_cache_feed_text_is_a_no_op_without_a_cache_dir():
+    body = "The county board voted to reject the rezoning application. " * 12
+    entries = parse_feed(_full_text_feed(body), FeedSpec("x", "https://a.test/f"))
+    assert discover.cache_feed_text(entries, None) == 0
 
 
 def test_feed_dates_are_stored_naive_utc():

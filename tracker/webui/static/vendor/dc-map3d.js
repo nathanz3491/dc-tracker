@@ -18,8 +18,19 @@
   const THREE_URL = "/static/vendor/three.module.js";
   const ATLAS = "/static/vendor/us-states-10m.json";
   let threeP = null, atlasP = null;
-  const getThree = () => (threeP = threeP || import(THREE_URL));
-  const getAtlas = () => (atlasP = atlasP || fetch(ATLAS).then((r) => r.json()));
+  // A failed load is not cached. `p = p || import(...)` memoises the
+  // *rejected* promise, so one transient failure — an expired session
+  // 401ing the module fetch, a dropped connection — became permanent for
+  // the life of the page, and the element went on reporting "unavailable
+  // offline" long after the cause was gone.
+  const getThree = () =>
+    (threeP = threeP || import(THREE_URL).catch((e) => { threeP = null; throw e; }));
+  const getAtlas = () =>
+    (atlasP =
+      atlasP ||
+      fetch(ATLAS)
+        .then((r) => (r.ok ? r.json() : Promise.reject(new Error("HTTP " + r.status))))
+        .catch((e) => { atlasP = null; throw e; }));
 
   const PHASE_TOKEN = {
     announced: "--chart-5", permitting: "--chart-1", construction: "--chart-3",
@@ -72,7 +83,20 @@
     async boot() {
       let THREE, topo;
       try { [THREE, topo] = await Promise.all([getThree(), getAtlas()]); }
-      catch (e) { this._note.textContent = "3d relief unavailable offline"; return; }
+      catch (e) {
+        // Recoverable, not terminal. Un-caching the promise above is only
+        // half of it — without a way back, the element sits on this message
+        // for the life of the page even once the cause is gone.
+        this._note.textContent = "3d relief unavailable — tap to retry";
+        this._note.style.cursor = "pointer";
+        this._note.onclick = () => {
+          this._note.onclick = null;
+          this._note.style.cursor = "";
+          this._note.textContent = "building relief…";
+          this.boot();
+        };
+        return;
+      }
       if (!window.DCTRACKER) await new Promise((r) => window.addEventListener("dctracker-ready", r, { once: true }));
       this.THREE = THREE;
       this._note.remove();

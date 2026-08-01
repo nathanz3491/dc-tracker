@@ -1,80 +1,125 @@
 # Handoff
 
-## Yesterday (state at start of 2026-08-01)
+## Yesterday (state at start of 2026-08-02)
 
-2026-07-31 was `tracker enrich ID` (`9226d1c`) plus the whole web console build,
-all in one day (`e65ac8f` through `694b204`, 15 commits): a pluggable search
-backend (Brave, Serper, Bocha), operator newsrooms as first-party sources,
-`tracker enrich --all` under a shared budget, the five-track stage model with
-its derived signal, the 待确认 tier for unconfirmed values, tier 3 reasoned
-inference, `--json` output carrying tiers and tracks, `tracker export html` (a
-self-contained snapshot page), and `tracker serve` — a local console on
-127.0.0.1 with six views (Projects, Map, Queue, Coverage, Commands, Runs) built
-from the Meridian design system. 579+ tests, green offline.
+2026-08-01 (`836945b`) added console auth/tunnel, mobile layout, honest
+coverage, a Help view and `docs/`: `tracker serve --tunnel` publishing through
+a Cloudflare quick tunnel with a password gate that refuses to start without
+`TRACKER_CONSOLE_PASSWORD`; the projects table reordered by measured coverage
+(visible cells ~46% -> 95%); a sub-720px mobile card layout; a Help view plus
+`docs/architecture.md` and Chinese translations; colour restored in the run
+log; map zoom/pan; and `tracker ingest crawl --url URL` for a single link. 615
+tests, green offline.
 
-Open items carried into today, per HANDOFF's own "Tomorrow": the 30-required-
-projects gap, ERCOT/CAISO column names in `iso_maps.py` unverified against a
-real export, and the two free Google CSE keys not yet configured to lift the
-archive-reading ceiling.
+Carried into today, per that HANDOFF's own "Tomorrow": the 30-required-projects
+gap, ERCOT/CAISO column names in `iso_maps.py` still unverified against a real
+export, the two free Google CSE keys not yet configured, and `tracker serve
+--tunnel` untested against a real Cloudflare tunnel.
 
-## Today (2026-08-01)
+## Today (2026-08-02)
 
-Working tree had substantial uncommitted work extending the web console;
-verified all 615 tests green offline before committing. Changes, largest first:
+Working tree held substantial uncommitted work — a new ingest source, a new
+report, and several correctness fixes underneath both. 759 tests (up from
+615), verified green offline before committing. Largest first:
 
-- **`tracker serve --tunnel`** publishes the console through a Cloudflare quick
-  tunnel and **refuses to start without `TRACKER_CONSOLE_PASSWORD`** — refusing
-  rather than warning, since there's no safe reading of "published and open" in
-  front of a process that runs commands. New `webui/auth.py`: constant-time
-  password check, server-side revocable session tokens, `HttpOnly`/`SameSite=Lax`
-  cookie plus an Origin check, and a global 40-attempts/15-min lockout (not just
-  per-IP, which doesn't defend a published URL against a rotating attacker). New
-  `webui/tunnel.py` and `static/login.html`. `find_cloudflared` prefers the real
-  executable over npm's `.CMD` shim after it silently produced a 7.9 MB fake
-  binary in place of the real 54 MB one.
-- **Honest density in the projects table**: columns now ordered by measured
-  coverage from `gaps.measure()`, defaulting to >50%-populated with the rest one
-  switch away. Visible cells went from ~46% to 95% populated. New per-row `9/12`,
-  a coverage strip, and a distinct style for legitimately-null vs. unknown
-  (`gaps.for_project`'s existing distinction, now actually surfaced).
-- **Mobile layout** (below 720px, `app.css`): table becomes a card list, header
-  collapses to logo + view strip, filters hide behind a count, map takes 60vh.
-  940px of chrome above the first card dropped to 355px.
-- **A Help view** and **`docs/`** (`architecture.md`, `guide.zh-CN.md`,
-  `architecture.zh-CN.md`, plus a `docs/README.md` index) — the Help tab covers
-  the console's own concepts (tiers, tracks, confidence) without duplicating the
-  README; `architecture.md` is the first place the CLI/database/console
-  relationship is written down.
-- **Colour in the run log**: `runner.py` had been forcing `NO_COLOR=1`/
-  `TERM=dumb`, discarding the CLI's own signalling exactly when someone reads the
-  output. Now parsed back out of the ANSI stream (`static/ansi.js`) onto a fixed
-  dark terminal surface. Root cause of the original Windows color failure:
-  `FORCE_COLOR=1` alone still hit Rich's `legacy_windows` branch, which paints via
-  the console API rather than escapes, and the markup was silently stripped.
-- **Map zoom/pan** (wheel, drag, +/−/reset) — geography scales, marks
-  deliberately don't, since the reason to zoom is overlapping bubbles.
-- **`tracker ingest crawl --url URL`**, repeatable, alongside the existing
-  `--urls FILE`; the Queue view's per-article Crawl button uses it.
-- **Motion** on Meridian's tokens (row entrance, drawer fade, track fill,
-  coverage bars, count-up header totals), all reachable by `prefers-reduced-motion`
-  except the count-up timer, which checks the query itself.
-- README gained a Documentation table indexing the new `docs/` files and the
-  Help tab; `.env.example` documents `TRACKER_CONSOLE_PASSWORD` and why it's an
-  env var rather than a `--password` flag (shell history, `ps` output).
-- CHANGELOG.md and README.md were already current with the above — no
-  housekeeping corrections needed. No AGENTS.md exists or was added: this is a
-  single-CLI project with no multi-agent architecture to document.
+- **`tracker ingest edgar`** (`tracker/ingest/edgar.py`, new): SEC filings as a
+  source. Publication there is a legal obligation rather than a website's
+  goodwill, so it is the one source that can't 403 us, and it's where the
+  fields this project covers worst actually live — investment, in-service
+  dates, named tenants in lease footnotes. Precision comes from scoping
+  EDGAR's full-text search by CIK (unscoped, "data center campus" returns
+  1,066 hits led by shell companies); a 369,000-character 10-Q is reduced by
+  scoring paragraphs for evidence density rather than truncated head-and-tail;
+  and a credit agreement mis-filed as an 8-K exhibit is dropped by
+  legal-vocabulary density before it costs a model call. New
+  `seed/edgar-companies.toml` names which companies and CIKs to read, and its
+  `kind` column (hyperscaler/neocloud/landlord) is reused by `capex` below.
+  Needs `TRACKER_USER_AGENT` set to a real contact — SEC blocks the shipped
+  placeholder outright.
+
+- **`tracker capex`** (`tracker/capex.py`, new): capacity and spend rolled up
+  by the company actually *buying* it, not the site building it. The database
+  is keyed on `(operator, locality, state)`; a lot of hyperscaler capacity is
+  built by wholesale developers and leased, so that key often isn't the
+  tenant. Attribution is a named tenant, else the operator when the operator
+  is itself a known end user (from `edgar-companies.toml` plus a short
+  hard-coded list of SEC-silent private buyers — OpenAI, xAI, Anthropic,
+  others — without which two of the largest positions in the table would be
+  invisible), else an explicit unattributed row. Every number is a floor, and
+  the footer says what fraction of projects the rollup can actually speak
+  for. Flags rather than auto-corrects two smells: a project naming a tracked
+  operator as its own customer, and rows that look like the same physical
+  site stored under a builder's name and a tenant's name both.
+
+- **Same-site dedup detection** (`dedup.looks_like_the_same_site` and
+  supporting helpers): recognizes when a builder/landlord/tenant split put one
+  campus in the database three or four times under different company
+  spellings — found live on the Abilene Stargate campus, stored as Crusoe,
+  Oracle, OpenAI and "OpenAI/Oracle", each correctly keyed and each carrying
+  the full 1.2 GW. This is exactly what made the first pass at `capex`
+  overcount. Locality alone isn't the signal (Ashburn alone holds fourteen
+  genuinely distinct projects); a match needs a shared company token or a
+  distinctive shared name token. Proposes a review candidate, never merges.
+
+- **An investment/MW plausibility ceiling** (`crawl._implausible_investment`,
+  $50M/MW, read off the live distribution rather than assumed): catches an
+  article about one campus that quotes a programme total ("OpenAI's $500
+  billion Stargate" in a piece about one 1,167 MW site) — the evidence gate
+  correctly confirms the number is in the text, but the number isn't this
+  site's. Demoted to 待确认 rather than dropped.
+
+- **`discover.cache_feed_text`**: when a feed syndicates the full article body
+  (`content:encoded`/Atom `content`) rather than a teaser, it's written
+  straight into the article cache so crawl never re-requests the page — fixing
+  every article from outlets (state nonprofit newsrooms among them) that serve
+  a free feed and then 403 any non-browser fetch of the article itself. Two
+  guards: short bodies are skipped (a summary read as if it were the article
+  would starve the evidence gate), and an existing cache entry is never
+  overwritten (a real fetch is more complete than a feed excerpt).
+
+- **Five new feeds** (`seed/feeds.toml`: bisnow-datacenter, constructiondive,
+  semianalysis, qts-newsroom, coreweave-blog, others) to break a
+  single-outlet dependency — 130 of ~180 editorial citations had come from one
+  domain, capping 109 of 124 projects below confidence 3.
+
+- **Six bug fixes underneath the above**, all now in CHANGELOG's Fixed
+  section: `html_to_text` mis-reading numeric HTML entities (`&#160;` appears
+  17,469 times across 39 filings and silently corrupted or dropped adjacent
+  figures — replaced the nine-entity hand table with `html.unescape`); two
+  events or risks sharing a `(type, date)` within one record crashing the
+  whole upsert (a filing can report two same-day expansions, which a news
+  article rarely does); `--browser` never actually working on any of
+  `enrich`/`sync`/`ingest crawl` (the fetcher was built but never entered —
+  fixed by having `fetch_all` start/stop it lazily, since it's the only code
+  already inside the event loop); an expired console session being invisible
+  (each widget blamed its own local cause — the 3D map said "unavailable
+  offline" — instead of the session having expired; `api()` now redirects to
+  `/` on 401); a failed map/3D-atlas module load being cached forever
+  (`p = p || import(...)` memoises rejected promises too — now cleared on
+  failure with a "tap to retry" control); and a quote popover in the console
+  table being unreachable on a touchscreen (hover-only; now also opens on tap).
+
+- **Housekeeping**: CHANGELOG's Added section was missing entries for edgar,
+  capex, the dedup/plausibility work and the new feeds — all had landed in
+  code and in README but not in CHANGELOG. Added entries for all of the above
+  (seven Added, five Fixed) this session to close that gap. README already
+  covered edgar and capex with worked examples; no changes needed there. No
+  AGENTS.md exists or was added — still a single-CLI project with no
+  multi-agent architecture to document.
 
 ## Tomorrow
 
 - The 30-required-projects gap is still open.
-- The two free Google CSE keys are still not configured; `tracker enrich`'s own
-  measurement (17/94 projects with unread archive articles, from 07-31) is the
-  reason to prioritize this.
-- ERCOT/CAISO column-name assumptions in `iso_maps.py` remain unverified against
-  a real export.
-- `tracker serve --tunnel` and the auth gate are new and unverified against a
-  real Cloudflare tunnel in this session — worth a live smoke test (start tunnel,
-  hit the public URL, confirm the login page gates every route) before relying
-  on it.
-- No other in-progress or blocked work was left open at end of day.
+- ERCOT/CAISO column-name assumptions in `iso_maps.py` remain unverified
+  against a real export.
+- The two free Google CSE keys are still not configured.
+- `tracker serve --tunnel` and its auth gate remain unverified against a real
+  Cloudflare tunnel.
+- `tracker ingest edgar` has not yet been run against the live SEC endpoint in
+  this session — worth a real run (with `TRACKER_USER_AGENT` set) to confirm
+  the full-text search, section extraction and rate limiting behave as
+  measured against a fresh set of filings rather than the 39 already sampled.
+- `tracker capex`'s duplicate-site detection is heuristic (shared company
+  token or shared distinctive name token) and has only been checked against
+  the one known case (Abilene); worth watching for false positives/negatives
+  as more filings widen the company list.

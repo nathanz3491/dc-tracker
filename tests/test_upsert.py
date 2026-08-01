@@ -627,6 +627,52 @@ def test_reingesting_events_does_not_duplicate_them(session):
     assert session.scalar(select(func.count()).select_from(Event)) == 1
 
 
+def test_two_same_key_events_in_one_record_collapse_rather_than_crash(session):
+    """One document can date two milestones of the same kind to the same day.
+
+    Migration 0002 accepts that they collapse into one row. What it must not do is
+    fail: the dedup map is built from what is already stored, so without
+    registering each insert as it is made, both are added and the flush dies on
+    uq_event_project_type_date — taking the whole run down, not just the record.
+
+    Seen live on an SEC filing listing two capacity expansions dated the same day.
+    A news article rarely does, which is why this survived until filings became a
+    source.
+    """
+    url = "https://www.sec.gov/Archives/edgar/data/1/2/f.htm"
+    result = upsert_record(
+        session,
+        rec(
+            sources=[manual_source(url)],
+            events=[
+                EventRecord(dt.date(2026, 4, 30), "expanded", "AMD exercised 100 MW option.", url),
+                EventRecord(dt.date(2026, 4, 30), "expanded", "A second expansion, same day.", url),
+            ],
+        ),
+    )
+    assert result.events_written == 1
+    assert session.scalar(select(func.count()).select_from(Event)) == 1
+    # The later one wins, consistent with how a re-ingest updates the description.
+    assert session.scalar(select(Event)).description == "A second expansion, same day."
+
+
+def test_two_same_key_risks_in_one_record_collapse_rather_than_crash(session):
+    """The same guard on the risk path, which `ingest manual` can reach."""
+    url = "https://www.sec.gov/Archives/edgar/data/1/2/f.htm"
+    result = upsert_record(
+        session,
+        rec(
+            sources=[manual_source(url)],
+            risks=[
+                RiskRecord("permitting", "watch", "First.", first_seen=None, source_url=url),
+                RiskRecord("permitting", "material", "Second.", first_seen=None, source_url=url),
+            ],
+        ),
+    )
+    assert result.risks_written == 1
+    assert session.scalar(select(func.count()).select_from(Risk)) == 1
+
+
 def test_event_with_unknown_source_url_still_records(session):
     """A milestone without a resolvable citation is still a fact worth keeping."""
     result = upsert_record(

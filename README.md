@@ -15,12 +15,13 @@ Three ingest paths converge on one normalizer and one write path:
 | Hand-curated JSON | `tracker ingest manual --json seed/sample-projects.json` | Projects you know about that no feed carries |
 | ISO queue export | `tracker ingest pjm --csv FILE --iso pjm` | Candidate generation and corroborating citations — **not** a project feed, see below |
 | News extraction | `tracker ingest crawl --urls urls.txt` | The 12 tracked fields, pulled from articles by an LLM and gated on quoted evidence |
+| SEC filings | `tracker ingest edgar` | Investment, in-service dates and named tenants, from the one publisher that cannot refuse us |
 
 Articles to extract from come from `tracker discover`, which polls news feeds and
 queues candidates for triage.
 
-Then query: `tracker list`, `tracker show ID`, `tracker stats`, `tracker review`,
-`tracker verify`, `tracker export {md,csv,json}`.
+Then query: `tracker list`, `tracker show ID`, `tracker stats`, `tracker capex`,
+`tracker review`, `tracker verify`, `tracker export {md,csv,json}`.
 
 The 12 tracked fields are the ones the PRD requires: project name, city + state,
 operator, end customer, planned investment, planned and built MW, first announced,
@@ -444,6 +445,92 @@ templates from tagged template literals.
 | [docs/guide.zh-CN.md](docs/guide.zh-CN.md) | 中文使用指南 |
 | [docs/architecture.zh-CN.md](docs/architecture.zh-CN.md) | 架构说明（中文） |
 | The console's **Help** tab | The three ideas — evidence tiers, five tracks, confidence — where you are actually looking. |
+
+### SEC filings: the publisher that cannot lock us out
+
+```bash
+tracker ingest edgar                       # every company in the list
+tracker ingest edgar --company Meta        # just one
+tracker ingest edgar --per-company 3       # the cost dial: filings per company
+tracker ingest edgar --dry-run             # prepare and cache, extract nothing
+```
+
+Every other source here is somebody's website, and the good ones increasingly
+answer 403 to anything that is not a browser. Filings are different in kind:
+publication is a legal obligation, the format is fixed, and they come from a
+government host with a documented rate limit rather than a bot filter. They are
+also where the fields we cover worst actually live — investment in the cash-flow
+statement, in-service dates in MD&A, and the end customer in the lease footnotes.
+
+Needs `TRACKER_USER_AGENT` set to a real contact; SEC blocks the shipped
+placeholder, and the command refuses to start rather than collect a run's worth
+of 403s.
+
+Which companies are read is [seed/edgar-companies.toml](seed/edgar-companies.toml),
+and that file **is** the precision mechanism. Full-text search scoped by CIK
+returns only that company's filings; unscoped, `"data center campus"` returns
+1,066 hits led by shell companies. The `sics` parameter is accepted and silently
+ignored, so industry filtering is not available. CIKs must be **10-digit
+zero-padded** — `1326801` returns nothing where `0001326801` returns 105, with no
+error either way.
+
+Two things the module does that the news path does not need:
+
+- **Selects a section rather than truncating.** A Meta 10-Q is 369,000 characters
+  against a 24,000-character model budget. `crawl.truncate` keeps the head and
+  tail, which is right for an article and wrong here, because a filing's facts sit
+  in MD&A and the footnotes. Paragraphs are scored on the density of things the
+  evidence gate can verify. Measured over 39 filings: ~6% of the document kept,
+  and where the budget is not the binding constraint, 99% of the fact-bearing
+  paragraphs survive.
+- **Refuses contracts.** An 8-K exhibit is as often a credit agreement as a press
+  release, and a credit agreement is dense with exactly what the scorer rewards.
+  Legal vocabulary per 10,000 characters separates them cleanly — 0.3 for a 10-Q,
+  0.5 for a press release, 20.1 for a financing exhibit — so anything above 5 is
+  dropped before it costs a call.
+
+Everything after that is the ordinary path: the selected section is written into
+the same article cache the feeds use, and `crawl.run` reads it with the same
+prompt, the same evidence gate and the same write path. A filing is held to
+exactly the standard an article is.
+
+### Who is actually buying the capacity
+
+```bash
+tracker capex
+```
+
+The database is keyed on the site — `(operator, locality, state)`. The question an
+analyst is paid to answer is on a different axis: how much capacity does each end
+customer have in flight, when does it land, and how exposed is it. Those grains do
+not coincide, because much hyperscaler capacity is built by wholesale developers
+and leased.
+
+Grouping on `project.customer` alone would answer for about a tenth of the
+database, so attribution is three rules in order:
+
+1. a **named tenant**, folded so Meta and Facebook are one buyer and a hedge like
+   "a Fortune 100 technology company" names nobody;
+2. otherwise the **operator, if the operator is an end user** — a Meta campus is
+   Meta's, and `customer` being NULL there is correct rather than missing;
+3. otherwise **unattributed**, reported as its own row rather than hidden, because
+   how much is being built for nobody we can name is itself worth knowing.
+
+Who counts as an end user comes from the `kind` column in
+[seed/edgar-companies.toml](seed/edgar-companies.toml), plus a short list of
+private companies that file nothing with the SEC — without which OpenAI and xAI,
+two of the largest positions in the table, would have been invisible.
+
+The footer states what fraction of projects the view can speak for. That is not
+decoration: a rollup silently covering a third of the data looks authoritative and
+is not.
+
+Two things it deliberately does not do. It never infers a tenant — who signed a
+lease is a *fact* with a documented answer, and `tracker infer` exists precisely to
+keep judgements and facts apart. And where a project names a tracked operator as
+its own customer, it flags the row instead of correcting it, for the same reason
+`dedup` refuses to auto-merge across granularity: a landlord genuinely can lease
+from another landlord.
 
 ### Seeing where the data is thin
 

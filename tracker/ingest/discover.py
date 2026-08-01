@@ -38,7 +38,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from tracker.config import Settings, get_settings, install_root
-from tracker.ingest.fetch import Fetcher, FetchResult
+from tracker.ingest.fetch import MIN_USEFUL_CHARS, Fetcher, FetchResult, cache_path, html_to_text
 from tracker.models import IngestUrl, utcnow
 from tracker.normalize import norm_text
 from tracker.vocab import PENDING_URL_STATUS
@@ -165,6 +165,13 @@ class Candidate:
     published_at: dt.datetime | None = None
     source_type: str = "general_media"
     topic_implied: bool = False
+    #: The article body, when the feed syndicates it in full (RSS
+    #: `content:encoded`, Atom `<content>`). Empty for the common case of a
+    #: summary-only feed and always empty for a sitemap.
+    #:
+    #: This is the difference between reading a source and only seeing its
+    #: headlines. See :func:`cache_feed_text`.
+    content: str = ""
 
 
 @dataclass
@@ -175,6 +182,9 @@ class DiscoverReport:
     filtered: int = 0
     already_known: int = 0
     queued: int = 0
+    #: Bodies taken straight from the feeds, so the crawl path never has to
+    #: request the article page. See :func:`cache_feed_text`.
+    bodies_cached: int = 0
     failures: list[tuple[str, str]] = field(default_factory=list)
 
     def as_rows(self) -> list[tuple[str, int]]:
@@ -185,6 +195,7 @@ class DiscoverReport:
             ("filtered out", self.filtered),
             ("already known", self.already_known),
             ("queued", self.queued),
+            ("bodies from feed", self.bodies_cached),
         ]
 
 
@@ -298,6 +309,12 @@ def parse_feed(xml: str, feed: FeedSpec, *, cap: int | None = None) -> list[Cand
                 ),
                 source_type=feed.source_type,
                 topic_implied=feed.topic_implied,
+                # `content:encoded` carries the whole article; `description` is a
+                # teaser. Only the former is worth treating as the body, so no
+                # fallback to `description` here — a 350-character summary read as
+                # if it were the article would let the evidence gate verify quotes
+                # against a fragment and call the rest unsupported.
+                content=_text(item.find("content:encoded", _NS)),
             )
         )
 
@@ -322,6 +339,7 @@ def parse_feed(xml: str, feed: FeedSpec, *, cap: int | None = None) -> list[Cand
                 ),
                 source_type=feed.source_type,
                 topic_implied=feed.topic_implied,
+                content=_text(entry.find(f"{{{_NS['atom']}}}content")),
             )
         )
 
@@ -573,6 +591,65 @@ def queue_candidates(
         report.queued += 1
     session.flush()
     return queued
+
+
+def cache_feed_text(candidates: list[Candidate], cache_dir: Path | None) -> int:
+    """Save syndicated article bodies into the article cache. Returns how many.
+
+    **This is what makes a whole class of source readable at all.** Several
+    outlets serve their feed freely and then answer 403 to any non-browser
+    request for the article itself — measured, every article from the state
+    nonprofit newsrooms failed to fetch, so the queue filled with headlines whose
+    bodies we could never read.
+
+    Those same feeds carry the complete article in `content:encoded`, 4,000 to
+    12,000 characters of it. The body was already in a file we had downloaded; we
+    were re-requesting it through a door that was shut. Writing it here means the
+    crawl path serves it from disk via `crawl._split_cached` and never issues the
+    request that would have been refused.
+
+    Deliberately not a bypass, and worth being precise about the difference: no
+    access control is circumvented, no fingerprint is spoofed, and nothing is
+    fetched that the publisher did not hand over. It is the syndication feed used
+    for the purpose a syndication feed exists for.
+
+    Two guards:
+
+    * **Short bodies are skipped.** A summary-only feed that puts 300 characters in
+      `content:encoded` would otherwise cache a teaser as though it were the
+      article, and the evidence gate would then verify a couple of quotes and
+      declare every other value unsupported. `MIN_USEFUL_CHARS` is the same floor
+      the fetcher uses to decide it got a JS shell rather than a page.
+    * **An existing cache entry is never overwritten.** A real fetch is the more
+      complete artefact — feeds truncate, drop tables and omit figure captions —
+      so syndicated text fills a gap rather than replacing what we already have.
+
+    The text goes through `html_to_text`, the same reduction the fetch path
+    applies, because the evidence gate matches quotes against exactly this string.
+    Producing it any other way would let a quote fail verification purely for
+    having been whitespaced differently.
+    """
+    if not cache_dir:
+        return 0
+    written = 0
+    for candidate in candidates:
+        if not candidate.content:
+            continue
+        path = cache_path(candidate.url, cache_dir)
+        if path.exists():
+            continue
+        # The headline leads, as it would in the fetched page: the extractor is
+        # told the title is the strongest hint about which project an article is
+        # about, and `content:encoded` does not repeat it.
+        body = html_to_text(f"<h1>{candidate.title}</h1>\n{candidate.content}")
+        if len(body) < MIN_USEFUL_CHARS:
+            continue
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        path.write_text(body, encoding="utf-8")
+        written += 1
+    if written:
+        log.info("cached %d article body/bodies straight from the feeds", written)
+    return written
 
 
 # --- Prioritising the queue toward depth ------------------------------------
@@ -874,6 +951,7 @@ def run(
     since_days: int | None = 60,
     run_id: str | None = None,
     dry_run: bool = False,
+    cache_dir: Path | None = None,
 ) -> tuple[DiscoverReport, list[Candidate]]:
     """Poll every configured feed and queue the matching articles.
 
@@ -921,8 +999,14 @@ def run(
     queued = queue_candidates(session, all_kept, run_id=run_id, report=report)
     if dry_run:
         session.rollback()
-        # The report still describes what would have happened.
+        # The report still describes what would have happened. No bodies are
+        # written either: a dry run must not leave files behind any more than it
+        # leaves rows behind.
         return report, all_kept
+    # Only for the newly queued. A candidate already in `ingest_url` has had its
+    # turn, and rewriting its body would resurrect an article the operator dropped
+    # from the queue on purpose.
+    report.bodies_cached = cache_feed_text(queued, cache_dir)
     session.commit()
     return report, queued
 

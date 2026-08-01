@@ -85,6 +85,150 @@ name = "meta-newsroom"
 url = "https://about.fb.com/news/feed/"
 source_type = "company_filing"
 
+# ---------------------------------------------------------------------------
+# Added 2026-08-01 to break a single-outlet dependency. Measured before adding:
+# 130 of ~180 editorial citations came from datacenterfrontier.com, and 109 of
+# 124 projects rested on ONE domain — which caps them below confidence 3, since
+# `confidence.compute` requires two independent registrable domains.
+#
+# Every entry below was fetched and parsed with this file's own filter before
+# being added; the match count in each comment is what `discover` really saw on
+# one poll, not an estimate.
+
+[[feed]]
+name = "bisnow-datacenter"
+# 11 of 30 entries matched — the highest hit rate of anything tested, and it is
+# the only feed that reliably carries the LOCAL government story: county
+# moratoria, rezoning votes, approvals. Those are the `permitting` and
+# `community_opposition` risk categories, which stood at 2 rows each because
+# nothing in the corpus reported them.
+url = "https://www.bisnow.com/rss/data-center"
+source_type = "trade_press"
+topic_implied = true
+
+[[feed]]
+name = "constructiondive"
+# The build side: EPC awards, equipment lead times, contractor backlogs. Not
+# topic_implied — it covers all construction, so "data center" must appear.
+url = "https://www.constructiondive.com/feeds/news/"
+source_type = "trade_press"
+
+[[feed]]
+name = "semianalysis"
+# Low volume, high value on capacity figures. Not topic_implied: it covers
+# silicon as much as buildings.
+url = "https://semianalysis.com/feed/"
+source_type = "trade_press"
+
+[[feed]]
+name = "qts-newsroom"
+# QTS's own newsroom. The sitemap note further down says QTS 404s — that is
+# still true of `/sitemap.xml`, but `/news/feed/` is a working RSS feed, and a
+# first-party release is weight 3.
+url = "https://www.qtsdatacenters.com/news/feed/"
+source_type = "company_filing"
+topic_implied = true
+
+[[feed]]
+name = "coreweave-blog"
+# NOT topic_implied, deliberately. The probe that found 13 matches here ran with
+# the topic tier bypassed; CoreWeave's blog is mostly GPU and product news, so
+# leaving it implied would queue kernel benchmarks. The same correction applies
+# to openai-blog below.
+url = "https://www.coreweave.com/blog/rss.xml"
+source_type = "company_filing"
+
+[[feed]]
+name = "openai-blog"
+# The end customer announcing its own sites — Stargate and successors. Not
+# topic_implied for the reason given above: most of this feed is model releases.
+url = "https://openai.com/blog/rss.xml"
+source_type = "company_filing"
+
+# --- State nonprofit newsrooms ----------------------------------------------
+#
+# The States Newsroom network plus a few independents. These cover the state
+# capitol and the utility regulator, which is exactly the angle trade press
+# skips, and they are open-feed, no paywall, CC-licensed.
+#
+# Most returned 0 matches on a single poll, and they are included anyway: each
+# poll is one HTTP request and costs nothing until an article matches, and the
+# ones that DID match returned precisely what the database lacks — "Louisa
+# homeowner sues Amazon over data center", "Loudoun supervisors mull data center
+# moratorium", "Henderson City Council rejects data center moratorium".
+#
+# None is topic_implied: they cover all of state politics.
+
+[[feed]]
+name = "virginia-mercury"        # 6 matches on the first poll, the best of these
+url = "https://virginiamercury.com/feed/"
+source_type = "general_media"
+
+[[feed]]
+name = "nevada-current"          # 3 matches
+url = "https://nevadacurrent.com/feed/"
+source_type = "general_media"
+
+[[feed]]
+name = "texas-tribune"           # 1 match
+url = "https://www.texastribune.org/feeds/main/"
+source_type = "general_media"
+
+[[feed]]
+name = "ohio-capital-journal"
+url = "https://www.ohiocapitaljournal.com/feed/"
+source_type = "general_media"
+
+[[feed]]
+name = "georgia-recorder"
+url = "https://georgiarecorder.com/feed/"
+source_type = "general_media"
+
+[[feed]]
+name = "iowa-capital-dispatch"
+url = "https://iowacapitaldispatch.com/feed/"
+source_type = "general_media"
+
+[[feed]]
+name = "nebraska-examiner"
+url = "https://nebraskaexaminer.com/feed/"
+source_type = "general_media"
+
+[[feed]]
+name = "wisconsin-examiner"
+url = "https://wisconsinexaminer.com/feed/"
+source_type = "general_media"
+
+[[feed]]
+name = "louisiana-illuminator"
+url = "https://lailluminator.com/feed/"
+source_type = "general_media"
+
+[[feed]]
+name = "arizona-mirror"
+url = "https://azmirror.com/feed/"
+source_type = "general_media"
+
+[[feed]]
+name = "indiana-capital-chronicle"
+url = "https://indianacapitalchronicle.com/feed/"
+source_type = "general_media"
+
+[[feed]]
+name = "oregon-capital-chronicle"
+url = "https://oregoncapitalchronicle.com/feed/"
+source_type = "general_media"
+
+[[feed]]
+name = "mississippi-today"
+url = "https://mississippitoday.org/feed/"
+source_type = "general_media"
+
+[[feed]]
+name = "cardinal-news"           # southwest Virginia, where the new sites are going
+url = "https://cardinalnews.org/feed/"
+source_type = "general_media"
+
 
 # Keyword filtering is two-tier, and both tiers must match.
 #
@@ -368,6 +512,131 @@ company = "CyrusOne"
 topic_implied = true
 max_urls = 20000
 
+
+# --- Operator newsrooms added 2026-08-01 ------------------------------------
+#
+# Each was probed with this file's own filter. The match count is over the whole
+# sitemap, so it is a backlog to work through with `sync --deep`, not a per-poll
+# rate.
+#
+# `topic_implied` is true only for the pure-play operators, per the rule stated
+# above. It is false for TeraWulf and Lambda even though both build data centers,
+# because their sites also carry bitcoin-mining and GPU-product pages that the
+# project signal alone would happily queue.
+
+[[sitemap]]
+name = "compass-newsroom"        # 36 matches of 105 URLs
+url = "https://www.compassdatacenters.com/news-sitemap.xml"
+source_type = "company_filing"
+company = "Compass Datacenters"
+topic_implied = true
+max_urls = 20000
+
+[[sitemap]]
+name = "applied-digital-newsroom"  # 45 of 94 — the densest of any operator site
+url = "https://www.applieddigital.com/sitemap.xml"
+source_type = "company_filing"
+company = "Applied Digital"
+topic_implied = true
+max_children = 8
+max_urls = 20000
+
+[[sitemap]]
+name = "fermi-america-newsroom"  # 33 of 61
+url = "https://fermiamerica.com/post-sitemap.xml"
+source_type = "company_filing"
+company = "Fermi America"
+topic_implied = true
+max_urls = 20000
+
+[[sitemap]]
+name = "quantum-loophole-newsroom"  # 20 of 114, incl. monthly construction updates
+url = "https://quantumloophole.com/sitemap.xml"
+source_type = "company_filing"
+company = "Quantum Loophole"
+topic_implied = true
+max_children = 8
+max_urls = 20000
+
+[[sitemap]]
+name = "h5-newsroom"             # 27 of 182
+url = "https://www.h5datacenters.com/sitemap.xml"
+source_type = "company_filing"
+company = "H5 Data Centers"
+topic_implied = true
+max_children = 8
+max_urls = 20000
+
+[[sitemap]]
+name = "novva-newsroom"          # 14 of 48
+url = "https://www.novva.com/post-sitemap.xml"
+source_type = "company_filing"
+company = "Novva Data Centers"
+topic_implied = true
+max_urls = 20000
+
+[[sitemap]]
+name = "yondr-newsroom"          # 5 of 97
+url = "https://yondrgroup.com/post-sitemap.xml"
+source_type = "company_filing"
+company = "Yondr"
+topic_implied = true
+max_urls = 20000
+
+[[sitemap]]
+name = "terawulf-newsroom"       # 18 of 217, with the topic tier bypassed
+url = "https://www.terawulf.com/sitemap.xml"
+source_type = "company_filing"
+company = "TeraWulf"
+topic_implied = false
+max_children = 8
+max_urls = 20000
+
+[[sitemap]]
+name = "lambda-newsroom"         # 19 of 327, with the topic tier bypassed
+url = "https://lambda.ai/sitemap.xml"
+source_type = "company_filing"
+company = "Lambda"
+topic_implied = false
+max_children = 8
+max_urls = 20000
+
+# --- The build side, and the money side -------------------------------------
+#
+# Deliberately NO `company` key on these three. That flag means "this host is the
+# operator's own newsroom", which relaxes `matches_known_project` to accept a
+# headline naming only the city. Turner builds for other people, JobsOhio is a
+# state development corporation and Duke is a utility — a headline of theirs
+# naming a city is not thereby about their own project, and setting `company`
+# would attribute other operators' campuses to them.
+
+[[sitemap]]
+name = "turner-construction"     # 12 of 2,183 — named campuses, e.g. "Papillion
+                                 # Data Center Buildings 1-2". Construction
+                                 # milestones nothing else in the corpus carries.
+url = "https://www.turnerconstruction.com/sitemap.xml"
+source_type = "general_media"
+topic_implied = false
+max_children = 8
+max_urls = 20000
+
+[[sitemap]]
+name = "jobsohio"                # 1 of 337 — "Vultr announces $1 billion data
+                                 # center investment in Springfield". Low volume,
+                                 # but investment_usd and locality in one line is
+                                 # exactly the scarcest thing we hold.
+url = "https://www.jobsohio.com/sitemap.xml"
+source_type = "general_media"
+topic_implied = false
+max_urls = 20000
+
+[[sitemap]]
+name = "duke-energy-news"        # 1 of 2,959. The utility framing of load growth.
+url = "https://news.duke-energy.com/sitemap.xml"
+source_type = "general_media"
+topic_implied = false
+max_children = 8
+max_urls = 20000
 
 # datacenterknowledge is NOT here despite being the highest-yield *feed*, because
 # it publishes no article sitemap: /sitemap.xml is a navigation file listing

@@ -21,7 +21,20 @@
 (function () {
   const ATLAS = "/static/vendor/us-states-10m.json";
   let atlasPromise = null;
-  const loadAtlas = () => (atlasPromise = atlasPromise || fetch(ATLAS).then((r) => r.json()));
+  // A failed load is not cached. `p = p || import(...)` memoises the
+  // *rejected* promise, so one transient failure — an expired session
+  // 401ing the module fetch, a dropped connection — became permanent for
+  // the life of the page, and the element went on reporting "unavailable
+  // offline" long after the cause was gone.
+  const loadAtlas = () =>
+    (atlasPromise =
+      atlasPromise ||
+      fetch(ATLAS)
+        .then((r) => (r.ok ? r.json() : Promise.reject(new Error("HTTP " + r.status))))
+        .catch((e) => {
+          atlasPromise = null;
+          throw e;
+        }));
 
   const PHASE_TOKEN = {
     announced: "--chart-5", permitting: "--chart-1", construction: "--chart-3",

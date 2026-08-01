@@ -43,32 +43,52 @@ body {
 @keyframes dcSlideLeft { from { opacity: 0; transform: translateX(28px); } to { opacity: 1; transform: none; } }
 @keyframes dcSegFill   { from { transform: scaleX(0); } to { transform: scaleX(1); } }
 
-.dc-rise  { animation: rise var(--duration-slow) var(--ease-spring) both; }
-.dc-pop   { animation: pop 160ms var(--ease-out-back) both; }
-.dc-slide { animation: dcSlideLeft 220ms var(--ease-spring) both; }
+/* `backwards`, never `both`.
+   ------------------------------------------------------------------------
+   `both` retains the final keyframe, and `rise` ends on a transform. A retained
+   transform — even an identity one — makes the element a containing block for
+   every `position: sticky` descendant and keeps it composited forever. The table
+   has sticky id and company columns inside every row, so 124 rows each holding a
+   transform smeared already-scrolled content down the page: a ghost of the
+   coverage strip was still being painted at the bottom of the viewport.
 
-/* Rows and cards arrive in sequence, but the stagger is capped at twelve — the
-   caller clamps `--i`, because a 124-step cascade is a slideshow, not a
-   flourish, and the last row would arrive four seconds late. */
+   `backwards` applies the *from* state during the delay and then lets the
+   element fall back to its ordinary style, so the transform exists only while
+   the animation is actually running. */
+/* No transform anywhere that contains a sticky descendant.
+   ------------------------------------------------------------------------
+   The view container wraps the whole table and every table row contains the
+   sticky id and company cells, so both fade and neither moves. Translation is
+   a nice-to-have; not breaking `position: sticky` is not.
+
+   Cards keep the full rise — nothing inside them is sticky. */
+.dc-rise  { animation: fade-in var(--duration-slow) var(--ease-swift) backwards; }
+.dc-pop   { animation: pop 160ms var(--ease-out-back) backwards; }
+.dc-slide { animation: dcSlideLeft 220ms var(--ease-spring) backwards; }
+
+/* Rows and cards arrive in sequence. The class is only applied to the first
+   twelve — a 124-step cascade is a slideshow, not a flourish, and animating a
+   hundred rows at once is a hundred compositing layers for no visible gain. */
 .dc-enter {
-  animation: rise var(--duration-base) var(--ease-spring) both;
+  animation: rise var(--duration-base) var(--ease-spring) backwards;
   animation-delay: calc(var(--i, 0) * 22ms);
 }
+tr.dc-enter { animation-name: fade-in; }
 
 /* Scrim fades; the panel it dims slides. Appearing instantly made the drawer
    feel like a page change rather than a layer. */
-.dc-scrim { animation: fade-in var(--duration-base) var(--ease-swift) both; }
+.dc-scrim { animation: fade-in var(--duration-base) var(--ease-swift) backwards; }
 
 /* Track segments fill left to right when the drawer opens, so the strip reads
    as a progression rather than a row of blocks. */
 .dc-drawer .dc-seg-cell {
   transform-origin: left center;
-  animation: dcSegFill var(--duration-base) var(--ease-spring) both;
+  animation: dcSegFill var(--duration-base) var(--ease-spring) backwards;
   animation-delay: calc(var(--i, 0) * 40ms);
 }
 
 /* Coverage bars grow from zero on arrival, same reasoning. */
-.dc-bar { transform-origin: left center; animation: dcSegFill var(--duration-slow) var(--ease-spring) both; }
+.dc-bar { transform-origin: left center; animation: dcSegFill var(--duration-slow) var(--ease-spring) backwards; }
 
 /* ---- Provenance -----------------------------------------------------------
    The underline under a value says where it came from, and the four are
@@ -188,7 +208,7 @@ body {
   font-variant-ligatures: none;
   tab-size: 4;
 }
-.dc-log-line { display: block; animation: fade-in var(--duration-fast) var(--ease-swift) both; }
+.dc-log-line { display: block; animation: fade-in var(--duration-fast) var(--ease-swift) backwards; }
 .dc-log-line:nth-child(n + 60) { animation: none; }
 
 /* A wide table scrolls inside its own container; the page never scrolls
