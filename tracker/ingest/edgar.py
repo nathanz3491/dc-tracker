@@ -74,6 +74,15 @@ class Company:
     name: str
     cik: str
     kind: str = "unknown"
+    #: Phrases to search this company's filings for, resolved at load time from
+    #: `[search.by_kind]`. Empty means "use the shared list".
+    #:
+    #: Per kind rather than per company, because the thing that varies is what
+    #: the class of filer writes: a utility discloses "large load" and an
+    #: interconnection agreement, an E&C contractor discloses backlog, and
+    #: neither writes "anchor tenant". Asking every filer the hyperscaler
+    #: question is how a new source class looks like it added nothing.
+    phrases: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -121,6 +130,14 @@ def load_companies(path: Path | None = None) -> tuple[list[Company], list[str], 
     except tomllib.TOMLDecodeError as exc:
         raise EdgarError(f"{path.name} is not valid TOML: {exc}") from exc
 
+    search = data.get("search") or {}
+    phrases = [str(p) for p in (search.get("phrases") or ['"data center"'])]
+    forms = [str(f) for f in (search.get("forms") or ["10-K", "10-Q"])]
+    by_kind = {
+        str(kind): tuple(str(p) for p in (words or ()))
+        for kind, words in (search.get("by_kind") or {}).items()
+    }
+
     companies: list[Company] = []
     for entry in data.get("company") or []:
         cik = str(entry.get("cik") or "").strip()
@@ -129,15 +146,18 @@ def load_companies(path: Path | None = None) -> tuple[list[Company], list[str], 
                 f"{path.name}: cik {cik!r} for {entry.get('name')!r} must be 10 digits, "
                 "zero-padded. An unpadded CIK silently returns no hits."
             )
+        kind = str(entry.get("kind") or "")
         companies.append(
-            Company(name=str(entry.get("name") or cik), cik=cik, kind=str(entry.get("kind") or ""))
+            Company(
+                name=str(entry.get("name") or cik),
+                cik=cik,
+                kind=kind,
+                phrases=by_kind.get(kind, ()),
+            )
         )
     if not companies:
         raise EdgarError(f"{path.name} defines no [[company]] entries")
 
-    search = data.get("search") or {}
-    phrases = [str(p) for p in (search.get("phrases") or ['"data center"'])]
-    forms = [str(f) for f in (search.get("forms") or ["10-K", "10-Q"])]
     return companies, phrases, forms
 
 
@@ -414,6 +434,7 @@ def prepare(
     settings: Settings | None = None,
     per_company: int = 2,
     only: str | None = None,
+    kind: str | None = None,
     since_days: int | None = 730,
 ) -> tuple[EdgarReport, list[str]]:
     """Find filings, cache the relevant section of each, return their URLs.
@@ -426,6 +447,11 @@ def prepare(
         per_company: filings per company per phrase. Each becomes one LLM call
             downstream, so this is the cost dial.
         only: restrict to one company by name, case-insensitive.
+        kind: restrict to one class — hyperscaler, neocloud, landlord, utility,
+            contractor. This is the cost dial that matters once the list covers
+            more than one kind of filer: reading the utilities is a different
+            question from reading the hyperscalers, and worth being able to ask
+            on its own.
         since_days: ignore filings older than this. Defaults to two years, because
             a decade-old 8-K describes a campus that is long since built.
     """
@@ -436,6 +462,12 @@ def prepare(
         companies = [c for c in companies if c.name.lower() == wanted]
         if not companies:
             raise EdgarError(f"no company named {only!r} in the company list")
+    if kind:
+        wanted_kind = kind.strip().lower()
+        companies = [c for c in companies if c.kind.lower() == wanted_kind]
+        if not companies:
+            known = sorted({c.kind for c in load_companies(companies_path)[0] if c.kind})
+            raise EdgarError(f"no companies of kind {kind!r}. Known kinds: {', '.join(known)}")
 
     since = dt.date.today() - dt.timedelta(days=since_days) if since_days else None
     report = EdgarReport()
@@ -446,7 +478,7 @@ def prepare(
         for company in companies:
             report.companies += 1
             seen: set[str] = set()
-            for phrase in phrases:
+            for phrase in company.phrases or phrases:
                 for filing in search(
                     client, company, phrase, forms, limit=per_company, since=since
                 ):

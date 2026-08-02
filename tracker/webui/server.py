@@ -113,7 +113,19 @@ class Handler(BaseHTTPRequestHandler):
         self._send(status, body, "application/json; charset=utf-8", extra=extra)
 
     def _error(self, status: int, message: str) -> None:
-        self._json({"error": message}, status=status)
+        """Send an error, and never become one.
+
+        This is called from inside `except` blocks. If the peer has already gone —
+        which is exactly the situation that lands here most often — writing the
+        response raises a second time, out of an exception handler, and escapes to
+        socketserver as an unhandled error. That is the second traceback in the
+        report that started this: one for the aborted stream, one for the failed
+        attempt to apologise for it.
+        """
+        try:
+            self._json({"error": message}, status=status)
+        except ConnectionError:
+            log.debug("could not send %d to a client that had already gone", status)
 
     def _body(self) -> dict[str, Any]:
         length = int(self.headers.get("Content-Length") or 0)
@@ -199,8 +211,13 @@ class Handler(BaseHTTPRequestHandler):
             self._error(503, str(exc))
         except FileNotFoundError as exc:
             self._error(503, str(exc))
-        except BrokenPipeError:
-            pass  # the tab closed mid-response
+        except ConnectionError:
+            # The tab closed mid-response. Must stay ahead of the catch-all below:
+            # that one tries to send a 500, and sending anything down a socket the
+            # peer has already dropped raises again — which is what escaped to
+            # socketserver and printed a second traceback under "Exception
+            # occurred during processing of request".
+            log.debug("GET %s: client went away", route)
         except Exception:
             log.exception("GET %s failed", route)
             self._error(500, "internal error; see the server log")
@@ -236,7 +253,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._dataset()
         if route == "/api/commands":
             return self._json(
-                {"groups": catalog.grouped_json(), "llm": sorted(catalog.LLM_COMMANDS)}
+                {
+                    "groups": catalog.grouped_json(),
+                    "llm": sorted(catalog.LLM_COMMANDS),
+                    "destructive": dict(catalog.DESTRUCTIVE),
+                }
             )
         if route == "/api/runs":
             return self._json(
@@ -275,9 +296,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._start_run(body)
             if parsed.path == "/api/run/cancel":
                 return self._json({"cancelled": self.console.runner.cancel()})
+            if parsed.path == "/api/overview":
+                return self._overview(body)
             self._error(404, f"no route {parsed.path!r}")
-        except BrokenPipeError:
-            pass
+        except ConnectionError:
+            log.debug("POST %s: client went away", parsed.path)
         except Exception:
             log.exception("POST %s failed", parsed.path)
             self._error(500, "internal error; see the server log")
@@ -359,6 +382,56 @@ class Handler(BaseHTTPRequestHandler):
             return self._error(409, str(exc))
         self._json({"run": run.summary()}, status=202)
 
+    def _overview(self, body: dict[str, Any]) -> None:
+        """Write, or return, the briefing for one project.
+
+        A POST rather than a GET because it can spend money, and a GET that costs
+        money is a GET a browser will happily make twice on a back button.
+
+        Reads the database `mode=ro` like every other read path — the briefing is
+        never stored, so there is nothing to write. Served from cache whenever the
+        row has not changed since it was written; the fingerprint covers the
+        sources too, because gaining a citation changes how trustworthy a row is
+        without moving any value.
+        """
+        from tracker import overview as overview_mod
+        from tracker.models import Project
+
+        try:
+            project_id = int(body.get("project_id"))
+        except (TypeError, ValueError):
+            return self._error(400, "project_id must be an integer")
+
+        with self.console.read_session() as session:
+            project = session.get(Project, project_id)
+            if project is None:
+                return self._error(404, f"no project #{project_id}")
+
+            ready = overview_mod.cached(project)
+            if ready is not None:
+                return self._json({**ready.as_json(), "cached": True})
+
+            if not self.console.allow_write:
+                return self._error(403, "this console was started read-only (--no-run)")
+            if str(body.get("confirm") or "").strip() != "overview":
+                return self._error(
+                    400, 'Writing a briefing spends LLM tokens. Re-send with confirm="overview".'
+                )
+
+            from tracker.config import get_settings
+            from tracker.llm import MissingApiKey, reasoning_extractor
+
+            try:
+                extractor = reasoning_extractor(get_settings())
+            except MissingApiKey as exc:
+                return self._error(503, str(exc))
+
+            written = overview_mod.write(project, extractor=extractor)
+
+        if written is None:
+            return self._error(502, "the model did not return a usable briefing")
+        self._json({**written.as_json(), "cached": False})
+
     def _stream(self, run_id: str) -> None:
         """Server-sent events for the run in flight.
 
@@ -400,8 +473,18 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.flush()
                 if event.get("type") == "end":
                     break
-        except (BrokenPipeError, ConnectionResetError):
-            pass
+        except ConnectionError:
+            # The reader went away mid-stream. Over a Cloudflare tunnel this is
+            # ordinary rather than exceptional: the edge drops an idle connection
+            # and the browser's EventSource silently reconnects, so a long crawl
+            # produces several of these per run.
+            #
+            # `ConnectionError`, not the two subclasses that used to be listed
+            # here. Windows raises `ConnectionAbortedError` (WinError 10053) where
+            # POSIX raises `BrokenPipeError` or `ConnectionResetError`, so the
+            # narrow tuple caught nothing on the platform this runs on and every
+            # closed tab logged a traceback.
+            log.debug("stream for %s closed by the client", run_id)
         finally:
             runner.unsubscribe(listener)
 

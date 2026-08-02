@@ -218,6 +218,17 @@ def _coerce_like(value: Any, template: Any) -> Any:
     return value
 
 
+def resolve_field(field_name: str, claims: list[_Claim], existing: Any) -> Any:
+    """Public alias for :func:`_resolve`.
+
+    `tracker logic check` has to report which of two conflicting claims the database
+    keeps, and the only way to report that faithfully is to ask the same function
+    the write path asks. Re-deriving it produced a report that disagreed with the
+    stored value on 73 rows.
+    """
+    return _resolve(field_name, claims, existing)
+
+
 def _resolve(field_name: str, claims: list[_Claim], existing: Any) -> Any:
     """Apply the field's policy to choose one value.
 
@@ -801,6 +812,47 @@ def _derive_blocker(session: Session, project: Project) -> str | None:
     return max(open_risks, key=lambda r: severity_rank(r.severity)).summary
 
 
+def recompute_from_sources(session: Session, project: Project) -> list[str]:
+    """Re-derive every field of one project from the citations it now holds.
+
+    Returns the key fields where sources materially disagree.
+
+    Extracted from :func:`upsert_record` so `tracker merge` gets the *same* merge
+    policy rather than a second implementation of it. Folding two rows together is
+    exactly the situation the recompute-from-claims design was built for: after
+    the sources move, the surviving row's values are whatever the full set of
+    citations now supports, computed by the declared per-field policy — not the
+    values either row happened to be carrying.
+    """
+    by_field = claims_by_field(list(project.sources))
+    for name in WRITABLE_FIELDS:
+        if name in DERIVED_FIELDS:
+            continue
+        current = getattr(project, name)
+        chosen = _resolve(name, by_field.get(name, []), current)
+        if chosen is not None:
+            chosen = _coerce_like(chosen, current if current is not None else _template_for(name))
+        if name in {"state", "country"} and isinstance(chosen, str):
+            chosen = chosen.upper()
+        if chosen != current:
+            setattr(project, name, chosen)
+    if project.phase is None:
+        project.phase = DEFAULT_PHASE
+
+    _derived, conflict_fields = _conflict_notes(by_field)
+
+    views = [conf.SourceView.from_row(s) for s in project.sources]
+    populated = sum(1 for f in TRACKED_FIELDS if getattr(project, f, None) is not None)
+    project.confidence = conf.compute(
+        views,
+        operator_verified=project.last_verified_at is not None,
+        populated_tracked_fields=populated,
+    ).value
+    project.blocker = _derive_blocker(session, project)
+    session.flush()
+    return conflict_fields
+
+
 def recompute_confidence(session: Session) -> int:
     """Recompute stored confidence for every project.
 
@@ -824,8 +876,12 @@ __all__ = [
     "NOTE_PREFIX",
     "Policy",
     "UpsertResult",
+    "claim_value",
+    "claims_by_field",
     "derive_fields",
     "recompute_confidence",
+    "recompute_from_sources",
     "record_tag",
+    "resolve_field",
     "upsert_record",
 ]

@@ -3,8 +3,10 @@
 Ingest, normalize and query US data center construction projects, where **every
 non-null fact traces back to a source URL with a confidence score**.
 
-SQLite is the source of truth. Ingestion is deterministic and re-runnable. There
-is no web UI — this is a backend plus a CLI.
+SQLite is the source of truth. Ingestion is deterministic and re-runnable. The
+CLI is the primary interface; `tracker serve` exposes the same dataset and the
+same commands as a live console (see below) for anyone who would rather click
+than type.
 
 ## What it does
 
@@ -21,7 +23,13 @@ Articles to extract from come from `tracker discover`, which polls news feeds an
 queues candidates for triage.
 
 Then query: `tracker list`, `tracker show ID`, `tracker stats`, `tracker capex`,
-`tracker review`, `tracker verify`, `tracker export {md,csv,json}`.
+`tracker duplicates`, `tracker review`, `tracker verify`,
+`tracker export {md,csv,json}`. `tracker merge` folds rows that turned out to be
+one campus; it is the only command here that deletes anything. `tracker point
+"<name>"` goes and gets one named data center on demand — matching it to an
+existing row (then `enrich`ing it) or building a fresh profile — instead of
+waiting for the batch. `tracker logic check` finds values that contradict each
+other or themselves; `tracker logic resolve` walks through fixing them.
 
 The 12 tracked fields are the ones the PRD requires: project name, city + state,
 operator, end customer, planned investment, planned and built MW, first announced,
@@ -391,9 +399,11 @@ Positions are city centres, not sites.
 tracker serve
 ```
 
-Opens `http://127.0.0.1:8765/`. Six views — Projects, Map, Queue, Coverage,
-Commands, Runs — reading the database on every request, so it reflects what a run
-just did without re-exporting anything.
+Opens `http://127.0.0.1:8765/`. Eight views — Projects, Map, Capex, Queue,
+Coverage, Commands, Runs, Help — reading the database on every request, so it
+reflects what a run just did without re-exporting anything. A run started from the
+page refetches the dataset when it finishes, so a crawl that adds a project or a
+merge that removes three is visible without a reload.
 
 **Different from `tracker export html`, and both are worth having.** The export is
 one self-contained file you can email; it is frozen at the moment it was written
@@ -422,9 +432,13 @@ open:
   concatenated into a command line, so `;`, backticks and `&&` are inert. An
   unknown flag is an error rather than something passed through — which is how a
   `--db` or an `--out` would otherwise arrive.
-* **Spending is confirmed.** `sync`, `enrich`, `infer`, `search` and
-  `ingest crawl` spend real LLM tokens, and the console will not start one until
-  you type its name. A stray click cannot cost money.
+* **Spending is confirmed.** `sync`, `enrich`, `infer`, `search`, `ingest crawl`
+  and `ingest edgar` spend real LLM tokens, and the console will not start one
+  until you type its name. A stray click cannot cost money.
+* **Destruction is confirmed too**, on its own axis. `merge` spends nothing and is
+  the only command here that cannot be undone, so it takes the same typed
+  confirmation for a different reason — and the check is on the command name, not
+  its flags, so no argument combination talks its way past it.
 
 `tracker serve --no-run` drops the runner entirely and serves the views read-only.
 
@@ -436,10 +450,86 @@ no build step and the repo has no `package.json`: React is a UMD global, the
 Meridian component bundle is already compiled, and `htm` supplies JSX-like
 templates from tagged template literals.
 
+### Putting the console on the internet
+
+```bash
+tracker cloudflare --check     # is everything in place?
+tracker cloudflare             # publish it
+```
+
+The console still binds loopback. `cloudflared` makes an **outbound** connection
+to Cloudflare and relays traffic back down it, so nothing is opened on your
+network and no router or firewall changes are involved. `tracker serve --tunnel`
+is the same thing in one flag; the command exists because publishing deserves a
+readiness check and a second shape.
+
+**Two shapes.** With no flags you get an anonymous *quick tunnel*: a random
+`https://<four-words>.trycloudflare.com`, no Cloudflare account, and a different
+URL every session. With `--name` you run a tunnel you created once on your own
+account, so the hostname is yours and survives a restart — worth the setup if the
+link is going to anyone else, because re-sending a fresh URL every session is how
+one ends up written down somewhere it should not be.
+
+Creating that named tunnel is deliberately left to you. It writes credentials into
+your home directory and a DNS record into your zone, both of which outlive the
+process:
+
+```bash
+cloudflared tunnel login
+cloudflared tunnel create dc-console
+cloudflared tunnel route dns dc-console console.example.com
+tracker cloudflare --name dc-console --hostname console.example.com
+```
+
+`TRACKER_CONSOLE_PASSWORD` is required for either shape and the command refuses to
+start without it. A quick-tunnel hostname is random but **not secret** — it goes
+over the wire and Cloudflare knows it — so it is obscurity, not access control.
+The password, the per-client and global lockouts, and `--no-run` are the access
+control. The console never sees the tunnel: cloudflared connects to it over
+loopback, which means the "refuse a non-loopback bind" check never fires and the
+password is what replaces it.
+
+**`--check` before you need it.** It verifies the password, that `cloudflared` is
+present *and actually executes*, that a `--name` tunnel exists on the account, and
+that the database and front-end files are there — then exits. Worth running once,
+because two of those fail in ways that are otherwise discovered at the worst
+moment: a truncated `cloudflared.exe` is a valid PE file that dies with WinError
+193 and no output, and npm's `.CMD` shim on Windows swallows both.
+
+**Behind a proxy, the quick tunnel is relayed.** cloudflared builds its own
+`http.Transport` for the one request that asks Cloudflare for a quick tunnel, and
+a zero-value Transport has no proxy function — so that request ignores
+`HTTPS_PROXY` however it is set, while every other tool on the machine honours it.
+On a filtered link that is the difference between working and not: measured
+against `api.trycloudflare.com` over an hour, direct swung between 3.8s and 28s
+while the proxy stayed near 4s, against a fixed client budget of about ten
+seconds. `tracker cloudflare` failed with `context deadline exceeded` roughly
+three times in four.
+
+So the console starts a loopback relay and points cloudflared's `--quick-service`
+at it. The relay forwards that one request through the proxy and hands the JSON
+back; the outbound leg is still TLS to Cloudflare and the only plaintext hop is
+inside loopback, where cloudflared and the console already talk. It is not a
+general proxy — the upstream host is a constant, only the path travels, and an
+absolute request URI is refused. The proxy is found in the environment or, on
+Windows, in `Internet Settings`, which is where Windows apps look and Go does not.
+
+`--proxy http://host:port` forces one, `--no-proxy` skips the relay entirely, and
+`--check` prints which was found. Attempts are retried three times regardless,
+because the underlying failure is a latency race rather than a refusal.
+
+Before this, a failed request did something worse than fail: the error text
+contains the API's own URL, the hostname pattern matched it, and the console
+printed `public: https://api.trycloudflare.com` — a link to Cloudflare's API
+presented as your console.
+
+If it still times out, use a named tunnel. It never calls that endpoint.
+
 ### Documentation
 
 | Where | What |
 | --- | --- |
+| [docs/what-we-built.zh-CN.md](docs/what-we-built.zh-CN.md) | **Start here.** 最短的一份：有了什么、怎么跑、报数前要知道的数字。~100 行。 |
 | This file | Everything: install, keys, every command, and the reasoning behind each design decision. |
 | [docs/architecture.md](docs/architecture.md) | How the CLI, the database and the console fit together — and why the browser never computes a judgement of its own. |
 | [docs/guide.zh-CN.md](docs/guide.zh-CN.md) | 中文使用指南 |
@@ -449,10 +539,11 @@ templates from tagged template literals.
 ### SEC filings: the publisher that cannot lock us out
 
 ```bash
-tracker ingest edgar                       # every company in the list
-tracker ingest edgar --company Meta        # just one
-tracker ingest edgar --per-company 3       # the cost dial: filings per company
-tracker ingest edgar --dry-run             # prepare and cache, extract nothing
+tracker ingest edgar                        # every company in the list
+tracker ingest edgar --kind utility         # one class of filer
+tracker ingest edgar --company Meta         # just one
+tracker ingest edgar --per-company 3        # the cost dial: filings per company
+tracker ingest edgar --dry-run              # prepare and cache, extract nothing
 ```
 
 Every other source here is somebody's website, and the good ones increasingly
@@ -465,6 +556,32 @@ statement, in-service dates in MD&A, and the end customer in the lease footnotes
 Needs `TRACKER_USER_AGENT` set to a real contact; SEC blocks the shipped
 placeholder, and the command refuses to start rather than collect a run's worth
 of 403s.
+
+**Five classes of filer, and `--kind` reads one.** Hyperscalers and neoclouds are
+the buyers; landlords hold the lease footnotes that name a tenant. The other two
+were added because the buyers alone cannot answer the two questions that matter
+most:
+
+* `--kind utility` — the power company is the counterparty that cannot be
+  bypassed, and its filings state which large load has actually signed an
+  interconnection agreement and when energisation is expected. `power` is the
+  track this database is worst at and the one it refuses to infer from
+  construction. The fourteen utilities were picked by measured exposure: each
+  serves a state holding at least ~1% of tracked capacity. Constellation and
+  Talen are there because a nuclear PPA names its counterparty *and* its site,
+  which is the customer-attribution fact 60% of the database lacks.
+* `--kind contractor` — an E&C filer discloses backlog, and backlog leads
+  energisation by a year or two. It is the weakest at naming sites: expect timing
+  and corroboration rather than new projects, and judge the class on that.
+
+Each class is searched with **its own phrases**, from `[search.by_kind]`. A
+utility does not write "build-to-suit"; it writes "large load" and
+"interconnection agreement". Adding a class of filer without adding its
+vocabulary is how a new source returns nothing and looks like it had nothing.
+
+Utilities and contractors are sources, never buyers — only `hyperscaler` and
+`neocloud` count as end users in `capex.attribute`, so adding forty companies
+cannot quietly move anybody's attributed capacity.
 
 Which companies are read is [seed/edgar-companies.toml](seed/edgar-companies.toml),
 and that file **is** the precision mechanism. Full-text search scoped by CIK
@@ -519,7 +636,15 @@ database, so attribution is three rules in order:
 Who counts as an end user comes from the `kind` column in
 [seed/edgar-companies.toml](seed/edgar-companies.toml), plus a short list of
 private companies that file nothing with the SEC — without which OpenAI and xAI,
-two of the largest positions in the table, would have been invisible.
+two of the largest positions in the table, would have been invisible. Only
+`hyperscaler` and `neocloud` count; a utility connects capacity and a contractor
+builds it, and neither buys it.
+
+`--by-quarter` buckets the pipeline by calendar quarter instead of by year, which
+is the grain the question is usually asked at. Read it as a shape rather than a
+schedule: 34% of dated projects land on 1 January, because that is where a source
+saying only "sometime in 2027" normalises to. `capex.date_precision` measures it
+and both the CLI and the page print the number rather than leaving you to guess.
 
 The footer states what fraction of projects the view can speak for. That is not
 decoration: a rollup silently covering a third of the data looks authoritative and
@@ -531,6 +656,108 @@ keep judgements and facts apart. And where a project names a tracked operator as
 its own customer, it flags the row instead of correcting it, for the same reason
 `dedup` refuses to auto-merge across granularity: a landlord genuinely can lease
 from another landlord.
+
+The console's **Capex** view is this table plus the one thing that would make it
+wrong. A campus stored twice is a nuisance in a site listing and a wrong number
+the moment anything groups by buyer — the Abilene campus was in the database four
+times, so 1.2 GW was counted four times against OpenAI. So the duplicate review
+lives on that page rather than under Coverage: the repair belongs next to the
+figure it corrupts. Reviewing a group by eye is also the one thing a browser does
+better than the CLI — the candidate rows sit side by side with their capacity,
+citation count and dates, a radio picks the survivor, and the merge runs through
+the same `/api/run` path as everything else, behind the typed confirmation.
+
+Which id survives does not decide the values. `merge` moves every citation onto
+the survivor and then recomputes each field from the combined set, so the choice
+picks a row number and nothing else.
+
+### Values that contradict each other
+
+```bash
+tracker logic check                    # free: rules and source disagreements
+tracker logic check --severity error   # only the impossible ones
+tracker logic check --read 20          # also have a model read 20 rows
+tracker logic resolve                  # work through them, one at a time
+tracker logic resolve --code built_exceeds_planned   # one kind at a time
+tracker logic resolve --auto           # only the repairs needing no decision
+```
+
+Every other check asks whether a value is *supported*. This one asks whether the
+supported values *agree*: a row can be perfectly cited and still be impossible. A
+campus marked `operational` whose construction track has reached nothing is either
+the wrong phase or a missing milestone, and both citations behind it can be sound.
+
+Three layers, and only the last costs anything.
+
+**Rules** are free and state their reasoning, so you can disagree with one without
+reading code. On the live database they find 21 impossibilities and 125 warnings
+across 221 projects — energised before operational, 100 MW built against 32 MW
+planned, an expected-online date 944 days in the past on a project still marked
+under construction.
+
+One of them exists because of a quirk worth knowing: `tracks.standing` reads an
+event's *type* and never its date, so an `energized` dated next December counts as
+reached today and drags the whole power track with it. `milestone_in_the_future`
+reports that rather than fixing it, because changing what "reached" means would
+move every track strip in the product.
+
+**Collisions** are two sources claiming different values for one field. The winner
+is read back from `upsert.resolve_field` — the same function the write path used —
+and printed with its reason. That reason is **not always "the better source won"**:
+
+| field | decided by |
+| --- | --- |
+| `mw_built` | the largest figure; energised capacity only grows |
+| `first_announced` | the earliest; that is what "first" means |
+| `phase` | furthest along, unless a source says it stopped |
+| `name`, `company`, `city`, … | first seen, never overwritten; churn beats staleness |
+| everything else | credibility, then recency |
+
+Getting that wrong is not cosmetic. The first version re-derived the winner as
+though credibility always decided, and reported **73 of 221 rows** as having
+drifted from their sources. None had. After asking the real resolver: **zero** —
+which is the correct answer for a write path that is working.
+
+**Judgement** is `--read N`, one LLM call per project, off by default. It catches
+what a rule cannot phrase. Every finding must name two fields and quote its
+evidence or it is dropped, it is never allowed to pick a collision winner, and
+nothing it says is written. Measured honestly: across four rows read during
+development it returned **nothing** — the guard rails demonstrably hold, and its
+usefulness on this database is still unproven. The rules are carrying the value.
+
+**`logic resolve` is the part that makes the other 149 worth finding.** It first
+re-runs the merge policy on any row whose stored values its own sources no longer
+support — arithmetic, no decision needed. Then it walks you through the rest one
+at a time, with the values and the quotes behind them on screen, and the answers
+as single keys:
+
+```
+#164 Cologix — COL4  Columbus, OH
+built_exceeds_planned 50 MW built against 36 MW planned
+  mw_built = 50.0
+    "50 MW of power will be available across three data halls"
+  mw_planned = 36.0
+    "adding 36MW of power to its total capacity in the Region"
+  u  the plan was revised — raise mw_planned to mw_built
+  c  the built figure is wrong — clear it
+  v  it is fine as it is — mark the row verified
+  s  skip    q  stop here
+```
+
+That is the distinction the tiers actually draw. A *model* may not assert
+`mw_planned = 100`; an *operator* looking at both quotes may, and until now had
+nowhere to put the answer. Each decision is written into the project's notes as
+plain prose — the one class of note re-ingesting never regenerates — so the record
+of a human overruling the data survives the next `sync`. Committed after every
+answer, because somebody triaging forty rows will stop partway.
+
+With no terminal (the console runs commands without a keyboard) it does the
+automatic repairs, reports what needs a person, and stops.
+
+`logic check` is in `LLM_COMMANDS` even though its default run is free, because
+`--read 50` spends fifty calls and the console's gate gates command names, never
+flags. `logic resolve` is gated too: it is the only command that rewrites fields
+in bulk.
 
 ### Seeing where the data is thin
 
@@ -714,7 +941,7 @@ directory, which is what lets `tracker init` work from anywhere.
 .venv/Scripts/python -m pytest
 ```
 
-579 tests, about 15 seconds. **A fresh clone with no API key and no network access
+1309 tests, well under a minute. **A fresh clone with no API key and no network access
 must produce a green run.** Tests that would hit the network or spend MiniMax
 tokens are marked `network` / `llm` and deselected by default; run them
 explicitly with `-m network` or `-m llm`.
@@ -922,6 +1149,37 @@ never spells out, so it matches on wording ("broke ground" → `construction`).
 `blocker` and `notes` are paraphrases — a correct summary like "grid
 interconnection delays" shares no substring with "the project awaits two
 345-kilovolt upgrades" — so they keep the label check.
+
+**A quote the model edited is repaired, not discarded.** Exact containment was
+throwing away real figures. Measured over 131 evidence quotes from 8 cached
+articles, 33 failed the substring test, and the dominant cause was not
+fabrication: the model *resolves references* while quoting. The article says "The
+campus is a single building comprising two data halls that serve as a 16.5 MW data
+center"; the model writes "The **Austin** campus is a single building…",
+substituting the site name for the definite article. Helpful for a reader, fatal
+for a substring test, and it was costing capacity and capex figures that were
+genuinely published.
+
+So when containment fails, `_verbatim_run` finds the longest stretch of the quote
+that really is in the article, and the **article's own words for that stretch are
+what get stored** — never the model's edit. Two floors keep it honest: the run
+must be at least 40 characters and at least half the quote, tuned against a
+negative control in which every sampled quote was also tested against an unrelated
+article. Nothing crossed. Acceptance went from **75% to 95%** with zero false
+positives.
+
+The span is then widened to its sentence boundaries, because a recovery that drops
+the number is worthless — one observed run ended at "…the offering was $", the
+article having wrapped the line inside the figure, so the quote was real but no
+longer evidenced the value and `_stated_in` discarded it anyway. Widening only
+ever adds the article's own text, so it cannot introduce a word nobody published.
+
+This is why the anti-fabrication guarantee survives the change: `_stated_in` runs
+against the *stored* text, so a value still has to be asserted by a sentence
+somebody actually wrote. Risk quotes take the same path, and their category check
+then runs against the recovered text — strictly harder than checking the model's
+own phrasing, which could otherwise carry the category's keyword in a word the
+article never used.
 
 ### Deriving county and coordinates
 

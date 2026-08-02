@@ -328,6 +328,202 @@ def test_evidence_gate_ignores_malformed_entries():
     assert kept == {}
 
 
+# --- Recovering a quote the model edited ------------------------------------
+#
+# Exact containment was throwing away real capacity and money figures. Measured
+# over 131 evidence quotes from 8 cached articles: 33 failed the substring test,
+# and the dominant cause was not fabrication but the model *resolving references*
+# while it quotes — substituting the company name for "the company", the site
+# name for "the campus". Helpful for a reader, fatal for a substring test.
+#
+# The fix keeps the anti-fabrication guarantee by storing the article's own
+# longest verbatim run rather than the model's edit. Acceptance went 75% -> 95%
+# with zero crossings against an unrelated article.
+
+
+def test_a_quote_the_model_edited_keeps_the_articles_words_not_the_models():
+    """The load-bearing property of the whole recovery path.
+
+    The model resolved "the company" to "Microsoft". We accept the evidence,
+    but what we store — and therefore what `_stated_in` is then tested against,
+    and what a reader sees in the drawer — is the sentence as published.
+    """
+    kept, quotes, dropped = crawl.evidence_gate(
+        {"mw_planned": 900.0},
+        [
+            {
+                "field": "mw_planned",
+                "quote": (
+                    "Microsoft has begun construction on Fairwater, a data center campus "
+                    "in Mount Pleasant, Wisconsin, that Microsoft says will draw 900 "
+                    "megawatts at full buildout."
+                ),
+            }
+        ],
+        article(),
+    )
+    assert kept == {"mw_planned": 900.0}
+    assert dropped == []
+    assert "the company says" in quotes["mw_planned"]
+    assert "that Microsoft says" not in quotes["mw_planned"]
+    # And what we stored is genuinely in the article, which is the invariant.
+    assert crawl._normalize_for_match(quotes["mw_planned"]) in crawl._normalize_for_match(article())
+
+
+def test_a_recovered_quote_is_stored_as_prose_not_as_the_source_wrapping():
+    """Filings and PDF-derived text wrap mid-sentence.
+
+    The offsets point back into the original, so without collapsing the run
+    the drawer renders a quote broken across lines at the source's column width.
+    """
+    kept, quotes, _ = crawl.evidence_gate(
+        {"mw_planned": 900.0},
+        [
+            {
+                "field": "mw_planned",
+                "quote": (
+                    "Microsoft has begun construction on Fairwater, a data center campus "
+                    "in Mount Pleasant, Wisconsin, that Microsoft says will draw 900 "
+                    "megawatts at full buildout."
+                ),
+            }
+        ],
+        article(),
+    )
+    assert kept
+    assert "\n" not in quotes["mw_planned"]
+
+
+def test_widening_recovers_a_figure_the_matched_run_stopped_short_of():
+    """Recovery is worthless if it drops the number it was cited for.
+
+    Here the model's edit lands immediately before "$3.3 billion", so the
+    longest common run ends at the sentence break and the recovered quote no
+    longer evidences the value. Widening to the sentence edge — still the
+    article's own text — is what makes the recovery actually keep the field.
+    """
+    quote = (
+        "Microsoft first announced the Racine County project in March 2023. "
+        "Microsoft has committed $3.3 billion to the site."
+    )
+    run = crawl._verbatim_run(quote, article())
+    assert run is not None
+    assert "$3.3 billion" in run
+
+    kept, quotes, dropped = crawl.evidence_gate(
+        {"investment_usd": 3_300_000_000.0},
+        [{"field": "investment_usd", "quote": quote}],
+        article(),
+    )
+    assert kept == {"investment_usd": 3_300_000_000.0}
+    assert dropped == []
+    assert "The company has committed" in quotes["investment_usd"]
+
+
+def test_a_fabricated_quote_is_still_rejected_however_plausible(caplog):
+    """Recovery must not become a way in for invented text.
+
+    This reads exactly like the article and is about the same project, but no
+    stretch of it was ever published, so there is nothing to recover.
+    """
+    kept, quotes, dropped = crawl.evidence_gate(
+        {"mw_planned": 4200.0},
+        [
+            {
+                "field": "mw_planned",
+                "quote": (
+                    "Officials confirmed the Mount Pleasant site is now expected to "
+                    "reach 4,200 megawatts once every phase is energized."
+                ),
+            }
+        ],
+        article(),
+    )
+    assert kept == {}
+    assert quotes == {}
+    assert dropped == ["mw_planned"]
+    assert "not in the article" in caplog.text
+
+
+def test_a_real_quote_from_a_different_article_is_rejected():
+    """The negative control the thresholds were tuned against.
+
+    Every one of the 131 sampled quotes was also run against an unrelated
+    article. If generic infrastructure phrasing were enough to clear the bar,
+    a citation could be satisfied by a story about a different site entirely.
+    """
+    elsewhere = (
+        "Vantage has begun construction on a data center campus in Port Washington, "
+        "Ohio, that the company says will draw 1,400 megawatts at full buildout. "
+        "The developer has committed $8.1 billion to the site."
+    )
+    assert crawl._verbatim_run(elsewhere, article()) is None
+
+    kept, _, dropped = crawl.evidence_gate(
+        {"mw_planned": 1400.0},
+        [{"field": "mw_planned", "quote": elsewhere}],
+        article(),
+    )
+    assert kept == {}
+    assert dropped == ["mw_planned"]
+
+
+def test_a_genuine_fragment_cannot_carry_a_mostly_invented_quote():
+    """`MIN_RUN_FRACTION`, and why a length floor alone is not enough.
+
+    Opening with one real clause and continuing into invention is the cheapest
+    way to defeat a "some of this is real" test, so most of the quote has to be
+    the article, not just some qualifying stretch of it.
+    """
+    quote = (
+        "Microsoft has begun construction on Fairwater, a data center campus, "
+        "and executives told investors the site will ultimately support more than "
+        "two gigawatts of critical load across six additional buildings now in "
+        "design, with the first of them due to break ground before the end of the year."
+    )
+    assert crawl._verbatim_run(quote, article()) is None
+
+
+def test_a_short_generic_phrase_is_not_enough_however_much_of_it_matches():
+    """`MIN_RUN_CHARS`, which the fraction floor does not cover.
+
+    "broke ground on the site" is 25 characters of near-boilerplate that appears
+    in every construction story ever filed, and it is 78% of this quote — so the
+    fraction test waves it through. The floor is what stops it, and it matters
+    because widening would then hand the model a whole sentence it never quoted:
+    it guessed 2024, and the sentence it would be credited with says 2023.
+    """
+    assert crawl._verbatim_run("broke ground on the site in 2024", article()) is None
+
+
+def test_widening_crosses_a_sentence_that_ends_at_a_line_wrap():
+    """Fetched articles are hard wrapped, so most sentences end at ".\\n".
+
+    Looking for a literal ". " finds the minority of them. This is the same
+    mid-figure truncation as above, in the form it actually arrives in.
+    """
+    text = (
+        "Vantage first announced the Ohio project in March 2024.\n"
+        "The company has committed $2.1 billion to the site.\n"
+        "Local officials welcomed the plan.\n"
+    )
+    quote = (
+        "Vantage first announced the Ohio project in March 2024. "
+        "Vantage has committed $2.1 billion to the site."
+    )
+    run = crawl._verbatim_run(quote, text)
+    assert run is not None
+    assert "$2.1 billion" in run
+
+    kept, _, dropped = crawl.evidence_gate(
+        {"investment_usd": 2_100_000_000.0},
+        [{"field": "investment_usd", "quote": quote}],
+        text,
+    )
+    assert kept == {"investment_usd": 2_100_000_000.0}
+    assert dropped == []
+
+
 # --- build_records ----------------------------------------------------------
 
 
@@ -498,6 +694,69 @@ def test_a_risk_whose_quote_is_not_in_the_article_is_dropped(prompt):
     """Same anti-fabrication guarantee the evidence gate gives every other field."""
     record = build("llm_response_ungrounded.json", prompt=prompt)[0]
     assert not any(r.category == "water" for r in record.risks)
+
+
+def test_a_risk_quote_the_model_edited_is_recovered_too():
+    """Risks lose evidence to reference resolution exactly like fields do.
+
+    They feed the blocker column and the risk aggregation, so dropping them on a
+    substring mismatch costs the same kind of real information.
+    """
+    text = (
+        "The principal obstacle is transmission: American Transmission Company must\n"
+        "complete two 345-kilovolt upgrades before the campus can draw its full load.\n"
+    )
+    kept, _ = crawl._risks(
+        {
+            "risks": [
+                {
+                    "category": "transmission",
+                    "severity": "material",
+                    "summary": "Two upgrades must finish first.",
+                    # "the campus" resolved to the site's name.
+                    "quote": (
+                        "The principal obstacle is transmission: American Transmission "
+                        "Company must complete two 345-kilovolt upgrades before Fairwater "
+                        "can draw its full load."
+                    ),
+                }
+            ]
+        },
+        text,
+        URL,
+    )
+    assert len(kept) == 1
+    assert "before the campus can draw" in kept[0].quote
+    assert crawl._normalize_for_match(kept[0].quote) in crawl._normalize_for_match(text)
+
+
+def test_recovery_does_not_let_a_mislabelled_risk_through():
+    """The category check runs against the recovered text, not the model's edit.
+
+    That is strictly harder to satisfy: the model could otherwise smuggle the
+    category's keyword into its own paraphrase of a real sentence and have the
+    label accepted on the strength of a word the article never used.
+    """
+    text = "Microsoft will operate the campus itself and has not announced any tenants.\n"
+    kept, notes = crawl._risks(
+        {
+            "risks": [
+                {
+                    "category": "financing",
+                    "severity": "material",
+                    "summary": "Funding looks shaky.",
+                    "quote": (
+                        "Microsoft will operate the campus itself and has not announced "
+                        "any tenants, leaving the financing unresolved."
+                    ),
+                }
+            ]
+        },
+        text,
+        URL,
+    )
+    assert kept == []
+    assert notes
 
 
 def test_a_real_quote_under_the_wrong_category_is_dropped(prompt):

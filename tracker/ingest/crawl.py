@@ -20,13 +20,14 @@ reporting trivial, and keeps the SQLAlchemy session single-threaded.
 from __future__ import annotations
 
 import datetime as dt
+import difflib
 import logging
 import re
 import unicodedata
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -91,6 +92,18 @@ MAX_RISKS_PER_PROJECT = 6
 #: costs far more per megawatt than one leasing shell space, and this must not
 #: fire on those.
 MAX_USD_PER_MW = 50_000_000
+
+#: Field the ratio check demotes, and a stable substring identifying its
+#: disclosure in a project's notes.
+#:
+#: The note is the only durable record of *why* a value is 待确认. Both causes
+#: land at the same tier — nothing quotable backs it — but they call for opposite
+#: work: an unquoted figure needs a second source, whereas a programme total
+#: needs correcting, because the sentence behind it is real and simply about
+#: something larger. The console reads this marker to tell them apart, so the
+#: wording around it may change and these words may not.
+SCALE_NOTE_FIELD = "investment_usd"
+SCALE_NOTE_MARKER = "plausibility ceiling"
 
 #: Marker inserted where the middle of an over-long article was dropped.
 TRUNCATION_MARKER = "\n\n[... middle of article omitted for length ...]\n\n"
@@ -198,6 +211,127 @@ def _normalize_for_match(text: str) -> str:
         .replace("—", "-")
     )
     return re.sub(r"\s+", " ", folded).strip().lower()
+
+
+def _normalize_with_offsets(text: str) -> tuple[str, list[int]]:
+    """Normalize, and keep an index back to the original for every character.
+
+    Needed because a recovered quote must be shown in the article's own words —
+    capitalisation and all — and the match is found in the normalized form. NFKC
+    can change a character's width, so this folds one character at a time and
+    keeps only the first source index for each result character; that is enough
+    to bound a span, which is all the caller needs.
+    """
+    out: list[str] = []
+    index: list[int] = []
+    pending_space = False
+    for position, char in enumerate(text):
+        folded = unicodedata.normalize("NFKC", char)
+        folded = (
+            folded.replace("“", '"')
+            .replace("”", '"')
+            .replace("‘", "'")
+            .replace("’", "'")
+            .replace("–", "-")
+            .replace("—", "-")
+        ).lower()
+        if folded.isspace() or not folded:
+            pending_space = bool(out)
+            continue
+        if pending_space:
+            out.append(" ")
+            index.append(position)
+            pending_space = False
+        for character in folded:
+            out.append(character)
+            index.append(position)
+    return "".join(out), index
+
+
+#: A recovered run must be at least this many characters, and at least this much
+#: of the quote the model offered.
+#:
+#: **Why recovery exists at all.** Measured over 131 real evidence quotes from 8
+#: cached articles, 33 failed exact containment — and the dominant reason was not
+#: fabrication. The model resolves references while quoting: the article says
+#: "The campus is a single building comprising two data halls that serve as a
+#: 16.5 MW data center" and the model writes "The *Austin* campus is a single
+#: building…", substituting the name for the pronoun. Helpful for a reader,
+#: fatal for a substring test, and it was costing real capacity figures.
+#:
+#: **Why it is still safe.** The run itself must be verbatim, the *article's* text
+#: is what gets stored rather than the model's edit, and `_stated_in` then runs
+#: against that stored text — so a value still has to be evidenced by words
+#: somebody actually published. Tuned against a negative control: every quote was
+#: also tested against an unrelated article, and at these thresholds not one
+#: crossed. 27 of the 33 came back; acceptance went from 75% to 95%.
+MIN_RUN_CHARS: Final = 40
+MIN_RUN_FRACTION: Final = 0.5
+
+
+def _verbatim_run(quote: str, article: str) -> str | None:
+    """The article's own words for the longest stretch of `quote` it really contains.
+
+    None when nothing long enough matches, which is what a fabricated quote looks
+    like.
+    """
+    normalized_quote = _normalize_for_match(quote)
+    if not normalized_quote:
+        return None
+    haystack, offsets = _normalize_with_offsets(article)
+    match = difflib.SequenceMatcher(
+        None, normalized_quote, haystack, autojunk=False
+    ).find_longest_match(0, len(normalized_quote), 0, len(haystack))
+    if match.size < MIN_RUN_CHARS:
+        return None
+    if match.size / len(normalized_quote) < MIN_RUN_FRACTION:
+        return None
+    start = offsets[match.b]
+    end = offsets[match.b + match.size - 1] + 1
+    start, end = _widen_to_sentence(article, start, end)
+    # Collapse the wrapping. Filings and PDF-derived text carry hard newlines
+    # mid-sentence, and a quote rendered with them looks broken in the drawer.
+    return re.sub(r"\s+", " ", article[start:end]).strip()
+
+
+#: How far either side of a matched run to look for a sentence boundary. Enough
+#: to pick up a clause the model dropped, short enough that a quote stays a quote.
+_WIDEN_BY: Final = 160
+
+#: A full stop that really ends a sentence, tolerating any wrapping after it.
+_SENTENCE_END: Final = re.compile(r"[.!?](?=\s)")
+
+
+def _widen_to_sentence(article: str, start: int, end: int) -> tuple[int, int]:
+    """Grow a span outward to sentence edges, staying inside the article.
+
+    Without this a run can stop mid-number. Observed: "…the offering was $" —
+    the model wrote "$1,300.0 million", the article breaks the line inside the
+    figure, and the longest common run ends at the dollar sign. The quote is then
+    real but no longer evidences the value it was cited for, so `_stated_in`
+    drops it anyway and the recovery bought nothing.
+
+    Safe because everything added is the article's own text; widening cannot
+    introduce a word nobody published.
+    """
+    # `[.!?]` followed by *any* whitespace, not ". " — fetched articles are hard
+    # wrapped, so most sentences end at ".\n" and a literal ". " misses them.
+    before = article[max(0, start - _WIDEN_BY) : start]
+    ends = list(_SENTENCE_END.finditer(before))
+    if ends:
+        start -= len(before) - ends[-1].end()
+    else:
+        paragraph = before.rfind("\n\n")
+        start -= len(before) - (paragraph + 2) if paragraph != -1 else 0
+
+    after = article[end : end + _WIDEN_BY]
+    found = _SENTENCE_END.search(after)
+    if found:
+        end += found.start() + 1  # keep the full stop, drop the whitespace
+    else:
+        paragraph = after.find("\n\n")
+        end += paragraph if paragraph != -1 else 0
+    return start, end
 
 
 #: Article wording that evidences each phase.
@@ -487,12 +621,26 @@ def evidence_gate(
         quote = entry.get("quote")
         if not isinstance(quote, str) or not quote.strip():
             continue
-        if _normalize_for_match(quote) not in haystack:
-            log.warning("evidence quote for %r is not in the article; ignoring", name)
-            continue
-        verified.append(quote.strip())
+        if _normalize_for_match(quote) in haystack:
+            settled = quote.strip()
+        else:
+            # Not verbatim — but the usual reason is the model resolving a
+            # reference at the edge of a sentence it otherwise copied exactly.
+            # Take the part it really did copy, in the article's own words.
+            recovered = _verbatim_run(quote, article_text)
+            if recovered is None:
+                log.warning("evidence quote for %r is not in the article; ignoring", name)
+                continue
+            log.debug(
+                "evidence quote for %r was edited by the model; keeping the %d "
+                "characters it actually copied",
+                name,
+                len(recovered),
+            )
+            settled = recovered
+        verified.append(settled)
         if isinstance(name, str):
-            quotes.setdefault(name, quote.strip())
+            quotes.setdefault(name, settled)
 
     kept: dict[str, Any] = {}
     dropped: list[str] = []
@@ -613,8 +761,8 @@ def _implausible_investment(claims: dict[str, Any]) -> str | None:
     if per_mw <= MAX_USD_PER_MW:
         return None
     return (
-        f"investment_usd of ${int(money):,} against {mw:g} MW is ${per_mw / 1e6:,.0f}M per MW, "
-        f"above the ${MAX_USD_PER_MW / 1e6:,.0f}M plausibility ceiling — usually a programme-wide "
+        f"{SCALE_NOTE_FIELD} of ${int(money):,} against {mw:g} MW is ${per_mw / 1e6:,.0f}M per MW, "
+        f"above the ${MAX_USD_PER_MW / 1e6:,.0f}M {SCALE_NOTE_MARKER} — usually a programme-wide "
         "total quoted in an article about one site. Kept as 待确认 rather than stored as fact."
     )
 
@@ -687,10 +835,19 @@ def _risks(raw: dict[str, Any], article_text: str, url: str) -> tuple[list[RiskR
         if not isinstance(quote, str) or not quote.strip():
             dropped_unsupported.append(category)
             continue
-        if _normalize_for_match(quote) not in haystack:
-            log.warning("risk quote for %s is not in the article; dropping the risk", category)
-            dropped_unsupported.append(category)
-            continue
+        if _normalize_for_match(quote) in haystack:
+            quote = quote.strip()
+        else:
+            # Same reference-resolution problem as `evidence_gate`, same remedy:
+            # fall back to the article's own words for the stretch the model really
+            # copied. The category check below then runs against *that*, which is
+            # strictly harder to satisfy than checking the model's edit.
+            recovered = _verbatim_run(quote, article_text)
+            if recovered is None:
+                log.warning("risk quote for %s is not in the article; dropping the risk", category)
+                dropped_unsupported.append(category)
+                continue
+            quote = recovered
         if not _risk_quote_supports(category, quote):
             log.warning("risk quote for %s does not state that category; dropping", category)
             dropped_unsupported.append(category)
@@ -1218,6 +1375,9 @@ def count_populated(record: IngestRecord) -> int:
 
 __all__ = [
     "MAX_PROJECTS_PER_ARTICLE",
+    "MAX_USD_PER_MW",
+    "SCALE_NOTE_FIELD",
+    "SCALE_NOTE_MARKER",
     "TRUNCATION_MARKER",
     "CrawlError",
     "ExtractionOutcome",

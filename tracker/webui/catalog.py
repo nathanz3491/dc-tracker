@@ -21,13 +21,56 @@ from typing import Any
 #:
 #: Listed explicitly rather than inferred. A command silently gaining a cost is a
 #: worse failure than one that has to be added here by hand when it does.
-LLM_COMMANDS: frozenset[str] = frozenset({"sync", "enrich", "infer", "search", "ingest crawl"})
+#: `logic` is here even though its default run is free, and that is the rule
+#: working rather than an over-reaction. The gate is on the command name and never
+#: on its flags — `--read 50` spends fifty calls, so the command can spend, so it
+#: confirms. A gate that reads arguments is a gate with a bypass in it.
+LLM_COMMANDS: frozenset[str] = frozenset(
+    {
+        "sync",
+        "enrich",
+        "infer",
+        "search",
+        "point",
+        "logic check",
+        "ingest crawl",
+        "ingest edgar",
+    }
+)
+
+#: Commands that destroy data, and the sentence shown before one is started.
+#:
+#: A separate axis from :data:`LLM_COMMANDS` rather than another entry in it,
+#: because the two guard different losses and a reader should not have to be told
+#: `merge` "spends LLM tokens" when it spends none. The *mechanism* is shared —
+#: both need the command name typed back — and that is the point: the console has
+#: one confirmation ritual, used for both kinds of irreversibility.
+#:
+#: `merge` folds rows together and deletes the ones folded in. Every field on the
+#: survivor is then recomputed from the combined citations, so nothing a source
+#: said is lost — but the row numbers are gone and there is no undo.
+DESTRUCTIVE: dict[str, str] = {
+    "merge": "deletes the rows it folds in. There is no undo.",
+    # Not destruction — it writes values derived from citations that stay exactly
+    # where they are, and running it twice changes nothing the second time. It is
+    # here because it is the only command that rewrites fields across the whole
+    # database at once, and a bulk write deserves the same deliberate pause as a
+    # deletion. Over-warning is the safe direction; the sentence says what it
+    # really does rather than implying loss.
+    "logic resolve": "rewrites every row whose stored values its own sources no longer support.",
+}
 
 #: Commands the console will not run at any cost, with the reason shown in the UI.
 #: They remain visible in the palette with their argv, so an operator can copy the
 #: line into a terminal — hiding them would just be confusing.
 BLOCKED: dict[str, str] = {
     "serve": "already running",
+    # A console that can publish itself is a console that can be told to publish
+    # itself. The command blocks forever running a tunnel, so it would also hold
+    # the single run slot until the timeout — but the reason it is here is the
+    # first one: putting this page on the public internet is a decision for
+    # somebody at a terminal, not a button on the page.
+    "cloudflare": "run it from a terminal — publishing this page is not a click",
     "version": "shown in the header",
 }
 
@@ -67,11 +110,24 @@ def _enum_hints() -> dict[str, tuple[str, ...]]:
 
 
 #: Rendered as a section heading, in the order an operator meets them.
+#:
+#: Hand-written, unlike everything else here, because there is nothing in Typer
+#: that knows `exposure` is an inspection and `merge` is a repair. The cost of
+#: that is real and worth naming: a command left out of this table still appears,
+#: but in an "Other" bucket at the bottom, which is where the four commands added
+#: with `capex` and `duplicates` sat until they were listed.
 GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("The loop", ("sync", "discover", "enrich", "search")),
-    ("Load data", ("ingest manual", "ingest pjm", "ingest crawl", "ingest geo")),
-    ("Inspect", ("list", "show", "risks", "exposure", "stats", "gaps", "queue")),
-    ("Judge", ("review", "verify", "infer")),
+    ("The loop", ("sync", "discover", "enrich", "search", "point")),
+    (
+        "Load data",
+        ("ingest manual", "ingest pjm", "ingest crawl", "ingest edgar", "ingest geo"),
+    ),
+    (
+        "Inspect",
+        ("list", "show", "risks", "exposure", "capex", "stats", "gaps", "queue"),
+    ),
+    ("Judge", ("review", "verify", "infer", "logic check")),
+    ("Repair", ("duplicates", "merge", "logic resolve")),
     ("Maintain", ("init", "export")),
 )
 
@@ -86,7 +142,9 @@ class Flag:
     help: str = ""
     choices: tuple[str, ...] = ()
     #: Typer's `list[str]` options, which the CLI accepts more than once
-    #: (`--url A --url B`). A request may send a list for these and only these.
+    #: (`--url A --url B`), and variadic positionals, which take any number of
+    #: values in a row (`merge 4 7 9`). A request may send a list for these and
+    #: only these.
     repeatable: bool = False
 
     def as_json(self) -> dict[str, Any]:
@@ -109,6 +167,13 @@ class Command:
     cost: str  # free | llm
     flags: tuple[Flag, ...]
     blocked: str | None = None
+    #: What this command destroys, or None. Orthogonal to `cost`.
+    destroys: str | None = None
+
+    @property
+    def needs_confirmation(self) -> bool:
+        """Whether the runner requires the command name typed back."""
+        return self.cost == "llm" or self.destroys is not None
 
     def as_json(self) -> dict[str, Any]:
         return {
@@ -116,6 +181,7 @@ class Command:
             "desc": self.help,
             "cost": self.cost,
             "blocked": self.blocked,
+            "destroys": self.destroys,
             "flags": [f.as_json() for f in self.flags],
         }
 
@@ -177,10 +243,13 @@ def _flags_for(command) -> tuple[Flag, ...]:
                 default=_jsonable(getattr(param, "default", None)),
                 help=getattr(param, "help", "") or "",
                 choices=choices,
-                # Click marks a `list[str]` option `multiple`. Read it rather
-                # than keeping a hand-written list, so a new repeatable option
-                # works without anyone remembering this file exists.
-                repeatable=bool(getattr(param, "multiple", False)),
+                # Click marks a `list[str]` option `multiple` and a variadic
+                # positional `nargs=-1`. Read both rather than keeping a
+                # hand-written list, so a new repeatable parameter works without
+                # anyone remembering this file exists.
+                repeatable=(
+                    bool(getattr(param, "multiple", False)) or getattr(param, "nargs", 1) == -1
+                ),
             )
         )
     return tuple(out)
@@ -204,6 +273,7 @@ def _walk(group, prefix: str = "") -> list[Command]:
                 cost="llm" if full in LLM_COMMANDS else "free",
                 flags=_flags_for(command),
                 blocked=BLOCKED.get(full),
+                destroys=DESTRUCTIVE.get(full),
             )
         )
     return out
@@ -319,6 +389,7 @@ def build_argv(cmd: str, flags: dict[str, Any], *, db_path: Any = None) -> list[
 __all__ = [
     "BLOCKED",
     "BLOCKED_FLAGS",
+    "DESTRUCTIVE",
     "GROUPS",
     "LLM_COMMANDS",
     "Command",

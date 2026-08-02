@@ -61,10 +61,21 @@ The payoff is direct: **a flag added to the CLI shows up in the browser on the
 next start**, with no second place to remember. And the browser can never offer
 a button the CLI would not recognise.
 
-Exactly one thing the CLI cannot answer: **which commands cost money**. That is
-not visible in a parameter definition, so it is a short hand-written list
-(`sync`, `enrich`, `infer`, `search`, `ingest crawl`). Hand-written rather than
-guessed, because guessing wrong means someone spends money by accident.
+Two things the CLI cannot answer, both short hand-written lists rather than
+guesses, because guessing wrong is how someone spends money or loses a row by
+accident:
+
+* **Which commands cost money** — `sync`, `enrich`, `infer`, `search`,
+  `ingest crawl`, `ingest edgar`. Not visible in a parameter definition.
+* **Which commands destroy data** — just `merge`. A separate list, not another
+  entry in the first: `merge` spends nothing, and telling an operator it spends
+  LLM tokens would be false. Both need the command's name typed back, so there is
+  one ritual for two different losses.
+
+Being hand-written has a cost, and the third hand-written list pays it: the
+*grouping* of commands into palette sections. Four commands arrived and all four
+landed in an unnamed "Other" bucket at the bottom until someone listed them. A
+test now fails if any command that is not blocked ends up there.
 
 ### Step 2 — what pressing Run actually does
 
@@ -79,7 +90,9 @@ the console checks the request against the list from step 1
    ├─ unknown command → refused
    ├─ unknown flag    → refused
    ├─ wrong type      → refused
-   └─ costs money and not confirmed → refused
+   └─ costs money or deletes rows, and not confirmed → refused
+      (checked on the command name, never on its flags —
+       a gate that reads arguments is a gate with a bypass in it)
         │
         ▼
 it assembles an argument list and starts a process
@@ -99,6 +112,15 @@ no special meaning. At no point is anything you type spliced into a command line
 ### Step 3 — how the data gets back
 
 The process writes to the database and exits. The page re-reads and redraws.
+
+That last part is automatic, and getting it right took two attempts. The page
+polls for the state of the most recent run and refetches when it has finished —
+keyed on the run's **id and status**, not on a running→idle transition. A
+transition is only observable if some poll caught the run mid-flight, and a merge
+takes about a second against a four-second interval. Measured: the merge
+completed between two ticks, nothing reloaded, and the log said three rows were
+deleted while the table still showed them. An id that has reached a terminal
+status is a fact about the past and cannot be missed.
 
 ```
 the CLI defines what commands exist

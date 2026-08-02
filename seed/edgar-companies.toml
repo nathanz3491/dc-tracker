@@ -23,10 +23,24 @@
 # `0001326801` returns 105; the API does not pad for you and does not complain.
 # Resolve one from https://www.sec.gov/files/company_tickers.json.
 #
-# `kind` records why the company is here, and nothing reads it yet:
+# `kind` records why the company is here. `tracker capex` reads it to decide who
+# is buying their own capacity, and `--kind` filters a run to one class:
 #   hyperscaler  the end customer whose capex we are ultimately tracking
 #   neocloud     AI-native operators, often their own tenant
 #   landlord     wholesale/colocation REITs and developers
+#   utility      the power company on the other side of the interconnection
+#   contractor   whoever is actually building it
+#
+# Only `hyperscaler` and `neocloud` count as end users in `capex.attribute`. A
+# utility is not buying compute and a contractor is not either, so adding them
+# cannot quietly change who capacity is attributed to — they are here to be
+# *sources*, not buyers.
+#
+# COST. Every company multiplies the default run: companies x phrases x
+# --per-company, one LLM call per filing that survives selection. With the
+# utilities and contractors added, a bare `tracker ingest edgar` is roughly twice
+# what it was. Use `--kind utility --per-company 1` to read one class, which is
+# also the honest way to find out whether a class is worth reading at all.
 #
 # A note on the landlords. Their filings are wall-to-wall data center, which
 # sounds ideal and is not: the section extractor has a fixed character budget and
@@ -137,6 +151,135 @@ cik = "0001679688"
 kind = "landlord"
 
 
+# --- Utilities ---------------------------------------------------------------
+#
+# The power company is the one counterparty that cannot be bypassed, and its
+# filings say things no operator press release does: how much large load has
+# actually signed an interconnection agreement, what the queue position is, and
+# when energisation is expected. `power` is the track this database is worst at
+# and the one it refuses to infer from construction, so this is aimed squarely at
+# the gap rather than at more of what already works.
+#
+# CHOSEN BY MEASURED EXPOSURE, not by size. Each of these serves a state holding
+# at least ~1% of tracked capacity, worst first: TX 33.8%, CO 11.7%, NM 8.5%,
+# OH 8.4%, GA 7.8%, VA 7.8%, AZ 1.3%, OR 1.1%. A utility for a state with no
+# tracked projects would be a subscription to noise.
+
+[[company]]
+name = "Sempra"            # Oncor — Texas, a third of all tracked capacity
+cik = "0001032208"
+kind = "utility"
+
+[[company]]
+name = "CenterPoint Energy"  # Houston
+cik = "0001130310"
+kind = "utility"
+
+[[company]]
+name = "Xcel Energy"       # Colorado, 11.7% of tracked MW
+cik = "0000072903"
+kind = "utility"
+
+[[company]]
+name = "TXNM Energy"       # formerly PNM Resources — New Mexico, 8.5%
+cik = "0001108426"
+kind = "utility"
+
+[[company]]
+name = "American Electric Power"  # Ohio, Texas, Indiana
+cik = "0000004904"
+kind = "utility"
+
+[[company]]
+name = "FirstEnergy"       # Ohio
+cik = "0001031296"
+kind = "utility"
+
+[[company]]
+name = "Southern Company"  # Georgia Power — already an operator in this database
+cik = "0000092122"
+kind = "utility"
+
+[[company]]
+name = "Dominion Energy"   # Virginia, the largest data-center market there is
+cik = "0000715957"
+kind = "utility"
+
+[[company]]
+name = "Duke Energy"       # Carolinas, Indiana
+cik = "0001326160"
+kind = "utility"
+
+[[company]]
+name = "Entergy"           # Louisiana — Meta's Hyperion sits in its territory
+cik = "0000065984"
+kind = "utility"
+
+[[company]]
+name = "Portland General Electric"  # Oregon
+cik = "0000784977"
+kind = "utility"
+
+[[company]]
+name = "Pinnacle West"     # Arizona
+cik = "0000764622"
+kind = "utility"
+
+# Merchant generators, here for one specific reason: a nuclear PPA names its
+# counterparty and its site. Talen/AWS at Susquehanna and Constellation/Microsoft
+# at Three Mile Island are both disclosed as agreements, which is exactly the
+# customer-attribution fact 60% of this database is missing.
+
+[[company]]
+name = "Constellation Energy"
+cik = "0001868275"
+kind = "utility"
+
+[[company]]
+name = "Talen Energy"
+cik = "0001622536"
+kind = "utility"
+
+
+# --- Contractors --------------------------------------------------------------
+#
+# What a builder discloses is *backlog*, and backlog leads energisation by a year
+# or two — which makes it the closest thing to a forward indicator in this
+# dataset. It is also the weakest at naming sites: an E&C 10-K says "data center
+# end market grew 40%", not which campus. Expect corroboration and timing rather
+# than new projects, and judge the class on that.
+
+[[company]]
+name = "Quanta Services"   # electrical infrastructure, substations
+cik = "0001050915"
+kind = "contractor"
+
+[[company]]
+name = "EMCOR Group"       # mechanical and electrical fit-out
+cik = "0000105634"
+kind = "contractor"
+
+[[company]]
+name = "Sterling Infrastructure"  # site development; names data centers explicitly
+cik = "0000874238"
+kind = "contractor"
+
+[[company]]
+name = "Comfort Systems USA"  # HVAC, and unusually explicit about the end market
+cik = "0001035983"
+kind = "contractor"
+
+[[company]]
+name = "MYR Group"
+cik = "0000700923"
+kind = "contractor"
+
+[[company]]
+name = "Argan"             # Gemma Power — the on-site generation EPC
+cik = "0000100591"
+kind = "contractor"
+
+
 # Phrases handed to full-text search, ANDed with the company scope above.
 #
 # Kept broad on purpose. Precision comes from `ciks`, so a narrow phrase only
@@ -155,6 +298,30 @@ phrases = [
   "\"lease agreement\" \"data center\"",
   "\"anchor tenant\"",
   "\"build-to-suit\"",
+]
+
+# Phrases used INSTEAD of the list above, for companies of a given kind.
+#
+# A utility does not write "build-to-suit" and an E&C contractor does not write
+# "anchor tenant". Both write about data centers, so the base list is not wrong —
+# it is just not asking for the thing each class uniquely knows. The utility
+# phrases target the `power` track, which is the one this database is worst at
+# and the one it refuses to infer; the contractor phrases target backlog, which
+# leads energisation and is the closest thing here to a forward indicator.
+#
+# A kind with no entry keeps the base list.
+[search.by_kind]
+utility = [
+  "\"data center\"",
+  "\"large load\"",
+  "\"interconnection agreement\" \"data center\"",
+  "\"load interconnection\"",
+  "\"energization\" \"data center\"",
+]
+contractor = [
+  "\"data center\"",
+  "\"backlog\" \"data center\"",
+  "\"remaining performance obligations\" \"data center\"",
 ]
 
 # 10-K and 10-Q together were 97% of hits in testing, and they are where the

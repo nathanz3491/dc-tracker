@@ -57,6 +57,16 @@ app = typer.Typer(
 ingest_app = typer.Typer(name="ingest", help="Load projects from a source.", no_args_is_help=True)
 app.add_typer(ingest_app)
 
+#: Finding contradictions and settling the one kind that can be settled are two
+#: halves of one job, so they live under one name rather than as strangers in a
+#: flat list. Same shape as `ingest`.
+logic_app = typer.Typer(
+    name="logic",
+    help="Find values that contradict each other, and settle the ones that can be.",
+    no_args_is_help=True,
+)
+app.add_typer(logic_app)
+
 #: Tables use ASCII borders, not Rich's default box-drawing characters.
 #: This machine's console codepage is cp936, where Unicode box characters render
 #: as mojibake — and the PRD's whole output story is redirection (`tracker export
@@ -309,34 +319,27 @@ def serve(
     Set `TRACKER_CONSOLE_PASSWORD` to put a password in front of it. On loopback
     that is optional; with `--tunnel` it is required, because a quick tunnel is a
     public URL and what is behind it runs commands.
+
+    `--tunnel` is the one-flag version of `tracker cloudflare`, which is the same
+    thing with a readiness check and support for a named tunnel on your own
+    domain.
     """
-    from tracker.webui import assets
+    _run_console(
+        port=port,
+        host=host,
+        open_browser=open_browser,
+        run=run,
+        allow_remote=allow_remote,
+        publish="quick" if tunnel else None,
+    )
+
+
+def _console_password() -> str | None:
+    """The console password, checked for the one thing worth checking."""
     from tracker.webui.auth import MIN_PASSWORD_LEN
-    from tracker.webui.server import serve as run_server
-    from tracker.webui.tunnel import CloudflaredMissing, quick_tunnel
 
     secret = get_settings().console_password
     password = secret.get_secret_value() if secret else None
-
-    if host not in {"127.0.0.1", "localhost", "::1"} and not allow_remote:
-        _fail(
-            f"--host {host} would expose the command runner to the network.\n"
-            "Anyone who can reach that address could start a run that spends LLM "
-            "tokens and writes to the database. Pass --allow-remote if that is "
-            "genuinely what you want."
-        )
-
-    # A tunnel is a public URL handed to anyone who learns it, in front of a
-    # process that runs commands. Refusing rather than warning is the point: a
-    # warning scrolls past, and there is no safe reading of "published and open".
-    if tunnel and not password:
-        _fail(
-            "--tunnel publishes this console on a public URL, and it has no password.\n\n"
-            "Set one first — in .env (gitignored) or the environment:\n"
-            "  TRACKER_CONSOLE_PASSWORD=...\n\n"
-            "Anything that reaches the URL can otherwise run `sync`, spend LLM "
-            "tokens and write to the database."
-        )
     # A floor against a typo, not a strength policy. What makes a short password
     # safe here is the rate limit — 40 failed attempts across all clients closes
     # the gate for 15 minutes, which puts even a 7-character keyspace tens of
@@ -346,6 +349,12 @@ def serve(
             f"TRACKER_CONSOLE_PASSWORD is under {MIN_PASSWORD_LEN} characters. "
             "That is short enough to be a typo rather than a secret."
         )
+    return password
+
+
+def _console_preflight(password: str | None) -> Path:
+    """Everything that can be checked before a socket is opened. Returns the db path."""
+    from tracker.webui import assets
 
     missing = assets.missing_vendor()
     if missing:
@@ -359,9 +368,107 @@ def serve(
     path = _db_path()
     if not path.is_file():
         _fail(f"database not found: {path}\nRun `tracker init` first.")
+    return path
+
+
+def _explain_tunnel_failure(message: str, publish: str | None, used_proxy: bool) -> str:
+    """Add the one thing the raw cloudflared log does not say.
+
+    `context deadline exceeded` on the quick-tunnel API is not a bug in this
+    project and not something a retry reliably fixes, so dumping the log and
+    stopping leaves the operator with no move. What it usually means is that the
+    request is slower than cloudflared's fixed budget — measured at 13-25s
+    against roughly ten on a filtered link — and the two things that actually
+    help are a proxy it will use and a named tunnel, which never calls that
+    endpoint at all.
+    """
+    from tracker.webui.tunnel import detect_proxy
+
+    if publish != "quick" or "deadline exceeded" not in message:
+        return message
+
+    hint = [
+        "",
+        "This is the quick-tunnel API being slower than cloudflared's own timeout,",
+        "not a fault in the tunnel itself. Two things help:",
+        "",
+    ]
+    proxy = detect_proxy()
+    if not used_proxy:
+        hint.append("  * drop --no-proxy: the API request can be routed through a proxy")
+    elif proxy:
+        hint.append(f"  * the proxy at {proxy} was already used and still timed out")
+    else:
+        hint.append("  * --proxy http://host:port, if you have one — cloudflared's own")
+        hint.append("    client ignores HTTPS_PROXY for this request, so the console")
+        hint.append("    relays it for you")
+    hint += [
+        "  * a named tunnel, which never calls that endpoint:",
+        "      cloudflared tunnel login",
+        "      cloudflared tunnel create dc-console",
+        "      cloudflared tunnel route dns dc-console console.example.com",
+        "      tracker cloudflare --name dc-console --hostname console.example.com",
+    ]
+    return message + "\n" + "\n".join(hint)
+
+
+def _run_console(
+    *,
+    port: int,
+    host: str,
+    open_browser: bool,
+    run: bool,
+    allow_remote: bool = False,
+    publish: str | None = None,
+    tunnel_name: str | None = None,
+    hostname: str | None = None,
+    proxy: str | None = None,
+    use_proxy: bool = True,
+) -> None:
+    """Start the console, optionally behind cloudflared. Shared by `serve` and `cloudflare`.
+
+    One implementation rather than two, because the interesting part is the
+    refusals — no password behind a public URL, a non-loopback bind without
+    `--allow-remote` — and a second copy of those is a second place for one of
+    them to quietly go missing.
+
+    `publish` is None, "quick" or "named".
+    """
+    from tracker.webui.server import serve as run_server
+    from tracker.webui.tunnel import (
+        CloudflaredMissing,
+        TunnelFailed,
+        TunnelNotFound,
+        named_tunnel,
+        quick_tunnel,
+    )
+
+    password = _console_password()
+
+    if host not in {"127.0.0.1", "localhost", "::1"} and not allow_remote:
+        _fail(
+            f"--host {host} would expose the command runner to the network.\n"
+            "Anyone who can reach that address could start a run that spends LLM "
+            "tokens and writes to the database. Pass --allow-remote if that is "
+            "genuinely what you want."
+        )
+
+    # A tunnel is a public URL handed to anyone who learns it, in front of a
+    # process that runs commands. Refusing rather than warning is the point: a
+    # warning scrolls past, and there is no safe reading of "published and open".
+    if publish and not password:
+        _fail(
+            "publishing this console puts it on a public URL, and it has no password.\n\n"
+            "Set one first — in .env (gitignored) or the environment:\n"
+            "  TRACKER_CONSOLE_PASSWORD=...\n\n"
+            "Anything that reaches the URL can otherwise run `sync`, spend LLM "
+            "tokens and write to the database."
+        )
+
+    path = _console_preflight(password)
 
     console.print(f"database: [bold]{path}[/bold]")
-    console.print(f"console:  [bold]http://{host}:{port}/[/bold]")
+    console.print(f"local:    [bold]http://{host}:{port}/[/bold]")
     console.print(
         "[green]password protected[/green]"
         if password
@@ -371,18 +478,45 @@ def serve(
         console.print("[dim]read-only: the page cannot execute commands[/dim]")
 
     public = None
-    if tunnel:
+    if publish:
         try:
-            public = quick_tunnel(port)
-        except CloudflaredMissing as exc:
-            _fail(str(exc))
-        except TimeoutError as exc:
-            _fail(str(exc))
-        console.print(f"public:   [bold]{public.url}[/bold]")
-        console.print(
-            "[yellow]that URL is reachable by anyone who has it.[/yellow] "
-            "It stops working when this command does."
-        )
+            public = (
+                named_tunnel(port, tunnel_name or "", hostname=hostname)
+                if publish == "named"
+                else quick_tunnel(port, proxy=proxy, use_proxy=use_proxy)
+            )
+        except (CloudflaredMissing, TunnelFailed, TunnelNotFound, TimeoutError) as exc:
+            _fail(_explain_tunnel_failure(str(exc), publish, use_proxy))
+
+        if public.via_proxy:
+            console.print(f"[dim]quick-tunnel API routed via {escape(public.via_proxy)}[/dim]")
+        if public.url:
+            console.print(f"public:   [bold]{public.url}[/bold]")
+        else:
+            # A named tunnel's hostname lives in your Cloudflare DNS, not in the
+            # tunnel's output. Saying "unknown" is honest; inventing one is not.
+            console.print(
+                f"public:   [bold]tunnel {tunnel_name!r} is up[/bold] "
+                "[dim]— at whichever hostname you routed to it. "
+                "Pass --hostname to have it printed here.[/dim]"
+            )
+        if not public.confirmed:
+            console.print(
+                "[yellow]could not confirm the edge connection[/yellow] "
+                "[dim]— cloudflared is still running and may well be fine; "
+                "run with -v to read its log[/dim]"
+            )
+        if public.kind == "quick":
+            console.print(
+                "[yellow]that URL is reachable by anyone who has it.[/yellow] "
+                "It stops working when this command does, and a new one is issued "
+                "next time."
+            )
+        else:
+            console.print(
+                "[yellow]that hostname is reachable by anyone who has it[/yellow] "
+                "while this command runs."
+            )
 
     console.print("[dim]stop with Ctrl-C[/dim]")
     try:
@@ -390,13 +524,184 @@ def serve(
             path,
             host=host,
             port=port,
-            open_browser=open_browser and not tunnel,
+            open_browser=open_browser and not publish,
             allow_write=run,
             password=password,
         )
     finally:
         if public is not None:
             public.stop()
+
+
+@app.command()
+def cloudflare(
+    port: Annotated[int, typer.Option("--port", help="Local port the tunnel points at.")] = 8765,
+    name: Annotated[
+        str | None,
+        typer.Option(
+            "--name",
+            help="Run this named tunnel instead of an anonymous one. Needs a Cloudflare account.",
+            show_default=False,
+        ),
+    ] = None,
+    hostname: Annotated[
+        str | None,
+        typer.Option(
+            "--hostname",
+            help="The hostname routed to --name, so it can be printed. Display only.",
+            show_default=False,
+        ),
+    ] = None,
+    run: Annotated[
+        bool,
+        typer.Option(
+            "--run/--no-run",
+            help="Allow the page to execute commands. --no-run publishes it read-only.",
+        ),
+    ] = True,
+    proxy: Annotated[
+        str | None,
+        typer.Option(
+            "--proxy",
+            help="Route the quick-tunnel API request through this proxy. Auto-detected.",
+            show_default=False,
+        ),
+    ] = None,
+    use_proxy: Annotated[
+        bool,
+        typer.Option("--proxy-api/--no-proxy", help="Use a proxy for the quick-tunnel API call."),
+    ] = True,
+    check: Annotated[
+        bool,
+        typer.Option("--check", help="Report whether publishing would work, then exit."),
+    ] = False,
+) -> None:
+    """Publish the console on the internet through cloudflared.
+
+    The console itself still binds loopback. cloudflared makes an *outbound*
+    connection to Cloudflare and relays traffic back down it, so nothing is
+    exposed on your network and no firewall or router changes are involved.
+
+    Two shapes. With no flags you get an anonymous quick tunnel: a random
+    `*.trycloudflare.com` URL, no account needed, new URL every time. With
+    `--name` you run a tunnel you created once on your own account, so the
+    hostname is yours and survives a restart — worth it if the link is going to
+    anybody else, because re-sending a fresh URL every session is how one ends up
+    written down somewhere it should not be.
+
+    `TRACKER_CONSOLE_PASSWORD` is required either way and this refuses to start
+    without it. The URL is public and the page can run commands that spend money
+    and write to the database; a random hostname is obscurity, not access control.
+
+    `--check` runs every test short of opening the tunnel and prints what it
+    found, which is the cheap way to discover that cloudflared is a truncated
+    download before you need the link to work.
+    """
+    from tracker.webui.tunnel import CloudflaredMissing, find_cloudflared
+
+    if hostname and not name:
+        _fail("--hostname describes a named tunnel; pass --name as well, or drop both.")
+
+    if check:
+        _cloudflare_check(name)
+        return
+
+    # Fail on a missing binary before the socket is opened, so the operator is not
+    # told the console is up and then told it is not published.
+    try:
+        find_cloudflared()
+    except CloudflaredMissing as exc:
+        _fail(str(exc))
+
+    _run_console(
+        port=port,
+        host="127.0.0.1",
+        open_browser=False,
+        run=run,
+        publish="named" if name else "quick",
+        tunnel_name=name,
+        hostname=hostname,
+        proxy=proxy,
+        use_proxy=use_proxy,
+    )
+
+
+def _cloudflare_check(name: str | None) -> None:
+    """Print a publish-readiness report and exit non-zero if it would fail."""
+    from tracker.webui import assets
+    from tracker.webui.auth import MIN_PASSWORD_LEN
+    from tracker.webui.tunnel import (
+        CloudflaredMissing,
+        detect_proxy,
+        find_cloudflared,
+        named_tunnels,
+        version,
+    )
+
+    rows: list[tuple[bool, str, str]] = []
+
+    secret = get_settings().console_password
+    password = secret.get_secret_value() if secret else None
+    if not password:
+        rows.append(
+            (False, "password", "TRACKER_CONSOLE_PASSWORD is not set — required to publish")
+        )
+    elif len(password) < MIN_PASSWORD_LEN:
+        rows.append((False, "password", f"set, but under {MIN_PASSWORD_LEN} characters"))
+    else:
+        rows.append((True, "password", f"set, {len(password)} characters"))
+
+    try:
+        binary = find_cloudflared()
+        rows.append((True, "cloudflared", f"{version(binary)} at {binary}"))
+        runnable = True
+    except CloudflaredMissing as exc:
+        rows.append((False, "cloudflared", str(exc).splitlines()[0]))
+        runnable = False
+
+    if runnable and name:
+        available = named_tunnels()
+        if name in available:
+            rows.append((True, "tunnel", f"{name!r} exists on this account"))
+        elif available:
+            rows.append((False, "tunnel", f"no {name!r}; this account has {', '.join(available)}"))
+        else:
+            rows.append(
+                (False, "tunnel", "no named tunnels — run `cloudflared tunnel login` first")
+            )
+
+    # Not pass/fail — no proxy is the ordinary case. It is reported because when
+    # the quick tunnel does time out, this line is the first thing worth knowing.
+    if not name:
+        proxy = detect_proxy()
+        rows.append(
+            (
+                True,
+                "proxy",
+                f"{proxy} — the quick-tunnel API call is relayed through it, because "
+                "cloudflared's own client ignores HTTPS_PROXY"
+                if proxy
+                else "none configured; cloudflared will reach the API directly",
+            )
+        )
+
+    path = _db_path()
+    rows.append(
+        (path.is_file(), "database", str(path) if path.is_file() else f"{path} does not exist")
+    )
+    missing = assets.missing_vendor()
+    rows.append(
+        (not missing, "front end", "vendored" if not missing else f"{len(missing)} file(s) missing")
+    )
+
+    for ok, label, detail in rows:
+        mark = "[green]ok[/green]  " if ok else "[red]no[/red]  "
+        console.print(f"{mark}[bold]{label:<12}[/bold]{escape(detail)}")
+
+    if all(ok for ok, _, _ in rows):
+        console.print("\n[green]ready to publish[/green] — run `tracker cloudflare`")
+    else:
+        _fail("not ready to publish; see above")
 
 
 # --- ingest -----------------------------------------------------------------
@@ -641,6 +946,21 @@ def ingest_iso(
     data-center column. Matching is therefore a keyword heuristic, confidence
     caps at 1, and queue MW is recorded as a disclosure rather than as the
     project's capacity. Use it for candidate generation and corroboration.
+
+    `--csv` takes a file you download, and deliberately does not fetch one. Each
+    ISO publishes behind a different report portal — a session cookie here, a
+    subscription key there, an .aspx that returns HTML to anything without a
+    browser — so a built-in fetcher would be four scrapers to maintain against
+    four sites that change. Downloading it is a two-minute job done a few times a
+    year:
+
+      PJM     https://www.pjm.com/planning/service-requests/services-request-status
+      MISO    https://www.misoenergy.org/planning/resource-utilization/GI_Queue/
+      ERCOT   https://www.ercot.com/gridinfo/resource  (Generation Interconnection
+              Status report; the Large Load queue is the one to want)
+      CAISO   https://www.caiso.com/generation-transmission/interconnection
+
+    Save the export anywhere and point `--csv` at it. XLSX and JSON work too.
     """
     import json as _json
 
@@ -1261,6 +1581,10 @@ def exposure(
 @app.command()
 def capex(
     rows: Annotated[int, typer.Option("--rows", help="Buyers to show.")] = 20,
+    by_quarter: Annotated[
+        bool,
+        typer.Option("--by-quarter", help="Bucket the pipeline by quarter instead of by year."),
+    ] = False,
     include_terminal: Annotated[
         bool,
         typer.Option("--include-terminal", help="Count paused and cancelled projects too."),
@@ -1285,6 +1609,7 @@ def capex(
         positions = capex_mod.rollup(session, include_terminal=include_terminal)
         cover = capex_mod.coverage(session)
         years = capex_mod.horizon(positions)
+        precision = capex_mod.date_precision(session)
         blockers = {p.key: capex_mod.blocking_risk(session, p.key) for p in positions if p.key}
         suspects = capex_mod.suspect_attributions(session)
         dupes = capex_mod.suspected_duplicates(session)
@@ -1305,6 +1630,7 @@ def capex(
                         "mw_unbuilt": p.mw_unbuilt,
                         "investment_usd": p.investment_usd,
                         "mw_by_year": p.mw_by_year,
+                        "mw_by_quarter": p.mw_by_quarter,
                         "projects_at_risk": p.at_risk_projects,
                         "mw_at_risk": p.mw_at_risk,
                         "slipped": p.slipped,
@@ -1332,11 +1658,18 @@ def capex(
     table.add_column("MW planned", justify="right")
     table.add_column("MW built", justify="right")
     table.add_column("investment", justify="right")
-    # Only the next few years; older dates are projects that should already be
+    # Only the next few periods; older dates are projects that should already be
     # online and are a data-quality signal rather than a pipeline.
-    shown_years = [y for y in years if y >= capex_mod.as_of().year][:4]
-    for year in shown_years:
-        table.add_column(f"MW {year}", justify="right")
+    today = capex_mod.as_of()
+    if by_quarter:
+        now = f"{today.year}Q{(today.month - 1) // 3 + 1}"
+        buckets = [q for q in capex_mod.quarters(positions) if q >= now][:6]
+        of = lambda p, b: p.mw_by_quarter.get(b)  # noqa: E731
+    else:
+        buckets = [str(y) for y in years if y >= today.year][:4]
+        of = lambda p, b: p.mw_by_year.get(int(b))  # noqa: E731
+    for bucket in buckets:
+        table.add_column(f"MW {bucket}", justify="right")
     table.add_column("at risk", justify="right")
     table.add_column("slipped", justify="right")
     table.add_column("worst risk")
@@ -1352,10 +1685,7 @@ def capex(
             _fmt_mw(position.mw_built) if position.mw_built else NA,
             _fmt_usd(position.investment_usd) if position.investment_usd else NA,
         ]
-        cells += [
-            _fmt_mw(position.mw_by_year[y]) if position.mw_by_year.get(y) else NA
-            for y in shown_years
-        ]
+        cells += [_fmt_mw(of(position, b)) if of(position, b) else NA for b in buckets]
         cells += [
             _fmt_mw(position.mw_at_risk) if position.mw_at_risk else NA,
             str(position.slipped) if position.slipped else NA,
@@ -1372,8 +1702,15 @@ def capex(
         f"{cover['self_built_pct']:.0f}% self-built). "
         f"{cover['with_capacity_pct']:.0f}% cite a capacity; "
         f"{cover['in_timeline_pct']:.0f}% cite both capacity and a date, "
-        f"so only those reach the year columns.[/dim]"
+        f"so only those reach the {'quarter' if by_quarter else 'year'} columns.[/dim]"
     )
+    if by_quarter:
+        console.print(
+            f"[yellow]quarters are a shape, not a schedule.[/yellow] [dim]"
+            f"{precision['year_only_pct']:.0f}% of the dated projects land on 1 January, which is "
+            "where a source that said only a year normalises to — those are a year of vagueness "
+            "sitting in Q1.[/dim]"
+        )
     console.print(
         "[dim]sums cover only cited figures — every number is a floor, not a total.[/dim]"
     )
@@ -1396,6 +1733,123 @@ def capex(
         )
         for project_id, operator, customer in suspects[:5]:
             console.print(f"  [dim]#{project_id} {operator} -> customer {customer!r}[/dim]")
+
+
+@app.command()
+def duplicates(
+    limit: Annotated[int, typer.Option("--limit", help="Groups to show.")] = 30,
+) -> None:
+    """Rows that look like one campus stored several times.
+
+    One site often has a builder, a landlord and an occupier, and whichever name a
+    source picks becomes its own row with its own dedup key. Every key is correct;
+    the building is one. That is a nuisance in a listing and a wrong number in
+    `tracker capex`, which counts the same megawatts once per row.
+
+    Nothing here is merged. Confirm a group and fold it with `tracker merge`.
+    """
+    from tracker import capex as capex_mod
+
+    engine = _read_engine()
+    with session_scope(engine, commit=False) as session:
+        pairs = capex_mod.suspected_duplicates(session)
+        wasted = capex_mod.double_counted_mw(pairs)
+
+    if not pairs:
+        console.print("[green]no suspected duplicates[/green]")
+        return
+
+    groups = capex_mod.duplicate_groups(pairs)
+    labels: dict[int, str] = {}
+    for pair in pairs:
+        labels[pair.a_id] = f"{pair.a_company} — {pair.a_name}"
+        labels[pair.b_id] = f"{pair.b_company} — {pair.b_name}"
+
+    if json_mode():
+        emit(
+            {
+                "double_counted_mw": wasted,
+                "groups": [{"ids": ids, "members": [labels[i] for i in ids]} for ids in groups],
+            }
+        )
+        return
+
+    console.print(
+        f"[bold]{len(groups)}[/bold] suspected group(s), holding "
+        f"[bold]{_fmt_mw(wasted)} MW[/bold] counted more than once.\n"
+    )
+    for ids in groups[:limit]:
+        for project_id in ids:
+            console.print(f"  #{project_id:<5} {labels[project_id][:82]}")
+        console.print(
+            f"  [dim]merge with:[/dim] tracker merge --into {ids[0]} "
+            f"{' '.join(str(i) for i in ids[1:])}\n"
+        )
+    console.print(
+        "[dim]pick whichever id should survive — every field is recomputed from the "
+        "combined citations afterwards, so the choice does not decide the values.[/dim]"
+    )
+
+
+@app.command()
+def merge(
+    dupe_ids: Annotated[list[int], typer.Argument(help="Project ids to fold in.")],
+    into: Annotated[int, typer.Option("--into", help="The project id that survives.")],
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="Report without writing.")] = False,
+) -> None:
+    """Fold duplicate rows into one project.
+
+    Citations, milestones and obstacles move onto the surviving row, the others
+    are deleted, and every field is then recomputed from the combined set of
+    claims. Nothing is hand-copied — which id you keep does not decide the values,
+    only which row number survives.
+
+    Irreversible. Run `tracker duplicates` first, and `--dry-run` to see the shape
+    of it before committing.
+    """
+    from tracker.merge import MergeError
+    from tracker.merge import merge_projects as do_merge
+
+    engine, _ = init_db(_db_path())
+    try:
+        release_lock = acquire_write_lock(_db_path(), command="merge")
+    except AlreadyRunning as exc:
+        _fail(str(exc))
+        raise
+    atexit.register(release_lock)
+
+    try:
+        with _explain_db_locks(), session_scope(engine, commit=not dry_run) as session:
+            before = {
+                p.id: f"{p.company} — {p.name}"
+                for p in session.scalars(
+                    select(Project).where(Project.id.in_([into, *dupe_ids]))
+                ).all()
+            }
+            result = do_merge(session, into, dupe_ids)
+            survivor = session.get(Project, into)
+            summary = (
+                f"{survivor.company} — {survivor.name} "
+                f"({_location(survivor)}), {_fmt_mw(survivor.mw_planned)} MW, "
+                f"confidence {survivor.confidence}"
+            )
+    except MergeError as exc:
+        _fail(str(exc))
+        raise
+
+    for project_id, label in before.items():
+        marker = "[green]keep[/green]" if project_id == into else "[red]fold[/red]"
+        console.print(f"  {marker} #{project_id:<5} {label[:78]}")
+    console.print()
+    _print_report_rows(result.as_rows(), title="merge (dry run)" if dry_run else "merge")
+    console.print(f"\nsurvivor: [bold]#{into}[/bold] {summary}")
+    if result.conflicts:
+        console.print(
+            f"[yellow]sources disagree on:[/yellow] {', '.join(result.conflicts)} "
+            "[dim]— both values are kept in their own citations and disclosed in notes[/dim]"
+        )
+    if dry_run:
+        console.print("[yellow]dry run[/yellow] — nothing written")
 
 
 @app.command()
@@ -1526,6 +1980,14 @@ def ingest_edgar(
         str | None,
         typer.Option("--company", help="Restrict to one company by name.", show_default=False),
     ] = None,
+    kind: Annotated[
+        str | None,
+        typer.Option(
+            "--kind",
+            help="Restrict to one class: hyperscaler, neocloud, landlord, utility, contractor.",
+            show_default=False,
+        ),
+    ] = None,
     companies_file: Annotated[
         Path | None,
         typer.Option("--companies", help="Company list TOML.", show_default=False),
@@ -1548,6 +2010,14 @@ def ingest_edgar(
     footnotes. Publication is a legal obligation, so unlike a newsroom there is no
     bot filter to be refused by.
 
+    The list covers five classes of filer and `--kind` reads one of them.
+    `--kind utility` is the interesting one: the power company is the counterparty
+    that cannot be bypassed, its filings say what has actually signed an
+    interconnection agreement, and `power` is the track this database is worst at
+    and refuses to infer. `--kind contractor` reads backlog, which leads
+    energisation. Each class is searched with its own phrases, because a utility
+    does not write "build-to-suit".
+
     Each filing costs one LLM call, like any article, and `--per-company` is the
     dial. A filing is far larger than the model budget, so the relevant section is
     selected first rather than the document truncated — see `tracker/ingest/edgar.py`.
@@ -1568,6 +2038,7 @@ def ingest_edgar(
             settings=settings,
             per_company=per_company,
             only=company,
+            kind=kind,
             since_days=since_days or None,
         )
     except edgar.EdgarError as exc:
@@ -1903,6 +2374,640 @@ def _render_enrich(report, *, dry_run: bool) -> None:
         f"{report.articles_read} article(s) read"
     )
     console.print(f"[dim]stopped: {report.stopped_because}[/dim]")
+
+
+@logic_app.command("check")
+def logic_check(
+    read: Annotated[
+        int,
+        typer.Option(
+            "--read",
+            help="Also have a model read this many projects. 0 runs only the free checks.",
+        ),
+    ] = 0,
+    project_id: Annotated[
+        int | None,
+        typer.Option("--id", help="Check one project.", show_default=False),
+    ] = None,
+    severity: Annotated[
+        str | None,
+        typer.Option("--severity", help="Show only `error` or only `warning`.", show_default=False),
+    ] = None,
+    code: Annotated[
+        str | None,
+        typer.Option("--code", help="Show only one kind of finding.", show_default=False),
+    ] = None,
+    collisions: Annotated[
+        bool, typer.Option("--collisions/--no-collisions", help="Show source disagreements.")
+    ] = True,
+    limit: Annotated[int, typer.Option("--limit", help="Findings to print.")] = 40,
+) -> None:
+    """Find values that contradict each other, and say which source wins.
+
+    Every other check asks whether a value is supported. This one asks whether the
+    supported values agree: a row can be perfectly cited and still be impossible.
+    A campus marked `operational` whose construction track has reached nothing is
+    either the wrong phase or a missing milestone, and both citations behind it
+    can be sound.
+
+    Three layers, and only the last one costs anything.
+
+    **Rules** run always and are free. They state their reasoning, so you can
+    disagree with one without reading any code: energised before operational,
+    built above planned, online before announced, a milestone dated next year
+    counted as already reached.
+
+    **Collisions** are two sources claiming different values for one field. The
+    winner is not decided here — it is read back from the same per-field policy
+    the write path used, and the reason is printed with it. That reason is *not*
+    always "the better source won": built capacity takes the largest figure,
+    `first_announced` the earliest, and the identity fields are never overwritten
+    at all. Only the rest are settled by credibility and then recency.
+
+    **Judgement** is `--read N`, costs one LLM call per project, and is off by
+    default. It catches what a rule cannot phrase — a blocker describing a problem
+    the milestones say is solved. Every finding it returns must name two fields
+    and quote its evidence, or it is dropped; it is never allowed to pick a
+    collision winner, and nothing it says is written to the database.
+    """
+    from tracker import logic as logic_mod
+
+    engine = _read_engine()
+    extractor = None
+    if read > 0:
+        from tracker.llm import MissingApiKey, reasoning_extractor
+
+        try:
+            extractor = reasoning_extractor(get_settings())
+        except MissingApiKey as exc:
+            _fail(str(exc))
+
+    def announce(project) -> None:
+        console.print(f"[dim]reading #{project.id} {project.company} — {project.name}[/dim]")
+
+    with session_scope(engine, commit=False) as session:
+        report = logic_mod.review(
+            session,
+            extractor=extractor,
+            read_limit=read or None,
+            only=project_id,
+            on_examine=announce if read else None,
+        )
+
+    findings = report.findings
+    if severity:
+        findings = [f for f in findings if f.severity == severity.lower()]
+    if code:
+        findings = [f for f in findings if f.code == code]
+
+    if json_mode():
+        emit(
+            {
+                "projects": report.projects,
+                "examined": report.examined,
+                "unreadable": report.unreadable,
+                "findings": [f.as_json() for f in findings],
+                "collisions": [c.as_json() for c in report.collisions],
+            }
+        )
+        return
+
+    _print_report_rows(report.as_rows(), title="logic")
+    console.print()
+
+    # Said out loud, not left in a table row. A truncated reply was paid for and
+    # produced nothing, and the one reading it must not take that for "clean".
+    if report.unreadable.get("truncated"):
+        console.print(
+            f"[yellow]{report.unreadable['truncated']} row(s) ran out of room while the "
+            f"model was reasoning[/yellow] [dim]— those calls were paid for and returned "
+            f"nothing. That is not the same as finding no contradictions; raise "
+            f"MAX_TOKENS in tracker/logic.py (currently {logic_mod.MAX_TOKENS}).[/dim]"
+        )
+    if report.unreadable.get("unusable") or report.unreadable.get("error"):
+        console.print(
+            f"[yellow]{report.unreadable.get('unusable', 0) + report.unreadable.get('error', 0)} "
+            "row(s) could not be read[/yellow] [dim]— run with -v for the reason[/dim]"
+        )
+
+    if not findings:
+        console.print("[green]no contradictions[/green]")
+    else:
+        by_project: dict[int, list] = {}
+        for finding in findings[:limit]:
+            by_project.setdefault(finding.project_id, []).append(finding)
+        for pid, group in by_project.items():
+            console.print(f"[bold]#{pid}[/bold]")
+            for finding in group:
+                style = "red" if finding.severity == logic_mod.ERROR else "yellow"
+                tag = "model" if finding.inferred else finding.code
+                console.print(f"  [{style}]{tag}[/{style}] {escape(finding.summary)}")
+                if finding.remedy:
+                    console.print(f"    [dim]{escape(finding.remedy)}[/dim]")
+        if len(findings) > limit:
+            console.print(f"\n[dim]{len(findings) - limit} more; raise --limit[/dim]")
+
+    if collisions and report.collisions:
+        console.print(
+            f"\n[bold]{len(report.collisions)} field(s) where sources disagree[/bold] "
+            "[dim]— the kept value and why[/dim]"
+        )
+        for collision in report.collisions[:limit]:
+            console.print(
+                f"  #{collision.project_id} [bold]{collision.field}[/bold]: "
+                f"{escape(str(collision.winner)[:44])} "
+                f"[dim]over[/dim] {escape(str(collision.loser)[:44])}"
+            )
+            console.print(f"    [dim]{escape(collision.why)}[/dim]")
+            if collision.stored_disagrees:
+                console.print(
+                    f"    [red]the row holds {escape(str(collision.stored)[:44])}[/red] "
+                    "[dim]— run `tracker init` to recompute it from its sources[/dim]"
+                )
+
+    console.print(
+        "\n[dim]nothing here is written. A contradiction is a question for a person: "
+        "confirm the row in `tracker review`, or fold duplicates with `tracker merge`.[/dim]"
+    )
+
+
+@logic_app.command("resolve")
+def logic_resolve(
+    auto_only: Annotated[
+        bool,
+        typer.Option("--auto", help="Only the repairs needing no decision. No prompts."),
+    ] = False,
+    apply: Annotated[
+        bool, typer.Option("--apply", help="With --auto: write. Otherwise implied.")
+    ] = False,
+    llm: Annotated[
+        bool,
+        typer.Option("--llm", help="Let a model choose, one call each. It skips when unsure."),
+    ] = False,
+    code: Annotated[
+        str | None,
+        typer.Option("--code", help="Work through one kind of finding only.", show_default=False),
+    ] = None,
+    limit: Annotated[int, typer.Option("--limit", help="Findings to offer.")] = 30,
+) -> None:
+    """Settle the collisions that can be settled, by re-running the merge policy.
+
+    **Where the winner comes from.** Two sources disagreeing on one field is
+    decided by how good each source is and how recently it was read — the more
+    credible wins, and recency breaks the tie. That is already applied at write
+    time, which is why a healthy database shows nothing to do here: the value on
+    the row *is* the winner. This command exists for when it is not, which happens
+    after a hand edit or when a source is attached by a path that did not
+    re-derive. Re-running the policy is arithmetic, not a judgement.
+
+    **Five fields do not use credibility, and that is deliberate.** Built capacity
+    takes the largest cited figure, because energised megawatts only go up and a
+    better source describing an earlier state should not walk it back.
+    `first_announced` takes the earliest, because that is what "first" means.
+    `phase` takes the furthest along unless a source says it stopped. Name,
+    company and the location fields are never overwritten once set, because churn
+    in an identity field is worse than staleness. `tracker logic check` prints
+    which rule settled each collision, so the reason is always on screen.
+
+    **Everything else needs a person and is left alone.** Whether 100 MW built
+    against 32 MW planned means the plan was revised or the two figures describe
+    different phases of one campus is not in the row; a tool that picked one would
+    be inventing a fact. Measured on the live database, 0 of 149 findings were
+    mechanically resolvable — which is the honest reason there is no button that
+    fixes everything.
+
+    **Then it hands you the rest, one at a time.** With the evidence on screen and
+    the answers as single keys, because that is the difference between a report
+    and a tool: a person looking at `100 MW built against 32 MW planned` with both
+    quotes in front of them settles it in two seconds, and what they lacked was
+    somewhere to put the answer. Every edit is written into the row's notes as
+    plain prose, which is the one kind of note re-ingesting never erases.
+
+    `--auto` does the no-decision repairs and stops, for scripts and for the
+    console, which has no keyboard.
+
+    **`--llm` lets a model choose instead of you**, one call per finding, and it
+    skips whenever the evidence does not clearly favour one option. This is
+    allowed where `tracker infer` bars a model from 关键数字, and the difference is
+    worth understanding: `infer` asks a model to produce a number from general
+    knowledge, whereas here every option was written by a person and operates only
+    on figures already in the row with citations behind them. The model's whole
+    output is one character from a closed set — it cannot type a value.
+
+    Two things it may never do. It cannot mark a row verified, because that means
+    "an operator says this is right" and feeds the confidence score. And its edits
+    are recorded as `model resolved`, never `operator resolved`, so a reader six
+    months later can tell that nobody looked.
+    """
+    import sys as _sys
+
+    from tracker import logic as logic_mod
+
+    path = _db_path()
+    if not path.is_file():
+        _fail(f"database not found: {path}\nRun `tracker init` first.")
+
+    extractor = None
+    if llm:
+        from tracker.llm import MissingApiKey, reasoning_extractor
+
+        try:
+            extractor = reasoning_extractor(get_settings())
+        except MissingApiKey as exc:
+            _fail(str(exc))
+
+    interactive = not auto_only and not llm and _sys.stdin.isatty() and not json_mode()
+    writing = interactive or apply or llm
+
+    if writing:
+        engine, _ = init_db(path)
+        try:
+            release_lock = acquire_write_lock(path, command="logic resolve")
+        except AlreadyRunning as exc:
+            _fail(str(exc))
+            raise
+        atexit.register(release_lock)
+    else:
+        engine = _read_engine()
+
+    with _explain_db_locks(), session_scope(engine, commit=writing) as session:
+        repairs = logic_mod.resolve_drift(session, apply=writing)
+        report = logic_mod.review(session)
+        findings = [f for f in report.findings if not code or f.code == code]
+
+        if json_mode():
+            emit(
+                {
+                    "repaired": [
+                        {
+                            "project_id": r.project_id,
+                            "changes": {f: {"was": w, "now": n} for f, (w, n) in r.changes.items()},
+                        }
+                        for r in repairs
+                    ],
+                    "left_for_a_person": [f.as_json() for f in findings],
+                }
+            )
+            return
+
+        for repair in repairs:
+            console.print(
+                f"[green]repaired[/green] #{repair.project_id} {escape(repair.label[:60])}"
+            )
+            for name, (was, now) in repair.changes.items():
+                console.print(f"  {name}: {escape(str(was)[:36])} -> {escape(str(now)[:36])}")
+        if repairs:
+            console.print()
+
+        if not findings:
+            console.print("[green]nothing left to decide[/green]")
+            return
+
+        if llm:
+            _triage_by_model(session, findings[:limit], logic_mod, extractor)
+            return
+
+        if not interactive:
+            console.print(
+                f"[bold]{len(findings)}[/bold] contradiction(s) need a person.\n"
+                "[dim]Run `tracker logic resolve` in a terminal to work through them; "
+                "each one offers the edits that answer it.[/dim]"
+            )
+            return
+
+        _triage(session, findings[:limit], logic_mod)
+
+
+def _triage_by_model(session, findings: list, logic_mod, extractor) -> None:
+    """Let a model answer each finding. One call per finding; it skips when unsure.
+
+    Prints every decision *and* every skip with the reason, because a run that
+    silently resolved 12 of 30 and said nothing about the other 18 would read as
+    "the rest were fine". They were not — nobody has looked at them.
+    """
+    from tracker.models import Project
+
+    applied = 0
+    declined = 0
+    rejected: dict[str, int] = {}
+    for index, finding in enumerate(findings, start=1):
+        project = session.get(Project, finding.project_id)
+        if project is None:
+            continue
+
+        decision = logic_mod.decide(project, finding, extractor=extractor)
+        head = f"[dim]{index}/{len(findings)}[/dim] #{project.id} {escape(project.name[:34])}"
+
+        if not decision.acted:
+            # A decline is the model doing what it was told; a rejection is its
+            # answer being unusable. Counting them together would hide a broken
+            # prompt inside a pile of sensible caution.
+            if decision.outcome == "declined":
+                declined += 1
+                console.print(f"{head}  [dim]left alone — {escape(decision.note[:90])}[/dim]")
+            else:
+                rejected[decision.note.split(":")[0]] = (
+                    rejected.get(decision.note.split(":")[0], 0) + 1
+                )
+                console.print(
+                    f"{head}  [yellow]unusable answer[/yellow] "
+                    f"[dim]— {escape(decision.note[:70])}[/dim]"
+                )
+            continue
+
+        action = next(a for a in logic_mod.ACTIONS[finding.code] if a.key == decision.key)
+        changed = action.apply(session, project, finding)
+        logic_mod.record_decision(
+            project,
+            finding.code,
+            changed,
+            by=f"model ({decision.confidence:.2f})",
+            detail=decision.reason,
+        )
+        session.commit()
+        applied += 1
+        console.print(f"{head}  [green]{escape(changed)}[/green]")
+        console.print(f"      [dim]{escape(decision.reason[:110])}[/dim]")
+
+    from tracker.upsert import recompute_confidence
+
+    recompute_confidence(session)
+    session.commit()
+
+    console.print(
+        f"\n[bold]{applied}[/bold] resolved, [bold]{declined}[/bold] the model declined"
+        + (f", [yellow]{sum(rejected.values())}[/yellow] unusable" if rejected else "")
+    )
+    for reason, count in sorted(rejected.items(), key=lambda kv: -kv[1]):
+        console.print(f"  [yellow]{count:>3}[/yellow]  [dim]{escape(reason)}[/dim]")
+    console.print(
+        "\n[dim]Each edit is recorded on the project as `model resolved`, never as "
+        "`operator resolved` — nobody has read the sources for these. Run "
+        "`tracker logic resolve` with no flags to go through the rest yourself.[/dim]"
+    )
+
+
+def _triage(session, findings: list, logic_mod) -> None:
+    """Walk an operator through findings, applying the edit they choose.
+
+    Committed after each answer rather than at the end. Somebody triaging forty
+    rows will stop partway, and losing the first thirty decisions to a Ctrl-C is
+    the kind of thing that stops a tool being used twice.
+    """
+    from tracker.models import Project
+
+    done = skipped = 0
+    total = len(findings)
+    for index, finding in enumerate(findings, start=1):
+        project = session.get(Project, finding.project_id)
+        if project is None:
+            continue
+
+        console.rule(f"[dim]{index} of {total}[/dim]", align="left")
+        console.print(
+            f"[bold]#{project.id}[/bold] {escape(project.company)} — {escape(project.name)}"
+            f"  [dim]{escape(_location(project))}[/dim]"
+        )
+        style = "red" if finding.severity == logic_mod.ERROR else "yellow"
+        console.print(f"[{style}]{finding.code}[/{style}] {escape(finding.summary)}")
+        if finding.remedy:
+            console.print(f"[dim]{escape(finding.remedy)}[/dim]")
+
+        # The values in play, so the decision does not need another command.
+        for name in finding.fields or ():
+            value = getattr(project, name, None)
+            quote = _one_quote(project, name)
+            console.print(f"  [bold]{name}[/bold] = {escape(str(value))}")
+            if quote:
+                console.print(f'    [dim]"{escape(quote[:150])}"[/dim]')
+
+        actions = logic_mod.ACTIONS.get(finding.code, ())
+        for action in actions:
+            console.print(f"  [bold cyan]{action.key}[/bold cyan]  {action.label}")
+        console.print("  [bold cyan]v[/bold cyan]  it is fine as it is — mark the row verified")
+        console.print("  [bold cyan]s[/bold cyan]  skip    [bold cyan]q[/bold cyan]  stop here")
+
+        valid = {a.key for a in actions} | {"v", "s", "q"}
+        choice = ""
+        while choice not in valid:
+            choice = typer.prompt("  >", default="s", show_default=False).strip().lower()
+
+        if choice == "q":
+            break
+        if choice == "s":
+            skipped += 1
+            continue
+        if choice == "v":
+            from tracker.models import utcnow
+
+            project.last_verified_at = utcnow()
+            logic_mod.record_decision(project, finding.code, "confirmed correct as it stands")
+        else:
+            action = next(a for a in actions if a.key == choice)
+            changed = action.apply(session, project, finding)
+            logic_mod.record_decision(project, finding.code, changed)
+            console.print(f"  [green]{escape(changed)}[/green]")
+        session.commit()
+        done += 1
+
+    from tracker.upsert import recompute_confidence
+
+    rescored = recompute_confidence(session)
+    session.commit()
+    console.print(
+        f"\n[bold]{done}[/bold] decided, [bold]{skipped}[/bold] skipped"
+        + (f", {rescored} row(s) rescored" if rescored else "")
+        + "\n[dim]every decision is written into the project's notes. "
+        "Re-run `tracker logic check` to see what is left.[/dim]"
+    )
+
+
+def _one_quote(project, field: str) -> str | None:
+    """The sentence behind a value, when there is one, for the triage screen."""
+    from tracker.gaps import provenance
+
+    try:
+        prov = provenance(project, field)
+    except Exception:
+        return None
+    return (prov.quote or "").strip() if prov else None
+
+
+@app.command()
+def point(
+    name: Annotated[str, typer.Argument(help="The data center to go and get.")],
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="Say what it would do and stop. Costs one call.")
+    ] = False,
+    max_articles: Annotated[
+        int, typer.Option("--max-articles", help="Articles to read when building a new profile.")
+    ] = 5,
+) -> None:
+    """Go and get one named data center: match it to a row, or build its profile.
+
+    Everything else here works in batches. This is the other direction — you heard
+    a name and want that one campus now.
+
+    It first asks whether we already have it. The same building routinely appears
+    under three names, because whoever writes about it picks the developer, the
+    landowner or the tenant: "Stargate Abilene", "Crusoe Abilene Data Center" and
+    "Oracle Stargate — Abilene" are one site, and adding a fourth row makes the
+    capex table wrong in exactly the way `tracker duplicates` exists to catch.
+
+    **Matched** — `enrich` runs on that project, throwing every retrieval method
+    at it until a round stops paying.
+
+    **Not matched** — it searches for that name specifically, reads what it finds,
+    and the ordinary write path creates the row with its citations.
+
+    The model chooses from a shortlist and can only answer with an id from it or
+    "none"; anything hedged below the confidence floor is treated as "none". That
+    asymmetry is deliberate. A wrong "no" makes a duplicate, which is detected and
+    fixable; a wrong "yes" folds a real campus into another project's history, and
+    nothing detects that.
+
+    Costs one call to identify, then whatever the branch it takes costs.
+    """
+    from tracker import point as point_mod
+    from tracker.llm import MissingApiKey, reasoning_extractor
+
+    settings = get_settings()
+    try:
+        extractor = reasoning_extractor(settings)
+    except MissingApiKey as exc:
+        _fail(str(exc))
+        return
+
+    engine, _ = init_db(_db_path())
+    with session_scope(engine, commit=False) as session:
+        candidates = point_mod.shortlist(session, name)
+
+    console.print(f"[bold]{escape(name)}[/bold]")
+    if candidates:
+        console.print(f"[dim]{len(candidates)} row(s) share a distinctive word:[/dim]")
+        for candidate in candidates[:5]:
+            console.print(f"  [dim]#{candidate.project_id:<5} {escape(candidate.label[:66])}[/dim]")
+    else:
+        console.print("[dim]nothing in the database shares a distinctive word with it[/dim]")
+
+    match = point_mod.identify(name, candidates, extractor=extractor)
+    if match.rejected:
+        console.print(f"[yellow]could not identify it:[/yellow] {escape(match.rejected)}")
+        console.print("[dim]treating it as new, which is the recoverable mistake[/dim]")
+    elif match.matched:
+        console.print(
+            f"[green]already tracked[/green] as [bold]#{match.project_id}[/bold] "
+            f"[dim](confidence {match.confidence:.2f})[/dim]"
+        )
+    else:
+        console.print(
+            f"[yellow]not in the database[/yellow] [dim](confidence {match.confidence:.2f})[/dim]"
+        )
+    if match.reason:
+        console.print(f"[dim]{escape(match.reason)}[/dim]")
+
+    if dry_run:
+        plan = (
+            f"enrich #{match.project_id}"
+            if match.matched
+            else f"search and read up to {max_articles} article(s)"
+        )
+        console.print(f"\n[yellow]dry run[/yellow] — would {plan}")
+        return
+
+    console.print()
+    if match.matched:
+        _point_enrich(match.project_id)
+    else:
+        _point_build(name, point_mod, settings, max_articles)
+
+
+def _point_enrich(project_id: int) -> None:
+    """The matched branch: hand it to the enrichment loop already built for this."""
+    from tracker.ingest import enrich as enrich_mod
+
+    engine, _ = init_db(_db_path())
+    try:
+        release_lock = acquire_write_lock(_db_path(), command="point")
+    except AlreadyRunning as exc:
+        _fail(str(exc))
+        raise
+    atexit.register(release_lock)
+
+    console.rule("[bold]enrich[/bold]", align="left")
+    with _explain_db_locks(), session_scope(engine) as session:
+        report = enrich_mod.run(session, project_id)
+    _print_report(report, title=f"enrich #{project_id}")
+
+
+def _point_build(name: str, point_mod, settings, max_articles: int) -> None:
+    """The unmatched branch: search for this name only, read the hits, let upsert build the row.
+
+    The queries are hand-built rather than model-written. `search --from-llm` asks
+    a model for queries and steers them *away* from projects already tracked,
+    which is the right instinct for prospecting and exactly wrong here — the name
+    is already the specific thing wanted.
+    """
+    from tracker.ingest import crawl as crawl_mod
+    from tracker.ingest import search as search_mod
+
+    if not settings.has_search_keys():
+        console.print(f"[yellow]search is not configured[/yellow]\n{search_mod.SEARCH_KEY_HELP}")
+        raise typer.Exit(2)
+    try:
+        provider = search_mod.build_provider(settings)
+    except search_mod.SearchError as exc:
+        _fail(str(exc))
+        return
+
+    queries = point_mod.queries_for(name)
+    console.rule("[bold]search[/bold]", align="left")
+    for query in queries:
+        console.print(f"  [dim]{escape(query)}[/dim]")
+
+    engine, _ = init_db(_db_path())
+    try:
+        release_lock = acquire_write_lock(_db_path(), command="point")
+    except AlreadyRunning as exc:
+        _fail(str(exc))
+        raise
+    atexit.register(release_lock)
+
+    with _explain_db_locks(), session_scope(engine) as session:
+        report, candidates = search_mod.run(session, queries, provider=provider, settings=settings)
+    _print_report_rows(report.as_rows(), title="search")
+
+    urls = [c.url for c in candidates][:max_articles]
+    if not urls:
+        console.print(
+            "\n[yellow]nothing readable found[/yellow] [dim]— either the name is wrong, or "
+            "nobody has written about it under that name. Try the operator's name with the "
+            "town.[/dim]"
+        )
+        return
+
+    console.rule("[bold]read[/bold]", align="left")
+    cache_dir = install_root() / ".cache" / "articles"
+    with _explain_db_locks(), session_scope(engine) as session:
+        crawl_report = crawl_mod.run(session, urls, cache_dir=cache_dir)
+    _print_report(crawl_report, title="read")
+
+    with session_scope(engine, commit=False) as session:
+        fresh = point_mod.shortlist(session, name, limit=3)
+    if fresh:
+        console.print("\n[green]now in the database:[/green]")
+        for candidate in fresh:
+            console.print(f"  #{candidate.project_id:<5} {escape(candidate.label[:70])}")
+        console.print(
+            "[dim]run `tracker show <id>` for the citations, or `tracker point` again "
+            "to deepen it.[/dim]"
+        )
+    else:
+        console.print(
+            "\n[yellow]the articles read did not yield a project row[/yellow] "
+            "[dim]— the evidence gate drops anything it cannot tie to a quote. "
+            "`tracker queue` shows what was fetched.[/dim]"
+        )
 
 
 @app.command()

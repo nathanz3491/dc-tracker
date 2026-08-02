@@ -155,6 +155,54 @@ tr.dc-enter { animation-name: fade-in; }
   align-items: center;
 }
 
+/* ---- The written briefing --------------------------------------------------
+   Set apart on purpose. Every other block in the drawer is a value with a
+   citation; this one is a reading of them, and it should not be mistaken for
+   evidence at a glance. The left rule uses the same hue the `inferred` tier uses
+   everywhere else, so the signal is one a reader has already been taught. */
+.dc-insight {
+  border-left: 2px solid color-mix(in oklab, var(--chart-5) 55%, transparent);
+  padding-left: 14px;
+}
+.dc-insight p {
+  margin: 0 0 10px;
+  font-size: 14px;
+  line-height: 22px;
+  max-width: 74ch;
+}
+.dc-insight p:last-of-type { margin-bottom: 0; }
+
+/* ---- Capex --------------------------------------------------------------- */
+.dc-capex-cover {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 18px;
+  padding: 4px 20px 20px;
+}
+
+/* One candidate row inside a suspected-duplicate group. A <label> wrapping the
+   radio, so the whole row is the hit target — picking which of four rows
+   survives should not require aiming at a 13px circle. */
+.dc-dupe-row {
+  display: grid;
+  grid-template-columns: 20px 44px minmax(0, 1fr) 90px auto auto;
+  gap: 12px;
+  align-items: center;
+  padding: 8px 10px;
+  border-radius: 10px;
+}
+.dc-dupe-row:hover { background: color-mix(in oklab, var(--muted) 55%, transparent); }
+.dc-dupe-row > span:nth-child(3) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* A button that reads as prose. Used where a sentence needs to move the page,
+   and an <a href="#..."> would put a dead fragment in the address bar. */
+.dc-link {
+  padding: 0; border: 0; background: none; cursor: pointer;
+  font: inherit; color: inherit; text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.dc-link:hover { text-decoration-thickness: 2px; }
+
 /* ---- Cards that are buttons (map list, command palette) ------------------ */
 .dc-tile {
   display: grid; gap: 6px; width: 100%; padding: 12px 14px; text-align: left;
@@ -202,14 +250,64 @@ tr.dc-enter { animation-name: fade-in; }
   background: var(--t-bg); color: var(--t-fg);
   border-radius: 14px; border: 1px solid var(--border);
   font-family: var(--font-mono); font-size: 12px; line-height: 1.65;
-  white-space: pre-wrap; word-break: break-word;
+
+  /* `pre`, not `pre-wrap`, and this is the whole reason a terminal scrolls
+     sideways instead of reflowing.
+
+     Rich lays its tables out at a fixed COLUMNS (160 here) and draws them with
+     +-| characters. The browser pane is narrower than that — 815px is about 113
+     characters — so `pre-wrap` folded every row onto a second line and the
+     borders stopped lining up with the cells. `tracker list` came out as a
+     shredded grid. Reported exactly that way.
+
+     Wrapping cannot be made to work: the column positions are baked into the
+     text at 160 characters, so any width but 160 shears it. Not wrapping is what
+     a terminal emulator does, and the horizontal scroll is bounded and
+     predictable because Rich never emits a line wider than COLUMNS. */
+  white-space: pre;
   /* Rich draws its tables with +-| at a fixed width; a proportional fallback
      would shear them apart. */
   font-variant-ligatures: none;
   tab-size: 4;
 }
-.dc-log-line { display: block; animation: fade-in var(--duration-fast) var(--ease-swift) backwards; }
+/* Prose read sideways is worse than a sheared table, so the pane can be told to
+   wrap. Off by default — faithful to the terminal is this surface's whole job. */
+.dc-log--wrap { white-space: pre-wrap; word-break: break-word; }
+
+/* Room for the floating toggle, so the first line is not under it at rest.
+   Only where there is a toggle: the argv preview in the Commands view reuses
+   this class and has none. */
+.dc-log--framed { padding-top: 34px; }
+
+.dc-log-line {
+  display: block;
+  /* Each line is as wide as its own content, so a reversed or background-coloured
+     run paints its full width rather than being clipped at the pane edge, and the
+     container's scrollWidth is the widest line rather than the container width.
+     `min-width: 100%` keeps short lines full-bleed for the same reason. */
+  width: max-content;
+  min-width: 100%;
+  animation: fade-in var(--duration-fast) var(--ease-swift) backwards;
+}
+.dc-log--wrap .dc-log-line { width: auto; }
 .dc-log-line:nth-child(n + 60) { animation: none; }
+
+/* Sits over the log's top-right corner. Styled against the terminal palette
+   rather than the page's, because it is inside that surface. */
+.dc-log-wrap {
+  position: absolute; top: 8px; right: 8px; z-index: 2;
+  padding: 3px 9px; border-radius: 999px; cursor: pointer;
+  font-family: var(--font-mono); font-size: 11px; line-height: 16px;
+  /* Fully opaque, not tinted: it floats over scrolling text, and at 86% alpha
+     the first line read straight through it. */
+  color: #a89e90; background: #17120e;
+  border: 1px solid rgba(232, 224, 212, .18);
+  box-shadow: 0 0 10px 6px #17120e;
+  transition: color var(--duration-fast) var(--ease-swift),
+              border-color var(--duration-fast) var(--ease-swift);
+}
+.dc-log-wrap:hover                 { color: #e8e0d4; border-color: rgba(232, 224, 212, .38); }
+.dc-log-wrap[aria-pressed="true"]  { color: #ecc26a; border-color: rgba(236, 194, 106, .45); }
 
 /* A wide table scrolls inside its own container; the page never scrolls
    sideways. Stated as a rule in Meridian's layout section, easy to lose. */
@@ -262,6 +360,23 @@ tr.dc-enter { animation-name: fade-in; }
   .dc-gap-row     { grid-template-columns: minmax(0, 1fr) !important; gap: 6px !important; }
   .dc-exposure-row{ grid-template-columns: minmax(0, 1fr) !important; gap: 6px !important; }
   .dc-queue-row   { grid-template-columns: minmax(0, 1fr) !important; gap: 8px !important; }
+
+  /* Six columns of duplicate metadata do not fit; the radio stays on the first
+     line with the id and the name, and the rest wraps under it. Keeping the
+     radio pinned matters — it is the only control in the group. */
+  .dc-dupe-row {
+    grid-template-columns: 20px 44px minmax(0, 1fr);
+    gap: 6px 10px;
+    padding: 10px 8px;
+  }
+  /* `justify-self: start` matters: a chip is inline-flex, but as a grid item it
+     stretches to the track, which drew the phase pill as a full-width bar. */
+  .dc-dupe-row > :nth-child(n + 4) {
+    grid-column: 2 / -1;
+    justify-self: start;
+    text-align: left !important;
+  }
+  .dc-capex-cover { gap: 14px; padding: 4px 14px 18px; }
 
   .dc-log         { font-size: 11px; max-height: 50vh; }
 }

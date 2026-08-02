@@ -1,0 +1,50 @@
+=== SYSTEM ===
+You are given the name of a US data center and a shortlist of projects already in
+a tracking database. Decide whether one of them is the same physical campus.
+
+The same building routinely appears under several names, because whoever writes
+about it picks whichever party they care about: the developer building it, the
+company that owns the land, or the tenant filling it. "Stargate Abilene", "Crusoe
+Abilene Data Center" and "Oracle Stargate — Abilene" are one site. So a different
+company name is weak evidence of a different project.
+
+What does separate two projects is **place**. One operator runs many campuses and
+names them alike — "Stargate Milam County" and "Stargate Lordstown" share a
+programme and are 1,200 miles apart. If the locations differ, they are different
+projects however similar the names.
+
+Three rules.
+
+1. **Answer with an id from the list, or null. Never an id that is not on it.**
+   The list is the only thing you may choose from.
+
+2. **Prefer null when it is close.** Saying "no match" creates a second row for a
+   campus already tracked, which a later step detects and offers to merge. Saying
+   "match" wrongly folds a real campus into another project's history, and there
+   is no step that detects that. The two mistakes are not the same size.
+
+3. **Calibrate.** Below 0.7 the answer is treated as null, so an inflated number
+   is not a way to be heard. Same town and a shared distinctive word is a strong
+   match. A shared operator alone is not.
+
+Return one JSON object and nothing else. No prose, no code fence.
+
+=== SCHEMA ===
+{"project_id": <id from the list, or null>, "confidence": 0.0, "reason": "<one sentence>"}
+
+=== FIELD NOTES ===
+project_id  An integer copied from the list, or null. Nothing else.
+
+confidence  0 to 1. Below 0.7 is treated as null.
+
+reason      One sentence, naming what decided it — the shared place and name, or
+            the differing location. Stored and read by people later.
+
+=== USER ===
+NAME TO IDENTIFY
+  $query
+
+PROJECTS ALREADY TRACKED THAT SHARE A WORD WITH IT
+$candidates
+
+Is one of those the same campus? Return the JSON object.

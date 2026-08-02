@@ -5,9 +5,12 @@ Three properties this has to hold, in order of how much they cost when broken:
 1. **No shell, ever.** `argv` comes from `catalog.build_argv`, which builds a list
    from a validated flag dict. Nothing here concatenates request text into a
    command line, so shell metacharacters are inert.
-2. **Spending is confirmed.** A command in `catalog.LLM_COMMANDS` needs a
-   `confirm` string equal to the command name. A misplaced click cannot start a
-   `sync`.
+2. **Spending and destruction are confirmed.** A command in
+   `catalog.LLM_COMMANDS` or `catalog.DESTRUCTIVE` needs a `confirm` string equal
+   to the command name. A misplaced click cannot start a `sync`, and it cannot
+   delete a project row either. Two different losses, one ritual — and the check
+   is on the command *name*, never on its flags, so no combination of arguments
+   talks its way past the gate.
 3. **One at a time.** SQLite takes one writer. Two overlapping runs produce a raw
    "database is locked" partway through the second — after it has already paid for
    its LLM calls. The subprocess takes the real file lock; this keeps a slot as
@@ -68,10 +71,11 @@ class Runner:
         command = catalog.by_name().get(cmd)
         if command is None:
             raise catalog.InvalidRequest(f"unknown command {cmd!r}")
-        if command.cost == "llm" and (confirm or "").strip() != cmd:
-            raise catalog.InvalidRequest(
-                f'`{cmd}` spends LLM tokens. Re-send with confirm="{cmd}" to run it.'
+        if command.needs_confirmation and (confirm or "").strip() != cmd:
+            why = (
+                f"`{cmd}` {command.destroys}" if command.destroys else f"`{cmd}` spends LLM tokens."
             )
+            raise catalog.InvalidRequest(f'{why} Re-send with confirm="{cmd}" to run it.')
         argv = catalog.build_argv(cmd, flags, db_path=self.db_path)
 
         with self._lock:

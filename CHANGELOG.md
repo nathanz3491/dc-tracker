@@ -12,6 +12,306 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **A survey of government data sources, and the decision not to build one**
+  (`docs/government-sources.md`, `scripts/probe_government_sources.py`). Four
+  uniform machine-readable routes were tested against the markets holding the
+  capacity, and all four failed:
+
+  Municipal permit portals (Socrata) have one API across ~460 jurisdictions and
+  none of the ones that matter — Loudoun, Prince William, all of Virginia and
+  Arizona return zero datasets; the hits that exist are $500k server-room
+  retrofits. FERC and the state PUCs hold the right content behind ASP.NET forms
+  with no API. County news feeds produced **0 candidates from 177 entries** scored
+  by this project's own discovery filter, with Abilene's city feed silent on
+  Stargate Abilene while it is built there. Legistar's agenda API does not have
+  the data-center counties as clients, and its "data center" matters are municipal
+  IT procurement from 2005.
+
+  Shipping any of them would have added a source class that yields nothing while
+  making the source mix look like government coverage exists. The probe script
+  exists so the finding can be rechecked rather than believed — portals change.
+
+  What does work is recorded alongside: utilities file large-load and
+  interconnection commitments **with the SEC**, which is the already-built
+  `ingest edgar --kind utility` path, and a specific `.gov` document can already
+  be read with `ingest crawl --url` and is filed as `government_doc`
+  automatically. Bulk discovery is the part that does not exist.
+
+- **`tracker logic check` and `tracker logic resolve`**: find values that
+  contradict each other, and settle the ones that can be. Every other check
+  asks whether a value is supported; this asks whether the supported values agree.
+  A row can be perfectly cited and still be impossible.
+
+  Three layers, cost-ordered. **Rules** are free and deterministic — paying a model
+  to notice `mw_built > mw_planned` is paying for arithmetic, and a rule states
+  its reasoning where anybody can argue with it. On the live database: 21
+  impossibilities and 125 warnings across 221 projects.
+
+  **Collisions** report which of two conflicting sources the database keeps, and
+  why. The winner is asked for, never re-derived: `upsert.resolve_field` is the
+  function the write path uses. That mattered more than expected — the first
+  version assumed credibility always decides and reported **73 of 221 rows** as
+  drifted from their sources. Each field has a declared policy: built capacity
+  takes the largest, `first_announced` the earliest, `phase` the furthest along
+  unless something says it stopped, identity fields are never overwritten. Only
+  the rest go by credibility then recency. After asking the real resolver, drift is
+  **zero**, which is the correct answer for a working write path. `resolve_field`
+  is now public for exactly this reason.
+
+  **Judgement** is `--read N`, one call per project, off by default. Findings must
+  name two fields and quote their evidence or they are dropped; it may not pick a
+  collision winner, because which of two cited numbers is right is a question
+  about sources and sources have weights and dates so nobody has to guess. Nothing
+  it says is written. Across four rows read during development it returned
+  nothing — the guards hold; its usefulness here is unproven and the rules are
+  carrying the value.
+
+  Also surfaces a quirk rather than silently working around it:
+  `tracks.standing` reads an event's type and never its date, so a milestone dated
+  next December counts as reached today. `milestone_in_the_future` reports it,
+  because redefining "reached" would move every track strip in the product and
+  that is not this command's call to make.
+
+  **`logic resolve` settles what can be settled.** The first cut of this shipped
+  as reporting only, which under-read the ask: finding a collision and applying
+  its winner are two halves of one job. A row drifts when its stored value is no
+  longer what its own citations support — after a hand edit, or a source attached
+  by a path that did not re-derive — and `upsert.recompute_from_sources` was
+  reachable only through `merge`, so there was no way to repair one. Now there is,
+  and it previews unless given `--apply`.
+
+  It settles that and nothing else, which is the honest scope. Measured on the
+  live database: **0 of 149 findings** were mechanically resolvable. Whether
+  100 MW built against 32 MW planned means a revised plan or two figures about
+  different phases of one campus is not in the row, and a tool that picked one
+  would be inventing a fact.
+
+  Worth stating plainly because it is the part most likely to surprise: **five
+  fields are not decided by credibility.** Built capacity takes the largest cited
+  figure, `first_announced` the earliest, `phase` the furthest along unless a
+  source says it stopped, and the identity fields are never overwritten once set.
+  Only the rest go by source weight and then recency. `logic check` prints which
+  rule settled each collision so the reason is always on screen.
+
+- **Utilities and contractors as SEC filers** — 20 companies added to
+  `seed/edgar-companies.toml`, taking it from 20 to 40. The power company is the
+  counterparty that cannot be bypassed, and its filings say what no operator
+  press release does: which large load has actually signed an interconnection
+  agreement, and when energisation is expected. `power` is the track this
+  database is worst at and the one it refuses to infer from construction, so this
+  aims at the gap rather than at more of what already works.
+
+  **Chosen by measured exposure, not by size.** Each utility serves a state
+  holding ≥1% of tracked capacity — TX 33.8%, CO 11.7%, NM 8.5%, OH 8.4%,
+  GA 7.8%, VA 7.8% — because a utility for a state with no projects is a
+  subscription to noise. Constellation and Talen are in for one specific reason:
+  a nuclear PPA names its counterparty and its site, which is exactly the
+  customer-attribution fact 60% of the database is missing. Contractors are in
+  for backlog, which leads energisation by a year or two.
+
+  **Each class is searched with its own phrases** (`[search.by_kind]`). A utility
+  does not write "build-to-suit"; it writes "large load" and "interconnection
+  agreement". Adding a class of filer without adding its vocabulary is how a new
+  source comes back empty and looks like it had nothing to say. Verified against
+  the live API: `--kind utility --per-company 1` found 19 filings and prepared 17.
+
+  `--kind` filters a run to one class, which is also the cost dial now that the
+  list covers five kinds — reading the utilities is a different question from
+  reading the hyperscalers and is worth being able to ask on its own. Utilities
+  and contractors are deliberately *not* end users in `capex.attribute`, so
+  adding them cannot move anybody's attributed capacity; there is a test.
+
+- **Quarterly buckets on the pipeline.** "Whose capacity lands next quarter" is a
+  question a year column cannot answer, and it was the one thing the Capex view
+  was asked for and did not have. `tracker capex --by-quarter` and a year/quarter
+  toggle on the page.
+
+  Shipped with its own caveat measured rather than assumed: `capex.date_precision`
+  counts how many dated projects land on 1 January, which is where a source that
+  said only "2027" normalises to. On the live database that is **34%** — so the
+  quarters are a shape and the years are the number, and both surfaces say so.
+
+- **`tracker cloudflare`**: publish the console through cloudflared as a
+  first-class command rather than a flag on `serve`. Same loopback bind, same
+  password requirement, same refusal to publish without one — `serve --tunnel`
+  still works and both now run one shared implementation, because the interesting
+  part is the refusals and a second copy of those is a second place for one to go
+  quietly missing.
+
+  Two things it adds. `--check` verifies the password, that cloudflared is present
+  *and executes*, that a named tunnel exists, and that the database and front end
+  are there, then exits — worth running once, since a truncated `cloudflared.exe`
+  is a valid PE file that dies with WinError 193 and no output. And `--name`
+  /`--hostname` run a named tunnel on your own account, so the hostname is yours
+  and survives a restart. Creating that tunnel is deliberately not done for you:
+  `cloudflared tunnel create` and `route dns` write credentials into your home
+  directory and a record into your DNS zone, both of which outlive the process, so
+  the command prints the three lines to run and stops.
+
+  `cloudflare` is blocked in the console's own command palette. The stated reason
+  is not that it would hold the run slot — it would — but that putting this page
+  on the public internet is a decision for somebody at a terminal.
+
+### Fixed
+
+- **The evidence gate was discarding correct values over cosmetic edits to the
+  quote.** `enrich` logged `evidence quote for 'mw_planned' is not in the article;
+  ignoring` on real, well-sourced figures.
+
+  Measured over 131 evidence quotes from 8 cached articles: 33 failed exact
+  containment, and the dominant cause was not fabrication but the model resolving
+  references while it quotes — the article says "The campus is a single building
+  comprising two data halls that serve as a 16.5 MW data center" and the model
+  writes "The *Austin* campus is a single building…". One word substituted, the
+  whole citation rejected, the capacity lost.
+
+  `_verbatim_run` now finds the longest stretch of the quote genuinely present in
+  the article and stores **the article's own words for that stretch**, never the
+  model's edit — then widens it to the enclosing sentence, because one observed run
+  stopped at "…the offering was $" where the source wrapped a line inside the
+  figure, leaving a real quote that no longer evidenced the value it was cited for.
+  Floors of 40 characters and 50% of the quote were tuned against a negative
+  control testing every sampled quote against an unrelated article; nothing
+  crossed. Acceptance **75% → 95%, zero false positives**.
+
+  The guarantee is unchanged: `_stated_in` runs against the stored text, so a value
+  must still be asserted by a sentence somebody published. Risk quotes take the
+  same path, with the category check applied to the recovered text.
+
+- **Closing a tab mid-run printed two tracebacks**, and over a Cloudflare tunnel
+  that is ordinary rather than rare: the edge drops idle connections and the
+  browser's EventSource silently reconnects, so one crawl produces several.
+
+  The cause was platform. Windows raises `ConnectionAbortedError` (WinError 10053)
+  where POSIX raises `BrokenPipeError` or `ConnectionResetError`, and the SSE
+  handler caught only the latter two — so on the platform this runs on it caught
+  nothing. All four are subclasses of `ConnectionError`; that is what is caught
+  now, in `_stream`, `do_GET` and `do_POST`.
+
+  The second traceback was the apology failing: the catch-all handler tried to
+  send a 500 down the same dead socket, raised again from inside an `except`
+  block, and escaped to socketserver. `_error` now tolerates a peer that has
+  already gone, and the `ConnectionError` clause sits ahead of the catch-all so it
+  never gets that far.
+
+  Verified over a live tunnel — attach to a run's stream, hang up mid-flight: the
+  run completes, the console stays healthy, the log stays silent.
+
+- **A Census geocode was rendered as a green, weight-3 official citation.** The
+  place-code lookup `ingest geo` uses is served from a `.gov` host, so
+  `classify_source_type` files it as `government_doc` — and the drawer then shows
+  "a government document supports this project" for a county and a pair of
+  coordinates nobody wrote about the campus. 158 of 509 citations are this.
+
+  The scores were never affected, which is worth stating because it was the first
+  thing checked: corroboration is counted over `KEY_FIELDS` and a geocode claims
+  none of them, so re-scoring every project with the Census sources removed moves
+  **0 of 221**. It was only ever a label, so it is fixed as a label — the chip
+  reads "reference data — corroborates nothing" for any `derived:` extractor. A
+  migration to re-tag rows would have been a lot of moving parts for a word.
+
+- **A wide table in the run log came out shredded.** Rich lays its tables out at
+  a fixed `COLUMNS` (160) and draws them with `+-|` characters, so the column
+  positions are baked into the text. The log pane was `white-space: pre-wrap`,
+  and at a measured 815px — about 113 characters — every 132-character row of
+  `tracker list` folded onto a second line and the borders stopped lining up with
+  the cells. There is no pane width but 160 characters at which wrapping works,
+  so the pane no longer wraps: it scrolls sideways, which is what a terminal
+  emulator does, and the scroll is bounded because Rich never emits a line wider
+  than `COLUMNS`. Each line is `width: max-content` so a reversed or
+  background-coloured run paints its whole width instead of being clipped at the
+  pane edge. The page still never scrolls sideways, at 1280px or at 390px.
+
+  A `wrap` toggle sits in the log's corner for the other half of the output —
+  `gaps` notes and refusal messages are prose Rich has already wrapped, and
+  reading those by scrolling is worse than reading them reflowed. Off by default:
+  the tables are the case that breaks rather than merely inconveniences.
+
+- **`tracker cloudflare` failed behind a proxy**, which on the machine it was
+  built for meant three times in four. cloudflared builds its own
+  `http.Transport` for the one request that asks Cloudflare for a quick tunnel,
+  and a zero-value Transport has no proxy function — so that request ignores
+  `HTTPS_PROXY` however it is set, while curl, pip and the browser all work.
+  Measured against `api.trycloudflare.com` over an hour: 3.8s to 28s direct
+  depending on the minute, a steady ~4s through the proxy, against a fixed client
+  budget of about ten seconds. The result was `context deadline exceeded` and no
+  way to act on it.
+
+  The console now starts a loopback relay, points cloudflared's `--quick-service`
+  at it, and forwards that request through the proxy — 4.1s, measured, where the
+  direct attempt had just timed out. The proxy is taken from the environment or,
+  on Windows, from `Internet Settings`, which is where Windows applications look
+  and Go does not. `--proxy` forces one, `--no-proxy` opts out, `--check` reports
+  which was found. The relay is not a general proxy: the upstream host is a
+  constant, only the path travels, an absolute request URI is refused, and it
+  closes with the tunnel.
+
+  Attempts are also retried three times, because the underlying failure is a
+  latency race rather than a refusal — the same request measured 3.8s and 28s an
+  hour apart. And when it does give up, the message now names the two things that
+  help instead of dumping the log: a proxy, or a named tunnel, which never calls
+  that endpoint at all.
+
+- **A failed quick tunnel was reported as a working public URL.** cloudflared's
+  timeout message contains `Post "https://api.trycloudflare.com/tunnel": context
+  deadline exceeded`, the hostname pattern matched the API host inside it, and the
+  console printed `public: https://api.trycloudflare.com` — a link to Cloudflare's
+  API, handed over as the operator's console. The pattern now excludes `api.`, and
+  a "failed to request quick Tunnel" line ends the wait immediately with the real
+  reason instead of timing out sixty seconds later with a vague one. Observed
+  live; the request itself is transient and succeeded on the next attempt.
+
+### Added
+
+- **A Capex view in the console**, and the duplicate review that belongs beside
+  it. `tracker capex` answers the question the site-keyed database cannot — how
+  much capacity each end customer has in flight — and the console had no
+  equivalent. The view carries the whole thing: the coverage banner saying what
+  fraction of projects it can speak for, the buyer table with MW-by-year, at-risk
+  and slipped columns, the `*` marker wherever attribution came from ownership
+  rather than a cited tenant, the suspect-attribution list, and both honesty
+  footers (how much is attributed; every figure is a floor).
+
+  The duplicate review sits on that page rather than under Coverage because
+  `capex.py` makes the argument itself: a row stored twice is a nuisance in a site
+  listing and a wrong number the moment anything groups by buyer — Abilene was in
+  the database four times, so 1.2 GW was counted four times against OpenAI. The
+  repair belongs next to the figure it corrupts. Groups appear with their
+  candidate rows side by side (capacity, citation count, dates), a radio picks the
+  survivor, and the merge runs through the ordinary `/api/run` path rather than a
+  bespoke route — one execution path, one lock, one audit log. Deciding which of
+  four rows survives by eye is the one thing a browser genuinely does better than
+  the CLI.
+
+- **A `DESTRUCTIVE` gate in the console catalog, on its own axis from cost.**
+  `tracker merge` permanently deletes project rows and was in neither
+  `LLM_COMMANDS` nor `BLOCKED`, so a misplaced click ran it with no confirmation
+  at all. It now needs its name typed back, the same ritual `sync` uses for a
+  different loss — reporting a merge as "spends LLM tokens" would simply be false,
+  which is why `cost` and `destroys` are separate fields rather than one enum. The
+  check is on the command *name* and never on its flags: a gate that reads
+  arguments is a gate with a bypass in it, and `--dry-run` must not be the thing
+  standing between a click and a deletion.
+
+- **`ingest edgar` priced.** It spends one LLM call per filing and shipped outside
+  `LLM_COMMANDS`, so it ran from the console without the confirmation
+  `ingest crawl` has. Same mechanism, cheaper failure, one line.
+
+- **A distinct label for the second cause of 待确认.** Two very different things
+  reach that tier and they need opposite work: nothing quotable backs the value
+  (find another source), or the quote is real and the figure belongs to a
+  programme rather than this site (correct it — searching would find a citation
+  and it would still be wrong). The console reads the disclosure the ingest path
+  already wrote into `project.notes`, keyed on `crawl.SCALE_NOTE_MARKER`, and
+  shows it as a red "not this site's figure" chip with the recorded sentence. Read
+  back rather than recomputed in the browser, which would sometimes accuse a
+  figure no gate ever demoted. Six projects in the live database carry one.
+
+- **Variadic positionals in the console catalog.** `merge` takes any number of ids
+  as bare arguments, which click models as `nargs=-1` rather than as a `multiple`
+  option; reading only `multiple` refused the list, so the Duplicates card could
+  never have folded more than one row.
+
 - **A plausibility ceiling on `investment_usd` against `mw_planned`**
   (`crawl._implausible_investment`, $50M/MW). The evidence gate can only confirm
   that a figure was quoted in the article, not that it is *this project's*

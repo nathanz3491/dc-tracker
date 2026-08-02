@@ -180,6 +180,44 @@ def test_capacity_lands_in_the_year_it_is_expected_online(session):
     meta = {p.key: p for p in capex.rollup(session)}["meta"]
     assert meta.mw_by_year == {2028: 1000}
     assert meta.mw_planned == 1050
+    # The same capacity, split by quarter. "Whose pipeline lands next quarter" is
+    # the question the year column cannot answer.
+    assert meta.mw_by_quarter == {"2028Q1": 300, "2028Q2": 700}
+    assert capex.quarters([meta]) == ["2028Q1", "2028Q2"]
+
+
+@pytest.mark.parametrize(
+    ("month", "quarter"),
+    [(1, "Q1"), (3, "Q1"), (4, "Q2"), (6, "Q2"), (7, "Q3"), (9, "Q3"), (10, "Q4"), (12, "Q4")],
+)
+def test_every_month_lands_in_the_right_quarter(session, month: int, quarter: str):
+    """Off-by-one here would move capacity a quarter, which is the whole point."""
+    _project(
+        session, name="A", company="Meta", mw_planned=100, expected_online=dt.date(2027, month, 15)
+    )
+    meta = {p.key: p for p in capex.rollup(session)}["meta"]
+    assert meta.mw_by_quarter == {f"2027{quarter}": 100}
+
+
+def test_quarter_precision_is_measured_rather_than_assumed(session):
+    """A source that said only "2027" normalises to 1 January and looks like Q1.
+
+    The quarter columns are worth having and worth distrusting, and the only
+    honest way to say how much is to count how many dates are suspiciously round.
+    Without this the view would pile a year of vagueness into Q1 and present it
+    as a schedule.
+    """
+    _project(session, name="A", company="Meta", mw_planned=100, expected_online=dt.date(2027, 1, 1))
+    _project(session, name="B", company="Meta", mw_planned=100, expected_online=dt.date(2027, 5, 1))
+    _project(
+        session, name="C", company="Meta", mw_planned=100, expected_online=dt.date(2027, 5, 14)
+    )
+    _project(session, name="D", company="Meta", mw_planned=100)  # undated, not counted
+
+    precision = capex.date_precision(session)
+    assert precision["dated"] == 3
+    assert round(precision["year_only_pct"]) == 33  # only the 1 January one
+    assert round(precision["month_start_pct"]) == 67  # 1 Jan and 1 May
 
 
 def test_risk_and_slippage_attach_to_the_buyer(session):
@@ -259,6 +297,66 @@ def test_one_campus_stored_per_party_is_flagged_with_its_cost(session):
     assert len(pairs) == 6, "four rows make six pairs"
     # Three redundant rows, not six: a row appearing in several pairs counts once.
     assert capex.double_counted_mw(pairs) == 3600
+
+
+def test_six_pairs_for_one_campus_become_one_decision(session):
+    """An operator merges a group, not a pair.
+
+    Six pairwise flags for four rows would be six prompts to answer the same
+    question, and `tracker merge` takes one survivor with any number of rows to
+    fold in — so the grouping is what makes the finding actionable at all.
+    """
+    for company, name in [
+        ("Crusoe", "Stargate Abilene"),
+        ("OpenAI/Oracle", "Stargate"),
+        ("OpenAI", "Stargate"),
+        ("Oracle", "Stargate - Abilene"),
+    ]:
+        _project(session, name=name, company=company, city="Abilene", mw_planned=1200)
+    # A second campus elsewhere must not be pulled into the first group.
+    for company in ("SoftBank", "OpenAI"):
+        _project(session, name="Stargate Milam", company=company, city="Milam", mw_planned=700)
+
+    groups = capex.duplicate_groups(capex.suspected_duplicates(session))
+    assert [len(g) for g in groups] == [4, 2], "largest group first"
+    assert all(g == sorted(g) for g in groups), "ids ascending, so the default survivor is stable"
+    assert not set(groups[0]) & set(groups[1])
+
+
+def test_grouping_is_transitive_across_pairs():
+    """A links to B and B links to C, with no A-C pair: one campus, not two.
+
+    Built from pairs directly rather than from the detector, because the detector
+    is transitive on every real example to hand and the fixture would prove
+    nothing — it would pass against an implementation that only ever merged pairs
+    sharing a *first* id. The chain is what matters: `looks_like_the_same_site`
+    compares names, and "Stargate Abilene" can match "Stargate" and "Stargate -
+    Abilene" while those two do not match each other. Offering that as two merges
+    would leave a duplicate behind whichever one the operator ran.
+    """
+
+    def pair(a: int, b: int) -> capex.DuplicatePair:
+        return capex.DuplicatePair(
+            a_id=a,
+            a_company="A",
+            a_name="n",
+            b_id=b,
+            b_company="B",
+            b_name="n",
+            locality="abilene",
+            state="TX",
+            b_mw=1200.0,
+        )
+
+    groups = capex.duplicate_groups([pair(1, 2), pair(2, 3)])
+    assert groups == [[1, 2, 3]]
+
+    # Order of arrival must not matter: the second pair can arrive first, and a
+    # later pair can be the one that welds two existing groups together.
+    assert capex.duplicate_groups([pair(2, 3), pair(1, 2)]) == [[1, 2, 3]]
+    assert capex.duplicate_groups([pair(1, 2), pair(3, 4), pair(2, 3)]) == [[1, 2, 3, 4]]
+    # Unrelated pairs stay apart.
+    assert capex.duplicate_groups([pair(1, 2), pair(3, 4)]) == [[1, 2], [3, 4]]
 
 
 def test_a_busy_locality_produces_no_false_duplicates(session):

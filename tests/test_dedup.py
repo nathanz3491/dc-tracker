@@ -198,9 +198,9 @@ def test_the_abilene_case_is_recognised():
     ]
     for i, (a_name, a_co) in enumerate(rows):
         for b_name, b_co in rows[i + 1 :]:
-            assert dedup.looks_like_the_same_site(
-                a_name, a_co, b_name, b_co, locality="Abilene"
-            ), f"{a_co} vs {b_co}"
+            assert dedup.looks_like_the_same_site(a_name, a_co, b_name, b_co, locality="Abilene"), (
+                f"{a_co} vs {b_co}"
+            )
 
 
 def test_one_busy_locality_is_not_one_project():

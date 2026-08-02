@@ -14,8 +14,10 @@ import datetime as dt
 import json
 import os
 import re
+import struct
 import sys
 import threading
+import time
 from http.client import HTTPConnection
 
 import pytest
@@ -23,7 +25,7 @@ import pytest
 from tracker.db import init_db, session_scope
 from tracker.ingest.records import IngestRecord, RiskRecord, SourceRecord
 from tracker.upsert import upsert_record
-from tracker.webui import catalog
+from tracker.webui import assets, catalog
 from tracker.webui.runner import Busy, Runner
 from tracker.webui.server import Console, Handler
 
@@ -136,6 +138,92 @@ def test_dataset_carries_the_shape_the_page_expects(server):
     assert project["prov"]["mw_planned"]["quote_is_exact"] is True
 
 
+def test_dataset_carries_the_capex_rollup(server):
+    """The buyer axis, and the duplicate warning that belongs beside it."""
+    address, _ = server
+    _status, data = request(address, "/api/dataset")
+    capex = data["capex"]
+    assert set(capex) >= {
+        "coverage",
+        "positions",
+        "years",
+        "as_of_year",
+        "suspect",
+        "duplicates",
+    }
+    assert set(capex["duplicates"]) == {"groups", "double_counted_mw"}
+    # Microsoft is a hyperscaler in the company list, so it is its own customer.
+    position = next(p for p in capex["positions"] if p["key"] == "microsoft")
+    assert position["self_built"] == 1
+    assert position["mw_planned"] == 900.0
+    # Groups carry ids only; the page looks the rows up in `projects` rather than
+    # being sent a second copy that can disagree with the first.
+    assert all(isinstance(i, int) for g in capex["duplicates"]["groups"] for i in g)
+
+
+def test_a_programme_total_says_so_rather_than_just_being_amber(tmp_path):
+    """Both causes of 待确认 sit at one tier, and they need opposite work.
+
+    An unquoted value needs another source. A programme total quoted in an
+    article about one campus needs correcting — going looking for a citation
+    would find one, and it would still be the wrong number. The ingest path
+    records which it is; this proves the console can still tell.
+    """
+    from tracker.ingest.crawl import SCALE_NOTE_FIELD, SCALE_NOTE_MARKER, _implausible_investment
+    from tracker.webui.dataset import build
+
+    note = _implausible_investment({"investment_usd": 100_000_000_000, "mw_planned": 1200.0})
+    assert note and SCALE_NOTE_MARKER in note
+
+    path = tmp_path / "scale.db"
+    engine, _ = init_db(path)
+    with session_scope(engine) as session:
+        upsert_record(
+            session,
+            IngestRecord(
+                project={
+                    "company": "Brookfield",
+                    "name": "Paducah",
+                    "city": "Paducah",
+                    "state": "KY",
+                },
+                sources=[
+                    SourceRecord(
+                        url="https://example.test/paducah",
+                        source_type="trade_press",
+                        fetched_at=T0,
+                        excerpt="The investment could total roughly $100 billion over time.",
+                        claims={
+                            "name": "Paducah",
+                            "company": "Brookfield",
+                            "city": "Paducah",
+                            "state": "KY",
+                            "mw_planned": 1200.0,
+                            "investment_usd": 100_000_000_000,
+                        },
+                        unconfirmed=frozenset({"investment_usd"}),
+                    )
+                ],
+                notes=[note],
+            ),
+        )
+    with session_scope(engine, commit=False) as session:
+        payload = build(session, db_path=str(path), schema_version=7)
+
+    reason = payload["projects"][0]["unconfirmed_because"][SCALE_NOTE_FIELD]
+    assert reason["code"] == "scale"
+    assert SCALE_NOTE_MARKER in reason["note"]
+    # The `[source][tag]` bookkeeping is stripped; the sentence is what is shown.
+    assert not reason["note"].startswith("[")
+
+
+def test_a_merely_unquoted_value_claims_no_reason(server):
+    """The common case must not borrow the rarer one's explanation."""
+    address, _ = server
+    _status, data = request(address, "/api/dataset")
+    assert data["projects"][0]["unconfirmed_because"] == {}
+
+
 def test_reading_the_dataset_does_not_write(server, seeded_db, logical_snapshot):
     """A read route opens the database mode=ro; prove it stays untouched.
 
@@ -197,6 +285,62 @@ def test_catalog_marks_what_spends_money():
     assert commands["sync"].cost == "llm"
     assert commands["ingest crawl"].cost == "llm"
     assert commands["gaps"].cost == "free"
+    # One LLM call per filing, exactly like an article. It shipped outside
+    # LLM_COMMANDS and so ran from the console with no confirmation at all.
+    assert commands["ingest edgar"].cost == "llm"
+
+
+def test_catalog_marks_what_destroys_data():
+    """A separate axis from cost, because they are separate losses.
+
+    `merge` spends nothing and is the only command in the console that cannot be
+    undone. Reporting that as "spends LLM tokens" would be false, and leaving it
+    ungated made a misplaced click delete project rows.
+    """
+    commands = catalog.by_name()
+    merge = commands["merge"]
+    assert merge.cost == "free"
+    assert merge.destroys and "no undo" in merge.destroys
+    assert merge.needs_confirmation
+    assert commands["duplicates"].destroys is None  # it only reports
+    assert commands["gaps"].needs_confirmation is False
+
+
+def test_a_destructive_command_needs_its_name_typed_back(seeded_db):
+    """The same ritual as an LLM command, for a different reason."""
+    runner = Runner(seeded_db)
+    with pytest.raises(catalog.InvalidRequest) as exc:
+        runner.start("merge", {"--into": 1, "dupe_ids": [2]})
+    assert "no undo" in str(exc.value)
+
+    with pytest.raises(catalog.InvalidRequest) as exc:
+        runner.start("merge", {"--into": 1, "dupe_ids": [2]}, confirm="yes")
+    assert "no undo" in str(exc.value)
+
+
+def test_the_gate_is_on_the_command_not_its_flags(seeded_db):
+    """`--dry-run` must not talk its way past the confirmation.
+
+    A gate that inspects arguments is a gate with a bypass in it: the flag that
+    makes the run harmless today is one refactor away from not doing so, and the
+    console would have already let the request through.
+    """
+    runner = Runner(seeded_db)
+    with pytest.raises(catalog.InvalidRequest):
+        runner.start("merge", {"--into": 1, "dupe_ids": [2], "--dry-run": True})
+
+
+def test_every_command_the_palette_offers_is_in_a_named_group():
+    """`GROUPS` is the one hand-written thing in the catalog, so it falls behind.
+
+    It did: `capex`, `duplicates`, `merge` and `ingest edgar` all arrived and all
+    landed in the unnamed "Other" bucket at the bottom of the palette. Only the
+    blocked commands belong there — they are listed so their argv can be copied,
+    not because anybody groups them.
+    """
+    grouped = catalog.grouped_json()
+    other = [c["cmd"] for g in grouped if g["group"] == "Other" for c in g["items"]]
+    assert set(other) <= set(catalog.BLOCKED), f"ungrouped commands: {sorted(other)}"
 
 
 def test_argv_is_a_list_built_from_the_catalog():
@@ -234,6 +378,20 @@ def test_a_repeatable_flag_takes_a_list_and_repeats_itself():
         "ingest crawl", {"--url": ["https://a.example/x", "https://b.example/y"]}
     )
     assert many[-4:] == ["--url", "https://a.example/x", "--url", "https://b.example/y"]
+
+
+def test_a_variadic_positional_takes_a_list_of_ids():
+    """The Duplicates card sends a whole group in one request.
+
+    `merge` takes any number of ids as bare arguments, which click models as
+    `nargs=-1` rather than as a `multiple` option. Reading only `multiple` refused
+    the list and the card could never have folded more than one row.
+    """
+    argv = catalog.build_argv("merge", {"--into": 3, "dupe_ids": [8, 93, 121]})
+    assert argv[1:] == ["-m", "tracker", "merge", "--into", "3", "8", "93", "121"]
+    # Options first, positionals last: `merge --into 3 8 93 121` parses, and
+    # `merge 8 93 121 --into 3` would swallow the option as an argument.
+    assert argv.index("--into") < argv.index("8")
 
 
 @pytest.mark.parametrize("cmd,flag", [("ingest crawl", "--prompt"), ("sync", "--limit")])
@@ -318,6 +476,156 @@ def test_run_streams_output_and_records_history(server, seeded_db):
     assert record["lines"][0].startswith("$ tracker --db ")
     assert record["lines"][0].endswith(" gaps")
     assert any("mw_built" in line for line in record["lines"])
+
+
+def test_writing_a_briefing_costs_money_and_says_so(server):
+    """A POST, and gated, because a GET that spends money is a GET a back button
+    will make twice."""
+    address, _ = server
+    status, body = request(address, "/api/overview", "POST", {"project_id": 1})
+    assert status == 400
+    assert 'confirm="overview"' in body["error"]
+
+
+@pytest.mark.parametrize(
+    ("payload", "status", "expect"),
+    [
+        ({"project_id": 99999, "confirm": "overview"}, 404, "no project"),
+        ({"project_id": "nine"}, 400, "must be an integer"),
+        ({}, 400, "must be an integer"),
+    ],
+)
+def test_the_briefing_route_refuses_what_it_cannot_answer(server, payload, status, expect):
+    address, _ = server
+    got_status, body = request(address, "/api/overview", "POST", payload)
+    assert got_status == status
+    assert expect in body["error"]
+
+
+def test_a_briefing_already_written_needs_no_confirmation(server, seeded_db):
+    """It has been paid for; making somebody re-confirm to reread it is theatre."""
+    from tracker import overview as overview_mod
+    from tracker.db import open_db
+    from tracker.models import Project
+
+    class _Writer:
+        def complete(self, *, system, user, max_tokens):
+            class R:
+                text = "A short briefing about this campus, long enough to be kept."
+                model = "test-model"
+
+            return R()
+
+    with session_scope(open_db(seeded_db), commit=False) as session:
+        overview_mod.write(session.get(Project, 1), extractor=_Writer())
+
+    address, _ = server
+    status, body = request(address, "/api/overview", "POST", {"project_id": 1})
+    assert status == 200
+    assert body["cached"] is True
+    assert "short briefing" in body["text"]
+
+
+def test_a_reader_that_walks_away_mid_stream_is_not_an_error(server, caplog):
+    """Closing the tab during a run must not produce a traceback.
+
+    Over a Cloudflare tunnel this is ordinary: the edge drops idle connections and
+    the browser's EventSource reconnects, so one crawl produces several aborted
+    streams. It was logging two tracebacks each — one for the aborted write, and
+    one for the failed attempt to send a 500 down the same dead socket.
+
+    The narrow cause was platform. Windows raises `ConnectionAbortedError`
+    (WinError 10053) where POSIX raises `BrokenPipeError` or
+    `ConnectionResetError`, and only the latter two were caught, so the handler
+    caught nothing on the platform this runs on.
+    """
+    import logging
+    import socket as socket_mod
+
+    address, _ = server
+    status, body = request(address, "/api/run", "POST", {"cmd": "gaps", "flags": {}})
+    assert status == 202, body
+    run_id = body["run"]["id"]
+
+    with caplog.at_level(logging.ERROR, logger="tracker.webui.server"):
+        # Attach, read a little, then vanish without closing politely — a reset
+        # rather than a shutdown, which is what a dropped tunnel looks like.
+        raw = socket_mod.create_connection(address, timeout=30)
+        raw.sendall(f"GET /api/run/{run_id}/stream HTTP/1.1\r\nHost: x\r\n\r\n".encode())
+        raw.recv(64)
+        raw.setsockopt(socket_mod.SOL_SOCKET, socket_mod.SO_LINGER, struct.pack("ii", 1, 0))
+        raw.close()
+
+        # The run is a subprocess and finishes regardless; wait it out so the
+        # server has tried and failed to write to the socket we just killed.
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            _s, runs_body = request(address, "/api/runs")
+            if (runs_body.get("current") or {}).get("status") != "running":
+                break
+            time.sleep(0.5)
+
+    assert not [r for r in caplog.records if r.levelno >= logging.ERROR], (
+        "a client hanging up is normal operation, not a server error:\n"
+        + "\n".join(r.getMessage() for r in caplog.records)
+    )
+
+    # And the server is still answering.
+    assert request(address, "/api/health")[0] == 200
+
+
+def test_apologising_to_a_dead_socket_does_not_raise_again():
+    """`_error` is called from inside `except` blocks, so it must not throw.
+
+    This is the second traceback in the original report. The stream aborted, the
+    catch-all handler tried to send a 500, and writing that 500 down the same dead
+    socket raised again — this time out of an exception handler, where nothing was
+    left to catch it, so it escaped to socketserver.
+
+    Driven directly rather than through a real socket: the behavioural test below
+    cannot reliably win the race between a fast command finishing and the client
+    disappearing, and a test that only sometimes exercises the bug is not a test.
+    """
+    import io
+
+    from tracker.webui.server import Handler
+
+    class DeadSocket(io.RawIOBase):
+        def write(self, b):
+            raise ConnectionAbortedError(10053, "aborted by the host software")
+
+        def writable(self) -> bool:
+            return True
+
+    handler = object.__new__(Handler)
+    handler.wfile = DeadSocket()
+    handler.headers = {}
+    handler.command = "GET"
+    handler.request_version = "HTTP/1.1"
+    handler.requestline = "GET /x HTTP/1.1"
+    handler.client_address = ("127.0.0.1", 1)
+    handler.server = None
+
+    handler._error(500, "internal error")  # must not raise
+
+
+def test_every_connection_failure_windows_can_raise_is_caught():
+    """`ConnectionError` covers all of them; the old tuple covered two of four.
+
+    Guards the fix by construction rather than by hoping a test happens to
+    provoke the right errno on the right platform.
+    """
+    for kind in (
+        BrokenPipeError,
+        ConnectionResetError,
+        ConnectionAbortedError,
+        ConnectionRefusedError,
+    ):
+        assert issubclass(kind, ConnectionError)
+
+    source = (assets.STATIC_ROOT.parent / "server.py").read_text(encoding="utf-8")
+    assert "except (BrokenPipeError, ConnectionResetError)" not in source
+    assert source.count("except ConnectionError") >= 3, "_stream, do_GET and do_POST"
 
 
 def test_a_run_targets_the_database_the_console_is_serving(seeded_db, tmp_path):
@@ -663,6 +971,49 @@ def test_a_tunnel_client_ip_is_only_trusted_from_loopback():
     assert "127.0.0.1" in source and "CF-Connecting-IP" in source
 
 
+def test_the_run_log_does_not_wrap():
+    """A Rich table's column positions are baked in at COLUMNS characters.
+
+    `white-space: pre-wrap` folded every 132-character row of `tracker list` onto
+    a second line in an 815px pane, so the `+--+` borders no longer lined up with
+    the cells and the table came out shredded. There is no width but COLUMNS at
+    which wrapping works, so the pane scrolls sideways instead — which is what a
+    terminal does.
+
+    Asserted against the stylesheet because the failure is purely a CSS one: the
+    markup was always right.
+    """
+    from tracker.webui import assets
+
+    css = (assets.STATIC_ROOT / "app.css").read_text(encoding="utf-8")
+    # Comments stripped first: the block explains this rule at length and the
+    # explanation naturally contains the word the assertion forbids.
+    declarations = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
+    block = declarations.split(".dc-log {", 1)[1].split("}", 1)[0]
+    assert "white-space: pre;" in block
+    assert "pre-wrap" not in block, "the default log surface must not reflow Rich's tables"
+    # The opt-in is still there for prose, and only as an opt-in.
+    assert ".dc-log--wrap { white-space: pre-wrap;" in declarations
+
+
+def test_a_log_line_is_as_wide_as_its_content():
+    """Otherwise a coloured background stops at the pane edge, mid-row.
+
+    With `white-space: pre` the text overflows a block that is only as wide as
+    the container, so any run with a background — Rich's reversed headers — would
+    be painted for 815px of a 983px line. It also makes the container's
+    scrollWidth wrong, which is what the horizontal scrollbar is sized from.
+    """
+    from tracker.webui import assets
+
+    css = re.sub(
+        r"/\*.*?\*/", "", (assets.STATIC_ROOT / "app.css").read_text(encoding="utf-8"), flags=re.S
+    )
+    block = css.split(".dc-log-line {", 1)[1].split("}", 1)[0]
+    assert "width: max-content;" in block
+    assert "min-width: 100%;" in block
+
+
 # --- assets -----------------------------------------------------------------
 
 
@@ -671,6 +1022,323 @@ def test_every_file_the_page_needs_is_vendored():
     from tracker.webui import assets
 
     assert assets.missing_vendor() == []
+
+
+# --- publishing through cloudflared -----------------------------------------
+
+
+def test_the_api_host_is_not_mistaken_for_a_tunnel():
+    """`api.trycloudflare.com` appears in the failure message, not in a success.
+
+    Observed live: the quick-tunnel request timed out, cloudflared printed
+    `Post "https://api.trycloudflare.com/tunnel": context deadline exceeded`, the
+    URL pattern matched it, and the console announced
+    `public: https://api.trycloudflare.com` — a link to Cloudflare's API,
+    presented as the operator's console. Reporting a tunnel that does not exist
+    is the worst failure this module has, because the whole point of the command
+    is the URL it prints.
+    """
+    from tracker.webui.tunnel import _QUICK_FAILED, _URL
+
+    failure = (
+        'failed to request quick Tunnel: Post "https://api.trycloudflare.com/tunnel": '
+        "context deadline exceeded (Client.Timeout exceeded while awaiting headers)"
+    )
+    assert _URL.search(failure) is None
+    assert _QUICK_FAILED.search(failure)
+
+    banner = "|  https://itchy-narrow-pine-42.trycloudflare.com   |"
+    assert _URL.search(banner).group(0) == "https://itchy-narrow-pine-42.trycloudflare.com"
+    assert _QUICK_FAILED.search(banner) is None
+
+
+def test_a_refused_tunnel_fails_at_once_rather_than_waiting_out_the_window():
+    """cloudflared can report that it cannot get a tunnel and then keep running.
+
+    Waiting the full 60s out would replace a precise reason with "did not publish
+    a URL in time", a minute later. The reason is on the first line of output.
+    """
+    import subprocess
+
+    from tracker.webui.tunnel import _QUICK_FAILED, TunnelFailed, _wait
+
+    class Alive:
+        def poll(self):
+            return None
+
+    tail = [
+        "INF Requesting new quick Tunnel on trycloudflare.com...",
+        "failed to request quick Tunnel: boom",
+    ]
+    with pytest.raises(TunnelFailed) as exc:
+        _wait(
+            Alive(),  # type: ignore[arg-type]
+            [],
+            tail,
+            timeout_s=30,
+            waiting_for="publishing a URL",
+            give_up_on=_QUICK_FAILED,
+        )
+    assert "boom" in str(exc.value)
+    assert subprocess  # the real callers pass a Popen; this stands in for one
+
+
+def test_publishing_is_not_something_the_page_can_do_to_itself():
+    """`cloudflare` is blocked in the console for the same reason `serve` is.
+
+    Stronger than "it would hold the run slot": putting this page on the public
+    internet is a decision for somebody at a terminal. A blocked command still
+    appears in the palette with its argv, so the operator can copy the line.
+    """
+    assert "cloudflare" in catalog.BLOCKED
+    with pytest.raises(catalog.InvalidRequest) as exc:
+        catalog.build_argv("cloudflare", {})
+    assert "cannot be run from the console" in str(exc.value)
+
+
+def test_the_quick_tunnel_api_call_is_relayed_through_the_proxy(monkeypatch):
+    """cloudflared ignores HTTPS_PROXY for exactly one request, and it matters.
+
+    It builds its own `http.Transport` for the quick-tunnel call, and a
+    zero-value Transport has no proxy function — so on a machine behind a proxy
+    that one request goes direct. Measured on such a machine: direct swung
+    between 3.8s and 28s over an hour while the proxy stayed near 4s, against a
+    fixed client budget of about ten. `tracker cloudflare` failed with
+    `context deadline exceeded` while curl, pip and the browser all worked.
+
+    So the console stands a relay in front of it and points `--quick-service` at
+    that. This asserts the flag is passed and the port is the relay's.
+    """
+    from tracker.webui import tunnel as tunnel_mod
+
+    captured: list[list[str]] = []
+
+    class FakeProcess:
+        def poll(self):
+            return None
+
+        def terminate(self):
+            pass
+
+        def wait(self, timeout=None):
+            return 0
+
+    def fake_spawn(argv, _pattern):
+        captured.append(argv)
+        return FakeProcess(), ["https://itchy-narrow-pine-42.trycloudflare.com"], []
+
+    monkeypatch.setattr(tunnel_mod, "find_cloudflared", lambda: "cloudflared")
+    monkeypatch.setattr(tunnel_mod, "_check_runnable", lambda _binary: None)
+    monkeypatch.setattr(tunnel_mod, "_spawn", fake_spawn)
+
+    result = tunnel_mod.quick_tunnel(8765, proxy="http://127.0.0.1:8080")
+    argv = captured[0]
+    assert "--quick-service" in argv
+    relayed = argv[argv.index("--quick-service") + 1]
+    assert relayed.startswith("http://127.0.0.1:")
+    assert result.via_proxy == "http://127.0.0.1:8080"
+    result.stop()
+
+    # And the escape hatch really escapes: no proxy, no relay, no flag.
+    captured.clear()
+    plain = tunnel_mod.quick_tunnel(8765, use_proxy=False)
+    assert "--quick-service" not in captured[0]
+    assert plain.via_proxy is None
+    plain.stop()
+
+
+def test_the_relay_is_not_an_open_proxy():
+    """It forwards to one fixed host, whatever path is asked for.
+
+    It binds a loopback port anything on the machine can reach, so "relay
+    whatever you are told to" would be a real hole rather than a theoretical one.
+
+    Asserted by watching what the relay asks a proxy to CONNECT to, because that
+    is the thing that would actually be wrong. An earlier version of this test
+    asserted `(QUICK_API + path).startswith(QUICK_API)`, which is a property of
+    string concatenation and would have passed against any implementation at all.
+    """
+    import socket
+    import threading as _threading
+    from http.client import HTTPConnection as _HTTPConnection
+
+    from tracker.webui.tunnel import QUICK_API, _QuickRelay
+
+    assert QUICK_API == "https://api.trycloudflare.com"
+
+    targets: list[str] = []
+    stub = socket.socket()
+    stub.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    stub.bind(("127.0.0.1", 0))
+    stub.listen(8)
+
+    def serve() -> None:
+        # urllib tunnels https-through-http-proxy with `CONNECT host:443`.
+        # Record the host and hang up; the relay then fails, which is fine —
+        # the question is only ever where it tried to go.
+        while True:
+            try:
+                conn, _ = stub.accept()
+            except OSError:
+                return
+            with conn:
+                first = conn.recv(4096).decode("latin-1", "replace").split("\r\n", 1)[0]
+                if first.upper().startswith("CONNECT"):
+                    targets.append(first.split()[1])
+
+    thread = _threading.Thread(target=serve, daemon=True)
+    thread.start()
+
+    # Every shape an attacker on this machine could try: a path that looks like a
+    # host, an absolute request URI, and headers that a naive implementation
+    # might honour. None of them may change where the relay goes.
+    attempts = [
+        ("//evil.example.com/steal", {}),
+        ("http://evil.example.com/steal", {}),
+        ("/tunnel", {"X-Upstream": "https://evil.example.com", "Host": "evil.example.com"}),
+    ]
+
+    relay = _QuickRelay(f"http://127.0.0.1:{stub.getsockname()[1]}")
+    try:
+        assert relay.start().startswith("http://127.0.0.1:")
+        for path, headers in attempts:
+            client = _HTTPConnection("127.0.0.1", relay.port, timeout=20)
+            try:
+                client.request("POST", path, body=b"", headers=headers)
+                client.getresponse().read()
+            except Exception:
+                pass  # a mangled upstream failing early is a pass, not a problem
+            finally:
+                client.close()
+    finally:
+        relay.stop()
+        stub.close()
+        thread.join(timeout=5)
+
+    assert set(targets) <= {"api.trycloudflare.com:443"}, f"relay reached out to {targets}"
+    assert targets, "the relay never called out at all — the test proved nothing"
+
+
+def test_a_proxy_is_found_in_the_environment(monkeypatch):
+    """Environment first; a bare host:port is given a scheme so Go can parse it."""
+    from tracker.webui.tunnel import detect_proxy
+
+    for name in (
+        "HTTPS_PROXY",
+        "https_proxy",
+        "ALL_PROXY",
+        "all_proxy",
+        "HTTP_PROXY",
+        "http_proxy",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("HTTPS_PROXY", "127.0.0.1:8080")
+    assert detect_proxy() == "http://127.0.0.1:8080"
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.example:3128")
+    assert detect_proxy() == "http://proxy.example:3128"
+
+
+def test_a_slow_minute_is_retried(monkeypatch):
+    """The failure being retried is a latency race, not a refusal.
+
+    The same request measured 3.8s and 28s an hour apart on one link. A second
+    attempt is the proportionate response to that; giving up on the first is not.
+    """
+    from tracker.webui import tunnel as tunnel_mod
+
+    monkeypatch.setattr(tunnel_mod.time, "sleep", lambda _s: None)
+    calls = {"n": 0}
+
+    def flaky(port, *, timeout_s, proxy, use_proxy):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise tunnel_mod.TunnelFailed("context deadline exceeded")
+        return "a tunnel"
+
+    monkeypatch.setattr(tunnel_mod, "_quick_tunnel_once", flaky)
+    assert tunnel_mod.quick_tunnel(8765, attempts=3) == "a tunnel"
+    assert calls["n"] == 3
+
+    # And it still gives up, with the last real reason rather than a summary.
+    calls["n"] = 0
+    monkeypatch.setattr(
+        tunnel_mod,
+        "_quick_tunnel_once",
+        lambda *a, **k: (_ for _ in ()).throw(tunnel_mod.TunnelFailed("still slow")),
+    )
+    with pytest.raises(tunnel_mod.TunnelFailed, match="still slow"):
+        tunnel_mod.quick_tunnel(8765, attempts=2)
+
+
+def test_a_named_tunnel_is_run_never_created(monkeypatch):
+    """Creating one writes credentials and a DNS record that outlive the process.
+
+    So an account with no tunnels gets the three commands to run rather than
+    having them run for it.
+    """
+    from tracker.webui import tunnel as tunnel_mod
+
+    monkeypatch.setattr(tunnel_mod, "find_cloudflared", lambda: "cloudflared")
+    monkeypatch.setattr(tunnel_mod, "_check_runnable", lambda _binary: None)
+    monkeypatch.setattr(tunnel_mod, "named_tunnels", lambda _binary=None: [])
+
+    with pytest.raises(tunnel_mod.TunnelNotFound) as exc:
+        tunnel_mod.named_tunnel(8765, "console")
+    message = str(exc.value)
+    assert "cloudflared tunnel create console" in message
+    assert "route dns" in message
+
+    monkeypatch.setattr(tunnel_mod, "named_tunnels", lambda _binary=None: ["other"])
+    with pytest.raises(tunnel_mod.TunnelNotFound) as exc:
+        tunnel_mod.named_tunnel(8765, "console")
+    assert "This account has: other" in str(exc.value)
+
+
+def test_the_named_tunnel_argv_pins_the_port_the_console_listens_on(monkeypatch):
+    """`--url` before `run` supplies the ingress, so no config.yml can disagree."""
+    from tracker.webui import tunnel as tunnel_mod
+
+    captured: list[list[str]] = []
+
+    class FakeProcess:
+        def poll(self):
+            return None
+
+        def terminate(self):
+            pass
+
+    def fake_spawn(argv, _pattern):
+        captured.append(argv)
+        return FakeProcess(), ["Registered tunnel connection"], []
+
+    monkeypatch.setattr(tunnel_mod, "find_cloudflared", lambda: "cloudflared")
+    monkeypatch.setattr(tunnel_mod, "_check_runnable", lambda _binary: None)
+    monkeypatch.setattr(tunnel_mod, "named_tunnels", lambda _binary=None: ["console"])
+    monkeypatch.setattr(tunnel_mod, "_spawn", fake_spawn)
+
+    result = tunnel_mod.named_tunnel(9001, "console", hostname="dc.example.com")
+    assert captured[0] == [
+        "cloudflared",
+        "tunnel",
+        "--no-autoupdate",
+        "--url",
+        "http://127.0.0.1:9001",
+        "run",
+        "console",
+    ]
+    assert result.url == "https://dc.example.com"
+    assert result.kind == "named" and result.confirmed
+
+
+def test_a_named_tunnel_without_a_hostname_says_unknown_rather_than_guessing():
+    """The DNS route lives in your zone, not in the tunnel's output."""
+    from tracker.webui.tunnel import Tunnel
+
+    class FakeProcess:
+        def poll(self):
+            return 0
+
+    assert Tunnel(url=None, process=FakeProcess(), kind="named").url is None  # type: ignore[arg-type]
 
 
 def test_the_meridian_bundle_is_complete():

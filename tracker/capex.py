@@ -115,6 +115,15 @@ class Position:
     #: Planned MW by the year the project is expected online. Only projects that
     #: cite both a capacity and a date appear here, so it is a floor within a floor.
     mw_by_year: dict[int, float] = field(default_factory=dict)
+    #: The same capacity bucketed by calendar quarter, "2026Q1".
+    #:
+    #: Worth having and worth distrusting in equal measure. "Whose pipeline lands
+    #: next quarter" is the question this table exists to answer, and a year
+    #: column cannot answer it. But an `expected_online` is very often a month or
+    #: a year in the source — "the second half of 2026" normalises to a date, and
+    #: that date then looks like a quarter it was never meant to name. Read the
+    #: quarters as a shape and the years as the number.
+    mw_by_quarter: dict[str, float] = field(default_factory=dict)
     #: Projects with at least one open obstacle, and the planned MW behind them.
     at_risk_projects: int = 0
     mw_at_risk: float = 0.0
@@ -192,6 +201,8 @@ def rollup(session: Session, *, include_terminal: bool = False) -> list[Position
         if project.expected_online and planned:
             year = project.expected_online.year
             bucket.mw_by_year[year] = bucket.mw_by_year.get(year, 0.0) + planned
+            quarter = f"{year}Q{(project.expected_online.month - 1) // 3 + 1}"
+            bucket.mw_by_quarter[quarter] = bucket.mw_by_quarter.get(quarter, 0.0) + planned
 
         if project.id in open_risk_ids:
             bucket.at_risk_projects += 1
@@ -214,6 +225,36 @@ def horizon(positions: list[Position]) -> list[int]:
     for position in positions:
         years.update(position.mw_by_year)
     return sorted(years)
+
+
+def quarters(positions: list[Position]) -> list[str]:
+    """Every quarter any position expects capacity online, ascending."""
+    seen: set[str] = set()
+    for position in positions:
+        seen.update(position.mw_by_quarter)
+    return sorted(seen)
+
+
+def date_precision(session: Session) -> dict[str, float]:
+    """How much of `expected_online` is precise enough to bucket by quarter.
+
+    The honest companion to the quarter columns. A date normalised from "2026"
+    lands on the 1st of January and is indistinguishable, downstream, from one a
+    source pinned to a day — so the quarter view would silently pile a year's
+    worth of vagueness into Q1. Counting the January-1st and month-start dates is
+    the closest available measure of how much of that is happening.
+    """
+    projects = session.scalars(select(Project)).all()
+    dated = [p for p in projects if p.expected_online and p.mw_planned]
+    jan1 = sum(1 for p in dated if p.expected_online.month == 1 and p.expected_online.day == 1)
+    month_start = sum(1 for p in dated if p.expected_online.day == 1)
+    total = len(dated) or 1
+    return {
+        "dated": float(len(dated)),
+        "projects": float(len(projects)),
+        "year_only_pct": jan1 / total * 100,
+        "month_start_pct": month_start / total * 100,
+    }
 
 
 def blocking_risk(session: Session, key: str) -> str | None:
@@ -309,7 +350,9 @@ def suspected_duplicates(session: Session) -> list[DuplicatePair]:
     for (locality, state), group in by_locality.items():
         for i, a in enumerate(group):
             for b in group[i + 1 :]:
-                if looks_like_the_same_site(a.name, a.company, b.name, b.company, locality=locality):
+                if looks_like_the_same_site(
+                    a.name, a.company, b.name, b.company, locality=locality
+                ):
                     pairs.append(
                         DuplicatePair(
                             a_id=a.id,
@@ -324,6 +367,26 @@ def suspected_duplicates(session: Session) -> list[DuplicatePair]:
                         )
                     )
     return pairs
+
+
+def duplicate_groups(pairs: list[DuplicatePair]) -> list[list[int]]:
+    """Collapse overlapping pairs into one group per campus, largest first.
+
+    Four rows for one site produce six pairs, and an operator wants one decision
+    rather than six. Pairs sharing an id are transitively the same building, so
+    they are unioned — which is also what makes the group safe to hand to
+    `tracker merge`, an operation that takes one survivor and any number of rows
+    to fold into it.
+    """
+    groups: list[set[int]] = []
+    for pair in pairs:
+        touching = [g for g in groups if pair.a_id in g or pair.b_id in g]
+        merged = {pair.a_id, pair.b_id}
+        for group in touching:
+            merged |= group
+            groups.remove(group)
+        groups.append(merged)
+    return sorted((sorted(g) for g in groups), key=lambda g: (-len(g), g))
 
 
 def double_counted_mw(pairs: list[DuplicatePair]) -> float:
@@ -381,9 +444,12 @@ __all__ = [
     "attribute",
     "blocking_risk",
     "coverage",
+    "date_precision",
     "double_counted_mw",
+    "duplicate_groups",
     "end_user_keys",
     "horizon",
+    "quarters",
     "rollup",
     "suspect_attributions",
     "suspected_duplicates",

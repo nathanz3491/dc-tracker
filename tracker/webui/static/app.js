@@ -48,9 +48,9 @@ const TIER = {
   na:          ["n/a", "not applicable"],
 };
 const TIER_NOTE = {
-  missing: "NULL — no source asserted this value. Absence is not always a gap: for blocker and customer it usually means there is nothing to report.",
-  defaulted: "Nobody stated one. The column is NOT NULL, so the schema default is what is sitting there — which is why the row is routed to `tracker review` rather than treated as a fact.",
-  unconfirmed: "待确认 — a source asserted this, but no verbatim quote the evidence gate could verify. Kept so the value survives to be confirmed, and excluded from confidence.",
+  missing: "Empty. Nobody has said. That is often the right answer rather than a gap — most projects have no problem to report and no named tenant.",
+  defaulted: "Nobody has said, and this field cannot be left blank, so it is showing the fallback. Treated as a guess, not a fact.",
+  unconfirmed: "待确认 — a source gave this figure but we could not find a sentence proving it. Kept so it can be checked later, and it counts for nothing until then.",
 };
 /* Phase hue lives on the map only, where a legend explains it. */
 const PHASE_TOKEN = {
@@ -62,7 +62,11 @@ const SEV_ORDER = ["watch", "material", "blocking"];
 
 /* ---- formatting ---------------------------------------------------------- */
 
+/* The trillions branch is not hypothetical. Summing investment by buyer put
+   OpenAI at $3.2tn — inflated by duplicate rows and programme totals, but real
+   output all the same, and it printed as "$3215B", which reads as a typo. */
 const fmtUSD = (v) => v == null ? "—"
+  : v >= 1e12 ? "$" + (v / 1e12).toFixed(1).replace(/\.0$/, "") + "T"
   : v >= 1e9 ? "$" + (v / 1e9).toFixed(1).replace(/\.0$/, "") + "B"
   : v >= 1e6 ? "$" + Math.round(v / 1e6) + "M"
   : "$" + v.toLocaleString();
@@ -93,6 +97,19 @@ const chip = (token, outline) => {
    API — `gaps.provenance()` — so the page never has to reason about evidence. */
 const provOf = (p, key) => (p.prov || {})[key] || null;
 const tierOf = (p, key) => (p[key] == null || p[key] === "") ? "missing" : (provOf(p, key)?.tier || "reported");
+/* Why a 待确认 value is 待确认.
+ *
+ * One tier, two causes, opposite remedies. The ordinary one is that nothing
+ * quotable backs the value, and the fix is another source. The other is that the
+ * quote is real and the figure is not this site's — a programme total lifted from
+ * an article about one campus — and the fix is a correction, because going
+ * looking for a citation would find one and it would still be wrong.
+ *
+ * Recorded by the ingest path, read back here. Never recomputed in the browser:
+ * that would sometimes accuse a figure no gate ever demoted. */
+const whyUnconfirmed = (p, key) =>
+  tierOf(p, key) === "unconfirmed" ? (p.unconfirmed_because || {})[key] || null : null;
+
 function quoteOf(p, key) {
   const tier = tierOf(p, key);
   const pr = provOf(p, key);
@@ -206,13 +223,30 @@ const LogLine = React.memo(({ line }) => html`
     ${parseAnsi(line).map((run, i) => html`<span key=${i} style=${run.style}>${run.text}</span>`)}
   </span>`);
 
+/* The run log.
+ *
+ * Does not wrap, and scrolls sideways instead — see `.dc-log` in app.css for
+ * why a Rich table cannot survive being reflowed. The toggle exists because the
+ * other half of the output is prose: `gaps` notes and refusal messages are
+ * sentences Rich has already wrapped at 160 columns, and reading those by
+ * scrolling is worse than reading them wrapped. Tables are the default because
+ * they are the case that breaks rather than merely inconveniences. */
 function LogPane({ lines, innerRef }) {
+  const [wrap, setWrap] = useState(false);
   return html`
-    <pre class="dc-log" ref=${innerRef} aria-live="polite" aria-atomic="false">
-      ${lines.length === 0
-        ? "connecting…"
-        : lines.map((line, i) => html`<${LogLine} key=${i} line=${line} />`)}
-    </pre>`;
+    <div style=${{ position: "relative" }}>
+      ${lines.length > 0 && html`
+        <button type="button" class="dc-log-wrap" aria-pressed=${wrap}
+                title=${wrap ? "Lines are wrapped; tables will not line up"
+                             : "Lines are not wrapped, so tables line up. Scroll sideways to read them."}
+                onClick=${() => setWrap((w) => !w)}>${wrap ? "wrap on" : "wrap off"}</button>`}
+      <pre class=${`dc-log${lines.length > 0 ? " dc-log--framed" : ""}${wrap ? " dc-log--wrap" : ""}`}
+           ref=${innerRef} aria-live="polite" aria-atomic="false">
+        ${lines.length === 0
+          ? "connecting…"
+          : lines.map((line, i) => html`<${LogLine} key=${i} line=${line} />`)}
+      </pre>
+    </div>`;
 }
 
 function Eyebrow({ figure, title, children }) {
@@ -316,11 +350,16 @@ function QuotePopover({ quote }) {
         <span style=${chip(quote.tier === "reported" ? "--foreground"
           : quote.tier === "unconfirmed" ? "--warning"
           : quote.tier === "inferred" ? "--chart-5" : "--muted-foreground")}>${tier[0]}</span>
+        ${quote.why && html`<span style=${chip("--danger")}>not this site's figure</span>`}
         ${quote.exact === false && quote.hasQuote && html`
           <span style=${{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--muted-foreground)" }}>
             from the source excerpt, not this field's own sentence
           </span>`}
       </div>
+      ${quote.why && html`
+        <p style=${{ margin: "0 0 8px", fontSize: 12, lineHeight: "18px", color: "var(--danger)" }}>
+          ${quote.why.note}
+        </p>`}
       <p style=${{ margin: 0, fontSize: 14, lineHeight: "21px" }}>
         ${quote.exact ? `“${quote.text}”` : quote.text}
       </p>
@@ -358,6 +397,7 @@ function useQuote() {
       y: below ? r.bottom + 8 : Math.max(10, r.top - H - 8),
       text: q.text, exact: q.exact, hasQuote: !!provOf(project, field)?.quote,
       tier: tierOf(project, field), sticky: !!opts.sticky,
+      why: whyUnconfirmed(project, field),
     });
   }, [quote]);
 
@@ -531,10 +571,10 @@ function ProjectsView({ data, onOpen, openId }) {
   return html`
     <div class="dc-view dc-rise" style=${{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 16,
                      padding: "22px 26px 60px" }}>
-      <${Eyebrow} figure="fig. 01 — projects" title="Every tracked field, and how much of it is quoted">
-        Colour here means trust, never category: a value's underline says whether a source quoted it, a
-        lookup derived it, a model guessed it, or nobody said anything at all. Hover any value for the
-        sentence behind it.
+      <${Eyebrow} figure="fig. 01 — projects" title="Every project, and where each number came from">
+        The underline under a value says who vouches for it — a quoted source, a lookup, a model's guess,
+        or nobody. Hover it, or tap it on a phone, to read the exact sentence behind it. Click a row for
+        everything we hold on that project.
       <//>
 
       <${Card}>
@@ -752,7 +792,8 @@ function Drawer({ data, project, onClose }) {
 
         <div class="dc-drawer-body" style=${{ flex: 1, overflowY: "auto", padding: "20px 24px 56px" }}>
           ${tab === "stats" && html`<${StatsTab} data=${data} p=${p} populated=${populated}
-                                                 open=${open} onQuote=${showQuote} />`}
+                                                 open=${open} onQuote=${showQuote}
+                                                 allowWrite=${data.allow_write} />`}
           ${tab === "risks" && html`<${RisksTab} data=${data} p=${p} />`}
           ${tab === "sources" && html`<${SourcesTab} data=${data} p=${p} />`}
         </div>
@@ -761,7 +802,96 @@ function Drawer({ data, project, onClose }) {
     </div>`;
 }
 
-function StatsTab({ data, p, populated, open, onQuote }) {
+/* A written reading of the row, from a model.
+ *
+ * The one panel in this drawer that is not a value with a citation behind it, so
+ * the whole job is making that impossible to miss. It sits *below* the evidence
+ * rather than above it, carries the `inferred` underline the tier legend already
+ * teaches, and says what it is in the header. A fluent paragraph beside quoted
+ * facts is the easiest place in the product to blur the line the tiers exist to
+ * draw.
+ *
+ * Not generated on open. It costs a call, and a drawer that spends money because
+ * you clicked a row is a drawer nobody dares click. */
+function InsightPanel({ project, allowWrite }) {
+  const [state, setState] = useState({ status: "idle" });
+
+  // A new project means a new briefing; without this, opening a second row shows
+  // the first row's text under the second row's name.
+  useEffect(() => { setState({ status: "idle" }); }, [project.id]);
+
+  const ask = async () => {
+    setState({ status: "writing" });
+    try {
+      const got = await api("/api/overview", {
+        method: "POST",
+        body: { project_id: project.id, confirm: "overview" },
+      });
+      setState({ status: "done", ...got });
+    } catch (e) {
+      setState({ status: "failed", error: e.message });
+    }
+  };
+
+  return html`
+    <${Card}>
+      <${CardHeader}>
+        <${CardTitle}>
+          <span style=${{ display: "inline-flex", alignItems: "center", gap: 9, flexWrap: "wrap" }}>
+            What this looks like
+            <span style=${chip("--chart-5")}>written by a model</span>
+          </span>
+        <//>
+        <${CardDescription}>
+          A reading of the values above, not another one of them. Nothing here is stored, it
+          cannot move the confidence score, and any figure it mentions should be checked against
+          the quoted evidence beside it.
+        <//>
+      <//>
+      <div style=${{ padding: "4px 20px 20px" }}>
+        ${state.status === "idle" && html`
+          <div style=${{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <${Button} size="sm" variant="outline" disabled=${!allowWrite} onClick=${ask}>
+              Write a briefing
+            <//>
+            <span style=${{ fontSize: 12, color: "var(--muted-foreground)" }}>
+              ${allowWrite ? "one LLM call" : "unavailable on a read-only console"}
+            </span>
+          </div>`}
+
+        ${state.status === "writing" && html`
+          <div style=${{ display: "grid", gap: 8 }}>
+            ${[92, 100, 78].map((w, i) => html`
+              <${Skeleton} key=${i} className="mrd-shimmer" height=${13} width=${w + "%"} />`)}
+            <span style=${{ fontSize: 12, color: "var(--muted-foreground)" }}>
+              reading the row…
+            </span>
+          </div>`}
+
+        ${state.status === "failed" && html`
+          <div style=${{ display: "grid", gap: 8 }}>
+            <span style=${{ fontSize: 13, color: "var(--danger)" }}>${state.error}</span>
+            <div><${Button} size="sm" variant="ghost" onClick=${ask}>Try again<//></div>
+          </div>`}
+
+        ${state.status === "done" && html`
+          <div class="dc-insight">
+            ${state.text.split(/\n\s*\n/).filter(Boolean).map((para, i) => html`
+              <p key=${i}>${para.trim()}</p>`)}
+            <div style=${{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap",
+                           marginTop: 12 }}>
+              <span style=${{ fontFamily: "var(--font-mono)", fontSize: 11,
+                              color: "var(--muted-foreground)" }}>
+                ${state.model}${state.cached ? " · from cache" : ""}
+              </span>
+              <${Button} size="sm" variant="ghost" onClick=${ask}>Rewrite<//>
+            </div>
+          </div>`}
+      </div>
+    <//>`;
+}
+
+function StatsTab({ data, p, populated, open, onQuote, allowWrite }) {
   const worst = open.slice().sort((a, b) => SEV_ORDER.indexOf(b.severity) - SEV_ORDER.indexOf(a.severity))[0];
   const stats = [
     { label: "Planned capacity", value: p.mw_planned == null ? "—" : p.mw_planned.toLocaleString() + " MW",
@@ -805,10 +935,15 @@ function StatsTab({ data, p, populated, open, onQuote }) {
                         ${fmt(key, p[key])}</span>
                       <span style=${chip(tier === "reported" ? "--foreground" : tier === "unconfirmed" ? "--warning"
                         : tier === "inferred" ? "--chart-5" : "--muted-foreground")}>${TIER[tier][0]}</span>
+                      ${whyUnconfirmed(p, key) && html`
+                        <span style=${chip("--danger")}>not this site's figure</span>`}
                       ${q.exact === false && !!provOf(p, key)?.quote && html`
                         <span style=${{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--muted-foreground)" }}>
                           excerpt, not this field's sentence</span>`}
                     </div>
+                    ${whyUnconfirmed(p, key) && html`
+                      <p style=${{ margin: 0, fontSize: 12, lineHeight: "18px", color: "var(--danger)" }}>
+                        ${whyUnconfirmed(p, key).note}</p>`}
                     <p style=${{ margin: 0, fontSize: 12, lineHeight: "18px", color: "var(--muted-foreground)",
                       maxWidth: "80ch",
                       ...(q.exact ? { borderLeft: "2px solid var(--primary)", paddingLeft: 9 } : {}),
@@ -837,9 +972,9 @@ function StatsTab({ data, p, populated, open, onQuote }) {
           <${Card}>
             <${CardHeader}>
               <${CardTitle}>Five independent tracks<//>
-              <${CardDescription}>A campus can own its land outright and still be four years deep in an
-                interconnection queue. The signal to watch for is the next unreached milestone on the
-                blocked track.<//>
+              <${CardDescription}>Five things happen in parallel, not in a line. A campus can own its
+                land and still wait four years for power. Look at whichever track is stuck — the next
+                milestone on it is the thing to watch for.<//>
             <//>
             <div style=${{ display: "grid", gap: 0 }}>
               ${p.standing.tracks.map((t) => {
@@ -897,6 +1032,11 @@ function StatsTab({ data, p, populated, open, onQuote }) {
               description="Nothing read so far states one. Silence is not evidence — a milestone appears when a source reports it." />
           </div>`}
       <//>
+
+      ${/* Last, deliberately. The evidence comes first and the reading of it
+            comes after — a fluent paragraph placed above quoted facts is read as
+            the summary rather than as one more opinion. */ ""}
+      <${InsightPanel} project=${p} allowWrite=${allowWrite} />
     </div>`;
 }
 
@@ -952,21 +1092,36 @@ function SourcesTab({ data, p }) {
   return html`
     <div style=${{ display: "grid", gap: 14 }}>
       <p style=${{ margin: 0, fontSize: 14, lineHeight: "22px", color: "var(--muted-foreground)", maxWidth: "88ch" }}>
-        Every non-null value above traces back to one of these. A lone source caps confidence at 2 however
-        authoritative — independence is counted by domain, not by row.
+        Every value above comes from one of these. One source alone caps confidence at 2, however good it
+        is — two articles on the same website still count as one voice.
       </p>
       ${p.sources.map((s, i) => {
         const placeholder = s.url.includes("PLACEHOLDER");
         const fields = (s.fields || "").split(",").filter(Boolean);
         const quotes = s.quotes || {};
+        /* A Census place-code lookup is stored as `government_doc` because it is
+         * served from a .gov host, and it renders as a green weight-3 official
+         * citation — which reads as "a government document supports this
+         * project". It supports a county and a pair of coordinates, derived
+         * deterministically, and nobody wrote it about this campus.
+         *
+         * The scores are unaffected: corroboration is counted over KEY_FIELDS,
+         * which a geocode never claims, so this was only ever a label. Fixed as
+         * a label rather than by re-tagging the rows — a migration to correct a
+         * chip would be a lot of moving parts for a word. */
+        const derived = (s.extractor || "").startsWith("derived:");
         return html`
           <${Card} key=${i}>
             <div style=${{ display: "flex", alignItems: "center", gap: 10, padding: "14px 20px",
                            borderBottom: "1px solid var(--border)", flexWrap: "wrap" }}>
-              <span style=${chip(["company_filing", "government_doc"].includes(s.source_type) ? "--success"
-                : s.source_type === "iso_queue" ? "--warning" : "--chart-1")}>${s.source_type}</span>
-              <span style=${{ fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--muted-foreground)" }}>
-                weight ${data.sourceWeight[s.source_type] || 1}</span>
+              <span style=${chip(derived ? "--muted-foreground"
+                : ["company_filing", "government_doc"].includes(s.source_type) ? "--success"
+                : s.source_type === "iso_queue" ? "--warning" : "--chart-1")}>
+                ${derived ? "reference data" : s.source_type}</span>
+              <span style=${{ fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--muted-foreground)" }}
+                    title=${derived ? "Derived from a reference table, not reported about this project. It cannot corroborate a capacity, a date or a customer." : undefined}>
+                ${derived ? "derived — corroborates nothing"
+                          : `weight ${data.sourceWeight[s.source_type] || 1}`}</span>
               <span style=${{ flex: 1 }} />
               <span style=${{ fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--muted-foreground)" }}>
                 ${String(s.fetched_at).slice(0, 10)}</span>
@@ -1046,10 +1201,10 @@ function MapView({ data, onOpen, openId }) {
   return html`
     <div class="dc-view dc-rise" style=${{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 16,
                      padding: "22px 26px 60px" }}>
-      <${Eyebrow} figure="fig. 02 — geography" title="Where the data centers really are">
-        Positions are Census place or county centroids — the centre of the place, ${html`<b>not</b>`} the
-        project site. Bubble area is cited planned capacity; a hollow dashed ring means no source cited
-        one. ${plotted} of ${data.projects.length} projects have coordinates.
+      <${Eyebrow} figure="fig. 02 — geography" title="Roughly where they are">
+        A dot sits on the middle of the town, ${html`<b>not</b>`} on the site — almost nobody publishes an
+        address. Bigger dot, more megawatts. A hollow dashed ring means nobody has said how big it is.
+        ${" "}${plotted} of ${data.projects.length} projects have coordinates.
       <//>
 
       <${Card}>
@@ -1209,12 +1364,10 @@ function QueueView({ data, onRan, allowWrite, busy }) {
   return html`
     <div class="dc-view dc-rise" style=${{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 16,
                      padding: "22px 26px 60px" }}>
-      <${Eyebrow} figure="fig. 03 — queue" title="Headlines waiting to be read">
-        Discovery filters feeds down to candidates and stops there — nothing is fetched or sent to a model
-        until you say so. Precision is deliberately not the goal: it is cheaper to over-collect and triage
-        than to tune a keyword filter until it silently drops real projects. A ${html`<b>deepens</b>`} tag
-        means the article names a project already tracked, which is where an LLM call pays best — read
-        those first. ${html`<b>Crawl</b>`} reads one article now, for one LLM call.
+      <${Eyebrow} figure="fig. 04 — queue" title="Articles found, not yet read">
+        Nothing here has cost anything yet. ${html`<b>Crawl</b>`} reads one article for one LLM call.
+        Start with the ones tagged ${html`<b>deepens</b>`} — they add detail to a project we already
+        track. The list over-collects on purpose: a tighter filter starts dropping real projects.
       <//>
 
       <${Card}>
@@ -1254,8 +1407,9 @@ function QueueView({ data, onRan, allowWrite, busy }) {
       <${Card}>
         <${CardHeader}>
           <${CardTitle}>Hosts that would not answer<//>
-          <${CardDescription}>Grouped by host, because the cause almost always is the host. These are
-            otherwise invisible: a run can report an empty queue while a dozen articles sit unread.<//>
+          <${CardDescription}>Grouped by site, because it is nearly always the site blocking us rather
+            than the article. Worth checking: a run can look like it cleared the queue while a dozen
+            articles sit here unread.<//>
         <//>
         <div style=${{ display: "grid", gap: 0 }}>
           ${failed.map((h) => html`
@@ -1283,11 +1437,11 @@ function GapsView({ data }) {
   return html`
     <div class="dc-view dc-rise" style=${{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 16,
                      padding: "22px 26px 60px" }}>
-      <${Eyebrow} figure="fig. 04 — coverage" title="Where the data is thin, measured honestly">
-        Each field is measured against the rows where it can legitimately be set, not against every
-        project. That distinction matters more than it sounds: mw_built looked 13% covered while most
-        projects were merely announced, so nothing was built and NULL was the correct answer. Fields whose
-        absence carries no information report n/a rather than a low score.
+      <${Eyebrow} figure="fig. 05 — coverage" title="What is missing, and what only looks missing">
+        Each field is scored against the projects where it could apply, not against all
+        ${" "}${data.projects.length}. Built capacity is empty on a project that has not broken ground —
+        that is the right answer, not a hole. Fields where an empty value tells you nothing show
+        ${" "}${html`<b>n/a</b>`} instead of a bad score.
       <//>
 
       <${Card}>
@@ -1318,8 +1472,8 @@ function GapsView({ data }) {
       <${Card}>
         <${CardHeader}>
           <${CardTitle}>Required project list — ${met} of ${req.entries.length} present<//>
-          <${CardDescription}>The PRD's definition of done names 30 specific projects but does not list
-            them. Paste them into ${req.path} to turn an unmeasurable requirement into a measurable one.<//>
+          <${CardDescription}>If you have a list of projects you need covered, paste it into
+            ${req.path} — one per line — and this becomes a checklist instead of a guess.<//>
         <//>
         <div style=${{ display: "grid", gap: 0 }}>
           ${req.entries.map((e) => html`
@@ -1339,9 +1493,9 @@ function GapsView({ data }) {
       <${Card}>
         <${CardHeader}>
           <${CardTitle}>Capacity behind an obstacle<//>
-          <${CardDescription}>A project appears under every category obstructing it, so these do not add
-            up to a fleet total. Projects with an open risk and no cited capacity are counted separately
-            rather than as zero.<//>
+          <${CardDescription}>How many megawatts are stuck behind each kind of problem. A project with
+            two problems appears twice, so these bars do not add up to a total. Projects with a problem
+            but no known size are counted off to the side rather than as zero.<//>
         <//>
         <div style=${{ display: "grid", gap: 0 }}>
           ${data.exposure.map((x) => {
@@ -1367,6 +1521,351 @@ function GapsView({ data }) {
               description="Nothing read so far reports one." />
           </div>`}
       <//>
+    </div>`;
+}
+
+/* ---- Capex --------------------------------------------------------------- */
+
+/* One group of rows that are probably one campus, and the merge that folds them.
+ *
+ * This is the one screen where a browser genuinely beats the CLI. Deciding which
+ * of four rows survives is a judgement made by eye — you want their capacity,
+ * their citations and their dates side by side, not four `tracker show` calls.
+ *
+ * Which id you keep does not decide the values: `merge` moves every citation onto
+ * the survivor and then recomputes each field from the combined set, so the only
+ * thing the choice picks is a row number. Said on the card, because it is exactly
+ * the thing an operator will otherwise agonise over.
+ */
+function DuplicateGroup({ ids, byId, allowWrite, busy, onRan }) {
+  const [keep, setKeep] = useState(ids[0]);
+  const [state, setState] = useState("idle"); // idle | confirming | running
+  const [typed, setTyped] = useState("");
+  const [error, setError] = useState(null);
+  const fold = ids.filter((i) => i !== keep);
+  const rows = ids.map((id) => byId[id]).filter(Boolean);
+
+  const merge = async () => {
+    setState("running");
+    setError(null);
+    try {
+      const res = await api("/api/run", {
+        method: "POST",
+        body: { cmd: "merge", flags: { "--into": keep, dupe_ids: fold }, confirm: "merge" },
+      });
+      onRan(res.run.id);
+    } catch (e) {
+      setError(e.message);
+      setState("idle");
+    }
+  };
+
+  // A row missing from `byId` means the dataset is older than the group — which
+  // happens for exactly one render after a merge, before the reload lands.
+  if (rows.length < 2) return null;
+  const mw = rows.reduce((sum, p) => sum + (p.mw_planned || 0), 0);
+
+  return html`
+    <div style=${{ borderTop: "1px solid var(--border)", padding: "14px 20px", display: "grid", gap: 10 }}>
+      <div style=${{ display: "flex", flexWrap: "wrap", gap: "4px 12px", alignItems: "baseline" }}>
+        <span style=${{ fontSize: 13, fontWeight: 600 }}>
+          ${rows[0].city || rows[0].county || "—"}${rows[0].state ? ", " + rows[0].state : ""}
+        </span>
+        <span class="dc-num" style=${{ fontSize: 12, color: "var(--muted-foreground)" }}>
+          ${rows.length} rows · ${Math.round(mw).toLocaleString()} MW claimed between them
+        </span>
+      </div>
+
+      <div style=${{ display: "grid", gap: 0 }}>
+        ${rows.map((p) => html`
+          <label key=${p.id} class="dc-dupe-row"
+                 style=${{ cursor: allowWrite ? "pointer" : "default",
+                           background: p.id === keep ? "color-mix(in oklab, var(--success) 8%, transparent)" : "transparent" }}>
+            <input type="radio" name=${`keep-${ids.join("-")}`} checked=${p.id === keep}
+                   disabled=${!allowWrite || state === "running"}
+                   onChange=${() => { setKeep(p.id); setState("idle"); setTyped(""); }}
+                   aria-label=${`Keep #${p.id}, ${p.company} ${p.name}`} />
+            <span class="dc-num" style=${{ fontSize: 12, color: "var(--muted-foreground)" }}>#${p.id}</span>
+            <span style=${{ minWidth: 0 }}>
+              <span style=${{ fontSize: 13, fontWeight: 500 }}>${p.company}</span>
+              <span style=${{ fontSize: 13, color: "var(--muted-foreground)" }}> — ${p.name}</span>
+            </span>
+            <span class="dc-num" style=${{ fontSize: 12, textAlign: "right", whiteSpace: "nowrap" }}>
+              ${p.mw_planned == null ? "—" : Math.round(p.mw_planned).toLocaleString() + " MW"}
+            </span>
+            <span style=${chip(PHASE_TOKEN[p.phase] || "--muted-foreground")}>${p.phase}</span>
+            <span class="dc-num" style=${{ fontSize: 12, color: "var(--muted-foreground)", whiteSpace: "nowrap" }}
+                  title=${`${p.sources.length} citation(s), last updated ${String(p.updated_at).slice(0, 10)}`}>
+              ${p.sources.length} src · ${String(p.updated_at).slice(0, 10)}
+            </span>
+          </label>`)}
+      </div>
+
+      ${error && html`
+        <span style=${{ fontSize: 12, color: "var(--danger)" }}>${error}</span>`}
+
+      ${allowWrite && (state === "confirming"
+        ? html`
+          <div style=${{ display: "grid", gap: 8, padding: "10px 12px", borderRadius: 10,
+                         border: "1px solid color-mix(in oklab, var(--danger) 40%, var(--border))",
+                         background: "color-mix(in oklab, var(--danger) 6%, transparent)" }}>
+            <span style=${{ fontSize: 13 }}>
+              Keeps ${html`<b class="dc-num">#${keep}</b>`} and permanently deletes
+              ${" "}${html`<b class="dc-num">${fold.map((i) => "#" + i).join(", ")}</b>`}.
+              Their citations, milestones and obstacles move across first, and every field on
+              ${" "}#${keep} is then recomputed from the combined set. There is no undo.
+            </span>
+            <div style=${{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              ${/* Wrapped rather than styled: Input spreads unknown props onto the
+                    inner <input>, so a width there would leave the field shell
+                    full-bleed around a narrow box. */ ""}
+              <div style=${{ width: 140 }}>
+                <${Input} size="sm" value=${typed} placeholder="merge"
+                          aria-label="Type merge to confirm"
+                          onChange=${(e) => setTyped(e.target.value)} />
+              </div>
+              <${Button} size="sm" variant="danger" disabled=${typed.trim() !== "merge" || busy}
+                         onClick=${merge}>Merge<//>
+              <${Button} size="sm" variant="ghost"
+                         onClick=${() => { setState("idle"); setTyped(""); }}>Cancel<//>
+            </div>
+          </div>`
+        : html`
+          <div>
+            <${Button} size="sm" variant="outline" disabled=${busy || state === "running"}
+                       loading=${state === "running"} onClick=${() => setState("confirming")}>
+              Merge ${fold.length} into #${keep}
+            <//>
+          </div>`)}
+    </div>`;
+}
+
+function CapexView({ data, allowWrite, busy, onRan }) {
+  const capex = data.capex;
+  const cover = capex.coverage;
+  const dupes = capex.duplicates;
+  const byId = useMemo(
+    () => Object.fromEntries(data.projects.map((p) => [p.id, p])), [data.projects]);
+  const reviewRef = useRef(null);
+
+  // Only the next few periods. An expected-online date already in the past is a
+  // data-quality signal rather than a pipeline, and giving it a column would put
+  // it in the same row of numbers as capacity that is genuinely coming.
+  const [grain, setGrain] = useState("year");
+  const buckets = grain === "quarter"
+    ? (capex.quarters || []).filter((q) => q >= capex.as_of_quarter).slice(0, 6)
+    : capex.years.filter((y) => y >= capex.as_of_year).slice(0, 4).map(String);
+  const bucketOf = (p, b) =>
+    grain === "quarter" ? (p.mw_by_quarter || {})[b] : p.mw_by_year[b];
+  const attributed = Math.round((cover.attributed_pct / 100) * cover.projects);
+
+  const num = (v, suffix = "") =>
+    v ? Math.round(v).toLocaleString() + suffix : html`<span class="dc-v dc-v--missing">—</span>`;
+
+  return html`
+    <div class="dc-view dc-rise" style=${{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 16,
+                     padding: "22px 26px 60px" }}>
+      <${Eyebrow} figure="fig. 03 — capex" title="Who is actually paying for it">
+        Meta builds its own campuses. OpenAI mostly rents from developers like Crusoe. So the company on
+        the building is often not the one paying for the compute — this page groups by whoever pays.
+        ${" "}${html`<b>*</b>`} means we worked the buyer out from who owns the site, because no source
+        named a tenant.
+      <//>
+
+      <${Card}>
+        <${CardHeader}>
+          <${CardTitle}>How much of the data this page covers<//>
+          <${CardDescription}>We can name a buyer for ${attributed} of ${cover.projects} projects.
+            The rest sit in the last row. Worth knowing before you quote a number off this table.<//>
+        <//>
+        <div class="dc-capex-cover">
+          ${[["we know the buyer", cover.attributed_pct, "for the rest, nobody has said who it is for"],
+             ["a source named them", cover.named_tenant_pct, "someone wrote down who the tenant is"],
+             ["worked out from owner", cover.self_built_pct, "the operator builds for itself, so it is the buyer"],
+             ["size is known", cover.with_capacity_pct, "the rest count as zero MW here"],
+             ["size and date known", cover.in_timeline_pct, "only these can appear in a year column"],
+            ].map(([label, pct, why]) => html`
+            <div key=${label} style=${{ display: "grid", gap: 4, minWidth: 0 }}>
+              <span class="dc-num" style=${{ fontSize: 22, fontFamily: "var(--font-display)" }}>
+                ${Math.round(pct)}%</span>
+              <span style=${{ fontSize: 12, fontWeight: 600 }}>${label}</span>
+              <span style=${{ fontSize: 11, lineHeight: "16px", color: "var(--muted-foreground)" }}>${why}</span>
+            </div>`)}
+        </div>
+      <//>
+
+      ${dupes.groups.length > 0 && html`
+        <${Alert} variant="warning">
+          <div>
+            <div class="mrd-alert-title">
+              ${dupes.groups.length === 1
+                ? "One campus is stored more than once"
+                : `${dupes.groups.length} campuses are stored more than once`}, holding
+              ${" "}${Math.round(dupes.double_counted_mw).toLocaleString()} MW counted twice
+            </div>
+            <div class="mrd-alert-desc">
+              One campus usually has a builder, a landowner and an occupier, and each name a source
+              picks becomes its own row. On the Projects page that is just untidy. Here it inflates a
+              buyer's total, because the same megawatts get added once per row.
+              ${" "}
+              <button type="button" class="dc-link"
+                      onClick=${() => reviewRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}>
+                Review them below
+              </button>.
+            </div>
+          </div>
+        <//>`}
+
+      <${Card}>
+        <div style=${{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "8px 14px",
+                       padding: "14px 20px 0" }}>
+          <span style=${{ fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--muted-foreground)" }}>
+            pipeline by
+          </span>
+          <div class="dc-seg" style=${{ padding: 3 }}>
+            ${[["year", "year"], ["quarter", "quarter"]].map(([key, label]) => html`
+              <button key=${key} type="button" class="dc-seg-btn" aria-pressed=${grain === key}
+                      onClick=${() => setGrain(key)}>${label}</button>`)}
+          </div>
+          ${grain === "quarter" && html`
+            <span style=${{ fontSize: 12, color: "var(--warning)" }}>
+              a shape, not a schedule — ${Math.round(capex.date_precision?.year_only_pct || 0)}% of
+              dated projects land on 1 January, which is where "sometime in 2027" normalises to
+            </span>`}
+        </div>
+        <div style=${{ minWidth: 0 }}>
+          <${Table} density="compact">
+            <${TableHeader}><${TableRow}>
+              <${TableHead}>buyer<//>
+              <${TableHead} align="right">proj<//>
+              <${TableHead} align="right">MW planned<//>
+              <${TableHead} align="right">MW built<//>
+              <${TableHead} align="right">investment<//>
+              ${buckets.map((b) => html`<${TableHead} key=${b} align="right">MW ${b}<//>`)}
+              <${TableHead} align="right">at risk<//>
+              <${TableHead} align="right">slipped<//>
+              <${TableHead}>worst obstacle<//>
+            <//><//>
+            <${TableBody}>
+              ${capex.positions.map((p, i) => {
+                const residual = p.key === "";
+                return html`
+                  <tr key=${p.key || "__none"} class=${i < 12 ? "dc-enter" : undefined}
+                      style=${{ ...(i < 12 ? { "--i": i } : {}),
+                                ...(residual ? { color: "var(--muted-foreground)" } : {}) }}>
+                    <td class="dc-cell dc-cell--wide">
+                      <span style=${{ fontWeight: residual ? 400 : 600, fontSize: 13 }}>${p.customer}</span>
+                      ${p.self_built > 0 && html`
+                        <span title=${`${p.self_built} of ${p.projects} attributed from ownership rather than a cited tenant`}
+                              style=${{ color: "var(--muted-foreground)" }}>
+                          ${p.self_built === p.projects ? " *" : ` (${p.self_built}*)`}</span>`}
+                    </td>
+                    <td class="dc-num" style=${{ textAlign: "right" }}>${p.projects}</td>
+                    <td class="dc-num" style=${{ textAlign: "right", fontWeight: 600 }}>${num(p.mw_planned)}</td>
+                    <td class="dc-num" style=${{ textAlign: "right" }}>${num(p.mw_built)}</td>
+                    <td class="dc-num" style=${{ textAlign: "right" }}>
+                      ${p.investment_usd ? fmtUSD(p.investment_usd) : html`<span class="dc-v dc-v--missing">—</span>`}</td>
+                    ${buckets.map((b) => html`
+                      <td key=${b} class="dc-num" style=${{ textAlign: "right" }}>
+                        ${num(bucketOf(p, b))}</td>`)}
+                    <td class="dc-num" style=${{ textAlign: "right",
+                          color: p.mw_at_risk ? "var(--warning)" : undefined }}>${num(p.mw_at_risk)}</td>
+                    <td class="dc-num" style=${{ textAlign: "right" }}>${p.slipped || ""}</td>
+                    <td style=${{ fontSize: 12, whiteSpace: "nowrap" }}>
+                      ${p.worst_open_risk
+                        ? html`<span style=${chip(p.worst_open_risk.endsWith("blocking") ? "--danger" : "--warning")}>
+                            ${p.worst_open_risk}</span>`
+                        : ""}</td>
+                  </tr>`;
+              })}
+            <//>
+          <//>
+          ${capex.positions.length === 0 && html`
+            <div style=${{ padding: "8px 20px 20px" }}>
+              <${EmptyState} variant="dashed" title="Nothing to attribute yet"
+                description="Load some projects and this becomes the other axis on them." />
+            </div>`}
+        </div>
+
+        ${/* Two footers, and both are load-bearing. The first says how much of the
+              database is in the table at all; the second says that everything in
+              it is a lower bound. Either one omitted turns a floor into a total. */ ""}
+        <div style=${{ padding: "12px 20px 16px", borderTop: "1px solid var(--border)",
+                       display: "grid", gap: 6, fontSize: 12, lineHeight: "18px",
+                       color: "var(--muted-foreground)" }}>
+          ${/* Every gap between an expression and the next word is an explicit
+                ${" "}: htm drops the newline-plus-indent between a `${}` and the
+                text after it, which silently produced "attributed —25% because". */ ""}
+          <span>
+            ${html`<b>Every number here is a minimum.</b>`} If nobody has said how big a project is, it
+            counts as zero — so a buyer really has at least this much, usually more.
+          </span>
+          <span>
+            We can name a buyer for ${Math.round(cover.attributed_pct)}% of projects:
+            ${" "}${Math.round(cover.named_tenant_pct)}% because a source said so, and
+            ${" "}${Math.round(cover.self_built_pct)}% worked out from who owns the site — those are
+            marked ${html`<b>*</b>`}. Biggest first, with the "nobody named" row pinned to the bottom;
+            it is a leftover, not a buyer.
+          </span>
+          ${/* The one column where "a floor" is the wrong warning: it can be far
+                too high, and saying only that it is a lower bound would be the
+                opposite of honest about it. */ ""}
+          <span>
+            ${html`<b>Trust the megawatts before the dollars.</b>`} The investment column adds up
+            everything each project carries, including figures we could not confirm — usually because a
+            headline number for a whole programme ("OpenAI's $500 billion Stargate") got attached to one
+            site. Duplicate rows then add it again. Open a project to see which of its numbers are
+            flagged.
+          </span>
+        </div>
+      <//>
+
+      ${capex.suspect.length > 0 && html`
+        <${Card}>
+          <${CardHeader}>
+            <${CardTitle}>${capex.suspect.length} project(s) list a builder as the customer<//>
+            <${CardDescription}>These name a company we track as an operator as if it were the tenant,
+              which is usually a mix-up — a developer builds for other people, it does not rent from
+              them. Flagged, not corrected, because occasionally it is genuinely true.<//>
+          <//>
+          <div style=${{ display: "grid", gap: 0 }}>
+            ${capex.suspect.map((s) => html`
+              <div key=${s.id} style=${{ display: "flex", flexWrap: "wrap", gap: "2px 10px", alignItems: "baseline",
+                   padding: "9px 20px", borderTop: "1px solid var(--border)", fontSize: 13 }}>
+                <span class="dc-num" style=${{ color: "var(--muted-foreground)", fontSize: 12 }}>#${s.id}</span>
+                <span>${s.operator}</span>
+                <span style=${{ color: "var(--muted-foreground)" }}>→ customer</span>
+                <span style=${{ fontWeight: 600 }}>${s.customer}</span>
+              </div>`)}
+          </div>
+        <//>`}
+
+      <div ref=${reviewRef}>
+        <${Card}>
+          <${CardHeader}>
+            <${CardTitle}>One campus, several rows<//>
+            <${CardDescription}>Tick the row to keep; the others fold into it and their sources come
+              along. ${html`<b>It does not matter which one you pick</b>`} — every value is recalculated
+              from the combined sources afterwards, so you are only choosing a row number. Nothing merges
+              on its own, because a wrong merge is hard to spot and cannot be undone.<//>
+          <//>
+          ${!allowWrite && html`
+            <div style=${{ padding: "0 20px 14px" }}>
+              <${Alert} variant="warning"><div><div class="mrd-alert-desc">
+                Started with --no-run, so the merge button is unavailable. The groups below are still
+                the ones <b class="dc-num">tracker duplicates</b> would print.
+              </div></div><//>
+            </div>`}
+          ${dupes.groups.map((ids) => html`
+            <${DuplicateGroup} key=${ids.join("-")} ids=${ids} byId=${byId}
+                               allowWrite=${allowWrite} busy=${busy} onRan=${onRan} />`)}
+          ${dupes.groups.length === 0 && html`
+            <div style=${{ padding: "4px 20px 20px" }}>
+              <${EmptyState} variant="dashed" size="sm" title="No suspected duplicates"
+                description="No two rows in one locality look like the same site." />
+            </div>`}
+        <//>
+      </div>
     </div>`;
 }
 
@@ -1408,10 +1907,10 @@ function CommandsView({ data, onRan }) {
   return html`
     <div class="dc-view dc-rise" style=${{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 16,
                      padding: "22px 26px 60px" }}>
-      <${Eyebrow} figure="fig. 05 — commands" title="The same commands, with their real flags">
-        Read straight out of the CLI, so this cannot fall behind it. A command marked
-        ${html`<b>llm</b>`} spends real tokens and needs its name typed to confirm — the console builds an
-        argument list and never a shell string, so nothing you type here is interpreted as a command.
+      <${Eyebrow} figure="fig. 06 — commands" title="The command line, as buttons">
+        Read from the CLI itself, so it cannot fall behind. ${html`<b>llm</b>`} means the command spends
+        money. ${html`<b>destructive</b>`} means it deletes rows. Either one makes you type the command's
+        name first, so a stray click cannot do it. Nothing you type here is run as a shell command.
       <//>
 
       ${error && html`<${Alert} variant="danger"><div><div class="mrd-alert-title">Refused</div>
@@ -1426,6 +1925,10 @@ function CommandsView({ data, onRan }) {
           <div style=${{ display: "grid", gap: 10 }}>
             ${g.items.map((cmd) => {
               const isOpen = openCmd?.cmd === cmd.cmd;
+              // Two different losses, one ritual. `merge` spends nothing and is
+              // the only command here you cannot undo, so it gets the same typed
+              // confirmation as `sync` and says a different sentence.
+              const needsConfirm = cmd.cost === "llm" || !!cmd.destroys;
               return html`
                 <${Card} key=${cmd.cmd}>
                   <button type="button" onClick=${() => pick(cmd)} disabled=${!!cmd.blocked}
@@ -1434,6 +1937,7 @@ function CommandsView({ data, onRan }) {
                               cursor: cmd.blocked ? "not-allowed" : "pointer", opacity: cmd.blocked ? .55 : 1 }}>
                     <span style=${{ fontFamily: "var(--font-mono)", fontSize: 14, fontWeight: 600 }}>${cmd.cmd}</span>
                     <span style=${chip(cmd.cost === "llm" ? "--warning" : "--muted-foreground")}>${cmd.cost}</span>
+                    ${cmd.destroys && html`<span style=${chip("--danger")}>destructive</span>`}
                     <span style=${{ flex: 1, fontSize: 13, color: "var(--muted-foreground)" }}>
                       ${cmd.blocked ? cmd.blocked : cmd.desc}</span>
                   </button>
@@ -1464,10 +1968,12 @@ function CommandsView({ data, onRan }) {
 
                       <pre class="dc-log" style=${{ maxHeight: 80 }}>${preview(cmd)}</pre>
 
-                      ${cmd.cost === "llm" && html`
+                      ${needsConfirm && html`
                         <div style=${{ display: "grid", gap: 6 }}>
-                          <span style=${{ fontSize: 13, color: "var(--warning)" }}>
-                            This spends LLM tokens. Type ${html`<b style=${{ fontFamily: "var(--font-mono)" }}>${cmd.cmd}</b>`} to confirm.
+                          <span style=${{ fontSize: 13,
+                                          color: cmd.destroys ? "var(--danger)" : "var(--warning)" }}>
+                            ${cmd.destroys ? `This ${cmd.destroys}` : "This spends LLM tokens."}
+                            ${" "}Type ${html`<b style=${{ fontFamily: "var(--font-mono)" }}>${cmd.cmd}</b>`} to confirm.
                           </span>
                           <${Input} size="sm" value=${confirm} placeholder=${cmd.cmd}
                                     onChange=${(e) => setConfirm(e.target.value)} />
@@ -1475,7 +1981,8 @@ function CommandsView({ data, onRan }) {
 
                       <div style=${{ display: "flex", gap: 10 }}>
                         <${Button} size="sm" loading=${busy}
-                          disabled=${!data.allow_write || busy || (cmd.cost === "llm" && confirm.trim() !== cmd.cmd)}
+                          variant=${cmd.destroys ? "danger" : undefined}
+                          disabled=${!data.allow_write || busy || (needsConfirm && confirm.trim() !== cmd.cmd)}
                           onClick=${() => run(cmd)}>Run<//>
                         <${Button} size="sm" variant="ghost" onClick=${() => setOpenCmd(null)}>Cancel<//>
                       </div>
@@ -1525,10 +2032,9 @@ function RunsView({ watchId }) {
   return html`
     <div class="dc-view dc-rise" style=${{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 16,
                      padding: "22px 26px 60px" }}>
-      <${Eyebrow} figure="fig. 06 — runs" title="What has been run, and what it printed">
-        Exactly the output the terminal would show, kept per run beside the database. Runs are recorded as
-        files rather than rows: a command's stdout is operational exhaust with a different lifetime from
-        the tracked data, and the schema is not the place for it.
+      <${Eyebrow} figure="fig. 07 — runs" title="What has been run, and what it printed">
+        The same output the terminal would show, colour and all, kept as one file per run. Wide tables
+        scroll sideways so their columns stay lined up — switch ${html`<b>wrap</b>`} on for long messages.
       <//>
 
       <div style=${{ display: "flex", flexWrap: "wrap", gap: 16, alignItems: "flex-start" }}>
@@ -1572,7 +2078,7 @@ function RunsView({ watchId }) {
 /* ---- Root ---------------------------------------------------------------- */
 
 const VIEWS = [
-  ["projects", "Projects"], ["map", "Map"], ["queue", "Queue"],
+  ["projects", "Projects"], ["map", "Map"], ["capex", "Capex"], ["queue", "Queue"],
   ["gaps", "Coverage"], ["commands", "Commands"], ["runs", "Runs"], ["help", "Help"],
 ];
 
@@ -1585,18 +2091,6 @@ function App() {
   const [watchRun, setWatchRun] = useState(null);
   const [running, setRunning] = useState(false);
 
-  // One run at a time is a server rule; knowing about it here is what lets the
-  // Queue disable its buttons instead of offering an action that will 409.
-  useEffect(() => {
-    let cancelled = false;
-    const poll = () => api("/api/runs")
-      .then((r) => { if (!cancelled) setRunning(r.current?.status === "running"); })
-      .catch(() => {});
-    poll();
-    const timer = setInterval(poll, 4000);
-    return () => { cancelled = true; clearInterval(timer); };
-  }, []);
-
   const load = useCallback(() => api("/api/dataset").then((payload) => {
     setData(payload);
     // The vendored custom elements read `window.DCTRACKER`. They were written
@@ -1607,6 +2101,47 @@ function App() {
   }).catch((e) => setError(e.message)), []);
   useEffect(() => { load(); }, [load]);
   useEffect(() => { document.documentElement.classList.toggle("dark", dark); }, [dark]);
+
+  /* One run at a time is a server rule; knowing about it here is what lets the
+   * Queue and the merge buttons disable themselves instead of offering an action
+   * that will 409.
+   *
+   * It also refetches the dataset when a run finishes, which is what makes a
+   * command actually change the page. Until this existed, a crawl finished and
+   * the article stayed in the queue, a merge finished and the folded rows stayed
+   * in the table — the run log said it had worked and every other view
+   * disagreed.
+   *
+   * Keyed on the run's id and status rather than on a running→idle transition.
+   * A falling edge is only observable if some poll caught the run *while* it was
+   * running, and a merge takes about a second against a four-second interval —
+   * measured: the merge completed between two ticks, nothing reloaded, and the
+   * folded rows sat there looking merged in the log and present in the table.
+   * An id that has reached a terminal status is a fact about the past, so it
+   * cannot be missed however briefly the run existed.
+   *
+   * Polling rather than hooking each button covers every path that can start
+   * one, including a run started from another tab. */
+  useEffect(() => {
+    let cancelled = false;
+    let seen = null;
+    const poll = () => api("/api/runs")
+      .then((r) => {
+        if (cancelled) return;
+        const current = r.current;
+        setRunning(current?.status === "running");
+        const stamp = current ? `${current.id}:${current.status}` : null;
+        // The first poll only establishes a baseline: reloading here would be a
+        // second dataset fetch on every page load, for a run that ended before
+        // the tab was even open.
+        if (seen !== null && stamp !== seen && current?.status !== "running") load();
+        seen = stamp;
+      })
+      .catch(() => {});
+    poll();
+    const timer = setInterval(poll, 4000);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [load]);
 
   // The table's sticky header must sit below the app header, which changes
   // height when it wraps. Measure rather than hard-code.
@@ -1679,6 +2214,9 @@ function App() {
 
         ${view === "projects" && html`<${ProjectsView} data=${data} openId=${openId} onOpen=${setOpenId} />`}
         ${view === "map" && html`<${MapView} data=${data} openId=${openId} onOpen=${setOpenId} />`}
+        ${view === "capex" && html`
+          <${CapexView} data=${data} allowWrite=${data.allow_write} busy=${!!running}
+            onRan=${(id) => { setWatchRun(id); setView("runs"); }} />`}
         ${view === "queue" && html`
           <${QueueView} data=${data} allowWrite=${data.allow_write} busy=${!!running}
             onRan=${(id) => { setWatchRun(id); setView("runs"); }} />`}

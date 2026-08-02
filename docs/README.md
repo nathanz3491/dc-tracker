@@ -1,13 +1,16 @@
 # Documentation
 
-Four documents, and honestly you need at most two of them.
+Six documents, and honestly you need at most two of them. Start with
+`what-we-built.zh-CN.md` if you are new.
 
 | | What it is | Read it when |
 | --- | --- | --- |
+| [`what-we-built.zh-CN.md`](what-we-built.zh-CN.md) | 最短的一份。要的是什么、有了什么、怎么跑、报数前要知道哪些数字。~100 行。 | 你刚接手，或要把这个交给别人。 |
 | [`../README.md`](../README.md) | The exhaustive one. Install, API keys, every command, every design decision and why. ~1100 lines. | You are setting this up, or you want to know why something works the way it does. |
 | [`architecture.md`](architecture.md) | How the CLI, the database and the web console fit together. Logic, not code. | You are changing the console, or wondering why the browser does not compute anything itself. |
 | [`guide.zh-CN.md`](guide.zh-CN.md) | 中文使用指南。按「你想做什么」组织。 | 你想用它，而不是改它。 |
 | [`architecture.zh-CN.md`](architecture.zh-CN.md) | 架构说明，中文。 | 同上。 |
+| [`government-sources.md`](government-sources.md) | Four routes to bulk government data, all measured, all rejected — and what to do instead. | You are about to go looking for permit or docket data. Read this first; it is a day you do not have to spend. |
 
 There is no English counterpart to `guide.zh-CN.md`, and that is deliberate:
 the root `README.md` already is one, and two documents covering the same ground

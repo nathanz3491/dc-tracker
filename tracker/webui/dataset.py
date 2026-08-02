@@ -83,6 +83,37 @@ def _nulls(project) -> dict[str, dict[str, Any]]:
     return out
 
 
+def _unconfirmed_because(project) -> dict[str, dict[str, str]]:
+    """Why a 待确认 value is 待确认, where the ingest path recorded a reason.
+
+    One tier, two causes, and they call for opposite work. The usual one is that
+    nothing quotable backs the value, and the answer is another source. The other
+    is that the quote is real and the figure is not this site's — a programme
+    total lifted from an article about one campus — and the answer is to correct
+    it. Showing both as the same amber chip tells a reader to go looking for a
+    citation that already exists.
+
+    The reason is not a column; it is the disclosure `crawl.py` writes into the
+    project's notes when the ratio check fires. Read back rather than recomputed,
+    so what the console shows is what the ingest actually decided — recomputing
+    the ratio from the merged values would sometimes accuse a figure no gate ever
+    demoted.
+    """
+    from tracker.ingest.crawl import SCALE_NOTE_FIELD, SCALE_NOTE_MARKER
+    from tracker.upsert import SOURCE_NOTE_PREFIX
+
+    out: dict[str, dict[str, str]] = {}
+    for raw in (project.notes or "").splitlines():
+        line = raw.strip()
+        if SCALE_NOTE_MARKER not in line:
+            continue
+        # Strip the `[source][tag] ` bookkeeping; the sentence is the useful part.
+        if line.startswith(SOURCE_NOTE_PREFIX):
+            line = line.split("] ", 1)[-1].strip()
+        out[SCALE_NOTE_FIELD] = {"code": "scale", "note": line}
+    return out
+
+
 def _queue(session: Session) -> list[dict[str, Any]]:
     from tracker.ingest import discover
 
@@ -154,6 +185,63 @@ def _gaps(session: Session) -> dict[str, Any]:
             for g in gaps
         ],
         "worst": [g.field for g in worst_gaps(gaps)],
+    }
+
+
+def _capex(session: Session) -> dict[str, Any]:
+    """Capacity by the company buying it, plus what would make it wrong.
+
+    The duplicate warning ships with this and not with `gaps`, for the reason
+    `capex.suspected_duplicates` gives: a row stored twice is a nuisance in a
+    site listing and a wrong number the moment anything groups by end customer.
+    Abilene is in the database four times, so 1.2 GW is counted four times
+    against OpenAI. The place to offer the repair is next to the figure it
+    corrupts.
+
+    Groups carry ids only. Every project is already in the payload, so the page
+    looks the rows up rather than being sent a second, driftable copy of them.
+    """
+    from tracker import capex as capex_mod
+
+    positions = capex_mod.rollup(session)
+    pairs = capex_mod.suspected_duplicates(session)
+    return {
+        "coverage": capex_mod.coverage(session),
+        "years": capex_mod.horizon(positions),
+        "quarters": capex_mod.quarters(positions),
+        "date_precision": capex_mod.date_precision(session),
+        "as_of_year": capex_mod.as_of().year,
+        "as_of_quarter": f"{capex_mod.as_of().year}Q{(capex_mod.as_of().month - 1) // 3 + 1}",
+        "unattributed": capex_mod.UNATTRIBUTED,
+        "positions": [
+            {
+                "customer": p.name,
+                "key": p.key,
+                "projects": p.projects,
+                "self_built": p.self_built,
+                "undisclosed": p.undisclosed,
+                "mw_planned": p.mw_planned,
+                "mw_built": p.mw_built,
+                "mw_unbuilt": p.mw_unbuilt,
+                "investment_usd": p.investment_usd,
+                "mw_by_year": {str(y): mw for y, mw in sorted(p.mw_by_year.items())},
+                "mw_by_quarter": dict(sorted(p.mw_by_quarter.items())),
+                "projects_at_risk": p.at_risk_projects,
+                "mw_at_risk": p.mw_at_risk,
+                "slipped": p.slipped,
+                "worst_open_risk": capex_mod.blocking_risk(session, p.key) if p.key else None,
+                "phases": p.phases,
+            }
+            for p in positions
+        ],
+        "suspect": [
+            {"id": pid, "operator": operator, "customer": customer}
+            for pid, operator, customer in capex_mod.suspect_attributions(session)
+        ],
+        "duplicates": {
+            "groups": capex_mod.duplicate_groups(pairs),
+            "double_counted_mw": capex_mod.double_counted_mw(pairs),
+        },
     }
 
 
@@ -229,6 +317,7 @@ def build(session: Session, *, db_path: str, schema_version: int) -> dict[str, A
         payload = to_json_object(project)
         payload["iso"] = _iso_of(project)
         payload["nulls"] = _nulls(project)
+        payload["unconfirmed_because"] = _unconfirmed_because(project)
         payload["filled"] = sum(1 for f in TRACKED_FIELDS if getattr(project, f, None) is not None)
         projects.append(payload)
 
@@ -251,6 +340,7 @@ def build(session: Session, *, db_path: str, schema_version: int) -> dict[str, A
             "queue_has_work": queued is not None,
         },
         "exposure": _risk_exposure(projects),
+        "capex": _capex(session),
         "queue": _queue(session),
         "failed": _failed(session),
         "gaps": _gaps(session),
