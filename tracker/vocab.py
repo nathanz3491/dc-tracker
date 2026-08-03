@@ -30,6 +30,58 @@ PHASES: Final[tuple[str, ...]] = PHASE_PROGRESSION + PHASE_TERMINAL
 
 Phase = Literal["announced", "permitting", "construction", "operational", "paused", "cancelled"]
 
+#: A *capacity block's* own ladder — one tranche of a campus, not the campus.
+#:
+#: Separate from `PHASE_PROGRESSION` because it has to make two distinctions the
+#: project enum cannot, and those two distinctions are the whole reason blocks
+#: exist:
+#:
+#: * `shell_complete` — the building is up and there is no power. `tracks.py` calls
+#:   a finished shell waiting on a substation the most informative signal in the
+#:   dataset, and today it has nowhere to live at all.
+#: * `energized` vs `serving` — power on, versus a customer actually running on it.
+#:   A campus can be energised for months before first revenue, and in the AI era
+#:   it can be pre-leased years before it is energised.
+#:
+#: Measured on the live database, 28 projects are partly built, 15 are
+#: `construction` with megawatts already live and 12 have power energised while
+#: construction is mid-track. One enum per campus cannot say any of that; one enum
+#: per *block* can.
+BLOCK_PROGRESSION: Final[tuple[str, ...]] = (
+    "planned",
+    "permitting",
+    "under_construction",
+    "shell_complete",
+    "energized",
+    "serving",
+)
+#: Outside the progression, for the same reason `PHASE_TERMINAL` is: a cancelled
+#: tranche is not further along than a live one, it overrides.
+BLOCK_TERMINAL: Final[tuple[str, ...]] = ("paused", "cancelled")
+BLOCK_STATUSES: Final[tuple[str, ...]] = BLOCK_PROGRESSION + BLOCK_TERMINAL
+
+DEFAULT_BLOCK_STATUS: Final[str] = "planned"
+
+#: Block status -> the project `phase` it implies, for the rollup. Total over
+#: `BLOCK_STATUSES`, and its range is a subset of `PHASES`; both are asserted in
+#: `tests/test_blocks.py`. Two statuses collapse onto `construction` and two onto
+#: `operational` — that loss of detail going *up* to the project row is precisely
+#: what the block row is now keeping.
+BLOCK_STATUS_TO_PHASE: Final[dict[str, str]] = {
+    "planned": "announced",
+    "permitting": "permitting",
+    "under_construction": "construction",
+    "shell_complete": "construction",
+    "energized": "operational",
+    "serving": "operational",
+    "paused": "paused",
+    "cancelled": "cancelled",
+}
+
+#: Block statuses that mean megawatts are actually delivering power. This is what
+#: `mw_built` rolls up from.
+BLOCK_LIVE: Final[frozenset[str]] = frozenset({"energized", "serving"})
+
 #: Written when no source states a phase. `phase` is NOT NULL and the PRD has no
 #: `unknown` member, so we default — but ingest paths must then OMIT `phase` from
 #: `source.fields`, which makes confidence.py's coverage penalty fire and routes
@@ -218,6 +270,10 @@ WRITABLE_FIELDS: Final[tuple[str, ...]] = (
     "lat",
     "lon",
     "notes",
+    # Usually derived from megawatts (`tracker.compute`), but an article that
+    # states a chip count outright has answered the question better than any
+    # conversion, so a source is allowed to write it.
+    "h200_equivalent",
 )
 
 

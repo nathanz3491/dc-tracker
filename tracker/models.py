@@ -29,6 +29,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 from tracker.vocab import (
+    BLOCK_STATUSES,
     EVENT_TYPES,
     PHASES,
     RISK_CATEGORIES,
@@ -82,6 +83,9 @@ class Project(Base):
 
     mw_planned: Mapped[float | None] = mapped_column(REAL)
     mw_built: Mapped[float | None] = mapped_column(REAL)
+    #: Capacity restated as accelerators. Derived from MW unless a source
+    #: stated a chip count outright. See `tracker/compute.py`.
+    h200_equivalent: Mapped[int | None] = mapped_column(Integer)
     investment_usd: Mapped[int | None] = mapped_column(Integer)
     phase: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'announced'"))
     first_announced: Mapped[dt.date | None] = mapped_column(Date)
@@ -101,6 +105,13 @@ class Project(Base):
         back_populates="project", cascade="all, delete-orphan", passive_deletes=True
     )
     risks: Mapped[list[Risk]] = relationship(
+        back_populates="project", cascade="all, delete-orphan", passive_deletes=True
+    )
+    #: Capacity blocks. A cache rebuilt wholesale from `source.blocks` on every
+    #: upsert, so `delete-orphan` is correct here in a way it would not be for
+    #: `risks`: a block's absence from the sources means the description changed,
+    #: whereas a risk's absence from one article is not evidence it cleared.
+    blocks: Mapped[list[CapacityBlock]] = relationship(
         back_populates="project", cascade="all, delete-orphan", passive_deletes=True
     )
 
@@ -154,6 +165,11 @@ class Source(Base):
     #: per-field quotes to give (ISO queues, the Census lookup, manual seeds);
     #: `gaps.provenance` falls back to `excerpt` and says so.
     quotes: Mapped[str | None] = mapped_column(Text)
+    #: JSON array of the capacity blocks this source described. Its own column and
+    #: deliberately not a key inside `claims`: that map is flat field->scalar and
+    #: six places iterate it assuming so, including a migration matching it with
+    #: `claims LIKE '%"blocker"%'`.
+    blocks: Mapped[str | None] = mapped_column(Text)
     extractor: Mapped[str | None] = mapped_column(Text)
 
     project: Mapped[Project] = relationship(back_populates="sources")
@@ -288,3 +304,102 @@ class Risk(Base):
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return f"<Risk {self.category}/{self.severity} {self.status} p={self.project_id}>"
+
+
+class CapacityBlock(Base):
+    """One tranche of a campus, with its own state, customer and dates.
+
+    The row `project` could not be. A modern AI campus is several states at once —
+    150 MW energised and serving one buyer, 150 MW under construction pre-leased to
+    another, 300 MW planned with nobody named — and a single `phase` enum, a single
+    `mw_planned` and a single `customer` cannot express that.
+
+    **A cache, not a fact of record.** Rebuilt wholesale from `source.blocks` on
+    every upsert, exactly like `confidence` and `h200_equivalent`, which is what
+    makes re-ingest idempotent and gives `merge` and `recompute_from_sources` the
+    right behaviour without a second implementation.
+
+    See `tracker/blocks.py` for how `block_key` is derived and why `parent` and
+    `generic` exist.
+    """
+
+    __tablename__ = "capacity_block"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("project.id", ondelete="CASCADE"), nullable=False
+    )
+
+    #: Derived by `blocks.block_key`. Identity rests here, never on `label`, so a
+    #: source rewording its phase name cannot re-key the block.
+    block_key: Mapped[str] = mapped_column(Text, nullable=False)
+    label: Mapped[str] = mapped_column(Text, nullable=False)
+    #: The facility a generic label belongs to. What lets an article's "Phase 3"
+    #: meet a filing's "AZP-3 Phase 3".
+    parent: Mapped[str | None] = mapped_column(Text)
+    #: True when the label names a kind of thing rather than which campus.
+    generic: Mapped[bool] = mapped_column(Integer, nullable=False, server_default=text("0"))
+
+    mw: Mapped[float | None] = mapped_column(REAL)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'planned'"))
+    customer: Mapped[str | None] = mapped_column(Text)
+    expected_online: Mapped[dt.date | None] = mapped_column(Date)
+    energized_on: Mapped[dt.date | None] = mapped_column(Date)
+    investment_usd: Mapped[int | None] = mapped_column(Integer)
+
+    #: JSON object, block field -> the verbatim sentence the gate verified. Per
+    #: field, because project 39's failure was money from one facility sitting
+    #: beside capacity from another.
+    quotes: Mapped[str | None] = mapped_column(Text)
+    unconfirmed_fields: Mapped[str | None] = mapped_column(Text)
+
+    source_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("source.id", ondelete="SET NULL")
+    )
+
+    project: Mapped[Project] = relationship(back_populates="blocks")
+
+    __table_args__ = (
+        UniqueConstraint("project_id", "block_key", name="uq_capacity_block_project_key"),
+        CheckConstraint(sql_in("status", BLOCK_STATUSES), name="ck_capacity_block_status"),
+        CheckConstraint("mw IS NULL OR mw >= 0", name="ck_capacity_block_mw"),
+        CheckConstraint(
+            "investment_usd IS NULL OR investment_usd >= 0", name="ck_capacity_block_investment"
+        ),
+        CheckConstraint("generic IN (0, 1)", name="ck_capacity_block_generic"),
+        CheckConstraint("length(label) > 0", name="ck_capacity_block_label"),
+        Index("ix_capacity_block_project_id", "project_id"),
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return f"<CapacityBlock {self.block_key} {self.mw}MW {self.status} p={self.project_id}>"
+
+
+class BlockAlias(Base):
+    """An operator's statement that two block keys are one block.
+
+    Has to be a table rather than a note. No string function can know that one
+    source's "Phase 1" and another's "AZP-2" are the same tranche, and blocks are
+    rebuilt wholesale on every upsert — so a hand-merge with nowhere durable to
+    live would evaporate on the next crawl.
+    """
+
+    __tablename__ = "block_alias"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("project.id", ondelete="CASCADE"), nullable=False
+    )
+    from_key: Mapped[str] = mapped_column(Text, nullable=False)
+    to_key: Mapped[str] = mapped_column(Text, nullable=False)
+    decided_by: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'operator'"))
+    decided_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False, server_default=_NOW)
+
+    __table_args__ = (
+        UniqueConstraint("project_id", "from_key", name="uq_block_alias_project_from"),
+        CheckConstraint("from_key <> to_key", name="ck_block_alias_not_self"),
+        Index("ix_block_alias_project_id", "project_id"),
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return f"<BlockAlias {self.from_key}->{self.to_key} p={self.project_id}>"

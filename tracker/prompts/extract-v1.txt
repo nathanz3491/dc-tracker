@@ -41,7 +41,9 @@ RULES
    Relative timing ("next year") -> resolve against ARTICLE_DATE; if ARTICLE_DATE
    is unknown, output null.
 6. One object per DISTINCT project: a different site, or a different operator.
-   Do NOT merge two sites into one object. Do NOT split one site's phases into
+   Do NOT merge two sites into one object. Phases and buildings of ONE site go in
+   that site's "blocks" array, not in separate project objects.
+   Do NOT split one site's phases into
    several objects. Do NOT emit an object for a project mentioned only in passing
    with no location and no capacity detail.
 7. Emit at most $max_projects project objects.
@@ -59,6 +61,18 @@ RULES
   "country":         string|null,
   "mw_planned":      number|null,
   "mw_built":        number|null,
+  "h200_equivalent": integer|null,
+  "blocks": [{
+    "label":           "<as the article names it: 'Phase 1', 'AZP-2', 'Building A'>",
+    "parent":          string|null,
+    "mw":              number|null,
+    "status":          "planned"|"permitting"|"under_construction"|"shell_complete"|"energized"|"serving"|"paused"|"cancelled"|null,
+    "customer":        string|null,
+    "expected_online": "YYYY-MM-DD"|null,
+    "energized_on":    "YYYY-MM-DD"|null,
+    "investment_usd":  integer|null,
+    "evidence": [{"field": "<a field of THIS block>", "quote": "<verbatim>"}]
+  }],
   "investment_usd":  integer|null,
   "phase":           "announced"|"permitting"|"construction"|"operational"|"paused"|"cancelled"|null,
   "first_announced": "YYYY-MM-DD"|null,
@@ -98,13 +112,44 @@ city             The municipality. If the article gives only a county or parish,
 county           County, parish or borough, copied as written.
 state            Two-letter USPS code ("WI", "TX").
 country          Two-letter ISO code. "US" for the United States.
+blocks           The parts of this site that have their own capacity, schedule or
+                 customer. A modern campus is several states at once — one phase
+                 energised and serving a tenant, the next under construction and
+                 pre-leased, a third only planned — and the fields above can hold
+                 only one of those.
+                 Emit a block ONLY when the article distinguishes one. An empty
+                 list is the correct and commonest answer: a campus the article
+                 treats as one thing IS one thing. Never invent tranches by
+                 dividing a single stated capacity.
+                 "label" is what the article calls it. "parent" is the facility a
+                 bare label belongs to — for "Phase 3 of AZP-3", label is "Phase 3"
+                 and parent is "AZP-3" — and it matters because one operator often
+                 has several campuses in one city.
+                 "status": planned / permitting / under_construction /
+                 shell_complete (built, no power yet) / energized (power on) /
+                 serving (a customer is running on it) / paused / cancelled.
+                 Each block's "evidence" is scoped to THAT block. A quote about the
+                 campus total must not appear there — it is evidence for
+                 mw_planned, not for a phase.
 mw_planned       Total planned electrical capacity of the DATA CENTER at full
                  buildout. Critically: this is NOT the capacity of a power plant,
                  solar farm or substation built to serve it. If the article only
                  gives generating capacity, leave this null and mention the figure
                  in "notes".
+                 If the article describes only ONE phase or building, leave this
+                 null and put that phase in "blocks". Do not promote a phase's
+                 capacity to the campus total — that is how one facility's 8 MW
+                 ends up recorded as another facility's size.
 mw_built         Capacity already energized or in operation today.
-investment_usd   Whole US dollars, as an integer.
+h200_equivalent  Accelerator count, ONLY if the article states one. Convert other
+                 NVIDIA data-center parts to H200-equivalents by rough compute:
+                 H100 ~0.9, A100 ~0.3, B200 ~2.2, GB200 ~2.5 per H200. Leave null
+                 for "GPUs" with no model, for a vendor's own units, and for
+                 anything you would have to work out from megawatts — the
+                 conversion from capacity is done in code, and a guess here
+                 overwrites it with a worse number wearing a citation.
+investment_usd   Whole US dollars, as an integer. Campus-wide only; a figure
+                 stated for one phase belongs on that block, not here.
 phase            The furthest stage the article says the project has reached.
                  Use "paused" for an indefinite hold and "cancelled" for
                  abandoned or withdrawn.

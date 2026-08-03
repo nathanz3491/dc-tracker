@@ -1,156 +1,167 @@
 # Handoff
 
-## Yesterday (state at start of 2026-08-03)
+## Yesterday (state at start of 2026-08-04)
 
-2026-08-02 (`1ef2209`) added SEC filings ingest and the capacity-by-customer
-rollup: `tracker ingest edgar` (scoped EDGAR full-text search by CIK, paragraph
-scoring instead of head-and-tail truncation, legal-vocabulary filtering to skip
-credit-agreement exhibits) and `tracker capex` (rolled up by the company
-actually buying capacity, not the site building it, with a same-site dedup
-detector and a $50M/MW plausibility ceiling for investment figures). 759 tests,
-green offline.
+2026-08-03 (`69a5d6e`) added `tracker logic check`/`resolve` (three-layer
+contradiction checking — deterministic rules, source-collision resolution via
+the real `upsert.resolve_field`, an optional paid LLM pass), `tracker merge`
+(the one destructive command, folding duplicate campus rows into one survivor),
+`tracker point "<name>"` (on-demand single-project lookup/enrichment), the
+per-project AI overview briefing, 20 new utility/contractor EDGAR filers, a
+`capex --by-quarter` view, `tracker cloudflare` as its own command, and a
+government-sources survey that concluded against building a bulk gov-data
+ingest path. 1309 tests, green offline.
 
 Carried into today, per that HANDOFF's own "Tomorrow": the 30-required-projects
 gap, ERCOT/CAISO column names in `iso_maps.py` unverified against a real
-export, the two free Google CSE keys not configured, `tracker ingest edgar` not
-yet run against the live SEC endpoint, and `tracker capex`'s duplicate-site
-heuristic checked against only one known case (Abilene).
+export, the two free Google CSE keys not configured, the 20 new EDGAR utility
+companies wired up but not yet run, `tracker logic check`'s paid layer-3 pass
+unproven, `tracker point`/`tracker merge` heuristics validated against only a
+handful of known cases, and `tracker cloudflare --name` untested against a real
+named tunnel with DNS already pointed at it.
 
-## Today (2026-08-03)
+## Today (2026-08-04)
 
-Working tree held a large batch of uncommitted work — a survey that killed a
-planned feature, a new contradiction-checking/merge/point-lookup subsystem,
-and a cluster of correctness and Windows-compatibility fixes underneath the
-console. Test suite grew from 759 to 1309 tests, verified green offline
-(`.venv/Scripts/python -m pytest`, exit 0) before writing this file. Largest
-first:
+Working tree held a large batch of uncommitted work, already fully written up
+in `CHANGELOG.md` and `README.md` before this handoff — the biggest addition
+is a new sub-project data model (`capacity_block`) plus its backfill. Test
+suite grew from 1309 to 1487 tests, verified green offline (exit 0) before
+writing this file. Largest first:
 
-- **A government-sources survey, and the decision not to build one**
-  (`docs/government-sources.md`, `scripts/probe_government_sources.py`, new):
-  four candidate bulk-discovery routes — Socrata municipal permits, FERC/state
-  PUC dockets, county news feeds, Legistar agendas — were probed live against
-  the jurisdictions that actually hold data center capacity, and all four came
-  back empty or irrelevant (0 candidates from 177 county-feed entries scored
-  by the project's own discovery filter; Socrata has no datasets for Loudoun,
-  Prince William, Virginia or Arizona). Conclusion recorded rather than
-  assumed: don't build a government ingest path — utilities already file
-  large-load commitments with the SEC (`ingest edgar --kind utility`), and a
-  one-off `.gov` document is already handled by `ingest crawl --url`. The probe
-  script exists so the finding can be rechecked as portals change.
+- **`capacity_block`: what an AI data center actually is** (migration `0009`,
+  `tracker/blocks.py`, new). `project` could only say one phase, one planned
+  MW, one built MW, one customer — inadequate for a modern campus that is
+  several of those at once (150 MW energized serving one buyer, 150 MW under
+  construction pre-leased to another, 300 MW planned unnamed). Measured on the
+  live DB: 28 projects partly built, 15 in `construction` with megawatts
+  already live, 12 energized while construction was mid-track, 49 with a named
+  customer and nothing built. A block carries its own label, MW, status
+  (including a new `shell_complete` distinction and `energized` vs `serving`),
+  customer and dates, each independently cited. Identity (`block_key`) is
+  derived — "Phase 1"/"Phase I"/"first phase" fold together — never a
+  similarity guess; an unplaceable block is excluded from rollup rather than
+  guessed at. `reconcile` only ever raises a scalar, never lowers one, so
+  migration 0009 landed on 227 live rows with every existing value provably
+  unchanged. Verified end to end against Iron Mountain's Q1 2026 filing and VA-9's
+  two differently-dated tranches. Not yet done: `logic` rules aren't
+  re-expressed per block, and the read surfaces don't show blocks yet.
 
-- **`tracker logic check` / `tracker logic resolve`** (`tracker/logic.py`,
-  new): a three-layer, cost-ordered contradiction checker — free deterministic
-  rules (built MW exceeding planned, energized-but-not-operational, milestones
-  dated in the future), free source-collision reporting that asks the real
-  `upsert.resolve_field` (now public) which of two conflicting claims wins and
-  why, and an optional paid LLM pass (`--read N`) that can only name
-  contradictions, never pick a winner. Measured on the live DB: 21
-  impossibilities, 125 warnings across 221 projects, and 0/149 findings were
-  mechanically resolvable — everything else needs a human, via an
-  interactive/`--llm` triage flow that writes decisions into `project.notes`
-  tagged `operator resolved` vs `model resolved`. An earlier draft that
-  re-derived the winner itself instead of asking the real resolver had falsely
-  reported 73/221 rows as "drifted" — worth remembering as the reason this
-  goes through `upsert.resolve_field` rather than reimplementing the policy.
+- **`tracker backfill blocks`** (`tracker/backfill.py`, new). Re-reads stored
+  articles (keyed by URL, not source row — 373 crawled sources are only 229
+  distinct articles) to populate blocks for the 227 pre-migration rows, without
+  re-extracting scalars via `ingest crawl --force`. Two guards were added after
+  an unguarded version wrote wrong numbers into a copy of the live DB: matching
+  on locality as well as operator name (a disagreeing city is a veto, not a
+  low score — an earlier pass put an 80 MW "Portland Expansion" onto eight
+  unrelated STACK rows), and detecting portfolio articles before splitting
+  blocks across sibling rows by label (an earlier pass gave Core Scientific's
+  six blocks to both the Denton and Dalton rows, double-counting 588 MW).
+  Verified on a nine-campus article that correctly routed Colossus/Stargate/
+  Prometheus to their respective rows and dropped an unattributable block
+  entirely.
 
-- **`tracker merge --into ID ids...`** (`tracker/merge.py`, new): folds
-  duplicate rows — the same campus stored under a builder's name, a
-  landlord's, and a tenant's — into one survivor. Sources, milestones and
-  risks move via the ORM relationship rather than raw FK edits (to respect
-  cascade-delete), and every field on the survivor is recomputed from sources
-  afterward so the choice of which row survives never determines the values.
-  Gated behind a new `DESTRUCTIVE` command class (separate from `LLM_COMMANDS`)
-  in the console, requiring a typed "merge" confirmation — it's the one
-  command in this project that deletes anything. Per the new Chinese status
-  doc, merging fixes a measured 24,125 MW double-count where OpenAI's
-  attributed capacity was inflated 53% and Oracle's 100%.
+- **`h200_equivalent`: capacity restated as accelerators** (migration `0008`,
+  `tracker/compute.py`, new). Derived by default from MW at 1.3 kW/H200
+  (~770/MW, built from the H200 board's 700W, DGX H200 node draw, and a
+  liquid-cooled PUE of 1.15–1.25), tiered `derived` like `county`/coordinates.
+  An article-stated chip count beats the conversion. A site nobody has sized
+  stays null rather than zero, so it can't corrupt a sum. `TRACKER_KW_PER_H200`
+  controls the ratio; `tracker init` re-bases the whole table. Deliberately
+  not a thirteenth tracked field — "9 of 12" still holds.
 
-- **`tracker point "<name>"`** (`tracker/point.py`, new): the on-demand
-  counterpart to the batch commands — given a data center name, it builds a
-  token-overlap shortlist, asks a model to match it to an existing row or
-  "none" (confidence floor 0.7, deliberately asymmetric: a false "no match"
-  just creates a duplicate that `tracker duplicates` can catch, a false "yes"
-  silently corrupts another project's history). Matched runs `enrich`;
-  unmatched runs targeted searches plus `crawl` to build a fresh profile.
+- **A command box on the Commands page** (`tracker/webui/catalog.py`,
+  `parse_command_line` / `build_argv`): a text line for what the forms can't
+  express (`merge 4 7 9 --into 2`, repeated `--url`), parsed server-side into
+  the same validated argv a form produces. Not a shell — `cd`, `rm`, `;`, `|`,
+  backticks are refused by name. Tab completes, ↑ recalls, running from the box
+  doesn't navigate away (would unmount its own history).
 
-- **`tracker/overview.py`** (new, no CLI command — served via `POST
-  /api/overview`): a cached, fingerprinted LLM narrative briefing for one
-  project's drawer in the console, invalidated whenever its sources, fields or
-  milestones change, and explicitly never stored as fact.
+- **Routines in the console** (`tracker/webui/workflows.py`, new): four named
+  multi-step sequences (*Catch up on the news*, *Deepen what we already have*,
+  *Tidy the database*, *Prepare a report*) run as one job/one log/one run-history
+  entry, validated against the same catalog and confirmation rules as a single
+  command — a routine can't reach a blocked command or spend money silently.
 
-- **Utilities and contractors as SEC filers**: 20 new companies in
-  `seed/edgar-companies.toml` (20 → 40), chosen by measured state-capacity
-  exposure (Texas 33.8%, Colorado 11.7%, etc.), with per-kind search phrases
-  since a utility writes "large load" where a builder writes "build-to-suit."
-  Wired up but not yet run against the live DB — today's source mix is
-  unchanged until that ingest actually executes.
+- **`tracker point --url URL`** (repeatable): read a specific link instead of
+  searching, going through the same `crawl.run`/evidence-gate/dedup/merge path.
 
-- **`tracker capex --by-quarter`**: buckets the capacity rollup by calendar
-  quarter instead of by year, with a measured caveat surfaced in both the CLI
-  and the console — 34% of dated projects normalize to 1 January, so the
-  quarterly view is "a shape, not a schedule."
+- **Streaming for the written briefing** (`llm.MiniMaxExtractor.stream`,
+  `overview.stream`, `POST /api/overview/stream`, `tracker/prompts/overview-v2.txt`,
+  new): switched the fast-briefing model to `M2-her` (new
+  `TRACKER_MINIMAX_FAST_MODEL` setting) after measuring every MiniMax model on
+  time-to-first-visible-word — `M2-her` is the only one that doesn't emit a
+  `<think>` block (2.7s vs 12.4–46.6s for the others; `MiniMax-M3`, the old
+  default, returned nothing at all). Needed an `[[END]]` sentinel in the prompt
+  (the API's own `stop` param is accepted and ignored) plus stream-level
+  truncation (`overview.RUNAWAY`) and a token cap, since unbounded `M2-her`
+  writes 750+ words against a 110-word instruction. Known cost, measured not
+  assumed: `M2-her` occasionally misreads a track or invents a detail (e.g.
+  inverting "construction is the last track to finish" into "all tracks
+  complete") — acceptable because the briefing is labelled a model's reading,
+  never stored, never a source, can't move confidence.
 
-- **`tracker cloudflare`** (promoted from `serve --tunnel`'s flag to its own
-  command): `--check` preflight, named-tunnel support (runs a tunnel someone
-  already created; deliberately does not create one itself, to avoid
-  credential/DNS side effects), and a `--name`/`--hostname` path for a stable
-  public URL instead of a random `trycloudflare.com` one. Two tunnel bugs
-  fixed underneath: cloudflared's own quick-tunnel API call ignores
-  `HTTPS_PROXY`, so a loopback relay (`_QuickRelay`) now forwards it through
-  whatever proxy is detected (env var or the Windows registry); and a failed
-  tunnel was being reported as a working public URL because the failure
-  message's own hostname (`api.trycloudflare.com`) matched the tunnel-URL
-  regex.
+- **Fixed: `logic resolve` could destroy correct data to satisfy a coarse
+  `phase` enum.** Three auto-edits (`_drop_energized`,
+  `_set_phase_operational`, `_built_equals_planned`) were mostly the schema
+  complaining about a state (a partly-built, partly-energized campus) that one
+  `phase` value can't represent — not real contradictions. Two now offer no
+  edit at all (accept/skip only); 73 of 148 findings can no longer be
+  auto-edited. Verified: a full `logic resolve --auto --apply` now leaves all
+  67 energization milestones intact. This is explicitly called out as stage 0
+  of the real fix, which is `capacity_block` above.
 
-- **Evidence-gate quote recovery** (`crawl._verbatim_run`): measured 131
-  quotes across 8 articles, 33 of which failed exact-match — mostly the model
-  resolving a pronoun while quoting ("The campus" → "The Austin campus").
-  Acceptance went from 75% to 95% with zero false positives on a
-  negative-control test, by recovering the longest verbatim run around a
-  near-miss quote rather than rejecting it outright.
+- **Fixed: a restart couldn't dislodge a stale front end.** Static assets were
+  served at bare, unversioned URLs with `no-cache`, so a browser or CDN edge
+  could keep serving last week's JS after a restart with no visible symptom.
+  `assets.stamp` now rewrites every `/static/...` reference with a token
+  derived from the file's mtime+size, so a changed file is a different URL;
+  matching-token requests get `immutable, max-age=1y`, stale/missing ones get
+  `no-cache`.
 
-- **Windows socket-error handling**: `ConnectionAbortedError` (WinError
-  10053), raised on tab-close on Windows, was never caught by the old
-  `except (BrokenPipeError, ConnectionResetError)`, producing double
-  tracebacks in the console's SSE stream. Widened to `ConnectionError` in
-  `_stream`, `do_GET` and `do_POST`.
+- **`TRACKER_TUNNEL_NAME`/`TRACKER_TUNNEL_HOSTNAME`**: configure a permanent
+  named-tunnel hostname once so `tracker cloudflare` needs no flags. Deliberately
+  not inherited by an explicit `--name` (would print a real hostname next to
+  the wrong tunnel); `serve --tunnel` reads the same pair.
 
-- **Console UI**: a Capex view with duplicate-review groups and merge-with-
-  confirmation UI; an `InsightPanel` for the new overview briefing
-  (deliberately placed below cited evidence, not above it); the run-log pane
-  switched from wrapping to sideways-scrolling (`.dc-log` `pre-wrap` → `pre`,
-  with a wrap toggle) so wide Rich tables stop shredding; a `$3.2T`-style USD
-  formatting fix; and the dataset now auto-reloads on run completion instead
-  of only polling run status.
+- **Housekeeping**: `CHANGELOG.md` and `README.md` were already updated with
+  detailed Added/Changed/Fixed entries for all of the above (verified, not
+  duplicated here). `docs/what-we-built.zh-CN.md` got a matching section on
+  the console's routines/command-box/AI-overview work.
 
-- **Housekeeping**: `CHANGELOG.md` gained matching Added/Fixed entries for all
-  of the above. `README.md` had zero mentions of the new `tracker point`
-  command and still opened with "There is no web UI — this is a backend plus
-  a CLI," directly contradicted by its own console section further down (added
-  `694b204`/`836945b`, never corrected here) — both fixed. The stated test
-  count ("579 tests") was stale by two sessions' worth of growth (`836945b`'s
-  615, `1ef2209`'s 759); updated to the current 1309. No AGENTS.md added —
-  the new logic/merge/overview/point modules are functions inside one CLI,
-  not autonomous agents, so there is still no multi-agent architecture to
-  document.
+- **`docs/feedback-2026-08-03.md`** (new, untracked): a written response to
+  five colleague questions about the live data — duplicate-counted campuses
+  (24,125 MW, e.g. Abilene stored under 4 different customer keys), the flat
+  `announced` phase hiding real sub-progress, OpenAI's capex summing to an
+  implausible $3.2T with no dedup/cap, a missing 2029 column in the capex year
+  grid, placeholder values ("TBD"/"—") accepted as evidence, and whether
+  government/permit/grid sources are actually used (four bulk routes tried,
+  all failed; `ingest edgar --kind utility` is the one that pays and hasn't
+  been run at scale). Explicitly "no code changes proposed yet — review
+  first"; carries into tomorrow.
 
 ## Tomorrow
 
-- The 30-required-projects gap is still open.
-- ERCOT/CAISO column-name assumptions in `iso_maps.py` remain unverified
-  against a real export.
-- The two free Google CSE keys are still not configured.
+- Review `docs/feedback-2026-08-03.md` and decide which of its 5 items to act
+  on — the suggested order is: run `tracker ingest edgar --kind utility`
+  first (changes the source mix everything else audits), then `tracker merge`
+  the obvious Stargate/duplicate clusters, then a placeholder-value vocabulary
+  in `vocab.py`, then surface the 5-track progress bar next to `phase`, then
+  (multi-day) the MW-by-share attribution join table.
+- `capacity_block`'s `logic` rules aren't re-expressed per block yet, and no
+  read surface (console, export, CLI `show`) displays blocks yet — the model
+  exists but isn't visible or checked against contradictions at block
+  granularity.
+- Run `tracker backfill blocks` against the full 227 pre-migration rows (only
+  verified so far on a sample); watch for the two guard conditions (locality
+  veto, portfolio-article detection) misfiring on unseen article shapes.
 - The 20 new utility/contractor EDGAR companies in `seed/edgar-companies.toml`
-  are wired up but have not been run — worth an `ingest edgar --kind utility`
-  pass to see whether utility filings actually move the needle on
-  investment/in-service-date coverage as hoped.
-- `tracker logic check`'s optional paid layer-3 judgement is explicitly called
-  out in code as unproven — across 4 rows read during development it returned
-  nothing beyond what the free rules already found. Worth watching whether it
-  ever earns its cost, or should be cut.
+  are still wired up but unrun.
+- The 30-required-projects gap, unverified ERCOT/CAISO column names, and the
+  two unconfigured Google CSE keys are still open, carried for a second day.
+- `tracker cloudflare --name`/`TRACKER_TUNNEL_HOSTNAME` still need a real run
+  against a named tunnel with DNS actually pointed at it.
 - `tracker point`'s 0.7 confidence floor and `tracker merge`'s duplicate
-  detection are both heuristics validated against a small number of known
-  cases (mainly Abilene); worth revisiting as more real usage accumulates.
-- `tracker cloudflare --name` still needs a real run against a named tunnel
-  with DNS already pointed at it — the loopback-relay proxy fix is untested
-  against an actual corporate proxy, only against the failure mode it targets.
+  detection remain validated against a small number of known cases.
+- None of today's work is committed yet — it's a large uncommitted batch on
+  `feat/web-console` (28 modified files, ~14 new files/migrations/tests) about
+  to be committed alongside this handoff.

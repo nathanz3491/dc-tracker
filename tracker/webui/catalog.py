@@ -35,6 +35,7 @@ LLM_COMMANDS: frozenset[str] = frozenset(
         "logic check",
         "ingest crawl",
         "ingest edgar",
+        "backfill",
     }
 )
 
@@ -128,7 +129,7 @@ GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ),
     ("Judge", ("review", "verify", "infer", "logic check")),
     ("Repair", ("duplicates", "merge", "logic resolve")),
-    ("Maintain", ("init", "export")),
+    ("Maintain", ("init", "backfill", "export")),
 )
 
 
@@ -310,6 +311,109 @@ def grouped_json() -> list[dict[str, Any]]:
 
 class InvalidRequest(ValueError):
     """The posted command or flags are not something the catalog permits."""
+
+
+def parse_command_line(text: str) -> tuple[str, dict[str, Any]]:
+    """Turn a typed line into ``(command, flags)`` this catalog recognises.
+
+    For the console's command box. It looks like a terminal and is deliberately
+    not one: **there is no shell here at any point**. This produces the same
+    `(cmd, flags)` pair the form produces, `build_argv` turns that into the same
+    validated argument list, and everything outside the catalog — `cd`, `rm`, a
+    pipe, a semicolon, a backtick — is a word the catalog has never heard of and
+    is refused by name. A leading `tracker` is accepted and ignored, because
+    people will type it.
+
+    Quoting is handled with `shlex` in POSIX mode purely as a *tokeniser*: it is
+    what splits `--name "Stargate Abilene"` into two words. None of the shell
+    behaviour `shlex` knows about is applied to the result.
+
+    Boolean flags take no value. Everything else consumes the next token, and a
+    flag given twice becomes a list — which `build_argv` accepts only where the
+    CLI itself is repeatable, so `--url a --url b` works and `--limit 1 --limit 2`
+    is refused there rather than silently taking one.
+    """
+    import shlex
+
+    try:
+        tokens = shlex.split(text.strip(), comments=False, posix=True)
+    except ValueError as exc:  # an unbalanced quote
+        raise InvalidRequest(f"unbalanced quotes: {exc}") from None
+    if not tokens:
+        raise InvalidRequest("nothing to run")
+    if tokens[0] == "tracker":
+        tokens = tokens[1:]
+    if not tokens:
+        raise InvalidRequest("nothing to run after `tracker`")
+
+    commands = by_name()
+    # Longest match first, so `ingest crawl` is not read as `ingest` with a stray
+    # positional and `logic check` is not read as `logic`.
+    name = None
+    for size in (3, 2, 1):
+        candidate = " ".join(tokens[:size])
+        if candidate in commands:
+            name, tokens = candidate, tokens[size:]
+            break
+    if name is None:
+        guess = _closest(tokens[0], commands)
+        hint = f" Did you mean `{guess}`?" if guess else ""
+        raise InvalidRequest(f"there is no `{tokens[0]}` command.{hint}")
+
+    command = commands[name]
+    known = {f.name: f for f in command.flags}
+    positionals = [f for f in command.flags if f.positional]
+    flags: dict[str, Any] = {}
+
+    def remember(key: str, value: Any) -> None:
+        if key in flags:
+            existing = flags[key] if isinstance(flags[key], list) else [flags[key]]
+            flags[key] = [*existing, value]
+        else:
+            flags[key] = value
+
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token.startswith("-"):
+            key, _, inline = token.partition("=")
+            flag = known.get(key)
+            if flag is None:
+                guess = _closest(key, known)
+                hint = f" Did you mean `{guess}`?" if guess else ""
+                raise InvalidRequest(f"`{name}` has no `{key}` option.{hint}")
+            if flag.kind == "bool":
+                if inline:
+                    raise InvalidRequest(f"`{key}` is a switch and takes no value")
+                flags[key] = True
+                index += 1
+                continue
+            if inline:
+                remember(key, inline)
+                index += 1
+                continue
+            if index + 1 >= len(tokens):
+                raise InvalidRequest(f"`{key}` needs a value")
+            remember(key, tokens[index + 1])
+            index += 2
+            continue
+
+        if not positionals:
+            raise InvalidRequest(f"`{name}` takes no arguments, so `{token}` is unexpected")
+        # A variadic positional swallows the rest; otherwise fill them in order.
+        target = positionals[0] if positionals[0].repeatable else positionals.pop(0)
+        remember(target.name, token)
+        index += 1
+
+    return name, flags
+
+
+def _closest(word: str, options) -> str | None:
+    """The nearest known name, for a typo. None when nothing is close enough."""
+    import difflib
+
+    matches = difflib.get_close_matches(word, list(options), n=1, cutoff=0.7)
+    return matches[0] if matches else None
 
 
 def build_argv(cmd: str, flags: dict[str, Any], *, db_path: Any = None) -> list[str]:

@@ -115,6 +115,11 @@ FIELD_POLICY: dict[str, Policy] = {
     "phase": Policy.PHASE,
     "first_announced": Policy.MIN,
     "expected_online": Policy.PREFER_WEIGHT,
+    # Same reasoning as `mw_built`: a later source counting more accelerators is
+    # reporting a build-out, not contradicting the earlier one. Only reached when
+    # a source stated a chip count; otherwise the value is derived from capacity
+    # by `apply_h200_equivalent` and never consults this table.
+    "h200_equivalent": Policy.MAX,
     # `blocker` is absent on purpose — see DERIVED_FIELDS above.
 }
 
@@ -230,18 +235,39 @@ def resolve_field(field_name: str, claims: list[_Claim], existing: Any) -> Any:
 
 
 def _resolve(field_name: str, claims: list[_Claim], existing: Any) -> Any:
-    """Apply the field's policy to choose one value.
+    """Apply the *field's* policy to choose one value. Thin wrapper over `resolve`."""
+    return resolve(FIELD_POLICY.get(field_name, Policy.PREFER_WEIGHT), claims, existing)
+
+
+def resolve(
+    policy: Policy,
+    claims: list[_Claim],
+    existing: Any,
+    *,
+    rank: dict[str, int] | None = None,
+    terminal: tuple[str, ...] = PHASE_TERMINAL,
+    default: Any = None,
+) -> Any:
+    """Apply a merge policy to choose one value.
+
+    Split out from `_resolve` so `capacity_block` fields go through this engine
+    rather than a second copy of it. Blocks need the same discipline fields need —
+    most of all the 待确认 rule below — and two implementations of "confirmed
+    first, then weight, then recency" would drift.
+
+    `rank`/`terminal`/`default` parameterise the LADDER policy, so the project
+    `phase` progression and a block's own status progression share one
+    implementation.
 
     Unconfirmed (待确认) claims are discarded outright whenever any confirmed claim
     exists for the field. Done here, once, rather than inside each policy: MAX and
-    MIN scan every claim and PHASE takes the furthest-along, so any of the three
+    MIN scan every claim and LADDER takes the furthest-along, so any of the three
     would otherwise let an unquoted value beat a quoted one.
     """
     if not claims:
         return existing
     if any(c.confirmed for c in claims):
         claims = [c for c in claims if c.confirmed]
-    policy = FIELD_POLICY.get(field_name, Policy.PREFER_WEIGHT)
 
     if policy is Policy.FILL_ONLY:
         return existing if existing is not None else claims[0].value
@@ -261,29 +287,45 @@ def _resolve(field_name: str, claims: list[_Claim], existing: Any) -> Any:
         return min(values) if values else existing
 
     if policy is Policy.PHASE:
-        return _resolve_phase(claims, existing)
+        return _resolve_ladder(
+            claims,
+            existing,
+            rank=rank or _PHASE_RANK,
+            terminal=terminal,
+            default=default if default is not None else DEFAULT_PHASE,
+        )
 
     # PREFER_WEIGHT: claims are pre-sorted by (weight, recency).
     return claims[0].value
 
 
-def _resolve_phase(claims: list[_Claim], existing: Any) -> Any:
-    """Furthest-along phase, but a terminal state always wins.
+def _resolve_ladder(
+    claims: list[_Claim],
+    existing: Any,
+    *,
+    rank: dict[str, int],
+    terminal: tuple[str, ...],
+    default: Any,
+) -> Any:
+    """Furthest along a progression, but a terminal state always wins.
 
-    A project that a newer source says is cancelled is cancelled, even though
-    "operational" sits further along the progression. Paused/cancelled are
-    statements about the project stopping, not about its degree of completion.
+    A project a newer source says is cancelled is cancelled, even though
+    "operational" sits further along. Paused/cancelled are statements about the
+    thing stopping, not about its degree of completion.
+
+    Parameterised so a block's status ladder reuses it: same argument, different
+    rungs.
     """
-    terminal = [c for c in claims if c.value in PHASE_TERMINAL]
-    if terminal:
+    stopped = [c for c in claims if c.value in terminal]
+    if stopped:
         # Claims are sorted strongest-and-newest first.
-        return terminal[0].value
-    ranked = [c.value for c in claims if c.value in _PHASE_RANK]
-    if existing in _PHASE_RANK:
+        return stopped[0].value
+    ranked = [c.value for c in claims if c.value in rank]
+    if existing in rank:
         ranked.append(existing)
     if not ranked:
-        return existing or DEFAULT_PHASE
-    return max(ranked, key=lambda p: _PHASE_RANK[p])
+        return existing or default
+    return max(ranked, key=lambda p: rank[p])
 
 
 def _conflict_notes(by_field: dict[str, list[_Claim]]) -> tuple[list[str], list[str]]:
@@ -506,6 +548,17 @@ def upsert_record(session: Session, rec: IngestRecord, *, force_new: bool = Fals
         row.quotes = (
             json.dumps(sr.quotes, sort_keys=True, ensure_ascii=False) if sr.quotes else None
         )
+        # Ordered by block key, for the same reason `claims` is sorted: a re-ingest
+        # of the same article must write byte-identical JSON or the idempotence
+        # test stops holding.
+        row.blocks = (
+            json.dumps(
+                [b.as_json() for b in sorted(sr.blocks, key=lambda b: b.label.lower())],
+                ensure_ascii=False,
+            )
+            if sr.blocks
+            else None
+        )
         row.extractor = sr.extractor
         # fetched_at is only advanced, never rewound: a cached re-read must not
         # make an old citation look newer than a genuinely newer one.
@@ -532,6 +585,14 @@ def upsert_record(session: Session, rec: IngestRecord, *, force_new: bool = Fals
     if project.phase is None:
         project.phase = DEFAULT_PHASE
 
+    # Blocks first, then the rollup, then h200 — so `apply_h200_equivalent` sees a
+    # `mw_built` that already reflects the energised tranches.
+    from tracker import blocks as blocks_mod
+
+    blocks_written = blocks_mod.rebuild(session, project)
+    block_notes = blocks_mod.reconcile(project)
+    apply_h200_equivalent(project, by_field)
+
     # --- Notes: conflicts, path disclosures, duplicate proposals ------------
     derived, conflict_fields = _conflict_notes(by_field)
     # Path disclosures and duplicate proposals are contributed, not derived: they
@@ -548,6 +609,7 @@ def upsert_record(session: Session, rec: IngestRecord, *, force_new: bool = Fals
     tag = record_tag([s.url for s in rec.sources])
     marker = f"{SOURCE_NOTE_PREFIX}[{tag}]"
     contributed = [f"{marker} {line}" for line in rec.notes]
+    derived.extend(f"{NOTE_PREFIX} {line}" for line in block_notes)
     project.notes = _merge_notes(project.notes, derived, contributed, tag=tag)
 
     # --- Confidence ---------------------------------------------------------
@@ -581,7 +643,15 @@ def upsert_record(session: Session, rec: IngestRecord, *, force_new: bool = Fals
 
     # --- Did anything actually change? -------------------------------------
     if action == "update":
-        if _snapshot(project) == before and not events_written and not risks_written:
+        if (
+            _snapshot(project) == before
+            and not events_written
+            and not risks_written
+            # A run that only added blocks did change the row. Without this it
+            # reports `unchanged`, `updated_at` never moves, and the watermark
+            # that tells a post-run check what to look at misses it entirely.
+            and not blocks_written
+        ):
             action = "unchanged"
         else:
             project.updated_at = utcnow()
@@ -812,6 +882,34 @@ def _derive_blocker(session: Session, project: Project) -> str | None:
     return max(open_risks, key=lambda r: severity_rank(r.severity)).summary
 
 
+def apply_h200_equivalent(project: Project, by_field: dict[str, list] | None = None) -> None:
+    """Set the accelerator count: a cited chip count if there is one, else derived.
+
+    Recomputed on every write rather than remembered, because it is a restatement
+    of the capacity rather than an independent fact. A row whose megawatts move
+    and whose accelerator count does not would be quietly self-contradictory, and
+    `logic check` would be right to flag it.
+
+    The derivation prefers *built* capacity where there is any, because that is
+    the compute a site actually has today; planned capacity answers a different
+    question and is the fallback. A row with neither, and no cited count, keeps
+    null — a site nobody has sized gets no number rather than a zero that would be
+    summed.
+    """
+    from tracker.compute import h200_equivalent
+
+    cited = _resolve("h200_equivalent", (by_field or {}).get("h200_equivalent", []), None)
+    if cited is not None:
+        try:
+            project.h200_equivalent = int(cited)
+            return
+        except (TypeError, ValueError):
+            pass  # fall through to the derivation rather than storing rubbish
+
+    basis = project.mw_built if project.mw_built else project.mw_planned
+    project.h200_equivalent = h200_equivalent(basis)
+
+
 def recompute_from_sources(session: Session, project: Project) -> list[str]:
     """Re-derive every field of one project from the citations it now holds.
 
@@ -838,6 +936,12 @@ def recompute_from_sources(session: Session, project: Project) -> list[str]:
             setattr(project, name, chosen)
     if project.phase is None:
         project.phase = DEFAULT_PHASE
+
+    from tracker import blocks as blocks_mod
+
+    blocks_mod.rebuild(session, project)
+    blocks_mod.reconcile(project)
+    apply_h200_equivalent(project, by_field)
 
     _derived, conflict_fields = _conflict_notes(by_field)
 
@@ -870,17 +974,63 @@ def recompute_confidence(session: Session) -> int:
     return changed
 
 
+def recompute_blocks(session: Session) -> int:
+    """Rebuild every project's blocks from its sources. Returns rows changed.
+
+    Blocks are a cache of `source.blocks`, the same status `confidence` and
+    `h200_equivalent` have, so they inherit the same obligation: `tracker init`
+    recomputes them, and `test_blocks_cache_is_consistent` asserts a second pass is
+    a no-op. If running it twice keeps changing rows then either the rebuild is not
+    a pure function of what is stored, or `init` is reporting churn that is not
+    real.
+    """
+    from tracker import blocks as blocks_mod
+
+    changed = 0
+    for project in session.scalars(select(Project)).all():
+        touched = blocks_mod.rebuild(session, project)
+        notes = blocks_mod.reconcile(project)
+        if touched or notes:
+            changed += 1
+    session.flush()
+    return changed
+
+
+def recompute_h200(session: Session) -> int:
+    """Restate every project's capacity as accelerators. Returns rows changed.
+
+    Same reasoning as `recompute_confidence`: a cache of a pure function, which
+    drifts when the function's inputs change. Here that includes a *setting* —
+    `kw_per_h200` — so re-basing the whole table is running this rather than
+    writing a migration.
+
+    Idempotent, and `test_h200_cache_is_consistent` asserts it is a no-op on a
+    database that is already current.
+    """
+    changed = 0
+    for project in session.scalars(select(Project)).all():
+        before = project.h200_equivalent
+        apply_h200_equivalent(project, claims_by_field(list(project.sources)))
+        if project.h200_equivalent != before:
+            changed += 1
+    session.flush()
+    return changed
+
+
 __all__ = [
     "DERIVED_FIELDS",
     "FIELD_POLICY",
     "NOTE_PREFIX",
     "Policy",
     "UpsertResult",
+    "apply_h200_equivalent",
     "claim_value",
     "claims_by_field",
     "derive_fields",
+    "recompute_blocks",
     "recompute_confidence",
     "recompute_from_sources",
+    "recompute_h200",
     "record_tag",
     "resolve_field",
     "upsert_record",

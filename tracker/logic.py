@@ -776,11 +776,6 @@ class Action:
     apply: Any  # (session, project, finding) -> str
 
 
-def _set_phase_operational(session: Session, project: Project, _f: Finding) -> str:
-    was, project.phase = project.phase, "operational"
-    return f"phase {was} -> operational"
-
-
 def _drop_future_milestones(session: Session, project: Project, _f: Finding) -> str:
     today = _today()
     doomed = [
@@ -794,14 +789,6 @@ def _drop_future_milestones(session: Session, project: Project, _f: Finding) -> 
     return f"removed {len(doomed)} milestone(s) dated in the future"
 
 
-def _drop_energized(session: Session, project: Project, _f: Finding) -> str:
-    doomed = [e for e in list(project.events) if e.event_type == "energized"]
-    for event in doomed:
-        project.events.remove(event)
-        session.delete(event)
-    return f"removed {len(doomed)} energized milestone(s)"
-
-
 def _raise_planned_to_built(_s: Session, project: Project, _f: Finding) -> str:
     was, project.mw_planned = project.mw_planned, project.mw_built
     return f"mw_planned {was} -> {project.mw_planned} (plan revised up to what is built)"
@@ -810,11 +797,6 @@ def _raise_planned_to_built(_s: Session, project: Project, _f: Finding) -> str:
 def _clear_built(_s: Session, project: Project, _f: Finding) -> str:
     was, project.mw_built = project.mw_built, None
     return f"mw_built {was} -> empty"
-
-
-def _built_equals_planned(_s: Session, project: Project, _f: Finding) -> str:
-    was, project.mw_built = project.mw_built, project.mw_planned
-    return f"mw_built {was} -> {project.mw_built}"
 
 
 def _clear_expected_online(_s: Session, project: Project, _f: Finding) -> str:
@@ -846,11 +828,34 @@ def _resolve_finished_obstacles(session: Session, project: Project, _f: Finding)
 
 #: finding code -> what an operator can do about it. `skip` and `verify` are
 #: offered everywhere and are not listed here.
+#: Per-finding operator edits.
+#:
+#: **Three actions were removed, and the reason is the point of this table.**
+#: `_set_phase_operational`, `_drop_energized` and `_built_equals_planned` all
+#: "fixed" a finding by rewriting the row to match a `phase` enum that cannot
+#: describe the row in the first place.
+#:
+#: A modern campus is several states at once: 150 MW energised and serving, 150 MW
+#: under construction, 300 MW planned. Measured on the live database, 28 projects
+#: are partly built, 15 are `construction` with megawatts already live, and 12 have
+#: power energised while construction is mid-track. Those are not contradictions —
+#: they are the ordinary shape of the thing, and the schema has no room for it.
+#:
+#: So the findings they hung off were largely artefacts, and the edits destroyed
+#: correct information to silence them. `_drop_energized` deleted a real, cited
+#: energisation milestone. `_built_equals_planned` asserted a whole campus was
+#: energised because one phase was. `_set_phase_operational` marked a campus
+#: finished while most of it was still being built. `tracker logic resolve --llm`
+#: could apply any of them unattended.
+#:
+#: The findings stay — they are still worth a person's eye — but with no action
+#: offered they can only be verified or skipped, which is the honest set of
+#: choices until `capacity_block` lands and the rules are re-expressed per block.
+#: See the plan: those rules are then either per-block or retired.
 ACTIONS: Final[dict[str, tuple[Action, ...]]] = {
-    "energized_but_not_operational": (
-        Action("p", "the phase is behind — set it to operational", _set_phase_operational),
-        Action("d", "the energisation is wrong — remove that milestone", _drop_energized),
-    ),
+    # No action: the phase and the milestone disagree because one enum is being
+    # asked to describe a campus that is partly live. Neither side is wrong.
+    "energized_but_not_operational": (),
     "built_exceeds_planned": (
         Action("u", "the plan was revised — raise mw_planned to mw_built", _raise_planned_to_built),
         Action("c", "the built figure is wrong — clear it", _clear_built),
@@ -859,13 +864,12 @@ ACTIONS: Final[dict[str, tuple[Action, ...]]] = {
         Action("c", "the online date is wrong — clear it", _clear_expected_online),
         Action("a", "the announced date is wrong — clear it", _clear_first_announced),
     ),
-    "past_its_own_date": (
-        Action("c", "that date is stale — clear it", _clear_expected_online),
-        Action("p", "it is running now — set the phase to operational", _set_phase_operational),
-    ),
-    "operational_without_built_capacity": (
-        Action("b", "it is running, so mw_built = mw_planned", _built_equals_planned),
-    ),
+    # Clearing a stale date is still honest. Declaring the campus operational
+    # because one phase's date passed is not.
+    "past_its_own_date": (Action("c", "that date is stale — clear it", _clear_expected_online),),
+    # No action: "no source says any of it is built" is a gap to fill, not a
+    # licence to assert the whole plan is energised.
+    "operational_without_built_capacity": (),
     "obstacle_on_a_finished_track": (
         Action("r", "the obstacle cleared — mark it resolved", _resolve_finished_obstacles),
     ),

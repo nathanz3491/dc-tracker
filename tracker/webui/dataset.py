@@ -309,6 +309,12 @@ def _risk_exposure(projects: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(buckets.values(), key=lambda e: (-e["mw"], -e["projects"], e["category"]))
 
 
+def _kw_per_h200() -> float:
+    from tracker.compute import kw_per_h200
+
+    return kw_per_h200()
+
+
 def build(session: Session, *, db_path: str, schema_version: int) -> dict[str, Any]:
     """The whole console payload for one request."""
     rows = fetch_projects(session)
@@ -359,6 +365,10 @@ def build(session: Session, *, db_path: str, schema_version: int) -> dict[str, A
         "sourceTypes": list(SOURCE_TYPES),
         "sourceWeight": dict(SOURCE_WEIGHTS),
         "trackedFields": list(TRACKED_FIELDS),
+        # The conversion the H200 column rests on. Sent rather than duplicated in
+        # the front end: the page needs it to tell a derived count from a cited
+        # one, and two copies of an assumption drift.
+        "kwPerH200": _kw_per_h200(),
     }
 
 

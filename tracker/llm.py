@@ -23,6 +23,7 @@ import json
 import logging
 import re
 import time
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -67,10 +68,27 @@ class LLMError(RuntimeError):
 
 
 class LLMJsonError(ValueError):
-    """The reply could not be parsed as a JSON object."""
+    """The reply could not be parsed as a JSON object.
+
+    Says *which* failure it was, because the two need opposite responses and the
+    generic message sent a real investigation down the wrong path. A reply that
+    opens `<think>` and never closes it did not "fail to return JSON" — it never
+    got as far as answering, having spent the whole completion budget reasoning.
+    Retrying that verbatim reproduces it; the fix is a bigger budget or a shorter
+    prompt. Every path that parses JSON raises this, so naming the cause here
+    names it in all of them.
+    """
 
     def __init__(self, head: str) -> None:
-        super().__init__(f"model did not return a JSON object; reply began: {head[:300]!r}")
+        self.ran_out_thinking = "<think>" in head.lower() and "</think>" not in head.lower()
+        if self.ran_out_thinking:
+            message = (
+                "model never finished thinking, so it never answered — its reasoning "
+                f"used the whole completion budget; reply began: {head[:200]!r}"
+            )
+        else:
+            message = f"model did not return a JSON object; reply began: {head[:300]!r}"
+        super().__init__(message)
         self.head = head
 
 
@@ -97,11 +115,103 @@ class Extractor(Protocol):
     def complete(self, *, system: str, user: str, max_tokens: int | None = None) -> LLMReply: ...
 
 
+class StreamingExtractor(Extractor, Protocol):
+    """An extractor that can also hand back the answer as it arrives.
+
+    Separate from `Extractor` because only one caller needs it. Everything that
+    parses JSON wants the whole reply before it can do anything, so streaming
+    would buy those paths nothing; the drawer's briefing is prose a person reads
+    top to bottom, and there the wait is the entire cost.
+    """
+
+    def stream(self, *, system: str, user: str, max_tokens: int | None = None) -> Iterator[str]: ...
+
+
 # --- JSON recovery ----------------------------------------------------------
 
 _THINK = re.compile(r"<think>(.*?)</think>", re.DOTALL | re.IGNORECASE)
 _FENCE_OPEN = re.compile(r"^\s*```(?:json|JSON)?\s*", re.MULTILINE)
 _FENCE_CLOSE = re.compile(r"\s*```\s*$", re.MULTILINE)
+
+
+_THINK_OPEN = "<think>"
+_THINK_CLOSE = "</think>"
+
+
+def _sse_delta(line: str) -> str:
+    """The content fragment in one `data:` line of an OpenAI-style stream."""
+    if not line.startswith("data:"):
+        return ""
+    payload = line[len("data:") :].strip()
+    if not payload or payload == "[DONE]":
+        return ""
+    try:
+        choices = json.loads(payload).get("choices") or []
+        return (choices[0].get("delta") or {}).get("content") or ""
+    except (json.JSONDecodeError, AttributeError, IndexError, TypeError, KeyError):
+        # A malformed frame is not worth killing a stream over; the reply is prose
+        # and one dropped fragment costs a few words, not correctness.
+        return ""
+
+
+def _held_back(text: str, tag: str) -> int:
+    """How much of `text`'s tail could still turn out to be the start of `tag`.
+
+    `split_thinking` gets the whole reply and can just regex it. A stream cannot:
+    `<think>` arrives as `<th` then `ink>`, and emitting the first half means the
+    reader watches an angle bracket appear and then get taken away again.
+    """
+    for size in range(min(len(text), len(tag) - 1), 0, -1):
+        if text[-size:].lower() == tag[:size]:
+            return size
+    return 0
+
+
+class _ThinkFilter:
+    """Strips `<think>` blocks from a stream, across chunk boundaries."""
+
+    def __init__(self) -> None:
+        self._buffer = ""
+        self._inside = False
+
+    def feed(self, chunk: str) -> Iterator[str]:
+        self._buffer += chunk
+        while True:
+            if self._inside:
+                cut = self._buffer.lower().find(_THINK_CLOSE)
+                if cut == -1:
+                    keep = _held_back(self._buffer, _THINK_CLOSE)
+                    self._buffer = self._buffer[len(self._buffer) - keep :] if keep else ""
+                    return
+                self._buffer = self._buffer[cut + len(_THINK_CLOSE) :]
+                self._inside = False
+                continue
+
+            cut = self._buffer.lower().find(_THINK_OPEN)
+            if cut != -1:
+                head = self._buffer[:cut]
+                self._buffer = self._buffer[cut + len(_THINK_OPEN) :]
+                self._inside = True
+                if head:
+                    yield head
+                continue
+
+            hold = _held_back(self._buffer, _THINK_OPEN)
+            ready = self._buffer[: len(self._buffer) - hold]
+            self._buffer = self._buffer[len(self._buffer) - hold :] if hold else ""
+            if ready:
+                yield ready
+            return
+
+    def finish(self) -> Iterator[str]:
+        """Flush the tail.
+
+        A reply truncated inside its own reasoning yields nothing, which is the
+        honest outcome: there was no answer, only a cut-off thought.
+        """
+        if not self._inside and self._buffer:
+            yield self._buffer
+        self._buffer = ""
 
 
 def split_thinking(text: str) -> tuple[str, str]:
@@ -222,6 +332,16 @@ def _scan(text: str) -> str | None:
 # --- MiniMax ----------------------------------------------------------------
 
 
+#: Models that reject the budget the rest accept.
+#:
+#: `M2-her` answers HTTP 400 to anything over 2048 — "does not support max tokens
+#: > 2048 (2013)" — so a caller passing the ordinary 4096 gets nothing at all
+#: rather than a shorter reply. Clamped here rather than at the call site because
+#: the budget is chosen for the *task* and the ceiling belongs to the *model*, and
+#: nothing that picks a budget should have to know the model roster.
+MODEL_TOKEN_CAP: dict[str, int] = {"M2-her": 2048, "MiniMax-M2-her": 2048}
+
+
 class MiniMaxExtractor:
     """OpenAI-compatible chat completions against MiniMax.
 
@@ -240,6 +360,11 @@ class MiniMaxExtractor:
         # call and wants the strongest model available.
         self.model = model or self.settings.minimax_model
 
+    def _budget(self, max_tokens: int | None) -> int:
+        """The completion budget, clamped to what this model will accept."""
+        asked = max_tokens or self.settings.max_completion_tokens
+        return min(asked, MODEL_TOKEN_CAP.get(self.model, asked))
+
     @property
     def endpoint(self) -> str:
         return f"{self.base_url}/chat/completions"
@@ -255,7 +380,7 @@ class MiniMaxExtractor:
             "temperature": 0.1,
             "top_p": 0.9,
             # max_completion_tokens, not max_tokens.
-            "max_completion_tokens": max_tokens or self.settings.max_completion_tokens,
+            "max_completion_tokens": self._budget(max_tokens),
             "stream": False,
             # No response_format on purpose: M2.x/M3 ignore it silently, so
             # sending it would imply a guarantee that does not exist.
@@ -275,6 +400,58 @@ class MiniMaxExtractor:
             completion_tokens=usage.get("completion_tokens"),
             model=data.get("model") or self.model,
         )
+
+    def stream(self, *, system: str, user: str, max_tokens: int | None = None) -> Iterator[str]:
+        """Yield the answer as it is generated.
+
+        Deliberately not retried. `_post` can replay a failed request because
+        nothing has been shown yet; once the first token has reached the reader,
+        a retry would restart the paragraph mid-sentence. A stream that breaks is
+        reported as broken and the caller can ask again.
+
+        Reasoning is filtered out *as it arrives*, which is the only fiddly part:
+        these models put `<think>` in the content field, so a naive passthrough
+        would type the model's private deliberation into the drawer and then have
+        to erase it.
+        """
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            "temperature": 0.1,
+            "top_p": 0.9,
+            "max_completion_tokens": self._budget(max_tokens),
+            "stream": True,
+        }
+        headers = {
+            "Authorization": f"Bearer {self.settings.minimax_api_key.get_secret_value()}",
+            "Content-Type": "application/json",
+        }
+        filter_ = _ThinkFilter()
+        try:
+            with httpx.stream(
+                "POST",
+                self.endpoint,
+                json=payload,
+                headers=headers,
+                timeout=httpx.Timeout(120.0, connect=10.0),
+            ) as response:
+                if response.status_code >= 400:
+                    response.read()
+                    if response.status_code == 401:
+                        raise MissingApiKey(KEY_HELP)
+                    raise LLMError(
+                        f"MiniMax returned HTTP {response.status_code}: {response.text[:500]}"
+                    )
+                for line in response.iter_lines():
+                    piece = _sse_delta(line)
+                    if piece:
+                        yield from filter_.feed(piece)
+        except httpx.RequestError as exc:
+            raise LLMError(f"LLM stream failed: {exc}") from exc
+        yield from filter_.finish()
 
     def _post(self, payload: dict[str, Any], *, attempts: int = 3) -> dict[str, Any]:
         headers = {
@@ -366,6 +543,16 @@ def reasoning_extractor(settings: Settings | None = None) -> Extractor:
     """The model for judgement rather than transcription. See `tracker.infer`."""
     settings = settings or get_settings()
     return MiniMaxExtractor(settings, model=settings.minimax_reasoning_model)
+
+
+def fast_extractor(settings: Settings | None = None) -> Extractor:
+    """The model for the one call a person sits and waits for.
+
+    Used by the drawer's briefing, where latency *is* the feature: the panel
+    generates when a row is opened, so the model's speed is the page's speed.
+    """
+    settings = settings or get_settings()
+    return MiniMaxExtractor(settings, model=settings.minimax_fast_model)
 
 
 __all__ = [

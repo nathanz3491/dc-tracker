@@ -1,0 +1,36 @@
+-- 0008_h200_equivalent: how much compute a site is, in H200-equivalents.
+--
+-- Megawatts is the unit the industry reports and the unit nobody thinks in. The
+-- question behind every one of these rows is how much training capacity a site
+-- represents, and "48 MW" only answers that after arithmetic the reader has to do
+-- in their head with an assumption they have to supply.
+--
+-- Two ways it gets filled, and they are not equal.
+--
+-- **Derived from capacity.** The ordinary case. `compute.h200_equivalent()` turns
+-- megawatts into a count using one documented figure, and the value is tiered
+-- `derived` exactly like `county` and `lat`/`lon` — a deterministic lookup over a
+-- value somebody reported, not a new claim about the world. It moves whenever the
+-- capacity it came from moves, so it is recomputed rather than remembered.
+--
+-- **Reported by a source.** Rarer and better. An article that says "100,000 GPUs"
+-- has stated the thing directly, and that beats any conversion. It goes through
+-- the same evidence gate as every other value, carries its own quote, and wins
+-- over the derivation.
+--
+-- Nullable, and stays null for a row with no capacity and no cited chip count.
+-- Inventing a number for those would make the column look complete and make the
+-- total wrong, which is the failure this project exists to avoid.
+--
+-- Deliberately NOT added to TRACKED_FIELDS. Those twelve are the PRD's definition
+-- of done and "9 of 12" is quoted in the docs, the console header and the export;
+-- adding a thirteenth would silently restate every one of those numbers.
+
+-- No index. Sorting and filtering on this happens over a few hundred rows in a
+-- page that already loads the whole table, and an index the model does not also
+-- declare is a schema drift `test_models_match_migrations` correctly refuses.
+--
+-- No backfill here either: the conversion ratio is a Python setting, not a
+-- constant this file could hard-code without the two silently disagreeing later.
+-- `tracker init` fills existing rows in after applying this.
+ALTER TABLE project ADD COLUMN h200_equivalent INTEGER;

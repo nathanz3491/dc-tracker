@@ -96,6 +96,16 @@ def server(seeded_db):
         httpd.server_close()
 
 
+def headers_for(address, path):
+    """Response headers, lowercased, for the cache-policy assertions."""
+    conn = HTTPConnection(*address, timeout=30)
+    conn.request("GET", path)
+    response = conn.getresponse()
+    response.read()
+    conn.close()
+    return {k.lower(): v for k, v in response.getheaders()}
+
+
 def request(address, path, method="GET", body=None):
     conn = HTTPConnection(*address, timeout=30)
     payload = json.dumps(body) if body is not None else None
@@ -257,6 +267,80 @@ def test_static_refuses_to_escape_its_root(server):
     ):
         status, _ = request(address, attempt)
         assert status == 404, f"{attempt} was served"
+
+
+# --- cache busting -----------------------------------------------------------
+#
+# Static files were served at bare URLs. The server had no way to tell a browser
+# — or a CDN edge in front of a published console — that `app.js` had changed, so
+# a restart could leave the operator looking at last week's front end while every
+# check on the server side said the new code was being served. It happened, and
+# it cost a round trip to work out that nothing was wrong with the code.
+
+
+def test_the_page_stamps_every_asset_with_its_version(server):
+    address, _ = server
+    status, body = request(address, "/")
+    assert status == 200
+    for asset in ("/static/app.js", "/static/app.css", "/static/vendor/react.js"):
+        assert f"{asset}?v=" in body, f"{asset} is referenced without a version"
+    assert '"/static/app.js"' not in body, "an unstamped reference survived"
+
+
+def test_editing_a_file_changes_the_url_it_is_served_at(server, tmp_path):
+    """The whole point: a changed file cannot be served from anybody's cache."""
+    from tracker.webui import assets
+
+    address, _ = server
+    target = assets.STATIC_ROOT / "app.css"
+    before = assets.version_token(target)
+    original = target.read_bytes()
+    try:
+        target.write_bytes(original + b"\n/* touched */\n")
+        assert assets.version_token(target) != before
+        _, body = request(address, "/")
+        assert f"app.css?v={assets.version_token(target)}" in body
+    finally:
+        target.write_bytes(original)
+
+
+def test_a_current_token_is_cacheable_and_anything_else_is_not(server):
+    """`immutable` is only safe because the URL changes when the file does.
+
+    Sent for a stale or absent token it would strand a browser on an old bundle,
+    which is the failure this whole mechanism exists to prevent.
+    """
+    from tracker.webui import assets
+
+    address, _ = server
+    token = assets.version_token(assets.STATIC_ROOT / "app.js")
+
+    fresh = headers_for(address, f"/static/app.js?v={token}")
+    assert "immutable" in fresh.get("cache-control", "")
+
+    for path in ("/static/app.js", "/static/app.js?v=stale-1"):
+        assert "immutable" not in headers_for(address, path).get("cache-control", ""), path
+
+
+def test_the_page_itself_is_never_cached(server):
+    """It carries the tokens, so a cached copy would pin every asset with it."""
+    address, _ = server
+    assert "no-store" in headers_for(address, "/").get("cache-control", "")
+
+
+def test_stamping_leaves_an_unknown_asset_alone():
+    """A reference to a file that is not there must not gain a fake version."""
+    from tracker.webui import assets
+
+    html = '<script src="/static/nope.js"></script>'
+    assert assets.stamp(html) == html
+
+
+def test_a_missing_file_still_yields_a_token():
+    """Called during a render; raising there would blank the page over nothing."""
+    from tracker.webui import assets
+
+    assert assets.version_token(assets.STATIC_ROOT / "not-a-file.js") == "0"
 
 
 def test_unknown_route_is_a_404_not_a_traceback(server):
@@ -709,18 +793,25 @@ def test_no_color_beats_force_color():
     assert not SGR.search(out)
 
 
-def test_the_runner_asks_for_colour_and_removes_what_would_suppress_it():
-    """Reading the env the runner builds, rather than running a whole crawl."""
-    import inspect
-
+def test_the_runner_asks_for_colour_and_removes_what_would_suppress_it(monkeypatch):
+    """The env the runner builds, read as a value rather than as its own source."""
     from tracker.webui import runner as runner_mod
 
-    source = inspect.getsource(runner_mod.Runner._execute)
-    assert '"FORCE_COLOR": "1"' in source
-    # Inheriting either of these from the operator's shell would silently undo it.
-    assert 'env.pop("NO_COLOR", None)' in source
-    assert 'env.pop("TTY_COMPATIBLE", None)' in source
-    assert '"TERM"' not in source, "TERM=dumb would make Rich a dumb terminal and kill colour"
+    # Both of these suppress colour even when it has been forced, so inheriting
+    # one from the operator's shell would silently undo the whole mechanism.
+    monkeypatch.setenv("NO_COLOR", "1")
+    monkeypatch.setenv("TTY_COMPATIBLE", "0")
+
+    # Inherited, never rewritten. An earlier version set TERM=dumb, which makes
+    # Rich a dumb terminal and kills the colour whatever else has been forced.
+    monkeypatch.setenv("TERM", "xterm-256color")
+
+    env = runner_mod._child_env()
+    assert env["FORCE_COLOR"] == "1"
+    assert env["COLORTERM"] == "truecolor"
+    assert "NO_COLOR" not in env
+    assert "TTY_COMPATIBLE" not in env
+    assert env["TERM"] == "xterm-256color"
 
 
 # --- the gate ---------------------------------------------------------------

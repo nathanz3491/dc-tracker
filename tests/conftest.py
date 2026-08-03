@@ -102,3 +102,19 @@ def logical_snapshot():
             return {t: conn.execute(f"SELECT * FROM {t}").fetchall() for t in sorted(tables)}
 
     return snapshot
+
+
+@pytest.fixture(autouse=True)
+def _clear_the_overview_cache():
+    """The briefing cache is module-global and keyed on (project id, content hash).
+
+    Correct in production — one process, one database, and the hash is what makes
+    reuse safe. In a test run it means one test's briefing is served to the next
+    test's project #1, because the fixtures build the same row and the hash
+    matches. Cleared between tests so a cache hit is never accidental.
+    """
+    from tracker import overview
+
+    overview._cache.clear()
+    yield
+    overview._cache.clear()

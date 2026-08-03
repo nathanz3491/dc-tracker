@@ -1462,3 +1462,197 @@ def test_real_figures_are_left_alone(usd: int, mw: float):
 )
 def test_the_check_needs_both_numbers_to_say_anything(claims: dict):
     assert crawl._implausible_investment(claims) is None
+
+
+# --- capacity blocks --------------------------------------------------------
+#
+# The containment property is the whole point. `evidence_gate` deliberately lets
+# any verified quote support any value, which recovered 89 correctly-evidenced
+# values across 64 projects. At block granularity that same tolerance is the
+# project-39 bug: an SEC filing's sentence about "AZP-3 Phase 3" must not be
+# allowed to evidence AZP-2's capacity, because block megawatts get summed.
+
+BLOCK_ARTICLE = (
+    "Iron Mountain is building AZP-2 in Phoenix, a three-story facility spanning\n"
+    "530,000 square feet and up to 48 megawatts of IT capacity at full buildout.\n"
+    "Separately the company reported that AZP-3 Phase 3 will add 8 megawatts,\n"
+    "fully pre-leased, in the third quarter of 2026.\n"
+)
+
+
+def test_a_block_is_extracted_with_its_own_quote():
+    kept, _ = crawl._blocks(
+        {
+            "blocks": [
+                {
+                    "label": "AZP-2",
+                    "mw": 48,
+                    "status": "under_construction",
+                    "evidence": [{"field": "mw", "quote": "up to 48 megawatts of IT capacity"}],
+                }
+            ]
+        },
+        BLOCK_ARTICLE,
+        URL,
+    )
+    assert len(kept) == 1
+    assert kept[0].mw == 48.0
+    assert "mw" in kept[0].quotes
+    assert "mw" not in kept[0].unconfirmed
+
+
+def test_a_quote_about_another_tranche_cannot_evidence_this_one():
+    """Project 39, as a test.
+
+    The sentence is real, it is in the article, and it is about a different
+    facility. `evidence_gate` alone would accept it — this is the check that does
+    not, and the value survives as 待确认 rather than as a quoted fact.
+    """
+    kept, notes = crawl._blocks(
+        {
+            "blocks": [
+                {
+                    "label": "AZP-2",
+                    "mw": 8,
+                    "status": "planned",
+                    # Verbatim from the article, and about AZP-3.
+                    "evidence": [{"field": "mw", "quote": "AZP-3 Phase 3 will add 8 megawatts"}],
+                }
+            ]
+        },
+        BLOCK_ARTICLE,
+        URL,
+    )
+    assert len(kept) == 1, "the block is kept; only its evidence is refused"
+    assert "mw" in kept[0].unconfirmed, "a quote naming another tranche must not confirm this one"
+    assert "mw" not in kept[0].quotes
+    assert notes, "the operator is told the figure is unquoted"
+
+
+def test_evidence_pools_are_sealed_between_blocks():
+    """Two blocks, and neither may reach into the other's evidence.
+
+    Without this the 8 MW quote confirms AZP-2 and the 48 MW quote confirms AZP-3,
+    and both blocks end up with a real citation for the wrong number.
+    """
+    kept, _ = crawl._blocks(
+        {
+            "blocks": [
+                {
+                    "label": "AZP-2",
+                    "mw": 48,
+                    "evidence": [{"field": "mw", "quote": "up to 48 megawatts of IT capacity"}],
+                },
+                {
+                    "label": "AZP-3 Phase 3",
+                    "mw": 8,
+                    "evidence": [{"field": "mw", "quote": "AZP-3 Phase 3 will add 8 megawatts"}],
+                },
+            ]
+        },
+        BLOCK_ARTICLE,
+        URL,
+    )
+    by_label = {b.label: b for b in kept}
+    assert by_label["AZP-2"].mw == 48.0
+    assert by_label["AZP-3 Phase 3"].mw == 8.0
+    assert "mw" in by_label["AZP-3 Phase 3"].quotes
+
+
+def test_an_ordinal_and_a_type_word_are_enough_to_name_a_block():
+    """ "The first phase 8 megawatts" has to evidence a block labelled "Phase 1".
+
+    This is the second acceptance arm, and without it the commonest phrasing in
+    the corpus cannot cite the block it describes.
+    """
+    article = "The first phase 8 megawatts of customer capacity is targeted for Q3 2026.\n"
+    kept, _ = crawl._blocks(
+        {
+            "blocks": [
+                {
+                    "label": "Phase 1",
+                    "mw": 8,
+                    "evidence": [{"field": "mw", "quote": "The first phase 8 megawatts"}],
+                }
+            ]
+        },
+        article,
+        URL,
+    )
+    assert kept[0].mw == 8.0
+    assert "mw" in kept[0].quotes, "an ordinal plus a type word names the block"
+
+
+def test_a_fabricated_block_quote_is_still_refused():
+    """The anti-fabrication guarantee is unchanged at block granularity."""
+    kept, _ = crawl._blocks(
+        {
+            "blocks": [
+                {
+                    "label": "AZP-2",
+                    "mw": 900,
+                    "evidence": [{"field": "mw", "quote": "AZP-2 will reach 900 megawatts"}],
+                }
+            ]
+        },
+        BLOCK_ARTICLE,
+        URL,
+    )
+    assert "mw" in kept[0].unconfirmed
+    assert kept[0].quotes == {}
+
+
+def test_no_blocks_key_is_the_common_and_correct_answer():
+    """A campus an article treats as one thing is one thing."""
+    assert crawl._blocks({}, BLOCK_ARTICLE, URL) == ([], [])
+    assert crawl._blocks({"blocks": []}, BLOCK_ARTICLE, URL) == ([], [])
+    assert crawl._blocks({"blocks": "nonsense"}, BLOCK_ARTICLE, URL) == ([], [])
+
+
+def test_two_labels_resolving_to_one_block_keep_the_first():
+    """The UNIQUE would abort the whole article; dedup in Python instead."""
+    kept, _ = crawl._blocks(
+        {"blocks": [{"label": "Phase 1", "mw": 10}, {"label": "phase one", "mw": 20}]},
+        BLOCK_ARTICLE,
+        URL,
+    )
+    assert len(kept) == 1
+
+
+def test_an_unusable_status_falls_back_rather_than_failing():
+    kept, _ = crawl._blocks({"blocks": [{"label": "AZP-2", "status": "vibes"}]}, BLOCK_ARTICLE, URL)
+    assert kept[0].status == "planned"
+
+
+def test_a_runaway_block_list_is_truncated_and_disclosed():
+    entries = [{"label": f"Phase {n}"} for n in range(1, 13)]
+    kept, notes = crawl._blocks({"blocks": entries}, BLOCK_ARTICLE, URL)
+    assert len(kept) == crawl.MAX_BLOCKS_PER_PROJECT
+    assert any("further block" in n for n in notes)
+
+
+def test_a_real_quote_that_does_not_state_the_value_keeps_no_quote():
+    """The gate verified the sentence; it does not evidence *this* number.
+
+    `evidence_gate` records a quote for every labelled evidence entry, including
+    ones whose value it then discards. Pairing one with a 待确认 figure would dress
+    an unconfirmed value as a quoted fact — the one thing the tier exists to stop —
+    so the block keeps the same filter `SourceRecord.quotes` applies.
+    """
+    kept, _ = crawl._blocks(
+        {
+            "blocks": [
+                {
+                    "label": "AZP-2",
+                    "mw": 999,
+                    # Verbatim, and about AZP-2 — but it says 48, not 999.
+                    "evidence": [{"field": "mw", "quote": "up to 48 megawatts of IT capacity"}],
+                }
+            ]
+        },
+        BLOCK_ARTICLE,
+        URL,
+    )
+    assert kept[0].mw == 999.0, "the value survives as a candidate"
+    assert "mw" in kept[0].unconfirmed
+    assert kept[0].quotes == {}, "no quote may vouch for a figure it does not state"

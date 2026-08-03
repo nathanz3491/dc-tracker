@@ -98,6 +98,54 @@ class Runner:
         threading.Thread(target=self._execute, args=(run, argv), daemon=True).start()
         return run
 
+    def start_workflow(self, name: str, *, confirm: str | None = None) -> runs.Run:
+        """Run a named sequence as a single job.
+
+        One `Run`, one log, one entry in the history — not N runs chained by the
+        browser. Chaining client-side would mean a closed tab abandons the
+        sequence halfway, and the history would show three unrelated commands with
+        nothing recording that they were one intention.
+        """
+        from tracker.webui import workflows as workflow_mod
+
+        workflow = workflow_mod.resolve(name)
+        if workflow.needs_confirmation and (confirm or "").strip() != name:
+            why = (
+                f"`{name}` {workflow.destroys}"
+                if workflow.destroys
+                else f"`{name}` spends LLM tokens."
+            )
+            raise catalog.InvalidRequest(f'{why} Re-send with confirm="{name}" to run it.')
+
+        # Every step's argv is built before anything executes. A typo in the last
+        # step should not be discovered after the first two have spent money.
+        plan = [
+            (step, catalog.build_argv(step.cmd, step.flags, db_path=self.db_path))
+            for step in workflow.steps
+        ]
+
+        with self._lock:
+            if self._current is not None and self._current.status == "running":
+                raise Busy(
+                    f"`{self._current.cmd}` is still running. "
+                    "SQLite takes one writer, so a second run would fail partway through."
+                )
+            run = runs.Run(
+                id=runs.new_id(self.db_path),
+                cmd=f"workflow {name}",
+                argv=[a for _, argv in plan for a in argv],
+                started_at=_now(),
+                cost=workflow.cost,
+            )
+            self._current = run
+            self._listeners = []
+
+        runs.begin(self.db_path, run)
+        threading.Thread(
+            target=self._execute_workflow, args=(run, workflow, plan), daemon=True
+        ).start()
+        return run
+
     def cancel(self) -> bool:
         process, run = self._process, self._current
         if process is None or run is None or run.status != "running":
@@ -130,32 +178,52 @@ class Runner:
     def _execute(self, run: runs.Run, argv: list[str]) -> None:
         started = time.monotonic()
         before = _project_stamps(self.db_path)
-        env = {
-            **os.environ,
-            # Keep the colour. Rich's output is not decorated text — red means a
-            # rejection, amber means 待确认, dim means a hint — and stripping it
-            # threw away the CLI's own signalling at exactly the moment someone is
-            # reading the output. The browser parses the escapes back out.
-            #
-            # Three variables, and all three are load-bearing. `FORCE_COLOR` makes
-            # Rich treat a pipe as a terminal. `NO_COLOR` has to be *removed*
-            # rather than left alone: it strips colour even from a forced
-            # terminal, so inheriting one from the environment would silently
-            # undo this. And `COLORTERM` pins the SGR dialect, because without it
-            # the same command emits 8-bit codes on POSIX and truecolor on
-            # Windows, which would make the parser's job platform-dependent.
-            #
-            # Safe because no command uses a live widget — a Progress bar or a
-            # status spinner would start redrawing with \r once Rich believes it
-            # is interactive, and the log would fill with half-drawn frames.
-            "COLUMNS": "160",
-            "FORCE_COLOR": "1",
-            "COLORTERM": "truecolor",
-            "PYTHONIOENCODING": "utf-8",
-            "PYTHONUNBUFFERED": "1",
-        }
-        env.pop("NO_COLOR", None)
-        env.pop("TTY_COMPATIBLE", None)  # newer Rich checks this before FORCE_COLOR
+        exit_code, error = self._spawn(run, argv)
+        self._close(run, exit_code=exit_code, started=started, before=before, error=error)
+
+    def _execute_workflow(self, run: runs.Run, workflow: Any, plan: list[Any]) -> None:
+        """Each step in turn, into one log, stopping at the first real failure.
+
+        The before/after stamps span the whole sequence, so `projects_touched`
+        counts rows the workflow changed rather than rows the last step changed.
+        """
+        started = time.monotonic()
+        before = _project_stamps(self.db_path)
+        total = len(plan)
+        self._push(run, f"[console] {workflow.title} — {total} step(s)")
+
+        exit_code: int | None = 0
+        for index, (step, argv) in enumerate(plan, start=1):
+            if run.status == "cancelled":
+                self._push(run, "[console] cancelled; remaining steps skipped")
+                break
+            self._push(run, "")
+            self._push(run, f"[console] step {index}/{total}: {step.cmd}")
+            if step.because:
+                self._push(run, f"[console] {step.because}")
+
+            code, error = self._spawn(run, argv)
+            if error:
+                self._push(run, f"[console] could not start: {error}")
+                exit_code = 127
+                break
+            if code == 0:
+                continue
+            if step.tolerate_failure:
+                # `duplicates` and `logic check` exit non-zero when they find
+                # something. That is the answer, not a breakage.
+                self._push(run, f"[console] {step.cmd} exited {code} — a finding, continuing")
+                continue
+            self._push(run, f"[console] {step.cmd} failed ({code}); stopping here")
+            self._push(run, f"[console] {total - index} step(s) not run")
+            exit_code = code
+            break
+
+        self._close(run, exit_code=exit_code, started=started, before=before)
+
+    def _spawn(self, run: runs.Run, argv: list[str]) -> tuple[int | None, str | None]:
+        """Run one argv to completion, streaming its output. Returns (code, error)."""
+        env = _child_env()
         try:
             # argv came from catalog.build_argv: a validated list, never a shell
             # string. No shell=True anywhere, so metacharacters are inert.
@@ -175,8 +243,7 @@ class Runner:
                 bufsize=1,
             )
         except OSError as exc:
-            self._close(run, exit_code=127, started=started, before=before, error=str(exc))
-            return
+            return 127, str(exc)
 
         self._process = process
         self._push(run, f"$ {' '.join(argv[2:])}")
@@ -191,7 +258,7 @@ class Runner:
         finally:
             self._process = None
 
-        self._close(run, exit_code=process.returncode, started=started, before=before)
+        return process.returncode, None
 
     def _push(self, run: runs.Run, line: str) -> None:
         runs.append(self.db_path, run, line)
@@ -217,6 +284,38 @@ class Runner:
         run.projects_touched = sum(1 for pid, stamp in after.items() if before.get(pid) != stamp)
         runs.finish(self.db_path, run)
         self._emit({"type": "end", "run": run.summary()})
+
+
+def _child_env() -> dict[str, str]:
+    """The environment every run's subprocess gets.
+
+    Keep the colour. Rich's output is not decorated text — red means a rejection,
+    amber means 待确认, dim means a hint — and stripping it threw away the CLI's
+    own signalling at exactly the moment someone is reading the output. The
+    browser parses the escapes back out.
+
+    Three variables, and all three are load-bearing. `FORCE_COLOR` makes Rich
+    treat a pipe as a terminal. `NO_COLOR` has to be *removed* rather than left
+    alone: it strips colour even from a forced terminal, so inheriting one from
+    the operator's shell would silently undo this. And `COLORTERM` pins the SGR
+    dialect, because without it the same command emits 8-bit codes on POSIX and
+    truecolor on Windows, which would make the parser's job platform-dependent.
+
+    Safe because no command uses a live widget — a Progress bar or a status
+    spinner would start redrawing with \\r once Rich believes it is interactive,
+    and the log would fill with half-drawn frames.
+    """
+    env = {
+        **os.environ,
+        "COLUMNS": "160",
+        "FORCE_COLOR": "1",
+        "COLORTERM": "truecolor",
+        "PYTHONIOENCODING": "utf-8",
+        "PYTHONUNBUFFERED": "1",
+    }
+    env.pop("NO_COLOR", None)
+    env.pop("TTY_COMPATIBLE", None)  # newer Rich checks this before FORCE_COLOR
+    return env
 
 
 def _now() -> str:

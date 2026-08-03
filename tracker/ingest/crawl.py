@@ -35,6 +35,7 @@ from sqlalchemy.orm import Session
 from tracker.config import Settings, get_settings
 from tracker.ingest.fetch import Fetcher, FetchResult, cache_path, fetch_all
 from tracker.ingest.records import (
+    BlockRecord,
     EventRecord,
     IngestRecord,
     IngestReport,
@@ -558,11 +559,15 @@ def _stated_in(field: str, value: Any, quote: str) -> bool:
         low = quote.lower()
         return any(token in low for token in _PHASE_EVIDENCE.get(str(value), ()))
 
-    if field in {"mw_planned", "mw_built"}:
+    # `mw` and `energized_on` are the capacity-block field names. Listed here
+    # rather than translated at the call site because dispatch is on the name and a
+    # block's `mw` really is a capacity quantity — sending it through the string
+    # branch silently refuses every well-quoted figure a filing states.
+    if field in {"mw_planned", "mw_built", "mw"}:
         return _matches_quantity(value, quote, _MW_EXPR, norm_mw_detail, field)
     if field == "investment_usd":
         return _matches_quantity(value, quote, _MONEY_EXPR, norm_money_detail, field)
-    if field in {"first_announced", "expected_online"}:
+    if field in {"first_announced", "expected_online", "energized_on"}:
         return _matches_quantity(value, quote, _DATE_EXPR, norm_date_detail, field)
 
     # Everything else is a string we copied out of the article, so it has to be
@@ -792,6 +797,203 @@ def _risk_quote_supports(category: str, quote: str) -> bool:
     return any(token in normalized for token in _RISK_EVIDENCE.get(category, ()))
 
 
+#: A block may name at most this many tranches. Beyond it the model is dividing a
+#: campus rather than reporting what an article distinguished. Same log-and-truncate
+#: as `MAX_PROJECTS_PER_ARTICLE`.
+MAX_BLOCKS_PER_PROJECT: Final = 8
+
+
+def _sentence_around(quote: str, article: str) -> str:
+    """The article's own sentence containing `quote`, or the quote if not found.
+
+    A model quotes a fragment — "up to 48 megawatts of IT capacity" — from a
+    sentence that named the block earlier: "Iron Mountain is building AZP-2 in
+    Phoenix, a three-story facility spanning 530,000 square feet and up to 48
+    megawatts of IT capacity." Testing the fragment for the block's name would
+    reject a perfectly good citation, so the check is applied to the sentence the
+    article actually wrote. Reuses `_widen_to_sentence`, and everything it adds is
+    the article's own text.
+    """
+    haystack, offsets = _normalize_with_offsets(article)
+    needle = _normalize_for_match(quote)
+    if not needle:
+        return quote
+    at = haystack.find(needle)
+    if at == -1:
+        return quote
+    start = offsets[at]
+    end = offsets[min(at + len(needle), len(offsets)) - 1] + 1
+
+    # Full sentence bounds, not `_widen_to_sentence`. That helper deliberately
+    # leaves a span alone when it finds no boundary, which is right when it is
+    # recovering an edited quote and wrong here: the commonest case is a quote from
+    # the *first* sentence of an article, where there is no preceding boundary to
+    # find and the block's name sits at the very start.
+    boundaries = [m.end() for m in _SENTENCE_END.finditer(article, 0, start)]
+    if boundaries:
+        start = boundaries[-1]
+    else:
+        paragraph = article.rfind(chr(10) * 2, 0, start)
+        start = paragraph + 2 if paragraph != -1 else 0
+
+    closing = _SENTENCE_END.search(article, end)
+    end = closing.start() + 1 if closing else len(article)
+    return article[start:end].strip()
+
+
+def _quote_names_the_block(label: str, parent: str | None, quote: str) -> bool:
+    """Does this verified quote actually mention the block it is cited for?
+
+    **The most important check in the block path**, and it exists because
+    `evidence_gate` deliberately does the opposite. That function ignores the
+    model's field labels and lets any verified quote support any value — earned
+    behaviour that recovered 89 correctly-evidenced values across 64 projects.
+
+    At block granularity the same tolerance *is* the project-39 bug: it would let
+    an SEC filing's sentence about "AZP-3 Phase 3" evidence AZP-2's capacity. Block
+    megawatts get summed, so a quote about the wrong tranche does not merely
+    mislabel a value — it changes a total.
+
+    A quote passes when it satisfies **any one segment** of the label or its parent:
+    the segment's head must appear, and if that segment carries an ordinal then some
+    form of the ordinal must appear too. Requiring the ordinal is what separates
+    AZP-2 from AZP-3, which share a stem; allowing any *form* of it is what admits
+    "The first phase 8 megawatts of customer capacity" for a block labelled
+    "Phase 1", the commonest phrasing in the corpus.
+    """
+    from tracker import blocks as blocks_mod
+
+    words = set(re.findall(r"[a-z0-9]+", _normalize_for_match(quote)))
+    requirements = blocks_mod.segment_requirements(label, parent)
+    if not requirements:
+        return False
+    return any(
+        head in words and (not ordinals or bool(ordinals & words))
+        for head, ordinals in requirements
+    )
+
+
+def _blocks(
+    raw: dict[str, Any], article_text: str, url: str
+) -> tuple[list[BlockRecord], list[str]]:
+    """Capacity blocks from one extracted project. Returns ``(kept, disclosures)``.
+
+    Structured like `_risks`, and gated twice for the same reason.
+
+    **Each block's evidence pool is sealed.** `evidence_gate` is called once per
+    block over that block's own evidence list only, so inside a block a quote may
+    support any of its fields — keeping the recovery behaviour that matters — while
+    across blocks nothing crosses. That containment is the whole point: project 39
+    is one row holding AZP-2's capacity beside AZP-3's money and date.
+    """
+    from tracker.vocab import BLOCK_STATUSES, DEFAULT_BLOCK_STATUS
+
+    entries = raw.get("blocks")
+    if not isinstance(entries, list) or not entries:
+        return [], []
+
+    kept: list[BlockRecord] = []
+    notes: list[str] = []
+    seen: set[str] = set()
+
+    for entry in entries[:MAX_BLOCKS_PER_PROJECT]:
+        if not isinstance(entry, dict):
+            continue
+        label = norm_text(entry.get("label"))
+        if not label:
+            continue
+
+        parent = norm_text(entry.get("parent"))
+        # Dedup in Python, not on the UNIQUE: two same-key blocks in one payload
+        # would abort the whole article, which `_upsert_events` records as a real
+        # failure mode.
+        from tracker import blocks as blocks_mod
+
+        key = blocks_mod.block_key(label, parent).value
+        if key in seen:
+            log.debug("%s: two blocks resolve to %r; keeping the first", url, key)
+            continue
+        seen.add(key)
+
+        status = norm_text(entry.get("status")) or DEFAULT_BLOCK_STATUS
+        if status not in BLOCK_STATUSES:
+            log.warning("%s: block %r has unusable status %r; defaulting", url, label, status)
+            status = DEFAULT_BLOCK_STATUS
+
+        values: dict[str, Any] = {}
+        for name, parse in (
+            ("mw", lambda v: soft(norm_mw_detail, v, field="mw_planned")),
+            ("investment_usd", lambda v: soft(norm_money_detail, v, field="investment_usd")),
+            ("expected_online", lambda v: soft(norm_date_detail, v, field="expected_online")),
+            ("energized_on", lambda v: soft(norm_date_detail, v, field="expected_online")),
+        ):
+            detail = parse(entry.get(name)) if entry.get(name) is not None else None
+            if detail is not None and detail.value is not None:
+                values[name] = detail.value
+        customer = norm_text(entry.get("customer"))
+        if customer:
+            values["customer"] = customer
+
+        # Sealed: this block's evidence and nothing else.
+        pool = entry.get("evidence")
+        confirmed, quotes, dropped = evidence_gate(
+            values, pool if isinstance(pool, list) else [], article_text
+        )
+
+        # Second gate: a verified quote must name this block. A real sentence about
+        # a different tranche is exactly what must not get through.
+        for name in list(confirmed):
+            quote = quotes.get(name)
+            in_context = _sentence_around(quote, article_text) if quote else ""
+            if quote and not _quote_names_the_block(label, parent, in_context):
+                log.debug(
+                    "%s: quote for block %r field %r does not name the block; "
+                    "keeping the value as 待确认",
+                    url,
+                    label,
+                    name,
+                )
+                confirmed.pop(name, None)
+                quotes.pop(name, None)
+                dropped.append(name)
+
+        unconfirmed = {name for name in values if name not in confirmed}
+        kept.append(
+            BlockRecord(
+                label=label,
+                parent=parent,
+                mw=values.get("mw"),
+                status=status,
+                customer=values.get("customer"),
+                expected_online=values.get("expected_online"),
+                energized_on=values.get("energized_on"),
+                investment_usd=values.get("investment_usd"),
+                # Only for fields the gate actually confirmed. `quotes` also holds
+                # the model's own labels for values that were dropped — pairing one
+                # with a 待确认 value would dress it as a quoted fact, which is the
+                # single thing the tier exists to prevent. Same filter the source
+                # path applies to `SourceRecord.quotes`.
+                quotes={k: q for k, q in quotes.items() if k in confirmed},
+                unconfirmed=frozenset(unconfirmed),
+            )
+        )
+
+    if len(entries) > MAX_BLOCKS_PER_PROJECT:
+        notes.append(
+            f"{len(entries) - MAX_BLOCKS_PER_PROJECT} further block(s) named by this "
+            "article were not recorded"
+        )
+    vague = sorted(
+        {b.label for b in kept for name in b.unconfirmed if name in {"mw", "investment_usd"}}
+    )
+    if vague:
+        notes.append(
+            "block figures kept as 待确认 because no quote in the article names that "
+            f"block: {', '.join(vague)}"
+        )
+    return kept, notes
+
+
 def _risks(raw: dict[str, Any], article_text: str, url: str) -> tuple[list[RiskRecord], list[str]]:
     """Obstacles from one extracted project. Returns ``(kept, disclosure notes)``.
 
@@ -995,6 +1197,12 @@ def build_records(
         risks, risk_notes = _risks(raw, result.markdown, result.url)
         notes.extend(risk_notes)
 
+        # Blocks, each gated against its own sealed evidence pool. This is where a
+        # campus stops being one `phase` and starts being the several states it
+        # actually is.
+        blocks, block_notes = _blocks(raw, result.markdown, result.url)
+        notes.extend(block_notes)
+
         # A source that reported an obstacle supports `blocker`, even though the
         # column is derived rather than claimed. Recording it keeps the "every
         # non-null tracked field appears in some source's `fields`" invariant true
@@ -1027,6 +1235,7 @@ def build_records(
                     # verified sentence behind them, and pairing one with a quote
                     # would dress an unconfirmed value as a quoted fact.
                     quotes={k: q for k, q in quotes.items() if k in kept},
+                    blocks=blocks,
                     extractor=f"crawl:{prompt.stamp}:{reply.model}:{result.via}",
                 )
             ],
@@ -1093,15 +1302,28 @@ def extract_one(
     )
 
     last_error: str | None = None
+    #: Set when a reply ran out of budget inside its own reasoning, so the retry
+    #: can be a *different* request. Retrying that verbatim reproduces the ramble
+    #: — measured on one Chinese-language article: two identical attempts, two
+    #: identical failures, two calls paid for and nothing extracted.
+    starved = False
     for attempt in range(1, max(1, settings.llm_max_attempts) + 1):
         message = user
-        if attempt > 1:
+        budget: int | None = None
+        if starved:
+            message = (
+                user + "\n\nYour previous reply spent its whole budget reasoning and never "
+                "produced an answer. Do not deliberate. Emit the JSON object immediately, "
+                "with no prose and no code fences."
+            )
+            budget = settings.max_completion_tokens * 2
+        elif attempt > 1:
             message = (
                 user + "\n\nYour previous reply was not a single valid JSON object. "
                 "Return ONLY the JSON object, with no prose and no code fences."
             )
         try:
-            reply = extractor.complete(system=prompt.system, user=message)
+            reply = extractor.complete(system=prompt.system, user=message, max_tokens=budget)
         except LLMError as exc:
             outcome.status = "llm_error"
             outcome.error = str(exc)
@@ -1112,6 +1334,7 @@ def extract_one(
 
         if reply.finish_reason == "length":
             last_error = "reply truncated at the token limit"
+            starved = True
             log.warning("%s: %s (attempt %d)", result.url, last_error, attempt)
             continue
 
@@ -1119,6 +1342,10 @@ def extract_one(
             payload = parse_json_object(reply.text)
         except LLMJsonError as exc:
             last_error = str(exc)
+            # `finish_reason` is not reliable here: MiniMax has reported "stop" on
+            # a reply that plainly stops mid-sentence inside `<think>`. An unclosed
+            # block is the observable fact, so trust that over the label.
+            starved = exc.ran_out_thinking
             log.warning("%s: %s (attempt %d)", result.url, last_error, attempt)
             continue
 

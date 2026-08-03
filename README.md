@@ -28,8 +28,19 @@ Then query: `tracker list`, `tracker show ID`, `tracker stats`, `tracker capex`,
 one campus; it is the only command here that deletes anything. `tracker point
 "<name>"` goes and gets one named data center on demand — matching it to an
 existing row (then `enrich`ing it) or building a fresh profile — instead of
-waiting for the batch. `tracker logic check` finds values that contradict each
-other or themselves; `tracker logic resolve` walks through fixing them.
+waiting for the batch; add `--url` (repeatable) to read a link you already have
+rather than searching for one. `tracker logic check` finds values that contradict
+each other or themselves; `tracker logic resolve` walks through fixing them.
+
+`h200_equivalent` restates a site's capacity as accelerators, because megawatts
+is what gets reported and compute is what people are actually asking about. It is
+derived from MW at **1.3 kW per H200** (~770 per MW) and tiered `derived` — the
+ratio comes from the H200's 700 W board, the DGX H200's 8.5 kW for eight GPUs
+(1.06 kW per GPU of node-level IT load), and a 1.2 PUE for a liquid-cooled hall.
+An article that states a chip count outright beats the conversion and carries its
+own quote. A site nobody has sized stays empty rather than zero. `TRACKER_KW_PER_H200`
+re-bases it; `tracker init` recomputes. It is deliberately *not* a thirteenth
+tracked field, because "9 of 12" is quoted throughout.
 
 The 12 tracked fields are the ones the PRD requires: project name, city + state,
 operator, end customer, planned investment, planned and built MW, first announced,
@@ -422,6 +433,101 @@ the CLI itself, so it cannot fall behind: every flag appears with its real type,
 default and help. Output streams into the Runs view and is kept per run under
 `data/runs/`.
 
+Flags are rendered for someone who has not used a terminal — a plain-language
+label with the real flag beside it, a picker listing the actual projects instead
+of an id you have to go and look up, presets around the CLI's own default rather
+than an empty number box, and the thirteen flags on `sync` folded down to the ones
+you might change. The argv preview stays: it is the honest record of what will
+run, it is what you paste into a terminal on a read-only console, and matching it
+against the labels is how someone graduates to the CLI.
+
+**Routines** sit above the command list, because for most visits the question
+"what do I run to catch up" has one right answer and it is three commands in a
+particular order:
+
+| Routine | Steps |
+| --- | --- |
+| Catch up on the news | `sync` → `ingest geo` → `logic check` |
+| Deepen what we already have | `enrich` → `ingest geo` → `gaps` |
+| Tidy the database | `duplicates` → `logic check` → `stats` |
+| Prepare a report | `stats` → `capex` → `verify` |
+
+The order carries reasons the page now states: geography is a free lookup, so
+deriving it *after* the read locates the rows that just arrived; contradictions
+come from new values, so checking logic before the read reports problems the run
+was about to fix. Each runs as **one job with one log and one entry in the
+history** — not chained by the browser, where a closed tab would abandon the
+sequence halfway. It stops at the first real failure, except for steps like
+`duplicates` that exit non-zero when they *find* something, which is an answer
+rather than a breakage. Adding a fifth routine is eight lines in
+`webui/workflows.py`; a node editor would have been a builder nobody asked for.
+
+**The AI overview** in each project drawer is the one thing in the console that
+is a *reading* of the values rather than one of them. It is a card in the stats
+tab's ordinary flow, under the figures it is a reading of — it was briefly pinned
+above the tab strip, which made it the one block you could not scroll past. It generates
+when you open the row and streams as it is written, and it is cached by content —
+so a row is paid for once, and reopening it is free until something about the row
+actually changes. It is never stored, never becomes a source, and cannot move
+confidence. See `overview.py`.
+
+It is written by `TRACKER_MINIMAX_FAST_MODEL` (default `M2-her`) rather than the
+reasoning model, because this is the one call somebody sits and waits for:
+**46.6s to the first word became 2.7s**, and the briefing went from 231 words to
+about 65.
+
+The model was chosen by measuring all of them on this prompt, and the ranking is
+not the one the model list implies. Plain `MiniMax-M2` (12.4s) beats every
+`-highspeed` variant — "highspeed" means output tokens per second, and this job
+emits ~70 words after a fixed slab of reasoning, so throughput barely matters.
+`MiniMax-M3` was worse than slow: it spent the whole completion budget thinking
+and returned an empty briefing. Only removing the reasoning moves the number, and
+**`M2-her` is the only MiniMax model that does not think at all.**
+
+Making it usable needed three things, all of which help every model:
+
+* the prompt asks for an `[[END]]` sentinel — the API's own `stop` parameter is
+  accepted and *ignored*, so it cannot be relied on;
+* `overview.RUNAWAY` cuts the **stream** at that sentinel, or at the point the
+  model starts a second answer. Cutting the stream rather than the finished text
+  is what saves the time: abandoning the generator closes the connection, so the
+  tokens after the answer are never waited for. Left alone, `M2-her` writes
+  756–982 words against a 110-word instruction, repeats itself under headings like
+  "Final answer (last round)", and narrates its own word count;
+* `MODEL_TOKEN_CAP` clamps the completion budget to the 2048 it accepts —
+  otherwise every request is an HTTP 400 and there is no briefing at all.
+
+**The known cost of this default.** `M2-her` is built for dialogue, and it
+sometimes reads the data wrong in a way `MiniMax-M2` did not. On Fairwater —
+construction track `nothing reached`, every other track passed — it wrote *"All
+tracks complete; construction the last to finish"*, inverting the most informative
+field in the row. It has also named a utility and a permit process that appear
+nowhere in the data, and produced phrases that mean nothing ("Major capex is
+confirmed via gas"). The behaviour is variable: four later runs on that same row
+came back clean.
+
+That trade is deliberate and it is bounded by the panel's own design — the
+briefing is labelled as a model's reading, is never stored, never becomes a
+source, and cannot move confidence, so a wrong one is a wrong *opinion* sitting
+beside correctly cited values rather than a wrong value. Set
+`TRACKER_MINIMAX_FAST_MODEL=MiniMax-M2` to buy the accuracy back for about ten
+seconds a row.
+
+On every other model the reasoning **cannot be switched off** — `thinking`,
+`reasoning_effort` and `enable_thinking` are all accepted by the API and all
+ignored, and an assistant prefill of `</think>` does not suppress it. Shrinking
+the prompt does not help; the cost is fixed. It is stripped as it streams, so it
+never reaches the page.
+
+The reply is markdown — one sentence, then two or three bullets — rendered to
+React elements by a small parser in `app.js`. Deliberately **not** `innerHTML`:
+this text is written by a model out of articles fetched from the open web, which
+makes it the least trustworthy string in the product, and turning it into markup
+would run a path from someone else's page into a console that executes commands.
+Links are flattened to their text for the same reason. Verified by feeding the
+panel a briefing containing `<script>` and an `onerror` attribute: both render as
+characters, nothing executes.
+
 Three things bound what that can do, and they are the reason it is safe to leave
 open:
 
@@ -432,13 +538,20 @@ open:
   concatenated into a command line, so `;`, backticks and `&&` are inert. An
   unknown flag is an error rather than something passed through — which is how a
   `--db` or an `--out` would otherwise arrive.
-* **Spending is confirmed.** `sync`, `enrich`, `infer`, `search`, `ingest crawl`
-  and `ingest edgar` spend real LLM tokens, and the console will not start one
-  until you type its name. A stray click cannot cost money.
-* **Destruction is confirmed too**, on its own axis. `merge` spends nothing and is
-  the only command here that cannot be undone, so it takes the same typed
-  confirmation for a different reason — and the check is on the command name, not
-  its flags, so no argument combination talks its way past it.
+* **Spending is confirmed.** `sync`, `enrich`, `infer`, `search`, `point`,
+  `logic check`, `ingest crawl` and `ingest edgar` spend real LLM tokens, and no
+  single click can start one — the UI asks a second time and says what it will
+  cost. A routine containing any of them is confirmed the same way, so wrapping a
+  command in a sequence is not the way around this.
+* **Destruction is confirmed too**, on its own axis, and more heavily. `merge`
+  spends nothing and is the only command here that cannot be undone, so it still
+  takes the command name typed out — proportionate friction in front of an
+  irreversible act, where a second click is proportionate to spending money you
+  can decide to spend again. The check is on the command name, not its flags, so
+  no argument combination talks its way past it.
+* **A routine is not a back door.** Its steps are validated against the same
+  catalog, so a blocked command — `cloudflare`, which publishes this page to a
+  public URL — cannot be reached by putting it in a sequence.
 
 `tracker serve --no-run` drops the runner entirely and serves the views read-only.
 
@@ -463,14 +576,15 @@ network and no router or firewall changes are involved. `tracker serve --tunnel`
 is the same thing in one flag; the command exists because publishing deserves a
 readiness check and a second shape.
 
-**Two shapes.** With no flags you get an anonymous *quick tunnel*: a random
+**Two shapes.** A *named tunnel* is one you created once on your own account: the
+hostname is yours and survives a restart, which is what you want if the link is
+going to anyone else — re-sending a fresh URL every session is how one ends up
+written down somewhere it should not be. A *quick tunnel* is anonymous: a random
 `https://<four-words>.trycloudflare.com`, no Cloudflare account, and a different
-URL every session. With `--name` you run a tunnel you created once on your own
-account, so the hostname is yours and survives a restart — worth the setup if the
-link is going to anyone else, because re-sending a fresh URL every session is how
-one ends up written down somewhere it should not be.
+URL every session. **A quick-tunnel URL cannot be preserved across a restart**;
+that is Cloudflare's design, not a missing flag.
 
-Creating that named tunnel is deliberately left to you. It writes credentials into
+Creating the named tunnel is deliberately left to you. It writes credentials into
 your home directory and a DNS record into your zone, both of which outlive the
 process:
 
@@ -478,8 +592,32 @@ process:
 cloudflared tunnel login
 cloudflared tunnel create dc-console
 cloudflared tunnel route dns dc-console console.example.com
-tracker cloudflare --name dc-console --hostname console.example.com
 ```
+
+Then record it once, in `.env`, and publishing takes no arguments:
+
+```
+TRACKER_TUNNEL_NAME=dc-console
+TRACKER_TUNNEL_HOSTNAME=console.example.com
+```
+
+```bash
+tracker cloudflare          # the configured tunnel; same URL every time
+tracker cloudflare --quick  # a throwaway URL instead
+```
+
+These are settings rather than flags retyped every session because they describe
+the machine, not the run. `--name` and `--hostname` override them **together**:
+an explicit `--name` will not inherit the configured hostname, because printing a
+real hostname beside a different tunnel produces a URL that looks right and points
+at the wrong thing. `serve --tunnel` uses the same pair, so the two ways of
+publishing cannot land on different URLs.
+
+Restarting to pick up new code is then just Ctrl-C and the same command. The
+console re-reads its static files from disk on every request and stamps every
+asset URL with that file's version, so a restart genuinely replaces the front end
+— a browser or a CDN edge cannot keep serving the previous one, because a changed
+file is a different URL. Only the Python process needs the restart.
 
 `TRACKER_CONSOLE_PASSWORD` is required for either shape and the command refuses to
 start without it. A quick-tunnel hostname is random but **not secret** — it goes
@@ -773,6 +911,53 @@ those as misses pointed effort at work that could never succeed. Fields whose
 absence carries no information (`blocker`, `customer`) report `n/a` rather than a
 low score, and the run ends with the measurable fields that have the most rows left
 to fill.
+
+### Filling in capacity blocks on projects ingested before they existed
+
+```bash
+tracker backfill blocks --limit 25
+```
+
+A campus is rarely one thing. Lake Mariner is 378 MW under construction for
+Fluidstack, 60 MW already serving Core42, and 145 MW of legacy capacity energised —
+and until blocks existed the row could only say one number and one customer. Every
+project ingested before migration `0009` still has no blocks, because turning an
+article into blocks needs the article text rather than the schema.
+
+This re-reads the stored articles for that one purpose. It is deliberately **not**
+`ingest crawl --force`: a plain re-crawl re-extracts every scalar with a model that
+behaves differently today than it did at ingest time, churning 227 rows and every
+`updated_at` inside what is supposed to be a backfill. This writes one column,
+`source.blocks`, and lets the ordinary rollup do the rest.
+
+Costs one LLM call per article, keyed on URL rather than source row — 373 crawled
+source rows are only 229 distinct articles, because 62 feed more than one project.
+Most are already cached, so `--refetch` is only needed for the remaining 36. It is
+resumable (an article whose blocks are stored is skipped) and idempotent (blocks are
+rebuilt wholesale, keyed on `(project_id, block_key)`), so the sensible way to run it
+is in tranches: `--limit 25`, look at what came back, then more. Filings sort first,
+because per-phase tables are where blocks actually live.
+
+**The part worth understanding before running it.** One article routinely describes
+several campuses, and one URL is often already cited by several rows, so deciding
+*whose* blocks these are is the whole job — and getting it wrong does not mislabel a
+value, it moves megawatts into another campus's total. Two guards, both added after
+the unguarded version wrote real wrong numbers into a copy of the database:
+
+- **A row is matched on locality, never on the operator.** An earlier version wrote
+  an 80 MW "Portland Expansion" onto eight STACK rows, every one of which matched on
+  "STACK Infrastructure". A stated city that *disagrees* is now a veto, not merely a
+  low score.
+- **A portfolio article is split, but only when it is one.** A Core Scientific filing
+  covering five campuses gave all six of its blocks to both the Denton row and the
+  Dalton row, recording 588 MW twice. So each block is now routed by its own label —
+  but only once some block in the article is found to name one row and not another.
+  Demanding it unconditionally was tried and was worse: it emptied Lake Mariner,
+  whose blocks are called "Akela" and "La Lupa", because a building is usually named
+  after nothing in particular.
+
+Both guards skip rather than guess. A missed block is a gap somebody can see; a
+misrouted one is a wrong number nobody can.
 
 ### Filling county and coordinates without an LLM
 

@@ -25,6 +25,8 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any, Final
 
@@ -172,7 +174,7 @@ def _today():
     return utcnow().date()
 
 
-def write(project: Project, *, extractor, prompt_name: str = "overview-v1") -> Overview | None:
+def write(project: Project, *, extractor, prompt_name: str = "overview-v2") -> Overview | None:
     """Generate the briefing. Costs one call. None when it could not be written.
 
     Returns None rather than a placeholder: an empty panel is honest and a
@@ -208,6 +210,94 @@ def write(project: Project, *, extractor, prompt_name: str = "overview-v1") -> O
     return overview
 
 
+#: The model finishing the briefing and then carrying on.
+#:
+#: Every model is asked to end with `[[END]]`. Some honour it, some do not, and
+#: `M2-her` — the one MiniMax model that does not think, and so the fastest by a
+#: wide margin — reliably writes a good answer and then keeps talking: repeating
+#: itself under headings like "Final answer (last round)", narrating its own word
+#: count ("Total word count: **75** (markdown consumed)"), emitting stray
+#: brackets. The API's own `stop` parameter is accepted and ignored, so this is
+#: the only place the tap can be turned off.
+#:
+#: Cutting the *stream* rather than the finished text is the point: closing the
+#: connection early is what turns a 17s reply into a 3.5s one, because the tokens
+#: after the answer are never waited for.
+RUNAWAY: Final = re.compile(
+    r"\[\[END\]\]"
+    r"|^\s*\]\s*$"
+    r"|total word count"
+    r"|final answer"
+    r"|one last time"
+    r"|^\s*(here('s| is) (the|another)|revised|shorter version|let me know)",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def stream(project: Project, *, extractor, prompt_name: str = "overview-v2") -> Iterator[str]:
+    """The same briefing, yielded as it is written.
+
+    The panel generates on open rather than on a click, so the wait is no longer
+    something the reader chose to start — which makes it the whole experience of
+    opening a row. Streaming turns a blank card into something legible after a
+    second or so.
+
+    Caches on success exactly like `write`, so reopening the row is free. A stream
+    that dies partway is *not* cached: half a briefing that stops mid-sentence
+    would otherwise be served forever as this row's reading.
+    """
+    from tracker.llm import LLMError
+    from tracker.prompts import load_prompt
+
+    if not hasattr(extractor, "stream"):
+        written = write(project, extractor=extractor, prompt_name=prompt_name)
+        if written is not None:
+            yield written.text
+        return
+
+    prompt = load_prompt(prompt_name)
+    sent = ""
+    try:
+        for piece in extractor.stream(
+            system=prompt.system,
+            user=prompt.render_user(**build_context(project)),
+            max_tokens=MAX_TOKENS,
+        ):
+            candidate = sent + piece
+            end = RUNAWAY.search(candidate)
+            if end is None:
+                sent = candidate
+                yield piece
+                continue
+            # Emit only the part before the model started over, then stop reading.
+            # Abandoning the generator closes the HTTP stream, which is where the
+            # time is saved.
+            tail = candidate[len(sent) : end.start()]
+            if tail:
+                yield tail
+            sent = candidate[: end.start()]
+            log.debug(
+                "overview for project %s ran past its answer; cut at the sentinel", project.id
+            )
+            break
+    except LLMError as exc:
+        log.warning("overview stream for project %s failed: %s", project.id, exc)
+        return
+
+    text = sent.strip()
+    if len(text) < 40:
+        log.warning("overview for project %s came back empty or truncated", project.id)
+        return
+    _remember(
+        Overview(
+            project_id=project.id,
+            text=text,
+            model=getattr(extractor, "model", "unknown"),
+            fingerprint=fingerprint(project),
+        )
+    )
+
+
 def _strip_reasoning(text: str) -> str:
     """Drop a reasoning model's `<think>` block.
 
@@ -215,17 +305,17 @@ def _strip_reasoning(text: str) -> str:
     and never goes near a JSON parser — so without it the drawer would render the
     model's private deliberation as the briefing.
     """
-    import re
-
     return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE)
 
 
 __all__ = [
     "CACHE_SIZE",
     "MAX_TOKENS",
+    "RUNAWAY",
     "Overview",
     "build_context",
     "cached",
     "fingerprint",
+    "stream",
     "write",
 ]

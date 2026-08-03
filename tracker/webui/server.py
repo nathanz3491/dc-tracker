@@ -248,15 +248,18 @@ class Handler(BaseHTTPRequestHandler):
         if route in {"/", "/index.html"}:
             return self._page()
         if route.startswith("/static/"):
-            return self._static(route[len("/static/") :])
+            return self._static(route[len("/static/") :], query)
         if route == "/api/dataset":
             return self._dataset()
         if route == "/api/commands":
+            from tracker.webui import workflows
+
             return self._json(
                 {
                     "groups": catalog.grouped_json(),
                     "llm": sorted(catalog.LLM_COMMANDS),
                     "destructive": dict(catalog.DESTRUCTIVE),
+                    "workflows": workflows.as_json(),
                 }
             )
         if route == "/api/runs":
@@ -294,10 +297,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": True}, extra=self._set_session_cookie(None))
             if parsed.path == "/api/run":
                 return self._start_run(body)
+            if parsed.path == "/api/workflow":
+                return self._start_workflow(body)
             if parsed.path == "/api/run/cancel":
                 return self._json({"cancelled": self.console.runner.cancel()})
             if parsed.path == "/api/overview":
                 return self._overview(body)
+            if parsed.path == "/api/overview/stream":
+                return self._overview_stream(body)
             self._error(404, f"no route {parsed.path!r}")
         except ConnectionError:
             log.debug("POST %s: client went away", parsed.path)
@@ -340,19 +347,28 @@ class Handler(BaseHTTPRequestHandler):
                 f"the console's static files are missing from {assets.STATIC_ROOT}. "
                 "This is an incomplete install, not a configuration problem.",
             )
-        self._send(200, index.read_bytes(), "text/html; charset=utf-8")
+        # Stamped on the way out, so every asset URL carries its file's version.
+        # The page itself is `no-store`, so the tokens are never stale.
+        html = assets.stamp(index.read_text(encoding="utf-8"))
+        self._send(200, html.encode("utf-8"), "text/html; charset=utf-8")
 
-    def _static(self, relative: str) -> None:
+    def _static(self, relative: str, query: dict[str, list[str]] | None = None) -> None:
         path = assets.resolve(relative)
         if path is None:
             return self._error(404, f"no asset {relative!r}")
-        # `no-cache` means revalidate, not "do not store", so a repeat load is
-        # still cheap. Deliberately not `immutable` even for the vendored files:
-        # they are versioned by their content rather than by their URL, so an
-        # upgrade would leave a browser serving last month's bundle from disk
-        # with no way to ask for the new one. On loopback the saving was never
-        # worth that failure mode.
-        self._send(200, path.read_bytes(), assets.content_type(path), cache="no-cache")
+
+        # A request carrying the right version token can be cached hard, because
+        # the URL changes whenever the file does — `index.html` is `no-store`, so
+        # a new token always reaches the browser. This used to be `no-cache` for
+        # everything, on the reasoning that the files are versioned by content
+        # rather than by URL and `immutable` would strand a browser on last
+        # month's bundle. Stamping the URLs is what removed that objection; it
+        # also removed the cost, which was re-fetching three megabytes of vendored
+        # JavaScript on every page load, since nothing here sends an ETag.
+        asked = (query or {}).get("v", [""])[0]
+        fresh = asked and asked == assets.version_token(path)
+        cache = "public, max-age=31536000, immutable" if fresh else "no-cache"
+        self._send(200, path.read_bytes(), assets.content_type(path), cache=cache)
 
     def _dataset(self) -> None:
         from tracker.webui.dataset import build
@@ -370,12 +386,46 @@ class Handler(BaseHTTPRequestHandler):
     def _start_run(self, body: dict[str, Any]) -> None:
         if not self.console.allow_write:
             return self._error(403, "this console was started read-only (--no-run)")
-        cmd = str(body.get("cmd") or "").strip()
-        flags = body.get("flags") or {}
+
+        # `line` is the console's command box. It is parsed *here*, against the
+        # catalog, into exactly the `(cmd, flags)` the form produces — so the box
+        # is a shorthand for the form and not a second, weaker way in. There is no
+        # shell at any point: `cd`, `rm`, `;` and `|` are words the catalog does
+        # not know, and it says so by name.
+        if body.get("line"):
+            try:
+                cmd, flags = catalog.parse_command_line(str(body["line"]))
+            except catalog.InvalidRequest as exc:
+                return self._error(400, str(exc))
+        else:
+            cmd = str(body.get("cmd") or "").strip()
+            flags = body.get("flags") or {}
         if not isinstance(flags, dict):
             return self._error(400, "`flags` must be an object")
         try:
             run = self.console.runner.start(cmd, flags, confirm=body.get("confirm"))
+        except catalog.InvalidRequest as exc:
+            # When the only thing missing is the confirmation, say which word
+            # confirms it. The command box has no form to read that off, and
+            # "re-send with confirm=..." is a sentence about an HTTP API rather
+            # than an instruction to a person.
+            command = catalog.by_name().get(cmd)
+            if command is not None and command.needs_confirmation and not body.get("confirm"):
+                return self._json(
+                    {"error": str(exc), "confirm_with": cmd, "destroys": command.destroys},
+                    status=400,
+                )
+            return self._error(400, str(exc))
+        except Busy as exc:
+            return self._error(409, str(exc))
+        self._json({"run": run.summary()}, status=202)
+
+    def _start_workflow(self, body: dict[str, Any]) -> None:
+        if not self.console.allow_write:
+            return self._error(403, "this console was started read-only (--no-run)")
+        name = str(body.get("name") or "").strip()
+        try:
+            run = self.console.runner.start_workflow(name, confirm=body.get("confirm"))
         except catalog.InvalidRequest as exc:
             return self._error(400, str(exc))
         except Busy as exc:
@@ -419,10 +469,10 @@ class Handler(BaseHTTPRequestHandler):
                 )
 
             from tracker.config import get_settings
-            from tracker.llm import MissingApiKey, reasoning_extractor
+            from tracker.llm import MissingApiKey, fast_extractor
 
             try:
-                extractor = reasoning_extractor(get_settings())
+                extractor = fast_extractor(get_settings())
             except MissingApiKey as exc:
                 return self._error(503, str(exc))
 
@@ -431,6 +481,79 @@ class Handler(BaseHTTPRequestHandler):
         if written is None:
             return self._error(502, "the model did not return a usable briefing")
         self._json({**written.as_json(), "cached": False})
+
+    def _overview_stream(self, body: dict[str, Any]) -> None:
+        """The briefing, sent as it is written.
+
+        Server-sent events over a POST, which `EventSource` cannot do — the client
+        reads the body with `fetch`. Worth the small awkwardness: the alternative
+        is a GET that spends money, and a browser will re-issue a GET on a back
+        button without asking anybody.
+
+        A cached briefing is sent as one frame. Nothing is generated twice, and the
+        panel does not perform a typewriter animation over text it already had.
+        """
+        from tracker import overview as overview_mod
+        from tracker.models import Project
+
+        try:
+            project_id = int(body.get("project_id"))
+        except (TypeError, ValueError):
+            return self._error(400, "project_id must be an integer")
+
+        with self.console.read_session() as session:
+            project = session.get(Project, project_id)
+            if project is None:
+                return self._error(404, f"no project #{project_id}")
+
+            ready = overview_mod.cached(project)
+            if ready is not None:
+                return self._send(
+                    200,
+                    (
+                        _sse({"type": "text", "text": ready.text})
+                        + _sse({"type": "end", **ready.as_json(), "cached": True})
+                    ).encode("utf-8"),
+                    "text/event-stream; charset=utf-8",
+                )
+
+            if not self.console.allow_write:
+                return self._error(403, "this console was started read-only (--no-run)")
+            if str(body.get("confirm") or "").strip() != "overview":
+                return self._error(
+                    400, 'Writing a briefing spends LLM tokens. Re-send with confirm="overview".'
+                )
+
+            from tracker.config import get_settings
+            from tracker.llm import MissingApiKey, fast_extractor
+
+            try:
+                extractor = fast_extractor(get_settings())
+            except MissingApiKey as exc:
+                return self._error(503, str(exc))
+
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Connection", "close")
+            self.end_headers()
+
+            wrote = False
+            for piece in overview_mod.stream(project, extractor=extractor):
+                wrote = True
+                self.wfile.write(_sse({"type": "text", "text": piece}).encode("utf-8"))
+                self.wfile.flush()
+
+            done = overview_mod.cached(project)
+            tail = (
+                {"type": "end", **done.as_json(), "cached": False}
+                if done is not None
+                else {"type": "error", "error": "the model did not return a usable briefing"}
+            )
+            if not wrote and done is None:
+                tail = {"type": "error", "error": "the model returned nothing"}
+            self.wfile.write(_sse(tail).encode("utf-8"))
+            self.wfile.flush()
 
     def _stream(self, run_id: str) -> None:
         """Server-sent events for the run in flight.

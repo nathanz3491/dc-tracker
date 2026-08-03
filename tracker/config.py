@@ -79,6 +79,62 @@ class Settings(BaseSettings):
     #: reasoning available. Verified present on both MiniMax platforms.
     minimax_reasoning_model: str = "MiniMax-M3"
 
+    #: Model for the drawer's written briefing — the one call a person waits for.
+    #:
+    #: A third setting, because this job's constraint is neither volume nor depth
+    #: but *latency*: the panel generates when a row is opened, so the model's
+    #: speed is the page's speed. `M2-her` is the only MiniMax model that does not
+    #: emit a `<think>` block, and on this prompt that is the whole race.
+    #:
+    #: Time to the first *visible* word, measured on this prompt. Tokens spent
+    #: inside `<think>` are invisible to a reader, so a model that streams
+    #: instantly and then deliberates is not fast:
+    #:
+    #:     MiniMax-M3               46.6s, and returned nothing at all
+    #:     MiniMax-M2.5-highspeed   17.9s
+    #:     MiniMax-M2.7             16.0s
+    #:     MiniMax-M2.7-highspeed   15.5s
+    #:     MiniMax-M2.1-highspeed   12.5s
+    #:     MiniMax-M2               12.4s
+    #:     M2-her                    2.7s   <- this, and it does not think
+    #:
+    #: Note that plain `MiniMax-M2` beats every `-highspeed` variant. "Highspeed"
+    #: is output tokens per second, and this job emits ~70 words after a fixed slab
+    #: of reasoning, so throughput is the one thing that barely matters. Only
+    #: removing the reasoning changes the number, and only `M2-her` does that.
+    #:
+    #: Three things make `M2-her` usable, and all three live outside this setting:
+    #: the prompt asks for an `[[END]]` sentinel (the API's own `stop` parameter is
+    #: accepted and ignored), `overview.RUNAWAY` cuts the stream there, and
+    #: `MODEL_TOKEN_CAP` clamps the budget to the 2048 it accepts. Without them it
+    #: writes 756-982 words against a 110-word instruction, repeats itself under
+    #: "Final answer (last round)", and narrates its own word count. With them:
+    #: 65 words on average, nothing leaking.
+    #:
+    #: **Known cost of this choice.** `M2-her` is built for dialogue, and it
+    #: sometimes gets the data wrong in a way `MiniMax-M2` did not. On Fairwater —
+    #: construction track `nothing reached`, the other four passed — it wrote "All
+    #: tracks complete; construction the last to finish", inverting the most
+    #: informative field in the row. It has also named a utility and a permit
+    #: process that appear nowhere in the data ("WEPCO", "Wind chill plant
+    #: licensing is pending") and written phrases that mean nothing ("Major capex
+    #: is confirmed via gas"). The behaviour is variable: four consecutive runs on
+    #: that same row came back clean.
+    #:
+    #: This is a deliberate trade, made with the failure measured rather than
+    #: assumed — the panel is labelled as a model's reading, is never stored, and
+    #: cannot move confidence, so a wrong briefing is a wrong *opinion* beside
+    #: correct cited values rather than a wrong value. `TRACKER_MINIMAX_FAST_MODEL`
+    #: = `MiniMax-M2` buys the accuracy back for about ten seconds a row.
+    #:
+    #: Thinking cannot be switched off on the others: `thinking`,
+    #: `reasoning_effort` and `enable_thinking` are all accepted by the API and all
+    #: ignored, and an assistant prefill of `</think>` does not suppress it.
+    #: Shrinking the prompt does not help either — measured with the provenance
+    #: quotes stripped, 1300 fewer characters moved the first word by less than the
+    #: run-to-run noise.
+    minimax_fast_model: str = "M2-her"
+
     # --- Web search ------------------------------------------------------------
     # Which backend `tracker search` and `tracker enrich` use: "auto" picks the
     # first one that has a key, in the order google, brave, serper.
@@ -144,6 +200,31 @@ class Settings(BaseSettings):
     #: Publishing the console (a tunnel, a reverse proxy) without setting this is
     #: refused — see `tracker serve --tunnel`.
     console_password: SecretStr | None = None
+
+    #: A named cloudflared tunnel to publish through, and the hostname routed to
+    #: it. Set both or neither.
+    #:
+    #: Configuration rather than flags retyped every time, because these describe
+    #: the machine rather than the run: the tunnel's credentials are already in
+    #: the home directory and the DNS record is already in the zone. Once a
+    #: hostname is permanent, `tracker cloudflare` should need no arguments.
+    #:
+    #: Neither is a secret — a hostname is public by definition — but they belong
+    #: in `.env` rather than in the repo, because a committed value would have
+    #: every checkout trying to publish to one person's domain.
+    tunnel_name: str | None = None
+    tunnel_hostname: str | None = None
+
+    #: Facility power per H200-equivalent accelerator, in kilowatts, used to
+    #: restate a site's megawatts as compute. See `tracker/compute.py` for how
+    #: 1.3 is arrived at — 700 W board, 1.06 kW per GPU of node-level IT load
+    #: from the DGX H200's 8.5 kW, times a 1.2 PUE.
+    #:
+    #: A setting because every input to it ages: boards get denser, PUE improves,
+    #: and a campus energised in 2028 will not be full of H200s. The stored column
+    #: is recomputed from this rather than remembered, so changing it re-bases the
+    #: whole table without a migration.
+    kw_per_h200: float = Field(default=1.3, gt=0)
 
     # --- Fetching ---------------------------------------------------------
     fetch_concurrency: int = Field(default=4, ge=1, le=32)

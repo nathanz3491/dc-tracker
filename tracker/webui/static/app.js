@@ -29,13 +29,37 @@ const {
 
 const TRACKED = ["name", "company", "customer", "city", "state", "mw_planned",
   "mw_built", "investment_usd", "phase", "first_announced", "expected_online", "blocker"];
-const AUDIT = ["county", "lat", "lon", "confidence", "last_verified_at"];
-const RIGHT = new Set(["mw_planned", "mw_built", "investment_usd", "confidence", "lat", "lon"]);
+/* Shown behind the "all fields" switch, with the tracked twelve. `h200_equivalent`
+ * belongs here rather than in TRACKED: those twelve are the PRD's definition of
+ * done and "9 of 12" is quoted in the docs, the header and the export, so a
+ * thirteenth would silently restate every one of those numbers. */
+const AUDIT = ["h200_equivalent", "county", "lat", "lon", "confidence", "last_verified_at"];
+const RIGHT = new Set(["mw_planned", "mw_built", "investment_usd", "h200_equivalent",
+                       "confidence", "lat", "lon"]);
 
 /* Coverage at or above this shows by default. Chosen so the default table is
  * mostly populated rather than mostly dashes; everything below it is one switch
  * away and the switch says how many. */
 const DENSE_THRESHOLD = 50;
+
+/* One definition of "does this project match what I typed", shared by the table
+ * filter and every project picker in the command form.
+ *
+ * They had drifted: the table searched six text fields and not the id, and the
+ * pickers did not search at all — they were 224-option dropdowns. Both are the
+ * same question, so both ask it here.
+ *
+ * `#42` means the id and nothing else. A bare `42` stays a substring match,
+ * because it is also a capacity, a year and part of a name. */
+function matchesProject(p, query) {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  if (q.startsWith("#")) return String(p.id) === q.slice(1).trim();
+  const hay = [p.id, p.name, p.company, p.customer, p.city, p.county, p.state, p.blocker]
+    .filter((v) => v != null && v !== "").join(" ").toLowerCase();
+  // Every word has to appear, so "meta ohio" narrows rather than widens.
+  return q.split(/\s+/).every((word) => hay.includes(word));
+}
 
 /* label, and the sentence shown when a value has no quote of its own. */
 const TIER = {
@@ -75,10 +99,32 @@ function fmt(key, v) {
   if (v == null || v === "") return "—";
   if (key === "mw_planned" || key === "mw_built") return Number(v).toLocaleString();
   if (key === "investment_usd") return fmtUSD(v);
+  // Six or seven digits in a table cell are unreadable, and the underlying
+  // figure is two significant figures anyway — "690k" says everything "690,000"
+  // does without implying the extra precision.
+  if (key === "h200_equivalent") {
+    const n = Number(v);
+    return n >= 1e6 ? (n / 1e6).toFixed(1).replace(/\.0$/, "") + "M"
+         : n >= 1e3 ? Math.round(n / 1e3) + "k"
+         : String(n);
+  }
   if (key === "lat" || key === "lon") return Number(v).toFixed(4);
   if (key === "last_verified_at" || key === "updated_at") return String(v).slice(0, 10);
   return String(v);
 }
+/* The same conversion `tracker/compute.py` does, used only to tell a derived
+ * count from a cited one so the drawer can label it. Kept in step by the ratio
+ * the backend ships in the dataset — never hard-coded here, because two copies
+ * of an assumption drift and the label would then lie about provenance. */
+function h200FromMw(mw, kwEach) {
+  if (mw == null || Number(mw) < 0.1) return null;
+  const exact = (Number(mw) * 1000) / (kwEach || H200_KW);
+  const magnitude = Math.floor(Math.log10(exact));
+  const step = Math.pow(10, Math.max(0, magnitude - 1));
+  return Math.round(exact / step) * step;
+}
+let H200_KW = 1.3;  // replaced from the dataset on load
+
 const place = (p) => (p.city || (p.county ? p.county + " Co." : "")) + (p.state ? ", " + p.state : "");
 const chip = (token, outline) => {
   const t = `var(${token})`;
@@ -151,8 +197,57 @@ async function api(path, options) {
   const text = await res.text();
   let payload = null;
   try { payload = text ? JSON.parse(text) : null; } catch { payload = { error: text }; }
-  if (!res.ok) throw Object.assign(new Error(payload?.error || res.statusText), { status: res.status });
+  // The body travels with the error. A refusal sometimes carries more than a
+  // sentence — the confirmation word for a command, say — and the caller cannot
+  // get at it if only the message survives.
+  if (!res.ok) {
+    throw Object.assign(new Error(payload?.error || res.statusText),
+                        { status: res.status, payload });
+  }
   return payload;
+}
+
+/* POST, then read server-sent events off the response body.
+ *
+ * `EventSource` is GET-only, and the two things that stream here both spend
+ * money — a GET that costs money is one a back button will happily re-issue. So
+ * the request stays a POST and we parse the frames by hand, which is about
+ * fifteen lines and buys the right verb. */
+async function apiStream(path, body, onEvent, signal) {
+  const res = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal,
+  });
+  if (res.status === 401) { window.location.replace("/"); return new Promise(() => {}); }
+  if (!res.ok) {
+    const text = await res.text();
+    let payload = null;
+    try { payload = text ? JSON.parse(text) : null; } catch { payload = null; }
+    throw Object.assign(new Error(payload?.error || text || res.statusText), { status: res.status });
+  }
+
+  const reader = res.body.getReader();
+  const decode = new TextDecoder();
+  let buffer = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decode.decode(value, { stream: true });
+    // Frames are separated by a blank line; a partial one stays in the buffer.
+    let cut;
+    while ((cut = buffer.indexOf("\n\n")) !== -1) {
+      const frame = buffer.slice(0, cut);
+      buffer = buffer.slice(cut + 2);
+      const payload = frame.split("\n")
+        .filter((l) => l.startsWith("data:"))
+        .map((l) => l.slice(5).trim())
+        .join("");
+      if (!payload) continue;
+      try { onEvent(JSON.parse(payload)); } catch { /* a torn frame costs a few words */ }
+    }
+  }
 }
 
 /* The one thing CSS cannot express here: below the breakpoint the table is not
@@ -531,11 +626,12 @@ function ProjectsView({ data, onOpen, openId }) {
   const rows = useMemo(() => {
     const q = f.q.trim().toLowerCase();
     const out = data.projects.filter((p) => {
-      if (q) {
-        const hay = [p.name, p.company, p.customer, p.city, p.county, p.state, p.blocker]
-          .filter(Boolean).join(" ").toLowerCase();
-        if (!hay.includes(q)) return false;
-      }
+      // The id is searchable, and `#42` finds only #42. Everything else on the
+      // page identifies a project by id — the drawer header, the run log, every
+      // command that takes one — and the table was the one place you could not
+      // type one in. A bare `42` still matches anything containing "42", because
+      // that is also a capacity and a year somebody may be looking for.
+      if (q && !matchesProject(p, q)) return false;
       if (f.state && p.state !== f.state) return false;
       if (f.phase && p.phase !== f.phase) return false;
       if (f.conf && p.confidence < Number(f.conf)) return false;
@@ -802,93 +898,276 @@ function Drawer({ data, project, onClose }) {
     </div>`;
 }
 
-/* A written reading of the row, from a model.
+/* ---- Markdown, rendered to React elements ---------------------------------
  *
- * The one panel in this drawer that is not a value with a citation behind it, so
- * the whole job is making that impossible to miss. It sits *below* the evidence
- * rather than above it, carries the `inferred` underline the tier legend already
- * teaches, and says what it is in the header. A fluent paragraph beside quoted
- * facts is the easiest place in the product to blur the line the tiers exist to
- * draw.
+ * A deliberately small subset: paragraphs, bullets, bold, italic, inline code.
+ * That is what the briefing prompt asks for and nothing else is worth carrying.
  *
- * Not generated on open. It costs a call, and a drawer that spends money because
- * you clicked a row is a drawer nobody dares click. */
-function InsightPanel({ project, allowWrite }) {
-  const [state, setState] = useState({ status: "idle" });
+ * **Never innerHTML.** This string is written by a model out of articles fetched
+ * from the open web, which makes it the least trustworthy text on the page —
+ * anything that turns it into markup is an injection path running from someone
+ * else's web page, through the extraction pipeline, into a console that runs
+ * commands. Emitting elements means a `<script>` in the text is a `<script>` on
+ * the screen, as characters.
+ *
+ * Links are flattened to their text for the same reason. A clickable destination
+ * chosen by a model reading an untrusted page is a phishing surface, the prompt
+ * does not ask for links, and there is nothing here worth linking to anyway. */
+const MD_INLINE = /(\*\*[^*\n]+\*\*|`[^`\n]+`|\*[^*\n]+\*|_[^_\n]+_)/g;
 
-  // A new project means a new briefing; without this, opening a second row shows
-  // the first row's text under the second row's name.
-  useEffect(() => { setState({ status: "idle" }); }, [project.id]);
+function mdInline(text, key) {
+  const parts = [];
+  let at = 0;
+  let match;
+  MD_INLINE.lastIndex = 0;
+  while ((match = MD_INLINE.exec(text)) !== null) {
+    if (match.index > at) parts.push(text.slice(at, match.index));
+    const token = match[0];
+    const k = `${key}-${match.index}`;
+    if (token.startsWith("**")) parts.push(html`<strong key=${k}>${token.slice(2, -2)}</strong>`);
+    else if (token.startsWith("`")) parts.push(html`<code key=${k} class="dc-md-code">${token.slice(1, -1)}</code>`);
+    else parts.push(html`<em key=${k}>${token.slice(1, -1)}</em>`);
+    at = match.index + token.length;
+  }
+  if (at < text.length) parts.push(text.slice(at));
+  return parts;
+}
 
-  const ask = async () => {
-    setState({ status: "writing" });
-    try {
-      const got = await api("/api/overview", {
-        method: "POST",
-        body: { project_id: project.id, confirm: "overview" },
-      });
-      setState({ status: "done", ...got });
-    } catch (e) {
-      setState({ status: "failed", error: e.message });
+function renderMarkdown(source) {
+  const text = source
+    // Links → their text. The target allows one level of nesting so that a URL
+    // like `(javascript:alert(1))` is consumed whole rather than leaving its
+    // closing bracket behind as debris.
+    .replace(/\[([^\]]*)\]\((?:[^()]|\([^()]*\))*\)/g, "$1")
+    .replace(/^\s*#{1,6}\s*/gm, "")            // headings → ordinary lines
+    .replace(/^\s*```.*$/gm, "");              // fences → dropped, never asked for
+  const blocks = [];
+  let list = null;
+
+  const flush = () => { if (list) { blocks.push(list); list = null; } };
+
+  for (const raw of text.split("\n")) {
+    const line = raw.trim();
+    if (!line) { flush(); continue; }
+    const bullet = line.match(/^[-*+]\s+(.*)$/);
+    if (bullet) {
+      if (!list) list = { type: "ul", items: [] };
+      list.items.push(bullet[1]);
+      continue;
     }
-  };
+    flush();
+    const last = blocks[blocks.length - 1];
+    // Consecutive non-blank lines are one paragraph, the way markdown means it —
+    // otherwise a model that hard-wraps produces a line break every nine words.
+    if (last && last.type === "p") last.text += " " + line;
+    else blocks.push({ type: "p", text: line });
+  }
+  flush();
+
+  return blocks.map((block, i) =>
+    block.type === "ul"
+      ? html`<ul key=${i}>${block.items.map((item, j) => html`<li key=${j}>${mdInline(item, `${i}-${j}`)}</li>`)}</ul>`
+      : html`<p key=${i}>${mdInline(block.text, String(i))}</p>`);
+}
+
+/* Hide a bold marker whose partner has not arrived yet.
+ *
+ * Without this, streaming shows `**Phoenix` as literal asterisks for a second and
+ * then reflows into bold. Dropping the lone marker keeps the words and lets them
+ * simply become bold when the closer lands. */
+function tidyPartialMarkdown(text) {
+  return (text.match(/\*\*/g) || []).length % 2
+    ? text.replace(/\*\*(?![\s\S]*\*\*)/, "")
+    : text;
+}
+
+const REDUCED_MOTION = () =>
+  window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+/* Reveal received text at a steady rate rather than in whatever bursts the
+ * network delivered.
+ *
+ * SSE frames arrive clumped — several sentences, then nothing, then several more.
+ * Rendering each frame as it lands looks like stuttering, not like writing.
+ *
+ * Three things make it smooth, and the first version had none of them.
+ *
+ * **The loop is created once.** Putting `text` in the effect's dependencies tore
+ * the animation frame down and rebuilt it on every SSE frame, so the cursor
+ * restarted several times a second. That alone was most of the stutter. The text
+ * now lives in a ref the loop reads.
+ *
+ * **The pace is set by elapsed time, not by frames.** A per-frame character step
+ * runs at whatever rate the display happens to refresh and stalls whenever the
+ * main thread is busy. Characters per *second* looks the same everywhere.
+ *
+ * **Whole words appear at once.** Revealing mid-word makes every line re-wrap as
+ * the word grows, which reads as twitching rather than typing. Rounding the
+ * cursor down to the last word boundary also cuts re-renders from ~60 a second to
+ * ~12, since the visible string only changes when a word completes. */
+const REVEAL_CPS = 62;        // comfortable reading pace when the model is ahead
+const REVEAL_CATCHUP_S = 0.7; // never let the backlog sit longer than this
+
+function useTypewriter(text, active) {
+  const [shown, setShown] = useState(0);
+  const target = useRef(text);
+  const cursor = useRef(0);
+  target.current = text;
+
+  useEffect(() => {
+    if (!active) return;
+    if (REDUCED_MOTION()) { setShown(target.current.length); return; }
+
+    let frame = 0;
+    let last = performance.now();
+    const tick = (now) => {
+      const elapsed = Math.min(now - last, 100) / 1000; // a backgrounded tab must not lurch
+      last = now;
+      const full = target.current;
+      const behind = full.length - cursor.current;
+      if (behind > 0) {
+        // Steady, unless the model has got far enough ahead that a fixed pace
+        // would still be typing long after the stream closed.
+        const speed = Math.max(REVEAL_CPS, behind / REVEAL_CATCHUP_S);
+        cursor.current = Math.min(full.length, cursor.current + speed * elapsed);
+        const edge = wordBoundary(full, Math.floor(cursor.current));
+        setShown((current) => (edge > current ? edge : current));
+      }
+      frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+  }, [active]);
+
+  // Snap to the end when the stream closes, so a finished briefing is never a
+  // few characters short because the last frame did not run.
+  useEffect(() => {
+    if (!active) { cursor.current = text.length; setShown(text.length); }
+  }, [active, text.length]);
+
+  return active ? Math.min(shown, text.length) : text.length;
+}
+
+/* The end of the last complete word at or before `index`.
+ *
+ * Everything up to the cursor is shown except a partly-revealed final word, which
+ * would otherwise grow letter by letter and re-wrap the line under it. Once the
+ * whole text has arrived the cursor may sit at the very end, and that is a
+ * boundary too. */
+function wordBoundary(text, index) {
+  if (index >= text.length) return text.length;
+  const space = text.lastIndexOf(" ", index);
+  const newline = text.lastIndexOf("\n", index);
+  return Math.max(space, newline) + 1;
+}
+
+/* A reading of the row, from a model — the console's version of an AI overview.
+ *
+ * It sits at the top of the drawer, generates when the row is opened and streams
+ * as it is written. Both were deliberate reversals: it used to be a card at the
+ * bottom behind a button, on the reasoning that a drawer which spends money when
+ * you click a row is a drawer nobody dares click. In use almost nobody clicked
+ * the button, so it cost nothing and did nothing. Cost control moved to where it
+ * belongs — the briefing is cached by content, so a row is paid for once and
+ * reopening is free.
+ *
+ * **The honesty signal got quieter, not weaker.** The previous version fronted
+ * two lines of disclaimer above three of content, which is the shape of something
+ * nobody reads. Now: a labelled heading that says a model wrote it, the tier hue
+ * the legend already teaches, and the caveat as a footnote under the text where a
+ * reader lands after the claim rather than before it. Still impossible to mistake
+ * for a cited value; no longer shouting. */
+function InsightPanel({ project, allowWrite }) {
+  const [state, setState] = useState({ status: "idle", text: "" });
+  const [expanded, setExpanded] = useState(false);
+  const abort = useRef(null);
+
+  const ask = useCallback(() => {
+    abort.current?.abort();
+    const controller = new AbortController();
+    abort.current = controller;
+    setState({ status: "writing", text: "" });
+    setExpanded(false);
+
+    apiStream("/api/overview/stream", { project_id: project.id, confirm: "overview" }, (event) => {
+      if (event.type === "text") {
+        setState((s) => ({ ...s, status: "writing", text: s.text + event.text }));
+      } else if (event.type === "end") {
+        setState({ status: "done", text: event.text, model: event.model, cached: event.cached });
+      } else if (event.type === "error") {
+        setState((s) => ({ ...s, status: "failed", error: event.error }));
+      }
+    }, controller.signal).catch((e) => {
+      if (e.name === "AbortError") return;
+      setState({ status: "failed", text: "", error: e.message });
+    });
+  }, [project.id]);
+
+  // A new project means a new briefing, and the request for the old one is
+  // abandoned — without that, opening a second row shows the first row's text
+  // arriving under the second row's name.
+  useEffect(() => {
+    if (!allowWrite) { setState({ status: "unavailable", text: "" }); return; }
+    ask();
+    return () => abort.current?.abort();
+  }, [project.id, allowWrite, ask]);
+
+  const streaming = state.status === "writing";
+  const shown = useTypewriter(state.text, streaming);
+  const visible = state.text.slice(0, shown);
+  const body = visible.trim()
+    ? renderMarkdown(streaming ? tidyPartialMarkdown(visible) : visible)
+    : null;
+
+  // Only offer "Show more" when there is more. A short briefing that already
+  // fits, under a control implying it is cut off, is worse than no control —
+  // and most of them do fit, which is the point of asking for 60 to 110 words.
+  const prose = useRef(null);
+  const [clipped, setClipped] = useState(false);
+  useEffect(() => {
+    const el = prose.current;
+    setClipped(!!el && el.scrollHeight > el.clientHeight + 2);
+  }, [visible, expanded]);
 
   return html`
-    <${Card}>
-      <${CardHeader}>
-        <${CardTitle}>
-          <span style=${{ display: "inline-flex", alignItems: "center", gap: 9, flexWrap: "wrap" }}>
-            What this looks like
-            <span style=${chip("--chart-5")}>written by a model</span>
-          </span>
-        <//>
-        <${CardDescription}>
-          A reading of the values above, not another one of them. Nothing here is stored, it
-          cannot move the confidence score, and any figure it mentions should be checked against
-          the quoted evidence beside it.
-        <//>
-      <//>
-      <div style=${{ padding: "4px 20px 20px" }}>
-        ${state.status === "idle" && html`
-          <div style=${{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-            <${Button} size="sm" variant="outline" disabled=${!allowWrite} onClick=${ask}>
-              Write a briefing
-            <//>
-            <span style=${{ fontSize: 12, color: "var(--muted-foreground)" }}>
-              ${allowWrite ? "one LLM call" : "unavailable on a read-only console"}
-            </span>
-          </div>`}
-
-        ${state.status === "writing" && html`
-          <div style=${{ display: "grid", gap: 8 }}>
-            ${[92, 100, 78].map((w, i) => html`
-              <${Skeleton} key=${i} className="mrd-shimmer" height=${13} width=${w + "%"} />`)}
-            <span style=${{ fontSize: 12, color: "var(--muted-foreground)" }}>
-              reading the row…
-            </span>
-          </div>`}
-
-        ${state.status === "failed" && html`
-          <div style=${{ display: "grid", gap: 8 }}>
-            <span style=${{ fontSize: 13, color: "var(--danger)" }}>${state.error}</span>
-            <div><${Button} size="sm" variant="ghost" onClick=${ask}>Try again<//></div>
-          </div>`}
-
+    <section class="dc-ai" aria-label="Model-written overview">
+      <div class="dc-ai-head">
+        <span class="dc-ai-spark" aria-hidden="true">✦</span>
+        <span class="dc-ai-label">AI overview</span>
+        ${streaming && html`<span class="dc-ai-dots" aria-live="polite" aria-label="writing"><i /><i /><i /></span>`}
         ${state.status === "done" && html`
-          <div class="dc-insight">
-            ${state.text.split(/\n\s*\n/).filter(Boolean).map((para, i) => html`
-              <p key=${i}>${para.trim()}</p>`)}
-            <div style=${{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap",
-                           marginTop: 12 }}>
-              <span style=${{ fontFamily: "var(--font-mono)", fontSize: 11,
-                              color: "var(--muted-foreground)" }}>
-                ${state.model}${state.cached ? " · from cache" : ""}
-              </span>
-              <${Button} size="sm" variant="ghost" onClick=${ask}>Rewrite<//>
-            </div>
-          </div>`}
+          <button type="button" class="dc-ai-redo" onClick=${ask}
+                  title=${state.model + (state.cached ? " · from cache" : "")}>Rewrite</button>`}
       </div>
-    <//>`;
+
+      ${state.status === "unavailable" && html`
+        <p class="dc-ai-quiet">Unavailable on a read-only console.</p>`}
+
+      ${state.status === "failed" && html`
+        <p class="dc-ai-quiet">
+          ${state.error} <button type="button" class="dc-ai-redo" onClick=${ask}>Try again</button>
+        </p>`}
+
+      ${streaming && !body && html`
+        <div class="dc-ai-wait" aria-hidden="true">
+          ${[96, 88, 62].map((w) => html`<span key=${w} style=${{ width: w + "%" }} />`)}
+        </div>`}
+
+      ${body && html`
+        <div ref=${prose}
+             class=${"dc-ai-body" + (streaming ? " is-writing" : "") + (expanded ? " is-open" : "")}>
+          ${body}
+        </div>`}
+
+      ${body && !streaming && html`
+        <div class="dc-ai-foot">
+          ${(clipped || expanded) && html`
+            <button type="button" class="dc-ai-more" onClick=${() => setExpanded(!expanded)}>
+              ${expanded ? "Show less" : "Show more"}
+            </button>`}
+          <span>Written by a model from the values below — not stored, not evidence.</span>
+        </div>`}
+    </section>`;
 }
 
 function StatsTab({ data, p, populated, open, onQuote, allowWrite }) {
@@ -898,6 +1177,10 @@ function StatsTab({ data, p, populated, open, onQuote, allowWrite }) {
       hint: p.mw_planned == null ? "no source cited one" : TIER[tierOf(p, "mw_planned")][0] },
     { label: "Built to date", value: p.mw_built == null ? "—" : p.mw_built.toLocaleString() + " MW",
       hint: p.mw_built == null ? "nothing built, or nothing read" : TIER[tierOf(p, "mw_built")][0] },
+    { label: "Compute", value: fmt("h200_equivalent", p.h200_equivalent),
+      hint: p.h200_equivalent == null ? "no capacity cited, so nothing to convert"
+          : p.h200_equivalent === h200FromMw(p.mw_built || p.mw_planned)
+          ? "H200-equivalent, derived from MW" : "H200-equivalent, as cited" },
     { label: "Announced investment", value: fmtUSD(p.investment_usd),
       hint: p.investment_usd == null ? "the hardest field to source" : TIER[tierOf(p, "investment_usd")][0] },
     { label: "Open obstacles", value: String(open.length),
@@ -910,6 +1193,12 @@ function StatsTab({ data, p, populated, open, onQuote, allowWrite }) {
       <div style=${{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 12 }}>
         ${stats.map((s) => html`<${StatCard} key=${s.label} label=${s.label} value=${s.value} hint=${s.hint} />`)}
       </div>
+
+      ${/* In the flow, under the numbers, scrolling with everything else. It was
+            briefly pinned above the tab strip, which made it the one block in the
+            drawer you could not scroll past — and put a model's reading in front
+            of the figures it is a reading *of*. A card, like the rest. */ ""}
+      <${InsightPanel} project=${p} allowWrite=${allowWrite} />
 
       <div style=${{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(330px, 1fr))",
                      gap: 18, alignItems: "start" }}>
@@ -1032,11 +1321,6 @@ function StatsTab({ data, p, populated, open, onQuote, allowWrite }) {
               description="Nothing read so far states one. Silence is not evidence — a milestone appears when a source reports it." />
           </div>`}
       <//>
-
-      ${/* Last, deliberately. The evidence comes first and the reading of it
-            comes after — a fluent paragraph placed above quoted facts is read as
-            the summary rather than as one more opinion. */ ""}
-      <${InsightPanel} project=${p} allowWrite=${allowWrite} />
     </div>`;
 }
 
@@ -1871,52 +2155,500 @@ function CapexView({ data, allowWrite, busy, onRan }) {
 
 /* ---- Commands and runs --------------------------------------------------- */
 
+/* Flags, rendered for someone who has never seen a command line.
+ *
+ * The catalog is read from Typer, so the names in it are the CLI's: `--max-articles`,
+ * `project_ids`. Those are precise and completely opaque if you have not used the
+ * terminal, so each control gets a plain-language label and keeps the real flag
+ * underneath it — the argv preview below the form is still the honest record of
+ * what will run, and matching the two up is how someone graduates to the CLI. */
+const PROJECT_FIELDS = new Set(
+  ["project_id", "project_ids", "dupe_ids", "--into", "--verify", "--unverify"]);
+
+const humanize = (name) => {
+  const bare = name.replace(/^--/, "").replace(/_/g, "-");
+  return bare.charAt(0).toUpperCase() + bare.slice(1).replace(/-/g, " ");
+};
+
+/* Presets around the CLI's own default, rather than an empty number box.
+ *
+ * Every one of these is a budget — articles to read, rows to print, projects to
+ * select — and the question is nearly always "the usual, less than usual, or
+ * more". A blank box makes that a research task; four options makes it a choice.
+ * Custom stays, because the person who knows they want 37 should get 37. */
+function NumberChoice({ flag, value, onChange }) {
+  const [custom, setCustom] = useState(false);
+  const base = typeof flag.d === "number" ? flag.d : null;
+  const presets = base == null ? []
+    : base === 0 ? [0, 1, 3, 5, 10]
+    : [...new Set([Math.max(1, Math.round(base / 2)), base, base * 2, base * 5])].sort((a, b) => a - b);
+
+  if (custom || !presets.length) {
+    return html`<${Input} size="sm" type="number" value=${value ?? ""}
+                  placeholder=${base == null ? "" : String(base)}
+                  onChange=${(e) => onChange(e.target.value)} />`;
+  }
+  return html`
+    <${Select} size="sm" value=${value ?? ""}
+      onChange=${(e) => {
+        if (e.target.value === "__custom") { setCustom(true); onChange(""); }
+        else onChange(e.target.value);
+      }}>
+      <option value="">${base} (default)</option>
+      ${presets.filter((n) => n !== base).map((n) => html`<option key=${n} value=${n}>${n}</option>`)}
+      <option value="__custom">Custom…</option>
+    <//>`;
+}
+
+/* A project picker instead of "type the id you memorised".
+ *
+ * This is the single biggest barrier in the old form: half the useful commands
+ * take a project id, and the only way to learn one was to run `list` in another
+ * tab and read it off. The dataset is already loaded on the page.
+ *
+ * **The multi-value case is add-one-at-a-time, not a multi-select.** It was a
+ * native `<select multiple>` holding 224 rows, which works and which nobody can
+ * use: `merge` takes several ids, and the report back was "I can only merge one
+ * into one". Ctrl-clicking inside a scrolling list of 224 options is not a thing
+ * to ask of anyone, and nothing on screen said it was possible. Picking from a
+ * dropdown and getting a removable chip says what it does. */
+function ProjectChoice({ projects, many, value, onChange }) {
+  if (!many) {
+    return html`
+      <${ProjectSearch} projects=${projects} value=${value}
+        placeholder=${value ? "search to change…" : "search projects…"}
+        onPick=${(id) => onChange(id === "" ? "" : String(id))} />`;
+  }
+
+  const chosen = Array.isArray(value) ? value.map(String) : value ? [String(value)] : [];
+  return html`
+    <div style=${{ display: "grid", gap: 6 }}>
+      ${!!chosen.length && html`
+        <div style=${{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+          ${chosen.map((id) => {
+            const project = projects.find((p) => String(p.id) === id);
+            return html`
+              <button key=${id} type="button" class="dc-chip-x" title="Remove"
+                      onClick=${() => onChange(chosen.filter((x) => x !== id))}>
+                #${id}${project ? ` ${project.name}` : ""} <span aria-hidden="true">✕</span>
+              </button>`;
+          })}
+        </div>`}
+      <${ProjectSearch} projects=${projects} exclude=${chosen}
+        placeholder=${chosen.length ? "add another…" : "search projects to add…"}
+        onPick=${(id) => onChange([...chosen, String(id)])} />
+      <span style=${{ fontSize: 11, color: "var(--muted-foreground)" }}>
+        ${chosen.length
+          ? `${chosen.length} chosen — add more, or click one to remove it`
+          : "add as many as you need"}
+      </span>
+    </div>`;
+}
+
+/* Type to find a project; click to take it.
+ *
+ * The pickers began as plain `<select>`s holding every row in the database. With
+ * 224 of them that is not a picker, it is a wall — and the report back was that
+ * the form had made things *harder*, because a command taking several projects
+ * looked like it took one. Same matcher as the table's search box, so `#42`,
+ * `meta ohio` and `abilene` behave the same in both places. */
+function ProjectSearch({ projects, exclude = [], placeholder, onPick, value }) {
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState(false);
+  const box = useRef(null);
+
+  const hits = useMemo(() => {
+    const skip = new Set(exclude.map(String));
+    return projects.filter((p) => !skip.has(String(p.id)) && matchesProject(p, query)).slice(0, 40);
+  }, [projects, exclude.join(","), query]);
+
+  // A click anywhere else closes it. Without this the list stays over whatever
+  // you were reaching for next.
+  useEffect(() => {
+    if (!open) return;
+    const away = (e) => { if (box.current && !box.current.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", away);
+    return () => document.removeEventListener("mousedown", away);
+  }, [open]);
+
+  const take = (project) => { onPick(project.id); setQuery(""); setOpen(false); };
+
+  return html`
+    <div ref=${box} style=${{ position: "relative" }}>
+      <${Input} size="sm" value=${query} placeholder=${placeholder || "search projects…"}
+        onFocus=${() => setOpen(true)}
+        onChange=${(e) => { setQuery(e.target.value); setOpen(true); }}
+        onKeyDown=${(e) => {
+          if (e.key === "Enter" && hits.length) { e.preventDefault(); take(hits[0]); }
+          if (e.key === "Escape") setOpen(false);
+        }} />
+      ${open && html`
+        <div class="dc-picker">
+          ${hits.length === 0 && html`
+            <div class="dc-picker-empty">
+              nothing matches ${query.trim() ? html`<b>${query.trim()}</b>` : "yet"}
+            </div>`}
+          ${hits.map((p) => html`
+            <button key=${p.id} type="button" class="dc-picker-row" onClick=${() => take(p)}>
+              <span class="dc-picker-id">#${p.id}</span>
+              <span class="dc-picker-name">${p.company} — ${p.name}</span>
+              <span class="dc-picker-where">${place(p)}</span>
+            </button>`)}
+          ${hits.length === 40 && html`
+            <div class="dc-picker-empty">first 40 shown — keep typing to narrow it</div>`}
+        </div>`}
+      ${value != null && value !== "" && html`
+        <div style=${{ marginTop: 6 }}>
+          <button type="button" class="dc-chip-x" title="Clear" onClick=${() => onPick("")}>
+            ${(() => { const p = projects.find((x) => String(x.id) === String(value));
+                       return p ? `#${p.id} ${p.name}` : `#${value}`; })()}
+            <span aria-hidden="true">✕</span>
+          </button>
+        </div>`}
+    </div>`;
+}
+
+function FlagField({ flag, projects, value, onChange }) {
+  const control = PROJECT_FIELDS.has(flag.f) && projects.length
+    ? html`<${ProjectChoice} projects=${projects} many=${flag.many} value=${value}
+             onChange=${onChange} />`
+    : flag.t === "bool"
+    ? html`<${Switch} size="sm" label=${value ? "on" : flag.d ? "on by default" : "off"}
+             checked=${!!value} onCheckedChange=${(v) => onChange(!!v)} />`
+    : flag.t === "choice"
+    ? html`<${Select} size="sm" value=${value ?? ""} onChange=${(e) => onChange(e.target.value)}>
+             <option value="">${flag.d ?? "default"}</option>
+             ${flag.o.map((o) => html`<option key=${o} value=${o}>${o}</option>`)}<//>`
+    : flag.many
+    ? html`<textarea class="mrd-input" rows="3" style=${{ height: "auto", resize: "vertical" }}
+             placeholder="one per line"
+             value=${Array.isArray(value) ? value.join("\n") : (value ?? "")}
+             onChange=${(e) => onChange(e.target.value.split("\n").map((s) => s.trim()).filter(Boolean))} />`
+    : flag.t === "int" || flag.t === "float"
+    ? html`<${NumberChoice} flag=${flag} value=${value} onChange=${onChange} />`
+    : html`<${Input} size="sm" value=${value ?? ""}
+             placeholder=${flag.d == null ? "" : String(flag.d)}
+             onChange=${(e) => onChange(e.target.value)} />`;
+
+  return html`
+    <div style=${{ display: "grid", gap: 4 }}>
+      <label style=${{ display: "flex", alignItems: "baseline", gap: 7, flexWrap: "wrap" }}>
+        <span style=${{ fontSize: 13, fontWeight: 500 }}>
+          ${humanize(flag.f)}${flag.req ? html`<span style=${{ color: "var(--danger)" }}> *</span>` : ""}
+        </span>
+        <span style=${{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--muted-foreground)" }}>
+          ${flag.f}</span>
+      </label>
+      ${control}
+      ${flag.h && html`<span style=${{ fontSize: 11, lineHeight: "16px", color: "var(--muted-foreground)" }}>
+        ${flag.h}</span>`}
+    </div>`;
+}
+
+/* Named sequences, run as one job.
+ *
+ * Placed above the command list because for most visits it is the answer: the
+ * question "what do I run to catch up" has one right answer and it is three
+ * commands in a particular order, not a menu of thirty. */
+function WorkflowsPanel({ workflows, allowWrite, busy, onRun }) {
+  const [open, setOpen] = useState(null);
+  const [armed, setArmed] = useState(null);
+
+  if (!workflows?.length) return null;
+  return html`
+    <div style=${{ display: "grid", gap: 10 }}>
+      <span style=${{ fontFamily: "var(--font-mono)", fontSize: 12, textTransform: "uppercase",
+                      letterSpacing: "0.16em", color: "var(--muted-foreground)" }}>Routines</span>
+      <div style=${{ display: "grid", gap: 10 }}>
+        ${workflows.map((w) => {
+          const isOpen = open === w.name;
+          const needsConfirm = w.cost === "llm" || !!w.destroys;
+          return html`
+            <${Card} key=${w.name}>
+              <button type="button" onClick=${() => { setOpen(isOpen ? null : w.name); setArmed(null); }}
+                style=${{ display: "grid", width: "100%", gap: 6, padding: "14px 20px",
+                          background: "transparent", border: 0, textAlign: "left", cursor: "pointer" }}>
+                <span style=${{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
+                  <span style=${{ fontSize: 15, fontWeight: 600 }}>${w.title}</span>
+                  <span style=${chip(w.cost === "llm" ? "--warning" : "--muted-foreground")}>${w.cost}</span>
+                  <span style=${{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--muted-foreground)" }}>
+                    ${w.steps.map((s) => s.cmd).join(" → ")}</span>
+                </span>
+                <span style=${{ fontSize: 13, lineHeight: "19px", color: "var(--muted-foreground)" }}>
+                  ${w.summary}</span>
+              </button>
+              ${isOpen && html`
+                <div style=${{ borderTop: "1px solid var(--border)", padding: "14px 20px", display: "grid", gap: 12 }}>
+                  <ol style=${{ margin: 0, paddingLeft: 20, display: "grid", gap: 8 }}>
+                    ${w.steps.map((s, i) => html`
+                      <li key=${i} style=${{ fontSize: 13, lineHeight: "19px" }}>
+                        <span style=${{ fontFamily: "var(--font-mono)", fontWeight: 600 }}>
+                          tracker ${s.cmd}${Object.entries(s.flags || {})
+                            .map(([k, v]) => ` ${k} ${v}`).join("")}</span>
+                        ${s.tolerates_failure && html`
+                          <span style=${{ ...chip("--muted-foreground"), marginLeft: 7 }}>findings ok</span>`}
+                        ${s.because && html`<div style=${{ color: "var(--muted-foreground)" }}>${s.because}</div>`}
+                      </li>`)}
+                  </ol>
+                  <span style=${{ fontSize: 12, color: "var(--muted-foreground)" }}>
+                    Runs as one job. Stops at the first step that genuinely fails.
+                  </span>
+                  ${armed === w.name
+                    ? html`
+                      <div style=${{ display: "grid", gap: 8 }}>
+                        <span style=${{ fontSize: 13, color: "var(--warning)" }}>
+                          ${w.destroys ? `This ${w.destroys}` : "This spends LLM tokens across every step."}
+                          ${" "}Run it?
+                        </span>
+                        <div style=${{ display: "flex", gap: 10 }}>
+                          <${Button} size="sm" loading=${busy} variant=${w.destroys ? "danger" : undefined}
+                            onClick=${() => onRun(w)}>Yes, run ${w.title.toLowerCase()}<//>
+                          <${Button} size="sm" variant="ghost" onClick=${() => setArmed(null)}>Back<//>
+                        </div>
+                      </div>`
+                    : html`
+                      <div>
+                        <${Button} size="sm" disabled=${!allowWrite || busy}
+                          onClick=${() => (needsConfirm ? setArmed(w.name) : onRun(w))}>
+                          ${needsConfirm ? "Run…" : "Run"}
+                        <//>
+                      </div>`}
+                </div>`}
+            <//>`;
+        })}
+      </div>
+    </div>`;
+}
+
+/* A command box, for everything the form cannot say.
+ *
+ * The form is good at one project and a couple of flags and bad at the rest:
+ * `enrich 4 7 9 12 --budget 60`, `ingest crawl --url a --url b`, anything with
+ * several positionals. Making the form cover all of that would rebuild a command
+ * line out of dropdowns. So: type the command line.
+ *
+ * **It is not a shell and never becomes one.** The line is parsed on the server
+ * by `catalog.parse_command_line` into the same `(cmd, flags)` the form produces,
+ * and `build_argv` turns that into the same validated argument list. There is no
+ * interpreter: `cd`, `rm`, `;`, `|` and a backtick are words the catalog has
+ * never heard of, and it refuses them by name. Anything that reaches a process
+ * came out of the catalog.
+ *
+ * Confirmation is unchanged, and is a second Enter: the server answers the first
+ * attempt with the word that confirms it, the box shows what it will cost, and
+ * the identical line sent again carries the confirmation. Re-typing the whole
+ * command is at least as deliberate as typing its name into a box. */
+function CommandLine({ allowWrite, commands, onRan }) {
+  const [line, setLine] = useState("");
+  const [log, setLog] = useState([]);
+  const [pending, setPending] = useState(null); // { line, confirm_with, destroys }
+  const [busy, setBusy] = useState(false);
+  const [historyAt, setHistoryAt] = useState(-1);
+  const input = useRef(null);
+  const tail = useRef(null);
+
+  const names = useMemo(
+    () => (commands || []).flatMap((g) => g.items).filter((c) => !c.blocked).map((c) => c.cmd),
+    [commands]);
+  const history = useMemo(() => log.filter((l) => l.kind === "in").map((l) => l.text), [log]);
+
+  useEffect(() => { tail.current?.scrollIntoView({ block: "nearest" }); }, [log]);
+
+  const say = (kind, text) => setLog((l) => [...l.slice(-60), { kind, text }]);
+
+  const submit = async (text) => {
+    const typed = text.trim();
+    if (!typed || busy) return;
+    say("in", typed);
+    setLine("");
+    setHistoryAt(-1);
+
+    if (typed === "help" || typed === "?") {
+      say("out", "Commands: " + names.join(", "));
+      say("out", "Type them as you would in a terminal — `merge 4 7 9 --into 2`. Nothing else runs here.");
+      return;
+    }
+    if (typed === "clear") { setLog([]); return; }
+
+    // The identical line, sent again, is the confirmation.
+    const confirm = pending && pending.line === typed ? pending.confirm_with : undefined;
+    setPending(null);
+    setBusy(true);
+    try {
+      const r = await api("/api/run", { method: "POST", body: { line: typed, confirm } });
+      // Deliberately does *not* jump to the Runs view the way the forms do.
+      // Switching away unmounts this box and takes its history with it, which is
+      // exactly wrong for the one control people use to type several commands in
+      // a row. The output is one click away and the click is theirs to make.
+      say("run", { text: `started — ${r.run.cmd}`, run: r.run.id });
+    } catch (e) {
+      if (e.payload?.confirm_with) {
+        setPending({ line: typed, ...e.payload });
+        say("warn", e.payload.destroys
+          ? `This ${e.payload.destroys} Press Enter again to confirm.`
+          : "This spends LLM tokens. Press Enter again to confirm.");
+      } else {
+        say("err", e.message);
+      }
+    } finally {
+      setBusy(false);
+      input.current?.focus();
+    }
+  };
+
+  const onKey = (e) => {
+    if (e.key === "Enter") { e.preventDefault(); submit(line); return; }
+    if (e.key === "Tab") {
+      // Complete the longest command name that starts with what is typed.
+      e.preventDefault();
+      const hits = names.filter((n) => n.startsWith(line.trim()));
+      if (hits.length === 1) setLine(hits[0] + " ");
+      else if (hits.length > 1) say("out", hits.join("  "));
+      return;
+    }
+    if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+      if (!history.length) return;
+      e.preventDefault();
+      const next = e.key === "ArrowUp"
+        ? Math.min(history.length - 1, historyAt + 1)
+        : Math.max(-1, historyAt - 1);
+      setHistoryAt(next);
+      setLine(next === -1 ? "" : history[history.length - 1 - next]);
+    }
+  };
+
+  return html`
+    <div style=${{ display: "grid", gap: 10 }}>
+      <span style=${{ fontFamily: "var(--font-mono)", fontSize: 12, textTransform: "uppercase",
+                      letterSpacing: "0.16em", color: "var(--muted-foreground)" }}>Command box</span>
+      <${Card}>
+        <${CardHeader}>
+          <${CardTitle}>Type a command<//>
+          <${CardDescription}>
+            For everything the forms above cannot say — several projects at once, repeated
+            options, a long line you already know. Only ${html`<code class="mrd-code">tracker</code>`}
+            commands run here; there is no shell, so ${html`<code class="mrd-code">cd</code>`},
+            ${html`<code class="mrd-code">rm</code>`} and pipes are refused by name.
+            Tab completes, ↑ recalls, ${html`<code class="mrd-code">help</code>`} lists.
+          <//>
+        <//>
+        <div style=${{ padding: "0 20px 18px", display: "grid", gap: 10 }}>
+          ${!!log.length && html`
+            <div class="dc-term-log">
+              ${log.map((entry, i) => html`
+                <div key=${i} class=${"dc-term-line dc-term-" + (entry.kind === "run" ? "ok" : entry.kind)}>
+                  ${entry.kind === "in" ? html`<span class="dc-term-prompt">$</span> ` : ""}
+                  ${entry.kind === "run" ? entry.text.text : entry.text}
+                  ${entry.kind === "run" && html`
+                    <button type="button" class="dc-term-link"
+                            onClick=${() => onRan(entry.text.run)}>view output</button>`}
+                </div>`)}
+              <div ref=${tail} />
+            </div>`}
+          <div class="dc-term-entry">
+            <span class="dc-term-prompt" aria-hidden="true">$</span>
+            <input ref=${input} class="dc-term-input" spellcheck="false" autocomplete="off"
+              placeholder=${allowWrite ? "merge 4 7 9 --into 2" : "read-only console"}
+              disabled=${!allowWrite || busy}
+              value=${line}
+              onInput=${(e) => setLine(e.target.value)}
+              onKeyDown=${onKey} />
+            <${Button} size="sm" variant="ghost" loading=${busy}
+              disabled=${!allowWrite || busy || !line.trim()}
+              onClick=${() => submit(line)}>
+              ${pending && pending.line === line.trim() ? "Confirm" : "Run"}
+            <//>
+          </div>
+        </div>
+      <//>
+    </div>`;
+}
+
 function CommandsView({ data, onRan }) {
-  const [groups, setGroups] = useState(null);
+  const [catalogue, setCatalogue] = useState(null);
   const [openCmd, setOpenCmd] = useState(null);
   const [values, setValues] = useState({});
   const [confirm, setConfirm] = useState("");
+  const [armed, setArmed] = useState(false);
+  const [showAll, setShowAll] = useState(false);
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => { api("/api/commands").then((r) => setGroups(r.groups)).catch((e) => setError(e.message)); }, []);
+  useEffect(() => { api("/api/commands").then(setCatalogue).catch((e) => setError(e.message)); }, []);
+
+  const projects = useMemo(
+    () => (data.projects || []).slice().sort((a, b) => a.id - b.id), [data.projects]);
 
   const pick = (cmd) => {
     setOpenCmd(openCmd?.cmd === cmd.cmd ? null : cmd);
     setValues({});
     setConfirm("");
+    setArmed(false);
+    setShowAll(false);
     setError(null);
   };
 
-  const run = async (cmd) => {
+  const run = async (cmd, confirmWith) => {
     setBusy(true); setError(null);
     try {
-      const r = await api("/api/run", { method: "POST", body: { cmd: cmd.cmd, flags: values, confirm } });
+      const r = await api("/api/run", {
+        method: "POST",
+        body: { cmd: cmd.cmd, flags: values, confirm: confirmWith ?? confirm },
+      });
+      onRan(r.run.id);
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  };
+
+  const runWorkflow = async (w) => {
+    setBusy(true); setError(null);
+    try {
+      const r = await api("/api/workflow", { method: "POST", body: { name: w.name, confirm: w.name } });
       onRan(r.run.id);
     } catch (e) { setError(e.message); }
     finally { setBusy(false); }
   };
 
   const preview = (cmd) => "tracker " + cmd.cmd + Object.entries(values)
-    .filter(([, v]) => v !== "" && v !== false && v != null)
-    .map(([k, v]) => (cmd.flags.find((f) => f.f === k)?.t === "bool" ? ` ${k}`
-      : cmd.flags.find((f) => f.f === k)?.positional ? ` ${v}` : ` ${k} ${v}`)).join("");
+    .filter(([, v]) => v !== "" && v !== false && v != null && !(Array.isArray(v) && !v.length))
+    .map(([k, v]) => {
+      const fl = cmd.flags.find((f) => f.f === k);
+      const list = Array.isArray(v) ? v : [v];
+      if (fl?.t === "bool") return ` ${k}`;
+      if (fl?.positional) return list.map((x) => ` ${x}`).join("");
+      return list.map((x) => ` ${k} ${x}`).join("");
+    }).join("");
 
-  if (!groups) return html`<div style=${{ padding: 26 }}><${Skeleton} height=${180} width="100%" /></div>`;
+  // A required positional with nothing in it is the commonest way a run gets
+  // refused, and the server's message arrives after the click. Say it before.
+  const unmet = (cmd) => cmd.flags
+    .filter((f) => f.req)
+    .filter((f) => {
+      const v = values[f.f];
+      return v == null || v === "" || (Array.isArray(v) && !v.length);
+    })
+    .map((f) => humanize(f.f));
+
+  if (!catalogue) return html`<div style=${{ padding: 26 }}><${Skeleton} height=${180} width="100%" /></div>`;
+  const groups = catalogue.groups;
 
   return html`
     <div class="dc-view dc-rise" style=${{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 16,
                      padding: "22px 26px 60px" }}>
-      <${Eyebrow} figure="fig. 06 — commands" title="The command line, as buttons">
-        Read from the CLI itself, so it cannot fall behind. ${html`<b>llm</b>`} means the command spends
-        money. ${html`<b>destructive</b>`} means it deletes rows. Either one makes you type the command's
-        name first, so a stray click cannot do it. Nothing you type here is run as a shell command.
+      <${Eyebrow} figure="fig. 06 — commands" title="Run things">
+        Start with a ${html`<b>routine</b>`} — a named sequence that does the steps in the order they
+        want doing. The individual commands are below it, read from the CLI itself so they cannot fall
+        behind. ${html`<b>llm</b>`} means it spends money; ${html`<b>destructive</b>`} means it deletes
+        rows and asks you to type the name. Nothing here is run as a shell command.
       <//>
 
       ${error && html`<${Alert} variant="danger"><div><div class="mrd-alert-title">Refused</div>
         <div class="mrd-alert-desc">${error}</div></div><//>`}
       ${!data.allow_write && html`<${Alert} variant="warning"><div><div class="mrd-alert-title">Read-only console</div>
         <div class="mrd-alert-desc">Started with --no-run. The argv below is still correct to paste into a terminal.</div></div><//>`}
+
+      <${WorkflowsPanel} workflows=${catalogue.workflows} allowWrite=${data.allow_write}
+                         busy=${busy} onRun=${runWorkflow} />
 
       ${groups.map((g) => html`
         <div key=${g.group} style=${{ display: "grid", gap: 10 }}>
@@ -1941,56 +2673,87 @@ function CommandsView({ data, onRan }) {
                     <span style=${{ flex: 1, fontSize: 13, color: "var(--muted-foreground)" }}>
                       ${cmd.blocked ? cmd.blocked : cmd.desc}</span>
                   </button>
-                  ${isOpen && html`
+                  ${isOpen && (() => {
+                    // Required first, then a few, then the rest folded away.
+                    // `sync` has thirteen flags and all thirteen have defaults
+                    // that work; showing them all reads as thirteen decisions.
+                    const required = cmd.flags.filter((f) => f.req);
+                    const optional = cmd.flags.filter((f) => !f.req);
+                    const shown = showAll ? optional : optional.slice(0, 3);
+                    const hidden = optional.length - shown.length;
+                    const missing = unmet(cmd);
+                    const set = (f) => (v) => setValues((s) => ({ ...s, [f]: v }));
+                    return html`
                     <div style=${{ borderTop: "1px solid var(--border)", padding: "16px 20px", display: "grid", gap: 14 }}>
                       ${cmd.flags.length > 0 && html`
-                        <div style=${{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
-                          ${cmd.flags.map((fl) => html`
-                            <div key=${fl.f} style=${{ display: "grid", gap: 4 }}>
-                              <label style=${{ fontFamily: "var(--font-mono)", fontSize: 12,
-                                color: fl.req ? "var(--foreground)" : "var(--muted-foreground)" }}>
-                                ${fl.f}${fl.req ? " *" : ""}</label>
-                              ${fl.t === "bool"
-                                ? html`<${Switch} size="sm" label=${fl.d ? "on by default" : "off"}
-                                        checked=${!!values[fl.f]}
-                                        onCheckedChange=${(v) => setValues((s) => ({ ...s, [fl.f]: !!v }))} />`
-                                : fl.t === "choice"
-                                ? html`<${Select} size="sm" value=${values[fl.f] ?? ""}
-                                        onChange=${(e) => setValues((s) => ({ ...s, [fl.f]: e.target.value }))}>
-                                        <option value="">${fl.d ?? "default"}</option>
-                                        ${fl.o.map((o) => html`<option key=${o} value=${o}>${o}</option>`)}<//>`
-                                : html`<${Input} size="sm" value=${values[fl.f] ?? ""}
-                                        placeholder=${fl.d == null ? "" : String(fl.d)}
-                                        onChange=${(e) => setValues((s) => ({ ...s, [fl.f]: e.target.value }))} />`}
-                              <span style=${{ fontSize: 11, lineHeight: "16px", color: "var(--muted-foreground)" }}>${fl.h}</span>
-                            </div>`)}
+                        <div style=${{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 14 }}>
+                          ${[...required, ...shown].map((fl) => html`
+                            <${FlagField} key=${fl.f} flag=${fl} projects=${projects}
+                                          value=${values[fl.f]} onChange=${set(fl.f)} />`)}
                         </div>`}
+                      ${hidden > 0 && html`
+                        <div><${Button} size="sm" variant="ghost" onClick=${() => setShowAll(true)}>
+                          ${hidden} more option${hidden === 1 ? "" : "s"}
+                        <//></div>`}
 
+                      ${!!missing.length && html`
+                        <span style=${{ fontSize: 12, color: "var(--muted-foreground)" }}>
+                          Still needed: ${missing.join(", ")}.
+                        </span>`}
+
+                      ${/* The argv stays. It is the honest record of what will run,
+                            it is what you paste into a terminal on a read-only
+                            console, and it is how the labels above teach the
+                            flags they stand for. */ ""}
                       <pre class="dc-log" style=${{ maxHeight: 80 }}>${preview(cmd)}</pre>
 
-                      ${needsConfirm && html`
+                      ${/* Two rituals for two different losses. `merge` cannot be
+                            undone, so it keeps the typed name — deliberate friction
+                            in front of an irreversible act. Spending tokens is
+                            recoverable (you are out some money, not some data), so
+                            it gets an explicit second click instead of homework. */ ""}
+                      ${cmd.destroys && html`
                         <div style=${{ display: "grid", gap: 6 }}>
-                          <span style=${{ fontSize: 13,
-                                          color: cmd.destroys ? "var(--danger)" : "var(--warning)" }}>
-                            ${cmd.destroys ? `This ${cmd.destroys}` : "This spends LLM tokens."}
-                            ${" "}Type ${html`<b style=${{ fontFamily: "var(--font-mono)" }}>${cmd.cmd}</b>`} to confirm.
+                          <span style=${{ fontSize: 13, color: "var(--danger)" }}>
+                            This ${cmd.destroys} Type
+                            ${" "}${html`<b style=${{ fontFamily: "var(--font-mono)" }}>${cmd.cmd}</b>`} to confirm.
                           </span>
                           <${Input} size="sm" value=${confirm} placeholder=${cmd.cmd}
                                     onChange=${(e) => setConfirm(e.target.value)} />
                         </div>`}
+                      ${!cmd.destroys && needsConfirm && armed && html`
+                        <span style=${{ fontSize: 13, color: "var(--warning)" }}>
+                          This spends LLM tokens. Run it?
+                        </span>`}
 
-                      <div style=${{ display: "flex", gap: 10 }}>
-                        <${Button} size="sm" loading=${busy}
-                          variant=${cmd.destroys ? "danger" : undefined}
-                          disabled=${!data.allow_write || busy || (needsConfirm && confirm.trim() !== cmd.cmd)}
-                          onClick=${() => run(cmd)}>Run<//>
-                        <${Button} size="sm" variant="ghost" onClick=${() => setOpenCmd(null)}>Cancel<//>
+                      <div style=${{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                        ${cmd.destroys
+                          ? html`<${Button} size="sm" loading=${busy} variant="danger"
+                              disabled=${!data.allow_write || busy || !!missing.length
+                                         || confirm.trim() !== cmd.cmd}
+                              onClick=${() => run(cmd)}>Run<//>`
+                          : needsConfirm && !armed
+                          ? html`<${Button} size="sm" disabled=${!data.allow_write || busy || !!missing.length}
+                              onClick=${() => setArmed(true)}>Run…<//>`
+                          : html`<${Button} size="sm" loading=${busy}
+                              disabled=${!data.allow_write || busy || !!missing.length}
+                              onClick=${() => run(cmd, needsConfirm ? cmd.cmd : undefined)}>
+                              ${needsConfirm ? "Yes, run it" : "Run"}<//>`}
+                        <${Button} size="sm" variant="ghost"
+                          onClick=${() => (armed ? setArmed(false) : setOpenCmd(null))}>
+                          ${armed ? "Back" : "Cancel"}<//>
                       </div>
-                    </div>`}
+                    </div>`;
+                  })()}
                 <//>`;
             })}
           </div>
         </div>`)}
+
+      ${/* Last, because it is the escape hatch rather than the front door: the
+            forms cover the ordinary cases, and this covers the ones a form would
+            have to become a command line to express. */ ""}
+      <${CommandLine} allowWrite=${data.allow_write} commands=${groups} onRan=${onRan} />
     </div>`;
 }
 
@@ -2092,6 +2855,7 @@ function App() {
   const [running, setRunning] = useState(false);
 
   const load = useCallback(() => api("/api/dataset").then((payload) => {
+    if (payload.kwPerH200) H200_KW = payload.kwPerH200;
     setData(payload);
     // The vendored custom elements read `window.DCTRACKER`. They were written
     // against the mockup's shape, which the API deliberately matches, so they

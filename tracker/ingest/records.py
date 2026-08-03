@@ -10,7 +10,59 @@ import datetime as dt
 from dataclasses import dataclass, field
 from typing import Any
 
-from tracker.vocab import TRACKED_FIELDS, WRITABLE_FIELDS
+from tracker.vocab import DEFAULT_BLOCK_STATUS, TRACKED_FIELDS, WRITABLE_FIELDS
+
+
+@dataclass(frozen=True)
+class BlockRecord:
+    """One capacity block as a single source described it.
+
+    A tranche of a campus with its own state, customer and dates — the thing
+    `project`'s single `phase` / `mw_planned` / `customer` cannot express. See
+    `tracker/blocks.py`.
+
+    `parent` is what lets an article's "Phase 3" meet a filing's "AZP-3 Phase 3":
+    a label naming only a phase cannot be placed without knowing of which facility,
+    and one project row routinely holds several campuses.
+    """
+
+    label: str
+    parent: str | None = None
+    mw: float | None = None
+    status: str = DEFAULT_BLOCK_STATUS
+    customer: str | None = None
+    expected_online: dt.date | None = None
+    energized_on: dt.date | None = None
+    investment_usd: int | None = None
+    #: block field -> the verbatim sentence that got it through the gate. Per field,
+    #: because project 39's failure was money from one facility sitting beside
+    #: capacity from another.
+    quotes: dict[str, str] = field(default_factory=dict)
+    #: Fields this block asserted with no quote the gate could verify — 待确认 at
+    #: block granularity, same meaning and same consequence as on a source.
+    unconfirmed: frozenset[str] = frozenset()
+
+    def as_json(self) -> dict[str, Any]:
+        """The shape stored in `source.blocks`. Sorted, so re-ingest is byte-equal."""
+        out: dict[str, Any] = {"label": self.label}
+        for name in (
+            "parent",
+            "mw",
+            "status",
+            "customer",
+            "expected_online",
+            "energized_on",
+            "investment_usd",
+        ):
+            value = getattr(self, name)
+            if value is None:
+                continue
+            out[name] = value.isoformat() if hasattr(value, "isoformat") else value
+        if self.quotes:
+            out["quotes"] = dict(sorted(self.quotes.items()))
+        if self.unconfirmed:
+            out["unconfirmed"] = sorted(self.unconfirmed)
+        return out
 
 
 @dataclass(frozen=True)
@@ -46,6 +98,13 @@ class SourceRecord:
     #: any prose behind them, and inventing one would be the fabrication the gate
     #: exists to prevent.
     quotes: dict[str, str] = field(default_factory=dict)
+    #: Capacity blocks this source described — the tranches of the campus that have
+    #: their own state, customer and dates. Belongs to the *source* rather than the
+    #: project, unlike `events` and `risks`, because two sources routinely describe
+    #: different phases of one site and both descriptions have to survive to be
+    #: merged. Empty is the common and correct answer: a campus an article treats
+    #: as one thing is one thing.
+    blocks: list[BlockRecord] = field(default_factory=list)
 
     def tracked_claims(self) -> dict[str, Any]:
         """Claims restricted to real project columns with a non-None value."""

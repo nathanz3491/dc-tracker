@@ -262,13 +262,18 @@ def version() -> None:
 
 @app.command()
 def init() -> None:
-    """Create or upgrade the database, then recompute cached confidence."""
-    from tracker.upsert import recompute_confidence
+    """Create or upgrade the database, then recompute the cached derived values."""
+    from tracker.upsert import recompute_blocks, recompute_confidence, recompute_h200
 
     path = _db_path()
     engine, applied = init_db(path)
     with session_scope(engine) as session:
         rescored = recompute_confidence(session)
+        # Both of these are restatements of stored facts rather than facts, so
+        # they are recomputed rather than migrated: the conversion ratio lives in
+        # settings and a SQL backfill would freeze one copy of it here.
+        resized = recompute_h200(session)
+        reblocked = recompute_blocks(session)
 
     console.print(f"database: [bold]{path}[/bold]")
     if applied:
@@ -278,6 +283,15 @@ def init() -> None:
     console.print(f"schema version: {schema_version(engine)}")
     if rescored:
         console.print(f"recomputed confidence on {rescored} project(s)")
+    if reblocked:
+        console.print(f"rebuilt capacity blocks on {reblocked} project(s)")
+    if resized:
+        from tracker.compute import kw_per_h200
+
+        console.print(
+            f"recomputed H200-equivalents on {resized} project(s) "
+            f"[dim]at {kw_per_h200()} kW each[/dim]"
+        )
 
 
 @app.command()
@@ -317,20 +331,24 @@ def serve(
     `--allow-remote`. Anyone who can reach this port can start a `sync`.
 
     Set `TRACKER_CONSOLE_PASSWORD` to put a password in front of it. On loopback
-    that is optional; with `--tunnel` it is required, because a quick tunnel is a
-    public URL and what is behind it runs commands.
+    that is optional; with `--tunnel` it is required, because publishing makes it
+    a public URL and what is behind it runs commands.
 
-    `--tunnel` is the one-flag version of `tracker cloudflare`, which is the same
-    thing with a readiness check and support for a named tunnel on your own
-    domain.
+    `--tunnel` uses the tunnel configured in `TRACKER_TUNNEL_NAME` /
+    `TRACKER_TUNNEL_HOSTNAME` if there is one, and an anonymous quick tunnel
+    otherwise. `tracker cloudflare` is the same thing with a readiness check and
+    flags to override either.
     """
+    settings = get_settings()
     _run_console(
         port=port,
         host=host,
         open_browser=open_browser,
         run=run,
         allow_remote=allow_remote,
-        publish="quick" if tunnel else None,
+        publish=(("named" if settings.tunnel_name else "quick") if tunnel else None),
+        tunnel_name=settings.tunnel_name if tunnel else None,
+        hostname=settings.tunnel_hostname if tunnel else None,
     )
 
 
@@ -552,6 +570,13 @@ def cloudflare(
             show_default=False,
         ),
     ] = None,
+    quick: Annotated[
+        bool,
+        typer.Option(
+            "--quick",
+            help="Force an anonymous throwaway tunnel, ignoring the configured one.",
+        ),
+    ] = False,
     run: Annotated[
         bool,
         typer.Option(
@@ -582,12 +607,19 @@ def cloudflare(
     connection to Cloudflare and relays traffic back down it, so nothing is
     exposed on your network and no firewall or router changes are involved.
 
-    Two shapes. With no flags you get an anonymous quick tunnel: a random
-    `*.trycloudflare.com` URL, no account needed, new URL every time. With
-    `--name` you run a tunnel you created once on your own account, so the
-    hostname is yours and survives a restart — worth it if the link is going to
-    anybody else, because re-sending a fresh URL every session is how one ends up
-    written down somewhere it should not be.
+    Two shapes. A *named* tunnel is one you created once on your own account: the
+    hostname is yours and survives a restart, which is what you want if the link
+    is going to anybody else — re-sending a fresh URL every session is how one
+    ends up written down somewhere it should not be. A *quick* tunnel is
+    anonymous: a random `*.trycloudflare.com`, no account needed, and a different
+    URL every time.
+
+    Set `TRACKER_TUNNEL_NAME` and `TRACKER_TUNNEL_HOSTNAME` in `.env` and this
+    needs no arguments. They are properties of the machine, not of the run — the
+    credentials are already in your home directory and the DNS record is already
+    in your zone — so retyping them on every publish is bookkeeping the
+    environment can do. `--name` and `--hostname` override them, together;
+    `--quick` ignores them and gets a throwaway URL.
 
     `TRACKER_CONSOLE_PASSWORD` is required either way and this refuses to start
     without it. The URL is public and the page can run commands that spend money
@@ -599,11 +631,26 @@ def cloudflare(
     """
     from tracker.webui.tunnel import CloudflaredMissing, find_cloudflared
 
+    if quick and (name or hostname):
+        _fail("--quick means an anonymous tunnel; --name and --hostname describe a named one.")
+
+    # The configured pair is taken together, and only when neither flag was
+    # given. Filling a configured hostname in behind an explicitly different
+    # --name would print a URL that does not point at the tunnel being run.
+    settings = get_settings()
+    if not quick and name is None and hostname is None:
+        name, hostname = settings.tunnel_name, settings.tunnel_hostname
+
     if hostname and not name:
-        _fail("--hostname describes a named tunnel; pass --name as well, or drop both.")
+        _fail(
+            "--hostname describes a named tunnel; pass --name as well, or drop both. "
+            "(TRACKER_TUNNEL_HOSTNAME is set without TRACKER_TUNNEL_NAME.)"
+            if settings.tunnel_hostname and not settings.tunnel_name
+            else "--hostname describes a named tunnel; pass --name as well, or drop both."
+        )
 
     if check:
-        _cloudflare_check(name)
+        _cloudflare_check(name, hostname)
         return
 
     # Fail on a missing binary before the socket is opened, so the operator is not
@@ -626,7 +673,7 @@ def cloudflare(
     )
 
 
-def _cloudflare_check(name: str | None) -> None:
+def _cloudflare_check(name: str | None, hostname: str | None = None) -> None:
     """Print a publish-readiness report and exit non-zero if it would fail."""
     from tracker.webui import assets
     from tracker.webui.auth import MIN_PASSWORD_LEN
@@ -669,6 +716,20 @@ def _cloudflare_check(name: str | None) -> None:
             rows.append(
                 (False, "tunnel", "no named tunnels — run `cloudflared tunnel login` first")
             )
+        # Say where it will publish, and say that the DNS route is not checked
+        # here. `cloudflared tunnel route dns` writes a CNAME this command cannot
+        # see, so a hostname pointing at a tunnel that no longer exists reports
+        # clean and then fails at the edge with a 1033.
+        rows.append(
+            (True, "hostname", f"https://{hostname} — DNS route not verified from here")
+            if hostname
+            else (
+                True,
+                "hostname",
+                "not set; the tunnel's own config decides where it answers. "
+                "Set TRACKER_TUNNEL_HOSTNAME to have the URL printed.",
+            )
+        )
 
     # Not pass/fail — no proxy is the ordinary case. It is reported because when
     # the quick tunnel does time out, this line is the first thing worth knowing.
@@ -699,7 +760,11 @@ def _cloudflare_check(name: str | None) -> None:
         console.print(f"{mark}[bold]{label:<12}[/bold]{escape(detail)}")
 
     if all(ok for ok, _, _ in rows):
-        console.print("\n[green]ready to publish[/green] — run `tracker cloudflare`")
+        # Echo the shape that was actually checked. Printing the bare command
+        # after a `--quick` check would suggest the anonymous tunnel is what runs
+        # by default, which it is not once one is configured.
+        invocation = "tracker cloudflare" if name else "tracker cloudflare --quick"
+        console.print(f"\n[green]ready to publish[/green] — run `{invocation}`")
     else:
         _fail("not ready to publish; see above")
 
@@ -1300,6 +1365,7 @@ def show(project_id: Annotated[int, typer.Argument(help="Project id.")]) -> None
             ("phase", cell("phase", project.phase)),
             ("MW planned", cell("mw_planned", _fmt_mw(project.mw_planned))),
             ("MW built", cell("mw_built", _fmt_mw(project.mw_built))),
+            ("H200-equiv", _h200_cell(project)),
             ("investment", cell("investment_usd", _fmt_usd(project.investment_usd))),
             ("first announced", cell("first_announced", str(project.first_announced or NA))),
             ("expected online", cell("expected_online", str(project.expected_online or NA))),
@@ -1627,6 +1693,7 @@ def capex(
                         "self_built": p.self_built,
                         "mw_planned": p.mw_planned,
                         "mw_built": p.mw_built,
+                        "h200_equivalent": p.h200_equivalent,
                         "mw_unbuilt": p.mw_unbuilt,
                         "investment_usd": p.investment_usd,
                         "mw_by_year": p.mw_by_year,
@@ -2836,6 +2903,14 @@ def _one_quote(project, field: str) -> str | None:
 @app.command()
 def point(
     name: Annotated[str, typer.Argument(help="The data center to go and get.")],
+    url: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--url",
+            help="Read this link instead of searching. Repeatable.",
+            show_default=False,
+        ),
+    ] = None,
     dry_run: Annotated[
         bool, typer.Option("--dry-run", help="Say what it would do and stop. Costs one call.")
     ] = False,
@@ -2859,6 +2934,12 @@ def point(
 
     **Not matched** — it searches for that name specifically, reads what it finds,
     and the ordinary write path creates the row with its citations.
+
+    `--url` replaces the finding step in both branches: you already have the link,
+    so read that instead of searching for one. This is the path for a press release
+    or a filing that search will not surface — and it works whether or not the
+    campus is already tracked, because the write path merges by dedup key either
+    way. Repeatable.
 
     The model chooses from a shortlist and can only answer with an id from it or
     "none"; anything hedged below the confidence floor is treated as "none". That
@@ -2906,20 +2987,95 @@ def point(
     if match.reason:
         console.print(f"[dim]{escape(match.reason)}[/dim]")
 
+    links = [u.strip() for u in (url or []) if u and u.strip()]
     if dry_run:
-        plan = (
-            f"enrich #{match.project_id}"
-            if match.matched
-            else f"search and read up to {max_articles} article(s)"
-        )
+        if links:
+            plan = f"read the {len(links)} link(s) given"
+            plan += f" and merge into #{match.project_id}" if match.matched else " as a new row"
+        elif match.matched:
+            plan = f"enrich #{match.project_id}"
+        else:
+            plan = f"search and read up to {max_articles} article(s)"
         console.print(f"\n[yellow]dry run[/yellow] — would {plan}")
         return
 
     console.print()
-    if match.matched:
+    if links:
+        _point_read(name, point_mod, links, match)
+    elif match.matched:
         _point_enrich(match.project_id)
     else:
         _point_build(name, point_mod, settings, max_articles)
+
+
+def _h200_cell(project) -> str:
+    """The accelerator count, labelled with where it came from.
+
+    Almost always a restatement of the capacity, so it says so — printing it bare
+    beside quoted figures would read as something a source reported. When a source
+    *did* report a chip count it goes through the evidence gate like any value and
+    is shown plainly.
+    """
+    from tracker.compute import h200_equivalent, kw_per_h200
+
+    count = project.h200_equivalent
+    if count is None:
+        return NA
+    basis = project.mw_built if project.mw_built else project.mw_planned
+    if count == h200_equivalent(basis):
+        return f"{count:,} [dim](derived from {_fmt_mw(basis)} at {kw_per_h200()} kW each)[/dim]"
+    return f"{count:,}"
+
+
+def _point_read(name: str, point_mod, urls: list[str], match) -> None:
+    """`--url`: read exactly these links, whoever they turn out to be about.
+
+    No special write path. The links go through `crawl.run` like any other article,
+    so the evidence gate, the dedup key and the merge policies all apply unchanged —
+    which is what makes this safe to point at a page for a campus we already track.
+
+    The identification above is therefore advisory here rather than load-bearing:
+    it tells the operator which row to expect the article to land on, and if the
+    article turns out to be about something else, the dedup key sends it there
+    instead. Overriding that with the matched id would be worse — it would let a
+    mistyped name file a filing under the wrong campus, which is the one error
+    nothing downstream detects.
+    """
+    from tracker.ingest import crawl as crawl_mod
+
+    engine, _ = init_db(_db_path())
+    try:
+        release_lock = acquire_write_lock(_db_path(), command="point")
+    except AlreadyRunning as exc:
+        _fail(str(exc))
+        raise
+    atexit.register(release_lock)
+
+    console.rule("[bold]read[/bold]", align="left")
+    for link in urls:
+        console.print(f"  [dim]{escape(link)}[/dim]")
+    if match.matched:
+        console.print(
+            f"[dim]expected to land on #{match.project_id}; the dedup key decides, not this.[/dim]"
+        )
+
+    cache_dir = install_root() / ".cache" / "articles"
+    with _explain_db_locks(), session_scope(engine) as session:
+        report = crawl_mod.run(session, urls, cache_dir=cache_dir)
+    _print_report(report, title="read")
+
+    with session_scope(engine, commit=False) as session:
+        fresh = point_mod.shortlist(session, name, limit=3)
+    if fresh:
+        console.print("\n[green]in the database:[/green]")
+        for candidate in fresh:
+            console.print(f"  #{candidate.project_id:<5} {escape(candidate.label[:70])}")
+    else:
+        console.print(
+            "\n[yellow]nothing matching that name came out of it[/yellow] "
+            "[dim]— the page may be about a different site, or the gate found no "
+            "quotable value. `tracker queue` shows what was fetched.[/dim]"
+        )
 
 
 def _point_enrich(project_id: int) -> None:
@@ -3007,6 +3163,134 @@ def _point_build(name: str, point_mod, settings, max_articles: int) -> None:
             "\n[yellow]the articles read did not yield a project row[/yellow] "
             "[dim]— the evidence gate drops anything it cannot tie to a quote. "
             "`tracker queue` shows what was fetched.[/dim]"
+        )
+
+
+@app.command("backfill")
+def backfill(
+    what: Annotated[str, typer.Argument(help="Only `blocks` for now.")] = "blocks",
+    limit: Annotated[
+        int, typer.Option("--limit", help="Articles to read. 0 reads every one selected.")
+    ] = 25,
+    project_id: Annotated[
+        int | None,
+        typer.Option("--project", help="Only this project's sources.", show_default=False),
+    ] = None,
+    refetch: Annotated[
+        bool, typer.Option("--refetch", help="Fetch the articles that are no longer cached.")
+    ] = False,
+    force: Annotated[
+        bool, typer.Option("--force", help="Re-read articles whose blocks are already stored.")
+    ] = False,
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="Read and report, write nothing. Still costs calls.")
+    ] = False,
+    yes: Annotated[
+        bool, typer.Option("--yes", help="Skip the confirmation for a large run.")
+    ] = False,
+) -> None:
+    """Re-read stored articles to fill in capacity blocks.
+
+    Migration 0009 created the block table and wrote no rows, because turning an
+    article into blocks needs the article text rather than the schema. Every project
+    ingested before it therefore has no blocks until this runs.
+
+    Deliberately not `ingest crawl --force`: that re-extracts every field with a
+    model that behaves differently than it did at ingest time, churning rows and
+    timestamps inside what is meant to be a backfill. This writes one column and
+    lets the ordinary rollup do the rest.
+
+    Costs one LLM call per article. Reads from the article cache, so most cost
+    nothing to fetch; `--refetch` covers the rest. Resumable — an article whose
+    blocks are already stored is skipped — so a sensible way to run it is in
+    tranches: `--limit 25`, look at what came back, then more.
+    """
+    from tracker import backfill as backfill_mod
+    from tracker.llm import MissingApiKey, default_extractor
+
+    if what != "blocks":
+        _fail(f"nothing to backfill called {what!r}. Only `blocks` exists.")
+
+    settings = get_settings()
+    cache_dir = install_root() / ".cache" / "articles"
+    engine, _ = init_db(_db_path())
+
+    with session_scope(engine, commit=False) as session:
+        picks = backfill_mod.candidates(
+            session, cache_dir=cache_dir, project_id=project_id, force=force
+        )
+
+    if not picks:
+        console.print("[green]nothing to do[/green] — every crawled article already has blocks.")
+        return
+
+    ready = [p for p in picks if p.cached]
+    chosen = picks if refetch else ready
+    if limit:
+        chosen = chosen[:limit]
+
+    # Preflight before anything is spent. Two of these numbers decide whether the
+    # run is worth making at all, and both were wrong in the original estimate.
+    _print_report_rows(
+        [
+            ("articles without blocks", len(picks)),
+            ("already cached", len(ready)),
+            ("need fetching", len(picks) - len(ready)),
+            ("will read now", len(chosen)),
+            ("LLM calls", len(chosen)),
+        ],
+        title="backfill blocks",
+    )
+    if not chosen:
+        console.print(
+            "[yellow]nothing cached to read[/yellow] "
+            "[dim]— pass --refetch to fetch the articles again.[/dim]"
+        )
+        return
+
+    if len(chosen) > 40 and not yes and not json_mode():
+        console.print(
+            f"\n[yellow]{len(chosen)} LLM calls.[/yellow] "
+            "[dim]Re-run with --yes, or use --limit to go in tranches.[/dim]"
+        )
+        raise typer.Exit(1)
+
+    try:
+        extractor = default_extractor(settings)
+    except MissingApiKey as exc:
+        _fail(str(exc))
+        return
+
+    try:
+        release_lock = acquire_write_lock(_db_path(), command="backfill")
+    except AlreadyRunning as exc:
+        _fail(str(exc))
+        raise
+    atexit.register(release_lock)
+
+    console.rule("[bold]read[/bold]", align="left")
+    with _explain_db_locks(), session_scope(engine, commit=not dry_run) as session:
+        report = backfill_mod.run(
+            session,
+            chosen,
+            extractor=extractor,
+            cache_dir=cache_dir,
+            settings=settings,
+            refetch=refetch,
+            dry_run=dry_run,
+        )
+
+    if json_mode():
+        emit({"rows": dict(report.as_rows()), "notes": report.notes})
+        return
+
+    _print_report(report, title="blocks" + (" (dry run)" if dry_run else ""))
+    for note in report.notes[:20]:
+        console.print(f"  [dim]{escape(note)}[/dim]")
+    remaining = len(picks) - len(chosen)
+    if remaining > 0:
+        console.print(
+            f"\n[dim]{remaining} article(s) still to read. Run it again to continue.[/dim]"
         )
 
 

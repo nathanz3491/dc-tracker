@@ -12,6 +12,201 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **`capacity_block`: what an AI data center actually is** (migration `0009`,
+  `tracker/blocks.py`, `tracker/vocab.py`, `tracker/ingest/crawl.py`).
+
+  `project` carried one `phase`, one `mw_planned`, one `mw_built`, one `customer`.
+  That was adequate when a campus was either built and serving customers or not
+  built. A modern AI campus is several of those at once — 150 MW energised and
+  serving one buyer, 150 MW under construction pre-leased to another, 300 MW planned
+  with nobody named — and the row could not say it. Measured on the live database:
+  **28 projects partly built, 15 in `construction` with megawatts already live, 12
+  with power energised while construction was mid-track, 49 with a customer named
+  and nothing built, and 52 whose sources described a phase with its own capacity
+  that was being discarded into a single `mw_planned`.**
+
+  A block carries its own label, MW, status, customer and dates, each with its own
+  citation. The status ladder makes two distinctions the project enum cannot:
+  **`shell_complete`** (built, no power — which `tracks.py` calls the most
+  informative signal in the dataset and which previously had nowhere to live) and
+  **`energized` vs `serving`** (power on, versus a customer running on it).
+
+  Verified end to end against Iron Mountain's Q1 2026 filing. **Project 39 — the row
+  that read "AZP-2, 48 MW, $47.4M, online Q3 2026" with the capacity from one
+  facility and the money and date from another — now carries `azp-3.phase-3` as its
+  own 8 MW block with its own Q3 2026 date.** VA-9 came in as two tranches with
+  *different* dates, Q4 2026 and Q1 2027, where before that was one row with one.
+
+  Four design points, each with tests:
+
+  - **Identity is a derived key, never a name a source chose.** `block_key` folds
+    "Phase 1" / "Phase I" / "phase one" / "first phase" onto `phase-1`, and makes a
+    filing's "AZP-3 Phase 3" meet an article's "Phase 3" *of AZP-3* — the convergence
+    project 39 needed. It never decides `phase-1` and `azp-2` are one block on a
+    similarity score; that is an operator's call, recorded in a new `block_alias`
+    table. Same asymmetry `dedup.py` argues for projects.
+  - **A project row is not one campus.** `dedup_key` is `company|city|state`, so one
+    row holds every facility an operator has in one city. The likeliest corruption
+    this could cause is a generic "Phase 1" from two different campuses colliding and
+    summing their megawatts — so blocks carry `parent` and a `generic` flag, and an
+    unplaceable block's capacity is **excluded** from the rollup rather than guessed.
+  - **The rollup only ever raises.** `reconcile` may lift a scalar or fill a null,
+    never lower one or blank one. A block sum is a *floor* on the campus; a cited
+    campus total is a different, also-valid figure. That is what let migration 0009
+    land on 227 live rows with every value provably unchanged, and it means the
+    "9 of 12" count can only go up.
+  - **Each block's evidence pool is sealed.** `evidence_gate` deliberately ignores
+    field labels and lets any verified quote support any value — earned behaviour
+    that recovered 89 values across 64 projects. At block granularity that same
+    tolerance *is* the project-39 bug, since block megawatts get summed. So the gate
+    runs once per block over that block's own evidence, and a second check requires
+    the containing sentence to actually name the block: the segment's head **and**,
+    where it has one, its ordinal — because `AZP-2` and `AZP-3` share a stem and it
+    is the number that distinguishes them.
+
+  Blocks are a cache rebuilt wholesale from a new `source.blocks` column, the same
+  status `confidence` and `h200_equivalent` have, so re-ingest is idempotent and
+  `merge` and `recompute_from_sources` get the behaviour without a second
+  implementation. `tracker init` recomputes them. `upsert.resolve` was extracted so
+  block fields go through the field engine — including the 待确认 rule — rather than
+  a copy of it.
+
+  Not yet done, and honest about it: the `logic` rules are not yet re-expressed per
+  block and the read surfaces do not show blocks. Deliberately **not** a thirteenth
+  tracked field.
+
+- **`tracker backfill blocks`** (`tracker/backfill.py`). The 227 rows ingested
+  before migration `0009` have no blocks, because turning an article into blocks
+  needs the article text rather than the schema. This re-reads the stored articles
+  for that one purpose.
+
+  Deliberately not `ingest crawl --force`, which would re-extract every scalar with
+  a model that behaves differently today than it did at ingest time — churning 227
+  rows and every `updated_at` inside what is meant to be a backfill. This writes one
+  column, `source.blocks`, and lets the rollup do the rest. Keyed on URL, not source
+  row: **373 crawled sources are only 229 distinct articles**, since 62 feed more
+  than one project, and 193 are already cached. Resumable, idempotent, filings first.
+
+  **The hard part is deciding whose blocks these are**, and both guards exist because
+  the unguarded version wrote real wrong numbers into a copy of the live database:
+
+  - **Locality, never the operator.** An 80 MW "Portland Expansion" landed on eight
+    STACK rows — San Jose, Prince William, Chicago, Avondale, Fort Worth, New Albany
+    and two Portlands — because the only thing being matched on was a company name
+    all eight share. Matching now runs over name and city, and a *disagreeing* city
+    is a veto rather than a low score: "STACK Infrastructure"/Chicago against "STACK
+    Infrastructure"/Portland still scores 0.67 on the operator's two words alone.
+  - **A portfolio article is split, but only when it is one.** A Core Scientific
+    filing describing Denton, Dalton, Austin, Marble and Muskogee gave all six of its
+    blocks to both the Denton row and the Dalton row, recording 588 MW twice. Each
+    block is now routed by its own label — against what *distinguishes* the sibling
+    rows, since the tokens they share are exactly what makes them indistinguishable.
+    Demanding this unconditionally was tried first and was worse: it emptied Lake
+    Mariner, whose blocks are "Akela" and "La Lupa", because a building is usually
+    named after nothing in particular. So portfolio-ness is detected from the
+    article rather than assumed, and only then must every block earn its place.
+
+  Both guards skip rather than guess, which is the recoverable direction. Verified on
+  a nine-campus article that routed Colossus to Memphis, Stargate to Abilene and
+  Prometheus to New Albany, and dropped an unattributable "Planned 600 MW Expansion"
+  entirely. **Lake Mariner now reads the way the schema was rebuilt to allow: 378 MW
+  under construction for Fluidstack beside 60 MW already serving Core42.**
+
+- **`h200_equivalent`: capacity restated as accelerators** (migration `0008`,
+  `tracker/compute.py`). Megawatts is what gets reported and is not what anybody
+  is asking; the question behind these rows is how much training capacity a site
+  represents.
+
+  Derived from capacity by default and tiered `derived`, like `county` and the
+  coordinates — a unit conversion, not a new claim. An article that states a chip
+  count outright beats it and comes through the evidence gate with its own quote.
+  A site nobody has sized stays **null rather than zero**, because a zero would be
+  summed and every total would be wrong.
+
+  The ratio is **1.3 kW per H200 at the meter** (~770 per MW), built from
+  published figures rather than picked: the H200 SXM board is 700 W, a DGX H200
+  draws 8.5 kW for eight of them — 1.06 kW per GPU of node-level IT load, which is
+  what a data center actually powers — and a liquid-cooled AI hall is underwritten
+  at PUE 1.15–1.25 for 2026. Every input to that ages, so it is
+  `TRACKER_KW_PER_H200` and the column is recomputed rather than migrated:
+  `tracker init` re-bases the whole table. Output is rounded to two significant
+  figures, because the megawatt input was rounded before it was published.
+
+  Deliberately **not** a thirteenth tracked field. Those twelve are the PRD's
+  definition of done and "9 of 12" is quoted in the docs, the console header and
+  the export.
+
+- **A command box on the Commands page**, for what the forms cannot say —
+  `merge 4 7 9 --into 2`, `ingest crawl --url a --url b`, several positionals.
+
+  It is not a shell and does not become one. The line is parsed server-side by
+  `catalog.parse_command_line` into exactly the `(cmd, flags)` a form produces, and
+  `build_argv` turns that into the same validated argument list. `cd`, `rm`, `;`,
+  `|` and backticks are words the catalog has never heard of and are refused by
+  name, with a suggestion when it is a near miss. A blocked command is still
+  blocked; confirmation is still required and is a second Enter. Tab completes, ↑
+  recalls. Running from the box does not jump to the Runs view — that would
+  unmount the box and take its history with it — so it prints a "view output" link
+  instead.
+
+- **`TRACKER_TUNNEL_NAME` / `TRACKER_TUNNEL_HOSTNAME`**, so `tracker cloudflare`
+  publishes to a permanent hostname with no arguments. They are settings rather
+  than flags retyped every session because they describe the machine, not the run:
+  the tunnel credentials are already in the home directory and the DNS record is
+  already in the zone.
+
+  The pair is taken **together, and only when neither flag was given**. An
+  explicit `--name` does not inherit the configured hostname — printing a real
+  hostname beside a different tunnel produces a URL that looks right and points at
+  the wrong thing, which is worse than printing none. `--quick` ignores the
+  configuration and gets a throwaway URL; it and `--name` are mutually exclusive.
+  `serve --tunnel` reads the same pair, so the two ways of publishing cannot land
+  on different URLs. A hostname configured without a name is refused by name.
+
+  `--check` now reports where it will publish, and says the DNS route is *not*
+  verified from here — `cloudflared tunnel route dns` writes a CNAME this command
+  cannot see, so a hostname pointing at a deleted tunnel reports clean and then
+  fails at the edge with a 1033.
+
+- **Routines in the console** (`webui/workflows.py`): four named sequences —
+  *Catch up on the news* (`sync → ingest geo → logic check`), *Deepen what we
+  already have*, *Tidy the database*, *Prepare a report* — run as **one job with
+  one log and one entry in the run history**, not chained by the browser.
+
+  The console could always run any single command, which left the operator doing
+  the sequencing by hand and guessing at the order. The order matters: deriving
+  geography before reading articles wastes the derivation. Each step states why it
+  follows the last, in the UI and in the log.
+
+  Every guarantee the single-command path enforces holds here — a sequence cannot
+  reach a blocked command, cannot spend tokens without confirmation, and reports
+  the cost of its most expensive step. Every step's argv is built before anything
+  executes, so a typo in step three is not discovered after steps one and two have
+  spent money. Stops at the first real failure; `duplicates` and `logic check` exit
+  non-zero when they *find* something, which is a finding, so those are marked
+  `tolerate_failure` and the run continues.
+
+- **`tracker point --url URL`** (repeatable): read a specific link instead of
+  searching for one, for a press release or a filing that search will not surface.
+  Works whether or not the campus is already tracked — the links go through
+  `crawl.run` like any other article, so the evidence gate, the dedup key and the
+  merge policies all apply unchanged. The identification is advisory on this path:
+  it says which row to expect, and the dedup key decides. Overriding it with the
+  matched id would let a mistyped name file a filing under the wrong campus, which
+  is the one error nothing downstream detects.
+
+- **Streaming for the written briefing** (`llm.MiniMaxExtractor.stream`,
+  `overview.stream`, `POST /api/overview/stream`). Reasoning is filtered out *as it
+  arrives* — these models put `<think>` in the content field, and `<think>` shows
+  up split across frames as `<th` then `ink>`, so a naive passthrough types the
+  model's private deliberation into the drawer and then has to erase it.
+
+  Deliberately not retried: `_post` can replay a failed request because nothing has
+  been shown yet, but once the first token has reached the reader a retry restarts
+  the paragraph mid-sentence. A stream that dies partway is not cached either —
+  half a briefing that stops mid-sentence would otherwise be served as that row's
+  reading forever, since the content it is keyed on never changes.
+
 - **A survey of government data sources, and the decision not to build one**
   (`docs/government-sources.md`, `scripts/probe_government_sources.py`). Four
   uniform machine-readable routes were tested against the markets holding the
@@ -152,7 +347,197 @@ initial build of the v1 PRD.
   is not that it would hold the run slot — it would — but that putting this page
   on the public internet is a decision for somebody at a terminal.
 
+### Changed
+
+- **Project pickers search; so does the projects table.** The command form's
+  pickers were `<select>`s holding all 224 rows, which is not a picker but a wall
+  — and `merge`, which takes several ids, therefore looked like it took one. They
+  are now type-to-filter with the results as removable chips. The table's search
+  box gained the same matcher, so **`#42` finds project 42** and `meta ohio`
+  narrows on both words. One definition of "matches", used in both places, because
+  they had drifted: the table searched six fields and not the id, and the pickers
+  did not search at all.
+
+- **The AI overview is a card in the stats flow again**, under the figures it is a
+  reading of, matching `.mrd-card`'s radius and shadow. Pinning it above the tab
+  strip made it the one block in the drawer that could not be scrolled past.
+
+- **The streamed reveal is smoother.** The animation loop was being torn down and
+  rebuilt on every SSE frame, because the text sat in its effect dependencies — the
+  cursor restarted several times a second, which was most of the stutter. It is
+  created once now, paced by elapsed time rather than by frames, and reveals whole
+  words: simulated against the old algorithm on identical arrivals, **23 renders
+  with a half-drawn word became 0**. A word growing letter by letter re-wraps the
+  line under it, which reads as twitching rather than typing.
+
+- **The briefing is written by `M2-her` and is a third as long.** New
+  `TRACKER_MINIMAX_FAST_MODEL`, a third model setting beside extraction and
+  reasoning, because this call's constraint is neither volume nor depth but
+  *latency*: the panel generates when a row is opened, so the model's speed is the
+  page's speed. **46.6s → 2.7s to the first word, 231 → ~65 words.**
+  `tracker infer` keeps the reasoning model, where nobody is waiting.
+
+  Chosen by measuring every model on this prompt, and the ranking is not the one
+  the model list implies. Time to the first *visible* word — tokens inside
+  `<think>` are invisible, so a model that streams instantly and then deliberates
+  is not fast:
+
+  | model | thinks | first visible word |
+  | --- | --- | --- |
+  | `MiniMax-M3` (previous default) | yes | 46.6s, **and returned nothing at all** |
+  | `MiniMax-M2.5-highspeed` | yes | 17.9s |
+  | `MiniMax-M2.7` | yes | 16.0s |
+  | `MiniMax-M2.7-highspeed` | yes | 15.5s |
+  | `MiniMax-M2.1-highspeed` | yes | 12.5s |
+  | `MiniMax-M2` | yes | 12.4s |
+  | **`M2-her`** | **no** | **2.7s** |
+
+  Note that plain `MiniMax-M2` beats every `-highspeed` variant. "Highspeed" is
+  output tokens per second, and this job emits ~70 words after a fixed slab of
+  reasoning, so throughput is the one thing that barely matters. `MiniMax-M3` is
+  worse than slow: it spent the entire completion budget thinking and returned an
+  **empty** briefing. Only removing the reasoning moves the number.
+
+  **`M2-her` is the only MiniMax model that does not think**, which is why it is
+  the default: **2.7s to the first word against 12.4s**, 65 words on average,
+  nothing leaking. Three things were needed, and all three benefit every model:
+
+  - the prompt asks for an `[[END]]` sentinel, because the API's own `stop`
+    parameter is accepted and **ignored**;
+  - `overview.RUNAWAY` cuts the *stream* at the sentinel, or where the model
+    starts a second answer. Cutting the stream rather than the text is where the
+    time is saved — abandoning the generator closes the connection, so the tokens
+    after the answer are never waited for. Unchecked, `M2-her` writes 756–982 words
+    against a 110-word instruction, repeats itself under "Final answer (last
+    round)", and narrates its own word count;
+  - `MODEL_TOKEN_CAP` clamps the budget to the 2048 it accepts. Without it every
+    request was an HTTP 400 and the model was not selectable at all.
+
+  **The known cost.** The shape was never the real problem. On a row whose
+  construction track read `nothing reached` and whose other four tracks had
+  passed, it wrote *"All tracks complete; construction the last to finish"* — the
+  most informative field in the row, inverted. It has also named a utility and a
+  permit process appearing nowhere in the data, and written phrases that mean
+  nothing ("Major capex is confirmed via gas"). `MiniMax-M2` read the same row
+  correctly. The behaviour is variable — four later runs on that row were clean.
+
+  Taken deliberately, with the failure measured rather than assumed, and bounded
+  by what the panel already is: labelled as a model's reading, never stored, never
+  a source, unable to move confidence. A wrong briefing is a wrong *opinion* beside
+  correctly cited values, not a wrong value. `TRACKER_MINIMAX_FAST_MODEL` =
+  `MiniMax-M2` buys the accuracy back for about ten seconds a row.
+
+  Thinking cannot be switched off on the rest: `thinking: {type: disabled}`,
+  `reasoning_effort: none`, `reasoning_effort: minimal` and
+  `enable_thinking: false` are all accepted by the API and all ignored, and an
+  assistant prefill of `</think>` does not suppress it. Shrinking the prompt does
+  not help either — 1300 fewer characters of provenance quotes moved the first word
+  by less than the run-to-run noise. The reasoning is a fixed cost; the model is
+  the only lever.
+
+  `overview-v2` asks for one opening sentence and two or three bullets in
+  markdown, 110 words maximum. It also carries a rule the fast model needed: read
+  THE FIVE TRACKS one line at a time, and call a track blocked only if its own line
+  says `nothing reached`. Without it the model merged two tracks into one claim —
+  "permits and power both show nothing reached" for a project whose permits line
+  read `permit_filed, permit_approved`. That is a false statement about data on the
+  screen beside it, which is the worst thing this panel can do. Measured over 8
+  projects: **2 misread a track before the rule, 0 after.**
+
+- **The briefing panel generates on open and streams.** All three were reversals of the original design, which put it last
+  behind a *Write a briefing* button on the reasoning that a drawer spending money
+  when you click a row is a drawer nobody dares click. In use almost nobody clicked
+  the button, so the panel cost nothing and did nothing. Cost control moved to
+  where it belongs — the briefing is cached by content, so a row is paid for once
+  and reopening is free — and generating on open then made the wait the first thing
+  that happens when you open a row, which is what streaming is for.
+
+  It is a card in the stats tab's ordinary flow, under the figures it reads. It
+  was briefly pinned above the tab strip; that made it the one block in the drawer
+  you could not scroll past, and put a model's reading in front of the numbers it
+  is a reading *of*. It matches `.mrd-card`'s radius and shadow so it belongs to
+  the page — the tint and the `inferred` hue are what mark it out, not a different
+  shape — and it keeps its header saying a model wrote it.
+
+  **Smoother streaming.** The reveal loop was being torn down and rebuilt on every
+  SSE frame, because the text was in its effect dependencies — the cursor
+  restarted several times a second, which was most of the stutter. It is now
+  created once and reads the text from a ref, paced by elapsed *time* rather than
+  by frames (so it looks the same on any refresh rate), and it reveals whole words
+  rather than characters. Simulated against the old algorithm on the same clumped
+  arrivals: **23 renders with a half-drawn word, down to 0** — a growing word
+  re-wraps the line under it, which reads as twitching rather than typing.
+
+- **The command form is built for someone who has not used a terminal.**
+  Plain-language labels with the real flag beside them; a **project picker** instead
+  of an id you had to go and look up in another tab; presets around the CLI's own
+  default instead of an empty number box; required fields first with the rest folded
+  behind *N more options* (`sync` has thirteen flags and all thirteen have defaults
+  that work); and missing required values named before the click rather than by the
+  server after it.
+
+  Confirmation now distinguishes the two losses it was conflating. `merge` cannot be
+  undone, so it keeps the typed command name — deliberate friction in front of an
+  irreversible act. Spending tokens is recoverable, so it takes an explicit second
+  click instead of homework. The server-side rule is unchanged; the UI supplies the
+  string only after the operator has explicitly confirmed, which is exactly what
+  that rule checks for.
+
+  The argv preview stays. It is the honest record of what will run, it is what you
+  paste into a terminal on a read-only console, and it is how the friendly labels
+  teach the flags they stand for.
+
 ### Fixed
+
+- **`logic resolve` could destroy correct data to satisfy a coarse `phase` enum.**
+  Three of its operator edits — `_drop_energized`, `_set_phase_operational` and
+  `_built_equals_planned` — answered a contradiction by rewriting the row, and
+  `--llm` could apply any of them unattended.
+
+  The contradictions they hung off are largely artefacts of the schema rather than
+  faults in the data. A modern campus is several states at once: measured on the
+  live database, **28 projects are partly built, 15 are `construction` with
+  megawatts already live, and 12 have power energised while construction is
+  mid-track.** One `phase` enum cannot describe that, so
+  `energized_but_not_operational` (19 findings) and
+  `operational_without_built_capacity` (7) were mostly the schema complaining about
+  itself — and the remedies were severe. `_drop_energized` deleted a real, cited
+  energisation milestone, the most informative event type in the dataset.
+  `_built_equals_planned` asserted a whole campus was energised because one phase
+  was. `_set_phase_operational` marked a campus finished while most of it was still
+  being built.
+
+  Those two findings now offer no edit at all — accept or skip, which is the honest
+  set of choices — and `past_its_own_date` keeps only the defensible half (clear a
+  stale date; do not declare the campus operational). **73 of the 148 findings can
+  no longer be auto-edited**; the 75 that remain are ones where an edit really does
+  answer the question. Verified against a copy of the live database: a full
+  `logic resolve --auto --apply` now leaves all 67 energisation milestones intact.
+
+  A test locks it in, because the removed one-liners are convenient enough to come
+  back by accident. The real repair — representing a campus as capacity blocks so
+  these states can be *recorded* rather than flagged — is the work this is stage 0
+  of.
+
+- **A restart could not dislodge a stale front end.** Static files were served at
+  bare URLs — `/static/app.js`, no version — with `Cache-Control: no-cache`. That
+  is correct and it is not sufficient: a browser holding the file, or a CDN edge in
+  front of a published console, goes on serving last week's page however many times
+  the server restarts. The failure is silent, because the page still loads. It cost
+  a round trip to establish that a rebuilt panel and a rewritten animation had in
+  fact shipped and were simply not being fetched.
+
+  `assets.stamp` now rewrites every `/static/...` reference in `index.html` to
+  carry a token derived from the file's mtime and size, so **a changed file is a
+  different URL** and nothing anywhere can serve the old bytes. The page itself is
+  `no-store`, so new tokens always arrive.
+
+  That also fixed the opposite problem. `no-cache` with no `ETag` meant every page
+  load re-downloaded roughly three megabytes of vendored JavaScript, because there
+  was no validator to make a conditional request with. A request carrying the
+  current token is now answered `immutable, max-age=1y`; a bare or stale token
+  still gets `no-cache`. `immutable` is only safe *because* the URL changes — which
+  is exactly the objection the previous comment raised against it.
 
 - **The evidence gate was discarding correct values over cosmetic edits to the
   quote.** `enrich` logged `evidence quote for 'mw_planned' is not in the article;

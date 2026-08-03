@@ -155,22 +155,182 @@ tr.dc-enter { animation-name: fade-in; }
   align-items: center;
 }
 
-/* ---- The written briefing --------------------------------------------------
-   Set apart on purpose. Every other block in the drawer is a value with a
-   citation; this one is a reading of them, and it should not be mistaken for
-   evidence at a glance. The left rule uses the same hue the `inferred` tier uses
-   everywhere else, so the signal is one a reader has already been taught. */
-.dc-insight {
-  border-left: 2px solid color-mix(in oklab, var(--chart-5) 55%, transparent);
-  padding-left: 14px;
+/* ---- The AI overview -------------------------------------------------------
+
+   Shaped after the overview blocks search engines put above their results, for
+   the same reason they are shaped that way: it is a reading of what follows, it
+   should be skimmable in one glance, and it must not be mistaken for the sourced
+   material underneath it.
+
+   Earlier this was a bordered card carrying two lines of disclaimer above three
+   lines of content, which is the shape of something nobody reads. The honesty
+   signal is still here and still unmissable — a heading that says a model wrote
+   it, the `inferred` hue the tier legend already teaches, a tinted ground that
+   belongs to nothing else in the drawer — but it is stated once, quietly, and the
+   caveat moved below the text where a reader arrives *after* the claim instead of
+   in front of it.
+
+   It sits in the stats tab's ordinary card flow. It was briefly pinned above the
+   tab strip, which made it the one block in the drawer you could not scroll past
+   and put a model's reading in front of the figures it is a reading of. Matching
+   the radius and padding of the cards around it is the point: it belongs to the
+   page, and the tint is what marks it out, not a different shape. */
+.dc-ai {
+  padding: 16px 20px 14px;
+  /* The same radius and shadow token `.mrd-card` uses, so it reads as one of the
+     cards rather than as a foreign block that happens to sit among them. Only the
+     tint and the border hue differ, and those are the honesty signal. */
+  border-radius: var(--radius-2xl);
+  box-shadow: var(--shadow-card);
+  background: color-mix(in oklab, var(--chart-5) 7%, var(--surface));
+  border: 1px solid color-mix(in oklab, var(--chart-5) 14%, transparent);
 }
-.dc-insight p {
-  margin: 0 0 10px;
-  font-size: 14px;
-  line-height: 22px;
-  max-width: 74ch;
+
+.dc-ai-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
 }
-.dc-insight p:last-of-type { margin-bottom: 0; }
+.dc-ai-spark { font-size: 13px; color: var(--chart-5); line-height: 1; }
+.dc-ai-label {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: color-mix(in oklab, var(--chart-5) 70%, var(--foreground));
+}
+
+/* Three dots rather than the word "writing", so the live indicator does not
+   change the width of the heading as it comes and goes. */
+.dc-ai-dots { display: inline-flex; gap: 3px; align-items: center; }
+.dc-ai-dots i {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--chart-5);
+  animation: dc-ai-dot 1.1s var(--ease-swift, ease-in-out) infinite;
+}
+.dc-ai-dots i:nth-child(2) { animation-delay: 0.15s; }
+.dc-ai-dots i:nth-child(3) { animation-delay: 0.3s; }
+@keyframes dc-ai-dot { 0%, 100% { opacity: 0.25; } 50% { opacity: 1; } }
+
+.dc-ai-redo,
+.dc-ai-more {
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  color: color-mix(in oklab, var(--chart-5) 72%, var(--foreground));
+  cursor: pointer;
+}
+.dc-ai-redo { margin-left: auto; }
+.dc-ai-redo:hover, .dc-ai-more:hover { text-decoration: underline; }
+
+/* Body type is a step larger than the table around it. This is the one block in
+   the drawer meant to be read as prose rather than scanned as data, and setting
+   it like data is most of why it looked wrong.
+
+   No reading measure. A 68ch cap is right for a page of prose and wrong here: the
+   card is already narrower than the drawer, the briefing is under 110 words, and
+   capping it again left a third of the card empty with the text hugging the left
+   edge — which reads as a layout bug, not as typography. The card's own padding
+   is the measure. */
+.dc-ai-body {
+  font-size: 14.5px;
+  line-height: 23px;
+  color: var(--foreground);
+  /* Collapsed by default, with the last line faded rather than sliced. The old
+     panel clipped mid-letter against a hard edge, which reads as a rendering bug
+     rather than as more text. */
+  max-height: 10.5em;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(180deg, #000 76%, transparent 100%);
+  mask-image: linear-gradient(180deg, #000 76%, transparent 100%);
+}
+/* Expansion is instant, deliberately. Transitioning `max-height` needs a
+   concrete target, and the usual trick — animating to a large fixed value —
+   measured as a transition that does not visibly complete: 1.5s after the class
+   landed the computed height was still the collapsed 152.25px. Animating to a
+   measured `scrollHeight` would work but means writing a pixel value from JS on
+   every resize and every re-render of streamed text. A click that reveals the
+   rest of a short paragraph does not need easing. */
+.dc-ai-body.is-open {
+  max-height: none;
+  -webkit-mask-image: none;
+  mask-image: none;
+}
+/* While writing, never fade or clip — a briefing that appears to stop growing
+   mid-stream looks broken. It settles into the collapsed state when it finishes. */
+.dc-ai-body.is-writing {
+  max-height: none;
+  -webkit-mask-image: none;
+  mask-image: none;
+}
+
+.dc-ai-body p { margin: 0 0 9px; }
+.dc-ai-body p:last-child { margin-bottom: 0; }
+.dc-ai-body ul { margin: 0 0 9px; padding-left: 18px; }
+.dc-ai-body ul:last-child { margin-bottom: 0; }
+.dc-ai-body li { margin: 0 0 4px; }
+.dc-ai-body li::marker { color: color-mix(in oklab, var(--chart-5) 60%, transparent); }
+.dc-ai-body strong { font-weight: 650; }
+.dc-md-code {
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: color-mix(in oklab, var(--foreground) 8%, transparent);
+}
+
+/* The caret marks the live edge. On the container rather than in the text, so it
+   cannot be selected or copied out with the briefing. */
+.dc-ai-body.is-writing > :last-child::after {
+  content: "";
+  display: inline-block;
+  width: 2px;
+  height: 1.05em;
+  margin-left: 3px;
+  vertical-align: text-bottom;
+  background: var(--chart-5);
+  animation: dc-ai-caret 1s steps(2, start) infinite;
+}
+@keyframes dc-ai-caret { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
+
+.dc-ai-foot {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+  font-size: 11.5px;
+  color: var(--muted-foreground);
+}
+
+.dc-ai-quiet { margin: 0; font-size: 13px; color: var(--muted-foreground); }
+
+/* Placeholder lines while the model is still thinking. It cannot be told not to
+   think, so this is the two or three seconds before the first word every time. */
+.dc-ai-wait { display: grid; gap: 8px; padding: 2px 0 4px; }
+.dc-ai-wait span {
+  height: 11px;
+  border-radius: 5px;
+  background: color-mix(in oklab, var(--chart-5) 16%, transparent);
+  animation: dc-ai-wait 1.4s var(--ease-swift, ease-in-out) infinite;
+}
+.dc-ai-wait span:nth-child(2) { animation-delay: 0.12s; }
+.dc-ai-wait span:nth-child(3) { animation-delay: 0.24s; }
+@keyframes dc-ai-wait { 0%, 100% { opacity: 0.45; } 50% { opacity: 0.9; } }
+
+/* base.css collapses durations under this, but the caret, the dots and the
+   placeholder pulse are timing functions that never settle, so they are turned
+   off rather than sped up. */
+@media (prefers-reduced-motion: reduce) {
+  .dc-ai-body.is-writing > :last-child::after,
+  .dc-ai-dots i,
+  .dc-ai-wait span { animation: none; }
+}
 
 /* ---- Capex --------------------------------------------------------------- */
 .dc-capex-cover {
@@ -429,4 +589,115 @@ dc-map svg:active { cursor: grabbing; }
   .dc-cover  { display: none; }
   .dc-legend { display: none !important; }
   .dc-view h1 { font-size: 22px !important; }
+}
+
+/* A chosen value in a multi-value field, with its own remove affordance. Reads as
+   "this is in, click to take it out", which a highlighted row in a native
+   multi-select does not. */
+.dc-chip-x {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--muted);
+  color: var(--foreground);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.dc-chip-x:hover {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+.dc-chip-x span { opacity: 0.55; }
+.dc-chip-x:hover span { opacity: 1; }
+
+/* ---- The searchable project picker ---------------------------------------- */
+.dc-picker {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  max-height: 260px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-popover, 0 8px 28px rgb(0 0 0 / 0.14));
+}
+.dc-picker-row {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: baseline;
+  width: 100%;
+  padding: 7px 10px;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--foreground);
+}
+.dc-picker-row:hover, .dc-picker-row:focus-visible { background: var(--accent-soft); }
+.dc-picker-id    { font-family: var(--font-mono); font-size: 11.5px; color: var(--muted-foreground); }
+.dc-picker-name  { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dc-picker-where { font-size: 11.5px; color: var(--muted-foreground); white-space: nowrap; }
+.dc-picker-empty { padding: 9px 11px; font-size: 12px; color: var(--muted-foreground); }
+
+/* ---- The command box ------------------------------------------------------
+   Terminal-shaped on purpose: it takes the same command lines the CLI does, and
+   looking like the thing it is saves explaining. Dark in both themes, like the
+   run log, because that is where its output goes. */
+.dc-term-log {
+  max-height: 190px;
+  overflow-y: auto;
+  padding: 10px 12px;
+  border-radius: var(--radius-lg);
+  background: #16130f;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 19px;
+}
+.dc-term-line { white-space: pre-wrap; word-break: break-word; }
+.dc-term-in   { color: #f3ead9; }
+.dc-term-out  { color: #a89b86; }
+.dc-term-ok   { color: #86c38a; }
+.dc-term-warn { color: #e0b168; }
+.dc-term-err  { color: #e08a7a; }
+.dc-term-prompt { color: #6f6455; user-select: none; }
+
+.dc-term-entry {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--muted);
+}
+.dc-term-input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--foreground);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  padding: 4px 0;
+}
+.dc-term-input:focus { outline: none; }
+.dc-term-input::placeholder { color: var(--muted-foreground); opacity: 0.7; }
+.dc-term-link {
+  margin-left: 8px;
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: #7fa9d4;
+  cursor: pointer;
+  text-decoration: underline;
 }

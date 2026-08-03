@@ -29,8 +29,20 @@ const VIEWS = [
   ["Capex", "The same projects grouped by who is paying rather than by where they are. Also where you merge duplicate rows, which matters most here because duplicates inflate a buyer's total."],
   ["Queue", "Articles we found and have not read. Reading one costs one LLM call. Underneath, the sites that would not let us in."],
   ["Coverage", "What is missing and what only looks missing, plus how many megawatts are stuck behind each kind of problem."],
-  ["Commands", "The command line as buttons, read from the CLI itself so it cannot go stale."],
-  ["Runs", "What has been run and exactly what it printed."],
+  ["Commands", "Routines first — a named sequence that does several commands in the order they want doing. Under them, every command individually, read from the CLI itself so it cannot go stale."],
+  ["Runs", "What has been run and exactly what it printed. A routine is one entry, not three."],
+];
+
+/* The four routines, and why the order in each is the order it is.
+ *
+ * Listed here as well as on the Commands view because this is where someone
+ * comes when the one-line summary was not enough — and "why that order" is
+ * exactly the question a sequence raises. */
+const ROUTINES = [
+  ["Catch up on the news", "sync → ingest geo → logic check. Geography is a free lookup, so deriving it after the read locates the rows that just arrived too. Contradictions come from new values, so the check goes last."],
+  ["Deepen what we already have", "enrich → ingest geo → gaps. Grows the rows already tracked instead of finding new ones, then says what is still missing so the next run has a target."],
+  ["Tidy the database", "duplicates → logic check → stats. Writes nothing. Finds the same-campus-twice rows that inflate a buyer's total, and the values that disagree with their own sources."],
+  ["Prepare a report", "stats → capex → verify. Coverage first, because it sets how much the rest is worth."],
 ];
 
 const COSTS = [
@@ -39,7 +51,10 @@ const COSTS = [
   ["ingest crawl", "Reads articles. One call each."],
   ["infer", "Asks a model what is holding a project up."],
   ["search", "Adds web search to the loop. Needs a search key too."],
+  ["point", "Goes and gets one named data center. One call to identify it, then whichever branch it takes."],
+  ["logic check", "Free on its own. Spends only with --read, which has a model examine the rows it flagged."],
   ["ingest edgar", "Reads SEC filings. One call per filing; --per-company is the dial."],
+  ["the briefing panel", "The written summary at the top of a project drawer. One call, then cached — reopening the same row is free until the row changes."],
 ];
 
 /* Destruction is a different loss from spending, and it gets the same ritual.
@@ -152,8 +167,14 @@ export function HelpView({ data }) {
         <//>
       <//>
 
+      <${Section} title="Routines"
+        description="A named sequence, run as one job with one log. Stops at the first step that genuinely fails — though a step like duplicates exits unhappy when it finds something, which is an answer rather than a breakage, and the run carries on.">
+        ${ROUTINES.map(([name, text]) => html`
+          <${Row} key=${name} left=${html`<span style=${{ fontSize: 13 }}>${name}</span>`}>${text}<//>`)}
+      <//>
+
       <${Section} title="What costs money"
-        description="These six spend LLM tokens. Everything else is free. You have to type the command's name before any of them will start.">
+        description="These spend LLM tokens. Everything else is free. None of them can be started by a single click: the button asks again and says what it will cost.">
         ${COSTS.map(([cmd, text]) => html`
           <${Row} key=${cmd} left=${html`
             <span style=${{ fontFamily: "var(--font-mono)", fontSize: 13 }}>${cmd}</span>`}>${text}<//>`)}
@@ -169,7 +190,7 @@ export function HelpView({ data }) {
       <//>
 
       <${Section} title="What cannot be undone"
-        description="Separate from the money question, same safeguard: type the command's name or it will not start.">
+        description="A different loss, and a heavier ritual: type the command's name out, or it will not start. Spending money can be decided again tomorrow; this cannot.">
         ${DESTRUCTIVE.map(([cmd, text]) => html`
           <${Row} key=${cmd} left=${html`
             <span style=${{ fontFamily: "var(--font-mono)", fontSize: 13 }}>${cmd}</span>`}>${text}<//>`)}

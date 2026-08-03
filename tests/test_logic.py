@@ -604,6 +604,51 @@ def test_every_finding_offers_a_way_out(session):
         assert len({a.key for a in actions}) == len(actions), f"duplicate key in {code}"
 
 
+def test_no_action_rewrites_a_row_to_satisfy_a_coarse_phase_enum(session):
+    """The three actions that were removed, and why they must not come back.
+
+    A modern campus is several states at once — measured on the live database, 28
+    projects are partly built, 15 are `construction` with megawatts already live,
+    12 have power energised while construction is mid-track. The `phase` enum
+    cannot say that, so the findings it produces there are largely artefacts of
+    the schema rather than faults in the data.
+
+    `_set_phase_operational`, `_drop_energized` and `_built_equals_planned`
+    silenced those findings by rewriting the row: deleting a real, cited
+    energisation milestone; asserting a whole campus was energised because one
+    phase was; marking a campus finished while most of it was still being built.
+    `tracker logic resolve --llm` could apply any of them unattended.
+
+    The two findings they hung off now offer no action at all, which is the honest
+    set of choices until `capacity_block` lands. This test is what stops a future
+    reader restoring a convenient one-liner.
+    """
+    for code in ("energized_but_not_operational", "operational_without_built_capacity"):
+        assert logic.ACTIONS[code] == (), (
+            f"`{code}` offers an edit again. It is a contradiction between a coarse "
+            "phase enum and a correct milestone; rewriting the row to agree with the "
+            "enum destroys the milestone."
+        )
+
+    # `past_its_own_date` keeps only the honest half: a stale date can be cleared,
+    # but a passed phase-1 date is not evidence the whole campus is running.
+    assert [a.key for a in logic.ACTIONS["past_its_own_date"]] == ["c"]
+
+    # And nothing anywhere may delete an energisation. It is the single most
+    # informative milestone in the dataset and it always carries a citation.
+    project = _project(session, name="A", mw_planned=100, mw_built=100, phase="construction")
+    _event(session, project, "energized", dt.date(2025, 6, 1))
+    for code, actions in logic.ACTIONS.items():
+        for action in actions:
+            finding = next((f for f in logic.check_rules(project) if f.code == code), None)
+            if finding is None:
+                continue
+            action.apply(session, project, finding)
+            assert any(e.event_type == "energized" for e in project.events), (
+                f"{code}/{action.key} deleted an energisation milestone"
+            )
+
+
 def test_raising_the_plan_clears_the_contradiction(session):
     project = _project(session, name="A", mw_planned=32, mw_built=100)
     finding = next(f for f in logic.check_rules(project) if f.code == "built_exceeds_planned")
