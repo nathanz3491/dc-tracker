@@ -959,6 +959,14 @@ the unguarded version wrote real wrong numbers into a copy of the database:
 Both guards skip rather than guess. A missed block is a gap somebody can see; a
 misrouted one is a wrong number nobody can.
 
+**A block's capacity counts only if a quote named it.** A block whose `mw` came
+through as 待确认 is still recorded and still shown — that is what the tier is for —
+but it is left out of the campus total, and `reconcile` says which blocks it left
+out. Summing an unconfirmed figure launders it into a total that then reads as
+cited, and the first live tranche proved the cost: it raised one campus from 7 MW to
+7,500 MW off a single unquoted block. Read the run's notes; `mw_planned` moving by
+orders of magnitude is the thing to look for.
+
 ### Filling county and coordinates without an LLM
 
 ```bash

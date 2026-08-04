@@ -356,6 +356,8 @@ class Rollup:
     customer: str | None
     #: Blocks whose identity is too vague to place, so excluded from the sums.
     unplaceable: tuple[str, ...] = ()
+    #: Blocks carrying a capacity no quote confirmed, so excluded from the sums.
+    uncited: tuple[str, ...] = ()
     #: Every distinct customer the blocks name, largest first, for disclosure.
     customers: tuple[tuple[str, float], ...] = ()
 
@@ -375,6 +377,26 @@ def placeable(blocks: list[Any], *, families: int | None = None) -> list[Any]:
     return [b for b in blocks if not b.generic or b.parent]
 
 
+def mw_is_confirmed(block: Any) -> bool:
+    """Whether a quote in the article actually named this block's capacity.
+
+    Blocks keep an unconfirmed figure rather than dropping it — that is what the
+    待确认 tier is for, and a number somebody can check beats a null. But keeping a
+    value and *summing* it are different acts, and conflating them cost a real
+    1000x error: the first backfill tranche raised Applied Digital Jamestown from
+    7 MW to 7,500 MW on a single 待确认 block, and `reconcile` records no tier, so
+    the campus then asserted that figure as though it were cited.
+
+    So an unconfirmed capacity is shown and not counted. That is the same floor
+    discipline as `placeable`, applied to the other way a block's megawatts can be
+    untrustworthy: not "we cannot tell whose it is" but "nothing said it".
+    """
+    raw = getattr(block, "unconfirmed_fields", None)
+    if not raw:
+        return True
+    return "mw" not in {part.strip() for part in raw.split(",")}
+
+
 def rollup(blocks: list[Any]) -> Rollup:
     """Derive project-level values from a project's blocks. Never writes."""
     if not blocks:
@@ -382,13 +404,15 @@ def rollup(blocks: list[Any]) -> Rollup:
 
     usable = placeable(blocks)
     skipped = tuple(b.block_key for b in blocks if b not in usable)
-    live = [b for b in usable if b.status in BLOCK_LIVE]
+    counted = [b for b in usable if mw_is_confirmed(b)]
+    uncited = tuple(b.block_key for b in usable if not mw_is_confirmed(b) and b.mw)
+    live = [b for b in counted if b.status in BLOCK_LIVE]
 
-    sized = [b.mw for b in usable if b.mw and b.status not in BLOCK_TERMINAL]
+    sized = [b.mw for b in counted if b.mw and b.status not in BLOCK_TERMINAL]
     built = [b.mw for b in live if b.mw]
 
     by_customer: dict[str, float] = {}
-    for block in usable:
+    for block in counted:
         if block.customer:
             by_customer[block.customer] = by_customer.get(block.customer, 0.0) + (block.mw or 0.0)
     ranked = tuple(sorted(by_customer.items(), key=lambda kv: (-kv[1], kv[0])))
@@ -415,6 +439,7 @@ def rollup(blocks: list[Any]) -> Rollup:
         phase=phase,
         customer=ranked[0][0] if ranked else None,
         unplaceable=skipped,
+        uncited=uncited,
         customers=ranked,
     )
 
@@ -666,9 +691,31 @@ def reconcile(project: Any) -> list[str]:
     if project.customer is None and got.customer is not None:
         project.customer = got.customer
 
+    notes.extend(reconcile_notes(got))
+    return notes
+
+
+def reconcile_notes(got: Rollup) -> list[str]:
+    """What a reader has to be told about a rollup, given only the rollup.
+
+    Separate from `reconcile` because `reconcile` writes and this does not, and the
+    surfaces need the disclosures without the write: `tracker show` prints them under
+    the block table, and printing "3 blocks are 待确认" is only half the fact — the
+    other half is that their megawatts are therefore *not* in `MW planned` above.
+    Every caller that shows a capacity owes the reader both.
+    """
+    notes: list[str] = []
+
     if len(got.customers) > 1:
         named = ", ".join(f"{name} ({mw:g} MW)" for name, mw in got.customers)
         notes.append(f"blocks name {len(got.customers)} customers: {named}")
+
+    if got.uncited:
+        notes.append(
+            f"{len(got.uncited)} block(s) carry a capacity no quote in the article "
+            f"names ({', '.join(got.uncited)}); shown as 待确认 and left out of the "
+            "campus total"
+        )
 
     if got.unplaceable:
         notes.append(
@@ -691,9 +738,11 @@ __all__ = [
     "furthest_status",
     "is_type_word_only",
     "label_tokens",
+    "mw_is_confirmed",
     "placeable",
     "rebuild",
     "reconcile",
+    "reconcile_notes",
     "rollup",
     "segment_requirements",
 ]

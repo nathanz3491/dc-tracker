@@ -106,6 +106,17 @@ initial build of the v1 PRD.
     named after nothing in particular. So portfolio-ness is detected from the
     article rather than assumed, and only then must every block earn its place.
 
+  **A 待确认 capacity is shown and not summed** (`blocks.mw_is_confirmed`). Found by
+  reading the first live tranche rather than by a test: `rollup` summed every
+  placeable block's megawatts regardless of whether a quote named them, and since
+  `reconcile` records no tier, the campus then asserted the total as though it were
+  cited. **It raised Applied Digital Jamestown from 7 MW to 7,500 MW off one
+  unconfirmed block**, and CHI-1 from 12 to 36. Keeping an unconfirmed figure is the
+  whole point of the 待确认 tier; *summing* it launders it. Blocks still show the
+  number — `reconcile` now discloses which ones are excluded and why. The three
+  contaminated scalars were repaired by re-deriving them from their citations, which
+  `Policy.MAX` cannot do on its own because it counts the existing value.
+
   Both guards skip rather than guess, which is the recoverable direction. Verified on
   a nine-campus article that routed Colossus to Memphis, Stargate to Abilene and
   Prometheus to New Albany, and dropped an unattributable "Planned 600 MW Expansion"

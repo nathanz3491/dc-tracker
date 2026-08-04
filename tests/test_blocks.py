@@ -158,6 +158,71 @@ class FakeBlock:
     customer: str | None = None
     parent: str | None = None
     generic: bool = False
+    #: Comma-joined, exactly as the column stores it.
+    unconfirmed_fields: str | None = None
+
+
+def test_an_unconfirmed_capacity_is_shown_but_never_summed():
+    """The 7,500 MW error, pinned.
+
+    The first backfill tranche raised Applied Digital Jamestown from 7 MW to 7,500
+    MW off a single block whose `mw` no quote in the article named. Keeping an
+    unconfirmed figure is the point of 待确认; *summing* it launders it into a
+    campus total that then reads as cited.
+    """
+    got = blocks.rollup(
+        [
+            FakeBlock(
+                "hpc-facility", mw=7500.0, status="under_construction", unconfirmed_fields="mw"
+            ),
+        ]
+    )
+    assert got.mw_planned is None
+    assert got.uncited == ("hpc-facility",)
+
+
+def test_the_unconfirmed_list_is_read_by_entry_and_not_by_substring():
+    """No field today contains "mw" inside a longer name, so this guards a rename.
+
+    Reading the column with `"mw" in raw` behaves identically on the current field
+    set and would silently void a cited capacity the moment an `mwh_*` field is
+    added. The column is comma-joined, so it costs nothing to split it properly.
+    """
+    assert blocks.mw_is_confirmed(FakeBlock("phase-1", mw=10.0, unconfirmed_fields="mwh_estimate"))
+    assert not blocks.mw_is_confirmed(
+        FakeBlock("phase-1", mw=10.0, unconfirmed_fields="customer,mw")
+    )
+
+
+def test_a_block_unconfirmed_in_some_other_field_still_counts_its_capacity():
+    """Only `mw` gates the capacity sum. A vague date does not void a cited figure."""
+    got = blocks.rollup(
+        [FakeBlock("phase-1", mw=48.0, unconfirmed_fields="expected_online,customer")]
+    )
+    assert got.mw_planned == 48.0
+    assert got.uncited == ()
+
+
+def test_a_confirmed_block_is_not_dragged_down_by_an_unconfirmed_sibling():
+    got = blocks.rollup(
+        [
+            FakeBlock("phase-1", mw=100.0, status="energized"),
+            FakeBlock("phase-2", mw=9000.0, unconfirmed_fields="mw"),
+        ]
+    )
+    assert got.mw_planned == 100.0
+    assert got.mw_built == 100.0
+
+
+def test_an_unconfirmed_capacity_does_not_inflate_a_customer_attribution():
+    """Capex attributes MW per customer off this, so the same rule has to hold."""
+    got = blocks.rollup(
+        [
+            FakeBlock("phase-1", mw=50.0, customer="Fluidstack"),
+            FakeBlock("phase-2", mw=9000.0, customer="Fluidstack", unconfirmed_fields="mw"),
+        ]
+    )
+    assert got.customers == (("Fluidstack", 50.0),)
 
 
 def test_no_blocks_means_no_opinion():
