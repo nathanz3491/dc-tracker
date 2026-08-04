@@ -239,6 +239,11 @@ def _nested_blocks(blocks: list[Any]) -> list[tuple[str, str]]:
     operator named badly. Only a person can say which, and folding them silently is
     the failure mode `dedup.py` argues against at project grain.
     """
+    # Compared as sets of segments rather than as prefixes, because the extra words
+    # can arrive anywhere: "AMD Lease Expansion" appends, "Initial AMD Capacity"
+    # prepends. Two distinct keys with *identical* segment sets would differ only in
+    # order, which `block_key` builds deterministically, so the strict-subset test
+    # below cannot be loosened by any input this codebase can produce.
     keyed = [(b.block_key, set(b.block_key.split("."))) for b in blocks]
     out: list[tuple[str, str]] = []
     for inner, inner_parts in keyed:

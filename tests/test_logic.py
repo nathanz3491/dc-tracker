@@ -834,3 +834,140 @@ def test_nothing_is_read_unless_an_extractor_is_given(session):
     report = logic.review(session)
     assert report.examined == 0
     assert report.findings and report.projects == 1
+
+
+# --- Rules asked per block ---------------------------------------------------
+#
+# Four rules were written when a campus was either built and serving customers or
+# not built. On a partly-live AI campus they fire on the ordinary shape of the
+# thing. Each case below is one that used to be reported as a contradiction and is
+# not one.
+
+
+def _blk(session, project, **kwargs):
+    from tracker.models import CapacityBlock
+
+    defaults = {
+        "block_key": kwargs.get("label", "b").lower().replace(" ", "-"),
+        "label": "Block",
+        "status": "planned",
+        "generic": False,
+    }
+    defaults.update(kwargs)
+    session.add(CapacityBlock(project_id=project.id, **defaults))
+    session.flush()
+
+
+def _codes(project) -> set[str]:
+    return {f.code for f in logic.check_rules(project)}
+
+
+def test_a_partly_energised_campus_is_not_contradicting_itself(session):
+    """All 18 `energized_but_not_operational` findings were this shape."""
+    project = _project(session, phase="construction", mw_planned=400.0)
+    _event(session, project, "energized", dt.date(2025, 6, 1))
+    _blk(session, project, label="Phase 1", mw=100.0, status="energized")
+    _blk(session, project, label="Phase 2", mw=300.0, status="under_construction")
+    session.refresh(project)
+    assert "energized_but_not_operational" not in _codes(project)
+
+
+def test_a_fully_energised_campus_whose_phase_lags_is_still_reported(session):
+    """The rule is narrowed, not deleted: with nothing still going up it is real."""
+    project = _project(session, phase="construction", mw_planned=100.0)
+    _event(session, project, "energized", dt.date(2025, 6, 1))
+    _blk(session, project, label="Phase 1", mw=100.0, status="energized")
+    session.refresh(project)
+    assert "energized_but_not_operational" in _codes(project)
+
+
+def test_a_campus_with_no_blocks_keeps_the_old_behaviour(session):
+    """No blocks means nothing has been read, not that the row is coherent."""
+    project = _project(session, phase="construction", mw_planned=100.0)
+    _event(session, project, "energized", dt.date(2025, 6, 1))
+    session.refresh(project)
+    assert "energized_but_not_operational" in _codes(project)
+
+
+def test_a_slipped_tranche_is_named_rather_than_the_whole_campus(session):
+    project = _project(session, phase="construction", expected_online=dt.date(2024, 1, 1))
+    _blk(
+        session,
+        project,
+        label="Phase 1",
+        mw=50.0,
+        status="under_construction",
+        expected_online=dt.date(2024, 1, 1),
+    )
+    session.refresh(project)
+    codes = _codes(project)
+    assert "block_past_its_own_date" in codes
+    assert "past_its_own_date" not in codes
+
+
+def test_a_still_future_tranche_explains_a_campus_date_that_passed(session):
+    """Phase 1's date is on the row; phase 2 has not happened yet."""
+    project = _project(session, phase="construction", expected_online=dt.date(2024, 1, 1))
+    _blk(session, project, label="Phase 1", mw=50.0, status="energized")
+    _blk(
+        session,
+        project,
+        label="Phase 2",
+        mw=50.0,
+        status="planned",
+        expected_online=dt.date(2099, 1, 1),
+    )
+    session.refresh(project)
+    assert "past_its_own_date" not in _codes(project)
+
+
+def test_a_running_tranche_with_no_cited_capacity_is_a_missing_citation(session):
+    project = _project(session, phase="operational", mw_planned=200.0, mw_built=None)
+    _blk(session, project, label="Phase 1", mw=200.0, status="serving", unconfirmed_fields="mw")
+    session.refresh(project)
+    codes = _codes(project)
+    assert "live_block_without_cited_capacity" in codes
+    assert "operational_without_built_capacity" not in codes
+
+
+def test_nested_tranche_labels_are_reported_as_possible_double_counting(session):
+    """Riot Rockdale: one AMD lease described at three grains, summed three times."""
+    project = _project(session, phase="construction", mw_planned=700.0)
+    _blk(session, project, block_key="amd.lease", label="AMD Lease", mw=25.0)
+    _blk(session, project, block_key="amd.lease.expansion", label="AMD Lease Expansion", mw=25.0)
+    session.refresh(project)
+    assert "blocks_may_double_count" in _codes(project)
+
+
+def test_two_genuinely_separate_tranches_are_not_called_double_counting(session):
+    project = _project(session, phase="construction", mw_planned=100.0)
+    _blk(session, project, block_key="azp-2", label="AZP-2", mw=48.0)
+    _blk(session, project, block_key="azp-3.phase-3", label="AZP-3 Phase 3", mw=8.0)
+    session.refresh(project)
+    assert "blocks_may_double_count" not in _codes(project)
+
+
+def test_every_block_rule_is_report_only(session):
+    """An automatic edit here would be guessing at the sub-site grain."""
+    for code in (
+        "block_past_its_own_date",
+        "live_block_without_cited_capacity",
+        "block_label_ambiguous",
+        "blocks_may_double_count",
+    ):
+        assert logic.ACTIONS[code] == ()
+
+
+def test_the_same_phase_of_two_campuses_is_not_double_counting(session):
+    """`dedup_key` is company|city|state, so one row holds several campuses.
+
+    "AZP-2 Phase 1" and "AZP-3 Phase 1" share a segment and neither contains the
+    other. They are two tranches of two facilities, and their megawatts genuinely
+    add — reporting them as double-counted would train an operator to ignore the
+    rule on exactly the rows it matters for.
+    """
+    project = _project(session, phase="construction", mw_planned=100.0)
+    _blk(session, project, block_key="azp-2.phase-1", label="AZP-2 Phase 1", mw=48.0)
+    _blk(session, project, block_key="azp-3.phase-1", label="AZP-3 Phase 1", mw=8.0)
+    session.refresh(project)
+    assert "blocks_may_double_count" not in _codes(project)

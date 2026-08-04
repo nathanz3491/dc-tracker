@@ -38,13 +38,20 @@ from __future__ import annotations
 import datetime as _dt
 from dataclasses import dataclass, field
 from functools import lru_cache
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from tracker.dedup import company_key, customer_key, is_undisclosed, looks_like_the_same_site
 from tracker.models import Event, Project, Risk
-from tracker.vocab import OPEN_RISK_STATUS, PHASE_TERMINAL, severity_rank
+from tracker.vocab import (
+    BLOCK_LIVE,
+    BLOCK_TERMINAL,
+    OPEN_RISK_STATUS,
+    PHASE_TERMINAL,
+    severity_rank,
+)
 
 #: Attribution bucket for capacity with no identifiable buyer.
 UNATTRIBUTED = "(no named customer)"
@@ -158,6 +165,79 @@ def attribute(project: Project) -> tuple[str, str, bool]:
     return UNATTRIBUTED, "", False
 
 
+@dataclass(frozen=True)
+class BlockShare:
+    """One buyer's slice of one campus, taken from a tranche that names them."""
+
+    name: str
+    key: str
+    mw_planned: float
+    mw_built: float
+    #: The tranche's own date, not the campus's. This is most of the value: a
+    #: campus with one date cannot say that 60 MW landed last year and 378 MW
+    #: lands next.
+    online: _dt.date | None
+
+
+def block_shares(project: Project) -> tuple[list[BlockShare], float]:
+    """Per-tranche capacity by buyer, and the campus capacity left over.
+
+    This is why `customer` sits on a block at all. Attributing a whole campus to
+    one buyer was adequate when a campus had one; Lake Mariner has 378 MW being
+    built for Fluidstack beside 60 MW already serving Core42, and putting all 750
+    against whichever name reached `project.customer` first is simply wrong.
+
+    Only confirmed capacities are shared out, for the same reason `rollup` will not
+    sum an unquoted figure: a number nobody stated must not become a buyer's
+    position. Everything not accounted for by a tranche stays with the campus and is
+    attributed the old way, so the total is conserved rather than replaced.
+
+    Megawatts are split and money is not. A tranche states its capacity often and
+    its share of the investment almost never, so splitting the money would mean
+    inventing a ratio — which is the sort of quiet fabrication this codebase spends
+    most of its effort refusing.
+    """
+    from tracker import blocks as blocks_mod
+
+    blocks = list(getattr(project, "blocks", ()) or ())
+    if not blocks:
+        return [], float(project.mw_planned or 0.0)
+
+    by_key: dict[str, dict[str, Any]] = {}
+    for block in blocks_mod.placeable(blocks):
+        if block.mw is None or not blocks_mod.mw_is_confirmed(block):
+            continue
+        if block.status in PHASE_TERMINAL or block.status in BLOCK_TERMINAL:
+            continue
+        key = customer_key(block.customer)
+        if not key:
+            continue
+        entry = by_key.setdefault(
+            key, {"name": block.customer or key, "planned": 0.0, "built": 0.0, "online": None}
+        )
+        entry["planned"] += float(block.mw)
+        if block.status in BLOCK_LIVE:
+            entry["built"] += float(block.mw)
+        when = block.energized_on or block.expected_online
+        # Earliest tranche date, so a buyer's capacity is booked when it first
+        # arrives rather than when the last building finishes.
+        if when and (entry["online"] is None or when < entry["online"]):
+            entry["online"] = when
+
+    shares = [
+        BlockShare(
+            name=entry["name"],
+            key=key,
+            mw_planned=entry["planned"],
+            mw_built=entry["built"],
+            online=entry["online"],
+        )
+        for key, entry in by_key.items()
+    ]
+    claimed = sum(s.mw_planned for s in shares)
+    return shares, max(0.0, float(project.mw_planned or 0.0) - claimed)
+
+
 def rollup(session: Session, *, include_terminal: bool = False) -> list[Position]:
     """Every buyer's position, largest planned capacity first.
 
@@ -193,9 +273,16 @@ def rollup(session: Session, *, include_terminal: bool = False) -> list[Position
         bucket.undisclosed += int(is_undisclosed(project.customer))
         bucket.phases[project.phase] = bucket.phases.get(project.phase, 0) + 1
 
-        planned = float(project.mw_planned or 0.0)
+        # Capacity a tranche assigns to a named buyer goes to that buyer; the rest of
+        # the campus stays here. A project with no blocks has no shares, so `planned`
+        # is its whole capacity and this is exactly the previous behaviour.
+        shares, planned = block_shares(project)
         bucket.mw_planned += planned
-        bucket.mw_built += float(project.mw_built or 0.0)
+        # Built megawatts are only reassigned when a tranche accounts for them.
+        # Otherwise `mw_built` would drop below `mw_planned` for reasons that have
+        # nothing to do with what is built.
+        claimed_built = sum(s.mw_built for s in shares)
+        bucket.mw_built += max(0.0, float(project.mw_built or 0.0) - claimed_built)
         bucket.investment_usd += int(project.investment_usd or 0)
 
         if project.expected_online and planned:
@@ -203,6 +290,30 @@ def rollup(session: Session, *, include_terminal: bool = False) -> list[Position
             bucket.mw_by_year[year] = bucket.mw_by_year.get(year, 0.0) + planned
             quarter = f"{year}Q{(project.expected_online.month - 1) // 3 + 1}"
             bucket.mw_by_quarter[quarter] = bucket.mw_by_quarter.get(quarter, 0.0) + planned
+
+        for share in shares:
+            # A buyer with a tranche here genuinely holds a position at this campus,
+            # so it counts as one of their projects — which means the `projects`
+            # column can now exceed the row count of the database. That is the
+            # honest reading: two buyers at one campus is two positions.
+            theirs = positions.setdefault(share.key, Position(name=share.name, key=share.key))
+            if theirs is not bucket:
+                theirs.projects += 1
+                theirs.phases[project.phase] = theirs.phases.get(project.phase, 0) + 1
+            theirs.mw_planned += share.mw_planned
+            theirs.mw_built += share.mw_built
+            if share.online and share.mw_planned:
+                year = share.online.year
+                theirs.mw_by_year[year] = theirs.mw_by_year.get(year, 0.0) + share.mw_planned
+                quarter = f"{year}Q{(share.online.month - 1) // 3 + 1}"
+                theirs.mw_by_quarter[quarter] = (
+                    theirs.mw_by_quarter.get(quarter, 0.0) + share.mw_planned
+                )
+            if project.id in open_risk_ids and theirs is not bucket:
+                theirs.at_risk_projects += 1
+                theirs.mw_at_risk += share.mw_planned
+            if project.id in slipped_ids and theirs is not bucket:
+                theirs.slipped += 1
 
         if project.id in open_risk_ids:
             bucket.at_risk_projects += 1
@@ -324,6 +435,11 @@ class DuplicatePair:
     state: str
     #: Planned MW on the second row — what stops being double-counted if merged.
     b_mw: float
+    #: Tranches both rows hold under the same key. Much harder evidence than a name
+    #: resemblance: `block_key` is derived, so two rows carrying `stingray` are two
+    #: readings of one building rather than two similarly-named campuses. Three rows
+    #: in Andrews, TX each ended up holding the same 70 MW AWS tranche.
+    shared_blocks: tuple[str, ...] = ()
 
 
 def suspected_duplicates(session: Session) -> list[DuplicatePair]:
@@ -337,6 +453,13 @@ def suspected_duplicates(session: Session) -> list[DuplicatePair]:
     hold 11,135 MW of double-counted capacity.
 
     Flagged and never merged, per `dedup.looks_like_the_same_site`.
+
+    **Blocks are a second, stronger signal.** Two rows holding the same derived
+    `block_key` are two readings of one building, not two campuses whose names
+    happen to resemble each other — and since a block's megawatts are summed, an
+    unmerged pair now double-counts at the tranche grain as well as the campus one.
+    So a shared tranche both raises a pair the name test would have missed and is
+    reported as the evidence for the pairs it already found.
     """
     projects = session.scalars(select(Project)).all()
     by_locality: dict[tuple[str, str], list[Project]] = {}
@@ -346,26 +469,41 @@ def suspected_duplicates(session: Session) -> list[DuplicatePair]:
             continue
         by_locality.setdefault((locality, project.state), []).append(project)
 
+    # A generic key like `phase-1` is shared by half the database and would pair
+    # every row in a city with every other, so only a key that names something is
+    # kept. `generic` is read off the row rather than re-derived from the key: it is
+    # what `block_key` decided at write time, and a second derivation could disagree.
+    keys: dict[int, set[str]] = {
+        p.id: {
+            b.block_key for b in (getattr(p, "blocks", ()) or ()) if not b.generic or b.parent
+        }
+        for p in projects
+    }
+
     pairs: list[DuplicatePair] = []
     for (locality, state), group in by_locality.items():
         for i, a in enumerate(group):
             for b in group[i + 1 :]:
-                if looks_like_the_same_site(
+                shared = tuple(sorted(keys[a.id] & keys[b.id]))
+                same_site = looks_like_the_same_site(
                     a.name, a.company, b.name, b.company, locality=locality
-                ):
-                    pairs.append(
-                        DuplicatePair(
-                            a_id=a.id,
-                            a_company=a.company,
-                            a_name=a.name,
-                            b_id=b.id,
-                            b_company=b.company,
-                            b_name=b.name,
-                            locality=a.city or a.county or locality,
-                            state=state,
-                            b_mw=float(b.mw_planned or 0.0),
-                        )
+                )
+                if not (same_site or shared):
+                    continue
+                pairs.append(
+                    DuplicatePair(
+                        a_id=a.id,
+                        a_company=a.company,
+                        a_name=a.name,
+                        b_id=b.id,
+                        b_company=b.company,
+                        b_name=b.name,
+                        locality=a.city or a.county or locality,
+                        state=state,
+                        b_mw=float(b.mw_planned or 0.0),
+                        shared_blocks=shared,
                     )
+                )
     return pairs
 
 

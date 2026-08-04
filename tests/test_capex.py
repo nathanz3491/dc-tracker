@@ -378,3 +378,169 @@ def test_duplicate_pairs_survive_the_session_closing(session):
     pairs = capex.suspected_duplicates(session)
     session.expunge_all()
     assert pairs[0].a_company and pairs[0].locality  # no DetachedInstanceError
+
+
+# --- Per-tranche attribution -------------------------------------------------
+#
+# The reason `customer` sits on a capacity block at all. Lake Mariner is 378 MW
+# being built for Fluidstack beside 60 MW already serving Core42; putting all of it
+# against whichever name reached `project.customer` first is simply wrong.
+
+
+def _block(session, project, **kwargs):
+    from tracker.models import CapacityBlock
+
+    defaults = {
+        "block_key": kwargs.get("label", "b").lower().replace(" ", "-"),
+        "label": "Block",
+        "status": "planned",
+        "generic": False,
+    }
+    defaults.update(kwargs)
+    block = CapacityBlock(project_id=project.id, **defaults)
+    session.add(block)
+    session.flush()
+    return block
+
+
+def test_a_campus_with_two_tenants_splits_between_them(session):
+    project = _project(session, company="TeraWulf", customer="Fluidstack", mw_planned=750.0)
+    _block(
+        session,
+        project,
+        label="Akela",
+        mw=378.0,
+        customer="Fluidstack",
+        status="under_construction",
+    )
+    _block(session, project, label="La Lupa", mw=60.0, customer="Core42", status="serving")
+    session.refresh(project)
+
+    shares, leftover = capex.block_shares(project)
+    by_key = {s.key: s for s in shares}
+    assert by_key["fluidstack"].mw_planned == 378.0
+    assert by_key["core42"].mw_planned == 60.0
+    # Serving means delivering, so it counts as built; the other does not.
+    assert by_key["core42"].mw_built == 60.0
+    assert by_key["fluidstack"].mw_built == 0.0
+    # The rest of the cited campus total stays with the campus rather than being
+    # invented into somebody's position.
+    assert leftover == 750.0 - 438.0
+
+
+def test_the_campus_total_is_conserved_not_replaced(session):
+    """Splitting must not create or destroy megawatts."""
+    project = _project(session, company="TeraWulf", customer="Fluidstack", mw_planned=750.0)
+    _block(
+        session,
+        project,
+        label="Akela",
+        mw=378.0,
+        customer="Fluidstack",
+        status="under_construction",
+    )
+    _block(session, project, label="La Lupa", mw=60.0, customer="Core42", status="serving")
+    session.refresh(project)
+
+    total = sum(p.mw_planned for p in capex.rollup(session))
+    assert total == 750.0
+
+
+def test_an_unconfirmed_tranche_capacity_is_never_attributed(session):
+    """Same rule as the rollup: a figure nobody stated is not a buyer's position."""
+    project = _project(session, company="Someone", customer=None, mw_planned=100.0)
+    _block(session, project, label="Phase 1", mw=9000.0, customer="Meta", unconfirmed_fields="mw")
+    session.refresh(project)
+
+    shares, leftover = capex.block_shares(project)
+    assert shares == []
+    assert leftover == 100.0
+
+
+def test_a_cancelled_tranche_is_out_of_its_buyer_s_pipeline(session):
+    project = _project(session, company="Someone", customer=None, mw_planned=200.0)
+    _block(session, project, label="Phase 1", mw=50.0, customer="Meta", status="cancelled")
+    _block(session, project, label="Phase 2", mw=50.0, customer="Meta", status="planned")
+    session.refresh(project)
+
+    shares, _ = capex.block_shares(project)
+    assert [s.mw_planned for s in shares] == [50.0]
+
+
+def test_a_tranche_books_capacity_on_its_own_date_not_the_campus_s(session):
+    """The campus has one `expected_online`; its tranches do not land together."""
+    import datetime as dt
+
+    project = _project(
+        session,
+        company="TeraWulf",
+        customer=None,
+        mw_planned=438.0,
+        expected_online=dt.date(2027, 6, 1),
+    )
+    _block(
+        session,
+        project,
+        label="La Lupa",
+        mw=60.0,
+        customer="Core42",
+        status="serving",
+        energized_on=dt.date(2025, 3, 1),
+    )
+    _block(
+        session,
+        project,
+        label="Akela",
+        mw=378.0,
+        customer="Fluidstack",
+        status="under_construction",
+        expected_online=dt.date(2027, 1, 1),
+    )
+    session.refresh(project)
+
+    positions = {p.key: p for p in capex.rollup(session)}
+    assert positions["core42"].mw_by_year == {2025: 60.0}
+    assert positions["fluidstack"].mw_by_year == {2027: 378.0}
+
+
+def test_a_project_with_no_blocks_is_attributed_exactly_as_before(session):
+    project = _project(session, company="Meta", customer=None, mw_planned=120.0, mw_built=40.0)
+    session.refresh(project)
+
+    shares, leftover = capex.block_shares(project)
+    assert shares == [] and leftover == 120.0
+    position = next(p for p in capex.rollup(session) if p.key == "meta")
+    assert (position.mw_planned, position.mw_built, position.projects) == (120.0, 40.0, 1)
+
+
+def test_two_rows_holding_one_tranche_are_flagged_even_if_named_differently(session):
+    """Three rows in Andrews, TX each held the same 70 MW AWS tranche.
+
+    `block_key` is derived, so two rows carrying `stingray` are two readings of one
+    building. That is harder evidence than a name resemblance, and it catches pairs
+    the name test misses.
+    """
+    a = _project(session, name="Stingray Facility", company="Vantage", city="Andrews")
+    b = _project(session, name="Project Bluebird", company="Vantage", city="Andrews")
+    _block(session, a, block_key="stingray", label="Stingray", mw=70.0)
+    _block(session, b, block_key="stingray", label="Stingray", mw=70.0)
+    session.refresh(a)
+    session.refresh(b)
+
+    pairs = capex.suspected_duplicates(session)
+    found = [p for p in pairs if {p.a_id, p.b_id} == {a.id, b.id}]
+    assert found, "a shared tranche did not raise the pair"
+    assert found[0].shared_blocks == ("stingray",)
+
+
+def test_a_generic_tranche_shared_by_two_rows_proves_nothing(session):
+    """Half the database has a `phase-1`. Pairing on it would pair everything."""
+    a = _project(session, name="Alpha Campus", company="Vantage", city="Mesa")
+    b = _project(session, name="Beta Campus", company="Aligned", city="Mesa")
+    _block(session, a, block_key="phase-1", label="Phase 1", mw=50.0, generic=True)
+    _block(session, b, block_key="phase-1", label="Phase 1", mw=50.0, generic=True)
+    session.refresh(a)
+    session.refresh(b)
+
+    pairs = capex.suspected_duplicates(session)
+    assert not [p for p in pairs if {p.a_id, p.b_id} == {a.id, b.id}]
