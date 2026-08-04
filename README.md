@@ -959,6 +959,15 @@ the unguarded version wrote real wrong numbers into a copy of the database:
 Both guards skip rather than guess. A missed block is a gap somebody can see; a
 misrouted one is a wrong number nobody can.
 
+**What the blocks then change.** Once a project has them, four `logic` rules stop
+calling a partly-live campus contradictory — a campus with one tranche energised and
+another going up is a campus, not a defect, and that was all 18
+`energized_but_not_operational` findings. `tracker show` grows a block table above
+the sources, the console drawer grows a Blocks tab, and Capex splits capacity between
+the buyers the tranches name rather than giving a whole campus to one of them. A
+project with no blocks behaves exactly as it did before, because no blocks means
+nothing has been read rather than that the row agrees with itself.
+
 **A block's capacity counts only if a quote named it.** A block whose `mw` came
 through as 待确认 is still recorded and still shown — that is what the tier is for —
 but it is left out of the campus total, and `reconcile` says which blocks it left

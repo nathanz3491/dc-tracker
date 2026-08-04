@@ -75,6 +75,61 @@ initial build of the v1 PRD.
   block and the read surfaces do not show blocks. Deliberately **not** a thirteenth
   tracked field.
 
+- **The rules ask the blocks before calling a campus contradictory**
+  (`tracker/logic.py`). Four rules were written when a campus was either built and
+  serving customers or not built. On a modern AI campus — part energised for one
+  buyer, part still going up — they fired on the ordinary shape of the thing and told
+  an operator to fix data that was correct. **That was all 18
+  `energized_but_not_operational` findings and a share of another 45
+  `past_its_own_date`**, out of 144 total.
+
+  A campus with no blocks keeps exactly the previous behaviour, because no blocks
+  means nothing has been read rather than that the row is coherent.
+
+  `past_its_own_date` becomes per tranche: a campus whose phase-1 date passed while
+  phase 2 runs to a later schedule is a campus, not a defect.
+  `operational_without_built_capacity` splits in two — a *running* tranche whose
+  capacity no quote confirms is a missing citation, not a phase to step back.
+
+  Two new rules are the design's own instrumentation: `block_label_ambiguous` for a
+  tranche that cannot be placed, and `blocks_may_double_count` for labels nested
+  inside one another. Riot Rockdale came back as "AMD Lease", "AMD Lease Initial
+  Deployment" and "AMD Lease Expansion" — one lease at three grains, whose megawatts
+  sum three times. All four block rules are report-only: each names something only a
+  person can settle, and an automatic edit would be guessing at exactly the grain
+  this design exists to stop guessing at.
+
+- **Blocks are visible** (`tracker show`, `to_json_object`, the console drawer). The
+  block table had been written to since migration `0009` and read by nothing, so the
+  richer state existed in the database and was invisible in the product. `show` gets
+  a table above the sources, because on a partly-built campus it is the answer to
+  "what state is it in". The JSON carries an `mw_counted` flag per block — without
+  it the tranche figures appear not to add up to `mw_planned`, since a 待确认
+  capacity is shown and deliberately not summed. The drawer's Blocks tab is offered
+  only when there are blocks: an empty tab on 88% of the database would read as
+  "this campus has one tranche", the opposite of what a missing backfill means.
+
+- **Capex attributes capacity per tranche** (`capex.block_shares`). Lake Mariner is
+  378 MW being built for Fluidstack beside 60 MW already serving Core42, and all 750
+  went to whichever name reached `project.customer` first. Capacity a tranche assigns
+  to a named buyer now goes to that buyer; the rest of the campus stays where it was,
+  so the total is **conserved rather than replaced**. A tranche books on its own
+  date, so a buyer's capacity appears when it first arrives instead of when the last
+  building finishes.
+
+  Megawatts are split and money is not: a tranche states its capacity often and its
+  share of the investment almost never, so splitting the money would mean inventing a
+  ratio. One consequence stated plainly — the `projects` column can now exceed the
+  row count, because two buyers at one campus really are two positions.
+
+- **A shared tranche is evidence of a duplicate row** (`capex.suspected_duplicates`).
+  Three rows in Andrews, TX each hold the same 70 MW AWS block, so an unmerged pair
+  now double-counts at the tranche grain as well as the campus one. A derived
+  `block_key` on both rows is much harder evidence than a name resemblance, so it
+  raises pairs the name test misses and is reported as the argument for the ones it
+  finds. Generic keys are excluded — half the database has a `phase-1`, and pairing
+  on it would pair everything.
+
 - **`tracker backfill blocks`** (`tracker/backfill.py`). The 227 rows ingested
   before migration `0009` have no blocks, because turning an article into blocks
   needs the article text rather than the schema. This re-reads the stored articles
