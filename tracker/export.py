@@ -29,6 +29,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
+from tracker import blocks as blocks_mod
 from tracker.models import Project
 from tracker.upsert import NOTE_PREFIX, SOURCE_NOTE_PREFIX
 
@@ -101,6 +102,7 @@ def fetch_projects(session: Session, flt: ExportFilter | None = None) -> list[Pr
         selectinload(Project.sources),
         selectinload(Project.events),
         selectinload(Project.risks),
+        selectinload(Project.blocks),
     )
     if flt is not None:
         stmt = flt.apply(stmt)
@@ -298,6 +300,30 @@ def to_json_object(project: Project) -> dict[str, Any]:
                 "source_id": r.source_id,
             }
             for r in _sorted_risks(project)
+        ],
+        # A consumer asking "what state is this campus in" cannot answer from
+        # `phase` and `mw_planned` alone once a campus is partly live, which most
+        # now are. `mw_counted` says whether this tranche's capacity is inside
+        # `mw_planned` above or excluded as 待确认 — without it the numbers appear
+        # not to add up.
+        "blocks": [
+            {
+                "block_key": b.block_key,
+                "label": b.label,
+                "parent": b.parent,
+                "generic": bool(b.generic),
+                "mw": b.mw,
+                "mw_counted": blocks_mod.mw_is_confirmed(b),
+                "status": b.status,
+                "customer": b.customer,
+                "expected_online": _iso(b.expected_online),
+                "energized_on": _iso(b.energized_on),
+                "investment_usd": b.investment_usd,
+                "quotes": json.loads(b.quotes) if b.quotes else None,
+                "unconfirmed_fields": b.unconfirmed_fields,
+                "source_id": b.source_id,
+            }
+            for b in sorted(project.blocks, key=lambda b: b.block_key)
         ],
     }
 

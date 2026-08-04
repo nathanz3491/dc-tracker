@@ -1300,6 +1300,70 @@ def _print_standing(project) -> None:
         console.print(f"[bold]watch for:[/bold] {stand.watch_for}")
 
 
+#: Block statuses coloured by how far along they are, so a mixed campus reads at a
+#: glance. `serving` and `energized` are the two that mean megawatts are delivering.
+_BLOCK_STYLE: dict[str, str] = {
+    "serving": "green",
+    "energized": "green",
+    "shell_complete": "yellow",
+    "under_construction": "yellow",
+    "permitting": "cyan",
+    "planned": "dim",
+    "paused": "red",
+    "cancelled": "red",
+}
+
+
+def _print_blocks(project: Project) -> None:
+    """The campus broken into the tranches that have their own state.
+
+    The reason this table exists: the rows above it can only say one phase, one
+    capacity, one customer. This is where a campus gets to say it is 100 MW serving
+    one buyer beside 150 MW still going up for another — which is what most of these
+    projects actually are.
+
+    A capacity no quote confirmed is marked 待确认 *and* stated to be outside the
+    campus total, because those are two different facts and a reader who sees only
+    the first will assume the number is in `MW planned`.
+    """
+    blocks = list(getattr(project, "blocks", ()) or ())
+    if not blocks:
+        return
+
+    from tracker import blocks as blocks_mod
+
+    got = blocks_mod.rollup(blocks)
+    table = Table(
+        title=f"capacity blocks ({len(blocks)})",
+        header_style="bold",
+        box=TABLE_BOX,
+        title_justify="left",
+    )
+    table.add_column("block")
+    table.add_column("MW", justify="right")
+    table.add_column("status")
+    table.add_column("customer")
+    table.add_column("online")
+
+    for block in sorted(blocks, key=lambda b: b.block_key):
+        style = _BLOCK_STYLE.get(block.status, "")
+        status = f"[{style}]{block.status}[/{style}]" if style else block.status
+        mw = _fmt_mw(block.mw)
+        if block.mw is not None and not blocks_mod.mw_is_confirmed(block):
+            mw = f"[red]{mw} 待确认[/red]"
+        when = block.energized_on or block.expected_online
+        label = escape(block.label)
+        if block.parent:
+            label = f"{escape(block.parent)} / {label}"
+        table.add_row(label, mw, status, escape(block.customer or NA), str(when or NA))
+
+    console.print()
+    console.print(table)
+
+    for note in blocks_mod.reconcile_notes(got):
+        console.print(f"  [dim]{escape(note)}[/dim]")
+
+
 @app.command()
 def show(project_id: Annotated[int, typer.Argument(help="Project id.")]) -> None:
     """Show one project in full, with every citation."""
@@ -1384,6 +1448,10 @@ def show(project_id: Annotated[int, typer.Argument(help="Project id.")]) -> None
         console.print(f"\n[dim]why confidence {score.value}:[/dim] {'; '.join(score.reasons)}")
 
         _print_standing(project)
+        # Above the sources on purpose: on a partly-built campus this table is the
+        # answer to "what state is it in", and the scalars above it are a summary of
+        # this rather than the other way round.
+        _print_blocks(project)
 
         if project.notes:
             console.print("\n[bold]notes[/bold]")

@@ -851,7 +851,16 @@ function Drawer({ data, project, onClose }) {
   const p = project;
   const open = p.risks.filter((r) => r.status === "open");
   const populated = TRACKED.filter((k) => p[k] != null).length;
-  const tabs = [["stats", "Stats", ""], ["risks", "Risks", ` ${open.length}`], ["sources", "Sources", ` ${p.sources.length}`]];
+  const blocks = p.blocks || [];
+  // Only offered when there are blocks. An empty tab on 88% of the database would
+  // read as "this campus has one tranche", which is the opposite of what a missing
+  // backfill means.
+  const tabs = [
+    ["stats", "Stats", ""],
+    ...(blocks.length ? [["blocks", "Blocks", ` ${blocks.length}`]] : []),
+    ["risks", "Risks", ` ${open.length}`],
+    ["sources", "Sources", ` ${p.sources.length}`],
+  ];
 
   return html`
     <div style=${{ position: "fixed", inset: 0, zIndex: 60, display: "flex" }}>
@@ -890,6 +899,7 @@ function Drawer({ data, project, onClose }) {
           ${tab === "stats" && html`<${StatsTab} data=${data} p=${p} populated=${populated}
                                                  open=${open} onQuote=${showQuote}
                                                  allowWrite=${data.allow_write} />`}
+          ${tab === "blocks" && html`<${BlocksTab} p=${p} />`}
           ${tab === "risks" && html`<${RisksTab} data=${data} p=${p} />`}
           ${tab === "sources" && html`<${SourcesTab} data=${data} p=${p} />`}
         </div>
@@ -1321,6 +1331,78 @@ function StatsTab({ data, p, populated, open, onQuote, allowWrite }) {
               description="Nothing read so far states one. Silence is not evidence — a milestone appears when a source reports it." />
           </div>`}
       <//>
+    </div>`;
+}
+
+//: Block status to a colour token. `serving` and `energized` are the two that mean
+//: megawatts are actually delivering, so they share the success colour.
+const BLOCK_TONE = {
+  serving: "--success",
+  energized: "--success",
+  shell_complete: "--chart-1",
+  under_construction: "--warning",
+  permitting: "--chart-5",
+  planned: "--muted-foreground",
+  paused: "--danger",
+  cancelled: "--danger",
+};
+
+function BlocksTab({ p }) {
+  const blocks = p.blocks || [];
+  const counted = blocks.filter((b) => b.mw_counted && b.mw != null);
+  const uncited = blocks.filter((b) => !b.mw_counted && b.mw != null);
+  const live = blocks.filter((b) => b.status === "serving" || b.status === "energized");
+  const customers = [...new Set(blocks.map((b) => b.customer).filter(Boolean))];
+
+  return html`
+    <div style=${{ display: "grid", gap: 14 }}>
+      <p style=${{ margin: 0, fontSize: 14, lineHeight: "22px", color: "var(--muted-foreground)", maxWidth: "88ch" }}>
+        A campus is rarely one thing. Each tranche carries its own state, customer and dates, so this
+        project can say it is ${live.length ? `${live.length} block(s) already running` : "not yet running"}
+        beside capacity still being built — which the single phase and capacity above can only summarise.
+      </p>
+
+      ${customers.length > 1 && html`
+        <${Card} style=${{ padding: "12px 16px" }}>
+          <span style=${{ fontSize: 12, textTransform: "uppercase", letterSpacing: "0.08em",
+                          color: "var(--muted-foreground)" }}>this campus serves ${customers.length} customers</span>
+          <div style=${{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+            ${customers.map((c, i) => html`<span key=${i} style=${chip("--chart-1")}>${c}</span>`)}
+          </div>
+        <//>`}
+
+      <div style=${{ display: "grid", gap: 0 }}>
+        ${blocks.map((b, i) => html`
+          <div key=${i} style=${{ display: "grid", gridTemplateColumns: "minmax(0,1fr) 92px 150px 132px",
+               gap: 12, alignItems: "baseline", padding: "12px 4px", borderTop: "1px solid var(--border)" }}>
+            <div style=${{ minWidth: 0 }}>
+              <div style=${{ fontSize: 14, fontWeight: 500 }}>
+                ${b.parent ? html`<span style=${{ color: "var(--muted-foreground)" }}>${b.parent} / </span>` : null}${b.label}
+              </div>
+              ${b.generic && !b.parent && html`
+                <div style=${{ fontSize: 12, color: "var(--muted-foreground)", marginTop: 2 }}>
+                  names a phase but not of which facility</div>`}
+            </div>
+            <span class="dc-num" style=${{ fontSize: 13, textAlign: "right",
+                  color: b.mw == null ? "var(--muted-foreground)" : b.mw_counted ? "inherit" : "var(--danger)" }}>
+              ${b.mw == null ? "—" : `${b.mw} MW`}</span>
+            <span style=${chip(BLOCK_TONE[b.status] || "--muted-foreground")}>${b.status}</span>
+            <span style=${{ fontSize: 12, color: "var(--muted-foreground)" }}>
+              ${b.customer || "—"}${b.energized_on ? ` · live ${b.energized_on}`
+                : b.expected_online ? ` · ${b.expected_online}` : ""}</span>
+          </div>`)}
+      </div>
+
+      ${uncited.length > 0 && html`
+        <${Card} style=${{ padding: "12px 16px",
+              borderColor: "color-mix(in oklab, var(--danger) 34%, var(--border))" }}>
+          <p style=${{ margin: 0, fontSize: 13, lineHeight: "20px" }}>
+            <strong>${uncited.length} block(s) carry a capacity no quote confirms (待确认).</strong>
+            ${" "}Their megawatts are shown above but deliberately left out of the campus total, so
+            ${" "}${counted.length ? "the tranche figures will not add up to" : "there is no"} MW planned.
+            A figure nobody stated is not a fact, and summing it would make the total read as cited.
+          </p>
+        <//>`}
     </div>`;
 }
 

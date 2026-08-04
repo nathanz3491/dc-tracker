@@ -241,6 +241,13 @@ def _capex(session: Session) -> dict[str, Any]:
         "duplicates": {
             "groups": capex_mod.duplicate_groups(pairs),
             "double_counted_mw": capex_mod.double_counted_mw(pairs),
+            # The tranches two rows hold in common, keyed by the pair. A derived
+            # `block_key` on both rows is far harder evidence than a name
+            # resemblance, and an operator deciding whether to merge should see the
+            # strongest argument rather than infer it.
+            "shared_blocks": {
+                f"{p.a_id}-{p.b_id}": list(p.shared_blocks) for p in pairs if p.shared_blocks
+            },
         },
     }
 

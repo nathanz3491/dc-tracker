@@ -161,7 +161,7 @@ def test_dataset_carries_the_capex_rollup(server):
         "suspect",
         "duplicates",
     }
-    assert set(capex["duplicates"]) == {"groups", "double_counted_mw"}
+    assert set(capex["duplicates"]) == {"groups", "double_counted_mw", "shared_blocks"}
     # Microsoft is a hyperscaler in the company list, so it is its own customer.
     position = next(p for p in capex["positions"] if p["key"] == "microsoft")
     assert position["self_built"] == 1
