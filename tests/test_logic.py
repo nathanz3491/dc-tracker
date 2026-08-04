@@ -971,3 +971,20 @@ def test_the_same_phase_of_two_campuses_is_not_double_counting(session):
     _blk(session, project, block_key="azp-3.phase-1", label="AZP-3 Phase 1", mw=8.0)
     session.refresh(project)
     assert "blocks_may_double_count" not in _codes(project)
+
+
+def test_an_energisation_no_tranche_holds_is_reported_as_a_gap_in_the_blocks(session):
+    """Measured on SDC Quincy: one block under construction, a cited 2022
+    energisation, and nothing to hold it.
+
+    Calling that "the phase is behind the milestone" points at the wrong thing. The
+    phase is right; the blocks are incomplete, which is a crawl to do rather than a
+    value to change.
+    """
+    project = _project(session, phase="construction", mw_planned=85.0)
+    _event(session, project, "energized", dt.date(2022, 7, 1))
+    _blk(session, project, label="Newest Phase", mw=85.0, status="under_construction")
+    session.refresh(project)
+    codes = _codes(project)
+    assert "no_block_for_energisation" in codes
+    assert "energized_but_not_operational" not in codes

@@ -403,13 +403,30 @@ def check_rules(project: Project) -> list[Finding]:
         # campus that is two things at once.
         and not partly_live
     ):
-        add(
-            "energized_but_not_operational",
-            ERROR,
-            f"power was energised on {energized_on} but the phase is still {phase}",
-            ("phase",),
-            "energised means running; the phase is behind the milestone",
-        )
+        if blocks and not live_blocks:
+            # The tranches this row has disagree with its power track. Measured on
+            # SDC Quincy: one block, "Newest Phase", under construction, beside a
+            # cited 2022 energisation with no tranche to hold it. Reporting that as
+            # "the phase is behind the milestone" points at the wrong thing — the
+            # phase is right and the blocks are incomplete, which is a crawl to do
+            # rather than a value to change.
+            add(
+                "no_block_for_energisation",
+                WARNING,
+                f"power was energised on {energized_on}, but none of the "
+                f"{len(blocks)} tranche(s) recorded here is running",
+                ("mw_built",),
+                "the energised part of this campus has no block yet; re-read a "
+                "source that describes it",
+            )
+        else:
+            add(
+                "energized_but_not_operational",
+                ERROR,
+                f"power was energised on {energized_on} but the phase is still {phase}",
+                ("phase",),
+                "energised means running; the phase is behind the milestone",
+            )
 
     # --- the numbers against each other --------------------------------------
     if (
@@ -1019,6 +1036,7 @@ ACTIONS: Final[dict[str, tuple[Action, ...]]] = {
     "live_block_without_cited_capacity": (),
     "block_label_ambiguous": (),
     "blocks_may_double_count": (),
+    "no_block_for_energisation": (),
 }
 
 
