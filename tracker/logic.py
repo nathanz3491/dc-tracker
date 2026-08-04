@@ -53,7 +53,13 @@ from sqlalchemy.orm import Session
 
 from tracker.models import Project
 from tracker.tracks import RISK_TRACK, TRACK_MILESTONES, standing
-from tracker.vocab import OPEN_RISK_STATUS, PHASE_TERMINAL, TRACKED_FIELDS
+from tracker.vocab import (
+    BLOCK_LIVE,
+    BLOCK_TERMINAL,
+    OPEN_RISK_STATUS,
+    PHASE_TERMINAL,
+    TRACKED_FIELDS,
+)
 
 log = logging.getLogger(__name__)
 
@@ -220,6 +226,32 @@ def _reached(state) -> set[str]:
     return set(state.reached)
 
 
+def _nested_blocks(blocks: list[Any]) -> list[tuple[str, str]]:
+    """Pairs where one block's label is contained in another's. `(inner, outer)`.
+
+    Measured on Riot Rockdale, which came back as "AMD Lease" 25 MW, "AMD Lease
+    Initial Deployment" 25 MW and "AMD Lease Expansion" 25 MW — one lease described
+    at three grains. `block_key` correctly says those are three different strings;
+    what it cannot know is that summing them counts the same megawatts three times.
+
+    Deliberately a *report*, not a merge. Sometimes "Phase 1" and "Phase 1
+    Remainder" really are the whole and a part; sometimes they are two tranches an
+    operator named badly. Only a person can say which, and folding them silently is
+    the failure mode `dedup.py` argues against at project grain.
+    """
+    keyed = [(b.block_key, set(b.block_key.split("."))) for b in blocks]
+    out: list[tuple[str, str]] = []
+    for inner, inner_parts in keyed:
+        for outer, outer_parts in keyed:
+            if inner == outer:
+                continue
+            # Strict superset: every segment of the outer key appears in the inner
+            # one, so the inner names the outer plus something more.
+            if outer_parts < inner_parts:
+                out.append((inner, outer))
+    return sorted(set(out))
+
+
 def check_rules(project: Project) -> list[Finding]:
     """Every deterministic contradiction on one row.
 
@@ -234,6 +266,23 @@ def check_rules(project: Project) -> list[Finding]:
     by_track = {s.track: s for s in stand.tracks}
     phase = (project.phase or "").lower()
     today_ = _today()
+
+    # --- what the blocks say, which several rules below must ask before firing ---
+    #
+    # Four of these rules were written when a campus was either built and serving
+    # customers or not built. On a modern AI campus — part energised and serving one
+    # buyer, part still going up — they fire on the ordinary shape of the thing and
+    # tell an operator to "fix" data that is correct. That was 18 of 144 findings
+    # outright and a share of another 45.
+    #
+    # So each of them now asks the blocks first. A campus that is *partly* live is
+    # not contradicting itself, and saying so is the whole reason blocks exist. A
+    # campus with no blocks keeps exactly today's behaviour, because the absence of
+    # blocks is a gap in what has been read and not evidence of coherence.
+    blocks = list(getattr(project, "blocks", ()) or ())
+    live_blocks = [b for b in blocks if b.status in BLOCK_LIVE]
+    pending_blocks = [b for b in blocks if b.status not in BLOCK_LIVE | set(BLOCK_TERMINAL)]
+    partly_live = bool(live_blocks and pending_blocks)
 
     def add(
         code: str, severity: str, summary: str, fields: tuple[str, ...], remedy: str = ""
@@ -306,14 +355,29 @@ def check_rules(project: Project) -> list[Finding]:
         )
 
     if phase in _LIVE_PHASES and project.mw_built is None and project.mw_planned:
-        add(
-            "operational_without_built_capacity",
-            WARNING,
-            f"phase is operational and {project.mw_planned:g} MW is planned, but no "
-            "source says any of it is built",
-            ("phase", "mw_built"),
-            "a live campus has energised capacity; find it or step the phase back",
-        )
+        if live_blocks:
+            # Not a contradiction. Something *does* say part of it is running — the
+            # block says so — and `mw_built` is empty because that block's capacity
+            # arrived without a quote naming it, which `rollup` refuses to sum. The
+            # remedy is a citation for a known tranche, not a phase to step back.
+            named = ", ".join(sorted(b.label for b in live_blocks)[:3])
+            add(
+                "live_block_without_cited_capacity",
+                WARNING,
+                f"{len(live_blocks)} block(s) are running ({named}) but none carries a "
+                "capacity any quote confirms, so mw_built stays empty",
+                ("mw_built",),
+                "find a source that states the megawatts of that tranche",
+            )
+        else:
+            add(
+                "operational_without_built_capacity",
+                WARNING,
+                f"phase is operational and {project.mw_planned:g} MW is planned, but no "
+                "source says any of it is built",
+                ("phase", "mw_built"),
+                "a live campus has energised capacity; find it or step the phase back",
+            )
 
     # Only on an energisation that has actually happened. A future-dated one is
     # caught by `milestone_in_the_future` above, and calling it a contradiction
@@ -328,6 +392,11 @@ def check_rules(project: Project) -> list[Finding]:
         and phase
         and phase not in _LIVE_PHASES
         and phase not in PHASE_TERMINAL
+        # A campus with one tranche energised and another still going up is
+        # *correctly* described as under construction. This was every one of the 18
+        # `energized_but_not_operational` findings: one enum asked to answer for a
+        # campus that is two things at once.
+        and not partly_live
     ):
         add(
             "energized_but_not_operational",
@@ -368,11 +437,36 @@ def check_rules(project: Project) -> list[Finding]:
         )
 
     today = _today()
-    if (
+
+    # Asked per block wherever there are blocks, because a campus whose phase-1 date
+    # passed while phase 2 runs to a later schedule is not late — it is a campus. The
+    # project-level question is only meaningful when there is nothing finer to ask.
+    late_blocks = [
+        b
+        for b in blocks
+        if b.expected_online
+        and b.expected_online < today
+        and b.status not in BLOCK_LIVE
+        and b.status not in BLOCK_TERMINAL
+    ]
+    if late_blocks:
+        listed = ", ".join(f"{b.label} ({b.expected_online})" for b in late_blocks[:3])
+        add(
+            "block_past_its_own_date",
+            WARNING,
+            f"{len(late_blocks)} tranche(s) are past their own online date — {listed}",
+            ("expected_online",),
+            "that tranche specifically slipped or is running; the campus around it "
+            "may be perfectly on schedule",
+        )
+    elif (
         project.expected_online
         and project.expected_online < today
         and phase not in _LIVE_PHASES
         and phase not in PHASE_TERMINAL
+        # A dated tranche still to come explains a campus date that has passed: the
+        # date on the row is the first phase's, and the campus is not done.
+        and not any(b.expected_online and b.expected_online >= today for b in blocks)
     ):
         overdue = (today - project.expected_online).days
         add(
@@ -384,6 +478,40 @@ def check_rules(project: Project) -> list[Finding]:
             "either it slipped and we missed the news, or it is running and we "
             "missed that — both are worth one crawl",
         )
+
+    # --- the blocks against themselves ----------------------------------------
+    #
+    # These two are this design's own instrumentation. `block_key` is asserted to be
+    # an identity; if it is not, the symptom is a generic label that cannot be placed
+    # or two tranches summing capacity they share. Better to report that than to let
+    # a silent double-count sit inside a campus total.
+    if blocks:
+        from tracker import blocks as blocks_mod
+
+        got = blocks_mod.rollup(blocks)
+        if got.unplaceable:
+            listed = ", ".join(got.unplaceable[:3])
+            add(
+                "block_label_ambiguous",
+                WARNING,
+                f"{len(got.unplaceable)} block(s) name a phase without saying of which "
+                f"facility ({listed}), and this row holds more than one",
+                ("mw_planned",),
+                "name the parent facility; until then their capacity is left out of "
+                "the campus total rather than guessed at",
+            )
+
+        nested = _nested_blocks(blocks)
+        if nested:
+            listed = ", ".join(f"{inner} within {outer}" for inner, outer in nested[:3])
+            add(
+                "blocks_may_double_count",
+                WARNING,
+                f"{len(nested)} block label(s) sit inside another's ({listed}), so "
+                "summing them as separate tranches may count the same megawatts twice",
+                ("mw_planned", "mw_built"),
+                "if one describes part of the other, merge them or record only the finer grain",
+            )
 
     # --- terminal states that are still moving --------------------------------
     if phase in PHASE_TERMINAL:
@@ -877,6 +1005,15 @@ ACTIONS: Final[dict[str, tuple[Action, ...]]] = {
         Action("d", "those are plans, not milestones — remove them", _drop_future_milestones),
     ),
     "phase_without_construction": (),  # nothing to edit; accept or skip
+    # The block rules are all report-only, and stay that way. Each names something
+    # only a person can settle: which facility an unplaceable tranche belongs to,
+    # whether two labels describe one lease, whether a slipped tranche slipped or
+    # simply went live unreported. An automatic edit here would be guessing at the
+    # sub-site grain, which is the grain this whole design exists to stop guessing at.
+    "block_past_its_own_date": (),
+    "live_block_without_cited_capacity": (),
+    "block_label_ambiguous": (),
+    "blocks_may_double_count": (),
 }
 
 
