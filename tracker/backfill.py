@@ -328,6 +328,7 @@ def run(
         MAX_PROJECTS_PER_ARTICLE,
         _blocks,
         truncate,
+        vague_block_note,
     )
     from tracker.ingest.fetch import HttpxFetcher, cache_path
     from tracker.llm import LLMError, LLMJsonError, parse_json_object
@@ -398,6 +399,10 @@ def run(
                     f"the operator's sites ({', '.join(b.label for b in elsewhere)}); "
                     "left off this row"
                 )
+                # `_blocks` described every block in the article; this row kept only
+                # some of them, so the 待确认 disclosure is recomputed rather than
+                # reported about blocks that went elsewhere.
+                block_notes = vague_block_note(found)
             if not found:
                 continue
 

@@ -983,15 +983,28 @@ def _blocks(
             f"{len(entries) - MAX_BLOCKS_PER_PROJECT} further block(s) named by this "
             "article were not recorded"
         )
+    notes.extend(vague_block_note(kept))
+    return kept, notes
+
+
+def vague_block_note(kept: list[BlockRecord]) -> list[str]:
+    """The 待确认 disclosure for a set of blocks. Empty when they are all cited.
+
+    Split out because the backfill routes a portfolio article's blocks across
+    several project rows *after* `_blocks` has run, and the note has to describe
+    the blocks that row actually kept. It did not: the first tranche told STACK's
+    Chicago row that "Portland Expansion" was unconfirmed, about a block that had
+    already been sent to the Portland row.
+    """
     vague = sorted(
         {b.label for b in kept for name in b.unconfirmed if name in {"mw", "investment_usd"}}
     )
-    if vague:
-        notes.append(
-            "block figures kept as 待确认 because no quote in the article names that "
-            f"block: {', '.join(vague)}"
-        )
-    return kept, notes
+    if not vague:
+        return []
+    return [
+        "block figures kept as 待确认 because no quote in the article names that "
+        f"block: {', '.join(vague)}"
+    ]
 
 
 def _risks(raw: dict[str, Any], article_text: str, url: str) -> tuple[list[RiskRecord], list[str]]:
