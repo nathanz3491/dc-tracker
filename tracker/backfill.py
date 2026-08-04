@@ -324,14 +324,8 @@ def run(
 
     from tracker import blocks as blocks_mod
     from tracker.config import get_settings
-    from tracker.ingest.crawl import (
-        MAX_PROJECTS_PER_ARTICLE,
-        _blocks,
-        truncate,
-        vague_block_note,
-    )
-    from tracker.ingest.fetch import HttpxFetcher, cache_path
-    from tracker.llm import LLMError, LLMJsonError, parse_json_object
+    from tracker.ingest.crawl import extract_one, vague_block_note
+    from tracker.ingest.fetch import FetchResult, HttpxFetcher, cache_path
     from tracker.prompts import load_prompt
 
     settings = settings or get_settings()
@@ -356,42 +350,49 @@ def run(
             report.skipped_cached += 1
             continue
 
-        user = prompt.render_user(
-            url=pick.url,
-            published_date="unknown",
-            markdown=truncate(text, settings.max_input_chars),
-            max_projects=MAX_PROJECTS_PER_ARTICLE,
+        # `extract_one` rather than a bare `complete`, for its corrective retry.
+        # Measured on the first live tranche: 5 of 25 articles failed to parse, every
+        # one of them a reply that spent its whole budget inside `<think>` and never
+        # reached the JSON. A verbatim retry reproduces that ramble, so the crawl path
+        # already learned to send a *different* request with a doubled budget — 20% of
+        # the articles were being thrown away for want of reusing it.
+        outcome = extract_one(
+            FetchResult(url=pick.url, ok=True, markdown=text),
+            prompt=prompt,
+            extractor=extractor,
+            settings=settings,
         )
-        try:
-            reply = extractor.complete(system=prompt.system, user=user)
-        except LLMError as exc:
-            report.fetch_error += 1
-            log.warning("%s: %s", pick.url, exc)
-            continue
-        report.prompt_tokens += reply.prompt_tokens or 0
-        report.completion_tokens += reply.completion_tokens or 0
+        report.prompt_tokens += outcome.prompt_tokens
+        report.completion_tokens += outcome.completion_tokens
         report.read += 1
 
-        try:
-            payload = parse_json_object(reply.text)
-        except LLMJsonError as exc:
-            report.parse_error += 1
-            log.warning("%s: %s", pick.url, exc)
+        if outcome.status == "llm_error":
+            report.fetch_error += 1
+            log.warning("%s: %s", pick.url, outcome.error)
             continue
-        extracted = [p for p in (payload.get("projects") or []) if isinstance(p, dict)]
+        if outcome.status not in ("ok", "no_project"):
+            report.parse_error += 1
+            log.warning("%s: %s", pick.url, outcome.error)
+            continue
+        extracted = list(outcome.records)
         if not extracted:
             continue
 
+        # Matched on the record's *normalized* fields rather than the model's raw
+        # reply, so the pairing sees the same "Fort Worth" the row was stored with,
+        # and the pairing logic stays a pure function of plain dicts.
+        claims = [record.project for record in extracted]
         siblings = [p for p in (session.get(Project, pid) for pid in pick.project_ids) if p]
         for project in siblings:
             pid = project.id
-            raw = _match(extracted, project, sole_candidate=len(pick.project_ids) == 1)
+            raw = _match(claims, project, sole_candidate=len(pick.project_ids) == 1)
             if raw is None:
                 report.notes.append(
                     f"#{pid}: {pick.url} describes no project matching this row; left alone"
                 )
                 continue
-            found, block_notes = _blocks(raw, text, pick.url)
+            record = extracted[next(i for i, c in enumerate(claims) if c is raw)]
+            found = [block for source in record.sources for block in source.blocks]
             found, elsewhere = _route(found, project, siblings)
             if elsewhere:
                 report.notes.append(
@@ -399,10 +400,9 @@ def run(
                     f"the operator's sites ({', '.join(b.label for b in elsewhere)}); "
                     "left off this row"
                 )
-                # `_blocks` described every block in the article; this row kept only
-                # some of them, so the 待确认 disclosure is recomputed rather than
-                # reported about blocks that went elsewhere.
-                block_notes = vague_block_note(found)
+            # The record described every block in the article; this row may have kept
+            # only some, so the 待确认 disclosure is built from what it actually kept.
+            block_notes = vague_block_note(found)
             if not found:
                 continue
 

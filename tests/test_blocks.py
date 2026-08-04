@@ -479,3 +479,29 @@ def test_a_wholly_stopped_campus_reports_a_terminal_phase_either_way(session):
         got = blocks.rollup([FakeBlock(f"p{i}", status=s) for i, s in enumerate(order)])
         assert got.phase in {"paused", "cancelled"}
         assert got.mw_planned is None, "a stopped tranche is not planned capacity"
+
+
+def test_word_order_does_not_fork_one_tranche_into_two():
+    """Found on Lake Mariner mid-backfill.
+
+    Two articles wrote "La Lupa (Core42 Leases)" and "Core42 Leases (La Lupa)", and
+    the row held the same 60 MW tranche twice under two keys. A block is a set of
+    designators, not a phrase, so order cannot be allowed to carry identity.
+    """
+    a = blocks.block_key("La Lupa (Core42 Leases)")
+    b = blocks.block_key("Core42 Leases (La Lupa)")
+    assert a.value == b.value
+
+
+def test_sorting_still_converges_the_parent_case():
+    """The AZP-3 convergence must survive the change that fixed Lake Mariner."""
+    assert (
+        blocks.block_key("AZP-3 Phase 3").value
+        == blocks.block_key("Phase 3", parent="AZP-3").value
+        == blocks.block_key("Phase 3 of AZP-3").value
+    )
+
+
+def test_a_repeated_word_does_not_change_the_key():
+    """Segments are a set, so "Phase 1 Phase 1" is still `phase-1`."""
+    assert blocks.block_key("Phase 1 Phase 1").value == blocks.block_key("Phase 1").value

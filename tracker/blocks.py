@@ -232,6 +232,13 @@ def block_key(label: str, parent: str | None = None) -> Key:
     `parent` is what makes a filing's "AZP-3 Phase 3" and an article's "Phase 3"
     (of AZP-3) converge — the reason project 39's third facility can be recognised
     at all.
+
+    **Segments are sorted, so word order cannot fork one tranche into two.** Found on
+    Lake Mariner during the backfill: two articles wrote "La Lupa (Core42 Leases)"
+    and "Core42 Leases (La Lupa)", and the row ended up holding the same 60 MW
+    tranche twice under two keys. Order carries no meaning here — a block is a set of
+    designators, not a phrase — and every case where order looked meaningful
+    ("AZP-3 Phase 3") converges either way.
     """
     segments = _segments(label)
     if not segments:
@@ -247,8 +254,8 @@ def block_key(label: str, parent: str | None = None) -> Key:
     if generic and parent:
         prefix = _segments(parent)
         if prefix and not all(s.split("-")[0] in TYPE_WORDS for s in prefix):
-            return Key(".".join([*prefix, *segments]), generic=False)
-    return Key(".".join(segments), generic=generic)
+            return Key(".".join(sorted({*prefix, *segments})), generic=False)
+    return Key(".".join(sorted(set(segments))), generic=generic)
 
 
 def label_tokens(label: str, parent: str | None = None) -> frozenset[str]:
