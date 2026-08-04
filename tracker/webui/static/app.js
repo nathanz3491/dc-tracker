@@ -1358,8 +1358,10 @@ function BlocksTab({ p }) {
     <div style=${{ display: "grid", gap: 14 }}>
       <p style=${{ margin: 0, fontSize: 14, lineHeight: "22px", color: "var(--muted-foreground)", maxWidth: "88ch" }}>
         A campus is rarely one thing. Each tranche carries its own state, customer and dates, so this
-        project can say it is ${live.length ? `${live.length} block(s) already running` : "not yet running"}
-        beside capacity still being built — which the single phase and capacity above can only summarise.
+        project can say it is ${live.length
+          ? `${live.length} tranche${live.length === 1 ? "" : "s"} already running `
+          : "not yet running "}beside capacity still being built — which the single phase and
+        capacity above can only summarise.
       </p>
 
       ${customers.length > 1 && html`
@@ -1397,8 +1399,9 @@ function BlocksTab({ p }) {
         <${Card} style=${{ padding: "12px 16px",
               borderColor: "color-mix(in oklab, var(--danger) 34%, var(--border))" }}>
           <p style=${{ margin: 0, fontSize: 13, lineHeight: "20px" }}>
-            <strong>${uncited.length} block(s) carry a capacity no quote confirms (待确认).</strong>
-            ${" "}Their megawatts are shown above but deliberately left out of the campus total, so
+            <strong>${uncited.length} tranche${uncited.length === 1 ? "" : "s"} carr${uncited.length === 1 ? "ies" : "y"}
+            ${" "}a capacity no quote confirms (待确认).</strong>
+            ${" "}Shown above, and deliberately left out of the campus total — so
             ${" "}${counted.length ? "the tranche figures will not add up to" : "there is no"} MW planned.
             A figure nobody stated is not a fact, and summing it would make the total read as cited.
           </p>
