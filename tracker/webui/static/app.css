@@ -701,3 +701,47 @@ dc-map svg:active { cursor: grabbing; }
   cursor: pointer;
   text-decoration: underline;
 }
+
+/* --- capacity blocks -------------------------------------------------------
+ *
+ * Five columns of tranche data need about 400px and a phone drawer gives 346, so
+ * the grid is declared here rather than inline: only a media query can rebuild it
+ * for a narrow screen, and an overflowing table is unreadable in a way a stacked
+ * one is not.
+ *
+ * On a phone the tranche and its megawatts stay side by side — that pairing is the
+ * whole point of the table — and state, customer and date drop onto their own
+ * lines, each prefixed with the column heading it lost. */
+.dc-blockrow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 108px 156px minmax(0, 1fr) 84px;
+  gap: 12px;
+  align-items: baseline;
+}
+
+@media (max-width: 720px) {
+  .dc-blockrow {
+    grid-template-columns: minmax(0, 1fr) 96px;
+    row-gap: 5px;
+  }
+  /* The heading row cannot label columns that are no longer columns. */
+  .dc-blockhead > :nth-child(n + 3) {
+    display: none;
+  }
+  .dc-blockrow > .dc-bmeta {
+    grid-column: 1 / -1;
+    text-align: left !important;
+  }
+  .dc-blockrow > .dc-bmeta::before {
+    content: attr(data-label) " ";
+    text-transform: uppercase;
+    font-size: 10px;
+    letter-spacing: 0.06em;
+    color: var(--muted-foreground);
+    margin-right: 6px;
+  }
+  /* Its own heading is already in the ::before above. */
+  .dc-blockrow > .dc-bmeta > .dc-bmeta-label {
+    display: none;
+  }
+}

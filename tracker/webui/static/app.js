@@ -1336,76 +1336,211 @@ function StatsTab({ data, p, populated, open, onQuote, allowWrite }) {
 
 //: Block status to a colour token. `serving` and `energized` are the two that mean
 //: megawatts are actually delivering, so they share the success colour.
-const BLOCK_TONE = {
-  serving: "--success",
-  energized: "--success",
-  shell_complete: "--chart-1",
-  under_construction: "--warning",
-  permitting: "--chart-5",
-  planned: "--muted-foreground",
-  paused: "--danger",
-  cancelled: "--danger",
+//: One entry per block status: how to colour it, how to say it, and how far along it
+//: is. `rank` orders the table so a reader meets a campus the way it was built —
+//: running capacity first, plans last — instead of in whatever order the keys sorted.
+//: The words are spelled out because `under_construction` is a database value, not
+//: something to put in front of an analyst.
+const BLOCK_STATE = {
+  serving: { tone: "--success", label: "Serving", rank: 7 },
+  energized: { tone: "--chart-2", label: "Energised", rank: 6 },
+  shell_complete: { tone: "--chart-1", label: "Shell complete", rank: 5 },
+  under_construction: { tone: "--warning", label: "Under construction", rank: 4 },
+  permitting: { tone: "--chart-5", label: "Permitting", rank: 3 },
+  planned: { tone: "--muted-foreground", label: "Planned", rank: 2 },
+  paused: { tone: "--danger", label: "Paused", rank: 1 },
+  cancelled: { tone: "--danger", label: "Cancelled", rank: 0 },
 };
+
+const blockState = (status) =>
+  BLOCK_STATE[status] || { tone: "--muted-foreground", label: status, rank: 2 };
+
+//: Megawatts, rounded the way capacity is actually published. A tranche is never
+//: quoted to a decimal place, and "36" reads faster than "36.0".
+const fmtMw = (v) => (v == null ? "—" : Math.round(v).toLocaleString());
+
+//: A month is as precise as an `expected_online` ever honestly is — most are
+//: normalised from "the second half of 2026" — so a day component invites a
+//: precision the source never offered.
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+function fmtMonth(iso) {
+  if (!iso) return null;
+  const [y, m] = String(iso).split("-");
+  return MONTHS[Number(m) - 1] ? `${MONTHS[Number(m) - 1]} ${y}` : iso;
+}
+
+//: One row of the reconciliation under the tranches. Kept as table rows rather than
+//: a paragraph so the megawatt column is a single column a reader can add up — the
+//: whole complaint was that the numbers did not visibly add up.
+function ReconRow({ label, mw, note, strong, tone }) {
+  return html`
+    <div class="dc-blockrow" style=${{ padding: "9px 4px", borderTop: "1px solid var(--border)" }}>
+      <span style=${{ fontSize: 13, fontWeight: strong ? 600 : 400,
+             color: tone ? `var(${tone})` : "inherit" }}>${label}</span>
+      <span class="dc-num" style=${{ fontSize: 13, textAlign: "right", fontWeight: strong ? 600 : 400,
+             color: tone ? `var(${tone})` : "inherit" }}>${mw}</span>
+      <span style=${{ fontSize: 12, color: "var(--muted-foreground)", gridColumn: "3 / -1" }}>${note || ""}</span>
+    </div>`;
+}
 
 function BlocksTab({ p }) {
   const blocks = p.blocks || [];
-  const counted = blocks.filter((b) => b.mw_counted && b.mw != null);
+  const acct = p.accounting;
   const uncited = blocks.filter((b) => !b.mw_counted && b.mw != null);
-  const live = blocks.filter((b) => b.status === "serving" || b.status === "energized");
   const customers = [...new Set(blocks.map((b) => b.customer).filter(Boolean))];
 
+  // Furthest along first, then largest, so the eye lands on running capacity before
+  // plans. Sorted here rather than server-side because it is a reading order, not a
+  // fact about the data.
+  const rows = [...blocks].sort((a, b) => {
+    const d = blockState(b.status).rank - blockState(a.status).rank;
+    return d !== 0 ? d : (b.mw || 0) - (a.mw || 0);
+  });
+  const widest = Math.max(...blocks.map((b) => b.mw || 0), 1);
+
+  // Capacity by state, for the strip above the table. This is the one number an
+  // analyst wants first: how much of this campus is actually delivering.
+  const byState = {};
+  for (const b of blocks) {
+    if (b.mw == null) continue;
+    byState[b.status] = (byState[b.status] || 0) + b.mw;
+  }
+  const segments = Object.entries(byState).sort(
+    (a, b) => blockState(b[0]).rank - blockState(a[0]).rank,
+  );
+  const itemised = segments.reduce((sum, [, mw]) => sum + mw, 0);
+  const live = segments
+    .filter(([s]) => s === "serving" || s === "energized")
+    .reduce((sum, [, mw]) => sum + mw, 0);
+
+  // The bar measures against the *campus total*, not against the tranches — using
+  // the tranche sum gave a headline of "0 of 42 MW" on a campus the table below
+  // totalled at 48, which is the same failure to add up in a different place. The
+  // shortfall gets its own muted segment, so the bar reaching full width is itself
+  // the statement that every megawatt is accounted for.
+  // The *stated* denominator is always the campus total, so the headline and the
+  // total row can never disagree. Lake Mariner reads 750 with 761 MW of tranches
+  // (one building described twice), and quoting 761 up top would reintroduce the
+  // very mismatch this is here to remove. `denom` is geometry only — it keeps the
+  // bar inside its track when the parts overrun.
+  const campusTotal = acct && acct.total != null ? acct.total : itemised;
+  const gap = Math.max(0, campusTotal - itemised);
+  const denom = Math.max(campusTotal, itemised, 1);
+  const bars = [...segments, ...(gap > 0.5 ? [["_gap", gap]] : [])];
+  const barTone = (key) => (key === "_gap" ? "--border" : blockState(key).tone);
+  const barLabel = (key) => (key === "_gap" ? "Not yet itemised" : blockState(key).label);
+
   return html`
-    <div style=${{ display: "grid", gap: 14 }}>
-      <p style=${{ margin: 0, fontSize: 14, lineHeight: "22px", color: "var(--muted-foreground)", maxWidth: "88ch" }}>
-        A campus is rarely one thing. Each tranche carries its own state, customer and dates, so this
-        project can say it is ${live.length
-          ? `${live.length} tranche${live.length === 1 ? "" : "s"} already running `
-          : "not yet running "}beside capacity still being built — which the single phase and
-        capacity above can only summarise.
-      </p>
+    <div style=${{ display: "grid", gap: 16 }}>
+      <!-- The headline: what is running, out of what. Replaces a paragraph of prose
+           that made the reader do this arithmetic themselves. -->
+      <div>
+        <div style=${{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
+          <span class="dc-num" style=${{ fontFamily: "var(--font-display)", fontSize: 30, fontWeight: 500,
+                 letterSpacing: "-0.02em" }}>${fmtMw(live)} MW</span>
+          <span style=${{ fontSize: 14, color: "var(--muted-foreground)" }}>
+            delivering of ${fmtMw(campusTotal)} MW${acct && acct.total_is_floor ? " (at least)" : ""}
+            ${" "}· ${blocks.length} tranche${blocks.length === 1 ? "" : "s"}${customers.length > 1
+              ? ` · ${customers.length} customers`
+              : customers.length === 1 ? ` · ${customers[0]}` : ""}</span>
+        </div>
+        <div style=${{ display: "flex", height: 8, marginTop: 10, borderRadius: 4, overflow: "hidden",
+             background: "var(--border)" }}>
+          ${bars.map(([key, mw], i) => html`
+            <div key=${i} title=${`${barLabel(key)}: ${fmtMw(mw)} MW`}
+                 style=${{ width: `${(mw / denom) * 100}%`, background: `var(${barTone(key)})` }} />`)}
+        </div>
+        <div style=${{ display: "flex", gap: 14, flexWrap: "wrap", marginTop: 8 }}>
+          ${bars.map(([key, mw], i) => html`
+            <span key=${i} style=${{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12,
+                   color: "var(--muted-foreground)" }}>
+              <span style=${{ width: 8, height: 8, borderRadius: 2, background: `var(${barTone(key)})`,
+                     border: key === "_gap" ? "1px solid var(--muted-foreground)" : "none" }} />
+              ${barLabel(key)} <span class="dc-num">${fmtMw(mw)} MW</span></span>`)}
+        </div>
+      </div>
 
-      ${customers.length > 1 && html`
-        <${Card} style=${{ padding: "12px 16px" }}>
-          <span style=${{ fontSize: 12, textTransform: "uppercase", letterSpacing: "0.08em",
-                          color: "var(--muted-foreground)" }}>this campus serves ${customers.length} customers</span>
-          <div style=${{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
-            ${customers.map((c, i) => html`<span key=${i} style=${chip("--chart-1")}>${c}</span>`)}
-          </div>
-        <//>`}
+      <div>
+        <!-- A header row, because the previous table had none: four unlabelled
+             columns of dates, names and pills. -->
+        <div class="dc-blockrow dc-blockhead" style=${{ padding: "0 4px 7px",
+             fontSize: 11, textTransform: "uppercase", letterSpacing: "0.07em",
+             color: "var(--muted-foreground)" }}>
+          <span>Tranche</span>
+          <span style=${{ textAlign: "right" }}>MW</span>
+          <span>State</span>
+          <span>Customer</span>
+          <span style=${{ textAlign: "right" }}>Online</span>
+        </div>
 
-      <div style=${{ display: "grid", gap: 0 }}>
-        ${blocks.map((b, i) => html`
-          <div key=${i} style=${{ display: "grid", gridTemplateColumns: "minmax(0,1fr) 92px 150px 132px",
-               gap: 12, alignItems: "baseline", padding: "12px 4px", borderTop: "1px solid var(--border)" }}>
-            <div style=${{ minWidth: 0 }}>
-              <div style=${{ fontSize: 14, fontWeight: 500 }}>
-                ${b.parent ? html`<span style=${{ color: "var(--muted-foreground)" }}>${b.parent} / </span>` : null}${b.label}
+        ${rows.map((b, i) => {
+          const state = blockState(b.status);
+          const when = b.energized_on || b.expected_online;
+          return html`
+            <div key=${i} class="dc-blockrow"
+                 style=${{ padding: "11px 4px", borderTop: "1px solid var(--border)" }}>
+              <div style=${{ minWidth: 0 }}>
+                ${b.parent && html`
+                  <div style=${{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em",
+                         color: "var(--muted-foreground)" }}>${b.parent}</div>`}
+                <div style=${{ fontSize: 14, fontWeight: 500 }}>${b.label}</div>
+                ${b.generic && !b.parent && html`
+                  <div style=${{ fontSize: 12, color: "var(--muted-foreground)", marginTop: 2 }}>
+                    not tied to a named facility</div>`}
               </div>
-              ${b.generic && !b.parent && html`
-                <div style=${{ fontSize: 12, color: "var(--muted-foreground)", marginTop: 2 }}>
-                  names a phase but not of which facility</div>`}
-            </div>
-            <span class="dc-num" style=${{ fontSize: 13, textAlign: "right",
-                  color: b.mw == null ? "var(--muted-foreground)" : b.mw_counted ? "inherit" : "var(--danger)" }}>
-              ${b.mw == null ? "—" : `${b.mw} MW`}</span>
-            <span style=${chip(BLOCK_TONE[b.status] || "--muted-foreground")}>${b.status}</span>
-            <span style=${{ fontSize: 12, color: "var(--muted-foreground)" }}>
-              ${b.customer || "—"}${b.energized_on ? ` · live ${b.energized_on}`
-                : b.expected_online ? ` · ${b.expected_online}` : ""}</span>
-          </div>`)}
+              <div>
+                <div class="dc-num" style=${{ fontSize: 14, textAlign: "right",
+                       color: b.mw == null ? "var(--muted-foreground)" : "inherit" }}>${fmtMw(b.mw)}</div>
+                <!-- Magnitude, so 1 against 36 is visible without reading. -->
+                ${b.mw != null && html`
+                  <div style=${{ height: 3, marginTop: 4, marginLeft: "auto", borderRadius: 2,
+                         width: `${Math.max(4, (b.mw / widest) * 100)}%`,
+                         background: `var(${state.tone})`, opacity: b.mw_counted ? 1 : 0.4 }} />`}
+                ${b.mw != null && !b.mw_counted && html`
+                  <div style=${{ fontSize: 10, textAlign: "right", marginTop: 3, color: "var(--warning)" }}>
+                    待确认</div>`}
+              </div>
+              <div class="dc-bmeta" data-label="State">
+                <span style=${chip(state.tone)}>${state.label}</span></div>
+              <div class="dc-bmeta" data-label="Customer"
+                   style=${{ fontSize: 13, minWidth: 0, overflowWrap: "anywhere" }}>
+                ${b.customer || html`<span style=${{ color: "var(--muted-foreground)" }}>—</span>`}</div>
+              <div class="dc-bmeta" data-label=${b.energized_on ? "Live since" : "Online"}
+                   style=${{ textAlign: "right", color: "var(--muted-foreground)" }}>
+                ${b.energized_on && html`
+                  <div class="dc-bmeta-label" style=${{ fontSize: 10, textTransform: "uppercase",
+                         letterSpacing: "0.05em" }}>live since</div>`}
+                <span class="dc-num" style=${{ fontSize: 12 }}>${when ? fmtMonth(when) : "—"}</span>
+              </div>
+            </div>`;
+        })}
+
+        <!-- The arithmetic, closed. Every megawatt of the campus sits on one of these
+             lines, which is the point: a reader who cannot make the parts reach the
+             total stops trusting the rest of the row too. -->
+        ${acct && html`
+          <div style=${{ marginTop: 10, paddingTop: 2, borderTop: "2px solid var(--border)" }}>
+            <${ReconRow} label="Cited per tranche" mw=${fmtMw(acct.counted_mw)}
+              note="capacity a quote confirms for a named tranche" />
+            ${acct.residuals.map((r, i) => html`
+              <${ReconRow} key=${i} tone="--warning"
+                label=${r.reason === "unitemised" ? "Not yet itemised"
+                  : r.reason === "unconfirmed" ? "Stated, unconfirmed"
+                  : r.reason === "unplaceable" ? "Not tied to a facility"
+                  : "Counted twice over"}
+                mw=${(r.reason === "overlap" ? "−" : "") + fmtMw(r.mw)} note=${r.note} />`)}
+            <${ReconRow} strong label=${acct.total_is_floor ? "Campus total (at least)" : "Campus total"}
+              mw=${fmtMw(acct.total)}
+              note=${acct.total_is_floor ? "no source states a campus figure — this is the sum of the parts" : ""} />
+          </div>`}
       </div>
 
       ${uncited.length > 0 && html`
-        <${Card} style=${{ padding: "12px 16px",
-              borderColor: "color-mix(in oklab, var(--danger) 34%, var(--border))" }}>
-          <p style=${{ margin: 0, fontSize: 13, lineHeight: "20px" }}>
-            <strong>${uncited.length} tranche${uncited.length === 1 ? "" : "s"} carr${uncited.length === 1 ? "ies" : "y"}
-            ${" "}a capacity no quote confirms (待确认).</strong>
-            ${" "}Shown above, and deliberately left out of the campus total — so
-            ${" "}${counted.length ? "the tranche figures will not add up to" : "there is no"} MW planned.
-            A figure nobody stated is not a fact, and summing it would make the total read as cited.
-          </p>
-        <//>`}
+        <p style=${{ margin: 0, fontSize: 12, lineHeight: "19px", color: "var(--muted-foreground)" }}>
+          <strong style=${{ color: "var(--warning)" }}>待确认</strong> marks a capacity the article
+          states without any quote naming that tranche. It is shown and accounted for above, and kept
+          out of the cited figure — a number nobody stated should not read as one that was.
+        </p>`}
     </div>`;
 }
 
@@ -2009,6 +2144,97 @@ function DuplicateGroup({ ids, byId, allowWrite, busy, onRan }) {
     </div>`;
 }
 
+/* The buyer-position twin of InsightPanel: streamed from the capex overview
+ * endpoint, cut at the sentinel server-side, cached by content so re-hovering a
+ * buyer whose data has not moved is free. Same honesty framing — a model's
+ * reading, never stored, never evidence. */
+function CapexInsight({ posKey, allowWrite }) {
+  const [state, setState] = useState({ status: "idle", text: "" });
+
+  useEffect(() => {
+    if (!allowWrite) { setState({ status: "unavailable", text: "" }); return; }
+    const controller = new AbortController();
+    setState({ status: "writing", text: "" });
+    apiStream("/api/capex/overview/stream", { key: posKey, confirm: "overview" }, (event) => {
+      if (event.type === "text") {
+        setState((s) => ({ ...s, status: "writing", text: s.text + event.text }));
+      } else if (event.type === "end") {
+        setState((s) => ({ status: "done", text: event.text || s.text,
+                           model: event.model, cached: event.cached }));
+      } else if (event.type === "error") {
+        setState((s) => ({ ...s, status: "failed", error: event.error }));
+      }
+    }, controller.signal).catch((e) => {
+      if (e.name !== "AbortError") setState({ status: "failed", text: "", error: e.message });
+    });
+    return () => controller.abort();
+  }, [posKey, allowWrite]);
+
+  const streaming = state.status === "writing";
+  const shown = useTypewriter(state.text, streaming);
+  const visible = state.text.slice(0, shown);
+  const body = visible.trim()
+    ? renderMarkdown(streaming ? tidyPartialMarkdown(visible) : visible)
+    : null;
+
+  return html`
+    <section class="dc-ai" aria-label="Model-written reading of this buyer" style=${{ marginTop: 10 }}>
+      <div class="dc-ai-head">
+        <span class="dc-ai-spark" aria-hidden="true">✦</span>
+        <span class="dc-ai-label">AI reading</span>
+        ${streaming && html`<span class="dc-ai-dots" aria-live="polite" aria-label="writing"><i /><i /><i /></span>`}
+      </div>
+      ${state.status === "unavailable" && html`
+        <p class="dc-ai-quiet">Unavailable on a read-only console.</p>`}
+      ${state.status === "failed" && html`<p class="dc-ai-quiet">${state.error}</p>`}
+      ${streaming && !body && html`
+        <div class="dc-ai-wait" aria-hidden="true">
+          ${[92, 70].map((w) => html`<span key=${w} style=${{ width: w + "%" }} />`)}
+        </div>`}
+      ${body && html`
+        <div class=${"dc-ai-body is-open" + (streaming ? " is-writing" : "")}>${body}</div>`}
+      ${body && !streaming && html`
+        <div class="dc-ai-foot">
+          <span>Written by a model from the table's own rows — not stored, not evidence.</span>
+        </div>`}
+    </section>`;
+}
+
+/* The hover card: instant deterministic facts on top, the model's reading
+ * streaming underneath. Fixed-position like QuotePopover, but interactive —
+ * the reader can mouse into it, so it holds itself open. */
+function CapexHoverCard({ hover, position, allowWrite, onHold, onRelease }) {
+  if (!hover || !position) return null;
+  const facts = [
+    [`${position.projects}`, position.projects === 1 ? "site" : "sites"],
+    position.self_built > 0 && [`${position.self_built}`, "attributed from ownership"],
+    position.mw_duplicate_skipped > 0 &&
+      [`${Math.round(position.mw_duplicate_skipped).toLocaleString()} MW`, "set aside as duplicates"],
+    position.investment_excluded_usd > 0 &&
+      [fmtUSD(position.investment_excluded_usd), "claimed, never confirmed"],
+  ].filter(Boolean);
+  return html`
+    <div class="dc-pop" onMouseEnter=${onHold} onMouseLeave=${onRelease}
+         style=${{ position: "fixed", zIndex: 70, left: hover.x, top: hover.y,
+                   width: "min(430px, 88vw)", maxHeight: "62vh", overflowY: "auto",
+                   padding: "13px 15px", background: "var(--surface)",
+                   border: "1px solid var(--border)", borderRadius: 14,
+                   boxShadow: "var(--shadow-pop)" }}>
+      <div style=${{ fontWeight: 600, fontSize: 13, marginBottom: 8 }}>${position.customer}</div>
+      <div style=${{ display: "flex", flexWrap: "wrap", gap: "4px 16px" }}>
+        ${facts.map(([big, label]) => html`
+          <div key=${label} style=${{ display: "grid" }}>
+            <span class="dc-num" style=${{ fontSize: 15, fontWeight: 600 }}>${big}</span>
+            <span style=${{ fontSize: 10.5, color: "var(--muted-foreground)" }}>${label}</span>
+          </div>`)}
+      </div>
+      <${CapexInsight} posKey=${position.key} allowWrite=${allowWrite} />
+      <div style=${{ marginTop: 8, fontSize: 10.5, color: "var(--muted-foreground)" }}>
+        click the row to list the sites behind these numbers
+      </div>
+    </div>`;
+}
+
 function CapexView({ data, allowWrite, busy, onRan }) {
   const capex = data.capex;
   const cover = capex.coverage;
@@ -2017,46 +2243,99 @@ function CapexView({ data, allowWrite, busy, onRan }) {
     () => Object.fromEntries(data.projects.map((p) => [p.id, p])), [data.projects]);
   const reviewRef = useRef(null);
 
-  // Only the next few periods. An expected-online date already in the past is a
-  // data-quality signal rather than a pipeline, and giving it a column would put
-  // it in the same row of numbers as capacity that is genuinely coming.
+  // Which periods get a column is a judgement — years as a continuous range so a
+  // gap year shows as an empty column, quarters data-only — so the server computes
+  // it (capex.year_columns) and this component only renders it.
   const [grain, setGrain] = useState("year");
   const buckets = grain === "quarter"
-    ? (capex.quarters || []).filter((q) => q >= capex.as_of_quarter).slice(0, 6)
-    : capex.years.filter((y) => y >= capex.as_of_year).slice(0, 4).map(String);
+    ? (capex.quarter_columns || [])
+    : (capex.year_columns || []).map(String);
   const bucketOf = (p, b) =>
     grain === "quarter" ? (p.mw_by_quarter || {})[b] : p.mw_by_year[b];
   const attributed = Math.round((cover.attributed_pct / 100) * cover.projects);
+  // Sums of server-sent disclosures — arithmetic, not a judgement of our own.
+  const skippedMW = capex.positions.reduce((t, p) => t + (p.mw_duplicate_skipped || 0), 0);
+  const excludedUSD = capex.positions.reduce((t, p) => t + (p.investment_excluded_usd || 0), 0);
 
   const num = (v, suffix = "") =>
     v ? Math.round(v).toLocaleString() + suffix : html`<span class="dc-v dc-v--missing">—</span>`;
+
+  // Headline sums of server-sent values — arithmetic only, per the rule that the
+  // browser never computes a judgement of its own.
+  const totalPlanned = capex.positions.reduce((t, p) => t + (p.mw_planned || 0), 0);
+  const totalBuilt = capex.positions.reduce((t, p) => t + (p.mw_built || 0), 0);
+  const totalUSD = capex.positions.reduce((t, p) => t + (p.investment_usd || 0), 0);
+  const skippedUSD = capex.positions.reduce(
+    (t, p) => t + (p.investment_duplicate_skipped_usd || 0), 0);
+  const gw = (mw) => mw >= 1000
+    ? `${(mw / 1000).toLocaleString(undefined, { maximumFractionDigits: 1 })} GW`
+    : `${Math.round(mw).toLocaleString()} MW`;
+  const groupHead = {
+    fontSize: 10, fontFamily: "var(--font-mono)", fontWeight: 500,
+    textTransform: "uppercase", letterSpacing: "0.08em",
+    color: "var(--muted-foreground)", textAlign: "center",
+    padding: "8px 8px 0", whiteSpace: "nowrap",
+  };
+  const head = (label, why, align) => html`
+    <${TableHead} align=${align}><span title=${why}>${label}</span><//>`;
+
+  // Click a buyer → the sites behind its numbers. Hover → a model's reading.
+  // The hover waits 450ms so mousing down the table does not fire a request per
+  // row, and the card holds itself open so the reader can mouse into it.
+  const [openKey, setOpenKey] = useState(null);
+  const [hover, setHover] = useState(null);
+  const hoverTimer = useRef(null);
+  const leaveTimer = useRef(null);
+  useEffect(() => () => { clearTimeout(hoverTimer.current); clearTimeout(leaveTimer.current); }, []);
+  const startHover = (event, p) => {
+    clearTimeout(hoverTimer.current);
+    clearTimeout(leaveTimer.current);
+    const r = event.currentTarget.getBoundingClientRect();
+    const W = 430, H = 280;
+    const below = r.bottom + H + 16 < window.innerHeight;
+    const coords = {
+      key: p.key,
+      x: Math.max(10, Math.min(r.left, window.innerWidth - W - 12)),
+      y: below ? r.bottom + 6 : Math.max(10, r.top - H - 6),
+    };
+    hoverTimer.current = setTimeout(() => setHover(coords), 450);
+  };
+  const endHover = () => {
+    clearTimeout(hoverTimer.current);
+    leaveTimer.current = setTimeout(() => setHover(null), 250);
+  };
+  const holdHover = () => clearTimeout(leaveTimer.current);
+  const hovered = hover === null ? null : capex.positions.find((p) => p.key === hover.key);
 
   return html`
     <div class="dc-view dc-rise" style=${{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 16,
                      padding: "22px 26px 60px" }}>
       <${Eyebrow} figure="fig. 03 — capex" title="Who is actually paying for it">
-        Meta builds its own campuses. OpenAI mostly rents from developers like Crusoe. So the company on
-        the building is often not the one paying for the compute — this page groups by whoever pays.
-        ${" "}${html`<b>*</b>`} means we worked the buyer out from who owns the site, because no source
-        named a tenant.
+        Each row is one ${html`<b>buyer</b>`} — the company all that capacity is ultimately for, which is
+        often not the company on the building: Meta builds its own campuses, OpenAI mostly rents from
+        developers like Crusoe. Read a row left to right: how many sites, how much capacity is planned
+        and already running, the confirmed money behind it, and when the megawatts are expected to
+        arrive. ${html`<b>*</b>`} means the buyer was worked out from who owns the site, because no
+        source named a tenant. ${html`<b>Click a buyer</b>`} to list the sites behind its numbers;
+        ${html`<b>hover one</b>`} for a model's short reading of the position.
       <//>
 
+      ${/* The page in five numbers, before any column has to be decoded. */ ""}
       <${Card}>
-        <${CardHeader}>
-          <${CardTitle}>How much of the data this page covers<//>
-          <${CardDescription}>We can name a buyer for ${attributed} of ${cover.projects} projects.
-            The rest sit in the last row. Worth knowing before you quote a number off this table.<//>
-        <//>
         <div class="dc-capex-cover">
-          ${[["we know the buyer", cover.attributed_pct, "for the rest, nobody has said who it is for"],
-             ["a source named them", cover.named_tenant_pct, "someone wrote down who the tenant is"],
-             ["worked out from owner", cover.self_built_pct, "the operator builds for itself, so it is the buyer"],
-             ["size is known", cover.with_capacity_pct, "the rest count as zero MW here"],
-             ["size and date known", cover.in_timeline_pct, "only these can appear in a year column"],
-            ].map(([label, pct, why]) => html`
+          ${[[gw(totalPlanned), "planned or building",
+              "capacity in the pipeline across every buyer below; a project nobody has sized counts zero"],
+             [gw(totalBuilt), "already running",
+              "megawatts a source says are energised and serving"],
+             [fmtUSD(totalUSD) || "$0", "confirmed spend",
+              "only figures a source confirmed for that specific site"],
+             [fmtUSD(excludedUSD + skippedUSD) || "$0", "claimed, not counted",
+              "programme-wide totals and duplicate rows — disclosed below, never summed"],
+             [`${Math.round(cover.attributed_pct)}%`, "have a named buyer",
+              "the rest sit in the bottom row as capacity nobody has claimed"],
+            ].map(([big, label, why]) => html`
             <div key=${label} style=${{ display: "grid", gap: 4, minWidth: 0 }}>
-              <span class="dc-num" style=${{ fontSize: 22, fontFamily: "var(--font-display)" }}>
-                ${Math.round(pct)}%</span>
+              <span class="dc-num" style=${{ fontSize: 22, fontFamily: "var(--font-display)" }}>${big}</span>
               <span style=${{ fontSize: 12, fontWeight: 600 }}>${label}</span>
               <span style=${{ fontSize: 11, lineHeight: "16px", color: "var(--muted-foreground)" }}>${why}</span>
             </div>`)}
@@ -2069,18 +2348,18 @@ function CapexView({ data, allowWrite, busy, onRan }) {
             <div class="mrd-alert-title">
               ${dupes.groups.length === 1
                 ? "One campus is stored more than once"
-                : `${dupes.groups.length} campuses are stored more than once`}, holding
-              ${" "}${Math.round(dupes.double_counted_mw).toLocaleString()} MW counted twice
+                : `${dupes.groups.length} campuses are stored more than once`}
             </div>
             <div class="mrd-alert-desc">
               One campus usually has a builder, a landowner and an occupier, and each name a source
-              picks becomes its own row. On the Projects page that is just untidy. Here it inflates a
-              buyer's total, because the same megawatts get added once per row.
+              picks becomes its own row. This table counts one row per suspected campus and sets
+              ${" "}${Math.round(skippedMW).toLocaleString()} MW aside — skipped, not merged, so the
+              rows are still there.
               ${" "}
               <button type="button" class="dc-link"
                       onClick=${() => reviewRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}>
                 Review them below
-              </button>.
+              </button> to fold them for real.
             </div>
           </div>
         <//>`}
@@ -2104,36 +2383,78 @@ function CapexView({ data, allowWrite, busy, onRan }) {
         </div>
         <div style=${{ minWidth: 0 }}>
           <${Table} density="compact">
-            <${TableHeader}><${TableRow}>
-              <${TableHead}>buyer<//>
-              <${TableHead} align="right">proj<//>
-              <${TableHead} align="right">MW planned<//>
-              <${TableHead} align="right">MW built<//>
-              <${TableHead} align="right">investment<//>
-              ${buckets.map((b) => html`<${TableHead} key=${b} align="right">MW ${b}<//>`)}
-              <${TableHead} align="right">at risk<//>
-              <${TableHead} align="right">slipped<//>
-              <${TableHead}>worst obstacle<//>
-            <//><//>
+            <${TableHeader}>
+              ${/* Group row first: the year columns mean nothing until the reader
+                    knows they are megawatts arriving. Raw <th> so colSpan is
+                    guaranteed to survive; the real column row stays Meridian. */ ""}
+              <tr>
+                <th colSpan=${2}></th>
+                <th colSpan=${2} style=${groupHead}>capacity, MW</th>
+                <th></th>
+                <th colSpan=${buckets.length} style=${groupHead}>MW arriving, by ${grain}</th>
+                <th colSpan=${3} style=${groupHead}>trouble</th>
+              </tr>
+              <${TableRow}>
+                ${head("buyer", "the company the capacity is ultimately for")}
+                ${head("sites", "projects attributed to this buyer", "right")}
+                ${head("planned", "capacity a source states is planned or building", "right")}
+                ${head("running", "energised and serving today", "right")}
+                ${head("confirmed $", "investment some source confirmed for that specific site", "right")}
+                ${buckets.map((b) => html`
+                  <${TableHead} key=${b} align="right">
+                    <span title=${`planned MW expected online in ${b}`}>${b}</span><//>`)}
+                ${head("MW at risk", "planned MW on projects with an open obstacle", "right")}
+                ${head("delays", "projects whose online date has moved later", "right")}
+                ${head("biggest obstacle", "the most severe open obstacle across this buyer's sites")}
+              <//>
+            <//>
             <${TableBody}>
               ${capex.positions.map((p, i) => {
                 const residual = p.key === "";
+                if (!p.projects) {
+                  // A buyer whose every row was set aside as a suspected duplicate.
+                  // A rank of dashes here read as broken data; say what happened.
+                  return html`
+                    <tr key=${p.key || "__none"} style=${{ color: "var(--muted-foreground)" }}>
+                      <td class="dc-cell dc-cell--wide">
+                        <span style=${{ fontSize: 13 }}>${p.customer}</span></td>
+                      <td colSpan=${7 + buckets.length} style=${{ fontSize: 12, padding: "6px 10px" }}>
+                        nothing counted — ${Math.round(p.mw_duplicate_skipped).toLocaleString()} MW${" "}
+                        ${p.investment_duplicate_skipped_usd
+                          ? `and ${fmtUSD(p.investment_duplicate_skipped_usd)} `
+                          : ""}set aside as duplicate rows of a campus counted above
+                      </td>
+                    </tr>`;
+                }
+                const expanded = openKey === p.key;
                 return html`
                   <tr key=${p.key || "__none"} class=${i < 12 ? "dc-enter" : undefined}
                       style=${{ ...(i < 12 ? { "--i": i } : {}),
                                 ...(residual ? { color: "var(--muted-foreground)" } : {}) }}>
-                    <td class="dc-cell dc-cell--wide">
+                    <td class="dc-cell dc-cell--wide" style=${{ cursor: "pointer" }}
+                        onClick=${() => setOpenKey(expanded ? null : p.key)}
+                        onMouseEnter=${(e) => startHover(e, p)}
+                        onMouseLeave=${endHover}>
+                      <span aria-hidden="true" style=${{ color: "var(--muted-foreground)",
+                            fontSize: 10, marginRight: 5 }}>${expanded ? "▾" : "▸"}</span>
                       <span style=${{ fontWeight: residual ? 400 : 600, fontSize: 13 }}>${p.customer}</span>
                       ${p.self_built > 0 && html`
                         <span title=${`${p.self_built} of ${p.projects} attributed from ownership rather than a cited tenant`}
                               style=${{ color: "var(--muted-foreground)" }}>
                           ${p.self_built === p.projects ? " *" : ` (${p.self_built}*)`}</span>`}
                     </td>
-                    <td class="dc-num" style=${{ textAlign: "right" }}>${p.projects}</td>
+                    <td class="dc-num" style=${{ textAlign: "right", cursor: "pointer" }}
+                        title="click to list the sites behind this number"
+                        onClick=${() => setOpenKey(expanded ? null : p.key)}>${p.projects}</td>
                     <td class="dc-num" style=${{ textAlign: "right", fontWeight: 600 }}>${num(p.mw_planned)}</td>
                     <td class="dc-num" style=${{ textAlign: "right" }}>${num(p.mw_built)}</td>
-                    <td class="dc-num" style=${{ textAlign: "right" }}>
-                      ${p.investment_usd ? fmtUSD(p.investment_usd) : html`<span class="dc-v dc-v--missing">—</span>`}</td>
+                    <td class="dc-num" style=${{ textAlign: "right", whiteSpace: "nowrap" }}>
+                      ${p.investment_usd ? fmtUSD(p.investment_usd) : html`<span class="dc-v dc-v--missing">—</span>`}
+                      ${p.investment_excluded_usd > 0 && html`<span
+                            title="claimed by a source but confirmed by none — usually a programme-wide total quoted in an article about one site; disclosed, never summed"
+                            style=${{ color: "var(--muted-foreground)", fontWeight: 400, fontSize: 11 }}>
+                          ${" "}+${fmtUSD(p.investment_excluded_usd)} claimed</span>`}
+                    </td>
                     ${buckets.map((b) => html`
                       <td key=${b} class="dc-num" style=${{ textAlign: "right" }}>
                         ${num(bucketOf(p, b))}</td>`)}
@@ -2145,7 +2466,61 @@ function CapexView({ data, allowWrite, busy, onRan }) {
                         ? html`<span style=${chip(p.worst_open_risk.endsWith("blocking") ? "--danger" : "--warning")}>
                             ${p.worst_open_risk}</span>`
                         : ""}</td>
-                  </tr>`;
+                  </tr>
+                  ${expanded && html`
+                    <tr key=${(p.key || "__none") + ":sites"}>
+                      <td colSpan=${8 + buckets.length}
+                          style=${{ padding: "2px 16px 14px", borderTop: "none" }}>
+                        <div style=${{ display: "grid", gap: 3, fontSize: 12.5 }}>
+                          <div style=${{ fontFamily: "var(--font-mono)", fontSize: 10.5,
+                                textTransform: "uppercase", letterSpacing: "0.08em",
+                                color: "var(--muted-foreground)", margin: "6px 0 3px" }}>
+                            the ${p.projects} site(s) behind this row</div>
+                          ${(p.project_ids || []).map((id) => {
+                            const site = byId[id];
+                            if (!site) return null;
+                            return html`
+                              <div key=${id} style=${{ display: "flex", flexWrap: "wrap",
+                                    gap: "2px 10px", alignItems: "baseline" }}>
+                                <span class="dc-num" style=${{ color: "var(--muted-foreground)",
+                                      fontSize: 11 }}>#${id}</span>
+                                <span style=${{ fontWeight: 600 }}>${site.company} — ${site.name}</span>
+                                <span style=${{ color: "var(--muted-foreground)" }}>
+                                  ${site.city || site.county || "?"}, ${site.state}</span>
+                                <span class="dc-num">
+                                  ${site.mw_planned
+                                    ? Math.round(site.mw_planned).toLocaleString() + " MW"
+                                    : "unsized"}</span>
+                                <span style=${{ color: "var(--muted-foreground)" }}>${site.phase}</span>
+                                ${site.expected_online && html`
+                                  <span style=${{ color: "var(--muted-foreground)" }}>
+                                    online ${String(site.expected_online).slice(0, 4)}</span>`}
+                              </div>`;
+                          })}
+                          ${(p.duplicate_skipped_ids || []).length > 0 && html`
+                            <div style=${{ color: "var(--muted-foreground)" }}>
+                              <div style=${{ fontFamily: "var(--font-mono)", fontSize: 10.5,
+                                    textTransform: "uppercase", letterSpacing: "0.08em",
+                                    margin: "8px 0 3px" }}>
+                                set aside as suspected duplicates — not counted</div>
+                              ${p.duplicate_skipped_ids.map((id) => {
+                                const site = byId[id];
+                                if (!site) return null;
+                                return html`
+                                  <div key=${id} style=${{ display: "flex", flexWrap: "wrap",
+                                        gap: "2px 10px", alignItems: "baseline" }}>
+                                    <span class="dc-num" style=${{ fontSize: 11 }}>#${id}</span>
+                                    <span>${site.company} — ${site.name}</span>
+                                    <span class="dc-num">
+                                      ${site.mw_planned
+                                        ? Math.round(site.mw_planned).toLocaleString() + " MW"
+                                        : "unsized"}</span>
+                                  </div>`;
+                              })}
+                            </div>`}
+                        </div>
+                      </td>
+                    </tr>`}`;
               })}
             <//>
           <//>
@@ -2176,16 +2551,43 @@ function CapexView({ data, allowWrite, busy, onRan }) {
             marked ${html`<b>*</b>`}. Biggest first, with the "nobody named" row pinned to the bottom;
             it is a leftover, not a buyer.
           </span>
-          ${/* The one column where "a floor" is the wrong warning: it can be far
-                too high, and saying only that it is a lower bound would be the
-                opposite of honest about it. */ ""}
+          ${/* The one column where "a floor" is the wrong warning: it can still
+                be too high when a confirmed figure covers more than one site, and
+                saying only that it is a lower bound would be the opposite of
+                honest about it. */ ""}
           <span>
-            ${html`<b>Trust the megawatts before the dollars.</b>`} The investment column adds up
-            everything each project carries, including figures we could not confirm — usually because a
-            headline number for a whole programme ("OpenAI's $500 billion Stargate") got attached to one
-            site. Duplicate rows then add it again. Open a project to see which of its numbers are
-            flagged.
+            ${html`<b>Trust the megawatts before the dollars.</b>`} The investment column sums only
+            figures some source confirmed for that site.
+            ${excludedUSD > 0 && html`${" "}${fmtUSD(excludedUSD)} more was claimed but never
+            confirmed — usually a headline number for a whole programme ("OpenAI's $500 billion
+            Stargate") attached to one site — and is excluded and disclosed, not summed.`}
+            ${" "}Open a project to see which of its numbers are flagged.
           </span>
+        </div>
+      <//>
+
+      <${CapexHoverCard} hover=${hover} position=${hovered} allowWrite=${allowWrite}
+        onHold=${holdHover} onRelease=${endHover} />
+
+      <${Card}>
+        <${CardHeader}>
+          <${CardTitle}>How much of the data this page covers<//>
+          <${CardDescription}>We can name a buyer for ${attributed} of ${cover.projects} projects.
+            The rest sit in the last row. Worth knowing before you quote a number off this table.<//>
+        <//>
+        <div class="dc-capex-cover">
+          ${[["we know the buyer", cover.attributed_pct, "for the rest, nobody has said who it is for"],
+             ["a source named them", cover.named_tenant_pct, "someone wrote down who the tenant is"],
+             ["worked out from owner", cover.self_built_pct, "the operator builds for itself, so it is the buyer"],
+             ["size is known", cover.with_capacity_pct, "the rest count as zero MW here"],
+             ["size and date known", cover.in_timeline_pct, "only these can appear in a year column"],
+            ].map(([label, pct, why]) => html`
+            <div key=${label} style=${{ display: "grid", gap: 4, minWidth: 0 }}>
+              <span class="dc-num" style=${{ fontSize: 22, fontFamily: "var(--font-display)" }}>
+                ${Math.round(pct)}%</span>
+              <span style=${{ fontSize: 12, fontWeight: 600 }}>${label}</span>
+              <span style=${{ fontSize: 11, lineHeight: "16px", color: "var(--muted-foreground)" }}>${why}</span>
+            </div>`)}
         </div>
       <//>
 
@@ -2214,9 +2616,10 @@ function CapexView({ data, allowWrite, busy, onRan }) {
           <${CardHeader}>
             <${CardTitle}>One campus, several rows<//>
             <${CardDescription}>Tick the row to keep; the others fold into it and their sources come
-              along. ${html`<b>It does not matter which one you pick</b>`} — every value is recalculated
-              from the combined sources afterwards, so you are only choosing a row number. Nothing merges
-              on its own, because a wrong merge is hard to spot and cannot be undone.<//>
+              along. Every quantitative value is recalculated from the combined sources afterwards, but
+              ${html`<b>the name, company and locality stay the survivor's</b>`} — so pick the row whose
+              identity should win. Nothing merges on its own, because a wrong merge is hard to spot and
+              cannot be undone.<//>
           <//>
           ${!allowWrite && html`
             <div style=${{ padding: "0 20px 14px" }}>

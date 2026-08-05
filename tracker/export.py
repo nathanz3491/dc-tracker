@@ -325,6 +325,27 @@ def to_json_object(project: Project) -> dict[str, Any]:
             }
             for b in sorted(project.blocks, key=lambda b: b.block_key)
         ],
+        # Sent rather than recomputed in the page. The console could add these up
+        # itself, and then there would be two definitions of "what is in the campus
+        # total" free to disagree — the objection `webui/dataset.py` opens with.
+        "accounting": _accounting_json(project),
+    }
+
+
+def _accounting_json(project: Project) -> dict[str, Any] | None:
+    """Every megawatt of the campus on one line each, or None with no tranches."""
+    if not project.blocks:
+        return None
+    got = blocks_mod.account(project)
+    return {
+        "total": got.total,
+        "total_is_floor": got.total_is_floor,
+        "counted_mw": got.counted_mw,
+        "closes": got.closes,
+        "residuals": [
+            {"reason": r.reason, "mw": r.mw, "labels": list(r.labels), "note": r.note}
+            for r in got.residuals
+        ],
     }
 
 
