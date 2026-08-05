@@ -1396,39 +1396,83 @@ function BlocksTab({ p }) {
     const d = blockState(b.status).rank - blockState(a.status).rank;
     return d !== 0 ? d : (b.mw || 0) - (a.mw || 0);
   });
-  const widest = Math.max(...blocks.map((b) => b.mw || 0), 1);
+  const cited = acct && acct.total != null ? acct.total : null;
+  const campusTotal =
+    cited != null ? cited : blocks.reduce((sum, b) => sum + (b.mw || 0), 0);
 
-  // Capacity by state, for the strip above the table. This is the one number an
-  // analyst wants first: how much of this campus is actually delivering.
+  // Which tranches were rejected as implausible is decided by `blocks.account`, not
+  // here. Portland 3's "Hillsboro Phase 1" is 36,000 MW against a cited 144 MW
+  // campus, and the panel used to announce "36,000 MW delivering of 144 MW". Judging
+  // it a second time in the page would be a second definition of the rule, free to
+  // disagree with the reconciliation printed a few rows below — which is how the top
+  // of this panel came to say 132 MW while the bottom said 36,126.
+  const rejectedLabels = new Set(
+    (acct && acct.residuals ? acct.residuals : [])
+      .filter((r) => r.reason === "out_of_scale")
+      .flatMap((r) => r.labels),
+  );
+  const outOfScale = (b) => rejectedLabels.has(b.label);
+  const rejected = blocks.filter(outOfScale);
+  const plotted = blocks.filter((b) => b.mw != null && !outOfScale(b));
+  const widest = Math.max(...plotted.map((b) => b.mw), 1);
+
+  // Confirmed capacity by state, then everything the campus is made of that we will
+  // not commit to. **Only `mw_counted` capacity counts as delivering** — the previous
+  // version summed every `serving` tranche regardless, so 36,000 unconfirmed
+  // megawatts were reported as running. A figure nobody confirmed cannot be the
+  // headline number for a campus.
   const byState = {};
-  for (const b of blocks) {
-    if (b.mw == null) continue;
+  for (const b of plotted.filter((x) => x.mw_counted)) {
     byState[b.status] = (byState[b.status] || 0) + b.mw;
   }
-  const segments = Object.entries(byState).sort(
+  const confirmed = Object.entries(byState).sort(
     (a, b) => blockState(b[0]).rank - blockState(a[0]).rank,
   );
-  const itemised = segments.reduce((sum, [, mw]) => sum + mw, 0);
-  const live = segments
+  const live = confirmed
     .filter(([s]) => s === "serving" || s === "energized")
     .reduce((sum, [, mw]) => sum + mw, 0);
 
-  // The bar measures against the *campus total*, not against the tranches — using
-  // the tranche sum gave a headline of "0 of 42 MW" on a campus the table below
-  // totalled at 48, which is the same failure to add up in a different place. The
-  // shortfall gets its own muted segment, so the bar reaching full width is itself
-  // the statement that every megawatt is accounted for.
-  // The *stated* denominator is always the campus total, so the headline and the
-  // total row can never disagree. Lake Mariner reads 750 with 761 MW of tranches
-  // (one building described twice), and quoting 761 up top would reintroduce the
-  // very mismatch this is here to remove. `denom` is geometry only — it keeps the
-  // bar inside its track when the parts overrun.
-  const campusTotal = acct && acct.total != null ? acct.total : itemised;
-  const gap = Math.max(0, campusTotal - itemised);
-  const denom = Math.max(campusTotal, itemised, 1);
-  const bars = [...segments, ...(gap > 0.5 ? [["_gap", gap]] : [])];
-  const barTone = (key) => (key === "_gap" ? "--border" : blockState(key).tone);
-  const barLabel = (key) => (key === "_gap" ? "Not yet itemised" : blockState(key).label);
+  // The bar is the accounting, drawn: confirmed capacity by state, then what is
+  // stated but unconfirmed, then the remainder nobody has itemised. It is built to
+  // sum to the campus total exactly, so the bar reaching full width *is* the
+  // statement that every megawatt is accounted for — and the stated denominator is
+  // always the cited total, so the headline can never disagree with the total row.
+  // The uncommitted segments come straight from the reconciliation, not from a second
+  // pass over the blocks. Recomputing them put "Stated, unconfirmed 54 MW" in the
+  // legend against 36 MW three rows below, because the page lumped in capacity the
+  // backend had classed as not-tied-to-a-facility. One name, two numbers, again.
+  const RESIDUAL_LABEL = {
+    unconfirmed: "Stated, unconfirmed",
+    unplaceable: "Not tied to a facility",
+    unitemised: "Not yet itemised",
+  };
+  const RESIDUAL_TONE = {
+    unconfirmed: "--warning",
+    unplaceable: "--chart-5",
+    unitemised: "--border",
+  };
+  const extras = (acct && acct.residuals ? acct.residuals : [])
+    .filter((r) => RESIDUAL_LABEL[r.reason] && r.mw > 0.5)
+    .map((r) => [`_${r.reason}`, r.mw]);
+
+  const shown = [...confirmed, ...extras].reduce((sum, [, mw]) => sum + mw, 0);
+  const denom = Math.max(campusTotal, shown, 1);
+  const bars = [...confirmed, ...extras];
+  const barTone = (key) =>
+    key.startsWith("_") ? RESIDUAL_TONE[key.slice(1)] : blockState(key).tone;
+  const barLabel = (key) =>
+    key.startsWith("_") ? RESIDUAL_LABEL[key.slice(1)] : blockState(key).label;
+
+  // A date in the past on a tranche that is not running is not a plan, it is news we
+  // have missed. Project 39 showed "Under construction" beside "Oct 2021" with no
+  // acknowledgement that the date had passed four years ago — a contradiction in one
+  // row, which is the whole complaint at the scale of a single line.
+  const today = new Date().toISOString().slice(0, 10);
+  const isOverdue = (b) =>
+    !b.energized_on &&
+    b.expected_online &&
+    b.expected_online < today &&
+    !["serving", "energized", "cancelled", "paused"].includes(b.status);
 
   return html`
     <div style=${{ display: "grid", gap: 16 }}>
@@ -1490,13 +1534,19 @@ function BlocksTab({ p }) {
               </div>
               <div>
                 <div class="dc-num" style=${{ fontSize: 14, textAlign: "right",
-                       color: b.mw == null ? "var(--muted-foreground)" : "inherit" }}>${fmtMw(b.mw)}</div>
-                <!-- Magnitude, so 1 against 36 is visible without reading. -->
-                ${b.mw != null && html`
+                       textDecoration: outOfScale(b) ? "line-through" : "none",
+                       color: b.mw == null ? "var(--muted-foreground)"
+                         : outOfScale(b) ? "var(--danger)" : "inherit" }}>${fmtMw(b.mw)}</div>
+                <!-- Magnitude, so 1 against 36 is visible without reading. Skipped for a
+                     rejected figure: a bar 250x the width of its own campus is noise. -->
+                ${b.mw != null && !outOfScale(b) && html`
                   <div style=${{ height: 3, marginTop: 4, marginLeft: "auto", borderRadius: 2,
                          width: `${Math.max(4, (b.mw / widest) * 100)}%`,
                          background: `var(${state.tone})`, opacity: b.mw_counted ? 1 : 0.4 }} />`}
-                ${b.mw != null && !b.mw_counted && html`
+                ${outOfScale(b) && html`
+                  <div style=${{ fontSize: 10, textAlign: "right", marginTop: 3, color: "var(--danger)" }}>
+                    out of scale</div>`}
+                ${b.mw != null && !outOfScale(b) && !b.mw_counted && html`
                   <div style=${{ fontSize: 10, textAlign: "right", marginTop: 3, color: "var(--warning)" }}>
                     待确认</div>`}
               </div>
@@ -1505,11 +1555,13 @@ function BlocksTab({ p }) {
               <div class="dc-bmeta" data-label="Customer"
                    style=${{ fontSize: 13, minWidth: 0, overflowWrap: "anywhere" }}>
                 ${b.customer || html`<span style=${{ color: "var(--muted-foreground)" }}>—</span>`}</div>
-              <div class="dc-bmeta" data-label=${b.energized_on ? "Live since" : "Online"}
-                   style=${{ textAlign: "right", color: "var(--muted-foreground)" }}>
-                ${b.energized_on && html`
+              <div class="dc-bmeta"
+                   data-label=${b.energized_on ? "Live since" : isOverdue(b) ? "Was due" : "Online"}
+                   style=${{ textAlign: "right",
+                          color: isOverdue(b) ? "var(--warning)" : "var(--muted-foreground)" }}>
+                ${(b.energized_on || isOverdue(b)) && html`
                   <div class="dc-bmeta-label" style=${{ fontSize: 10, textTransform: "uppercase",
-                         letterSpacing: "0.05em" }}>live since</div>`}
+                         letterSpacing: "0.05em" }}>${b.energized_on ? "live since" : "was due"}</div>`}
                 <span class="dc-num" style=${{ fontSize: 12 }}>${when ? fmtMonth(when) : "—"}</span>
               </div>
             </div>`;
@@ -1527,13 +1579,25 @@ function BlocksTab({ p }) {
                 label=${r.reason === "unitemised" ? "Not yet itemised"
                   : r.reason === "unconfirmed" ? "Stated, unconfirmed"
                   : r.reason === "unplaceable" ? "Not tied to a facility"
+                  : r.reason === "out_of_scale" ? "Out of scale, excluded"
                   : "Counted twice over"}
-                mw=${(r.reason === "overlap" ? "−" : "") + fmtMw(r.mw)} note=${r.note} />`)}
-            <${ReconRow} strong label=${acct.total_is_floor ? "Campus total (at least)" : "Campus total"}
+                mw=${(r.reason === "overlap" ? "−" : "") + fmtMw(r.mw)} note=${r.note}
+                tone=${r.reason === "out_of_scale" ? "--danger" : "--warning"} />`)}
+            <${ReconRow} strong label=${acct.total_is_floor ? "Accounted for (at least)" : "Accounted for"}
               mw=${fmtMw(acct.total)}
               note=${acct.total_is_floor ? "no source states a campus figure — this is the sum of the parts" : ""} />
           </div>`}
       </div>
+
+      ${rejected.length > 0 && html`
+        <p style=${{ margin: 0, fontSize: 12, lineHeight: "19px", color: "var(--muted-foreground)" }}>
+          <strong style=${{ color: "var(--danger)" }}>Out of scale:</strong>
+          ${" "}${rejected.length} tranche${rejected.length === 1 ? "" : "s"}
+          ${" "}(${rejected.map((b) => `${b.label} ${fmtMw(b.mw)} MW`).join(", ")})
+          ${" "}${rejected.length === 1 ? "is" : "are"} larger than this whole campus, so
+          ${" "}${rejected.length === 1 ? "it is" : "they are"} left out of the figures above.
+          Almost always a kilowatt figure read as megawatts.
+        </p>`}
 
       ${uncited.length > 0 && html`
         <p style=${{ margin: 0, fontSize: 12, lineHeight: "19px", color: "var(--muted-foreground)" }}>
@@ -2230,12 +2294,163 @@ function CapexHoverCard({ hover, position, allowWrite, onHold, onRelease }) {
       </div>
       <${CapexInsight} posKey=${position.key} allowWrite=${allowWrite} />
       <div style=${{ marginTop: 8, fontSize: 10.5, color: "var(--muted-foreground)" }}>
-        click the row to list the sites behind these numbers
+        click any number in the row to see the sites it is made of
       </div>
     </div>`;
 }
 
-function CapexView({ data, allowWrite, busy, onRan }) {
+/* The breakdown under a clicked cell.
+ *
+ * One component, seven views, because "8 sites", "$185B" and "MW at risk" are
+ * three different questions and one generic site list answers none of them well.
+ * Every figure here is a stored per-project value — the panel never sums, so a
+ * reader adding the rows up must arrive at the cell they clicked. Where they
+ * cannot (a site with no cited capacity), the row says so instead of showing a
+ * zero that would balance the arithmetic and misstate the world. */
+function CapexBreakdown({ position, col, byId, bucket, grain, onOpenProject }) {
+  const sites = (position.project_ids || []).map((id) => byId[id]).filter(Boolean);
+  const skipped = (position.duplicate_skipped_ids || []).map((id) => byId[id]).filter(Boolean);
+  const yearOf = (s) => (s.expected_online ? String(s.expected_online).slice(0, 4) : null);
+  const quarterOf = (s) => {
+    if (!s.expected_online) return null;
+    const m = Number(String(s.expected_online).slice(5, 7));
+    return `${String(s.expected_online).slice(0, 4)}Q${Math.floor((m - 1) / 3) + 1}`;
+  };
+
+  const label = { fontFamily: "var(--font-mono)", fontSize: 10.5, textTransform: "uppercase",
+                  letterSpacing: "0.08em", color: "var(--muted-foreground)", margin: "8px 0 4px" };
+  const row = { display: "flex", flexWrap: "wrap", gap: "2px 10px", alignItems: "baseline" };
+  const idTag = { color: "var(--muted-foreground)", fontSize: 11 };
+  const where = (s) => `${s.city || s.county || "?"}, ${s.state}`;
+
+  // A clickable site line: opens the project's own drawer, so the drill-down
+  // bottoms out at the citations rather than at another aggregate.
+  const site = (s, extra) => html`
+    <div key=${s.id} style=${{ ...row, cursor: "pointer" }}
+         onClick=${() => onOpenProject && onOpenProject(s)}
+         title="open this project's citations">
+      <span class="dc-num" style=${idTag}>#${s.id}</span>
+      <span style=${{ fontWeight: 600 }}>${s.company} — ${s.name}</span>
+      <span style=${{ color: "var(--muted-foreground)" }}>${where(s)}</span>
+      ${extra}
+    </div>`;
+
+  const mw = (v) => v ? Math.round(v).toLocaleString() + " MW" : null;
+  const missing = (text) => html`<span class="dc-v dc-v--missing">${text}</span>`;
+
+  let heading = "";
+  let body = null;
+
+  if (col === "sites") {
+    heading = `every site counted for ${position.customer}`;
+    body = sites
+      .slice()
+      .sort((a, b) => (b.mw_planned || 0) - (a.mw_planned || 0))
+      .map((s) => site(s, html`
+        <span class="dc-num">${mw(s.mw_planned) || missing("unsized")}</span>
+        <span style=${{ color: "var(--muted-foreground)" }}>${s.phase}</span>
+        ${s.expected_online && html`
+          <span style=${{ color: "var(--muted-foreground)" }}>online ${yearOf(s)}</span>`}`));
+  } else if (col === "planned" || col === "running") {
+    const field = col === "planned" ? "mw_planned" : "mw_built";
+    const have = sites.filter((s) => s[field]).sort((a, b) => b[field] - a[field]);
+    const without = sites.filter((s) => !s[field]);
+    const top = have.length ? have[0][field] : 0;
+    heading = col === "planned"
+      ? `planned capacity, site by site — adds to ${Math.round(position.mw_planned).toLocaleString()} MW`
+      : `capacity a source says is running — adds to ${Math.round(position.mw_built).toLocaleString()} MW`;
+    body = html`
+      ${have.map((s) => site(s, html`
+        <span class="dc-num" style=${{ fontWeight: 600 }}>${mw(s[field])}</span>
+        <span aria-hidden="true" style=${{ display: "inline-block", height: 6, borderRadius: 3,
+              minWidth: 2, width: Math.max(2, Math.round((s[field] / top) * 90)) + "px",
+              background: "var(--chart-2)" }}></span>`))}
+      ${without.length > 0 && html`
+        <div style=${{ ...label, marginTop: 8 }}>
+          ${without.length} site(s) contribute nothing to this figure</div>
+        ${without.map((s) => site(s, missing(
+          col === "planned" ? "no cited capacity" : "nothing cited as running")))}`}`;
+  } else if (col === "money") {
+    const have = sites.filter((s) => s.investment_usd)
+      .sort((a, b) => b.investment_usd - a.investment_usd);
+    const without = sites.filter((s) => !s.investment_usd);
+    heading = "investment, site by site — only figures a source confirmed are summed";
+    body = html`
+      ${have.map((s) => {
+        const why = (s.unconfirmed_because || {}).investment_usd;
+        return site(s, html`
+          <span class="dc-num" style=${{ fontWeight: 600,
+                ...(why ? { color: "var(--muted-foreground)" } : {}) }}>
+            ${fmtUSD(s.investment_usd)}</span>
+          ${why && html`<span style=${chip("--warning")} title=${why}>claimed, not counted</span>`}`);
+      })}
+      ${without.length > 0 && html`
+        <div style=${{ ...label, marginTop: 8 }}>${without.length} site(s) with no cited investment</div>
+        ${without.map((s) => site(s, missing("nobody has said")))}`}`;
+  } else if (col === "risk") {
+    const atRisk = sites.filter((s) => (s.risks || []).some((r) => r.status === "open"));
+    heading = "what is obstructing this buyer's sites";
+    body = atRisk.length === 0
+      ? html`<div style=${{ color: "var(--muted-foreground)" }}>no open obstacle on any counted site</div>`
+      : atRisk.map((s) => html`
+        <div key=${s.id} style=${{ marginBottom: 6 }}>
+          ${site(s, html`<span class="dc-num">${mw(s.mw_planned) || missing("unsized")}</span>`)}
+          ${(s.risks || []).filter((r) => r.status === "open").map((r, i) => html`
+            <div key=${i} style=${{ paddingLeft: 18, fontSize: 12, display: "flex",
+                  flexWrap: "wrap", gap: "2px 8px", alignItems: "baseline" }}>
+              <span style=${chip(r.severity === "blocking" ? "--danger" : "--warning")}>
+                ${r.category}/${r.severity}</span>
+              <span style=${{ color: "var(--muted-foreground)" }}>${r.summary}</span>
+            </div>`)}
+        </div>`);
+  } else if (col === "delays") {
+    const slipped = sites.filter((s) => (s.events || []).some((e) => e.event_type === "delayed"));
+    heading = "sites whose expected online date has moved later";
+    body = slipped.length === 0
+      ? html`<div style=${{ color: "var(--muted-foreground)" }}>no recorded slip on any counted site</div>`
+      : slipped.map((s) => html`
+        <div key=${s.id} style=${{ marginBottom: 6 }}>
+          ${site(s, s.expected_online
+            ? html`<span class="dc-num">now online ${yearOf(s)}</span>` : null)}
+          ${(s.events || []).filter((e) => e.event_type === "delayed").map((e, i) => html`
+            <div key=${i} style=${{ paddingLeft: 18, fontSize: 12, color: "var(--muted-foreground)" }}>
+              ${e.description}</div>`)}
+        </div>`);
+  } else if (col === "bucket") {
+    const inBucket = sites.filter((s) =>
+      (grain === "quarter" ? quarterOf(s) : yearOf(s)) === bucket && s.mw_planned);
+    heading = `capacity dated ${bucket} — a site contributes only if it cites both a capacity and a date`;
+    body = inBucket.length === 0
+      ? html`<div style=${{ color: "var(--muted-foreground)" }}>
+          nothing this buyer holds is dated ${bucket}</div>`
+      : inBucket.sort((a, b) => b.mw_planned - a.mw_planned).map((s) => site(s, html`
+          <span class="dc-num" style=${{ fontWeight: 600 }}>${mw(s.mw_planned)}</span>
+          <span style=${{ color: "var(--muted-foreground)" }}>
+            online ${String(s.expected_online)}</span>
+          <span style=${{ color: "var(--muted-foreground)" }}>${s.phase}</span>`));
+  }
+
+  return html`
+    <div style=${{ display: "grid", gap: 3, fontSize: 12.5, padding: "2px 0 6px" }}>
+      <div style=${label}>${heading}</div>
+      ${body}
+      ${col === "sites" && skipped.length > 0 && html`
+        <div style=${{ color: "var(--muted-foreground)" }}>
+          <div style=${label}>set aside as suspected duplicates — not counted anywhere above</div>
+          ${skipped.map((s) => html`
+            <div key=${s.id} style=${row}>
+              <span class="dc-num" style=${{ fontSize: 11 }}>#${s.id}</span>
+              <span>${s.company} — ${s.name}</span>
+              <span class="dc-num">${mw(s.mw_planned) || "unsized"}</span>
+            </div>`)}
+        </div>`}
+      <div style=${{ fontSize: 10.5, color: "var(--muted-foreground)", marginTop: 4 }}>
+        click any site to open its citations
+      </div>
+    </div>`;
+}
+
+function CapexView({ data, allowWrite, busy, onRan, onOpen }) {
   const capex = data.capex;
   const cover = capex.coverage;
   const dupes = capex.duplicates;
@@ -2279,10 +2494,22 @@ function CapexView({ data, allowWrite, busy, onRan }) {
   const head = (label, why, align) => html`
     <${TableHead} align=${align}><span title=${why}>${label}</span><//>`;
 
-  // Click a buyer → the sites behind its numbers. Hover → a model's reading.
-  // The hover waits 450ms so mousing down the table does not fire a request per
-  // row, and the card holds itself open so the reader can mouse into it.
-  const [openKey, setOpenKey] = useState(null);
+  // Every number in this table opens. `open` is {key, col}: which buyer, and
+  // which column the reader clicked — because "8 sites" and "$185B" and "MW at
+  // risk" want three different breakdowns, and showing one generic list for all
+  // of them is how a drill-down becomes decoration. Clicking a second column on
+  // the same row switches the view; clicking the same one closes it.
+  const [open, setOpen] = useState(null);
+  const isOpen = (p, col) => open && open.key === p.key && open.col === col;
+  const toggle = (p, col) => setOpen(isOpen(p, col) ? null : { key: p.key, col });
+  // A cell that opens something. Deliberately not a <button>: it must not break
+  // the numeric alignment the whole table depends on.
+  const openable = (p, col, title) => ({
+    style: { textAlign: "right", cursor: "pointer",
+             ...(isOpen(p, col) ? { background: "var(--accent)" } : {}) },
+    title,
+    onClick: () => toggle(p, col),
+  });
   const [hover, setHover] = useState(null);
   const hoverTimer = useRef(null);
   const leaveTimer = useRef(null);
@@ -2316,8 +2543,9 @@ function CapexView({ data, allowWrite, busy, onRan }) {
         developers like Crusoe. Read a row left to right: how many sites, how much capacity is planned
         and already running, the confirmed money behind it, and when the megawatts are expected to
         arrive. ${html`<b>*</b>`} means the buyer was worked out from who owns the site, because no
-        source named a tenant. ${html`<b>Click a buyer</b>`} to list the sites behind its numbers;
-        ${html`<b>hover one</b>`} for a model's short reading of the position.
+        source named a tenant. ${html`<b>Every number here opens</b>`} — click any figure in a row and
+        it breaks down into the sites that make it up, and clicking a site opens its citations. Hover a
+        buyer's name for a model's short reading of the position.
       <//>
 
       ${/* The page in five numbers, before any column has to be decoded. */ ""}
@@ -2426,29 +2654,35 @@ function CapexView({ data, allowWrite, busy, onRan }) {
                       </td>
                     </tr>`;
                 }
-                const expanded = openKey === p.key;
+                const anyOpen = open && open.key === p.key;
                 return html`
                   <tr key=${p.key || "__none"} class=${i < 12 ? "dc-enter" : undefined}
                       style=${{ ...(i < 12 ? { "--i": i } : {}),
                                 ...(residual ? { color: "var(--muted-foreground)" } : {}) }}>
                     <td class="dc-cell dc-cell--wide" style=${{ cursor: "pointer" }}
-                        onClick=${() => setOpenKey(expanded ? null : p.key)}
+                        title="click for every site counted for this buyer"
+                        onClick=${() => toggle(p, "sites")}
                         onMouseEnter=${(e) => startHover(e, p)}
                         onMouseLeave=${endHover}>
                       <span aria-hidden="true" style=${{ color: "var(--muted-foreground)",
-                            fontSize: 10, marginRight: 5 }}>${expanded ? "▾" : "▸"}</span>
+                            fontSize: 10, marginRight: 5 }}>${anyOpen ? "▾" : "▸"}</span>
                       <span style=${{ fontWeight: residual ? 400 : 600, fontSize: 13 }}>${p.customer}</span>
                       ${p.self_built > 0 && html`
                         <span title=${`${p.self_built} of ${p.projects} attributed from ownership rather than a cited tenant`}
                               style=${{ color: "var(--muted-foreground)" }}>
                           ${p.self_built === p.projects ? " *" : ` (${p.self_built}*)`}</span>`}
                     </td>
-                    <td class="dc-num" style=${{ textAlign: "right", cursor: "pointer" }}
-                        title="click to list the sites behind this number"
-                        onClick=${() => setOpenKey(expanded ? null : p.key)}>${p.projects}</td>
-                    <td class="dc-num" style=${{ textAlign: "right", fontWeight: 600 }}>${num(p.mw_planned)}</td>
-                    <td class="dc-num" style=${{ textAlign: "right" }}>${num(p.mw_built)}</td>
-                    <td class="dc-num" style=${{ textAlign: "right", whiteSpace: "nowrap" }}>
+                    <td class="dc-num" ...${openable(p, "sites", "the sites behind this count")}>
+                      ${p.projects}</td>
+                    <td class="dc-num" ...${openable(p, "planned", "which sites make up this capacity")}
+                        style=${{ textAlign: "right", fontWeight: 600, cursor: "pointer",
+                                  ...(isOpen(p, "planned") ? { background: "var(--accent)" } : {}) }}>
+                      ${num(p.mw_planned)}</td>
+                    <td class="dc-num" ...${openable(p, "running", "which sites are actually running")}>
+                      ${num(p.mw_built)}</td>
+                    <td class="dc-num" ...${openable(p, "money", "the investment figure site by site")}
+                        style=${{ textAlign: "right", whiteSpace: "nowrap", cursor: "pointer",
+                                  ...(isOpen(p, "money") ? { background: "var(--accent)" } : {}) }}>
                       ${p.investment_usd ? fmtUSD(p.investment_usd) : html`<span class="dc-v dc-v--missing">—</span>`}
                       ${p.investment_excluded_usd > 0 && html`<span
                             title="claimed by a source but confirmed by none — usually a programme-wide total quoted in an article about one site; disclosed, never summed"
@@ -2456,69 +2690,37 @@ function CapexView({ data, allowWrite, busy, onRan }) {
                           ${" "}+${fmtUSD(p.investment_excluded_usd)} claimed</span>`}
                     </td>
                     ${buckets.map((b) => html`
-                      <td key=${b} class="dc-num" style=${{ textAlign: "right" }}>
+                      <td key=${b} class="dc-num"
+                          style=${{ textAlign: "right", cursor: "pointer",
+                                    ...(open && open.key === p.key && open.col === "bucket:" + b
+                                        ? { background: "var(--accent)" } : {}) }}
+                          title=${`which sites land in ${b}`}
+                          onClick=${() => toggle(p, "bucket:" + b)}>
                         ${num(bucketOf(p, b))}</td>`)}
-                    <td class="dc-num" style=${{ textAlign: "right",
-                          color: p.mw_at_risk ? "var(--warning)" : undefined }}>${num(p.mw_at_risk)}</td>
-                    <td class="dc-num" style=${{ textAlign: "right" }}>${p.slipped || ""}</td>
-                    <td style=${{ fontSize: 12, whiteSpace: "nowrap" }}>
+                    <td class="dc-num" ...${openable(p, "risk", "what is obstructing these sites")}
+                        style=${{ textAlign: "right", cursor: "pointer",
+                                  color: p.mw_at_risk ? "var(--warning)" : undefined,
+                                  ...(isOpen(p, "risk") ? { background: "var(--accent)" } : {}) }}>
+                      ${num(p.mw_at_risk)}</td>
+                    <td class="dc-num" ...${openable(p, "delays", "which sites have slipped")}>
+                      ${p.slipped || ""}</td>
+                    <td style=${{ fontSize: 12, whiteSpace: "nowrap", cursor: "pointer" }}
+                        title="what is obstructing these sites"
+                        onClick=${() => toggle(p, "risk")}>
                       ${p.worst_open_risk
                         ? html`<span style=${chip(p.worst_open_risk.endsWith("blocking") ? "--danger" : "--warning")}>
                             ${p.worst_open_risk}</span>`
                         : ""}</td>
                   </tr>
-                  ${expanded && html`
-                    <tr key=${(p.key || "__none") + ":sites"}>
+                  ${anyOpen && html`
+                    <tr key=${(p.key || "__none") + ":open"}>
                       <td colSpan=${8 + buckets.length}
                           style=${{ padding: "2px 16px 14px", borderTop: "none" }}>
-                        <div style=${{ display: "grid", gap: 3, fontSize: 12.5 }}>
-                          <div style=${{ fontFamily: "var(--font-mono)", fontSize: 10.5,
-                                textTransform: "uppercase", letterSpacing: "0.08em",
-                                color: "var(--muted-foreground)", margin: "6px 0 3px" }}>
-                            the ${p.projects} site(s) behind this row</div>
-                          ${(p.project_ids || []).map((id) => {
-                            const site = byId[id];
-                            if (!site) return null;
-                            return html`
-                              <div key=${id} style=${{ display: "flex", flexWrap: "wrap",
-                                    gap: "2px 10px", alignItems: "baseline" }}>
-                                <span class="dc-num" style=${{ color: "var(--muted-foreground)",
-                                      fontSize: 11 }}>#${id}</span>
-                                <span style=${{ fontWeight: 600 }}>${site.company} — ${site.name}</span>
-                                <span style=${{ color: "var(--muted-foreground)" }}>
-                                  ${site.city || site.county || "?"}, ${site.state}</span>
-                                <span class="dc-num">
-                                  ${site.mw_planned
-                                    ? Math.round(site.mw_planned).toLocaleString() + " MW"
-                                    : "unsized"}</span>
-                                <span style=${{ color: "var(--muted-foreground)" }}>${site.phase}</span>
-                                ${site.expected_online && html`
-                                  <span style=${{ color: "var(--muted-foreground)" }}>
-                                    online ${String(site.expected_online).slice(0, 4)}</span>`}
-                              </div>`;
-                          })}
-                          ${(p.duplicate_skipped_ids || []).length > 0 && html`
-                            <div style=${{ color: "var(--muted-foreground)" }}>
-                              <div style=${{ fontFamily: "var(--font-mono)", fontSize: 10.5,
-                                    textTransform: "uppercase", letterSpacing: "0.08em",
-                                    margin: "8px 0 3px" }}>
-                                set aside as suspected duplicates — not counted</div>
-                              ${p.duplicate_skipped_ids.map((id) => {
-                                const site = byId[id];
-                                if (!site) return null;
-                                return html`
-                                  <div key=${id} style=${{ display: "flex", flexWrap: "wrap",
-                                        gap: "2px 10px", alignItems: "baseline" }}>
-                                    <span class="dc-num" style=${{ fontSize: 11 }}>#${id}</span>
-                                    <span>${site.company} — ${site.name}</span>
-                                    <span class="dc-num">
-                                      ${site.mw_planned
-                                        ? Math.round(site.mw_planned).toLocaleString() + " MW"
-                                        : "unsized"}</span>
-                                  </div>`;
-                              })}
-                            </div>`}
-                        </div>
+                        <${CapexBreakdown} position=${p}
+                          col=${open.col.startsWith("bucket:") ? "bucket" : open.col}
+                          bucket=${open.col.startsWith("bucket:") ? open.col.slice(7) : null}
+                          grain=${grain} byId=${byId}
+                          onOpenProject=${(s) => onOpen && onOpen(s.id)} />
                       </td>
                     </tr>`}`;
               })}
@@ -3468,6 +3670,7 @@ function App() {
         ${view === "map" && html`<${MapView} data=${data} openId=${openId} onOpen=${setOpenId} />`}
         ${view === "capex" && html`
           <${CapexView} data=${data} allowWrite=${data.allow_write} busy=${!!running}
+            onOpen=${setOpenId}
             onRan=${(id) => { setWatchRun(id); setView("runs"); }} />`}
         ${view === "queue" && html`
           <${QueueView} data=${data} allowWrite=${data.allow_write} busy=${!!running}

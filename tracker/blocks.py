@@ -370,13 +370,25 @@ RESIDUAL_REASONS: Final[tuple[str, ...]] = (
     "unplaceable",
     "unitemised",
     "overlap",
+    "out_of_scale",
 )
+
+#: A tranche cannot be several times larger than the campus it is part of.
+#:
+#: Portland 3 came back with a "Hillsboro Phase 1" of 36,000 MW against a cited 144 MW
+#: campus — a kilowatt figure read as megawatts. Left in the arithmetic it was
+#: absorbed by the `overlap` line as "counted twice over -35,988 MW", which is a
+#: sentence that means nothing: nothing was counted twice, one number is wrong by
+#: three orders of magnitude. Naming it correctly is the difference between a dataset
+#: that catches a bad reading and one that dresses it up.
+OUT_OF_SCALE: Final = 3.0
 
 _RESIDUAL_NOTES: Final[dict[str, str]] = {
     "unconfirmed": "stated, but no quote in the article names that tranche",
     "unplaceable": "names a phase without saying of which facility",
     "unitemised": "no source breaks this part of the campus down",
     "overlap": "tranches sum past the cited campus total — probably one described twice",
+    "out_of_scale": "larger than the whole campus — almost always kilowatts read as megawatts",
 }
 
 
@@ -414,7 +426,7 @@ class Accounting:
     def accounted_mw(self) -> float:
         """What the displayed lines add up to. Equals `total` by construction."""
         over = sum(r.mw for r in self.residuals if r.reason == "overlap")
-        rest = sum(r.mw for r in self.residuals if r.reason != "overlap")
+        rest = sum(r.mw for r in self.residuals if r.reason not in ("overlap", "out_of_scale"))
         return self.counted_mw + rest - over
 
     @property
@@ -448,21 +460,35 @@ def account(project: Any) -> Accounting:
         # its capacity — the same reason `rollup` leaves terminal blocks out.
         return [b for b in items if b.mw and b.status not in BLOCK_TERMINAL]
 
-    counted = [b for b in running(usable) if mw_is_confirmed(b)]
-    unconfirmed = [b for b in running(usable) if not mw_is_confirmed(b)]
-    unplaceable_blocks = running(unplaced)
+    cited_total = getattr(project, "mw_planned", None)
+
+    def implausible(block: Any) -> bool:
+        return bool(cited_total) and block.mw is not None and block.mw > cited_total * OUT_OF_SCALE
+
+    # Only tranches that are still live. A cancelled one is already outside the
+    # campus total, so calling its figure implausible as well is noise about a
+    # number nobody is counting.
+    rejected = [b for b in running(blocks) if implausible(b)]
+    ok = [b for b in running(usable) if not implausible(b)]
+    counted = [b for b in ok if mw_is_confirmed(b)]
+    unconfirmed = [b for b in ok if not mw_is_confirmed(b)]
+    unplaceable_blocks = [b for b in running(unplaced) if not implausible(b)]
 
     counted_mw = sum(b.mw for b in counted)
     itemised = counted_mw + sum(b.mw for b in unconfirmed) + sum(b.mw for b in unplaceable_blocks)
 
-    cited = getattr(project, "mw_planned", None)
+    cited = cited_total
     total, floor = cited, False
     if cited is None:
         total = itemised or None
         floor = True
 
     residuals: list[Residual] = []
-    for reason, group in (("unconfirmed", unconfirmed), ("unplaceable", unplaceable_blocks)):
+    for reason, group in (
+        ("unconfirmed", unconfirmed),
+        ("unplaceable", unplaceable_blocks),
+        ("out_of_scale", rejected),
+    ):
         if group:
             residuals.append(
                 Residual(

@@ -656,3 +656,43 @@ def test_every_residual_reason_has_a_sentence_for_the_reader():
     """A residual with no explanation is the mismatch again, one line lower."""
     for reason in blocks.RESIDUAL_REASONS:
         assert blocks.Residual(reason, 1.0).note
+
+
+def test_a_figure_larger_than_its_own_campus_is_rejected_not_absorbed():
+    """Portland 3: a "Hillsboro Phase 1" of 36,000 MW against a cited 144 MW campus.
+
+    Left in the arithmetic it was swallowed by the overlap line as "counted twice over
+    -35,988 MW", a sentence that means nothing — nothing was counted twice, one figure
+    is wrong by three orders of magnitude. It is disclosed on its own line and kept
+    out of every sum, so the panel's headline and its total cannot disagree.
+    """
+    got = blocks.account(
+        FakeProject(
+            mw_planned=144.0,
+            blocks=[
+                FakeBlock(
+                    "hillsboro.phase-1", mw=36000.0, status="serving", unconfirmed_fields="mw"
+                ),
+                FakeBlock("total", mw=126.0, unconfirmed_fields="mw"),
+            ],
+        )
+    )
+    reasons = {r.reason: r.mw for r in got.residuals}
+    assert reasons["out_of_scale"] == 36000.0
+    assert reasons["unconfirmed"] == 126.0
+    assert "overlap" not in reasons, "a bad reading must not masquerade as double counting"
+    assert got.closes, "the rejected figure is disclosed, never summed"
+
+
+def test_a_plausible_tranche_larger_than_the_total_is_still_only_an_overlap():
+    """The threshold has to leave the real case alone: a stale campus figure."""
+    got = blocks.account(FakeProject(mw_planned=100.0, blocks=[FakeBlock("phase-1", mw=150.0)]))
+    reasons = {r.reason for r in got.residuals}
+    assert reasons == {"overlap"}
+
+
+def test_with_no_cited_campus_figure_nothing_can_be_called_out_of_scale():
+    """There is nothing to be out of scale *with*, so the sum of parts stands."""
+    got = blocks.account(FakeProject(mw_planned=None, blocks=[FakeBlock("phase-1", mw=36000.0)]))
+    assert got.total == 36000.0
+    assert not [r for r in got.residuals if r.reason == "out_of_scale"]
