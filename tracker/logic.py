@@ -44,6 +44,7 @@ what its own sources support, which `upsert.recompute_from_sources` resolves.
 from __future__ import annotations
 
 import datetime as dt
+import json
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Final
@@ -52,6 +53,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from tracker.models import Project
+from tracker.normalize import is_blank
 from tracker.tracks import RISK_TRACK, TRACK_MILESTONES, standing
 from tracker.vocab import (
     BLOCK_LIVE,
@@ -195,6 +197,8 @@ class Report:
     projects: int = 0
     #: Projects sent to a model, when the judgement layer ran.
     examined: int = 0
+    #: Projects whose evidence was audited, when that layer ran.
+    audited: int = 0
     #: Of those, the ones whose reply could not be used — reason -> count. Paid
     #: for and thrown away, so it belongs in the summary and not only in the log.
     unreadable: dict[str, int] = field(default_factory=dict)
@@ -211,6 +215,7 @@ class Report:
             ("source collisions", len(self.collisions)),
             ("  row disagrees with sources", sum(1 for c in self.collisions if c.stored_disagrees)),
             ("read by a model", self.examined),
+            ("evidence audited", self.audited),
             *[(f"  unreadable ({reason})", n) for reason, n in sorted(self.unreadable.items())],
         ]
 
@@ -568,6 +573,52 @@ def check_rules(project: Project) -> list[Finding]:
                 "resolve the obstacle in `tracker review`, or the milestone is wrong",
             )
 
+    # --- placeholder values that reached storage --------------------------------
+    #
+    # `normalize.is_blank` turns "TBD" / "N/A" / "—" into NULL on every ingest
+    # path, so a stored placeholder means a path bypassed the normalizer or the
+    # token predates the list. It is an ERROR, not a warning: "TBD" is "the
+    # source did not say" asserted as though it were a fact, and everything
+    # downstream (coverage, confidence, capex) counts it as a populated field.
+    for name in TRACKED_FIELDS:
+        value = getattr(project, name, None)
+        if isinstance(value, str) and value and is_blank(value):
+            add(
+                "placeholder_value",
+                ERROR,
+                f"{name} holds the placeholder {value!r} — a non-answer stored as a fact",
+                (name,),
+                "clear it: a null we can cite is worth more than a token that means nothing",
+            )
+
+    # --- evidence that is itself a placeholder ----------------------------------
+    #
+    # The per-field quote is the sentence a value stands on. A quote that is
+    # empty or a placeholder means the gate verified the value against nothing —
+    # the hover in the console would show "TBD" as the evidence for a number.
+    for source in getattr(project, "sources", ()) or ():
+        if not source.quotes:
+            continue
+        try:
+            quotes = json.loads(source.quotes)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(quotes, dict):
+            continue
+        for field_name, quote in quotes.items():
+            text = str(quote or "").strip()
+            if text and not is_blank(text):
+                continue
+            shown = "empty" if not text else repr(text)
+            add(
+                "placeholder_quote",
+                WARNING,
+                f"the quote recorded for {field_name} is {shown} — the value has no "
+                "sentence behind it",
+                (field_name,) if field_name in TRACKED_FIELDS else (),
+                f"re-read {source.url}, or confirm the value in `tracker review`",
+            )
+
     return out
 
 
@@ -817,9 +868,12 @@ def parse_contradictions(project: Project, payload: dict[str, Any]) -> list[Find
 #: line of JSON, and a reply cut off mid-thought has no closing `</think>` — so
 #: the parser cannot strip the reasoning, finds no object, and the call is a total
 #: loss that reads in the log as "the model returned nothing useful". Measured at
-#: 2048 on a project with an obvious contradiction: truncated every time. Matched
-#: to `infer`, which had already found this out.
-MAX_TOKENS: Final = 4096
+#: 2048 on a project with an obvious contradiction: truncated every time; raised
+#: to 4096 to match `infer`. Then the first live evidence-audit sweep truncated
+#: 5 of 20 rows at 4096 — a quarter of the spend paid for and thrown away — so
+#: it is 8192 now. The rows that truncate are precisely the evidence-heavy ones
+#: the audit most needs to finish reading.
+MAX_TOKENS: Final = 8192
 
 
 @dataclass(frozen=True)
@@ -902,6 +956,154 @@ def _ran_out_of_room(reply) -> bool:
         return True
     lowered = (getattr(reply, "text", "") or "").lower()
     return "<think>" in lowered and "</think>" not in lowered
+
+
+# --- Layer 3b: the evidence audit ------------------------------------------------
+#
+# `examine` asks whether the values agree with each other; this asks the prior
+# question — whether each value's own evidence actually says it. The gate that
+# stored a quote checked mechanically (the figure appears in the sentence); what
+# survives that and still goes wrong is semantic: a programme-wide total quoted
+# as one campus's money, a figure about the building next door, an aspiration
+# recorded as a schedule. Reading is the only way to catch those, so this layer
+# costs one call per row and is off by default.
+#
+# Nothing it returns is written. A confirmed mismatch is answered in `tracker
+# review` by demoting the value to 待确认 — and an unconfirmed investment figure
+# already stays out of the capex sums, so the audit plugs into an existing
+# repair path rather than needing one of its own.
+
+AUDIT_VERDICTS: Final[frozenset[str]] = frozenset({"unsupported", "misattributed", "hedged"})
+
+
+def _evidence_lines(project: Project) -> tuple[list[str], list[str]]:
+    """``(field names shown, rendered lines)``. Both empty when nothing is auditable."""
+    from tracker.gaps import provenance
+
+    names: list[str] = []
+    lines: list[str] = []
+    for name in TRACKED_FIELDS:
+        value = getattr(project, name, None)
+        if value is None:
+            continue
+        prov = provenance(project, name)
+        if prov is None:
+            continue
+        text = (prov.quote or "").strip().replace("\n", " ")
+        if not text:
+            continue
+        kind = (
+            "exact quote for this field" if prov.quote_is_exact else "fallback: the source excerpt"
+        )
+        names.append(name)
+        lines.append(f'  {name} = {value}\n    [{prov.tier}, {kind}] "{text[:400]}"')
+    return names, lines
+
+
+def auditable_fields(project: Project) -> list[str]:
+    """Fields whose stored value carries a sentence the audit can judge."""
+    names, _lines = _evidence_lines(project)
+    return names
+
+
+def parse_evidence_findings(
+    project: Project, payload: dict[str, Any], shown: list[str]
+) -> list[Finding]:
+    """Findings from an audit reply, dropping everything unverifiable.
+
+    Same discipline as `parse_contradictions`, with the two-field rule swapped
+    for a shown-field rule: the audit's subject *is* one field, so a single
+    field is correct here — but it must be one the model was actually shown,
+    the verdict must be one of the three defined kinds, the reason must exist,
+    and the confidence floor still applies.
+    """
+    raw = payload.get("mismatches")
+    if not isinstance(raw, list):
+        return []
+
+    allowed = set(shown)
+    out: list[Finding] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        field_name = str(entry.get("field") or "").strip()
+        verdict = str(entry.get("verdict") or "").strip().lower()
+        reason = str(entry.get("reason") or "").strip()
+        try:
+            confidence = float(entry.get("confidence", 0))
+        except (TypeError, ValueError):
+            confidence = 0.0
+        if field_name not in allowed or verdict not in AUDIT_VERDICTS or not reason:
+            continue
+        if confidence < MIN_CONFIDENCE:
+            continue
+        out.append(
+            Finding(
+                project_id=project.id,
+                code="evidence_mismatch",
+                severity=WARNING,
+                summary=(
+                    f"{field_name}: the evidence looks {verdict} — {reason} "
+                    f"[confidence {confidence:.1f}]"
+                ),
+                fields=(field_name,),
+                remedy=(
+                    "if a person confirms this, demote the value in `tracker review`; "
+                    "an unconfirmed investment figure already stays out of the capex sums"
+                ),
+                inferred=True,
+            )
+        )
+    return out[:MAX_PER_PROJECT]
+
+
+def audit_evidence(project: Project, *, extractor, prompt_name: str = "evidence-v1") -> Read:
+    """Ask a model whether each value's evidence actually states it. One call.
+
+    Never raises, for the same reason `examine` never does: one unreadable row
+    is not a reason to abandon a sweep.
+    """
+    from tracker.llm import LLMError, LLMJsonError, parse_json_object
+    from tracker.prompts import load_prompt
+
+    shown, lines = _evidence_lines(project)
+    if not shown:
+        return Read()
+
+    def show(value: Any) -> str:
+        return "unknown" if value is None else str(value)
+
+    prompt = load_prompt(prompt_name)
+    context = {
+        "project_id": str(project.id),
+        "name": show(project.name),
+        "company": show(project.company),
+        "customer": show(project.customer),
+        "location": f"{project.city or project.county or 'unknown'}, {project.state}",
+        "evidence": "\n".join(lines),
+        "today": str(_today()),
+    }
+    try:
+        reply = extractor.complete(
+            system=prompt.system, user=prompt.render_user(**context), max_tokens=MAX_TOKENS
+        )
+    except LLMError as exc:
+        log.warning("evidence audit failed for project %s: %s", project.id, exc)
+        return Read(failure="error")
+    try:
+        payload = parse_json_object(reply.text)
+    except (LLMJsonError, ValueError) as exc:
+        if _ran_out_of_room(reply):
+            log.warning(
+                "evidence audit for project %s ran out of room while reasoning — "
+                "raise MAX_TOKENS (currently %d); this is not a clean audit.",
+                project.id,
+                MAX_TOKENS,
+            )
+            return Read(failure="truncated")
+        log.warning("evidence audit for project %s returned unusable JSON: %s", project.id, exc)
+        return Read(failure="unusable")
+    return Read(findings=parse_evidence_findings(project, payload, shown))
 
 
 # --- What a person can do about one -------------------------------------------
@@ -1283,17 +1485,25 @@ def review(
     *,
     extractor=None,
     read_limit: int | None = None,
+    audit_limit: int | None = None,
     only: int | None = None,
     on_examine=None,
+    on_audit=None,
 ) -> Report:
-    """Every free check over every project, and optionally the paid one.
+    """Every free check over every project, and optionally the paid ones.
 
     Args:
-        extractor: when given, rows are also read by a model. One call each.
-        read_limit: stop after this many model calls. The dial that decides what
-            this costs; there is no default sweep of the whole database.
+        extractor: when given, rows may also be read by a model. One call each.
+        read_limit: contradiction reads to pay for. **None means none**, not
+            unlimited — the caller must always name a number, because "however
+            many rows the database happens to hold" is not a spend anybody
+            chose. (None meant unlimited once, and the first `--audit`-only run
+            silently started reading every row in the database.)
+        audit_limit: also audit the evidence behind this many rows' values.
+            Separate dial, separate question — see `audit_evidence`.
         only: check a single project id.
-        on_examine: called with each project before its model call, for progress.
+        on_examine: called with each project before its contradiction read.
+        on_audit: called with each project before its evidence audit.
     """
     query = select(Project)
     if only is not None:
@@ -1306,7 +1516,7 @@ def review(
         report.findings.extend(found)
         report.collisions.extend(check_collisions(project))
 
-        if extractor is None or (read_limit is not None and report.examined >= read_limit):
+        if extractor is None or not read_limit or report.examined >= read_limit:
             continue
         if on_examine is not None:
             on_examine(project)
@@ -1316,11 +1526,30 @@ def review(
         if read.failure:
             report.unreadable[read.failure] = report.unreadable.get(read.failure, 0) + 1
 
+    if extractor is not None and audit_limit:
+        # Costliest rows first: the audit exists to protect the sums, so the
+        # dollars at stake pick the reading order rather than the row id. Rows
+        # with no quoted values are skipped outright — a call that could only
+        # come back empty is not worth paying for.
+        candidates = sorted(
+            (p for p in projects if auditable_fields(p)),
+            key=lambda p: (-(p.investment_usd or 0), -(p.mw_planned or 0.0), p.id),
+        )
+        for project in candidates[:audit_limit]:
+            if on_audit is not None:
+                on_audit(project)
+            report.audited += 1
+            read = audit_evidence(project, extractor=extractor)
+            report.findings.extend(read.findings)
+            if read.failure:
+                report.unreadable[read.failure] = report.unreadable.get(read.failure, 0) + 1
+
     return report
 
 
 __all__ = [
     "ACTIONS",
+    "AUDIT_VERDICTS",
     "ERROR",
     "MAX_PER_PROJECT",
     "MAX_TOKENS",
@@ -1334,12 +1563,15 @@ __all__ = [
     "Read",
     "Repair",
     "Report",
+    "audit_evidence",
+    "auditable_fields",
     "build_context",
     "check_collisions",
     "check_rules",
     "decide",
     "examine",
     "parse_contradictions",
+    "parse_evidence_findings",
     "record_decision",
     "resolve_drift",
     "review",

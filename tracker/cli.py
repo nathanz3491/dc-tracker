@@ -2596,6 +2596,16 @@ def logic_check(
             help="Also have a model read this many projects. 0 runs only the free checks.",
         ),
     ] = 0,
+    audit: Annotated[
+        int,
+        typer.Option(
+            "--audit",
+            help=(
+                "Also audit the evidence behind this many rows' values, costliest "
+                "first. One LLM call per row; 0 skips it."
+            ),
+        ),
+    ] = 0,
     project_id: Annotated[
         int | None,
         typer.Option("--id", help="Check one project.", show_default=False),
@@ -2640,12 +2650,20 @@ def logic_check(
     the milestones say is solved. Every finding it returns must name two fields
     and quote its evidence, or it is dropped; it is never allowed to pick a
     collision winner, and nothing it says is written to the database.
+
+    **The evidence audit** is `--audit N`, the same cost, and asks the prior
+    question: does each value's own recorded sentence actually state it — or is
+    it a programme-wide total quoted as one campus's money, a figure about a
+    different building, an aspiration recorded as a schedule? Rows are read
+    costliest first. A finding a person confirms is answered by demoting the
+    value in `tracker review`; an unconfirmed investment figure already stays
+    out of the capex sums, so the repair path exists before the audit runs.
     """
     from tracker import logic as logic_mod
 
     engine = _read_engine()
     extractor = None
-    if read > 0:
+    if read > 0 or audit > 0:
         from tracker.llm import MissingApiKey, reasoning_extractor
 
         try:
@@ -2656,13 +2674,23 @@ def logic_check(
     def announce(project) -> None:
         console.print(f"[dim]reading #{project.id} {project.company} — {project.name}[/dim]")
 
+    def announce_audit(project) -> None:
+        console.print(
+            f"[dim]auditing evidence on #{project.id} {project.company} — {project.name}[/dim]"
+        )
+
+    # Progress lines share stdout with the payload, so in --json mode they would
+    # corrupt it — the very first announce makes `json.load` fail at char 0.
+    narrate = not json_mode()
     with session_scope(engine, commit=False) as session:
         report = logic_mod.review(
             session,
             extractor=extractor,
             read_limit=read or None,
+            audit_limit=audit or None,
             only=project_id,
-            on_examine=announce if read else None,
+            on_examine=announce if read and narrate else None,
+            on_audit=announce_audit if audit and narrate else None,
         )
 
     findings = report.findings
@@ -2676,6 +2704,7 @@ def logic_check(
             {
                 "projects": report.projects,
                 "examined": report.examined,
+                "audited": report.audited,
                 "unreadable": report.unreadable,
                 "findings": [f.as_json() for f in findings],
                 "collisions": [c.as_json() for c in report.collisions],

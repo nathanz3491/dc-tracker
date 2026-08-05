@@ -8,8 +8,9 @@ Two answers are possible and they lead to opposite work.
 
 **We already have it**, under some spelling. "Stargate Abilene", "Crusoe Abilene
 Data Center" and "Stargate (星际之门) - Abilene" are one building, and adding a
-fourth row for it would make the capex table wrong in the way `tracker duplicates`
-exists to catch. So the first job is matching, and matching a name against 224
+fourth row for it would add a row the capex table has to skip and disclose, in
+the way `tracker duplicates` exists to catch. So the first job is matching, and
+matching a name against 224
 rows is a judgement — "Project Camellia" and "Camellia Data Center" probably are
 the same and "Stargate Milam County" and "Stargate Lordstown" definitely are not,
 and no string metric gets both right.

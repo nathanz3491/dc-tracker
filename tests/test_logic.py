@@ -518,7 +518,7 @@ def test_a_sweep_counts_what_it_could_not_read(session):
     """Otherwise "read by a model: 200" with no findings reads as 200 clean rows."""
     _project(session, name="A")
     _project(session, name="B")
-    report = logic.review(session, extractor=_Extractor("<think>cut off here"))
+    report = logic.review(session, extractor=_Extractor("<think>cut off here"), read_limit=2)
     assert report.examined == 2
     assert report.unreadable == {"truncated": 2}
     assert ("  unreadable (truncated)", 2) in report.as_rows()
@@ -988,3 +988,165 @@ def test_an_energisation_no_tranche_holds_is_reported_as_a_gap_in_the_blocks(ses
     codes = _codes(project)
     assert "no_block_for_energisation" in codes
     assert "energized_but_not_operational" not in codes
+
+
+# --- placeholders that reached storage -------------------------------------------
+
+
+def test_a_stored_placeholder_value_is_an_error(session):
+    """normalize nulls these at ingest, so a stored one means a path bypassed it."""
+    project = _project(session, name="A", customer="TBD")
+    findings = {f.code: f for f in logic.check_rules(project)}
+    assert "placeholder_value" in findings
+    assert findings["placeholder_value"].severity == logic.ERROR
+    assert findings["placeholder_value"].fields == ("customer",)
+
+
+def test_a_real_value_is_not_a_placeholder(session):
+    project = _project(
+        session, name="A", customer="OpenAI", blocker="permit appeal pending in court"
+    )
+    assert "placeholder_value" not in _codes(project)
+
+
+def test_a_placeholder_quote_is_flagged(session):
+    """The observed failure: a value whose recorded evidence is itself 'TBD'."""
+    import json as _json
+
+    project = _project(session, name="A", investment_usd=1_000_000)
+    session.add(
+        Source(
+            project_id=project.id,
+            url="https://x.test/",
+            source_type="trade_press",
+            fetched_at=T0,
+            quotes=_json.dumps({"investment_usd": "TBD"}),
+        )
+    )
+    session.flush()
+    session.refresh(project)
+    findings = {f.code: f for f in logic.check_rules(project)}
+    assert "placeholder_quote" in findings
+    assert findings["placeholder_quote"].severity == logic.WARNING
+
+
+def test_a_real_quote_is_not_flagged(session):
+    import json as _json
+
+    project = _project(session, name="A", investment_usd=1_000_000)
+    session.add(
+        Source(
+            project_id=project.id,
+            url="https://x.test/",
+            source_type="trade_press",
+            fetched_at=T0,
+            quotes=_json.dumps({"investment_usd": "a $1 million expansion of the campus"}),
+        )
+    )
+    session.flush()
+    session.refresh(project)
+    assert "placeholder_quote" not in _codes(project)
+
+
+# --- the evidence audit -----------------------------------------------------------
+
+
+def _quoted_project(session, *, name: str, investment: int = 500_000_000_000):
+    """A row whose values carry exact per-field quotes, so the audit has a subject."""
+    import json as _json
+
+    project = _project(session, name=name, investment_usd=investment, mw_planned=1200.0)
+    session.add(
+        Source(
+            project_id=project.id,
+            url=f"https://quoted.test/{name}",
+            source_type="trade_press",
+            fetched_at=T0,
+            claims=_json.dumps({"investment_usd": investment, "mw_planned": 1200.0}),
+            fields="mw_planned,investment_usd",
+            quotes=_json.dumps(
+                {
+                    "investment_usd": "part of the $500 billion Stargate programme",
+                    "mw_planned": "a 1,200 MW campus",
+                }
+            ),
+        )
+    )
+    session.flush()
+    session.refresh(project)
+    return project
+
+
+def test_the_audit_reads_a_mismatch(session):
+    project = _quoted_project(session, name="A")
+    reply = (
+        '{"mismatches": [{"field": "investment_usd", "verdict": "misattributed", '
+        '"reason": "the figure describes the whole programme, not this campus", '
+        '"confidence": 0.9}]}'
+    )
+    read = logic.audit_evidence(project, extractor=_Extractor(reply))
+    assert read.failure is None
+    (finding,) = read.findings
+    assert finding.code == "evidence_mismatch"
+    assert finding.inferred is True
+    assert finding.fields == ("investment_usd",)
+    assert "misattributed" in finding.summary
+
+
+def test_the_audit_drops_what_it_cannot_check(session):
+    """Same guard-rail discipline as parse_contradictions, adapted to one field."""
+    project = _quoted_project(session, name="A")
+    shown = logic.auditable_fields(project)
+    payload = {
+        "mismatches": [
+            {"field": "blocker", "verdict": "unsupported", "reason": "x", "confidence": 0.9},
+            {"field": "investment_usd", "verdict": "wrong", "reason": "x", "confidence": 0.9},
+            {"field": "investment_usd", "verdict": "hedged", "reason": "", "confidence": 0.9},
+            {"field": "investment_usd", "verdict": "hedged", "reason": "x", "confidence": 0.1},
+        ]
+    }
+    assert logic.parse_evidence_findings(project, payload, shown) == []
+
+
+def test_a_row_with_no_quotes_is_not_worth_a_call(session):
+    project = _project(session, name="A", investment_usd=5)
+    extractor = _Extractor('{"mismatches": []}')
+    read = logic.audit_evidence(project, extractor=extractor)
+    assert read.findings == [] and read.failure is None
+    assert extractor.max_tokens is None, "no call should have been made"
+
+
+def test_the_audit_reads_costliest_rows_first(session):
+    """The audit exists to protect the sums, so the dollars at stake pick the order."""
+    _quoted_project(session, name="Small", investment=1_000)
+    big = _quoted_project(session, name="Big", investment=9_000_000_000)
+
+    audited = []
+    logic.review(
+        session,
+        extractor=_Extractor('{"mismatches": []}'),
+        audit_limit=1,
+        on_audit=lambda p: audited.append(p.id),
+    )
+    assert audited == [big.id]
+
+
+def test_an_audit_only_run_pays_for_no_contradiction_reads(session):
+    """The first --audit run silently examined every row in the database.
+
+    `read_limit=None` used to mean "unlimited", tolerable only while the
+    extractor was set exclusively by --read. The audit flag broke that
+    invariant, so None now means none: every model call needs a number the
+    caller actually chose.
+    """
+    _quoted_project(session, name="A")
+    examined = []
+    report = logic.review(
+        session,
+        extractor=_Extractor('{"mismatches": []}'),
+        audit_limit=1,
+        on_examine=lambda p: examined.append(p.id),
+    )
+    assert examined == []
+    assert report.examined == 0
+    assert report.audited == 1

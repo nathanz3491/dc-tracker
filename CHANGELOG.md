@@ -12,6 +12,128 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **Every number in the capex table opens** (`tracker/capex.py`,
+  `tracker/webui/dataset.py`, `server.py`, `app.js`,
+  `tracker/prompts/capex-overview-v1.txt`). An aggregate a reader cannot open is
+  an aggregate they have to trust, and this table asks to be trusted about
+  billions.
+
+  - **Click any figure in a row** and it breaks into the sites that make it up,
+    and *which* figure decides the view — because "8 sites", "$185B" and "MW at
+    risk" are three different questions and one generic list answers none of them
+    well. Seven views: every counted site; planned capacity with a share bar and
+    the sites contributing nothing; capacity actually running; investment per
+    site with the never-confirmed ones marked and their ingest reason on hover;
+    what is obstructing which site, with each obstacle's own summary; which sites
+    have slipped; and per year column, which sites are dated into it. Clicking a
+    site opens its drawer, so the drill-down bottoms out at citations rather than
+    at another aggregate. **The panel never sums** — every figure is a stored
+    per-project value, so a reader adding the rows up arrives at the cell they
+    clicked (verified live: Meta's twelve rows add to 8,250 MW and $27.3B
+    exactly), and a site with no cited capacity says so instead of showing a
+    zero that would balance the arithmetic and misstate the world. `Position`
+    carries `project_ids` / `duplicate_skipped_ids`, ids only, looked up in the
+    projects payload the page already has.
+  - **Hover a buyer** and a card shows the instant facts with a model-written
+    reading of the position streaming underneath — the capex twin of the project
+    drawer's AI overview, same fast model (`M2-her`), via a new
+    `/api/capex/overview/stream` endpoint with the same contract: POST plus a
+    confirm token because it spends, cut at the sentinel, cached by a fingerprint
+    over the position's figures and every underlying row's `updated_at`, never
+    stored, never evidence. Measured live: first word in 1.7s, whole card in
+    ~2.5s, and re-hovering an unchanged buyer is free. The hover waits 450ms so
+    mousing down the table does not fire a request per row.
+
+    **The prompt asks for no figures at all, and that is the finding.** Written as
+    an analyst on the reader's desk — one characterising sentence, one bullet,
+    one open question — the fast model produced good copy and unreliable numbers:
+    across four measured rounds it subtracted running from planned and called the
+    remainder "3,300 MW due mid-year", summed two sites into "4,200 MW in 2028",
+    wrote "only 30% online", spelled out "nine thousand seven hundred and
+    thirty-nine megawatts", and invented a source ("likely the January
+    statement"). Three rounds of tightening rules did not fix it; removing the
+    job did. Every derivation it was reaching for is now computed server-side and
+    labelled — each site's share **in words** (`_SHARE_WORDS`, because it also
+    got "about a quarter" wrong as "more than a third"), and the unbuilt
+    remainder marked `NOTHING DATES IT` — and the prompt's rule is that the
+    answer contains no digits, since the figures sit on the card directly above
+    it. Measured after: 5 of 7 briefings digit-free, and both leaks were figures
+    copied correctly from the context. Names, places and the closing question are
+    what this model is good at, so that is all it is asked for now.
+
+- **`tracker logic check --audit N`: does each value's evidence actually say it?**
+  (`tracker/logic.py`, `tracker/prompts/evidence-v1.txt`). Every existing check
+  asks whether values are supported or agree with each other; this asks the prior
+  question — whether the sentence recorded as a value's evidence actually states
+  that value *for this project*. The gate that stored the quote checked
+  mechanically (the figure appears in the sentence); what survives that and still
+  goes wrong is semantic: a programme-wide total quoted as one campus's money
+  (`misattributed`), a sentence about a different building (`unsupported`), an
+  aspiration recorded as a schedule (`hedged`). One LLM call per row, costliest
+  rows first, off by default. Same guard rails as `--read`: a finding must name a
+  field the model was shown, use one of the three defined verdicts, give a
+  checkable reason and clear the confidence floor, or it is dropped — and nothing
+  is ever written. A confirmed finding is answered by demoting the value in
+  `tracker review`; an unconfirmed investment figure already stays out of the
+  capex sums, so the repair path existed before the audit did.
+
+- **Placeholders are rejected in more shapes, and flagged if they ever reach
+  storage** (`tracker/normalize.py`, `tracker/logic.py`). `is_blank` already
+  nulled `TBD` / `N/A` / `—`; it now also catches decorated and spelled-out forms
+  — `$TBD`, `TBD (est.)`, `to be determined`, `not yet announced`, `N.D.`,
+  `...`, `??`, `xx` — via a start-anchored pattern, so a sentence merely
+  containing the letters survives and `ND` still reaches the state normalizer.
+  Two new free `logic check` rules watch the stored data itself:
+  `placeholder_value` (ERROR — a non-answer stored as a fact, meaning some path
+  bypassed the normalizer) and `placeholder_quote` (WARNING — a value whose
+  recorded evidence is empty or itself a placeholder, so the console would show
+  "TBD" as the sentence behind a number). Measured on the live database: both
+  return zero today, which is the normalizer earning its keep — the rules exist
+  so a regression is caught rather than trusted.
+
+- **The capex table now defends its own numbers** (`tracker/capex.py`,
+  `tracker/cli.py`, the console's Capex view). Three changes, each answering one
+  way the table was wrong, all disclosing rather than hiding:
+
+  - **One row per suspected campus.** The Abilene Stargate campus was stored four
+    times — once per company a source attached to it — and `rollup()` counted
+    1.2 GW four times against OpenAI. The rollup now counts one representative per
+    `suspected_duplicates` group (a named tenant first, then the largest capacity,
+    then the oldest id — the row a merge would most likely keep) and sets the
+    others aside in per-buyer `*_skipped` disclosure fields. Skipped, never
+    merged: `tracker merge` remains the only real repair. Measured live: 10,293 MW
+    and $707.9B set aside.
+  - **Only confirmed dollars are summed.** `investment_usd` asserted by a source
+    but confirmed by none — the signature of a programme-wide total ("OpenAI's
+    $500 billion Stargate") quoted in an article about one campus and demoted at
+    ingest by the `MAX_USD_PER_MW` ceiling — is excluded from the sum and
+    disclosed as `investment_excluded_usd`. The rollup reads back what ingest
+    decided (`Source.unconfirmed_fields`) rather than re-judging the figure, per
+    the same rule `webui.dataset._unconfirmed_because` follows. Measured live:
+    OpenAI's investment column went from $3,215B to $635B counted, with $2,012.9B
+    disclosed beside it — the numbers sum back, nothing is hidden.
+  - **The year grid is a continuous range** (`capex.year_columns`), so a year
+    nothing is dated for renders as an empty column instead of vanishing — 2029
+    now appears, empty, between a dated 2028 and 2030. Quarters stay data-only
+    (`capex.quarter_columns`): the quarter view is a shape, and a shape survives
+    gaps. Both windows are computed server-side and shipped in the dataset
+    payload; the browser's own copy of the window logic was deleted per the
+    "browser never re-implements a judgement" rule.
+
+- **`project_alias`: merges that outlive the next crawl** (migration `0010`,
+  `tracker/merge.py`, `tracker/upsert.py`). `upsert_record` matches on exact
+  `dedup_key`, so a merge used to last exactly until the next crawl: fold the
+  OpenAI-angle Abilene row into the Crusoe one, and the next OpenAI-angle article
+  quietly re-created it. `tracker merge` now records each folded identity in a
+  `project_alias` table (the project-level sibling of `block_alias`, and for the
+  same stated reason: a hand-merge with nowhere durable to live evaporates), and
+  the upsert consults it after an exact-key miss, routing the record to the
+  survivor. Aliases point at project ids and are repointed when their target is
+  itself merged, so chains stay flat and resolution is one lookup. `--force-new`
+  still bypasses it — the escape hatch for two genuinely separate campuses —
+  and deleting a survivor cascades its aliases away, so a stale redirect cannot
+  outlive its target.
+
 - **`capacity_block`: what an AI data center actually is** (migration `0009`,
   `tracker/blocks.py`, `tracker/vocab.py`, `tracker/ingest/crawl.py`).
 
@@ -415,6 +537,21 @@ initial build of the v1 PRD.
 
 ### Changed
 
+- **The console's Capex view now explains itself at first glance** (`app.js`).
+  It opened with thirteen columns of raw numbers; a first-time reader — the
+  person this page exists for — had to assemble the story from footnotes. Now:
+  a five-number headline strip (GW planned, GW running, confirmed spend,
+  claimed-but-not-counted, share with a named buyer) sits above the table; the
+  columns carry plain-language names with a group row that says what the year
+  columns *are* ("MW arriving, by year"); a buyer whose every row was set aside
+  as a duplicate says so in words instead of rendering as a rank of dashes; and
+  a buyer's excluded money shows inline beside the confirmed figure
+  ("$185B +$465B claimed"), so "where is the $500B headline?" is answered on
+  the row itself. The coverage tiles moved below the table — the headline strip
+  now carries the essential caveat (share attributed) above the fold. Also fixed
+  the merge-review card's claim that survivor choice "does not matter": identity
+  fields keep the survivor's values, and the card now says so.
+
 - **Project pickers search; so does the projects table.** The command form's
   pickers were `<select>`s holding all 224 rows, which is not a picker but a wall
   — and `merge`, which takes several ids, therefore looked like it took one. They
@@ -554,6 +691,31 @@ initial build of the v1 PRD.
   teach the flags they stand for.
 
 ### Fixed
+
+- **A tunnel that had not reconnected was reported as a database failure**
+  (`app.js`). Restarting a published console briefly takes the tunnel down; a tab
+  left open then fetched `/api/dataset`, got **Cloudflare's own 502 HTML page**,
+  and the console rendered it under the heading "The console could not read the
+  database" with the provider's entire error document dumped into the message
+  area. Two false statements at once — the database was fine and the console had
+  never answered at all. A non-JSON body is no longer taken as an error message,
+  502/503/504 and an outright network failure now say *"The console is not
+  answering — nothing is wrong with the data, this page just cannot reach the
+  server"* with a retry button, and only a real server-side error keeps the
+  database wording. Observed live on a restart of the published console.
+
+- **`logic.review` could spend without a number anybody chose.** `read_limit=None`
+  meant "unlimited", tolerable only while the extractor was set exclusively by
+  `--read N`. The new `--audit` flag broke that invariant: an `--audit 20` run
+  silently started contradiction-reading *every* row in the database on its way
+  to the audit — caught live after ~10 wasted calls. `None` now means **none**:
+  every model call needs an explicit limit, and a regression test holds the line.
+
+- **`tracker capex --json` crashed.** The payload read `p.h200_equivalent` off
+  `capex.Position`, which has no such field — every JSON invocation died with an
+  `AttributeError`. The column is now derived from the position's planned MW via
+  `compute.h200_equivalent`, the same unit conversion the per-project column
+  uses, and a regression test parses the output.
 
 - **`logic resolve` could destroy correct data to satisfy a coarse `phase` enum.**
   Three of its operator edits — `_drop_energized`, `_set_phase_operational` and

@@ -33,7 +33,7 @@ from dataclasses import dataclass, field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from tracker.models import Event, Project, Risk, utcnow
+from tracker.models import Event, Project, ProjectAlias, Risk, utcnow
 from tracker.upsert import recompute_from_sources
 
 log = logging.getLogger(__name__)
@@ -53,6 +53,7 @@ class MergeResult:
     events_discarded: int = 0
     risks_moved: int = 0
     risks_discarded: int = 0
+    aliases_recorded: int = 0
     conflicts: list[str] = field(default_factory=list)
 
     def as_rows(self) -> list[tuple[str, int]]:
@@ -64,6 +65,7 @@ class MergeResult:
             ("milestones already held", self.events_discarded),
             ("obstacles moved", self.risks_moved),
             ("obstacles already held", self.risks_discarded),
+            ("identities remembered", self.aliases_recorded),
         ]
 
 
@@ -125,6 +127,18 @@ def merge_projects(session: Session, keep_id: int, dupe_ids: list[int]) -> Merge
         result.risks_moved += moved
         result.risks_discarded += dropped
 
+        # --- The identity itself ----------------------------------------------
+        # Without this the merge lasts until the next crawl: `upsert_record`
+        # matches on exact dedup_key, so an article written from the folded
+        # company's angle would re-create the row. Aliases already aimed at the
+        # folded row are repointed first, which is what keeps chains flat — a
+        # lookup resolves in one step however many merges preceded it.
+        for alias in session.scalars(
+            select(ProjectAlias).where(ProjectAlias.to_project_id == dupe.id)
+        ).all():
+            alias.to_project_id = keep.id
+        result.aliases_recorded += _record_alias(session, dupe.dedup_key, keep)
+
         session.delete(dupe)
         result.removed.append(dupe_id)
         session.flush()
@@ -143,6 +157,23 @@ def _repoint(session: Session, old_source_id: int, new_source_id: int) -> None:
     for model in (Event, Risk):
         for row in session.scalars(select(model).where(model.source_id == old_source_id)).all():
             row.source_id = new_source_id
+
+
+def _record_alias(session: Session, from_key: str | None, keep: Project) -> int:
+    """Remember that a folded identity belongs to the survivor. Returns rows written.
+
+    An existing alias for the key is retargeted rather than duplicated — the
+    latest human decision wins. A key equal to the survivor's own is not
+    recorded: the exact-key lookup already answers it.
+    """
+    if not from_key or from_key == keep.dedup_key:
+        return 0
+    existing = session.scalar(select(ProjectAlias).where(ProjectAlias.from_dedup_key == from_key))
+    if existing is not None:
+        existing.to_project_id = keep.id
+        return 1
+    session.add(ProjectAlias(from_dedup_key=from_key, to_project_id=keep.id))
+    return 1
 
 
 def _move_events(session: Session, keep: Project, dupe: Project) -> tuple[int, int]:

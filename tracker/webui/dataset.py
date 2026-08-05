@@ -194,24 +194,33 @@ def _capex(session: Session) -> dict[str, Any]:
     The duplicate warning ships with this and not with `gaps`, for the reason
     `capex.suspected_duplicates` gives: a row stored twice is a nuisance in a
     site listing and a wrong number the moment anything groups by end customer.
-    Abilene is in the database four times, so 1.2 GW is counted four times
-    against OpenAI. The place to offer the repair is next to the figure it
-    corrupts.
+    Abilene was in the database four times, and 1.2 GW was counted four times
+    against OpenAI until the rollup learned to skip the extra rows. The place to
+    offer the real repair — the merge — is still next to the figure it corrupts.
 
     Groups carry ids only. Every project is already in the payload, so the page
     looks the rows up rather than being sent a second, driftable copy of them.
+
+    `year_columns` / `quarter_columns` are computed here rather than in the
+    browser: which years the grid shows — including an empty 2029 between a
+    dated 2028 and 2030 — is a judgement, and the browser never re-implements a
+    judgement (docs/architecture.md).
     """
     from tracker import capex as capex_mod
 
     positions = capex_mod.rollup(session)
     pairs = capex_mod.suspected_duplicates(session)
+    as_of = capex_mod.as_of()
+    as_of_quarter = f"{as_of.year}Q{(as_of.month - 1) // 3 + 1}"
     return {
         "coverage": capex_mod.coverage(session),
         "years": capex_mod.horizon(positions),
         "quarters": capex_mod.quarters(positions),
+        "year_columns": capex_mod.year_columns(positions, start=as_of.year),
+        "quarter_columns": capex_mod.quarter_columns(positions, start=as_of_quarter),
         "date_precision": capex_mod.date_precision(session),
-        "as_of_year": capex_mod.as_of().year,
-        "as_of_quarter": f"{capex_mod.as_of().year}Q{(capex_mod.as_of().month - 1) // 3 + 1}",
+        "as_of_year": as_of.year,
+        "as_of_quarter": as_of_quarter,
         "unattributed": capex_mod.UNATTRIBUTED,
         "positions": [
             {
@@ -224,6 +233,14 @@ def _capex(session: Session) -> dict[str, Any]:
                 "mw_built": p.mw_built,
                 "mw_unbuilt": p.mw_unbuilt,
                 "investment_usd": p.investment_usd,
+                "investment_excluded_usd": p.investment_excluded_usd,
+                "duplicate_rows_skipped": p.duplicate_rows_skipped,
+                "mw_duplicate_skipped": p.mw_duplicate_skipped,
+                "investment_duplicate_skipped_usd": p.investment_duplicate_skipped_usd,
+                # Ids only, like the duplicate groups: the page looks the rows up
+                # in the projects payload rather than being sent a second copy.
+                "project_ids": p.project_ids,
+                "duplicate_skipped_ids": p.duplicate_skipped_ids,
                 "mw_by_year": {str(y): mw for y, mw in sorted(p.mw_by_year.items())},
                 "mw_by_quarter": dict(sorted(p.mw_by_quarter.items())),
                 "projects_at_risk": p.at_risk_projects,

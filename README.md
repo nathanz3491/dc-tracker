@@ -788,6 +788,27 @@ The footer states what fraction of projects the view can speak for. That is not
 decoration: a rollup silently covering a third of the data looks authoritative and
 is not.
 
+The table defends itself against the two ways it used to be wrong, and both
+defences disclose rather than hide:
+
+- **One row per suspected campus.** A campus stored twice is a nuisance in a site
+  listing and a wrong number the moment anything groups by buyer — the Abilene
+  campus was in the database four times, so 1.2 GW was counted four times against
+  OpenAI. The rollup now counts the one row a merge would most likely keep (a
+  named tenant first, then the largest capacity) and sets the others aside;
+  the footer says how many megawatts and dollars were skipped. Skipped, not
+  merged: `tracker merge` remains the repair, and the rows are still there.
+- **Only confirmed dollars are summed.** A figure a source asserted but the
+  evidence gate never confirmed — most often a programme-wide total like "OpenAI's
+  $500 billion Stargate" quoted in an article about one campus, demoted at ingest
+  by the `$/MW` plausibility ceiling — is excluded from the investment column and
+  disclosed in the footer instead. The rollup reads back what ingest decided
+  rather than re-judging the figure.
+
+The year columns are a continuous range, so a year nothing is dated for shows as
+an empty column between years that have capacity — "nothing is *dated* 2029"
+rendered honestly, instead of 2029 silently vanishing between 2028 and 2030.
+
 Two things it deliberately does not do. It never infers a tenant — who signed a
 lease is a *fact* with a documented answer, and `tracker infer` exists precisely to
 keep judgements and facts apart. And where a project names a tracked operator as
@@ -795,19 +816,35 @@ its own customer, it flags the row instead of correcting it, for the same reason
 `dedup` refuses to auto-merge across granularity: a landlord genuinely can lease
 from another landlord.
 
-The console's **Capex** view is this table plus the one thing that would make it
-wrong. A campus stored twice is a nuisance in a site listing and a wrong number
-the moment anything groups by buyer — the Abilene campus was in the database four
-times, so 1.2 GW was counted four times against OpenAI. So the duplicate review
-lives on that page rather than under Coverage: the repair belongs next to the
-figure it corrupts. Reviewing a group by eye is also the one thing a browser does
+The console's **Capex** view is this table made openable, because an aggregate a
+reader cannot open is one they have to trust. **Click any figure in a row** and it
+breaks into the sites that make it up, with the *column* deciding the view: the
+site list, planned capacity with a share bar, what is actually running,
+investment per site with the never-confirmed ones marked, what is obstructing
+which site, what has slipped, or — from a year column — the sites dated into that
+year. The panel never sums, so the rows always add to the cell you clicked, and a
+site nobody has sized says so rather than showing a zero. Clicking a site opens
+its drawer, so the drill-down ends at citations and not at another total.
+
+**Hover a buyer** and a card shows the instant facts with a model-written reading
+of the position streaming under them — the capex twin of the project drawer's AI
+overview, same fast model, same rules: cached by content, cut at the sentinel,
+never stored, never evidence. That prompt asks for **no figures at all**: measured
+over four rounds, the fast model wrote fluent analysis and unreliable arithmetic
+(subtracting to invent "3,300 MW due mid-year", summing two sites, "only 30%
+online"), so every share it was reaching for is now computed server-side *in
+words* and the numbers stay where they are correct — on the card above the prose,
+and in the table behind it.
+
+The duplicate review also lives on that page rather than under Coverage: the
+repair belongs next to the figure it protects. Reviewing a group by eye is also the one thing a browser does
 better than the CLI — the candidate rows sit side by side with their capacity,
 citation count and dates, a radio picks the survivor, and the merge runs through
 the same `/api/run` path as everything else, behind the typed confirmation.
 
-Which id survives does not decide the values. `merge` moves every citation onto
-the survivor and then recomputes each field from the combined set, so the choice
-picks a row number and nothing else.
+Which id survives decides more than a row number: quantitative fields are
+recomputed from the combined citations, but identity fields — name, company,
+locality — keep the survivor's values, so pick the row whose identity should win.
 
 ### Values that contradict each other
 
@@ -815,6 +852,7 @@ picks a row number and nothing else.
 tracker logic check                    # free: rules and source disagreements
 tracker logic check --severity error   # only the impossible ones
 tracker logic check --read 20          # also have a model read 20 rows
+tracker logic check --audit 20         # audit the evidence behind 20 rows' values
 tracker logic resolve                  # work through them, one at a time
 tracker logic resolve --code built_exceeds_planned   # one kind at a time
 tracker logic resolve --auto           # only the repairs needing no decision
@@ -862,6 +900,19 @@ evidence or it is dropped, it is never allowed to pick a collision winner, and
 nothing it says is written. Measured honestly: across four rows read during
 development it returned **nothing** — the guard rails demonstrably hold, and its
 usefulness on this database is still unproven. The rules are carrying the value.
+
+**The evidence audit** is `--audit N`, the same cost, and asks the prior question:
+does the sentence recorded as a value's evidence actually state that value *for
+this project*? The gate that stored the quote checked mechanically — the figure
+appears in the sentence — and what survives that and still goes wrong is
+semantic: a programme-wide total quoted as one campus's money, a figure about the
+building next door, an aspiration recorded as a schedule. Rows are read costliest
+first, because the audit exists to protect the capex sums and the dollars at
+stake pick the order. Findings carry one of three verdicts — `unsupported`,
+`misattributed`, `hedged` — plus a reason checkable against the quoted sentence
+alone, and nothing is written: a person confirms a finding by demoting the value
+in `tracker review`, and an unconfirmed investment figure already stays out of
+the capex sums, so the repair path existed before the audit did.
 
 **`logic resolve` is the part that makes the other 149 worth finding.** It first
 re-runs the merge policy on any row whose stored values its own sources no longer

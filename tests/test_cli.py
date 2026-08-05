@@ -1139,3 +1139,72 @@ def test_a_bracketed_name_is_not_silently_truncated(bracketed: Path):
     """The failure mode is deletion, not corruption, which is why it hid."""
     out = invoke(bracketed, "list").output
     assert "Stargate [redacted]" in out and "Stargate  " not in out
+
+
+# --- capex ---------------------------------------------------------------------
+
+
+@pytest.fixture
+def dated_pipeline(tmp_path: Path, initialized: Path) -> Path:
+    """Two dated projects with a year gap between them, no LLM needed."""
+    curated = tmp_path / "dated.json"
+    curated.write_text(
+        json.dumps(
+            {
+                "projects": [
+                    {
+                        "name": "Fairwater",
+                        "company": "Microsoft",
+                        "city": "Mount Pleasant",
+                        "state": "WI",
+                        "mw_planned": 900,
+                        "expected_online": "2028-06-01",
+                        "sources": [{"url": "https://news.microsoft.com/fairwater/"}],
+                    },
+                    {
+                        "name": "Prairie",
+                        "company": "Meta",
+                        "city": "Cheyenne",
+                        "state": "WY",
+                        "mw_planned": 400,
+                        "expected_online": "2030-01-01",
+                        "sources": [{"url": "https://about.fb.com/prairie/"}],
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert invoke(initialized, "ingest", "manual", "--json", str(curated)).exit_code == 0
+    return initialized
+
+
+def test_capex_renders_a_continuous_year_grid(dated_pipeline: Path):
+    """A year nothing is dated for appears as an empty column, not a silent gap.
+
+    2028 and 2030 have capacity; 2029 must still get a column, because a grid
+    that skips it reads as "nothing lands in 2029" when the truth is "nothing is
+    dated 2029".
+    """
+    result = invoke(dated_pipeline, "capex")
+    assert result.exit_code == 0, result.output
+    flat = " ".join(result.output.split())
+    assert "MW 2029" in flat
+    assert flat.index("MW 2028") < flat.index("MW 2029") < flat.index("MW 2030")
+
+
+def test_capex_json_is_parseable(dated_pipeline: Path):
+    """Regression: the payload read a field `Position` does not have and crashed."""
+    result = invoke(dated_pipeline, "--json", "capex")
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["year_columns"] == [2028, 2029, 2030]
+    position = payload["positions"][0]
+    for key in (
+        "h200_equivalent",
+        "investment_excluded_usd",
+        "duplicate_rows_skipped",
+        "mw_duplicate_skipped",
+        "investment_duplicate_skipped_usd",
+    ):
+        assert key in position, key

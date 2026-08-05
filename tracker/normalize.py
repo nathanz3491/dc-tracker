@@ -77,7 +77,29 @@ _NULL_TOKENS = frozenset(
         # *refusal* to ingest a file still containing them lives in
         # ingest/manual.py, where it can be overridden for a smoke test.
         "placeholder",
+        "n.d.",
+        "to be determined",
+        "to be announced",
+        "to be confirmed",
+        "not yet determined",
+        "not yet announced",
+        "not yet disclosed",
+        "not yet known",
+        "coming soon",
+        "forthcoming",
     }
+)
+
+#: Composite placeholder shapes a token set cannot list: "$TBD", "TBD MW",
+#: "TBD (est.)", "..." and "??" all mean "the source did not say" with
+#: decoration around it. Anchored at the start, so "TBD" leading a value nulls
+#: it while a sentence merely *containing* the letters does not. `xx`/`__`
+#: runs are template scaffolding that survived an export. `placeholder` leading
+#: a longer string is the seed file's own instruction text ("PLACEHOLDER -
+#: paste the 1-3 sentence verbatim quote...") — found live by the evidence
+#: audit, serving as the recorded evidence for a phase.
+_PLACEHOLDER_RE = re.compile(
+    r"^(?:\$\s*)?(?:tbd|tba)\b|^placeholder\b|^\.{2,}$|^\?{2,}$|^x{2,}$|^_{2,}$"
 )
 
 
@@ -112,7 +134,8 @@ def is_blank(raw: Any) -> bool:
     if raw is None:
         return True
     if isinstance(raw, str):
-        return _clean(raw).lower() in _NULL_TOKENS
+        text = _clean(raw).lower()
+        return text in _NULL_TOKENS or bool(_PLACEHOLDER_RE.match(text))
     return False
 
 

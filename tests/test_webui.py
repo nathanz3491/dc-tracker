@@ -157,15 +157,23 @@ def test_dataset_carries_the_capex_rollup(server):
         "coverage",
         "positions",
         "years",
+        "year_columns",
+        "quarter_columns",
         "as_of_year",
         "suspect",
         "duplicates",
     }
     assert set(capex["duplicates"]) == {"groups", "double_counted_mw", "shared_blocks"}
+    # The browser renders the column list; it never computes one of its own.
+    assert all(isinstance(y, int) for y in capex["year_columns"])
     # Microsoft is a hyperscaler in the company list, so it is its own customer.
     position = next(p for p in capex["positions"] if p["key"] == "microsoft")
     assert position["self_built"] == 1
     assert position["mw_planned"] == 900.0
+    # The disclosure fields ride on positions, not on `duplicates`, so the
+    # exact-set assertion above stays true.
+    assert position["investment_excluded_usd"] == 0
+    assert position["duplicate_rows_skipped"] == 0
     # Groups carry ids only; the page looks the rows up in `projects` rather than
     # being sent a second copy that can disagree with the first.
     assert all(isinstance(i, int) for g in capex["duplicates"]["groups"] for i in g)
@@ -1445,3 +1453,29 @@ def test_the_meridian_bundle_is_complete():
     assert bundle.rstrip().endswith("})();"), "the bundle's IIFE is not closed"
     for component in ("Button", "Card", "Table", "Tabs", "StatCard", "EmptyState", "Skeleton"):
         assert f"__ds_ns.{component} = __ds_scope.{component};" in bundle
+
+
+def test_capex_positions_carry_the_ids_behind_their_numbers(server):
+    """Ids only, like the duplicate groups — the page looks the rows up."""
+    address, _ = server
+    _status, data = request(address, "/api/dataset")
+    position = next(p for p in data["capex"]["positions"] if p["key"] == "microsoft")
+    assert position["project_ids"], "a counted position must name its rows"
+    assert all(isinstance(i, int) for i in position["project_ids"])
+    assert len(position["project_ids"]) == position["projects"]
+    assert position["duplicate_skipped_ids"] == []
+
+
+def test_the_position_briefing_endpoint_guards_before_it_spends(server):
+    """Bad key → 404, no confirm → 400; neither costs a model call."""
+    address, _ = server
+    status, body = request(address, "/api/capex/overview/stream", "POST", {})
+    assert status == 400 and "key" in body["error"]
+
+    status, body = request(
+        address, "/api/capex/overview/stream", "POST", {"key": "nobody-of-that-name"}
+    )
+    assert status == 404
+
+    status, body = request(address, "/api/capex/overview/stream", "POST", {"key": "microsoft"})
+    assert status == 400 and "confirm" in body["error"]

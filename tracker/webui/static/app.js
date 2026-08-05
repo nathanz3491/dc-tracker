@@ -196,15 +196,39 @@ async function api(path, options) {
 
   const text = await res.text();
   let payload = null;
-  try { payload = text ? JSON.parse(text) : null; } catch { payload = { error: text }; }
+  try {
+    payload = text ? JSON.parse(text) : null;
+  } catch {
+    // NOT `{error: text}`. When the console is behind a tunnel or a proxy and the
+    // server is down — a restart, say — what comes back is the *provider's* HTML
+    // error page, and taking its markup as an error message dumped a full
+    // Cloudflare 502 document into the console's error box under the heading "the
+    // console could not read the database". Two wrong statements at once: it is
+    // not the database, and the console never answered at all.
+    payload = { error: null, html: text };
+  }
   // The body travels with the error. A refusal sometimes carries more than a
   // sentence — the confirmation word for a command, say — and the caller cannot
   // get at it if only the message survives.
   if (!res.ok) {
-    throw Object.assign(new Error(payload?.error || res.statusText),
-                        { status: res.status, payload });
+    throw Object.assign(new Error(payload?.error || _gatewayReason(res) || res.statusText),
+                        { status: res.status, payload, unreachable: _isGateway(res.status) });
   }
   return payload;
+}
+
+/* 502/503/504 from in front of the console: something between the browser and
+ * the server answered instead of it. Worth its own name because the honest
+ * message is the opposite of an application error — the console is fine and
+ * unreachable, and the reader should wait rather than investigate. */
+function _isGateway(status) {
+  return status === 502 || status === 503 || status === 504;
+}
+
+function _gatewayReason(res) {
+  if (!_isGateway(res.status)) return null;
+  return `the console did not answer (HTTP ${res.status}). It is probably restarting, or the `
+       + `tunnel in front of it has not reconnected yet.`;
 }
 
 /* POST, then read server-sent events off the response body.
@@ -3552,7 +3576,14 @@ function App() {
     // need no adaptation — only to be told the data has arrived.
     window.DCTRACKER = payload;
     window.dispatchEvent(new Event("dctracker-ready"));
-  }).catch((e) => setError(e.message)), []);
+    setError(null);
+    // The whole error object, not just its message: `unreachable` is what lets
+    // the page say "nothing answered" instead of blaming the database. A network
+    // failure (fetch rejects outright, no response at all) is unreachable too.
+  }).catch((e) => setError({
+    message: e.message || "the request failed before it reached the server",
+    unreachable: e.unreachable === undefined ? e.name === "TypeError" : e.unreachable,
+  })), []);
   useEffect(() => { load(); }, [load]);
   useEffect(() => { document.documentElement.classList.toggle("dark", dark); }, [dark]);
 
@@ -3612,10 +3643,25 @@ function App() {
   useEffect(() => { if (window.lucide?.createIcons) window.lucide.createIcons(); });
 
   if (error) {
+    // Two different failures, and telling a reader the wrong one costs them a
+    // debugging session: the server answering with a problem, versus nothing
+    // answering at all. Only the first is about the database.
+    const unreachable = !!error.unreachable;
     return html`<div style=${{ padding: 40, maxWidth: "70ch" }}>
-      <${Alert} variant="danger"><div>
-        <div class="mrd-alert-title">The console could not read the database</div>
-        <div class="mrd-alert-desc" style=${{ whiteSpace: "pre-wrap" }}>${error}</div>
+      <${Alert} variant=${unreachable ? "warning" : "danger"}><div>
+        <div class="mrd-alert-title">
+          ${unreachable ? "The console is not answering" : "The console could not read the database"}
+        </div>
+        <div class="mrd-alert-desc" style=${{ whiteSpace: "pre-wrap" }}>${error.message}</div>
+        ${unreachable && html`
+          <div class="mrd-alert-desc" style=${{ marginTop: 8 }}>
+            Nothing is wrong with the data — this page just cannot reach the server. If you
+            restarted it, give it a few seconds.
+            ${" "}
+            <button type="button" class="dc-link" onClick=${() => window.location.reload()}>
+              Try again
+            </button>.
+          </div>`}
       </div><//>
     </div>`;
   }

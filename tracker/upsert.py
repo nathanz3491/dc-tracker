@@ -42,7 +42,7 @@ from tracker.dedup import (
     looks_like_the_same_site,
 )
 from tracker.ingest.records import IngestRecord
-from tracker.models import Event, Project, Risk, Source, utcnow
+from tracker.models import Event, Project, ProjectAlias, Risk, Source, utcnow
 from tracker.vocab import (
     DEFAULT_PHASE,
     OPEN_RISK_STATUS,
@@ -489,6 +489,21 @@ def upsert_record(session: Session, rec: IngestRecord, *, force_new: bool = Fals
     project = session.scalar(select(Project).where(Project.dedup_key == key))
     action = "update"
     duplicate_of: int | None = None
+    routed_from: str | None = None
+
+    if project is None and not force_new:
+        # A merged-away identity. `tracker merge` records each folded row's key in
+        # `project_alias`, and consulting it here is what makes a merge outlive
+        # the next crawl: an article written from the folded company's angle
+        # produces the folded key, and without this it would re-create the row
+        # the operator just deleted. FILL_ONLY identity policies keep the routed
+        # record from rewriting the survivor's name, company or locality.
+        alias = session.scalar(select(ProjectAlias).where(ProjectAlias.from_dedup_key == key))
+        if alias is not None:
+            project = session.get(Project, alias.to_project_id)
+            if project is not None:
+                routed_from = key
+                log.info("routing %s to project #%d per project_alias", key, project.id)
 
     if project is None:
         project = Project(
@@ -515,7 +530,10 @@ def upsert_record(session: Session, rec: IngestRecord, *, force_new: bool = Fals
     # away just because the row already exists), and the warning disappears on its
     # own once an operator resolves it.
     candidate = None if force_new else _find_duplicate_candidate(session, key, payload)
-    if candidate is not None:
+    # A routed record's own survivor is not a duplicate of itself: the candidate
+    # scan works on the arriving key, which is not the survivor's, so without the
+    # id check an aliased record would flag — and confidence-cap — its own row.
+    if candidate is not None and candidate.id != project.id:
         duplicate_of = candidate.id
 
     before = _snapshot(project)
@@ -604,6 +622,11 @@ def upsert_record(session: Session, rec: IngestRecord, *, force_new: bool = Fals
             f"{NOTE_PREFIX} possible duplicate of project #{duplicate_of}: same company "
             "and state, locality differs only by city/county granularity. Confirm or reject in "
             "`tracker review`."
+        )
+    if routed_from is not None:
+        derived.append(
+            f"{NOTE_PREFIX} a record arriving as `{routed_from}` was routed here: that "
+            "identity was merged into this row, and `project_alias` remembers the decision."
         )
 
     tag = record_tag([s.url for s in rec.sources])

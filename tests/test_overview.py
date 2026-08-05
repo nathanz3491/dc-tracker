@@ -168,3 +168,56 @@ def test_the_model_sees_the_tiers_and_the_gaps_not_just_the_values(session):
     # And the instruction that keeps it honest is actually in the system prompt.
     assert "must come from the data given" in writer.system
     assert "Say when you do not know" in writer.system
+
+
+# --- the buyer-position briefing ---------------------------------------------
+
+
+def _position(session):
+    from tracker import capex
+
+    _project(session, name="Stargate", company="Crusoe", customer="OpenAI", mw_planned=1200.0)
+    positions = {p.key: p for p in capex.rollup(session)}
+    position = positions["openai"]
+    projects = [session.get(Project, pid) for pid in position.project_ids]
+    return position, projects
+
+
+def test_a_position_briefing_streams_and_is_cached(session):
+    position, projects = _position(session)
+    writer = _Writer(
+        "OpenAI's position is one leased campus in Abilene.\n\n- **weight** — all of it sits on one 1,200 MW site. [[END]] Total word count: 14"
+    )
+
+    text = "".join(overview.stream_position(position, projects, extractor=writer))
+    assert "one leased campus" in text
+    assert "[[END]]" not in text and "word count" not in text, "the sentinel must cut the tail"
+
+    ready = overview.cached_position(position, projects)
+    assert ready is not None and ready.text == text
+    assert writer.calls == 1
+
+
+def test_a_position_whose_rows_moved_is_not_served_stale(session):
+    position, projects = _position(session)
+    writer = _Writer("A reading that is long enough to pass the length floor for briefings.")
+    "".join(overview.stream_position(position, projects, extractor=writer))
+    assert overview.cached_position(position, projects) is not None
+
+    projects[0].mw_planned = 4500.0
+    projects[0].updated_at = dt.datetime(2027, 1, 1)
+    session.flush()
+
+    from tracker import capex
+
+    moved = {p.key: p for p in capex.rollup(session)}["openai"]
+    fresh = [session.get(Project, pid) for pid in moved.project_ids]
+    assert overview.cached_position(moved, fresh) is None
+
+
+def test_the_position_context_names_the_sites_and_the_shaky_money(session):
+    position, projects = _position(session)
+    context = overview.build_position_context(position, projects)
+    assert "Crusoe — Stargate" in context["sites"]
+    assert context["projects"] == "1"
+    assert context["investment_usd"] == "none"

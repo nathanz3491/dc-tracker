@@ -403,3 +403,36 @@ class BlockAlias(Base):
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return f"<BlockAlias {self.from_key}->{self.to_key} p={self.project_id}>"
+
+
+class ProjectAlias(Base):
+    """A merged-away identity, and the row it now belongs to.
+
+    `upsert_record` matches on exact `dedup_key` only, so without this a merge
+    lasts exactly until the next crawl: an article written from the folded
+    company's angle re-creates the folded key as a fresh row. `merge` writes one
+    of these per folded identity; the upsert consults it after an exact-key miss.
+
+    Global, unlike `block_alias` — a dedup key is already unique table-wide. The
+    target is an id, not another key, and `merge` repoints aliases when their
+    target is itself folded, so chains stay flat and resolution is one lookup.
+    """
+
+    __tablename__ = "project_alias"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    from_dedup_key: Mapped[str] = mapped_column(Text, nullable=False)
+    to_project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("project.id", ondelete="CASCADE"), nullable=False
+    )
+    decided_by: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'operator'"))
+    decided_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False, server_default=_NOW)
+
+    __table_args__ = (
+        UniqueConstraint("from_dedup_key", name="uq_project_alias_from"),
+        CheckConstraint("length(from_dedup_key) > 0", name="ck_project_alias_from"),
+        Index("ix_project_alias_to_project_id", "to_project_id"),
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return f"<ProjectAlias {self.from_dedup_key}->#{self.to_project_id}>"

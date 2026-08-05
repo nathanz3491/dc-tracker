@@ -44,7 +44,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from tracker.dedup import company_key, customer_key, is_undisclosed, looks_like_the_same_site
-from tracker.models import Event, Project, Risk
+from tracker.models import Event, Project, Risk, Source
 from tracker.vocab import (
     BLOCK_LIVE,
     BLOCK_TERMINAL,
@@ -119,6 +119,26 @@ class Position:
     mw_planned: float = 0.0
     mw_built: float = 0.0
     investment_usd: int = 0
+    #: Dollars a source asserted but none confirmed with a quote — most often a
+    #: programme-wide total ("OpenAI's $500 billion Stargate") quoted in an article
+    #: about one campus and demoted at ingest. Disclosed beside the sum, never
+    #: inside it. See `unconfirmed_investment_ids`.
+    investment_excluded_usd: int = 0
+    #: What the rows set aside as suspected duplicates would have added. The rollup
+    #: counts one representative per suspected campus (`suspected_duplicates`);
+    #: the others are skipped, never merged, and what they held is disclosed here —
+    #: on the bucket their own attribution would have fed, so an Oracle row skipped
+    #: in favour of an OpenAI one shows up under Oracle.
+    duplicate_rows_skipped: int = 0
+    mw_duplicate_skipped: float = 0.0
+    investment_duplicate_skipped_usd: int = 0
+    #: The rows behind the numbers, ids only — counted rows first, set-aside rows
+    #: in their own list. This is what lets a reader click a buyer's `sites`
+    #: figure and see the actual campuses, instead of trusting an aggregate. The
+    #: page looks the ids up in the project payload it already has, the same
+    #: discipline `suspected_duplicates` groups follow.
+    project_ids: list[int] = field(default_factory=list)
+    duplicate_skipped_ids: list[int] = field(default_factory=list)
     #: Planned MW by the year the project is expected online. Only projects that
     #: cite both a capacity and a date appear here, so it is a floor within a floor.
     mw_by_year: dict[int, float] = field(default_factory=dict)
@@ -261,6 +281,29 @@ def rollup(session: Session, *, include_terminal: bool = False) -> list[Position
         )
     }
 
+    # One representative per suspected campus. A duplicate is merely untidy in a
+    # site-keyed listing; grouped by buyer it becomes a wrong number, because every
+    # extra row adds its full capacity again — Abilene was stored four times and
+    # 1.2 GW counted four times. Rows are skipped, never merged (`tracker merge`
+    # stays a human decision), and everything skipped lands in the `*_skipped`
+    # disclosure fields. The representative is the row a merge would most likely
+    # keep: a named tenant first, then the largest capacity, then the oldest id.
+    # Taking per-field maxima across the group instead was rejected — it invents a
+    # synthetic row no citation backs.
+    eligible = {p.id: p for p in projects if include_terminal or p.phase not in PHASE_TERMINAL}
+    skip_ids: set[int] = set()
+    for group in duplicate_groups(suspected_duplicates(session)):
+        members = [eligible[pid] for pid in group if pid in eligible]
+        if len(members) < 2:
+            continue
+        representative = max(
+            members,
+            key=lambda p: (bool(customer_key(p.customer)), float(p.mw_planned or 0.0), -p.id),
+        )
+        skip_ids.update(p.id for p in members if p.id != representative.id)
+
+    demoted_investment = unconfirmed_investment_ids(session)
+
     positions: dict[str, Position] = {}
     for project in projects:
         if not include_terminal and project.phase in PHASE_TERMINAL:
@@ -268,7 +311,19 @@ def rollup(session: Session, *, include_terminal: bool = False) -> list[Position
         name, key, self_built = attribute(project)
         bucket = positions.setdefault(key or UNATTRIBUTED, Position(name=name, key=key))
 
+        if project.id in skip_ids:
+            # Another row already speaks for this campus. Nothing else about the
+            # row is counted — not its phases, its year, its tranches or its risk —
+            # because all of it describes the same building the representative
+            # already described.
+            bucket.duplicate_rows_skipped += 1
+            bucket.mw_duplicate_skipped += float(project.mw_planned or 0.0)
+            bucket.investment_duplicate_skipped_usd += int(project.investment_usd or 0)
+            bucket.duplicate_skipped_ids.append(project.id)
+            continue
+
         bucket.projects += 1
+        bucket.project_ids.append(project.id)
         bucket.self_built += int(self_built)
         bucket.undisclosed += int(is_undisclosed(project.customer))
         bucket.phases[project.phase] = bucket.phases.get(project.phase, 0) + 1
@@ -283,7 +338,13 @@ def rollup(session: Session, *, include_terminal: bool = False) -> list[Position
         # nothing to do with what is built.
         claimed_built = sum(s.mw_built for s in shares)
         bucket.mw_built += max(0.0, float(project.mw_built or 0.0) - claimed_built)
-        bucket.investment_usd += int(project.investment_usd or 0)
+        money = int(project.investment_usd or 0)
+        if money and project.id in demoted_investment:
+            # Asserted by a source, confirmed by none — read back from what the
+            # ingest gate decided rather than re-judging the figure here.
+            bucket.investment_excluded_usd += money
+        else:
+            bucket.investment_usd += money
 
         if project.expected_online and planned:
             year = project.expected_online.year
@@ -299,6 +360,7 @@ def rollup(session: Session, *, include_terminal: bool = False) -> list[Position
             theirs = positions.setdefault(share.key, Position(name=share.name, key=share.key))
             if theirs is not bucket:
                 theirs.projects += 1
+                theirs.project_ids.append(project.id)
                 theirs.phases[project.phase] = theirs.phases.get(project.phase, 0) + 1
             theirs.mw_planned += share.mw_planned
             theirs.mw_built += share.mw_built
@@ -344,6 +406,77 @@ def quarters(positions: list[Position]) -> list[str]:
     for position in positions:
         seen.update(position.mw_by_quarter)
     return sorted(seen)
+
+
+#: The most bucket columns any surface renders. Six covers the live 2026-2030 span
+#: with room to grow; wider pushes the risk columns off the page.
+MAX_YEAR_COLUMNS = 6
+
+
+def year_columns(
+    positions: list[Position], *, start: int, limit: int = MAX_YEAR_COLUMNS
+) -> list[int]:
+    """The year grid: continuous from the first dated year to the last.
+
+    `horizon` reports only the years that carry data, and a table built from that
+    silently skips a year — 2028 and 2030 render side by side and 2029 vanishes,
+    which reads as "nothing lands in 2029" when the truth is "nothing is *dated*
+    2029". An empty column is the honest rendering of a gap.
+
+    Years before `start` (the current year) are dropped rather than gridded: an
+    expected-online in the past is a data-quality signal, not a pipeline. Computed
+    here rather than in each surface, so the CLI, the dataset payload and the
+    browser cannot disagree about which years exist.
+    """
+    years = [year for year in horizon(positions) if year >= start]
+    if not years:
+        return []
+    return list(range(years[0], years[-1] + 1))[:limit]
+
+
+def quarter_columns(
+    positions: list[Position], *, start: str, limit: int = MAX_YEAR_COLUMNS
+) -> list[str]:
+    """Quarter columns — data-bearing quarters only, deliberately not continuous.
+
+    The live span gridded by quarter is ~18 columns, and truncating a continuous
+    grid at `limit` would spend the whole width on empty quarters. The quarter
+    view is read as a shape rather than a schedule (see `Position.mw_by_quarter`),
+    and a shape survives gaps; the year view is the number, so it gets the
+    continuous treatment in `year_columns`.
+    """
+    return [quarter for quarter in quarters(positions) if quarter >= start][:limit]
+
+
+def unconfirmed_investment_ids(session: Session) -> set[int]:
+    """Projects whose `investment_usd` a source asserted and none confirmed.
+
+    Reads back what ingest decided, the way `webui.dataset._unconfirmed_because`
+    does: the crawl gate lists a figure in `Source.unconfirmed_fields` when no
+    verified quote backs it or when it fails the `MAX_USD_PER_MW` plausibility
+    ceiling — the signature of a programme-wide total quoted in an article about
+    one campus. Recomputing that ratio here instead would accuse figures no gate
+    ever demoted, since a merge can legitimately put a large number beside a
+    small capacity.
+
+    A project no source mentions at all is *not* in the set: there is no ingest
+    decision to read back, so a hand-entered figure keeps counting.
+    """
+    demoted: set[int] = set()
+    confirmed: set[int] = set()
+    for pid, fields, unconfirmed in session.execute(
+        select(Source.project_id, Source.fields, Source.unconfirmed_fields)
+    ):
+        if _names_field(fields, "investment_usd"):
+            confirmed.add(pid)
+        if _names_field(unconfirmed, "investment_usd"):
+            demoted.add(pid)
+    return demoted - confirmed
+
+
+def _names_field(comma_list: str | None, name: str) -> bool:
+    """Whether a comma-joined field list names `name` exactly."""
+    return name in {token.strip() for token in (comma_list or "").split(",")}
 
 
 def date_precision(session: Session) -> dict[str, float]:
@@ -447,10 +580,12 @@ def suspected_duplicates(session: Session) -> list[DuplicatePair]:
 
     **Why this warning belongs on the capex table specifically.** A duplicate is
     mildly annoying in a site-keyed listing — two rows where there should be one.
-    Grouping by end customer turns it into a wrong number: the Abilene Stargate
-    campus is stored four times, once per company attached to it, so 1.2 GW is
-    counted four times against OpenAI. Measured across the database, 15 such pairs
-    hold 11,135 MW of double-counted capacity.
+    Grouping by end customer used to turn it into a wrong number: the Abilene
+    Stargate campus was stored four times, once per company attached to it, and
+    1.2 GW was counted four times against OpenAI. `rollup` now counts one row per
+    suspected group and sets the others aside in the `*_skipped` disclosure
+    fields, so the wrong number is prevented rather than merely flagged — but the
+    rows are still there, and `tracker merge` remains the only real repair.
 
     Flagged and never merged, per `dedup.looks_like_the_same_site`.
 
@@ -474,9 +609,7 @@ def suspected_duplicates(session: Session) -> list[DuplicatePair]:
     # kept. `generic` is read off the row rather than re-derived from the key: it is
     # what `block_key` decided at write time, and a second derivation could disagree.
     keys: dict[int, set[str]] = {
-        p.id: {
-            b.block_key for b in (getattr(p, "blocks", ()) or ()) if not b.generic or b.parent
-        }
+        p.id: {b.block_key for b in (getattr(p, "blocks", ()) or ()) if not b.generic or b.parent}
         for p in projects
     }
 
@@ -528,7 +661,13 @@ def duplicate_groups(pairs: list[DuplicatePair]) -> list[list[int]]:
 
 
 def double_counted_mw(pairs: list[DuplicatePair]) -> float:
-    """Planned MW that would stop being counted twice if each pair were merged.
+    """Planned MW stored redundantly — the payoff of merging each pair.
+
+    This measures duplicate *storage*, not what the capex table over-counts:
+    `rollup` skips the non-representative rows itself, and the table's own
+    exclusions are the `*_skipped` fields on `Position`. The two numbers differ
+    by design — this one counts the second row of every pair whatever its phase;
+    the skip tally counts live rows a representative displaced.
 
     Counts the second row of each pair once, however many pairs it appears in —
     four rows for one campus make six pairs but only three redundant rows.
@@ -576,6 +715,7 @@ def as_of() -> _dt.date:
 
 
 __all__ = [
+    "MAX_YEAR_COLUMNS",
     "UNATTRIBUTED",
     "Position",
     "as_of",
@@ -587,8 +727,11 @@ __all__ = [
     "duplicate_groups",
     "end_user_keys",
     "horizon",
+    "quarter_columns",
     "quarters",
     "rollup",
     "suspect_attributions",
     "suspected_duplicates",
+    "unconfirmed_investment_ids",
+    "year_columns",
 ]

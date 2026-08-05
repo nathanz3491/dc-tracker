@@ -222,3 +222,106 @@ def test_refuses_a_merge_it_cannot_make_sense_of(session):
         merge_projects(session, keep.id, [keep.id])
     with pytest.raises(MergeError, match="does not exist"):
         merge_projects(session, keep.id, [9999])
+
+
+# --- The merge outlives the next crawl -------------------------------------------
+#
+# `upsert_record` matches on exact dedup_key, so before `project_alias` a merge
+# lasted until the next crawl: an article written from the folded company's angle
+# re-created the row the operator had just deleted.
+
+
+def _crawl_key(company: str) -> str:
+    from tracker.dedup import dedup_key
+
+    return dedup_key(company, "Abilene", None, "TX")
+
+
+def _arrives(session, company: str, url: str, *, force_new: bool = False):
+    """One record landing the way a crawl delivers it."""
+    from tracker.ingest.records import IngestRecord, SourceRecord
+    from tracker.upsert import upsert_record
+
+    project = {"company": company, "name": f"{company} Abilene", "city": "Abilene", "state": "TX"}
+    record = IngestRecord(
+        project=project,
+        sources=[
+            SourceRecord(
+                url=url,
+                source_type="trade_press",
+                fetched_at=dt.datetime(2026, 2, 1),
+                excerpt="A quote.",
+                claims=dict(project),
+            )
+        ],
+    )
+    return upsert_record(session, record, force_new=force_new)
+
+
+def test_a_merged_away_key_routes_the_next_crawl_to_the_survivor(session):
+    keep = _project(session, "Stargate Abilene", "Crusoe")
+    dupe = _project(session, "Stargate", "Oracle")
+    dupe.dedup_key = _crawl_key("Oracle")  # exactly what a crawl would derive
+    session.flush()
+
+    result = merge_projects(session, keep.id, [dupe.id])
+    assert result.aliases_recorded == 1
+
+    arrived = _arrives(session, "Oracle", "https://oracle.test/abilene")
+    assert arrived.project_id == keep.id
+    assert arrived.action != "insert"
+    survivor = session.get(Project, keep.id)
+    assert "https://oracle.test/abilene" in {s.url for s in survivor.sources}
+    # FILL_ONLY identity: the routed record does not rewrite who the row is.
+    assert survivor.company == "Crusoe"
+    # And the routed record must not flag its own survivor as a duplicate.
+    assert arrived.duplicate_of != keep.id
+
+
+def test_alias_chains_are_flattened_when_the_survivor_is_merged(session):
+    from tracker.models import ProjectAlias
+
+    first = _project(session, "Stargate A", "Crusoe")
+    folded = _project(session, "Stargate B", "Oracle")
+    final = _project(session, "Stargate C", "Vantage")
+    first.dedup_key = _crawl_key("Crusoe")
+    folded.dedup_key = _crawl_key("Oracle")
+    session.flush()
+
+    merge_projects(session, first.id, [folded.id])  # oracle -> first
+    merge_projects(session, final.id, [first.id])  # crusoe -> final, oracle repointed
+
+    targets = {
+        alias.from_dedup_key: alias.to_project_id
+        for alias in session.scalars(select(ProjectAlias)).all()
+    }
+    assert targets[_crawl_key("Oracle")] == final.id, "the chain must be flat, not a walk"
+    assert targets[_crawl_key("Crusoe")] == final.id
+
+
+def test_force_new_ignores_the_alias(session):
+    """The operator's escape hatch: two genuinely separate campuses, one key."""
+    keep = _project(session, "Stargate Abilene", "Crusoe")
+    dupe = _project(session, "Stargate", "Oracle")
+    dupe.dedup_key = _crawl_key("Oracle")
+    session.flush()
+    merge_projects(session, keep.id, [dupe.id])
+
+    arrived = _arrives(session, "Oracle", "https://oracle.test/second-campus", force_new=True)
+    assert arrived.action == "insert"
+    assert arrived.project_id != keep.id
+
+
+def test_deleting_the_survivor_clears_its_aliases(session):
+    from tracker.models import ProjectAlias
+
+    keep = _project(session, "Stargate Abilene", "Crusoe")
+    dupe = _project(session, "Stargate", "Oracle")
+    dupe.dedup_key = _crawl_key("Oracle")
+    session.flush()
+    merge_projects(session, keep.id, [dupe.id])
+
+    session.delete(session.get(Project, keep.id))
+    session.flush()
+
+    assert session.scalars(select(ProjectAlias)).all() == []

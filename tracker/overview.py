@@ -87,10 +87,10 @@ def cached(project: Project) -> Overview | None:
     return found if found and found.fingerprint == fingerprint(project) else None
 
 
-def _remember(overview: Overview) -> None:
+def _remember(overview: Overview, *, key: str | None = None) -> None:
     if len(_cache) >= CACHE_SIZE:
         _cache.pop(next(iter(_cache)))
-    _cache[f"{overview.project_id}"] = overview
+    _cache[key if key is not None else f"{overview.project_id}"] = overview
 
 
 def build_context(project: Project) -> dict[str, str]:
@@ -224,7 +224,10 @@ def write(project: Project, *, extractor, prompt_name: str = "overview-v2") -> O
 #: connection early is what turns a 17s reply into a 3.5s one, because the tokens
 #: after the answer are never waited for.
 RUNAWAY: Final = re.compile(
-    r"\[\[END\]\]"
+    # `\[\[` rather than the full sentinel: the model sometimes emits the opening
+    # brackets and then stops, or starts spelling it differently, and a bare
+    # "[[" rendered at the end of a card is the tell that it was cut badly.
+    r"\[\["
     r"|^\s*\]\s*$"
     r"|total word count"
     r"|final answer"
@@ -308,14 +311,220 @@ def _strip_reasoning(text: str) -> str:
     return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE)
 
 
+# --- One buyer's capex position, read the same way -------------------------------
+#
+# The capex table's hover card. Same contract as the project briefing — never
+# stored, cached by content, cut at the sentinel — over a different subject: one
+# buyer's whole position rather than one row. The subject is derived (a rollup),
+# so the fingerprint hashes the position's own figures plus the `updated_at` of
+# every project behind it: any row moving rewrites the reading.
+
+
+def position_fingerprint(position: Any, projects: list[Project]) -> str:
+    parts = [
+        position.key or "unattributed",
+        str(position.projects),
+        str(position.mw_planned),
+        str(position.mw_built),
+        str(position.investment_usd),
+        str(position.investment_excluded_usd),
+        str(position.mw_duplicate_skipped),
+    ]
+    parts += sorted(f"{p.id}:{p.updated_at}" for p in projects)
+    return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()[:16]
+
+
+def cached_position(position: Any, projects: list[Project]) -> Overview | None:
+    found = _cache.get(f"pos:{position.key or 'unattributed'}")
+    if found and found.fingerprint == position_fingerprint(position, projects):
+        return found
+    return None
+
+
+#: A site's share of its buyer, already in words.
+#:
+#: The fast model reaches for "half" and "a third" unprompted — it is a dialogue
+#: model and that is how people talk — and it gets them wrong: 842 of 3,499 MW
+#: came out as "more than a third". Banning the words outright made the briefings
+#: stilted and the ban leaked anyway. So the phrase is computed here and the
+#: prompt says to copy it, which turns an arithmetic problem into a quoting one.
+_SHARE_WORDS: Final[tuple[tuple[float, str], ...]] = (
+    (0.95, "effectively all"),
+    (0.75, "most"),
+    (0.55, "more than half"),
+    (0.45, "about half"),
+    (0.28, "about a third"),
+    (0.20, "about a quarter"),
+    (0.10, "a modest share"),
+    (0.0, "a small share"),
+)
+
+
+def _share_phrase(fraction: float) -> str:
+    for floor, words in _SHARE_WORDS:
+        if fraction >= floor:
+            return words
+    return "a small share"
+
+
+def build_position_context(position: Any, projects: list[Project]) -> dict[str, str]:
+    """One line per site, plus the totals the table already shows.
+
+    **Every derivation the model would otherwise invent is done here and
+    labelled.** Measured: given "4,500 MW planned, 1,200 MW running, expected
+    online 2026" the fast model subtracts, calls the remainder "3,300 MW due
+    mid-year", and has thereby published a schedule no source stated. Adding a
+    prose rule against it did not stop it — the gap was simply too inviting. So
+    the remainder is computed here, and stated together with the fact that
+    nothing dates it. Same for each site's share of the position, which the model
+    was dividing out by hand.
+    """
+
+    def money(value: int) -> str:
+        return f"${value / 1e9:.1f}B" if value else "none"
+
+    total = position.mw_planned or 0.0
+    lines = []
+    for p in sorted(projects, key=lambda p: -(p.mw_planned or 0)):
+        if not p.mw_planned:
+            capacity = "capacity: NOT CITED — nobody has said how big this is"
+        else:
+            capacity = f"capacity: {p.mw_planned:g} MW planned"
+            if total:
+                capacity += f" — {_share_phrase(p.mw_planned / total)} of this buyer's capacity"
+            if p.mw_built:
+                capacity += f"; {p.mw_built:g} MW of it running"
+                remainder = p.mw_planned - p.mw_built
+                if remainder > 0:
+                    capacity += f"; the remaining {remainder:g} MW is unbuilt and NOTHING DATES IT"
+            else:
+                capacity += "; none of it running yet"
+        online = (
+            f"this campus's own stated online date: {p.expected_online}"
+            if p.expected_online
+            else "no online date stated for this campus"
+        )
+        money_line = f"; investment {money(p.investment_usd)}" if p.investment_usd else ""
+        lines.append(
+            f"  #{p.id} {p.company} — {p.name} ({p.city or p.county or 'unknown'}, {p.state})\n"
+            f"      {capacity}\n"
+            f"      phase {p.phase}; {online}{money_line}; confidence {p.confidence}/3"
+        )
+
+    unsized = sum(1 for p in projects if not p.mw_planned)
+    shape = [f"{len(projects)} site(s) counted"]
+    if unsized:
+        shape.append(f"{unsized} of them with no cited capacity at all")
+    operators = {p.company for p in projects}
+    if len(operators) > 1:
+        shape.append(f"{len(operators)} different operators build them")
+
+    skipped = "none"
+    if position.duplicate_rows_skipped:
+        skipped = (
+            f"{position.duplicate_rows_skipped} row(s) holding "
+            f"{position.mw_duplicate_skipped:g} MW look like duplicates of campuses "
+            "already counted, and were set aside"
+        )
+
+    return {
+        "name": position.name,
+        "projects": str(position.projects),
+        "self_built": str(position.self_built),
+        "mw_planned": f"{position.mw_planned:g}",
+        "mw_built": f"{position.mw_built:g}",
+        "investment_usd": money(position.investment_usd),
+        "investment_excluded": money(position.investment_excluded_usd),
+        "skipped": skipped,
+        "shape": "; ".join(shape),
+        "sites": "\n".join(lines) or "  (none)",
+        "today": str(_today()),
+    }
+
+
+def stream_position(
+    position: Any, projects: list[Project], *, extractor, prompt_name: str = "capex-overview-v1"
+) -> Iterator[str]:
+    """One buyer's briefing, yielded as it is written. Same rules as `stream`."""
+    from tracker.llm import LLMError
+    from tracker.prompts import load_prompt
+
+    prompt = load_prompt(prompt_name)
+    context = build_position_context(position, projects)
+
+    if not hasattr(extractor, "stream"):
+        try:
+            reply = extractor.complete(
+                system=prompt.system, user=prompt.render_user(**context), max_tokens=MAX_TOKENS
+            )
+        except LLMError as exc:
+            log.warning("position briefing for %r failed: %s", position.name, exc)
+            return
+        text = _strip_reasoning(reply.text or "")
+        cut = RUNAWAY.search(text)
+        text = (text[: cut.start()] if cut else text).strip()
+        if len(text) >= 40:
+            yield text
+            _remember(
+                Overview(
+                    project_id=0,
+                    text=text,
+                    model=reply.model,
+                    fingerprint=position_fingerprint(position, projects),
+                ),
+                key=f"pos:{position.key or 'unattributed'}",
+            )
+        return
+
+    sent = ""
+    try:
+        for piece in extractor.stream(
+            system=prompt.system,
+            user=prompt.render_user(**context),
+            max_tokens=MAX_TOKENS,
+        ):
+            candidate = sent + piece
+            end = RUNAWAY.search(candidate)
+            if end is None:
+                sent = candidate
+                yield piece
+                continue
+            tail = candidate[len(sent) : end.start()]
+            if tail:
+                yield tail
+            sent = candidate[: end.start()]
+            break
+    except LLMError as exc:
+        log.warning("position briefing for %r failed: %s", position.name, exc)
+        return
+
+    text = sent.strip()
+    if len(text) < 40:
+        log.warning("position briefing for %r came back empty or truncated", position.name)
+        return
+    _remember(
+        Overview(
+            project_id=0,
+            text=text,
+            model=getattr(extractor, "model", "unknown"),
+            fingerprint=position_fingerprint(position, projects),
+        ),
+        key=f"pos:{position.key or 'unattributed'}",
+    )
+
+
 __all__ = [
     "CACHE_SIZE",
     "MAX_TOKENS",
     "RUNAWAY",
     "Overview",
     "build_context",
+    "build_position_context",
     "cached",
+    "cached_position",
     "fingerprint",
+    "position_fingerprint",
     "stream",
+    "stream_position",
     "write",
 ]

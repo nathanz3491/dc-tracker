@@ -152,14 +152,14 @@ WORKFLOWS: tuple[Workflow, ...] = (
         name="tidy",
         title="Tidy the database",
         summary=(
-            "Writes nothing. Finds the same-campus-twice rows that make the capex "
-            "table overcount, and the values that disagree with their own sources — "
-            "then leaves both for you to decide on."
+            "Writes nothing. Finds the same-campus-twice rows the capex table has "
+            "to skip and disclose, and the values that disagree with their own "
+            "sources — then leaves both for you to decide on."
         ),
         steps=(
             Step(
                 "duplicates",
-                because="One campus stored twice double-counts its capacity by customer.",
+                because="One campus stored twice is capacity the capex table must set aside.",
                 tolerate_failure=True,
             ),
             Step(

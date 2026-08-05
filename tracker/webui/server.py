@@ -305,6 +305,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._overview(body)
             if parsed.path == "/api/overview/stream":
                 return self._overview_stream(body)
+            if parsed.path == "/api/capex/overview/stream":
+                return self._capex_overview_stream(body)
             self._error(404, f"no route {parsed.path!r}")
         except ConnectionError:
             log.debug("POST %s: client went away", parsed.path)
@@ -545,6 +547,82 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.flush()
 
             done = overview_mod.cached(project)
+            tail = (
+                {"type": "end", **done.as_json(), "cached": False}
+                if done is not None
+                else {"type": "error", "error": "the model did not return a usable briefing"}
+            )
+            if not wrote and done is None:
+                tail = {"type": "error", "error": "the model returned nothing"}
+            self.wfile.write(_sse(tail).encode("utf-8"))
+            self.wfile.flush()
+
+    def _capex_overview_stream(self, body: dict[str, Any]) -> None:
+        """A buyer-position briefing for the capex table's hover card.
+
+        Same contract as `_overview_stream` — POST because it can spend, a
+        confirm token, cached briefings sent as one frame — over a derived
+        subject: the position is recomputed from the database on every request,
+        so the reading can never describe a rollup the table is not showing.
+        """
+        from tracker import capex as capex_mod
+        from tracker import overview as overview_mod
+        from tracker.models import Project
+
+        if "key" not in body:
+            return self._error(400, "key is required (the position's buyer key; empty is valid)")
+        key = str(body.get("key") or "")
+
+        with self.console.read_session() as session:
+            positions = capex_mod.rollup(session)
+            position = next((p for p in positions if p.key == key), None)
+            if position is None:
+                return self._error(404, f"no buyer position {key!r}")
+            projects = [
+                row
+                for pid in position.project_ids
+                if (row := session.get(Project, pid)) is not None
+            ]
+
+            ready = overview_mod.cached_position(position, projects)
+            if ready is not None:
+                return self._send(
+                    200,
+                    (
+                        _sse({"type": "text", "text": ready.text})
+                        + _sse({"type": "end", **ready.as_json(), "cached": True})
+                    ).encode("utf-8"),
+                    "text/event-stream; charset=utf-8",
+                )
+
+            if not self.console.allow_write:
+                return self._error(403, "this console was started read-only (--no-run)")
+            if str(body.get("confirm") or "").strip() != "overview":
+                return self._error(
+                    400, 'Writing a briefing spends LLM tokens. Re-send with confirm="overview".'
+                )
+
+            from tracker.config import get_settings
+            from tracker.llm import MissingApiKey, fast_extractor
+
+            try:
+                extractor = fast_extractor(get_settings())
+            except MissingApiKey as exc:
+                return self._error(503, str(exc))
+
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Connection", "close")
+            self.end_headers()
+
+            wrote = False
+            for piece in overview_mod.stream_position(position, projects, extractor=extractor):
+                wrote = True
+                self.wfile.write(_sse({"type": "text", "text": piece}).encode("utf-8"))
+                self.wfile.flush()
+
+            done = overview_mod.cached_position(position, projects)
             tail = (
                 {"type": "end", **done.as_json(), "cached": False}
                 if done is not None

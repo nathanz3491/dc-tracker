@@ -140,8 +140,10 @@ def test_rollup_sums_across_operators_for_one_buyer(session):
 
 
 def test_cancelled_projects_are_out_of_the_forward_pipeline(session):
+    # Distinct cities: one company twice in one locality is a suspected-duplicate
+    # signal the rollup now acts on, and that is not what this test is about.
     _project(session, name="Live", company="Meta", mw_planned=100)
-    _project(session, name="Dead", company="Meta", phase="cancelled", mw_planned=900)
+    _project(session, name="Dead", company="Meta", city="Austin", phase="cancelled", mw_planned=900)
 
     live = {p.key: p for p in capex.rollup(session)}["meta"]
     assert live.mw_planned == 100
@@ -161,6 +163,8 @@ def test_unattributed_sorts_last_however_large(session):
 
 
 def test_capacity_lands_in_the_year_it_is_expected_online(session):
+    # Distinct cities, so the duplicate guard (same company, one locality) stays
+    # out of a test about year bucketing.
     _project(
         session,
         name="A",
@@ -172,10 +176,11 @@ def test_capacity_lands_in_the_year_it_is_expected_online(session):
         session,
         name="B",
         company="Meta",
+        city="Dallas",
         mw_planned=700,
         expected_online=dt.date(2028, 6, 1),
     )
-    _project(session, name="C", company="Meta", mw_planned=50)  # no date, no year bucket
+    _project(session, name="C", company="Meta", city="Austin", mw_planned=50)  # no date
 
     meta = {p.key: p for p in capex.rollup(session)}["meta"]
     assert meta.mw_by_year == {2028: 1000}
@@ -544,3 +549,171 @@ def test_a_generic_tranche_shared_by_two_rows_proves_nothing(session):
 
     pairs = capex.suspected_duplicates(session)
     assert not [p for p in pairs if {p.a_id, p.b_id} == {a.id, b.id}]
+
+
+# --- One row per suspected campus ---------------------------------------------
+#
+# Flagging a duplicate was not enough: until somebody merged, every extra row
+# added its full capacity to a buyer again. The rollup now counts one
+# representative per suspected group and discloses the rest — skipped, never
+# merged, so `tracker merge` stays the only real repair.
+
+
+def test_a_suspected_duplicate_group_is_counted_once_in_the_rollup(session):
+    """Abilene was stored four times and 1.2 GW counted four times against OpenAI."""
+    for company in ("Crusoe", "OpenAI", "Oracle", "OpenAI/Oracle"):
+        _project(
+            session,
+            name="Stargate",
+            company=company,
+            customer="OpenAI",
+            mw_planned=1200,
+            investment_usd=500,
+        )
+
+    openai = {p.key: p for p in capex.rollup(session)}["openai"]
+    assert openai.projects == 1
+    assert openai.mw_planned == 1200
+    assert openai.investment_usd == 500
+    assert openai.duplicate_rows_skipped == 3
+    assert openai.mw_duplicate_skipped == 3600
+    assert openai.investment_duplicate_skipped_usd == 1500
+    # The ids behind the numbers, so a reader can click the aggregate open.
+    assert len(openai.project_ids) == 1
+    assert len(openai.duplicate_skipped_ids) == 3
+    assert not set(openai.project_ids) & set(openai.duplicate_skipped_ids)
+
+
+def test_the_representative_is_the_row_a_merge_would_keep(session):
+    """A named tenant beats a larger reading, and the skip lands on its own buyer.
+
+    The Oracle row's megawatts must show up under Crusoe's disclosure, not
+    OpenAI's — an Oracle reader should see what was set aside on their side.
+    """
+    _project(session, name="Stargate Abilene", company="Crusoe", mw_planned=900)
+    _project(session, name="Stargate", company="OpenAI", customer="OpenAI", mw_planned=500)
+
+    positions = {p.key: p for p in capex.rollup(session)}
+    assert positions["openai"].projects == 1
+    assert positions["openai"].mw_planned == 500
+    crusoe = positions["crusoe"]
+    assert crusoe.projects == 0
+    assert crusoe.mw_planned == 0
+    assert crusoe.duplicate_rows_skipped == 1
+    assert crusoe.mw_duplicate_skipped == 900
+
+
+def test_a_terminal_member_never_represents_its_group(session):
+    """A cancelled row is not in the default table, so it cannot displace a live one."""
+    _project(session, name="Stargate", company="Crusoe", mw_planned=100)
+    _project(session, name="Stargate Campus", company="Oracle", phase="cancelled", mw_planned=900)
+
+    crusoe = {p.key: p for p in capex.rollup(session)}["crusoe"]
+    assert crusoe.projects == 1
+    assert crusoe.mw_planned == 100
+    assert crusoe.duplicate_rows_skipped == 0
+
+    # Asked to see terminal rows too, the larger cancelled reading may represent.
+    both = {p.key: p for p in capex.rollup(session, include_terminal=True)}
+    assert both["crusoe"].duplicate_rows_skipped == 1
+
+
+# --- Only confirmed dollars are summed ----------------------------------------
+
+
+def _source(session, project, *, fields=None, unconfirmed_fields=None):
+    from tracker.models import Source, utcnow
+
+    source = Source(
+        project_id=project.id,
+        url=f"https://example.com/{project.id}/{fields or 'none'}/{unconfirmed_fields or 'none'}",
+        source_type="trade_press",
+        fetched_at=utcnow(),
+        fields=fields,
+        unconfirmed_fields=unconfirmed_fields,
+    )
+    session.add(source)
+    session.flush()
+    return source
+
+
+def test_an_investment_no_source_confirms_is_excluded_and_disclosed(session):
+    """A programme-wide total demoted at ingest must not sum into a campus column."""
+    project = _project(session, company="Meta", mw_planned=100, investment_usd=500_000_000_000)
+    _source(session, project, unconfirmed_fields="investment_usd")
+
+    meta = {p.key: p for p in capex.rollup(session)}["meta"]
+    assert meta.investment_usd == 0
+    assert meta.investment_excluded_usd == 500_000_000_000
+    assert meta.mw_planned == 100  # only the dollars are excluded
+
+
+def test_one_confirming_source_keeps_the_investment_counted(session):
+    project = _project(session, company="Meta", investment_usd=1_000_000)
+    _source(session, project, unconfirmed_fields="investment_usd")
+    _source(session, project, fields="mw_planned,investment_usd")
+
+    meta = {p.key: p for p in capex.rollup(session)}["meta"]
+    assert meta.investment_usd == 1_000_000
+    assert meta.investment_excluded_usd == 0
+
+
+def test_a_hand_written_investment_with_no_claims_still_counts(session):
+    """No source mentions the field, so there is no ingest decision to read back.
+
+    This is the boundary that keeps manual seeds and fixtures counting: the
+    exclusion reads back a demotion, it does not demand a quote from rows whose
+    provenance never went through the gate.
+    """
+    bare = _project(session, company="Meta", investment_usd=2_000_000)
+    other = _project(session, name="Annex", company="Meta", city="Austin", investment_usd=3_000_000)
+    _source(session, other, fields="mw_planned")  # names other fields, says nothing about money
+
+    meta = {p.key: p for p in capex.rollup(session)}["meta"]
+    assert meta.investment_usd == 5_000_000
+    assert meta.investment_excluded_usd == 0
+    assert bare.investment_usd == 2_000_000
+
+
+def test_a_skipped_duplicate_is_not_disclosed_twice(session):
+    """A skipped row's unconfirmed $500B lands in one disclosure, not two."""
+    _project(session, name="Stargate", company="OpenAI", customer="OpenAI", mw_planned=1200)
+    dupe = _project(
+        session,
+        name="Stargate Campus",
+        company="Oracle",
+        customer="OpenAI",
+        mw_planned=800,
+        investment_usd=500,
+    )
+    _source(session, dupe, unconfirmed_fields="investment_usd")
+
+    openai = {p.key: p for p in capex.rollup(session)}["openai"]
+    assert openai.investment_duplicate_skipped_usd == 500
+    assert openai.investment_excluded_usd == 0
+
+
+# --- The year grid -------------------------------------------------------------
+
+
+def test_year_columns_are_continuous_across_a_gap():
+    """2028 and 2030 with data must render 2029 as an empty column, not skip it."""
+    position = capex.Position(name="Meta", key="meta", mw_by_year={2028: 100.0, 2030: 50.0})
+    assert capex.year_columns([position], start=2026) == [2028, 2029, 2030]
+
+
+def test_year_columns_drop_the_past_and_cap_the_future():
+    stale = capex.Position(name="a", key="a", mw_by_year={2024: 5.0, 2027: 1.0})
+    assert capex.year_columns([stale], start=2026) == [2027]
+
+    sprawl = capex.Position(name="b", key="b", mw_by_year={2026: 1.0, 2040: 1.0})
+    assert len(capex.year_columns([sprawl], start=2026)) == capex.MAX_YEAR_COLUMNS
+
+    assert capex.year_columns([], start=2026) == []
+
+
+def test_quarter_columns_stay_data_only():
+    """A continuous quarter grid would spend the whole width on empty quarters."""
+    position = capex.Position(name="m", key="m", mw_by_quarter={"2026Q1": 1.0, "2027Q3": 2.0})
+    assert capex.quarter_columns([position], start="2026Q1") == ["2026Q1", "2027Q3"]
+    assert capex.quarter_columns([position], start="2026Q2") == ["2027Q3"]

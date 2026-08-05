@@ -56,6 +56,23 @@ NULLISH = [
     "not disclosed",
     "not stated",
     None,
+    # Composite placeholder shapes: a token set cannot list "$TBD" or
+    # "TBD (est.)", so a start-anchored pattern catches decoration around the
+    # non-answer. Each of these was a gap found by feeding real-world spellings
+    # to the old check.
+    "$TBD",
+    "TBD MW",
+    "TBD (est.)",
+    "to be determined",
+    "To Be Announced",
+    "not yet determined",
+    "coming soon",
+    "N.D.",
+    "PLACEHOLDER - paste the 1-3 sentence verbatim quote that supports the values",
+    "...",
+    "??",
+    "xx",
+    "___",
 ]
 
 
@@ -64,7 +81,23 @@ def test_sentinels_are_blank(raw):
     assert is_blank(raw) is True
 
 
-@pytest.mark.parametrize("raw", ["0", "Microsoft", "WI", 0, 0.0])
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "0",
+        "Microsoft",
+        "WI",
+        0,
+        0.0,
+        # Contains a placeholder token without *being* one — the pattern is
+        # start-anchored precisely so a sentence mentioning TBD survives.
+        "the TBD facility name will be announced",
+        "the placeholder text was replaced with a real quote",
+        "ND",  # is_blank must not eat North Dakota before norm_state sees it
+        "x",
+        "Xcel Energy",
+    ],
+)
 def test_real_values_are_not_blank(raw):
     assert is_blank(raw) is False
 
