@@ -1357,11 +1357,58 @@ def _print_blocks(project: Project) -> None:
             label = f"{escape(block.parent)} / {label}"
         table.add_row(label, mw, status, escape(block.customer or NA), str(when or NA))
 
+    # The residual lines, then the total. Without these the tranches visibly fail to
+    # add up to `MW planned` — measured on 70 of 118 itemised projects — and a reader
+    # who cannot make the arithmetic work stops trusting the rest of the row too.
+    account = blocks_mod.account(project)
+    if account.residuals:
+        table.add_section()
+        for residual in account.residuals:
+            table.add_row(
+                f"[yellow]{residual.reason}[/yellow]",
+                f"[yellow]{_fmt_mw(residual.mw)}[/yellow]",
+                f"[dim]{escape(residual.note)}[/dim]",
+                "",
+                "",
+            )
+    if account.total is not None:
+        table.add_section()
+        caveat = (
+            " [dim](floor — no source states a campus total)[/dim]"
+            if (account.total_is_floor)
+            else ""
+        )
+        table.add_row(
+            "[bold]accounted for[/bold]",
+            f"[bold]{_fmt_mw(account.total)}[/bold]",
+            caveat,
+            "",
+            "",
+        )
+
     console.print()
     console.print(table)
 
     for note in blocks_mod.reconcile_notes(got):
         console.print(f"  [dim]{escape(note)}[/dim]")
+
+
+def _print_itemisation(project: Project) -> None:
+    """Why a campus shows no tranches. Printed only when it shows none.
+
+    A bare row and an unread row looked identical, so 88 bare rows beside 118
+    detailed ones read as uneven research. Most of those campuses really are one
+    undivided thing, and saying so is the difference between a gap and an answer.
+    """
+    if getattr(project, "blocks", None):
+        return
+
+    from tracker import blocks as blocks_mod
+
+    state = blocks_mod.itemisation(project)
+    console.print(
+        f"\n[bold]capacity blocks[/bold] [dim]— {blocks_mod.ITEMISATION_NOTES[state]}[/dim]"
+    )
 
 
 @app.command()
@@ -1452,6 +1499,7 @@ def show(project_id: Annotated[int, typer.Argument(help="Project id.")]) -> None
         # answer to "what state is it in", and the scalars above it are a summary of
         # this rather than the other way round.
         _print_blocks(project)
+        _print_itemisation(project)
 
         if project.notes:
             console.print("\n[bold]notes[/bold]")
@@ -1742,17 +1790,22 @@ def capex(
     with session_scope(engine, commit=False) as session:
         positions = capex_mod.rollup(session, include_terminal=include_terminal)
         cover = capex_mod.coverage(session)
-        years = capex_mod.horizon(positions)
         precision = capex_mod.date_precision(session)
         blockers = {p.key: capex_mod.blocking_risk(session, p.key) for p in positions if p.key}
         suspects = capex_mod.suspect_attributions(session)
         dupes = capex_mod.suspected_duplicates(session)
-        dupe_mw = capex_mod.double_counted_mw(dupes)
 
     if json_mode():
+        from tracker.compute import h200_equivalent
+
+        today = capex_mod.as_of()
         emit(
             {
                 "coverage": cover,
+                "year_columns": capex_mod.year_columns(positions, start=today.year),
+                "quarter_columns": capex_mod.quarter_columns(
+                    positions, start=f"{today.year}Q{(today.month - 1) // 3 + 1}"
+                ),
                 "positions": [
                     {
                         "customer": p.name,
@@ -1761,9 +1814,15 @@ def capex(
                         "self_built": p.self_built,
                         "mw_planned": p.mw_planned,
                         "mw_built": p.mw_built,
-                        "h200_equivalent": p.h200_equivalent,
+                        # Derived from MW, not a Position field — the same unit
+                        # conversion the project column uses.
+                        "h200_equivalent": h200_equivalent(p.mw_planned),
                         "mw_unbuilt": p.mw_unbuilt,
                         "investment_usd": p.investment_usd,
+                        "investment_excluded_usd": p.investment_excluded_usd,
+                        "duplicate_rows_skipped": p.duplicate_rows_skipped,
+                        "mw_duplicate_skipped": p.mw_duplicate_skipped,
+                        "investment_duplicate_skipped_usd": p.investment_duplicate_skipped_usd,
                         "mw_by_year": p.mw_by_year,
                         "mw_by_quarter": p.mw_by_quarter,
                         "projects_at_risk": p.at_risk_projects,
@@ -1793,15 +1852,16 @@ def capex(
     table.add_column("MW planned", justify="right")
     table.add_column("MW built", justify="right")
     table.add_column("investment", justify="right")
-    # Only the next few periods; older dates are projects that should already be
-    # online and are a data-quality signal rather than a pipeline.
+    # Column windows come from capex, not here: years are a continuous range so a
+    # gap year shows as an empty column, quarters stay data-only. See
+    # `capex.year_columns` for both arguments.
     today = capex_mod.as_of()
     if by_quarter:
         now = f"{today.year}Q{(today.month - 1) // 3 + 1}"
-        buckets = [q for q in capex_mod.quarters(positions) if q >= now][:6]
+        buckets = capex_mod.quarter_columns(positions, start=now)
         of = lambda p, b: p.mw_by_quarter.get(b)  # noqa: E731
     else:
-        buckets = [str(y) for y in years if y >= today.year][:4]
+        buckets = [str(y) for y in capex_mod.year_columns(positions, start=today.year)]
         of = lambda p, b: p.mw_by_year.get(int(b))  # noqa: E731
     for bucket in buckets:
         table.add_column(f"MW {bucket}", justify="right")
@@ -1849,12 +1909,25 @@ def capex(
     console.print(
         "[dim]sums cover only cited figures — every number is a floor, not a total.[/dim]"
     )
-    if dupes:
+    excluded_usd = sum(p.investment_excluded_usd for p in positions)
+    if excluded_usd:
         console.print(
-            f"\n[yellow]{len(dupes)} pair(s)[/yellow] of rows look like one campus stored twice, "
-            f"holding [bold]{_fmt_mw(dupe_mw)} MW[/bold] that is counted more than once above. "
-            "One site often has a builder, a landlord and an occupier, and each name makes its "
-            "own row:"
+            f"[dim]investment excludes [bold]{_fmt_usd(excluded_usd)}[/bold] whose figure no "
+            "source confirms — usually a programme-wide total quoted in an article about one "
+            "site, demoted at ingest. Shown here, never summed.[/dim]"
+        )
+    if dupes:
+        skip_mw = sum(p.mw_duplicate_skipped for p in positions)
+        skip_usd = sum(p.investment_duplicate_skipped_usd for p in positions)
+        set_aside = f"[bold]{_fmt_mw(skip_mw)} MW[/bold]"
+        if skip_usd:
+            set_aside += f" and [bold]{_fmt_usd(skip_usd)}[/bold]"
+        console.print(
+            f"\n[yellow]{len(dupes)} pair(s)[/yellow] of rows look like one campus stored twice. "
+            f"The table counts one row per suspected group and sets aside {set_aside} held by "
+            "the others — skipped, not merged. One site often has a builder, a landlord and an "
+            "occupier, and each name makes its own row; confirm with `tracker duplicates` and "
+            "fold with `tracker merge`:"
         )
         for pair in dupes[:5]:
             console.print(
@@ -1878,8 +1951,9 @@ def duplicates(
 
     One site often has a builder, a landlord and an occupier, and whichever name a
     source picks becomes its own row with its own dedup key. Every key is correct;
-    the building is one. That is a nuisance in a listing and a wrong number in
-    `tracker capex`, which counts the same megawatts once per row.
+    the building is one. `tracker capex` defends itself — it counts one row per
+    suspected group and discloses the rest — but the listing still carries every
+    row, and only a merge repairs that.
 
     Nothing here is merged. Confirm a group and fold it with `tracker merge`.
     """
@@ -1911,7 +1985,8 @@ def duplicates(
 
     console.print(
         f"[bold]{len(groups)}[/bold] suspected group(s), holding "
-        f"[bold]{_fmt_mw(wasted)} MW[/bold] counted more than once.\n"
+        f"[bold]{_fmt_mw(wasted)} MW[/bold] stored more than once — `tracker capex` "
+        "skips the extra rows and says so until each group is merged.\n"
     )
     for ids in groups[:limit]:
         for project_id in ids:
@@ -1921,8 +1996,9 @@ def duplicates(
             f"{' '.join(str(i) for i in ids[1:])}\n"
         )
     console.print(
-        "[dim]pick whichever id should survive — every field is recomputed from the "
-        "combined citations afterwards, so the choice does not decide the values.[/dim]"
+        "[dim]every quantitative field is recomputed from the combined citations after a "
+        "merge; identity fields (name, company, locality) stay the survivor's, so pick "
+        "the row whose identity should win.[/dim]"
     )
 
 

@@ -160,6 +160,11 @@ class FakeBlock:
     generic: bool = False
     #: Comma-joined, exactly as the column stores it.
     unconfirmed_fields: str | None = None
+    #: What a reader sees. Defaults to the key so the older tests need no changes.
+    label: str = ""
+
+    def __post_init__(self) -> None:
+        self.label = self.label or self.block_key
 
 
 def test_an_unconfirmed_capacity_is_shown_but_never_summed():
@@ -505,3 +510,149 @@ def test_sorting_still_converges_the_parent_case():
 def test_a_repeated_word_does_not_change_the_key():
     """Segments are a set, so "Phase 1 Phase 1" is still `phase-1`."""
     assert blocks.block_key("Phase 1 Phase 1").value == blocks.block_key("Phase 1").value
+
+
+# --- accounting: the parts must sum to the whole ------------------------------
+#
+# Measured on the live database: 70 of 118 itemised projects showed tranches summing
+# to *less* than the campus total, because untrustworthy capacity was quietly left
+# out. Each reads on screen as 250 + 150 != 750, and what a reader concludes is not
+# "one figure is unconfirmed" but "these people cannot add up".
+
+
+@dataclass
+class FakeProject:
+    mw_planned: float | None = None
+    blocks: list = None  # type: ignore[assignment]
+    sources: list = None  # type: ignore[assignment]
+
+    def __post_init__(self):
+        self.blocks = self.blocks or []
+        self.sources = self.sources or []
+
+
+def test_an_unconfirmed_tranche_is_accounted_for_rather_than_dropped():
+    """Polaris Forge 1 exactly: 100 + 150 counted, 150 待确认, 400 cited."""
+    got = blocks.account(
+        FakeProject(
+            mw_planned=400.0,
+            blocks=[
+                FakeBlock("eln-02", mw=100.0, status="serving"),
+                FakeBlock("eln-03", mw=150.0, status="under_construction"),
+                FakeBlock("building-4", mw=150.0, unconfirmed_fields="mw"),
+            ],
+        )
+    )
+    assert got.counted_mw == 250.0
+    assert got.closes, "the lines must add up to the cited total"
+    assert [(r.reason, r.mw) for r in got.residuals] == [("unconfirmed", 150.0)]
+
+
+def test_a_campus_only_partly_itemised_names_the_remainder():
+    """The 70-project case. The gap gets a line instead of being left on screen."""
+    got = blocks.account(
+        FakeProject(mw_planned=750.0, blocks=[FakeBlock("phase-1", mw=250.0, status="serving")])
+    )
+    assert got.closes
+    assert [(r.reason, r.mw) for r in got.residuals] == [("unitemised", 500.0)]
+
+
+def test_tranches_that_exceed_the_cited_total_are_named_not_hidden():
+    """The other direction: a stale campus figure, or one building counted twice.
+
+    Two sibling keys on purpose, not a nested pair — the duplicate that actually
+    occurs is `building-2.eln-2` beside `building-2.forge-1.polaris`, two articles
+    naming one building different ways. Neither key contains the other, which is why
+    it went undetected and why the overlap line has to exist.
+    """
+    got = blocks.account(
+        FakeProject(
+            mw_planned=100.0,
+            blocks=[
+                FakeBlock("building-2.eln-2", mw=100.0),
+                FakeBlock("building-2.forge-1.polaris", mw=100.0),
+            ],
+        )
+    )
+    assert got.closes
+    assert [(r.reason, r.mw) for r in got.residuals] == [("overlap", 100.0)]
+
+
+def test_with_no_cited_total_the_sum_of_parts_is_shown_as_a_floor():
+    got = blocks.account(
+        FakeProject(mw_planned=None, blocks=[FakeBlock("phase-1", mw=60.0, status="serving")])
+    )
+    assert got.total == 60.0
+    assert got.total_is_floor
+    assert got.closes
+
+
+def test_a_cancelled_tranche_is_outside_the_campus_total():
+    got = blocks.account(
+        FakeProject(
+            mw_planned=100.0,
+            blocks=[
+                FakeBlock("phase-1", mw=100.0, status="serving"),
+                FakeBlock("phase-2", mw=500.0, status="cancelled"),
+            ],
+        )
+    )
+    assert got.counted_mw == 100.0
+    assert got.closes and got.residuals == ()
+
+
+def test_naming_a_tranche_without_sizing_it_is_not_a_discrepancy():
+    """15 live projects do this — "VA2 is under construction", no megawatts published."""
+    got = blocks.account(FakeProject(mw_planned=None, blocks=[FakeBlock("va-2")]))
+    assert got.total is None
+    assert got.closes, "inventing a fault to go with a number nobody stated"
+
+
+def test_a_project_with_no_blocks_accounts_for_nothing():
+    got = blocks.account(FakeProject(mw_planned=100.0))
+    assert got.counted_mw == 0.0
+    assert [r.reason for r in got.residuals] == ["unitemised"]
+
+
+# --- itemisation: a bare row must say why it is bare --------------------------
+
+
+@dataclass
+class FakeSource:
+    extractor: str | None = "crawl:v1"
+    blocks: str | None = None
+
+
+def test_a_read_that_found_nothing_is_distinguishable_from_never_reading():
+    """The convergence bug. Both looked like NULL, so 40% of the spend was re-reads."""
+    unread = FakeProject(sources=[FakeSource(blocks=None)])
+    read = FakeProject(sources=[FakeSource(blocks="[]")])
+    assert blocks.itemisation(unread) == blocks.UNREAD
+    assert blocks.itemisation(read) == blocks.SINGLE_BLOCK
+
+
+def test_one_unread_article_among_several_keeps_the_project_unread():
+    project = FakeProject(sources=[FakeSource(blocks="[]"), FakeSource(blocks=None)])
+    assert blocks.itemisation(project) == blocks.UNREAD
+
+
+def test_a_project_with_no_article_is_not_reported_as_unread():
+    """Census lookups and queue rows have no prose behind them to read."""
+    project = FakeProject(sources=[FakeSource(extractor="derived:census-place")])
+    assert blocks.itemisation(project) == blocks.NO_ARTICLE
+
+
+def test_having_blocks_beats_every_other_state():
+    project = FakeProject(blocks=[FakeBlock("phase-1", mw=1.0)], sources=[FakeSource()])
+    assert blocks.itemisation(project) == blocks.ITEMISED
+
+
+def test_every_itemisation_state_has_a_sentence_for_the_reader():
+    for state in (blocks.ITEMISED, blocks.SINGLE_BLOCK, blocks.UNREAD, blocks.NO_ARTICLE):
+        assert blocks.ITEMISATION_NOTES[state]
+
+
+def test_every_residual_reason_has_a_sentence_for_the_reader():
+    """A residual with no explanation is the mismatch again, one line lower."""
+    for reason in blocks.RESIDUAL_REASONS:
+        assert blocks.Residual(reason, 1.0).note

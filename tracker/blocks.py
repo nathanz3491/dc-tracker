@@ -350,6 +350,184 @@ def furthest_status(statuses: list[str]) -> str:
     return max(present, key=lambda s: _RANK.get(s, -1))
 
 
+# --- accounting: the parts must always sum to the whole -----------------------
+#
+# Measured on the live database after the backfill: on **70 of 118** itemised
+# projects the tranches summed to *less* than the campus total, because capacity
+# that could not be trusted was quietly left out. Every one of those reads on screen
+# as 250 + 150 ≠ 750, and the conclusion a reader draws from that is not "one of
+# those figures is unconfirmed" — it is that we cannot add up. A 待确认 badge and a
+# footnote do not repair it; the arithmetic has to close.
+#
+# So nothing is silently excluded any more. Capacity we will not commit to is still
+# *accounted for*, on a line that says where it went. The difference between
+# excluding a number and naming it is the whole difference between a dataset that
+# looks careless and one that looks careful.
+
+#: Why a slice of a campus is not in the committed total. Ordered as displayed.
+RESIDUAL_REASONS: Final[tuple[str, ...]] = (
+    "unconfirmed",
+    "unplaceable",
+    "unitemised",
+    "overlap",
+)
+
+_RESIDUAL_NOTES: Final[dict[str, str]] = {
+    "unconfirmed": "stated, but no quote in the article names that tranche",
+    "unplaceable": "names a phase without saying of which facility",
+    "unitemised": "no source breaks this part of the campus down",
+    "overlap": "tranches sum past the cited campus total — probably one described twice",
+}
+
+
+@dataclass(frozen=True)
+class Residual:
+    """One slice of a campus that is accounted for but not committed."""
+
+    reason: str
+    mw: float
+    #: The tranches this line stands for, where it stands for specific ones.
+    labels: tuple[str, ...] = ()
+
+    @property
+    def note(self) -> str:
+        return _RESIDUAL_NOTES.get(self.reason, "")
+
+
+@dataclass(frozen=True)
+class Accounting:
+    """Every megawatt of one campus, placed on exactly one line.
+
+    `counted_mw` plus the residuals equal `total`. That identity is the point, and
+    `test_the_accounting_closes_on_every_live_project` asserts it across the whole
+    database rather than trusting it here.
+    """
+
+    total: float | None
+    counted_mw: float
+    residuals: tuple[Residual, ...] = ()
+    #: True when no source states a campus figure, so the total shown is the sum of
+    #: the parts — a floor, and labelled as one rather than presented as the total.
+    total_is_floor: bool = False
+
+    @property
+    def accounted_mw(self) -> float:
+        """What the displayed lines add up to. Equals `total` by construction."""
+        over = sum(r.mw for r in self.residuals if r.reason == "overlap")
+        rest = sum(r.mw for r in self.residuals if r.reason != "overlap")
+        return self.counted_mw + rest - over
+
+    @property
+    def closes(self) -> bool:
+        """Whether the lines add up. Vacuously true when there is no capacity at all.
+
+        15 live projects name tranches without sizing any of them — a real state
+        ("VA2 is under construction", no megawatts published). There is nothing to
+        reconcile there, and reporting it as an open discrepancy would be inventing
+        a fault to go with a number nobody stated.
+        """
+        if self.total is None:
+            return abs(self.accounted_mw) < 0.51
+        return abs(self.accounted_mw - self.total) < 0.51
+
+
+def account(project: Any) -> Accounting:
+    """Break a campus into lines that sum to its total. Never writes.
+
+    The residuals are not a rounding plug. Each names a *reason* capacity is not in
+    the committed figure, and each reason implies different work: `unconfirmed` wants
+    a citation, `unplaceable` wants an operator to say which facility, `unitemised`
+    wants another article, `overlap` wants two tranches merged.
+    """
+    blocks = list(getattr(project, "blocks", ()) or ())
+    usable = placeable(blocks)
+    unplaced = [b for b in blocks if b not in usable]
+
+    def running(items: list[Any]) -> list[Any]:
+        # A cancelled tranche is not part of anybody's campus total, and neither is
+        # its capacity — the same reason `rollup` leaves terminal blocks out.
+        return [b for b in items if b.mw and b.status not in BLOCK_TERMINAL]
+
+    counted = [b for b in running(usable) if mw_is_confirmed(b)]
+    unconfirmed = [b for b in running(usable) if not mw_is_confirmed(b)]
+    unplaceable_blocks = running(unplaced)
+
+    counted_mw = sum(b.mw for b in counted)
+    itemised = counted_mw + sum(b.mw for b in unconfirmed) + sum(b.mw for b in unplaceable_blocks)
+
+    cited = getattr(project, "mw_planned", None)
+    total, floor = cited, False
+    if cited is None:
+        total = itemised or None
+        floor = True
+
+    residuals: list[Residual] = []
+    for reason, group in (("unconfirmed", unconfirmed), ("unplaceable", unplaceable_blocks)):
+        if group:
+            residuals.append(
+                Residual(
+                    reason,
+                    sum(b.mw for b in group),
+                    tuple(sorted(b.label for b in group)),
+                )
+            )
+    if total is not None:
+        gap = total - itemised
+        if gap > 0.5:
+            residuals.append(Residual("unitemised", gap))
+        elif gap < -0.5:
+            residuals.append(Residual("overlap", -gap))
+
+    return Accounting(
+        total=total,
+        counted_mw=counted_mw,
+        residuals=tuple(residuals),
+        total_is_floor=floor,
+    )
+
+
+#: What we know about whether a campus has been broken into tranches.
+#:
+#: The point is to stop a bare row from looking like a lapse. Before this, a project
+#: with no blocks and a project nobody had read looked identical on screen, so 88
+#: bare rows beside 118 detailed ones read as uneven research rather than as what it
+#: is: most of those campuses really are one undivided thing. Same argument
+#: `gaps.py` makes about NULL — an empty value is not automatically a gap.
+ITEMISED: Final = "itemised"
+SINGLE_BLOCK: Final = "single_block"
+UNREAD: Final = "unread"
+NO_ARTICLE: Final = "no_article"
+
+ITEMISATION_NOTES: Final[dict[str, str]] = {
+    ITEMISED: "broken into tranches",
+    SINGLE_BLOCK: "read, and no source breaks it into tranches",
+    UNREAD: "not yet read for tranches",
+    NO_ARTICLE: "no article to read — derived or queue data only",
+}
+
+
+def itemisation(project: Any) -> str:
+    """Whether this campus has tranches, has been read, or is simply one thing.
+
+    Depends on the backfill recording an empty read as `blocks = '[]'` rather than
+    leaving the column NULL. Without that, "read it, it is one campus" and "never
+    read it" are the same value, which is why the backfill could not converge and
+    re-read 40% of its articles.
+    """
+    if getattr(project, "blocks", None):
+        return ITEMISED
+    crawled = [
+        s
+        for s in (getattr(project, "sources", ()) or ())
+        if (s.extractor or "").startswith("crawl:")
+    ]
+    if not crawled:
+        return NO_ARTICLE
+    if all(s.blocks is not None for s in crawled):
+        return SINGLE_BLOCK
+    return UNREAD
+
+
 # --- the rollup --------------------------------------------------------------
 
 
@@ -736,14 +914,24 @@ def reconcile_notes(got: Rollup) -> list[str]:
 
 __all__ = [
     "BLOCK_POLICY",
+    "ITEMISATION_NOTES",
+    "ITEMISED",
+    "NO_ARTICLE",
+    "RESIDUAL_REASONS",
+    "SINGLE_BLOCK",
     "TYPE_WORDS",
+    "UNREAD",
+    "Accounting",
     "Key",
+    "Residual",
     "Rollup",
+    "account",
     "aliases_for",
     "block_key",
     "blocks_by_key",
     "furthest_status",
     "is_type_word_only",
+    "itemisation",
     "label_tokens",
     "mw_is_confirmed",
     "placeable",

@@ -58,6 +58,10 @@ class BackfillReport:
     parse_error: int = 0
     blocks_written: int = 0
     projects_touched: int = 0
+    #: Rows where the article was read and named no tranche for this campus. Counted
+    #: because it is a *result*, not a failure: most campuses really are one block,
+    #: and recording the read is what lets the run converge.
+    read_no_blocks: int = 0
     prompt_tokens: int = 0
     completion_tokens: int = 0
     notes: list[str] = field(default_factory=list)
@@ -68,6 +72,7 @@ class BackfillReport:
             ("read", self.read),
             ("blocks written", self.blocks_written),
             ("projects touched", self.projects_touched),
+            ("read, one undivided campus", self.read_no_blocks),
             ("not cached, skipped", self.skipped_cached),
             ("fetch errors", self.fetch_error),
             ("parse errors", self.parse_error),
@@ -390,6 +395,14 @@ def run(
                 report.notes.append(
                     f"#{pid}: {pick.url} describes no project matching this row; left alone"
                 )
+                # Still a recorded read. The article was fetched and understood; it
+                # simply is not about this campus, and that is a fact worth storing
+                # so the same call is never paid for twice.
+                row = next((s for s in project.sources if s.url == pick.url), None)
+                if row is not None and not dry_run and not row.blocks:
+                    row.blocks = "[]"
+                    report.read_no_blocks += 1
+                    session.commit()
                 continue
             record = extracted[next(i for i, c in enumerate(claims) if c is raw)]
             found = [block for source in record.sources for block in source.blocks]
@@ -403,21 +416,31 @@ def run(
             # The record described every block in the article; this row may have kept
             # only some, so the 待确认 disclosure is built from what it actually kept.
             block_notes = vague_block_note(found)
-            if not found:
-                continue
 
             row = next((s for s in project.sources if s.url == pick.url), None)
             if row is None:
                 continue
             if dry_run:
                 report.blocks_written += len(found)
-                touched.add(pid)
+                if found:
+                    touched.add(pid)
                 continue
 
+            # **An empty read is recorded, not skipped.** Leaving the column NULL made
+            # "read it, this campus is one undivided thing" indistinguishable from
+            # "never read it" — so `candidates` re-offered the same articles forever
+            # and the run could never reach "nothing to do". Measured across four
+            # tranches: 391 reads over 229 distinct URLs, about 40% of the spend on
+            # articles already read. It also made 88 bare rows look like a lapse when
+            # most of those campuses really are one block.
             row.blocks = json.dumps(
                 [b.as_json() for b in sorted(found, key=lambda b: b.label.lower())],
                 ensure_ascii=False,
             )
+            if not found:
+                report.read_no_blocks += 1
+                session.commit()
+                continue
             session.flush()
             report.blocks_written += blocks_mod.rebuild(session, project)
             blocks_mod.reconcile(project)
