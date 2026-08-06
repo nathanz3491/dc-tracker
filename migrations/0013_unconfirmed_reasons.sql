@@ -1,0 +1,35 @@
+-- 0013_unconfirmed_reasons: why a value is 待确认, not merely that it is.
+--
+-- Migration 0006 gave a value a third outcome and one bit to record it. One bit
+-- is not enough to act on, because the tier covers two situations that call for
+-- opposite work:
+--
+--   * nothing quotable backs the figure     -> go and find another source
+--   * the figure is quoted, real, and not this site's — a programme-wide total
+--     lifted from an article about one campus, demoted by the `$/MW` ceiling
+--                                           -> correct the figure
+--
+-- Reading them as the same amber chip tells an operator to go looking for a
+-- citation that already exists. Worse, `capex.unconfirmed_investment_ids` cannot
+-- distinguish them either, so the investment column excludes *both* — it means
+-- to drop the programme total and it also drops every campus figure nobody
+-- happened to quote, understating the one number the table exists to state.
+--
+-- Stored as a JSON object mapping field name to a value from
+-- tracker.vocab.UNCONFIRMED_REASONS, beside the existing comma-joined
+-- `unconfirmed_fields` rather than replacing it. That column answers "is this
+-- confirmed", which is what almost every reader asks and what the merge path
+-- reads on the hot path; this one answers "why not", for the two readers that
+-- need more. Keeping both means no existing query changes meaning.
+--
+-- NULL for every row written before this migration, and for every path that has
+-- no gate behind it — an ISO queue row or a Census lookup asserts values with no
+-- prose to quote, which is a different thing from a refusal.
+--
+-- Deliberately not backfilled. The reason is a fact about an extraction that has
+-- already happened, and inferring it now from the merged values would sometimes
+-- accuse a figure no gate ever demoted — the same argument
+-- `unconfirmed_investment_ids` makes for reading ingest's decision back rather
+-- than recomputing the ratio. Re-crawling under the new gate fills it correctly.
+
+ALTER TABLE source ADD COLUMN unconfirmed_reasons TEXT;

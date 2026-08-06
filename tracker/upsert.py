@@ -50,7 +50,7 @@ from tracker.vocab import (
     PHASE_TERMINAL,
     TRACKED_FIELDS,
     WRITABLE_FIELDS,
-    severity_rank,
+    risk_precedence,
 )
 
 log = logging.getLogger(__name__)
@@ -561,6 +561,13 @@ def upsert_record(session: Session, rec: IngestRecord, *, force_new: bool = Fals
         row.unconfirmed_fields = derive_fields(
             {k: v for k, v in claims.items() if k in sr.unconfirmed}
         )
+        # Restricted to fields actually claimed, so the reason map cannot outlive
+        # the value it explains. Sorted for the same byte-identical re-ingest
+        # reason as `claims`.
+        why = {k: v for k, v in dict(sr.unconfirmed_reasons).items() if k in claims}
+        row.unconfirmed_reasons = (
+            json.dumps(why, sort_keys=True, ensure_ascii=False) if why else None
+        )
         # Sorted so a re-ingest of the same article writes byte-identical JSON and
         # the idempotence test keeps holding, exactly as `claims` above.
         row.quotes = (
@@ -785,6 +792,7 @@ def _upsert_risks(session: Session, project: Project, rec: IngestRecord) -> int:
                 first_seen=risk.first_seen,
                 delay_days=risk.delay_days,
                 source_id=source_id,
+                unconfirmed=risk.unconfirmed,
             )
             session.add(row)
             # Registered immediately, for the same reason as in `_upsert_events`:
@@ -801,7 +809,13 @@ def _upsert_risks(session: Session, project: Project, rec: IngestRecord) -> int:
             # extractor's.
             found.severity = risk.severity
             found.summary = risk.summary
-            found.quote = risk.quote
+            # A confirmed reading never loses to a later unconfirmed one. Two
+            # sources report the same obstacle and only one quotes it usably; the
+            # citation is the thing worth keeping, so an unconfirmed re-read
+            # refreshes the wording without demoting an obstacle already evidenced.
+            if risk.unconfirmed is None or found.unconfirmed is not None:
+                found.quote = risk.quote
+                found.unconfirmed = risk.unconfirmed
             if risk.delay_days is not None:
                 found.delay_days = risk.delay_days
             if source_id is not None:
@@ -878,7 +892,7 @@ def _record_slippage(session: Session, project: Project, previous: _dt.date | No
         if open_risks:
             # The most severe open obstacle is the one already presented as this
             # project's blocker, so it is where a measured slip belongs.
-            worst = max(open_risks, key=lambda r: severity_rank(r.severity))
+            worst = max(open_risks, key=risk_precedence)
             worst.delay_days = slipped_days
 
     session.flush()
@@ -902,7 +916,7 @@ def _derive_blocker(session: Session, project: Project) -> str | None:
     ).all()
     if not open_risks:
         return None
-    return max(open_risks, key=lambda r: severity_rank(r.severity)).summary
+    return max(open_risks, key=risk_precedence).summary
 
 
 def apply_h200_equivalent(project: Project, by_field: dict[str, list] | None = None) -> None:

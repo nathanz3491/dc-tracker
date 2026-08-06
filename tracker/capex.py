@@ -36,6 +36,7 @@ usually more.
 from __future__ import annotations
 
 import datetime as _dt
+import json
 from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Any
@@ -124,6 +125,13 @@ class Position:
     #: about one campus and demoted at ingest. Disclosed beside the sum, never
     #: inside it. See `unconfirmed_investment_ids`.
     investment_excluded_usd: int = 0
+    #: Dollars counted in `investment_usd` that no quote backs, but which the gate
+    #: had no positive reason to doubt — it simply was not quoted. Counted, unlike
+    #: `investment_excluded_usd`, because excluding a figure that is very likely
+    #: correct understates the one number this table exists to state; disclosed,
+    #: because a sum whose composition a reader cannot see is one they must trust.
+    #: See `unquoted_investment_ids`.
+    investment_unquoted_usd: int = 0
     #: What the rows set aside as suspected duplicates would have added. The rollup
     #: counts one representative per suspected campus (`suspected_duplicates`);
     #: the others are skipped, never merged, and what they held is disclosed here —
@@ -154,6 +162,13 @@ class Position:
     #: Projects with at least one open obstacle, and the planned MW behind them.
     at_risk_projects: int = 0
     mw_at_risk: float = 0.0
+    #: Of `at_risk_projects`, those whose *only* open obstacles are 待确认 — a
+    #: source reported them and no quote stood up. They are counted in the two
+    #: figures above, deliberately: understating exposure is the worse error, and
+    #: an obstacle the model found is information even before it is evidenced.
+    #: Disclosed rather than hidden, on the same principle as `*_skipped` — a
+    #: total whose composition a reader cannot see is one they have to trust.
+    at_risk_unconfirmed: int = 0
     #: Projects whose `expected_online` has moved later, per `event.delayed`.
     slipped: int = 0
     #: Projects the operator is building for an unnamed tenant. Counted only in
@@ -274,6 +289,18 @@ def rollup(session: Session, *, include_terminal: bool = False) -> list[Position
             select(Risk.project_id).where(Risk.status == OPEN_RISK_STATUS).distinct()
         )
     }
+    # Projects whose obstacles are *all* unconfirmed. A project with one quoted
+    # obstacle and one 待确认 one is not in doubt, so it does not belong in a
+    # disclosure about doubt.
+    cited_risk_ids = {
+        pid
+        for (pid,) in session.execute(
+            select(Risk.project_id)
+            .where(Risk.status == OPEN_RISK_STATUS, Risk.unconfirmed.is_(None))
+            .distinct()
+        )
+    }
+    vague_risk_ids = open_risk_ids - cited_risk_ids
     slipped_ids = {
         pid
         for (pid,) in session.execute(
@@ -303,6 +330,7 @@ def rollup(session: Session, *, include_terminal: bool = False) -> list[Position
         skip_ids.update(p.id for p in members if p.id != representative.id)
 
     demoted_investment = unconfirmed_investment_ids(session)
+    unquoted_investment = unquoted_investment_ids(session)
 
     positions: dict[str, Position] = {}
     for project in projects:
@@ -345,6 +373,8 @@ def rollup(session: Session, *, include_terminal: bool = False) -> list[Position
             bucket.investment_excluded_usd += money
         else:
             bucket.investment_usd += money
+            if money and project.id in unquoted_investment:
+                bucket.investment_unquoted_usd += money
 
         if project.expected_online and planned:
             year = project.expected_online.year
@@ -374,12 +404,16 @@ def rollup(session: Session, *, include_terminal: bool = False) -> list[Position
             if project.id in open_risk_ids and theirs is not bucket:
                 theirs.at_risk_projects += 1
                 theirs.mw_at_risk += share.mw_planned
+                if project.id in vague_risk_ids:
+                    theirs.at_risk_unconfirmed += 1
             if project.id in slipped_ids and theirs is not bucket:
                 theirs.slipped += 1
 
         if project.id in open_risk_ids:
             bucket.at_risk_projects += 1
             bucket.mw_at_risk += planned
+            if project.id in vague_risk_ids:
+                bucket.at_risk_unconfirmed += 1
         if project.id in slipped_ids:
             bucket.slipped += 1
 
@@ -449,29 +483,79 @@ def quarter_columns(
 
 
 def unconfirmed_investment_ids(session: Session) -> set[int]:
-    """Projects whose `investment_usd` a source asserted and none confirmed.
+    """Projects whose `investment_usd` the gate judged not to be this site's money.
 
-    Reads back what ingest decided, the way `webui.dataset._unconfirmed_because`
-    does: the crawl gate lists a figure in `Source.unconfirmed_fields` when no
-    verified quote backs it or when it fails the `MAX_USD_PER_MW` plausibility
-    ceiling — the signature of a programme-wide total quoted in an article about
-    one campus. Recomputing that ratio here instead would accuse figures no gate
-    ever demoted, since a merge can legitimately put a large number beside a
-    small capacity.
+    Reads back what ingest decided rather than recomputing it: the crawl gate
+    records a reason in `Source.unconfirmed_reasons` when it refuses a figure, and
+    recomputing the ratio here would accuse figures no gate ever demoted, since a
+    merge can legitimately put a large number beside a small capacity.
+
+    **Only `out_of_scale` is excluded**, which is the whole point of storing the
+    reason. That is the programme-wide total — "OpenAI's $500 billion Stargate"
+    quoted in an article about one campus — caught by the `$/MW` ceiling, and it
+    genuinely is not this site's money. A figure that merely went unquoted is a
+    different thing: it is very likely correct and nobody sourced it, and dropping
+    it from the sum understates the one number this table exists to state. Those
+    are reported by `unquoted_investment_ids` instead, disclosed separately.
+
+    Sources written before migration 0013 have no reason recorded, and are treated
+    as excluded — the conservative reading, and the behaviour this replaces.
 
     A project no source mentions at all is *not* in the set: there is no ingest
     decision to read back, so a hand-entered figure keeps counting.
     """
-    demoted: set[int] = set()
+    return _demoted_investment(session)[0]
+
+
+def unquoted_investment_ids(session: Session) -> set[int]:
+    """Projects whose `investment_usd` is merely unquoted — counted, and disclosed.
+
+    The other half of what `unconfirmed_investment_ids` used to return in one
+    undifferentiated set. See its docstring for why the split matters.
+    """
+    return _demoted_investment(session)[1]
+
+
+def _demoted_investment(session: Session) -> tuple[set[int], set[int]]:
+    """(implausible, merely unquoted) project ids, each net of any confirmation."""
+    out_of_scale: set[int] = set()
+    unquoted: set[int] = set()
     confirmed: set[int] = set()
-    for pid, fields, unconfirmed in session.execute(
-        select(Source.project_id, Source.fields, Source.unconfirmed_fields)
+    for pid, fields, unconfirmed, reasons in session.execute(
+        select(
+            Source.project_id,
+            Source.fields,
+            Source.unconfirmed_fields,
+            Source.unconfirmed_reasons,
+        )
     ):
         if _names_field(fields, "investment_usd"):
             confirmed.add(pid)
-        if _names_field(unconfirmed, "investment_usd"):
-            demoted.add(pid)
-    return demoted - confirmed
+        if not _names_field(unconfirmed, "investment_usd"):
+            continue
+        why = _reason_for(reasons, "investment_usd")
+        # No reason recorded means a source older than migration 0013. Read as
+        # out_of_scale, which is exactly the behaviour this split replaced: the
+        # old code excluded every unconfirmed figure, so treating the unknown as
+        # excluded cannot change any number that was already being reported.
+        (
+            unquoted
+            if why in {"no_quote", "quote_unverified", "quote_off_target"}
+            else out_of_scale
+        ).add(pid)
+    return out_of_scale - confirmed, unquoted - confirmed - out_of_scale
+
+
+def _reason_for(blob: str | None, name: str) -> str | None:
+    """One field's refusal reason out of a source's JSON reason map."""
+    if not blob:
+        return None
+    try:
+        parsed = json.loads(blob)
+    except (TypeError, ValueError):
+        return None
+    value = parsed.get(name) if isinstance(parsed, dict) else None
+    return value if isinstance(value, str) else None
 
 
 def _names_field(comma_list: str | None, name: str) -> bool:
@@ -733,5 +817,6 @@ __all__ = [
     "suspect_attributions",
     "suspected_duplicates",
     "unconfirmed_investment_ids",
+    "unquoted_investment_ids",
     "year_columns",
 ]

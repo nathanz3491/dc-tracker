@@ -825,6 +825,68 @@ def test_the_blocker_is_the_most_severe_open_risk(session):
     assert session.scalar(select(Project)).blocker == "Rezoning refused."
 
 
+def test_an_unconfirmed_risk_is_stored_with_its_reason(session):
+    result = upsert_record(session, rec(risks=[risk(unconfirmed="no_quote")]))
+    assert result.risks_written == 1
+    row = session.scalar(select(Risk))
+    assert row.unconfirmed == "no_quote"
+    assert row.quote is None
+
+
+def test_a_confirmed_risk_outranks_an_unconfirmed_one_for_the_blocker(session):
+    """`blocker` is a tracked field, so what fills it must be the best evidenced.
+
+    Severity alone would let a 待确认 `blocking` obstacle displace a quoted
+    `material` one, putting an unevidenced sentence in the twelve-field count.
+    """
+    upsert_record(
+        session,
+        rec(
+            risks=[
+                risk(
+                    category="permitting",
+                    severity="blocking",
+                    summary="Rezoning refused.",
+                    unconfirmed="no_quote",
+                ),
+                risk(
+                    category="transmission",
+                    severity="material",
+                    summary="Upgrades pending.",
+                    quote="two 345-kilovolt upgrades",
+                ),
+            ]
+        ),
+    )
+    assert session.scalar(select(Project)).blocker == "Upgrades pending."
+
+
+def test_an_unconfirmed_reread_does_not_demote_an_evidenced_risk(session):
+    """Two sources report one obstacle and only one quotes it usably.
+
+    The citation is the thing worth keeping. Letting the later read overwrite it
+    would mean a refresh could silently strip the evidence off an obstacle that
+    had it, which is the opposite of what re-reading is for.
+    """
+    upsert_record(session, rec(risks=[risk(quote="two 345-kilovolt upgrades")]))
+    upsert_record(session, rec(risks=[risk(summary="Still waiting.", unconfirmed="no_quote")]))
+
+    row = session.scalar(select(Risk))
+    assert row.quote == "two 345-kilovolt upgrades"
+    assert row.unconfirmed is None
+    assert row.summary == "Still waiting.", "the wording still refreshes"
+
+
+def test_a_confirmed_reread_promotes_an_unconfirmed_risk(session):
+    """And the other direction, which is the point of re-reading at all."""
+    upsert_record(session, rec(risks=[risk(unconfirmed="no_quote")]))
+    upsert_record(session, rec(risks=[risk(quote="two 345-kilovolt upgrades")]))
+
+    row = session.scalar(select(Risk))
+    assert row.unconfirmed is None
+    assert row.quote == "two 345-kilovolt upgrades"
+
+
 def test_resolving_a_risk_clears_the_blocker(session):
     """What the free-text column could never do.
 

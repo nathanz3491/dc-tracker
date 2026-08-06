@@ -13,6 +13,7 @@ translation layer.
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -83,34 +84,53 @@ def _nulls(project) -> dict[str, dict[str, Any]]:
     return out
 
 
+#: What each refusal means to somebody looking at the chip, and what it asks of
+#: them. The distinction is the point: two of these send you to find a source,
+#: and two send you to correct something you already have.
+_REASON_NOTES: dict[str, str] = {
+    "no_quote": "the source asserted this and quoted nothing for it",
+    "quote_unverified": "the quote offered for this is not in the article",
+    "quote_off_target": "the article's sentence for this does not state this value",
+    "out_of_scale": "quoted, but implausible for a site this size — usually a "
+    "programme-wide total quoted in an article about one campus",
+}
+
+
 def _unconfirmed_because(project) -> dict[str, dict[str, str]]:
-    """Why a 待确认 value is 待确认, where the ingest path recorded a reason.
+    """Why a 待确认 value is 待确认, as the ingest gate recorded it.
 
-    One tier, two causes, and they call for opposite work. The usual one is that
-    nothing quotable backs the value, and the answer is another source. The other
-    is that the quote is real and the figure is not this site's — a programme
-    total lifted from an article about one campus — and the answer is to correct
-    it. Showing both as the same amber chip tells a reader to go looking for a
-    citation that already exists.
+    One tier, several causes, and they call for opposite work. The usual one is
+    that nothing quotable backs the value, and the answer is another source. The
+    other is that the quote is real and the figure is not this site's — a
+    programme total lifted from an article about one campus — and the answer is
+    to correct it. Showing both as the same amber chip tells a reader to go
+    looking for a citation that already exists.
 
-    The reason is not a column; it is the disclosure `crawl.py` writes into the
-    project's notes when the ratio check fires. Read back rather than recomputed,
-    so what the console shows is what the ingest actually decided — recomputing
-    the ratio from the merged values would sometimes accuse a figure no gate ever
-    demoted.
+    Read from `source.unconfirmed_reasons` (migration 0013), never recomputed:
+    recomputing the ratio from the merged values would sometimes accuse a figure
+    no gate ever demoted. This used to reconstruct the one reason it could by
+    string-matching a marker in the project's notes, which could only ever see
+    the scale demotion; the column is that seam made explicit.
+
+    A source older than 0013 has no reason recorded, and gets no chip rather than
+    a guessed one.
     """
-    from tracker.ingest.crawl import SCALE_NOTE_FIELD, SCALE_NOTE_MARKER
-    from tracker.upsert import SOURCE_NOTE_PREFIX
-
     out: dict[str, dict[str, str]] = {}
-    for raw in (project.notes or "").splitlines():
-        line = raw.strip()
-        if SCALE_NOTE_MARKER not in line:
+    for source in project.sources:
+        if not source.unconfirmed_reasons:
             continue
-        # Strip the `[source][tag] ` bookkeeping; the sentence is the useful part.
-        if line.startswith(SOURCE_NOTE_PREFIX):
-            line = line.split("] ", 1)[-1].strip()
-        out[SCALE_NOTE_FIELD] = {"code": "scale", "note": line}
+        try:
+            reasons = json.loads(source.unconfirmed_reasons)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(reasons, dict):
+            continue
+        for field_name, code in reasons.items():
+            note = _REASON_NOTES.get(code)
+            # An unrecognised code is a newer writer than this reader. Say
+            # nothing rather than invent a gloss for it.
+            if note and field_name not in out:
+                out[field_name] = {"code": code, "note": note}
     return out
 
 
@@ -234,6 +254,7 @@ def _capex(session: Session) -> dict[str, Any]:
                 "mw_unbuilt": p.mw_unbuilt,
                 "investment_usd": p.investment_usd,
                 "investment_excluded_usd": p.investment_excluded_usd,
+                "investment_unquoted_usd": p.investment_unquoted_usd,
                 "duplicate_rows_skipped": p.duplicate_rows_skipped,
                 "mw_duplicate_skipped": p.mw_duplicate_skipped,
                 "investment_duplicate_skipped_usd": p.investment_duplicate_skipped_usd,
@@ -245,6 +266,7 @@ def _capex(session: Session) -> dict[str, Any]:
                 "mw_by_quarter": dict(sorted(p.mw_by_quarter.items())),
                 "projects_at_risk": p.at_risk_projects,
                 "mw_at_risk": p.mw_at_risk,
+                "projects_at_risk_unconfirmed": p.at_risk_unconfirmed,
                 "slipped": p.slipped,
                 "worst_open_risk": capex_mod.blocking_risk(session, p.key) if p.key else None,
                 "phases": p.phases,

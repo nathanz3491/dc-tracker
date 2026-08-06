@@ -243,7 +243,56 @@ def test_risk_and_slippage_attach_to_the_buyer(session):
     meta = {p.key: p for p in capex.rollup(session)}["meta"]
     assert meta.mw_at_risk == 400
     assert meta.slipped == 1
+    assert meta.at_risk_unconfirmed == 0
     assert capex.blocking_risk(session, "meta") == "transmission/material"
+
+
+def test_an_unconfirmed_obstacle_counts_toward_exposure_and_is_disclosed(session):
+    """Counted, and said so.
+
+    Leaving a 待确认 obstacle out would understate exposure, which is the worse
+    direction to be wrong in — a reported obstacle is information before it is
+    evidenced. Disclosing the count is what keeps that from being a total whose
+    composition a reader cannot see.
+    """
+    project = _project(session, name="A", company="Meta", mw_planned=400)
+    session.add(
+        Risk(
+            project_id=project.id,
+            category="transmission",
+            severity="material",
+            summary="s",
+            unconfirmed="no_quote",
+        )
+    )
+    session.flush()
+
+    meta = {p.key: p for p in capex.rollup(session)}["meta"]
+    assert meta.mw_at_risk == 400
+    assert meta.at_risk_projects == 1
+    assert meta.at_risk_unconfirmed == 1
+
+
+def test_one_quoted_obstacle_takes_a_project_out_of_the_disclosure(session):
+    """A project with one cited obstacle is not in doubt, whatever else it has."""
+    project = _project(session, name="A", company="Meta", mw_planned=400)
+    session.add(
+        Risk(project_id=project.id, category="water", severity="watch", summary="cited", quote="q")
+    )
+    session.add(
+        Risk(
+            project_id=project.id,
+            category="transmission",
+            severity="material",
+            summary="vague",
+            unconfirmed="no_quote",
+        )
+    )
+    session.flush()
+
+    meta = {p.key: p for p in capex.rollup(session)}["meta"]
+    assert meta.at_risk_projects == 1
+    assert meta.at_risk_unconfirmed == 0
 
 
 # --- Honesty about what the view covers --------------------------------------
@@ -621,7 +670,9 @@ def test_a_terminal_member_never_represents_its_group(session):
 # --- Only confirmed dollars are summed ----------------------------------------
 
 
-def _source(session, project, *, fields=None, unconfirmed_fields=None):
+def _source(session, project, *, fields=None, unconfirmed_fields=None, reasons=None):
+    import json
+
     from tracker.models import Source, utcnow
 
     source = Source(
@@ -631,6 +682,7 @@ def _source(session, project, *, fields=None, unconfirmed_fields=None):
         fetched_at=utcnow(),
         fields=fields,
         unconfirmed_fields=unconfirmed_fields,
+        unconfirmed_reasons=json.dumps(reasons) if reasons else None,
     )
     session.add(source)
     session.flush()
@@ -673,6 +725,53 @@ def test_a_hand_written_investment_with_no_claims_still_counts(session):
     assert meta.investment_usd == 5_000_000
     assert meta.investment_excluded_usd == 0
     assert bare.investment_usd == 2_000_000
+
+
+def test_only_an_implausible_figure_is_excluded_not_a_merely_unquoted_one(session):
+    """The reason is what stops the exclusion over-reaching.
+
+    Both figures are 待确认 and one bit cannot tell them apart, so both used to be
+    dropped from the sum. Only the first genuinely is not this site's money; the
+    second is very likely correct and simply nobody quoted it, and excluding it
+    understates the one number the table exists to state.
+    """
+    programme = _project(session, name="Abilene", company="Meta", mw_planned=100)
+    programme.investment_usd = 500_000_000_000
+    _source(
+        session,
+        programme,
+        unconfirmed_fields="investment_usd",
+        reasons={"investment_usd": "out_of_scale"},
+    )
+    unquoted = _project(
+        session, name="Annex", company="Meta", city="Austin", investment_usd=2_000_000_000
+    )
+    _source(
+        session,
+        unquoted,
+        unconfirmed_fields="investment_usd",
+        reasons={"investment_usd": "no_quote"},
+    )
+    session.flush()
+
+    meta = {p.key: p for p in capex.rollup(session)}["meta"]
+    assert meta.investment_excluded_usd == 500_000_000_000
+    assert meta.investment_usd == 2_000_000_000
+    assert meta.investment_unquoted_usd == 2_000_000_000, "counted, and disclosed"
+
+
+def test_a_source_older_than_the_reason_column_is_still_excluded(session):
+    """No reason recorded means a source written before migration 0013.
+
+    Read as the conservative case, which is exactly the behaviour this split
+    replaced — so no number that was already being reported can move.
+    """
+    project = _project(session, company="Meta", mw_planned=100, investment_usd=500_000_000_000)
+    _source(session, project, unconfirmed_fields="investment_usd")  # no reasons
+
+    meta = {p.key: p for p in capex.rollup(session)}["meta"]
+    assert meta.investment_usd == 0
+    assert meta.investment_excluded_usd == 500_000_000_000
 
 
 def test_a_skipped_duplicate_is_not_disclosed_twice(session):

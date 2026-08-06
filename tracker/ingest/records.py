@@ -91,6 +91,14 @@ class SourceRecord:
     #: `source.fields`, which is what `confidence` and the "9 of 12" count read.
     #: A project field takes an unconfirmed value only when no confirmed one exists.
     unconfirmed: frozenset[str] = frozenset()
+    #: field -> why the gate refused it, from `vocab.UNCONFIRMED_REASONS`. Same
+    #: keys as `unconfirmed`, which stays a set because almost everything reading
+    #: it only asks "is this one confirmed". The reason is for the two readers
+    #: that need more: the capex exclusion, which means to drop `out_of_scale`
+    #: figures and not merely unquoted ones, and the console, which shows a
+    #: different chip for "go and find a source" than for "this is the wrong
+    #: number". A tuple rather than a dict so the record stays hashable.
+    unconfirmed_reasons: tuple[tuple[str, str], ...] = ()
     #: field -> the verbatim sentence that got that value through the evidence gate.
     #: `excerpt` is up to three of these concatenated for display, so it cannot say
     #: which sentence evidenced which value; this can. Empty for a path with nothing
@@ -150,6 +158,12 @@ class RiskRecord:
     first_seen: dt.date | None = None
     delay_days: int | None = None
     source_url: str | None = None
+    #: Why the gate did not confirm this, from `vocab.UNCONFIRMED_REASONS`, or
+    #: None when it did. An obstacle the gate refuses is kept and flagged rather
+    #: than deleted — the same answer migration 0006 gave for field values, and
+    #: the reason matters because `no_quote` wants another source while
+    #: `quote_off_target` wants the category corrected.
+    unconfirmed: str | None = None
 
 
 @dataclass(frozen=True)
@@ -194,6 +208,11 @@ class IngestReport:
     conflicts: int = 0
     fetch_error: int = 0
     parse_error: int = 0
+    #: Pages fetched successfully that were navigation furniture rather than an
+    #: article, refused before the LLM call. Counted separately from the errors
+    #: because it is a saving, not a failure — and because a run reporting eight
+    #: of these from one host is how the operator sees the pattern.
+    thin_content: int = 0
     events: int = 0
     risks: int = 0
 
@@ -224,6 +243,7 @@ class IngestReport:
             ("field conflicts", self.conflicts),
             ("fetch errors", self.fetch_error),
             ("parse errors", self.parse_error),
+            ("not an article", self.thin_content),
         ]
 
 

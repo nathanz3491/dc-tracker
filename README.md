@@ -798,12 +798,20 @@ defences disclose rather than hide:
   named tenant first, then the largest capacity) and sets the others aside;
   the footer says how many megawatts and dollars were skipped. Skipped, not
   merged: `tracker merge` remains the repair, and the rows are still there.
-- **Only confirmed dollars are summed.** A figure a source asserted but the
-  evidence gate never confirmed — most often a programme-wide total like "OpenAI's
-  $500 billion Stargate" quoted in an article about one campus, demoted at ingest
-  by the `$/MW` plausibility ceiling — is excluded from the investment column and
-  disclosed in the footer instead. The rollup reads back what ingest decided
-  rather than re-judging the figure.
+- **Implausible dollars are excluded; merely unquoted ones are counted and
+  disclosed.** A figure the `$/MW` plausibility ceiling demoted — the signature of
+  a programme-wide total like "OpenAI's $500 billion Stargate" quoted in an
+  article about one campus — is kept out of the investment column and shown in the
+  footer instead. A figure that simply went unquoted is a different thing: very
+  likely correct, and nobody sourced it. Excluding those too understated the one
+  number the table exists to state, and one 待确认 bit could not tell them apart —
+  which is why the gate now records *why* it refused a value and the rollup reads
+  that back rather than re-judging the figure.
+- **An obstructed project counts even when its obstacle is 待确认.** The
+  obstructed column includes projects whose only open obstacles are unquoted, and
+  the footer says how many: understating exposure is the worse direction to be
+  wrong in, and an obstacle a source reported is information before it is
+  evidenced.
 
 The year columns are a continuous range, so a year nothing is dated for shows as
 an empty column between years that have capacity — "nothing is *dated* 2029"
@@ -1138,7 +1146,7 @@ transmission  1 project(s), 900 MW
 water  1 project(s), 900 MW  (+1 with no cited capacity)
   #1 Microsoft — Fairwater (Mount Pleasant, WI)  watch  900 MW
     Cooling draw questioned by the county board.
-    uncited — confirm in `tracker review`
+    uncited — the source named it but quoted nothing for it; confirm in `tracker review`
 ```
 
 Categories map onto the PRD's obstacle list — `grid_capacity`, `transmission`,
@@ -1148,7 +1156,22 @@ countable: MW blocked on `transmission` is a power and utility signal, MW blocke
 `offtake` or `chip_supply` is a cloud and semiconductor one.
 
 Each obstacle shows the verbatim quote behind it, and one that has none says
-`uncited` rather than sitting silently beside the evidenced ones.
+`uncited` rather than sitting silently beside the evidenced ones — and says
+*which* kind of uncited, because the answers differ. "Quoted nothing for it"
+means go and find a source. "The quoted sentence does not state this category"
+means the sentence is real and filed under the wrong heading, which is a
+correction to a source you already have.
+
+**An obstacle whose quote fails is kept, not deleted.** Until migration 0012 it
+was the one thing in the ingest path that still went on the floor, and that fell
+hardest on the field this database is worst at: no press release names its own
+blocker, so an adversarial second source is the only thing that ever records one.
+The failed quote is still never stored beside it. Unconfirmed obstacles count
+toward the MW sums, with the count disclosed in the footer — but they cannot
+quietly become `project.blocker`, which is one of the twelve tracked fields: a
+confirmed obstacle always outranks an unconfirmed one, and if an unconfirmed one
+does fill the column it is marked 待确认 there too, so confidence and the 9-of-12
+count are never told it was cited.
 
 `tracker exposure` is the rollup, and it deliberately **does not produce a single
 "MW at risk" number**:
@@ -1472,6 +1495,68 @@ somebody actually wrote. Risk quotes take the same path, and their category chec
 then runs against the recovered text — strictly harder than checking the model's
 own phrasing, which could otherwise carry the category's keyword in a word the
 article never used.
+
+**A page with nothing to quote is refused before the call.** A fetch can return
+200 and 600 characters of navigation furniture, and nothing checked. The model
+got a teaser card, invented a plausible project from the title, and then *every*
+quote failed together — which is what a wall of `company / city / county / state
+/ phase` rejections in one run actually means. The row was written anyway,
+because identity fields are restored from the ungated values.
+
+The check is on **prose**, not raw length, because raw length cannot draw the
+line: a real Meta 8-K excerpt is 590 characters and an Applied Digital teaser
+card is 598, and the shorter one is genuine. Counting only characters in lines
+long enough to be sentences separates them cleanly — that 8-K scores 553, and all
+fifteen cached teaser cards score 74, being one site-wide banner line about a
+different campus. Measured over 544 cached articles, a floor of 200 refuses 20 of
+them and cannot fire on the corpus that matters: the thinnest of 246 trade-press
+articles scores 3,025, and only one of 115 SEC filings falls below.
+
+Refused pages get their own `ingest_url` status, `thin_content`, rather than
+`no_project` — that one means a model read the page and found nothing, and
+discovery never retries it. Nothing read this page, so `tracker queue --failed`
+lists it (grouped by host, which is how eight identical teasers read as one
+pattern instead of eight silent charges) and `--retry-failed` picks it up if the
+site later serves the body.
+
+**When it refuses, it says what it refused.** The warning used to name the field
+and nothing else, which is not enough to judge whether the gate is too strict:
+
+```
+evidence quote for 'mw_planned' is not in the article (best run 34 of 200 chars, 17%);
+  offered: 'Vantage has begun construction on a data center campus in Port Washington…'
+```
+
+**Checking these numbers rather than trusting them:**
+
+```bash
+python scripts/measure_evidence_gate.py
+```
+
+Re-runs all three measurements — the prose floor, how often recovery is needed at
+all, and the negative control — against whatever corpus you have. On the current
+one: **98.7% of 1,250 stored quotes are exact substrings of their own article**,
+recovery is needed for 0.5%, and **0 of 3,064 quotes crossed into an unrelated
+publisher's article**. The first number is the one that matters before loosening
+anything: the matching is not what is refusing values.
+
+The control taught one thing worth knowing. "Unrelated" has to mean a different
+*publisher* — pairing naively reported three crossings, all of them a single
+company's boilerplate recurring in its own filings or its own site. Those are
+reported separately now, because they name the gate's genuine blind spot rather
+than a threshold that needs raising: boilerplate is verbatim everywhere a company
+publishes, so quoting it proves the sentence was published and nothing about
+which site it describes. That is what `tracker logic check --audit` is for.
+
+**What the gate refuses, it keeps and flags.** A value with no quote behind it is
+待确认, not deleted (migration 0006), and since migration 0012 so is a *risk* —
+which was the last thing in the ingest path that still went on the floor. The
+quote that failed is never stored beside it, but the reason is
+(`vocab.UNCONFIRMED_REASONS`), because the tier covers cases that ask for
+opposite work: `no_quote` sends you to find a source, while `out_of_scale` — a
+programme-wide total quoted in an article about one campus — sends you to correct
+a figure you already have. Going looking for a citation for that one would find
+one, and it would still be the wrong number.
 
 ### Deriving county and coordinates
 

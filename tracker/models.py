@@ -159,6 +159,13 @@ class Source(Base):
     #: "9 of 12" definition of done keep counting only quote-backed facts, while
     #: the value itself survives to be shown as 待确认 rather than deleted.
     unconfirmed_fields: Mapped[str | None] = mapped_column(Text)
+    #: JSON object, field -> why the gate refused it, from
+    #: `vocab.UNCONFIRMED_REASONS`. Same keys as `unconfirmed_fields`; that column
+    #: answers "is this confirmed" and is what the merge path reads, this one
+    #: answers "why not" for the readers that need to tell a figure nobody quoted
+    #: from one the `$/MW` ceiling demoted. NULL before migration 0013 and on any
+    #: path with no gate behind it.
+    unconfirmed_reasons: Mapped[str | None] = mapped_column(Text)
     #: JSON object, field -> the verbatim sentence the evidence gate verified for
     #: that value. Parallel to `claims`, which holds the values themselves. NULL on
     #: every row written before migration 0007 and on any source whose path has no
@@ -276,6 +283,11 @@ class Risk(Base):
     #: Allowed to be a paraphrase; `quote` beside it is the evidence.
     summary: Mapped[str] = mapped_column(Text, nullable=False)
     quote: Mapped[str | None] = mapped_column(Text)
+
+    #: Why the evidence gate did not confirm this obstacle, from
+    #: `vocab.UNCONFIRMED_REASONS`. NULL means it did — which is every row that
+    #: predates migration 0012, since the old gate deleted whatever it refused.
+    unconfirmed: Mapped[str | None] = mapped_column(Text)
 
     first_seen: Mapped[dt.date | None] = mapped_column(Date)
     resolved_at: Mapped[dt.date | None] = mapped_column(Date)

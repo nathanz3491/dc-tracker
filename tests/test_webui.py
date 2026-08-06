@@ -218,8 +218,18 @@ def test_a_programme_total_says_so_rather_than_just_being_amber(tmp_path):
                             "state": "KY",
                             "mw_planned": 1200.0,
                             "investment_usd": 100_000_000_000,
+                            "expected_online": dt.date(2028, 1, 1),
                         },
-                        unconfirmed=frozenset({"investment_usd"}),
+                        unconfirmed=frozenset({"investment_usd", "expected_online"}),
+                        # What the gate decided, recorded per field (migration
+                        # 0013). This used to be reconstructed by string-matching
+                        # a marker in the project's notes, which could only ever
+                        # see the scale demotion — the second field below had no
+                        # way to say anything about itself.
+                        unconfirmed_reasons=(
+                            ("expected_online", "no_quote"),
+                            ("investment_usd", "out_of_scale"),
+                        ),
                     )
                 ],
                 notes=[note],
@@ -228,11 +238,13 @@ def test_a_programme_total_says_so_rather_than_just_being_amber(tmp_path):
     with session_scope(engine, commit=False) as session:
         payload = build(session, db_path=str(path), schema_version=7)
 
-    reason = payload["projects"][0]["unconfirmed_because"][SCALE_NOTE_FIELD]
-    assert reason["code"] == "scale"
-    assert SCALE_NOTE_MARKER in reason["note"]
-    # The `[source][tag]` bookkeeping is stripped; the sentence is what is shown.
-    assert not reason["note"].startswith("[")
+    because = payload["projects"][0]["unconfirmed_because"]
+    assert because[SCALE_NOTE_FIELD]["code"] == "out_of_scale"
+    assert "programme-wide total" in because[SCALE_NOTE_FIELD]["note"]
+
+    # The distinction is the whole point: same amber tier, different work.
+    assert because["expected_online"]["code"] == "no_quote"
+    assert because["expected_online"]["note"] != because[SCALE_NOTE_FIELD]["note"]
 
 
 def test_a_merely_unquoted_value_claims_no_reason(server):

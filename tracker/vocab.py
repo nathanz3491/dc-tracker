@@ -11,7 +11,7 @@ this module, so it must not depend on any of them.
 
 from __future__ import annotations
 
-from typing import Final, Literal
+from typing import Any, Final, Literal
 
 # --- project.phase ---------------------------------------------------------
 # Ordered from least to most advanced. The order is load-bearing: upsert.py
@@ -234,11 +234,39 @@ URL_STATUSES: Final[tuple[str, ...]] = (
     "parse_error",
     "llm_error",
     "no_project",
+    # Fetched, but the body was navigation furniture rather than an article, so it
+    # was refused before the LLM call. Distinct from `no_project`, which means a
+    # model read the page and found nothing: here nothing read it, and a site that
+    # later serves the full body makes the URL worth another attempt.
+    "thin_content",
     "skipped",
 )
 
 #: The one status that means "there is work to do here".
 PENDING_URL_STATUS: Final[str] = "discovered"
+
+# --- why something is unconfirmed ------------------------------------------
+#: Why the evidence gate did not confirm a value or a risk. Absent means it did.
+#:
+#: The tier alone is not enough to act on. A figure that is perfectly quoted but
+#: whose label did not match reads identically to a programme-wide total caught
+#: by the `$/MW` ceiling, and they call for opposite work: the first wants
+#: another source, the second wants the figure corrected. Anything reading the
+#: flag back — the capex exclusion most of all — over-excludes without this.
+UNCONFIRMED_REASONS: Final[tuple[str, ...]] = (
+    #: Nothing was offered to support it.
+    "no_quote",
+    #: A quote was offered and is not in the article, even after recovery. This
+    #: is the one that means a model wrote a sentence nobody published.
+    "quote_unverified",
+    #: The quote is genuinely the article's, but does not state this particular
+    #: thing — a real sentence filed against the wrong value or category.
+    "quote_off_target",
+    #: Quoted, verified, and still not credible for this project: the `$/MW`
+    #: ceiling, which fires on a programme-wide total quoted in an article about
+    #: one campus.
+    "out_of_scale",
+)
 
 # --- project fields --------------------------------------------------------
 #: Canonical order for the 12 tracked PRD fields. Used to render `source.fields`
@@ -287,6 +315,22 @@ def severity_rank(severity: str) -> int:
         return RISK_SEVERITIES.index(severity)
     except ValueError:
         return -1
+
+
+def risk_precedence(risk: Any) -> tuple[int, int]:
+    """Sort key for the obstacle that should speak for a project. Highest wins.
+
+    Confirmed before unconfirmed, then severity. A 待确认 risk may become
+    `project.blocker` only when nothing evidenced is available — the same rule a
+    field value follows, and it matters here because `blocker` is one of the
+    twelve tracked fields. Without it, an obstacle the gate refused would be
+    promoted into `source.fields` and read as cited by confidence and by the
+    9-of-12 count, which is the laundering the 待确认 tier exists to prevent.
+
+    Duck-typed on `severity` and `unconfirmed` so the extractor's `RiskRecord`
+    and the stored `Risk` row are ranked by one definition rather than two.
+    """
+    return (0 if getattr(risk, "unconfirmed", None) else 1, severity_rank(risk.severity))
 
 
 def sql_in(column: str, allowed: tuple[str, ...]) -> str:

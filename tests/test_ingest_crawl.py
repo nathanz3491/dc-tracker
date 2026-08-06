@@ -167,13 +167,13 @@ def test_evidence_gate_keeps_quoted_values():
     )
     assert kept == {"mw_planned": 900.0}
     assert "mw_planned" in quotes
-    assert dropped == []
+    assert dropped == {}
 
 
 def test_evidence_gate_drops_values_with_no_quote():
     kept, _, dropped = crawl.evidence_gate({"mw_planned": 900.0}, [], article())
     assert kept == {}
-    assert dropped == ["mw_planned"]
+    assert dropped == {"mw_planned": "no_quote"}
 
 
 def test_evidence_gate_drops_a_quote_that_is_not_in_the_article(caplog):
@@ -191,7 +191,7 @@ def test_evidence_gate_drops_a_quote_that_is_not_in_the_article(caplog):
     )
     assert kept == {}
     assert quotes == {}
-    assert dropped == ["mw_planned"]
+    assert dropped == {"mw_planned": "quote_unverified"}
     assert "not in the article" in caplog.text
 
 
@@ -231,7 +231,7 @@ def test_evidence_gate_accepts_a_value_stated_under_another_field_label():
         f"Some preamble. {quote}. Some trailing text.",
     )
     assert kept == {"mw_planned": 200.0}
-    assert dropped == []
+    assert dropped == {}
     assert quotes["mw_planned"] == quote, "the supporting quote must be recorded for citation"
 
 
@@ -258,7 +258,7 @@ def test_evidence_gate_records_the_quote_that_states_the_value_not_the_label():
         [{"field": "mw_planned", "quote": money_quote}, {"field": "notes", "quote": mw_quote}],
         text,
     )
-    assert dropped == []
+    assert dropped == {}
     assert "900" in quotes["mw_planned"]
     assert quotes["mw_planned"] != money_quote
 
@@ -283,7 +283,7 @@ def test_evidence_gate_matches_quantities_by_value_not_by_string():
         text,
     )
     assert kept == {"mw_planned": 1200.0, "investment_usd": 3_300_000_000}
-    assert dropped == []
+    assert dropped == {}
 
 
 def test_evidence_gate_rejects_a_real_quote_citing_a_different_number():
@@ -299,7 +299,7 @@ def test_evidence_gate_rejects_a_real_quote_citing_a_different_number():
         text,
     )
     assert kept == {}
-    assert dropped == ["mw_planned"]
+    assert dropped == {"mw_planned": "quote_off_target"}
 
 
 def test_evidence_gate_reads_phase_from_article_wording():
@@ -316,7 +316,7 @@ def test_evidence_gate_reads_phase_from_article_wording():
         {"phase": "operational"}, [{"field": "x", "quote": announced}], announced
     )
     assert kept == {}
-    assert dropped == ["phase"]
+    assert dropped == {"phase": "no_quote"}
 
 
 def test_evidence_gate_ignores_malformed_entries():
@@ -363,7 +363,7 @@ def test_a_quote_the_model_edited_keeps_the_articles_words_not_the_models():
         article(),
     )
     assert kept == {"mw_planned": 900.0}
-    assert dropped == []
+    assert dropped == {}
     assert "the company says" in quotes["mw_planned"]
     assert "that Microsoft says" not in quotes["mw_planned"]
     # And what we stored is genuinely in the article, which is the invariant.
@@ -407,8 +407,8 @@ def test_widening_recovers_a_figure_the_matched_run_stopped_short_of():
         "Microsoft has committed $3.3 billion to the site."
     )
     run = crawl._verbatim_run(quote, article())
-    assert run is not None
-    assert "$3.3 billion" in run
+    assert run.text is not None
+    assert "$3.3 billion" in run.text
 
     kept, quotes, dropped = crawl.evidence_gate(
         {"investment_usd": 3_300_000_000.0},
@@ -416,7 +416,7 @@ def test_widening_recovers_a_figure_the_matched_run_stopped_short_of():
         article(),
     )
     assert kept == {"investment_usd": 3_300_000_000.0}
-    assert dropped == []
+    assert dropped == {}
     assert "The company has committed" in quotes["investment_usd"]
 
 
@@ -441,8 +441,43 @@ def test_a_fabricated_quote_is_still_rejected_however_plausible(caplog):
     )
     assert kept == {}
     assert quotes == {}
-    assert dropped == ["mw_planned"]
+    assert dropped == {"mw_planned": "quote_unverified"}
     assert "not in the article" in caplog.text
+
+
+def test_a_rejected_quote_is_logged_with_what_was_offered_and_how_close_it_came(caplog):
+    """The warning has to be actionable on its own.
+
+    Naming only the field says a value was lost and nothing about why, so
+    deciding whether the gate is too strict needed an instrumented replay of
+    the extraction path. Logging the quote and the longest run it really
+    matched makes every ordinary run produce that dataset for free.
+    """
+    caplog.set_level("WARNING")
+    crawl.evidence_gate(
+        {"mw_planned": 4200.0},
+        [
+            {
+                "field": "mw_planned",
+                "quote": (
+                    "Officials confirmed the Mount Pleasant site is now expected to "
+                    "reach 4,200 megawatts once every phase is energized."
+                ),
+            }
+        ],
+        article(),
+    )
+    assert "'mw_planned'" in caplog.text
+    assert "Officials confirmed the Mount Pleasant site" in caplog.text
+    assert re.search(r"best run \d+ of \d+ chars, \d+%", caplog.text)
+
+
+def test_a_logged_quote_is_one_line_and_bounded():
+    """A wall of these is the normal case on a thin page, so each stays short."""
+    sprawling = ("The campus will draw nine hundred megawatts.\n" * 20).strip()
+    logged = crawl._for_log(sprawling)
+    assert "\n" not in logged
+    assert len(logged) <= crawl._LOGGED_QUOTE_CHARS
 
 
 def test_a_real_quote_from_a_different_article_is_rejected():
@@ -457,7 +492,7 @@ def test_a_real_quote_from_a_different_article_is_rejected():
         "Ohio, that the company says will draw 1,400 megawatts at full buildout. "
         "The developer has committed $8.1 billion to the site."
     )
-    assert crawl._verbatim_run(elsewhere, article()) is None
+    assert crawl._verbatim_run(elsewhere, article()).text is None
 
     kept, _, dropped = crawl.evidence_gate(
         {"mw_planned": 1400.0},
@@ -465,7 +500,7 @@ def test_a_real_quote_from_a_different_article_is_rejected():
         article(),
     )
     assert kept == {}
-    assert dropped == ["mw_planned"]
+    assert dropped == {"mw_planned": "quote_unverified"}
 
 
 def test_a_genuine_fragment_cannot_carry_a_mostly_invented_quote():
@@ -481,7 +516,7 @@ def test_a_genuine_fragment_cannot_carry_a_mostly_invented_quote():
         "two gigawatts of critical load across six additional buildings now in "
         "design, with the first of them due to break ground before the end of the year."
     )
-    assert crawl._verbatim_run(quote, article()) is None
+    assert crawl._verbatim_run(quote, article()).text is None
 
 
 def test_a_short_generic_phrase_is_not_enough_however_much_of_it_matches():
@@ -493,7 +528,7 @@ def test_a_short_generic_phrase_is_not_enough_however_much_of_it_matches():
     because widening would then hand the model a whole sentence it never quoted:
     it guessed 2024, and the sentence it would be credited with says 2023.
     """
-    assert crawl._verbatim_run("broke ground on the site in 2024", article()) is None
+    assert crawl._verbatim_run("broke ground on the site in 2024", article()).text is None
 
 
 def test_widening_crosses_a_sentence_that_ends_at_a_line_wrap():
@@ -512,8 +547,8 @@ def test_widening_crosses_a_sentence_that_ends_at_a_line_wrap():
         "Vantage has committed $2.1 billion to the site."
     )
     run = crawl._verbatim_run(quote, text)
-    assert run is not None
-    assert "$2.1 billion" in run
+    assert run.text is not None
+    assert "$2.1 billion" in run.text
 
     kept, _, dropped = crawl.evidence_gate(
         {"investment_usd": 2_100_000_000.0},
@@ -521,7 +556,7 @@ def test_widening_crosses_a_sentence_that_ends_at_a_line_wrap():
         text,
     )
     assert kept == {"investment_usd": 2_100_000_000.0}
-    assert dropped == []
+    assert dropped == {}
 
 
 # --- build_records ----------------------------------------------------------
@@ -685,15 +720,36 @@ def test_a_risk_summary_may_be_a_paraphrase(prompt):
     assert crawl._normalize_for_match(risk.quote) in crawl._normalize_for_match(article())
 
 
-def test_a_risk_without_a_quote_is_dropped(prompt):
-    record = build("llm_response_ungrounded.json", prompt=prompt)[0]
-    assert not any(r.category == "community_opposition" for r in record.risks)
+def _risk(record, category):
+    return next((r for r in record.risks if r.category == category), None)
 
 
-def test_a_risk_whose_quote_is_not_in_the_article_is_dropped(prompt):
-    """Same anti-fabrication guarantee the evidence gate gives every other field."""
-    record = build("llm_response_ungrounded.json", prompt=prompt)[0]
-    assert not any(r.category == "water" for r in record.risks)
+def test_a_risk_without_a_quote_is_kept_as_unconfirmed_not_deleted(prompt):
+    """The one place in the ingest path that still destroyed extracted information.
+
+    Every *field* in this position is kept and flagged 待确认 (migration 0006).
+    A risk was deleted, which fell hardest on the field the database is worst at:
+    no press release names its own blocker, so an adversarial second source is
+    the only thing that ever records one.
+    """
+    risk = _risk(build("llm_response_ungrounded.json", prompt=prompt)[0], "community_opposition")
+    assert risk is not None
+    assert risk.unconfirmed == "no_quote"
+    assert risk.quote is None
+    assert risk.summary
+
+
+def test_a_risk_whose_quote_is_not_in_the_article_keeps_the_risk_and_drops_the_quote(prompt):
+    """The anti-fabrication guarantee is unchanged; only the remedy is.
+
+    The model wrote a sentence nobody published, so that sentence is not stored —
+    but the obstacle it was reaching for is not evidence *against* an obstacle,
+    and deleting it threw away the category and the severity too.
+    """
+    risk = _risk(build("llm_response_ungrounded.json", prompt=prompt)[0], "water")
+    assert risk is not None
+    assert risk.unconfirmed == "quote_unverified"
+    assert risk.quote is None, "a fabricated sentence is never stored"
 
 
 def test_a_risk_quote_the_model_edited_is_recovered_too():
@@ -755,25 +811,46 @@ def test_recovery_does_not_let_a_mislabelled_risk_through():
         text,
         URL,
     )
-    assert kept == []
+    assert len(kept) == 1
+    assert kept[0].unconfirmed == "quote_off_target"
+    assert kept[0].quote is None, "the model's keyword must not be credited as evidence"
     assert notes
 
 
-def test_a_real_quote_under_the_wrong_category_is_dropped(prompt):
+def test_a_real_quote_under_the_wrong_category_does_not_evidence_it(prompt):
     """The check that `_SUMMARY_FIELDS` could not make.
 
     "Microsoft will operate the campus itself" is a genuine sentence from the
     article, so trusting the model's label would let it evidence a financing
     collapse. `_RISK_EVIDENCE` requires the quote to actually concern the category
-    it is filed under.
+    it is filed under — and failing that now unpairs the quote from the risk
+    rather than deleting both, because a mislabelled quote is a correction to
+    make, not a source to go and find.
+    """
+    risk = _risk(build("llm_response_ungrounded.json", prompt=prompt)[0], "financing")
+    assert risk is not None
+    assert risk.unconfirmed == "quote_off_target"
+    assert risk.quote is None
+
+
+def test_unconfirmed_risks_are_disclosed(prompt):
+    record = build("llm_response_ungrounded.json", prompt=prompt)[0]
+    assert any("risk(s) kept as 待确认" in n for n in record.notes)
+
+
+def test_an_unconfirmed_risk_does_not_launder_itself_into_the_blocker_field(prompt):
+    """`blocker` is one of the twelve tracked fields.
+
+    It is derived from the risk rows, so an obstacle the gate refused would
+    otherwise arrive in `source.fields` reading as cited — counted by confidence
+    and by the 9-of-12 measure. It may still *fill* the column, since a 待确认
+    value is better than nothing; it may not be called confirmed.
     """
     record = build("llm_response_ungrounded.json", prompt=prompt)[0]
-    assert not any(r.category == "financing" for r in record.risks)
-
-
-def test_dropped_risks_are_disclosed(prompt):
-    record = build("llm_response_ungrounded.json", prompt=prompt)[0]
-    assert any("dropped unsupported risk" in n for n in record.notes)
+    source = record.sources[0]
+    assert all(r.unconfirmed for r in record.risks), "fixture premise"
+    assert source.claims.get("blocker")
+    assert "blocker" in source.unconfirmed
 
 
 def test_an_article_reporting_no_obstacle_yields_no_risk(prompt):
@@ -994,6 +1071,176 @@ def test_empty_projects_list_is_no_project_not_an_error(prompt):
     outcome = crawl.extract_one(fetched(), prompt=prompt, extractor=llm)
     assert outcome.status == "no_project"
     assert outcome.records == []
+
+
+# --- Refusing a page that is not an article ---------------------------------
+
+#: The Applied Digital campus-update card, as fetched. 598 characters, of which
+#: the only sentence is a site-wide banner about a *different* campus — which is
+#: precisely the project the model invented and then could not evidence.
+TEASER = """\
+Applied Digital
+
+Applied Digital has signed a 210 MW lease at Delta Forge 2... Read More >>
+
+INSIGHTS
+
+COMPANY
+
+INVESTORS
+
+Contact
+
+Contact
+
+< Back
+
+Video
+
+POLARIS FORGE 1 CAMPUS UPDATE | MAY 2026
+
+<< Return to Insights
+
+Awards & Recognition
+
+Company
+
+About Leadership Careers Contact Applied Digital CARES
+
+Solutions
+
+Digital Infrastructure
+
+AI Factories
+
+Insights
+
+Insights
+
+Behind The Build
+
+Investors
+
+Connect
+
+Subscribe to Applied Digital Email Updates
+
+Thank you for subscribing!
+
+Oops! Something went wrong while submitting the form.
+
+© 2026 — Copyright
+
+Terms & Conditions
+
+Privacy Policy
+"""
+
+#: A real Meta 8-K excerpt: 590 characters, eight fewer than the teaser above.
+#: Raw length cannot tell these two apart, which is why the floor is on prose.
+SHORT_FILING = """\
+Meta — SEC 8-K filed 2026-04-29
+
+We continue to expect to deliver operating income this year that is above 2025 operating income.
+
+We anticipate 2026 capital expenditures, including principal payments on finance leases, to be \
+in the range of $125-145 billion, increased from our prior range of $115-135 billion. This \
+reflects our expectations for higher component pricing this year and, to a lesser extent, \
+additional data center costs to support future year capacity.
+
+Absent any changes to our tax landscape, we expect our tax rate for the remaining quarters of \
+2026 to be between 13-16%.
+"""
+
+
+def test_a_teaser_card_is_refused_before_it_costs_an_llm_call(prompt, caplog):
+    """The largest single share of the reported symptom, and the cheapest fix.
+
+    Every quote failing together on one page is what a nav-only body looks like:
+    the model has a title and nothing to quote, so it invents a project and the
+    gate correctly refuses all of it — after the call has been paid for, and
+    after `build_records` has restored the identity fields and written the row.
+    """
+    caplog.set_level("WARNING")
+    llm = FakeLLM([canned("llm_response_microsoft_wi.json")])
+    outcome = crawl.extract_one(fetched(markdown=TEASER), prompt=prompt, extractor=llm)
+    assert outcome.status == "thin_content"
+    assert outcome.records == []
+    assert llm.seen == [], "the whole point is that nothing was spent"
+    assert "not an article" in caplog.text
+
+
+def test_a_short_but_real_filing_is_not_refused(prompt):
+    """The stated risk in refusing short pages, and the reason the floor is on prose.
+
+    This 8-K excerpt is *shorter* than the teaser card above — 590 characters
+    against 598 — so any raw-length floor that catches the card also destroys
+    real filings. It scores 553 characters of prose against the card's 74.
+    """
+    assert len(SHORT_FILING) < len(TEASER)
+    assert crawl.prose_length(SHORT_FILING) > crawl.MIN_PROSE_CHARS
+    assert crawl.prose_length(TEASER) < crawl.MIN_PROSE_CHARS
+
+    llm = FakeLLM(['{"projects": []}'])
+    outcome = crawl.extract_one(fetched(markdown=SHORT_FILING), prompt=prompt, extractor=llm)
+    assert outcome.status == "no_project"
+
+
+def test_prose_is_measured_in_characters_so_chinese_is_not_scored_at_zero():
+    """Why the line test counts characters and not words.
+
+    Chinese is not whitespace-delimited, so a words-per-line measure scores
+    every Chinese-language page at zero and refuses it as `thin_content` —
+    recording a reason that is simply false about a 4,392-character article.
+    This is the body of a real repost that the character measure keeps.
+
+    It is still the stricter direction for Chinese, because the same meaning
+    fits in fewer characters; see `MIN_PROSE_CHARS` for what that costs.
+    """
+    chinese = (
+        "IT之家 3 月 9 日消息，Oracle 甲骨文北京时间今日在 X 平台表示，近期媒体关于"
+        "“星际之门”首个站点 —— 得克萨斯州阿比林 (Abilene) 园区的报道存在虚假与不实内容。\n"
+        "Oracle 澄清称，该企业正与 Crusoe 紧密协作，以创纪录的速度建设阿比林站点，"
+        "两栋建筑已全面投入运营，园区其余部分也按计划推进；Oracle 还已完成额外 4.5GW 的"
+        "租赁签约，以兑现对 OpenAI 的承诺。\n"
+        "此外，Oracle 持续评估全球各地站点，通过与优秀合作伙伴及客户的紧密协作，"
+        "满足对 OCI 云服务日益增长的需求。\n"
+    )
+    assert crawl.prose_length(chinese) > crawl.MIN_PROSE_CHARS
+
+    # A whitespace-delimited sentence is one "word" long, which is what the
+    # measure this replaced would have scored the whole page at.
+    unbroken = (
+        "两栋建筑已全面投入运营，园区其余部分也按计划推进，公司持续评估全球各地站点，"
+        "通过与优秀合作伙伴及客户的紧密协作，满足对云服务日益增长的需求。"
+    )
+    assert len(unbroken.split()) == 1
+    assert crawl.prose_length(unbroken) == len(unbroken)
+
+
+def test_a_refused_page_is_retryable_not_settled(session, prompt):
+    """A site that serves a teaser today may serve the article tomorrow.
+
+    `no_project` would be wrong here and would bury it: that status means a model
+    read the page and found nothing, and discovery never retries it. Nothing read
+    this page at all.
+    """
+    from tracker.ingest import discover as disc
+
+    llm = FakeLLM([canned("llm_response_microsoft_wi.json")])
+    report = crawl.run(
+        session,
+        [URL],
+        fetcher=FakeFetcher({URL: fetched(markdown=TEASER)}),
+        extractor=llm,
+        run_id="thin",
+    )
+    assert report.thin_content == 1
+    assert report.written == 0
+
+    row = session.scalar(select(IngestUrl))
+    assert row.status == "thin_content"
+    assert [r.url for r in disc.failed(session)] == [URL]
 
 
 def test_token_usage_is_accounted(prompt):

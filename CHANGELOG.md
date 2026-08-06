@@ -12,6 +12,58 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **A page with nothing to quote is refused before it costs an LLM call**
+  (`tracker/ingest/crawl.py`, migration `0011`). A fetch that returns 200 and 600
+  characters of navigation furniture is not an article, and nothing checked. The
+  model was handed a teaser card, invented a plausible project from the title,
+  and then *every* quote failed — `company / city / county / state / phase`
+  refused together, which is the log signature that prompted this work.
+  `build_records` then restored the identity fields from the ungated values and
+  wrote the row anyway, so the call was paid for and a phantom project outlived
+  it.
+
+  The refusal is on **prose**, not raw length, because raw length cannot draw the
+  line: a real Meta 8-K excerpt is 590 characters and an Applied Digital teaser
+  card is 598, and the shorter one is the genuine one. Counting only characters
+  in lines long enough to be sentences separates them — the 8-K scores 553, all
+  15 cached teaser cards score 74, being one site-wide banner line ("Applied
+  Digital has signed a 210 MW lease at Delta Forge 2… Read More >>"), which is
+  exactly the sentence the model was inventing projects out of.
+
+  Measured over the 544 cached articles that could be matched to a URL: the floor
+  of 200 refuses 20 of them (3.7%), every one read and confirmed to be nav
+  furniture, an 8-character stub, a bare revenue table or one Chinese wire
+  newsflash. It cannot fire on the main corpus — 246 trade-press articles, the
+  thinnest at 3,025 — nor on the real filings that were the stated risk, since
+  only 1 of 115 cached SEC filings falls below it. Line length is measured in
+  characters rather than words on purpose: a word count scores every
+  Chinese-language page at zero, and recording `thin_content` against a real
+  4,392-character article would be a false reason in the database.
+
+  `thin_content` is its own `ingest_url` status, deliberately not `no_project`:
+  that status means a model read the page and found nothing, and discovery never
+  retries it. Nothing read this page, so it stays in `tracker queue --failed`
+  (grouped by host, which is how eight identical teasers become one visible
+  pattern) and `tracker sync --retry-failed` picks it up if the site later serves
+  the body.
+
+- **`scripts/measure_evidence_gate.py`** re-runs the three measurements the
+  gate's thresholds rest on, against whatever corpus you actually have. Corpora
+  change and docstrings do not, so this is how you check the numbers rather than
+  trusting a comment. It reads the cache and the database, writes nothing, and
+  needs no API key.
+
+  Its negative control is the experiment `MIN_RUN_CHARS` was tuned against and
+  the one `docs/plan-evidence-gate.md` makes mandatory for any change to the
+  matching. Getting it right needed one correction worth recording: "unrelated"
+  has to mean a different *publisher*. Pairing naively across the whole cache
+  reported three crossings, and all three were one company's own boilerplate
+  recurring in its own documents — two filings under one SEC CIK, two pages on
+  one domain. Those are reported on their own line now, because they name the
+  gate's real blind spot rather than a threshold that needs raising: boilerplate
+  is verbatim everywhere a company publishes, so quoting it proves the sentence
+  was published and proves nothing about which site it describes.
+
 - **`tracker audit`: numbers that cannot be true** (`tracker/audit.py`). `logic
   check` asks whether a row's fields contradict each other, and could not help
   here: each of these rows was perfectly self-consistent around a figure wrong by
@@ -561,6 +613,73 @@ initial build of the v1 PRD.
   on the public internet is a decision for somebody at a terminal.
 
 ### Changed
+
+- **A risk whose quote fails is kept as 待确认 instead of deleted** (migration
+  `0012`, `tracker/ingest/crawl.py`, `upsert.py`, `capex.py`, `cli.py`).
+  Migration 0006 gave every *field* a third outcome — retained, flagged, never
+  treated as fact. A risk was the one thing in the ingest path that still went on
+  the floor: fail the verbatim check or the category check and the obstacle, its
+  severity and the model's summary were all discarded. That fell hardest on the
+  field this database is worst at, because no press release names its own
+  blocker, so an adversarial second source is the only thing that ever records
+  one.
+
+  The quote that failed is still not stored — a sentence is never kept beside the
+  thing it failed to support, the same rule `evidence_gate` applies to fields —
+  but `risk.unconfirmed` records *why*, and `tracker risks` prints the reason
+  rather than a bare "uncited": "quoted nothing for it" sends you to find a
+  source, "the quoted sentence does not state this category" sends you to correct
+  one you already have. Two things still drop, because there is no 待确认 version
+  of them: a category outside the vocabulary, and a missing summary.
+
+  Unconfirmed risks **count** toward `tracker risks`' MW sums and the capex
+  obstructed column, with the count disclosed in both footers — understating
+  exposure is the worse error, and a total whose composition a reader cannot see
+  is what this database exists not to produce. They may not, however, quietly
+  become `project.blocker`: that is one of the twelve tracked fields, so
+  `vocab.risk_precedence` ranks a confirmed obstacle above an unconfirmed one
+  everywhere the "most severe open risk" is chosen, and an unconfirmed winner
+  marks `blocker` unconfirmed on the source too. Without that, an obstacle the
+  gate refused would arrive in `source.fields` reading as cited and be counted by
+  confidence and by the 9-of-12 measure.
+
+- **The 待确认 tier records why, not just that** (migration `0013`,
+  `tracker/vocab.py`, `crawl.py`, `capex.py`, `webui/dataset.py`). One bit could
+  not be acted on, because the tier covers situations that ask for opposite work:
+  a figure nothing quotable backs wants another source, while a programme-wide
+  total lifted from an article about one campus wants correcting — going looking
+  for a citation would find one, and it would still be the wrong number.
+
+  `evidence_gate` now returns a reason per refused field from a shared vocabulary
+  (`no_quote`, `quote_unverified`, `quote_off_target`, `out_of_scale`), stored in
+  `source.unconfirmed_reasons`. The consequence that matters is in `capex`: the
+  investment column excluded *every* unconfirmed figure, so it dropped the
+  programme total it meant to drop and also every campus figure nobody happened
+  to quote — understating the one number the table exists to state. It now
+  excludes only `out_of_scale`, counts the merely-unquoted, and discloses that
+  sum separately. Sources written before this migration have no reason recorded
+  and are read as excluded, which is exactly the previous behaviour, so no number
+  already being reported moves.
+
+  This also replaces the seam it was named after: `webui.dataset
+  ._unconfirmed_because` reconstructed the one reason it could by string-matching
+  a marker in the project's notes, and so could only ever speak about the scale
+  demotion. It reads the column now, and every other field can say something
+  about itself.
+
+- **A rejected evidence quote says what was rejected** (`tracker/ingest/crawl
+  .py`). The warning named the field and nothing else, so answering "are we
+  losing a lot of data?" needed an instrumented replay of the extraction path. It
+  now carries the offered quote and the longest run that really matched:
+
+  ```
+  evidence quote for 'mw_planned' is not in the article (best run 34 of 200 chars, 17%);
+    offered: 'Vantage has begun construction on a data center campus in Port Washington…'
+  ```
+
+  Two lines, and every ordinary run now produces the dataset that question
+  deserved. `_verbatim_run` returns the run statistics alongside the recovery so
+  the failing path does not pay for the expensive match twice.
 
 - **The console's Capex view now explains itself at first glance** (`app.js`).
   It opened with thirteen columns of raw numbers; a first-time reader — the

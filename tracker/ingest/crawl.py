@@ -27,7 +27,7 @@ import unicodedata
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Final, NamedTuple
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -62,7 +62,12 @@ from tracker.normalize import (
 )
 from tracker.prompts import Prompt, load_prompt
 from tracker.upsert import upsert_record
-from tracker.vocab import DEFAULT_RISK_SEVERITY, EVENT_TYPES, TRACKED_FIELDS, severity_rank
+from tracker.vocab import (
+    DEFAULT_RISK_SEVERITY,
+    EVENT_TYPES,
+    TRACKED_FIELDS,
+    risk_precedence,
+)
 
 log = logging.getLogger(__name__)
 
@@ -200,6 +205,69 @@ def truncate(text: str, limit: int) -> str:
     return text[:head] + TRUNCATION_MARKER + text[-tail:]
 
 
+#: A line has to be at least this long to be counted as prose rather than as a
+#: navigation label. `INSIGHTS`, `< Back`, `Terms & Conditions` and
+#: `© 2026 — Copyright` are what a teaser card is made of; a sentence somebody
+#: wrote is longer. Measured in *characters* rather than words on purpose — a
+#: word count scores every Chinese-language article at zero, and refusing a real
+#: 4,392-character article as `thin_content` would record a false reason.
+_PROSE_LINE_CHARS: Final = 60
+
+#: Below this much prose, a page is navigation furniture and is refused before it
+#: costs an LLM call.
+#:
+#: **Why a floor is needed.** A fetch that returns 200 and 600 characters of
+#: chrome is not an article, but nothing checked, so the model was handed a
+#: teaser card, invented a plausible project from the title, and then *every*
+#: quote failed — `company / city / county / state / phase` refused together.
+#: `build_records` then restored the identity fields from the ungated values and
+#: wrote a row anyway, with zero confirmed fields.
+#:
+#: **Why 200, and why on prose rather than on raw length.** Measured over the 544
+#: cached articles that could be matched to a URL:
+#:
+#: * Raw length cannot draw the line. A real Meta 8-K excerpt is 590 characters
+#:   and an Applied Digital teaser card is 598 — 8 apart, with the *shorter* one
+#:   genuine.
+#: * Prose separates them cleanly. The same 8-K scores 553; all 15 cached Applied
+#:   Digital campus-update cards score 74, being one site-wide banner line
+#:   ("Applied Digital has signed a 210 MW lease at Delta Forge 2… Read More >>")
+#:   — which is exactly the sentence the model was inventing projects out of.
+#: * It cannot fire on the main corpus: 246 trade-press articles, the thinnest
+#:   3,025, which is 15x this floor.
+#: * It cannot fire on real filings either, which was the stated risk: of 115
+#:   cached SEC filings only one falls below — a bare quarterly revenue table
+#:   with no sentence in it. The shortest genuine one clears the floor 2.8x over.
+#:
+#: 20 of the 544 are refused, and every one was read: 17 nav-only operator pages,
+#: an 8-character stub, that revenue table, and one Chinese wire newsflash. The
+#: margin above is thinner than the margin below — the next genuine page up
+#: scores 269 — so raising this without repeating the measurement is not safe.
+#:
+#: **The one known asymmetry.** A character floor is stricter for Chinese, where
+#: the same meaning fits in roughly a third of the characters, and the three
+#: Chinese-language reposts in the corpus score 180, 269 and 282 against an
+#: English median in the thousands. Accepted rather than corrected: the measure
+#: was chosen over a word count precisely so those pages score honestly instead
+#: of zero, and a Chinese repost is a source this pipeline can barely use anyway
+#: — `looks_english` refuses its summary fields and no quantity pattern matches
+#: its numerals. A per-script floor would be the fix if that ever stops being
+#: true.
+#: A refusal is recorded as `thin_content`, which is visible in
+#: `tracker queue --failed` and retried by `--retry-failed`, so a page a site
+#: later serves in full is recoverable rather than lost.
+MIN_PROSE_CHARS: Final = 200
+
+
+def prose_length(text: str) -> int:
+    """Characters of `text` that sit in lines long enough to be sentences."""
+    return sum(
+        len(stripped)
+        for line in text.splitlines()
+        if len(stripped := line.strip()) >= _PROSE_LINE_CHARS
+    )
+
+
 def _normalize_for_match(text: str) -> str:
     """Fold whitespace, unicode and quote style, for substring comparison."""
     folded = unicodedata.normalize("NFKC", text)
@@ -270,29 +338,59 @@ MIN_RUN_CHARS: Final = 40
 MIN_RUN_FRACTION: Final = 0.5
 
 
-def _verbatim_run(quote: str, article: str) -> str | None:
-    """The article's own words for the longest stretch of `quote` it really contains.
+#: How much of a rejected quote to put in the log. Long enough to recognise the
+#: sentence and judge the refusal, short enough that a wall of them stays readable.
+_LOGGED_QUOTE_CHARS: Final = 160
 
-    None when nothing long enough matches, which is what a fabricated quote looks
-    like.
+
+def _for_log(quote: str) -> str:
+    """A quote flattened to one readable line for a warning."""
+    flat = re.sub(r"\s+", " ", quote).strip()
+    if len(flat) <= _LOGGED_QUOTE_CHARS:
+        return flat
+    return flat[: _LOGGED_QUOTE_CHARS - 1] + "…"
+
+
+class _Run(NamedTuple):
+    """What the article really contains of an offered quote.
+
+    `text` is the recovery — the article's own words — and is None when the
+    longest run cleared neither floor, which is what a fabricated quote looks
+    like. `chars` and `of` survive that refusal deliberately: the rejection log
+    has to say *how close* the quote came, and recomputing the match to find out
+    would pay for the expensive part twice on the path that is already failing.
     """
+
+    text: str | None
+    chars: int
+    of: int
+
+    def shortfall(self) -> str:
+        """The refusal in the form the log wants: `best run 31 of 88 chars, 35%`."""
+        share = self.chars / self.of if self.of else 0.0
+        return f"best run {self.chars} of {self.of} chars, {share:.0%}"
+
+
+def _verbatim_run(quote: str, article: str) -> _Run:
+    """The article's own words for the longest stretch of `quote` it really contains."""
     normalized_quote = _normalize_for_match(quote)
     if not normalized_quote:
-        return None
+        return _Run(None, 0, 0)
     haystack, offsets = _normalize_with_offsets(article)
     match = difflib.SequenceMatcher(
         None, normalized_quote, haystack, autojunk=False
     ).find_longest_match(0, len(normalized_quote), 0, len(haystack))
+    run = _Run(None, match.size, len(normalized_quote))
     if match.size < MIN_RUN_CHARS:
-        return None
+        return run
     if match.size / len(normalized_quote) < MIN_RUN_FRACTION:
-        return None
+        return run
     start = offsets[match.b]
     end = offsets[match.b + match.size - 1] + 1
     start, end = _widen_to_sentence(article, start, end)
     # Collapse the wrapping. Filings and PDF-derived text carry hard newlines
     # mid-sentence, and a quote rendered with them looks broken in the drawer.
-    return re.sub(r"\s+", " ", article[start:end]).strip()
+    return run._replace(text=re.sub(r"\s+", " ", article[start:end]).strip())
 
 
 #: How far either side of a matched run to look for a sentence boundary. Enough
@@ -596,10 +694,19 @@ def _matches_quantity(value: Any, quote: str, expr: re.Pattern[str], parser, fie
 
 def evidence_gate(
     values: dict[str, Any], evidence: list[dict[str, Any]], article_text: str
-) -> tuple[dict[str, Any], dict[str, str], list[str]]:
+) -> tuple[dict[str, Any], dict[str, str], dict[str, str]]:
     """Keep only values the article is verified to actually state.
 
-    Returns ``(kept, quotes_by_field, dropped_field_names)``.
+    Returns ``(kept, quotes_by_field, dropped)``, where `dropped` maps each
+    refused field to *why*, from `vocab.UNCONFIRMED_REASONS`.
+
+    The reason is not decoration. "Nobody quoted this" and "the quote is real and
+    does not say that" land in the same 待确认 bucket and ask for opposite work —
+    the first wants another source, the second wants a correction — and anything
+    reading the flag back cannot tell them apart without it. `capex` is the case
+    that matters: it excludes unconfirmed investment figures from the sums, and
+    the figure it means to exclude is the programme-wide total the `$/MW` ceiling
+    demoted, not the campus figure nobody happened to quote.
 
     Every quote is first checked to be a real substring of the fetched text. That
     is the anti-fabrication guarantee: a model that *paraphrases* the article into
@@ -619,6 +726,10 @@ def evidence_gate(
     haystack = _normalize_for_match(article_text)
     quotes: dict[str, str] = {}
     verified: list[str] = []
+    #: Fields the model offered a quote for that turned out not to be in the
+    #: article. Kept so a refusal can say "the quote was fabricated" rather than
+    #: the much weaker "nothing quoted this".
+    unverified: set[str] = set()
     for entry in evidence:
         if not isinstance(entry, dict):
             continue
@@ -633,22 +744,33 @@ def evidence_gate(
             # reference at the edge of a sentence it otherwise copied exactly.
             # Take the part it really did copy, in the article's own words.
             recovered = _verbatim_run(quote, article_text)
-            if recovered is None:
-                log.warning("evidence quote for %r is not in the article; ignoring", name)
+            if recovered.text is None:
+                # Name what was refused, not just which field lost. Without the
+                # quote and the shortfall this warning cannot be acted on — and
+                # answering "are we losing data?" needed an instrumented replay
+                # that this line makes unnecessary next time.
+                log.warning(
+                    "evidence quote for %r is not in the article (%s); offered: %r",
+                    name,
+                    recovered.shortfall(),
+                    _for_log(quote),
+                )
+                if isinstance(name, str):
+                    unverified.add(name)
                 continue
             log.debug(
                 "evidence quote for %r was edited by the model; keeping the %d "
                 "characters it actually copied",
                 name,
-                len(recovered),
+                len(recovered.text),
             )
-            settled = recovered
+            settled = recovered.text
         verified.append(settled)
         if isinstance(name, str):
             quotes.setdefault(name, settled)
 
     kept: dict[str, Any] = {}
-    dropped: list[str] = []
+    dropped: dict[str, str] = {}
     for name, value in values.items():
         if value is None:
             continue
@@ -683,7 +805,17 @@ def evidence_gate(
             if name not in quotes or not _stated_in(name, value, quotes[name]):
                 quotes[name] = support
         else:
-            dropped.append(name)
+            # Which of the three refusals this was, in the order that makes the
+            # strongest true statement. A verified quote filed under this name
+            # means the article does have a sentence about it and the sentence
+            # does not state this value; a failed quote means the model wrote one
+            # nobody published; neither means simply that nothing backed it.
+            if name in quotes:
+                dropped[name] = "quote_off_target"
+            elif name in unverified:
+                dropped[name] = "quote_unverified"
+            else:
+                dropped[name] = "no_quote"
     return kept, quotes, dropped
 
 
@@ -955,7 +1087,9 @@ def _blocks(
                 )
                 confirmed.pop(name, None)
                 quotes.pop(name, None)
-                dropped.append(name)
+                # The quote is the article's own; it just belongs to a different
+                # tranche. Same reason a mislabelled field quote gets.
+                dropped[name] = "quote_off_target"
 
         unconfirmed = {name for name in values if name not in confirmed}
         kept.append(
@@ -1022,12 +1156,25 @@ def _risks(raw: dict[str, Any], article_text: str, url: str) -> tuple[list[RiskR
     What is deliberately NOT required is that `summary` be quotable. It is one
     sentence of the model's own words, and demanding it be a verbatim substring is
     precisely what took the old `blocker` field's coverage to zero.
+
+    **Failing either check no longer deletes the obstacle.** It is kept with
+    `unconfirmed` set to why, and without the quote that failed — the same answer
+    migration 0006 gave for a field value the gate could not verify. Deleting it
+    was the last place in the ingest path that destroyed extracted information,
+    and it fell hardest on the field the database is worst at: no press release
+    names its own blocker, so an adversarial second source is the only thing that
+    ever records one, and refusing it outright loses the obstacle rather than
+    merely its citation.
+
+    Two things still drop, because there is no 待确认 version of them: a category
+    outside the vocabulary (an unaggregatable risk is a hole in the one thing this
+    table is for) and a missing summary (nothing left to show).
     """
     haystack = _normalize_for_match(article_text)
     kept: list[RiskRecord] = []
     notes: list[str] = []
     seen: set[tuple[str, dt.date | None]] = set()
-    dropped_unsupported: list[str] = []
+    unconfirmed_kept: list[str] = []
 
     for entry in raw.get("risks") or []:
         if not isinstance(entry, dict):
@@ -1046,11 +1193,16 @@ def _risks(raw: dict[str, Any], article_text: str, url: str) -> tuple[list[RiskR
             log.warning("dropping a %s risk from %s: no summary", category, url)
             continue
 
+        # Why the gate could not confirm this obstacle, or None when it could.
+        # Set rather than `continue`d: the risk is kept either way, and the quote
+        # is dropped whenever this is set — a sentence that failed its check is
+        # never stored beside the thing it failed to support.
+        unconfirmed: str | None = None
+
         quote = entry.get("quote")
         if not isinstance(quote, str) or not quote.strip():
-            dropped_unsupported.append(category)
-            continue
-        if _normalize_for_match(quote) in haystack:
+            unconfirmed, quote = "no_quote", None
+        elif _normalize_for_match(quote) in haystack:
             quote = quote.strip()
         else:
             # Same reference-resolution problem as `evidence_gate`, same remedy:
@@ -1058,15 +1210,25 @@ def _risks(raw: dict[str, Any], article_text: str, url: str) -> tuple[list[RiskR
             # copied. The category check below then runs against *that*, which is
             # strictly harder to satisfy than checking the model's edit.
             recovered = _verbatim_run(quote, article_text)
-            if recovered is None:
-                log.warning("risk quote for %s is not in the article; dropping the risk", category)
-                dropped_unsupported.append(category)
-                continue
-            quote = recovered
-        if not _risk_quote_supports(category, quote):
-            log.warning("risk quote for %s does not state that category; dropping", category)
-            dropped_unsupported.append(category)
-            continue
+            if recovered.text is None:
+                log.warning(
+                    "risk quote for %s is not in the article (%s); keeping the risk "
+                    "as 待确认; offered: %r",
+                    category,
+                    recovered.shortfall(),
+                    _for_log(quote),
+                )
+                unconfirmed, quote = "quote_unverified", None
+            else:
+                quote = recovered.text
+        if quote is not None and not _risk_quote_supports(category, quote):
+            log.warning(
+                "risk quote for %s does not state that category; keeping the risk as 待确认",
+                category,
+            )
+            unconfirmed, quote = "quote_off_target", None
+        if unconfirmed:
+            unconfirmed_kept.append(category)
 
         first_seen = soft(norm_date_detail, entry.get("first_seen"), field="first_seen")
         first_seen_value = first_seen.value if first_seen is not None else None
@@ -1092,10 +1254,11 @@ def _risks(raw: dict[str, Any], article_text: str, url: str) -> tuple[list[RiskR
                 # unclear, and understating that is the safe direction.
                 severity=soft(norm_risk_severity, entry.get("severity")) or DEFAULT_RISK_SEVERITY,
                 summary=summary,
-                quote=norm_excerpt(quote),
+                quote=norm_excerpt(quote) if quote else None,
                 first_seen=first_seen_value,
                 delay_days=delay_days,
                 source_url=url,
+                unconfirmed=unconfirmed,
             )
         )
         if len(kept) >= MAX_RISKS_PER_PROJECT:
@@ -1107,11 +1270,12 @@ def _risks(raw: dict[str, Any], article_text: str, url: str) -> tuple[list[RiskR
             )
             break
 
-    if dropped_unsupported:
+    if unconfirmed_kept:
         notes.append(
-            "dropped unsupported risk(s) for "
-            + ", ".join(sorted(set(dropped_unsupported)))
-            + " (no verbatim quote from the article states them)"
+            "risk(s) kept as 待确认 for "
+            + ", ".join(sorted(set(unconfirmed_kept)))
+            + " — reported by the source, but no verbatim quote from the article "
+            "states them"
         )
     return kept, notes
 
@@ -1174,19 +1338,53 @@ def build_records(
         # They enter `claims` like any other value so they can be resolved and
         # displayed, and `SourceRecord.unconfirmed` keeps them out of
         # `source.fields`, which is what confidence and the 9-of-12 count read.
-        unconfirmed = {
-            f for f in dropped if f not in claims and f != "notes" and values.get(f) is not None
+        #
+        # Each carries the gate's reason, so a reader of the flag can tell "nobody
+        # quoted this" from "the quote says something else" — see `evidence_gate`.
+        reasons = {
+            f: why
+            for f, why in dropped.items()
+            if f not in claims and f != "notes" and values.get(f) is not None
         }
-        for name in unconfirmed:
+        for name in reasons:
             claims[name] = values[name]
 
         # A quoted figure can be real and still not be about this project. Demoted
         # to 待确认 rather than deleted, which is the same answer migration 0006
         # gave for values the gate could not verify: keep it, refuse to call it a
         # fact, and let a human see what the source actually said.
+        #
+        # `out_of_scale` overwrites any earlier reason on purpose: this figure was
+        # quoted and verified and is still not credible, which is a strictly
+        # stronger statement than any way of failing to be quoted.
         scale_note = _implausible_investment(claims)
         if scale_note:
-            unconfirmed.add("investment_usd")
+            reasons["investment_usd"] = "out_of_scale"
+        unconfirmed = set(reasons)
+
+        risks, risk_notes = _risks(raw, result.markdown, result.url)
+
+        # Blocks, each gated against its own sealed evidence pool. This is where a
+        # campus stops being one `phase` and starts being the several states it
+        # actually is.
+        blocks, block_notes = _blocks(raw, result.markdown, result.url)
+
+        # A source that reported an obstacle supports `blocker`, even though the
+        # column is derived rather than claimed. Recording it keeps the "every
+        # non-null tracked field appears in some source's `fields`" invariant true
+        # without the merge path ever reading the value: `upsert` skips `blocker` in
+        # the recompute loop and derives it from the `risk` rows instead.
+        #
+        # Confirmed risks outrank unconfirmed ones (`risk_precedence`), and if the
+        # winner is still unconfirmed the derived `blocker` inherits that: an
+        # obstacle the gate refused must not arrive in `source.fields` reading as
+        # cited, which is exactly what the 待确认 tier exists to prevent.
+        if risks:
+            worst = max(risks, key=risk_precedence)
+            claims["blocker"] = worst.summary
+            if worst.unconfirmed:
+                reasons["blocker"] = worst.unconfirmed
+                unconfirmed.add("blocker")
 
         # Report only what was genuinely discarded. `dropped` is the gate's raw
         # verdict, but identity fields (name, company, city, county, state) are
@@ -1195,6 +1393,9 @@ def build_records(
         # a summary, never a citable claim, so it is recorded separately below.
         # Listing either as "dropped" told the operator something untrue, which is
         # corrosive in the one place they look to judge data quality.
+        #
+        # Written after the risks, not before: `blocker` only joins this set once
+        # `_risks` has run, and a disclosure that omits it is the same untruth.
         notes = list(coercion_notes)
         if unconfirmed:
             notes.append(
@@ -1206,23 +1407,8 @@ def build_records(
             notes.append(scale_note)
         if values.get("notes"):
             notes.append(f"extracted summary: {values['notes']}")
-
-        risks, risk_notes = _risks(raw, result.markdown, result.url)
         notes.extend(risk_notes)
-
-        # Blocks, each gated against its own sealed evidence pool. This is where a
-        # campus stops being one `phase` and starts being the several states it
-        # actually is.
-        blocks, block_notes = _blocks(raw, result.markdown, result.url)
         notes.extend(block_notes)
-
-        # A source that reported an obstacle supports `blocker`, even though the
-        # column is derived rather than claimed. Recording it keeps the "every
-        # non-null tracked field appears in some source's `fields`" invariant true
-        # without the merge path ever reading the value: `upsert` skips `blocker` in
-        # the recompute loop and derives it from the `risk` rows instead.
-        if risks:
-            claims["blocker"] = max(risks, key=lambda r: severity_rank(r.severity)).summary
 
         record = IngestRecord(
             project={
@@ -1241,6 +1427,7 @@ def build_records(
                     excerpt=_excerpt(quotes),
                     claims=claims,
                     unconfirmed=frozenset(unconfirmed),
+                    unconfirmed_reasons=tuple(sorted(reasons.items())),
                     # Only what the gate confirmed. `quotes` can also hold the
                     # model's labels for values that were dropped, and `claims`
                     # additionally carries identity fields restored from the
@@ -1305,6 +1492,22 @@ def extract_one(
         http_status=result.status,
         content_sha1=result.sha1 if result.markdown else None,
     )
+
+    # Before the call, not after: a page with nothing to quote cannot produce a
+    # cited value, so paying to find that out is the one refusal that is strictly
+    # cheaper than the alternative. It also prevents the phantom row, which is
+    # the part that outlives the wasted call.
+    prose = prose_length(result.markdown)
+    if prose < MIN_PROSE_CHARS:
+        outcome.status = "thin_content"
+        outcome.error = (
+            f"{prose} characters of prose in {len(result.markdown)} of page; "
+            f"needs {MIN_PROSE_CHARS}"
+        )
+        log.warning(
+            "not an article, refused before the LLM call: %s (%s)", result.url, outcome.error
+        )
+        return outcome
 
     body = truncate(result.markdown, settings.max_input_chars)
     user = prompt.render_user(
@@ -1530,6 +1733,8 @@ def run(
         elif outcome.status == "llm_error":
             report.parse_error += 1
             log.error("LLM error for %s: %s", result.url, outcome.error)
+        elif outcome.status == "thin_content":
+            report.thin_content += 1
 
         for record in outcome.records:
             upsert = upsert_record(session, record)

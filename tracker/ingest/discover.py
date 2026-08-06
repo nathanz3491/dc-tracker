@@ -895,8 +895,10 @@ def pending_risk_count(session: Session, spec: FilterSpec) -> int:
 
 #: Outcomes worth another attempt: the URL was never successfully read, and the
 #: reason might be transient (a rate limit, a timeout) or fixable (a site that
-#: needs a browser). `no_project` and `ok` are settled and are never retried.
-RETRYABLE_STATUSES = ("fetch_error", "parse_error", "llm_error")
+#: needs a browser, or one that served a teaser card where the article should
+#: have been). `no_project` and `ok` are settled and are never retried —
+#: `thin_content` is not settled, because a model never read the page.
+RETRYABLE_STATUSES = ("fetch_error", "parse_error", "llm_error", "thin_content")
 
 
 def failed(session: Session, limit: int | None = None) -> list[IngestUrl]:

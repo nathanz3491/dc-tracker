@@ -1233,6 +1233,27 @@ def _severity_style(severity: str) -> str:
     )
 
 
+#: What an uncited obstacle needs, in the words of the work it implies. Naming
+#: the reason is the whole point of storing one: "nobody quoted it" sends you
+#: looking for another source, while "the sentence does not say that" sends you
+#: to correct the category on a source you already have.
+_UNCITED_BECAUSE = {
+    "no_quote": "uncited — the source named it but quoted nothing; confirm in `tracker review`",
+    "quote_unverified": (
+        "uncited — the quote offered for it is not in the article; confirm in `tracker review`"
+    ),
+    "quote_off_target": (
+        "uncited — the quoted sentence does not state this category; "
+        "recategorise in `tracker review`"
+    ),
+}
+
+
+def _why_uncited(risk_row) -> str:
+    """The line under an obstacle with no quote behind it."""
+    return _UNCITED_BECAUSE.get(risk_row.unconfirmed or "", "uncited — confirm in `tracker review`")
+
+
 def _open_risk_count(project: Project) -> int:
     return sum(1 for r in project.risks if r.status == OPEN_RISK_STATUS)
 
@@ -1617,7 +1638,7 @@ def risks(
                 if risk_row.quote:
                     console.print(f'    "{escape(risk_row.quote)}"', style="dim")
                 else:
-                    console.print("    [yellow]uncited — confirm in `tracker review`[/yellow]")
+                    console.print(f"    [yellow]{_why_uncited(risk_row)}[/yellow]")
                 shown += 1
             console.print()
 
@@ -1625,6 +1646,16 @@ def risks(
             "[dim]MW sums cover only projects whose capacity is cited; they are a "
             "floor, not a total.[/dim]"
         )
+        # Counted, and said so. An unconfirmed obstacle is still an obstacle a
+        # source reported, and leaving it out of the sums would understate exposure
+        # in the one direction that matters — but a total nobody can see the
+        # composition of is the thing this database exists not to produce.
+        vague = sum(1 for risk_row, _ in rows if risk_row.unconfirmed)
+        if vague:
+            console.print(
+                f"[dim]{vague} of {len(rows)} are 待确认 — reported by a source with no "
+                "quote that stands up. They are counted above.[/dim]"
+            )
 
 
 #: Weights for `exposure --weighted`. **A judgement, not a cited fact**, which is
@@ -1820,6 +1851,7 @@ def capex(
                         "mw_unbuilt": p.mw_unbuilt,
                         "investment_usd": p.investment_usd,
                         "investment_excluded_usd": p.investment_excluded_usd,
+                        "investment_unquoted_usd": p.investment_unquoted_usd,
                         "duplicate_rows_skipped": p.duplicate_rows_skipped,
                         "mw_duplicate_skipped": p.mw_duplicate_skipped,
                         "investment_duplicate_skipped_usd": p.investment_duplicate_skipped_usd,
@@ -1827,6 +1859,7 @@ def capex(
                         "mw_by_quarter": p.mw_by_quarter,
                         "projects_at_risk": p.at_risk_projects,
                         "mw_at_risk": p.mw_at_risk,
+                        "projects_at_risk_unconfirmed": p.at_risk_unconfirmed,
                         "slipped": p.slipped,
                         "worst_open_risk": blockers.get(p.key),
                         "phases": p.phases,
@@ -1915,6 +1948,23 @@ def capex(
             f"[dim]investment excludes [bold]{_fmt_usd(excluded_usd)}[/bold] whose figure no "
             "source confirms — usually a programme-wide total quoted in an article about one "
             "site, demoted at ingest. Shown here, never summed.[/dim]"
+        )
+    unquoted_usd = sum(p.investment_unquoted_usd for p in positions)
+    if unquoted_usd:
+        console.print(
+            f"[dim]investment [bold]includes[/bold] {_fmt_usd(unquoted_usd)} that no quote "
+            "backs — asserted by a source and never contradicted, unlike the figures above. "
+            "Counted, because dropping a figure that is probably right understates the "
+            "column.[/dim]"
+        )
+    vague_risk = sum(p.at_risk_unconfirmed for p in positions)
+    if vague_risk:
+        at_risk = sum(p.at_risk_projects for p in positions)
+        console.print(
+            f"[dim]the obstructed column counts [bold]{vague_risk}[/bold] of {at_risk} "
+            "project(s) whose only obstacles are 待确认 — a source reported them and no "
+            "quote stood up. Counted, because understating exposure is the worse error."
+            "[/dim]"
         )
     if dupes:
         skip_mw = sum(p.mw_duplicate_skipped for p in positions)
