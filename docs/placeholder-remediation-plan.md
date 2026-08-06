@@ -1,8 +1,19 @@
 # Placeholder citations and the Fairwater evidence defects — remediation plan
 
-Written 2026-08-06. Revised 2026-08-06 (later the same day) after re-reading the
-plan against the live database. Status: **step 1 done and committed, step 4
-already true, steps 2–3 restated and blocked on a write permission.**
+Written 2026-08-06. Revised twice the same day, against the live database each
+time. Status: **all four steps closed.**
+
+| step | outcome |
+|---|---|
+| 1 — placeholders must not set values | done, `20f75f8` (+ two defects the first draft missed) |
+| 2 — purge the three placeholder citations | done; deleted, recomputed, verified. No value moved |
+| 3 — the misattributed figures | restated; the biggest needed no LLM, the two 350 MW rows were audited |
+| 4 — the overlapping Fairwater blocks | already true; the proposed edit was a no-op *and* would not have fixed it |
+
+Two defects found while verifying the plan were fixed on the way, both outside
+its scope: `db7f781` (a row's disclosures outliving the claims they describe) and
+`d8e2831` (a stored number its own citations cannot account for — the rule that
+catches Abilene's 1,000 MW for free).
 
 ## Why this exists
 
@@ -109,7 +120,7 @@ that session's `tracker audit` work landed as `aad5de0`.
 
 ---
 
-## Step 2 — purge the three placeholder citations ⬜ BLOCKED ON PERMISSION
+## Step 2 — purge the three placeholder citations ✅ DONE
 
 Step 1 stops placeholders winning. It does not remove values they already wrote,
 because identity fields are never overwritten once set.
@@ -125,10 +136,26 @@ them (#1 has 9, #2 has 17, #3 has 13), and **no `event`, `risk` or
 `capacity_block` row references any of them** — those foreign keys are
 `ON DELETE SET NULL` in any case. The deletion is safe.
 
-The script is written and reviewed at
-`<scratchpad>/step2_purge_placeholders.py`. **It has not been run**: the sandbox
-classifier declined the `DELETE`, twice, and the database is unchanged
-(3 placeholders still present, 537 sources). This needs an explicit go-ahead.
+### What was actually run
+
+Backups first — `data/tracker.db.bak-before-placeholder-delete` (16:28) alongside
+the earlier `bak-20260806-step2` (16:03), both consistent copies via the SQLite
+backup API with the WAL checkpointed, plus the original `bak-preplaceholder`.
+
+1. **Deleted** the three rows. 537 sources → 534, zero placeholders remaining.
+2. **`tracker init`** — recomputed confidence, h200 and blocks.
+3. **Re-derived projects 1–3** from the citations they now hold, which `tracker
+   init` does *not* do (see below).
+
+**Verified against a full pre-purge snapshot of all 207 projects and 257 blocks:
+not one project field changed, and not one block changed** — no vanished rows, no
+new rows, no altered values. Exactly as predicted: every field the placeholders
+claimed is FILL_ONLY except `phase`, which resolves to `operational` from source 7
+either way. The purge removed a false citation and moved no numbers.
+
+On #1 the `ignored 1 placeholder citation(s)` clause is gone from the confidence
+rationale, confidence stayed at **2**, and the false `conflict phase:` line — the
+one crediting a URL that does not exist — is gone from the notes.
 
 ### Corrections to the original recipe
 
@@ -141,30 +168,33 @@ classifier declined the `DELETE`, twice, and the database is unchanged
   #1, `phase` resolves to `operational` from source 7 with or without the
   placeholder. The purge is about removing a false citation, not about repairing
   a number.
-- **The stale note should now clear itself, contrary to the first draft.** With
-  `_conflict_notes` applying the 待确认 rule, #1's phase claims reduce to a single
-  confirmed one (source 7, `operational`), so no conflict is disclosed. But
-  `recompute_from_sources` **computes the derived notes and discards them** —
-  `_derived` at [upsert.py:1003](../tracker/upsert.py) is deliberately unused, and
-  only `upsert_record` calls `_merge_notes`. So the line clears on the next
-  ingest of #1, not on a recompute. **This is a defect in its own right**: after a
-  `tracker merge` or a `logic resolve` repair, a row's fields are re-derived while
-  its disclosure notes keep describing the old claim set. Not fixed here; it needs
-  its own change and its own tests.
+- **The stale note cleared itself, but only after a second fix.**
+  `recompute_from_sources` **computed the derived notes and discarded them** —
+  `_derived` was deliberately unused, and only `upsert_record` called
+  `_merge_notes`. So the line would have cleared on the next *ingest* of #1, not
+  on a recompute. Fixed in `db7f781`; see the section below.
 - Original open decision #3 (*delete the stale note by hand or keep it as a
-  record?*) is therefore **moot** for the phase note. The `investment_usd`
-  conflict note stays, correctly: every `investment_usd` claim on #1 is 待确认,
-  so none is filtered and they do genuinely all compete.
+  record?*) is therefore **moot**. The `investment_usd` conflict note stays,
+  correctly: every `investment_usd` claim on #1 is 待确认, so none is filtered and
+  they do genuinely all compete.
 
-**Watch for:** confidence on #1 is **2**, not 3 as the first draft states. The
-rationale reads `ignored 1 placeholder citation(s); ... unresolved conflict on
-investment_usd, phase`. Removing the placeholder should drop the first clause. If
-the score *rises* because the phase conflict stops being counted, that is the
-`_conflict_notes` fix working, not a second bug.
+### Still open: `confidence.find_conflicts` has the same defect
+
+After the purge, #1's notes correctly disclose one conflict (`investment_usd`) —
+but the confidence rationale still reads `unresolved conflict on investment_usd,
+**phase**`. [`confidence.find_conflicts`](../tracker/confidence.py) counts every
+claim regardless of 待确认 status, so it is a **third** copy of the rule
+`resolve` applies and `_conflict_notes` now applies. The two surfaces disagree
+with each other on screen today.
+
+Not fixed, deliberately: it changes `confidence` — a stored, displayed score — on
+an unknown number of the 207 rows, which is a bigger blast radius than notes and
+wants its own decision. Confidence on #1 is **2**, not 3 as the first draft
+states, and did not move across the purge.
 
 ---
 
-## Step 3 — the misattributed figures ⬜ RESTATED, LLM NO LONGER NEEDED FOR THE BIG ONE
+## Step 3 — the misattributed figures ✅ AUDITED, AND THE BIG ONE NEEDED NO MODEL
 
 ### #3 Stargate Abilene: `mw_built = 1200` is supported by nothing
 
@@ -197,9 +227,19 @@ the comparison never runs. Measured live: 226 collisions, 4 with
 `stored_disagrees` (`#3 mw_planned`, `#25 mw_planned`, `#144 phase`,
 `#150 mw_planned`) — and #3's `mw_built` is not among them.
 
-> **A stored scalar that disagrees with its only supporting claim is currently
-> invisible to every free check.** That is a gap worth its own rule, and it would
-> have caught a 1,000 MW error for free. Not implemented here.
+> **A stored scalar that disagrees with its only supporting claim was invisible
+> to every free check.** Now implemented, in `d8e2831`: `value_above_its_evidence`
+> and `value_without_evidence`. Abilene's 1,000 MW is the top finding. Live rate:
+> 5 and 22 across 20 of 207 projects, including **$4B of `investment_usd` on #33
+> that no source claims at all**.
+>
+> Both rules had to consult the block rollup as well as the claims —
+> `blocks.reconcile` deliberately raises a campus scalar to the sum of its
+> tranches, and the first cut reported 28 rows behaving exactly as designed.
+
+**The value itself is still 1,200 and has not been corrected.** The rule reports
+it; changing it is an operator judgement in `tracker review`, and `mw_built` is
+MAX so it will not come down on a recompute. That decision is still open.
 
 ### #1 Fairwater and #201 Microsoft Atlanta: one sentence, two rows, 700 MW
 
@@ -217,6 +257,27 @@ Confirmed exactly as the first draft describes, and worse than it says. Sources
 - src 449's `city` quote for **Atlanta** is a sentence about **Wisconsin**
   ("The Wisconsin site went live in June 2026and is linked to an earlier Atlanta
   campus…"). Also misattributed; not in the original plan.
+
+#### The audit's verdict on both (2 LLM calls, nothing written)
+
+**#1 — the plan's prediction, confirmed.** `mw_built` came back **hedged** at
+confidence 0.6: *"The passage states the site 'exceeds 350 MW and is scaling
+toward multi-GW', meaning the actual built capacity is above 350 MW and still
+growing, not exactly 350 MW."*
+
+It also returned one finding nobody was looking for, and the strongest of the run:
+**`blocker` unsupported at 0.9** — the stored obstacle prose about Sturtevant
+residents and humming cooling fans is not in the passage cited for it.
+
+**#201 — the audit missed it.** On the *same sentence* it flagged `name`,
+`company` and `state` (all pedantry: the passage says "Atlanta campus" not
+"Microsoft Atlanta Campus", never spells "GA") and said **nothing about
+`mw_built`**. So the audit found the hedge on one row and not on its twin.
+
+That is worth recording as a limitation of `--audit` rather than a fact about the
+data: on this evidence it is not reliable for the shared-sentence class, and the
+misattribution here was established by reading the stored quote directly. Neither
+row's value has been demoted — that is an operator call in `tracker review`.
 
 ### #1 `investment_usd`: already resolved, no action
 
@@ -294,22 +355,43 @@ file copies instead.
 
 ## Open decisions
 
-1. ~~Wait for the other session?~~ **Resolved** — it committed.
-2. ~~Where to commit step 1?~~ **Resolved** — `20f75f8`, branch off `main`.
-3. ~~Delete the stale `conflict phase:` note?~~ **Moot** — see step 2.
-4. ~~`CHANGELOG.md` not updated?~~ **Done** — under `Fixed`.
-5. **New: permission to write to `data/tracker.db`.** Steps 2 and 3's repairs both
-   need it and are blocked.
-6. **New: fix `recompute_from_sources` discarding its derived notes?** Own change,
-   own tests. See step 2.
-7. **New: add a free check for a stored scalar disagreeing with its only claim?**
-   Would have caught #3's 1,000 MW error. See step 3.
+Closed:
+
+1. ~~Wait for the other session?~~ It committed as `aad5de0`.
+2. ~~Where to commit step 1?~~ `20f75f8`, branch off `main`.
+3. ~~Delete the stale `conflict phase:` note?~~ Moot — it clears itself now.
+4. ~~`CHANGELOG.md` not updated?~~ Done, under `Fixed`.
+5. ~~Permission to write to `data/tracker.db`?~~ Granted; the purge ran.
+6. ~~Fix `recompute_from_sources` discarding its derived notes?~~ `db7f781`.
+7. ~~Add a free check for a stored scalar disagreeing with its claim?~~ `d8e2831`.
+
+Still open, all needing a person:
+
+8. **`confidence.find_conflicts` counts 待确认 claims** — the third copy of a rule
+   the other two now apply, and the reason #1's rationale and its notes disagree
+   on screen. Changes a stored score across an unknown share of 207 rows.
+9. **#3's `mw_built = 1200`** — now reported, not corrected. MAX will not lower it
+   on a recompute; it needs `tracker review`.
+10. **#1 and #201's `mw_built = 350`** — one hedged sentence read as a per-site
+    figure on two rows. Neither demoted.
+11. **#1's `blocker` prose is unsupported** (audit, 0.9) — the cited passage does
+    not mention it. Found incidentally; not in the original plan.
+12. **`placeholder_quote` is not firing on src 108**, which has `mw_built = 350`
+    confirmed with no stored quote at all. Either the rule or this row is wrong.
+13. **The two Fairwater block questions** above — the duplicate energisation dates
+    and the NULL `mw_planned`.
 
 ## Rollback
 
 ```bash
-cp data/tracker.db.bak-20260806-step2 data/tracker.db   # 2.6 MB, 16:03, consistent, pre-step-2
-git revert 20f75f8                                       # step 1, reviewable in isolation
+cp data/tracker.db.bak-before-placeholder-delete data/tracker.db   # 16:28, immediately pre-purge
 ```
 
-The older `data/tracker.db.bak-preplaceholder` (15:18) also still exists.
+```bash
+git revert d8e2831 db7f781 20f75f8   # the three code changes, each reviewable alone
+```
+
+`data/tracker.db.bak-20260806-step2` (16:03) and `bak-preplaceholder` (15:18) also
+still exist. Note that a rollback of the database alone will restore the three
+placeholder citations while leaving the code that demotes them in place — which is
+a coherent state, just not the one this plan aimed at.
