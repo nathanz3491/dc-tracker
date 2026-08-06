@@ -262,6 +262,108 @@ def _nested_blocks(blocks: list[Any]) -> list[tuple[str, str]]:
     return sorted(set(out))
 
 
+#: Scalars checked against the evidence beneath them. Money and megawatts only:
+#: these are the fields that feed `tracker capex` and the national totals, so a
+#: stored figure nothing supports is a figure that misstates a rollup.
+_EVIDENCE_BACKED_FIELDS: Final[tuple[str, ...]] = ("mw_built", "mw_planned", "investment_usd")
+
+_UNITS: Final[dict[str, str]] = {
+    "mw_built": "MW built",
+    "mw_planned": "MW planned",
+    "investment_usd": "USD invested",
+}
+
+
+def _check_stored_against_evidence(project: Project) -> list[Finding]:
+    """Stored scalars that the row's own citations cannot account for.
+
+    `check_collisions` already asks a version of this — `stored_disagrees` means
+    the row drifted from its sources — but only *inside a collision*, and a
+    collision needs two or more claims on one field. So the cheapest shape of the
+    error is invisible to it: **one claim, and the row does not match it.**
+
+    Observed live on Stargate Abilene (#3), which read `mw_built = 1200` while the
+    only `mw_built` claim on the row was a well-quoted 200. The 1.2 GW quotes had
+    been re-extracted as `mw_planned`, correctly — "committed capacity" is not
+    energised capacity — but `mw_built` is policy MAX and `_resolve` counts the
+    stored value among the candidates, so **MAX can never come back down.** Once
+    written, the figure outlived the claim that produced it. 1,000 MW, against
+    HTI's ~0.4 GW satellite read and our own `phase-1` block of 200 MW serving.
+
+    Two things can legitimately support a scalar, and both are consulted:
+
+    * the field's own claims, resolved by the same policy the write path uses; and
+    * the **block rollup**, because `blocks.reconcile` deliberately raises a campus
+      scalar to the sum of its tranches. Ignoring it reported 28 false positives.
+
+    Deliberately *not* an ERROR. Nothing here is arithmetically impossible — the
+    row may be right and the extraction stale — so this is a question for a person,
+    which is what WARNING means everywhere else in this module.
+    """
+    from tracker import blocks as blocks_mod
+    from tracker.confidence import values_conflict
+    from tracker.upsert import claims_by_field, resolve_field
+
+    sources = list(getattr(project, "sources", ()) or ())
+    if not sources:
+        return []
+    by_field = claims_by_field(sources)
+    stored_blocks = list(getattr(project, "blocks", ()) or ())
+    roll = blocks_mod.rollup(stored_blocks) if stored_blocks else None
+
+    out: list[Finding] = []
+    for name in _EVIDENCE_BACKED_FIELDS:
+        stored = getattr(project, name, None)
+        if not isinstance(stored, (int, float)):
+            continue
+        from_claims = resolve_field(name, by_field.get(name, []), None)
+        from_blocks = getattr(roll, name, None) if roll is not None else None
+        supported = [v for v in (from_claims, from_blocks) if isinstance(v, (int, float))]
+        unit = _UNITS[name]
+
+        if not supported:
+            out.append(
+                Finding(
+                    project_id=project.id,
+                    code="value_without_evidence",
+                    severity=WARNING,
+                    summary=(
+                        f"{stored:g} {unit} is stored, and no source on this row claims "
+                        f"{name} at all"
+                    ),
+                    fields=(name,),
+                    remedy=(
+                        "find the citation and record it, or clear the value — it is "
+                        "counted in every total that reads this field"
+                    ),
+                )
+            )
+            continue
+
+        ceiling = max(supported)
+        # `values_conflict` rather than `!=`, so rounding between a quote and a
+        # stored figure is not reported as drift.
+        if stored > ceiling and values_conflict(stored, ceiling):
+            out.append(
+                Finding(
+                    project_id=project.id,
+                    code="value_above_its_evidence",
+                    severity=WARNING,
+                    summary=(
+                        f"{stored:g} {unit} is stored, but the citations support at most "
+                        f"{ceiling:g}"
+                    ),
+                    fields=(name,),
+                    remedy=(
+                        "usually a figure that outlived the claim behind it — MAX fields "
+                        "never come back down on their own; confirm and correct in "
+                        "`tracker review`"
+                    ),
+                )
+            )
+    return out
+
+
 def check_rules(project: Project) -> list[Finding]:
     """Every deterministic contradiction on one row.
 
@@ -447,6 +549,9 @@ def check_rules(project: Project) -> list[Finding]:
             "either the plan was revised upward and nobody recorded it, or one "
             "figure is about a different phase of the campus",
         )
+
+    # --- the numbers against the citations under them -------------------------
+    out.extend(_check_stored_against_evidence(project))
 
     # --- the dates against each other ----------------------------------------
     if (

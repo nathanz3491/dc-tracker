@@ -717,6 +717,52 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **A stored number could outlive the claim that produced it, unseen**
+  (`tracker/logic.py`). Two new free rules, `value_above_its_evidence` and
+  `value_without_evidence`, ask whether a stored scalar agrees with the citations
+  under it — as opposed to `logic check`'s usual question, whether a row's fields
+  agree with each other.
+
+  **Stargate Abilene is why.** The row read `mw_built = 1200` while the only
+  `mw_built` claim on it was a well-quoted **200**. Both "1.2 GW" quotes had since
+  been re-extracted as `mw_planned`, correctly — committed capacity is not
+  energised capacity — but `mw_built` merges by MAX and `_resolve` counts the
+  stored value among its own candidates, **so MAX can never come back down**. The
+  figure outlived its claim by 1,000 MW, against a ~0.4 GW satellite read and the
+  project's own `phase-1` block of 200 MW serving.
+
+  `check_collisions` already reports `stored_disagrees` — the row drifted from its
+  sources — but only *inside a collision*, and a collision needs two claims on one
+  field to compare. **One claim and a row that disagrees with it was invisible**,
+  which is the cheapest shape the error can take. Measured live: 226 collisions, 4
+  flagged, and Abilene's 1,000 MW not among them.
+
+  Both rules consult the **block rollup** as well as the claims, because
+  `blocks.reconcile` deliberately raises a campus scalar to the sum of its
+  tranches; the first cut ignored it and reported 28 rows behaving exactly as
+  designed. Restricted to money and megawatts, where an unsupported figure
+  misstates `tracker capex` and the national totals rather than one row. WARNING,
+  not ERROR — nothing here is arithmetically impossible, so it is a question for a
+  person. On the live database: **5 and 22 findings across 20 of 207 projects.**
+
+- **A row's disclosures could outlive the claims they describe**
+  (`tracker/upsert.py`). `recompute_from_sources` computed the derived note lines
+  and discarded them — `_derived` was deliberately unused. It is the shared
+  re-derive path for `tracker merge` and for `logic resolve` repairs, so after
+  either one a row's values moved and the prose explaining them did not: a
+  conflict disclosure naming two sources could outlive the disagreement, or the
+  merge that folded it.
+
+  Wiring it to `_merge_notes` took one piece of care. Derived lines are rebuilt
+  wholesale, and two of them describe the *ingest* rather than the claims — which
+  identity was routed here, and which existing row this one might duplicate.
+  Neither is recoverable from the row (`duplicate_of` is not a column, so that
+  note is the **only** record that the identity question is open) and a recompute
+  has no ingest record to regenerate them from, so rebuilding wholesale would have
+  deleted both. `_INGEST_ONLY_NOTES` names them and `preserve_derived` carries
+  them across. Live database: 39 projects hold a duplicate proposal and one holds
+  a routed-here note, so the path is load-bearing rather than defensive.
+
 - **A citation that does not exist could set values** (`tracker/upsert.py`,
   `tracker/blocks.py`). `confidence.compute` already dropped placeholder URLs
   before weighting, and the comment there names the row that motivated it. That
