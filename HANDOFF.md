@@ -1,6 +1,27 @@
 # Handoff
 
-## Yesterday (state at start of 2026-08-06)
+## Yesterday (state at start of 2026-08-07)
+
+The prior handoff (`f805bf5`, committed 2026-08-06 05:33) closed out `be16d37`
+— durable merges (`project_alias`), capex quadruple-counting and
+never-confirmed-figure fixes, a `--json` crash fix, a continuous year grid,
+click-to-drill-down on every capex figure, and the digit-free buyer overview
+— and left the session there for the day. It wasn't: the same day, 15:32–21:43,
+ten more commits landed on this branch and on two Claude worktrees that later
+merged into it, none of which made it into a handoff until now. That's what
+"Today" below actually covers, despite the commit timestamps reading
+2026-08-06 — this run is the first to account for them.
+
+Carried in from further back and still true at the top of that unrecorded
+stretch: the 5 deferred merge candidates in `docs/merge-review-2026-08-05.md`,
+16 projects with no blocks read yet, two untriaged block signals
+(`blocks_may_double_count`, `block_label_ambiguous`), `docs/feedback-2026-08-03.md`
+unreviewed, the 20 EDGAR utility/contractor companies unrun, the
+30-required-projects gap, unverified ERCOT/CAISO column names, two unconfigured
+Google CSE keys, and `tracker cloudflare --name` untested against a real
+tunnel.
+
+## Yesterday's older context (state at start of 2026-08-06)
 
 The prior handoff (`124a562`, committed 2026-08-05) closed out the tail of the
 2026-08-04 session — nine commits landing `capacity_block`, backfilling it
@@ -33,10 +54,10 @@ utility/contractor EDGAR companies from `seed/edgar-companies.toml` still
 wired up but unrun, and `tracker cloudflare --name` untested against a real
 named tunnel.
 
-## Today (2026-08-06)
+## Today's older context, continued (2026-08-06 05:33 run)
 
-No new commits landed during this run's window; the working tree was already
-clean of code changes, just uncommitted. What follows is this run's first
+No new commits landed during that run's window; the working tree was already
+clean of code changes, just uncommitted. What follows is that run's first
 accounting of that uncommitted work — one session, four independent pieces,
 committed together as `be16d37` since none of it had been committed before.
 Verified 1578 tests green offline first.
@@ -146,36 +167,142 @@ Verified 1578 tests green offline first.
   launch config and a session lock file (this run's own PID), neither of
   which belongs in the shared repository.
 
+## Today (2026-08-07 run, accounting for 2026-08-06 15:32–21:43)
+
+Ten commits, on this branch and on two Claude worktrees
+(`claude/evidence-gate-plan-2998b8`, `claude/placeholder-remediation-plan-1492da`)
+that merged into it at `bc79e27`. Two threads: a new free-standing magnitude
+auditor, and closing out the placeholder-citation defect the 05:33 handoff had
+only diagnosed. Re-verified 1578+ tests green (`pytest -q`, exit 0) before
+writing this.
+
+- **`tracker audit`: numbers that cannot be true** (`tracker/audit.py`,
+  `aad5de0`). `logic check` catches fields disagreeing with each other; nothing
+  caught a self-consistent field wrong by three orders of magnitude. Project 72
+  read "Flexential, Englewood expansion, 11,250 MW" — bigger than any campus
+  anywhere, for an operator whose whole portfolio is under 500 MW — and no
+  contradiction flagged it because nothing else in the row disagreed. Six
+  checks lean on stated physics or economics rather than a picked threshold:
+  sources ~1000x/~100x apart, a campus beyond anything planned, a tranche
+  bigger than its own campus, a gigawatt with no quote, dollars-per-MW outside
+  a generous band, a derived H200 figure drifted from its input. Read-only,
+  free, scopeable to given ids. Live: 21 findings across 19 of 206 projects; 16
+  planted mutants, all caught.
+
+- **Stop a citation that does not exist from setting values**
+  (`tracker/upsert.py`, `tracker/blocks.py`, `20f75f8`). `confidence.compute`
+  already dropped placeholder URLs from the score; it left the values alone,
+  which was the more dangerous half — a placeholder inherits whatever
+  `source_type` the seed file gave it, and the shipped seed types them
+  `company_filing`, the heaviest weight in the system. Observed live on
+  Fairwater (#1): the placeholder was source 1 and took every FILL_ONLY
+  identity field. Now demoted (not dropped, so `--allow-placeholders` still
+  smoke-tests the pipeline) in three places — field claims, block claims and
+  sort, and `_conflict_notes`, which had been reporting a contest that never
+  happened. Seven regression tests.
+
+- **Record the placeholder fix, and correct the plan against live data**
+  (`docs/placeholder-remediation-plan.md`, `9627d1c`) → **Stop a row's
+  disclosures outliving the claims they describe** (`tracker/upsert.py`,
+  `db7f781`) → **Report a stored number its own citations cannot account for**
+  (`tracker/logic.py`, `d8e2831`) → **Close out the placeholder plan against
+  what was actually run** (`docs/placeholder-remediation-plan.md`, `94a8216`).
+  Re-verifying the plan against a live snapshot found three of its four steps
+  had already been overtaken by data drift (a no-op update, a since-corrected
+  $4.7B, a since-retyped 1.2 GW). What was real and got fixed: `merge`/`resolve`
+  recompute derived disclosure notes and then threw them away, so a conflict
+  note could name a source no longer in dispute or outlive the merge that
+  resolved it — now preserved via `_merge_notes`, with two ingest-only note
+  kinds (`duplicate_of`, routed-here) carried across separately since neither
+  is recoverable from the row itself. And two new free `logic check` rules,
+  `value_above_its_evidence` / `value_without_evidence`, ask whether a stored
+  number agrees with its own citations rather than whether two fields agree
+  with each other — the gap that let Stargate Abilene's `mw_built=1200` stand
+  on a single well-quoted 200 claim, because MAX-merge plus the stored value
+  counting as its own candidate meant it could never come back down. Live: 5
+  + 22 findings across 20 of 207 projects, including $4B of investment on #33
+  with no supporting source at all. The evidence audit (`--audit`) confirmed
+  the plan's #1 prediction and surfaced one nobody was looking for — #1's
+  `blocker` prose isn't in its cited passage — while missing entirely on #201
+  from the same sentence, recorded as a limitation of the audit on
+  shared-sentence rows rather than a fact about the data. Six decisions left
+  open for a person (listed below under Tomorrow); values themselves
+  (Abilene's 1,200 MW, the two 350s) are reported, not corrected.
+
+- **Stop losing evidence at the gate, and refuse pages with nothing to quote**
+  (migrations `0011`–`0013`, `tracker/ingest/crawl.py`, `tracker/capex.py`,
+  `247e2f4`, plus its plan retrospective `docs/plan-evidence-gate.md` in
+  `2c74999`). A live sync had thrown a wall of "evidence quote... is not in
+  the article" warnings; measuring first showed the quote-matching wasn't the
+  problem (98.7% exact-substring over 1,250 stored quotes, plus a negative
+  control at 0/3,064). Three real fixes instead: (1) refuse a non-article page
+  *before* the LLM call — a 600-character teaser got read as an article, the
+  model invented a project from the title, then every quote failed together,
+  which was the exact log signature reported; the floor is on sentence-length
+  prose, not raw length, because a genuine 590-char SEC excerpt and a fake
+  598-char teaser can't be told apart by length alone. Measured over 544
+  cached articles: floor of 200 refuses 20, every one confirmed junk, doesn't
+  touch the 246-article trade-press corpus or 114/115 real filings. (2) a
+  failed-quote risk is now kept and flagged instead of deleted outright — the
+  field this database is worst at, since no press release names its own
+  blocker. (3) capex now excludes only `out_of_scale` unconfirmed figures and
+  discloses the rest, instead of excluding every unconfirmed figure and
+  understating the column along with the programme-total it meant to catch.
+
+- **Stop the colour probes reading the developer's own database**
+  (`tests/test_webui.py`, `c9eff8c`). The only tests here that shell out to
+  the real CLI ran with no `TRACKER_DB`, so they read `data/tracker.db` — fine
+  until a migration lands and the dev database falls a version behind,
+  `gaps` refuses to run, and two of three colour assertions (checking colour
+  is *absent*) kept passing against empty stdout, having checked nothing.
+  Migrations 0011–0013 triggered exactly that silent gap. Now each test gets
+  its own module-scoped temp database at current schema, and asserts the
+  command printed something at all.
+
 ## Tomorrow
 
+- **Six decisions left open by the placeholder-plan closeout, all needing a
+  person** (`docs/placeholder-remediation-plan.md`, "Open decisions"):
+  `confidence.find_conflicts` still counts 待确认 claims — a third copy of a
+  rule the other two now apply, so a row's confidence rationale and its notes
+  can disagree on screen, deliberately left alone since fixing it moves a
+  stored score across an unknown share of 207 rows; #3's `mw_built=1200` needs
+  a manual `tracker review` demotion since MAX-merge won't lower it on its
+  own; #1 and #201's `mw_built=350` (one hedged sentence read as a per-site
+  figure on two rows); #1's `blocker` prose is unsupported by its cited
+  passage (found by `--audit`, not in the original plan); `placeholder_quote`
+  isn't firing on source 108 despite a confirmed `mw_built=350` with no stored
+  quote at all — rule or row, undetermined; and the two Fairwater block
+  questions (duplicate energisation dates, NULL `mw_planned`).
 - **Review the 5 deferred merge candidates** in
   `docs/merge-review-2026-08-05.md` — two building-vs-campus pairs, one
   utility-recorded-as-operator row, one Doña Ana locality-grain pair, one
   locality typo. None auto-merge for good reason; each needs a human call.
 - **Finish the block backfill.** Still 16 projects with a real energisation
-  and no blocks read — carried two days now.
+  and no blocks read — carried three days now.
 - **Review the two block-shaped report-only signals** —
-  `blocks_may_double_count` (6 live hits) and `block_label_ambiguous` — from
-  the 2026-08-04 session, still untriaged.
-- Review `docs/feedback-2026-08-03.md`, now three days old and untouched:
-  `tracker ingest edgar --kind utility` first, then merge the obvious
-  duplicate clusters (the now-durable `project_alias` signal should help),
-  then a placeholder-value vocabulary (largely done today via `is_blank`,
-  worth re-checking against the five questions), then a 5-track progress bar
-  next to `phase`.
-- The 20 utility/contractor EDGAR companies in `seed/edgar-companies.toml`
-  are still wired up but unrun — fourth day carried.
+  `blocks_may_double_count` (6 live hits as of the 2026-08-04 session) and
+  `block_label_ambiguous` — still untriaged, unchanged by this session's work.
+- Review `docs/feedback-2026-08-03.md`, now four days old and untouched.
+- The 20 utility/contractor EDGAR companies in `seed/edgar-companies.toml` are
+  still wired up but unrun — fifth day carried.
 - The 30-required-projects gap, unverified ERCOT/CAISO column names, and the
-  two unconfigured Google CSE keys are still open — fourth day carried.
+  two unconfigured Google CSE keys are still open — fifth day carried.
 - `tracker cloudflare --name`/`TRACKER_TUNNEL_HOSTNAME` still need a real run
   against a named tunnel with DNS actually pointed at it.
-- The evidence audit (`--audit`) and the buyer hover overview are both new
-  and unproven beyond the measurements quoted above — worth a wider run once
-  there's time to read the output critically rather than just verify the
-  guard rails hold.
+- `tracker audit` and the evidence-quote gate are both new and measured only
+  against the live database as it stands today — worth rerunning after the
+  next sync to see whether the numbers hold up against fresh ingest.
+- **An untracked 2 MB PDF sits in `docs/`**
+  (`docs/能源科技AI系列报告（三）：北美AI电力新趋势PPT+ED (1).pdf`, added
+  2026-08-06 14:52, read-only). Not committed by this run — it's reference
+  material, not project output, and its filename/permissions suggest it was
+  dropped there deliberately rather than a leftover to delete. Needs a human
+  call on whether it belongs in the repo, `.gitignore`, or somewhere else
+  entirely.
 - No AGENTS.md exists for this project and none was added today: still a
-  single CLI/data-pipeline codebase with no distinct agent roles to
-  document. `docs/architecture.md` was checked against today's changes and
-  doesn't need updates — the new capex drill-down and buyer overview both
-  follow the existing "browser never re-implements a judgement" rule rather
-  than changing it.
+  single CLI/data-pipeline codebase with no distinct agent roles to document.
+  `docs/architecture.md` stays high-level by design (logic, not command-level
+  detail) and doesn't need updates for `tracker audit`, the evidence gate, or
+  the placeholder-plan closeout — all three are pipeline-internal behaviour
+  already covered at the right altitude in README/CHANGELOG.
