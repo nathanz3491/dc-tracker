@@ -13,6 +13,7 @@ depend on that being true.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 
 import pytest
@@ -696,3 +697,75 @@ def test_with_no_cited_campus_figure_nothing_can_be_called_out_of_scale():
     got = blocks.account(FakeProject(mw_planned=None, blocks=[FakeBlock("phase-1", mw=36000.0)]))
     assert got.total == 36000.0
     assert not [r for r in got.residuals if r.reason == "out_of_scale"]
+
+
+# --- placeholders -----------------------------------------------------------
+
+
+PLACEHOLDER_URL = "https://news.microsoft.com/PLACEHOLDER-replace-with-the-release/"
+
+
+@dataclass
+class FakeCitation:
+    """Only what `blocks_by_key` reads off a `Source` row.
+
+    Distinct from `FakeSource` above, which stands in for `itemisation`'s much
+    narrower view of the same table.
+    """
+
+    id: int
+    url: str
+    source_type: str
+    blocks: str
+    fetched_at: str = "2026-01-01"
+
+
+def _one_block(sources):
+    (block,) = blocks.blocks_by_key(sources).values()
+    return block
+
+
+def test_a_placeholder_citation_cannot_name_or_size_a_block():
+    """The block-level half of the Fairwater (#1) placeholder defect.
+
+    `sample-projects.json` types an unreplaced seed URL `company_filing` — weight 3
+    against `trade_press`'s 2 — so left alone it wins `mw` on weight *and* takes
+    `label`/`parent`, which are handed to whichever source is seen first rather
+    than resolved by weight at all.
+    """
+    block = _one_block(
+        [
+            FakeCitation(
+                1,
+                PLACEHOLDER_URL,
+                "company_filing",
+                json.dumps([{"label": "Phase 1", "mw": 999.0, "status": "serving"}]),
+            ),
+            FakeCitation(
+                2,
+                "https://www.dcd.com/a",
+                "trade_press",
+                json.dumps([{"label": "Phase 1", "mw": 200.0, "status": "under_construction"}]),
+            ),
+        ]
+    )
+    assert block["mw"] == 200.0, "weight 3 on a URL that does not exist must not win"
+    assert block["status"] == "under_construction", (
+        "the ladder ignores weight, so only the 待确认 flag stops 'serving' here"
+    )
+
+
+def test_a_placeholder_alone_still_produces_a_block():
+    """Demoted, not dropped — `--allow-placeholders` still has to smoke-test blocks."""
+    block = _one_block(
+        [
+            FakeCitation(
+                1,
+                PLACEHOLDER_URL,
+                "company_filing",
+                json.dumps([{"label": "Phase 1", "mw": 100.0, "status": "planned"}]),
+            )
+        ]
+    )
+    assert block["label"] == "Phase 1"
+    assert block["mw"] == 100.0

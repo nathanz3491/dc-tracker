@@ -318,6 +318,149 @@ def test_cancelled_overrides_a_further_along_phase(session):
     assert session.scalar(select(Project)).phase == "cancelled"
 
 
+# --- placeholders -----------------------------------------------------------
+#
+# Fairwater (#1), pinned. `sample-projects.json` types its unreplaced seed URLs
+# `company_filing` — weight 3, the heaviest in the system, on a URL that does not
+# exist. `confidence.compute` had already learned to drop them before scoring; the
+# write path had not, so a placeholder set every identity field on a real project
+# and was then written into `notes` as the winning side of a conflict.
+
+
+PLACEHOLDER_URL = "https://news.microsoft.com/PLACEHOLDER-replace-with-the-release-you-verified/"
+
+
+def placeholder_source(**claims):
+    """A seed row exactly as `--allow-placeholders` admits one: heaviest type, no URL."""
+    return SourceRecord(
+        url=PLACEHOLDER_URL,
+        source_type="company_filing",
+        fetched_at=T1,
+        claims=claims,
+    )
+
+
+def test_a_placeholder_loses_to_a_real_source_it_outweighs_on_paper(session):
+    """company_filing (3) vs trade_press (2), and the lighter real source wins."""
+    upsert_record(
+        session,
+        rec(
+            sources=[
+                placeholder_source(mw_planned=900.0),
+                SourceRecord(
+                    url="https://www.dcd.com/a",
+                    source_type="trade_press",
+                    fetched_at=T0,
+                    claims={"mw_planned": 300.0},
+                ),
+            ]
+        ),
+    )
+    assert session.scalar(select(Project)).mw_planned == 300.0
+
+
+def test_a_placeholder_loses_on_the_phase_ladder_too(session):
+    """The case demotion-by-weight alone would miss.
+
+    LADDER takes the furthest-along value and never consults weight, so zeroing the
+    placeholder's weight would not have saved this. It is the 待确认 flag that does
+    it: `resolve` discards unconfirmed claims outright once any confirmed claim
+    exists, which is true of every policy at once.
+    """
+    upsert_record(
+        session,
+        rec(
+            sources=[
+                placeholder_source(phase="operational"),
+                SourceRecord(
+                    url="https://www.dcd.com/a",
+                    source_type="trade_press",
+                    fetched_at=T0,
+                    claims={"phase": "construction"},
+                ),
+            ]
+        ),
+    )
+    assert session.scalar(select(Project)).phase == "construction"
+
+
+def test_a_placeholder_is_not_disclosed_as_a_conflict(session):
+    """A discarded claim is not a rival, and there was no contest to report.
+
+    The note observed on #1 read `kept higher-weighted value` and named a URL that
+    does not exist — describing a resolution that never happened on either count.
+    """
+    result = upsert_record(
+        session,
+        rec(
+            sources=[
+                placeholder_source(mw_planned=900.0),
+                SourceRecord(
+                    url="https://www.dcd.com/a",
+                    source_type="trade_press",
+                    fetched_at=T0,
+                    claims={"mw_planned": 300.0},
+                ),
+            ]
+        ),
+    )
+    project = session.get(Project, result.project_id)
+    assert result.conflicts == []
+    assert "conflict mw_planned" not in (project.notes or "")
+    assert "PLACEHOLDER" not in (project.notes or "")
+
+
+def test_a_placeholder_alone_still_populates_the_row(session):
+    """Demoted, not dropped.
+
+    `--allow-placeholders` exists so the shipped seed file can smoke-test the
+    pipeline end to end. A claim-less source would make that produce empty rows,
+    which is why these are weighted to zero rather than filtered out.
+    """
+    upsert_record(
+        session,
+        rec(
+            sources=[
+                placeholder_source(
+                    name="Fairwater", company="Microsoft", city="Mount Pleasant", state="WI"
+                )
+            ]
+        ),
+    )
+    project = session.scalar(select(Project))
+    assert (project.name, project.city) == ("Fairwater", "Mount Pleasant")
+
+
+def test_a_placeholder_does_not_get_to_name_an_identity_field(session):
+    """FILL_ONLY takes `claims[0]`, so ordering *is* the policy here.
+
+    On #1 the placeholder was source 1, created in the same second as the project,
+    and its `company_filing` weight put it first — so "first seen, never
+    overwritten" handed it every identity field. Sorting 待确认 last is what moves
+    the real source into slot 0.
+
+    Note what this test cannot show, and step 2 of the remediation plan therefore
+    has to: once a placeholder has written an identity field, FILL_ONLY protects
+    the stored value from every later source regardless. The demotion prevents the
+    next one; it does not undo the ones already in the database.
+    """
+    upsert_record(
+        session,
+        rec(
+            sources=[
+                placeholder_source(county="Wrong County"),
+                SourceRecord(
+                    url="https://www.dcd.com/a",
+                    source_type="general_media",
+                    fetched_at=T0,
+                    claims={"county": "Racine County"},
+                ),
+            ],
+        ),
+    )
+    assert session.scalar(select(Project)).county == "Racine County"
+
+
 def test_ingest_order_does_not_change_the_result(session, engine, db_path):
     """Recompute-from-claims means PJM-then-news equals news-then-PJM."""
     iso = SourceRecord(

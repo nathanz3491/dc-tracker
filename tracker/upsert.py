@@ -173,12 +173,39 @@ class _Claim:
     confirmed: bool = True
 
 
+def is_placeholder(source: Source) -> bool:
+    """A seed-file citation whose URL was never replaced with a real one.
+
+    `confidence.compute` already drops these before weighting, so a placeholder
+    cannot earn trust. That fix stopped at the *score* and left the *values*
+    alone, which is the more dangerous half: a placeholder carries whatever
+    `source_type` the seed file gave it, and `sample-projects.json` types them
+    `company_filing` — weight 3, the heaviest in the system, on a URL that does
+    not exist. Observed live on Fairwater (#1), where it set every identity field
+    and was then recorded in `notes` as the "higher-weighted" side of a phase
+    conflict it had no standing to enter.
+
+    Demoted rather than dropped, because `--allow-placeholders` exists so the
+    shipped seed file can smoke-test the pipeline, and a claim-less source would
+    make that produce empty rows. See `claims_by_field` for what demotion buys.
+    """
+    return conf.PLACEHOLDER_MARKER in (source.url or "")
+
+
 def claims_by_field(sources: list[Source]) -> dict[str, list[_Claim]]:
     """field -> every claim about it, strongest first."""
     out: dict[str, list[_Claim]] = {}
     for s in sources:
         if not s.claims:
             continue
+        # A placeholder is 待确认 by construction — its "quote" is the instruction
+        # to go and paste one. Saying so routes it through the rule `resolve`
+        # already applies to every policy: unconfirmed claims are discarded
+        # outright the moment any confirmed claim exists. So the seed file still
+        # populates a smoke-test row, and the first real source erases it —
+        # including on `phase`, which ranks by progression and would otherwise
+        # have let an unquoted "construction" outrank a cited "operational".
+        placeholder = is_placeholder(s)
         try:
             claims = json.loads(s.claims)
         except (TypeError, ValueError):
@@ -193,11 +220,11 @@ def claims_by_field(sources: list[Source]) -> dict[str, list[_Claim]]:
             out.setdefault(name, []).append(
                 _Claim(
                     value,
-                    _weight(s.source_type),
+                    0 if placeholder else _weight(s.source_type),
                     s.fetched_at,
                     s.source_type,
                     s.url,
-                    confirmed=name not in unconfirmed,
+                    confirmed=not placeholder and name not in unconfirmed,
                 )
             )
     # Confirmed first, then strongest source, then most recently fetched. `url` is
@@ -339,6 +366,13 @@ def _conflict_notes(by_field: dict[str, list[_Claim]]) -> tuple[list[str], list[
     fields: list[str] = []
     for field_name in conf.KEY_FIELDS:
         claims = by_field.get(field_name, [])
+        # The same 待确认 rule `resolve` applies, and for the same reason: a claim
+        # the engine discarded outright is not a rival, and reporting it as one
+        # describes a contest that never happened. Observed live on Fairwater (#1),
+        # whose notes credited a placeholder URL as the "higher-weighted" side of a
+        # phase conflict — a source that does not exist, disputing nothing.
+        if any(c.confirmed for c in claims):
+            claims = [c for c in claims if c.confirmed]
         if len(claims) < 2:
             continue
         best = claims[0]
@@ -1050,6 +1084,7 @@ __all__ = [
     "claim_value",
     "claims_by_field",
     "derive_fields",
+    "is_placeholder",
     "recompute_blocks",
     "recompute_confidence",
     "recompute_from_sources",
