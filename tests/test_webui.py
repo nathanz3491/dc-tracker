@@ -768,10 +768,41 @@ def test_a_read_only_console_refuses_to_run_anything(seeded_db):
 # --- colour -----------------------------------------------------------------
 
 
-def _run_gaps(extra_env: dict[str, str], drop: tuple[str, ...] = ()) -> str:
+@pytest.fixture(scope="module")
+def colour_db(tmp_path_factory) -> str:
+    """A database at this checkout's own schema version, for the colour probes.
+
+    They are the only tests here that shell out to the real CLI, and without a
+    database of their own they read the developer's `data/tracker.db`. That one
+    goes stale the moment a migration lands: `gaps` then refuses to run, prints
+    the refusal to *stderr*, and leaves stdout empty.
+
+    Which breaks these three asymmetrically, and that is the part worth guarding
+    against. Empty output has no escape sequences in it, so the probe asserting
+    colour is present fails loudly — while the two asserting colour is *absent*
+    keep passing, having checked nothing at all. Landing migrations 0011-0013 did
+    exactly this, and only one of the three said so.
+
+    Empty is enough; `gaps` prints a coloured "database is empty" line, so there
+    is nothing to seed.
+    """
+    from tracker.db import init_db
+
+    path = tmp_path_factory.mktemp("colour") / "tracker.db"
+    init_db(path)
+    return str(path)
+
+
+def _run_gaps(db: str, extra_env: dict[str, str], drop: tuple[str, ...] = ()) -> str:
     import subprocess
 
-    env = {**os.environ, "COLUMNS": "160", "PYTHONIOENCODING": "utf-8", **extra_env}
+    env = {
+        **os.environ,
+        "COLUMNS": "160",
+        "PYTHONIOENCODING": "utf-8",
+        "TRACKER_DB": db,
+        **extra_env,
+    }
     for key in drop:
         env.pop(key, None)
     result = subprocess.run(
@@ -782,13 +813,17 @@ def _run_gaps(extra_env: dict[str, str], drop: tuple[str, ...] = ()) -> str:
         env=env,
         timeout=120,
     )
+    # A command that refused to run says so on stderr and prints nothing here,
+    # which would satisfy both "is not coloured" assertions below for entirely
+    # the wrong reason.
+    assert result.stdout.strip(), f"`tracker gaps` printed nothing; stderr: {result.stderr!r}"
     return result.stdout
 
 
 SGR = re.compile(r"\x1b\[[0-9;]*m")
 
 
-def test_forcing_colour_actually_produces_escapes():
+def test_forcing_colour_actually_produces_escapes(colour_db):
     """`FORCE_COLOR` alone is not enough on Windows, and it fails silently.
 
     Rich honours it — `is_terminal` goes True — and then picks
@@ -797,19 +832,19 @@ def test_forcing_colour_actually_produces_escapes():
     nothing replaces it. `cli._forced_colour` names an ANSI dialect to fix it;
     this asserts the fix rather than the flag.
     """
-    out = _run_gaps({"FORCE_COLOR": "1", "COLORTERM": "truecolor"}, drop=("NO_COLOR",))
+    out = _run_gaps(colour_db, {"FORCE_COLOR": "1", "COLORTERM": "truecolor"}, drop=("NO_COLOR",))
     assert SGR.search(out), "colour was forced and no escape sequences came out"
 
 
-def test_piping_without_asking_stays_plain():
+def test_piping_without_asking_stays_plain(colour_db):
     """The default has not changed: `tracker gaps > file` is still plain text."""
-    out = _run_gaps({}, drop=("FORCE_COLOR", "NO_COLOR"))
+    out = _run_gaps(colour_db, {}, drop=("FORCE_COLOR", "NO_COLOR"))
     assert not SGR.search(out)
 
 
-def test_no_color_beats_force_color():
+def test_no_color_beats_force_color(colour_db):
     """https://no-color.org — set means no colour, whatever else was asked for."""
-    out = _run_gaps({"FORCE_COLOR": "1", "NO_COLOR": "1"})
+    out = _run_gaps(colour_db, {"FORCE_COLOR": "1", "NO_COLOR": "1"})
     assert not SGR.search(out)
 
 
