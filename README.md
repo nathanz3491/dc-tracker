@@ -846,6 +846,45 @@ Which id survives decides more than a row number: quantitative fields are
 recomputed from the combined citations, but identity fields — name, company,
 locality — keep the survivor's values, so pick the row whose identity should win.
 
+### Numbers that cannot be true
+
+```bash
+tracker audit          # every project
+tracker audit 72 25    # only these
+```
+
+Free, read-only, no LLM. Run it after every sync or backfill; an empty result is
+the point.
+
+**Why this is not `logic check`.** That command asks whether a row's fields
+contradict *each other*, and it cannot help here, because each of these rows was
+perfectly self-consistent around a figure wrong by three orders of magnitude.
+Project 72 read *Flexential, Englewood expansion, 11,250 MW* — larger than any
+campus planned anywhere, for a colocation operator whose entire portfolio is under
+500 MW. Nothing contradicted it, so nothing flagged it, and it sat as the largest
+number in the database feeding an 8.7-million-H200 estimate and every national
+total. **A unit error does not look like a lie. It looks like a big number.**
+
+Six checks, each leaning on a stated piece of physics or economics rather than a
+threshold somebody picked:
+
+| check | what it means |
+|---|---|
+| `same_figure_two_units` | two sources ~1000× or ~100× apart — the same number in kW and MW, not a disagreement |
+| `campus_exceeds_worlds_largest` | over 8,000 MW on one site, beyond anything actually planned |
+| `block_out_of_scale` | a tranche larger than the campus containing it |
+| `giant_capacity_unconfirmed` | a gigawatt claim with no quote anywhere behind it |
+| `usd_per_mw_out_of_band` | outside $0.3M–$60M per MW, when real builds run $2M–$30M |
+| `h200_disagrees_with_capacity` | a derived figure that drifted from the capacity it came from |
+
+Unit errors sort first, because those are the ones that poison totals. **Nothing is
+ever changed** — every remedy is a read or a re-read, because which of two figures
+is wrong is a judgement about a sentence, not something a threshold can settle.
+
+On the live database it returns 21 findings across 19 of 206 projects: a rate you
+can actually work through, which is the difference between a check people run and
+a check people mute.
+
 ### Values that contradict each other
 
 ```bash

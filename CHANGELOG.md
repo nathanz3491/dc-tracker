@@ -12,6 +12,31 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **`tracker audit`: numbers that cannot be true** (`tracker/audit.py`). `logic
+  check` asks whether a row's fields contradict each other, and could not help
+  here: each of these rows was perfectly self-consistent around a figure wrong by
+  three orders of magnitude.
+
+  **Project 72** is why it exists. The row read *Flexential, Englewood expansion,
+  11,250 MW* — larger than any campus planned anywhere, for a colocation operator
+  whose whole portfolio is under 500 MW, unquoted, and implying $187k per MW against
+  the $2-30M a real build costs. Three independent smells, no contradiction, so
+  nothing flagged it. It was the largest number in the database, feeding an
+  8.7-million-H200 estimate and every national total. A unit error does not look
+  like a lie; it looks like a big number.
+
+  Six checks, each leaning on stated physics or economics rather than a picked
+  threshold: `same_figure_two_units` (two sources ~1000x or ~100x apart),
+  `campus_exceeds_worlds_largest`, `block_out_of_scale`,
+  `giant_capacity_unconfirmed`, `usd_per_mw_out_of_band`, and
+  `h200_disagrees_with_capacity`. Free, read-only, no LLM, scopeable to given ids.
+
+  **Nothing is ever changed.** Which of two figures is wrong is a judgement about a
+  sentence, so every remedy is a read or a re-read. Unit errors sort first, because
+  those are the ones that poison totals. On the live database: 21 findings across 19
+  of 206 projects — a rate you can work through, which is the difference between a
+  check people run and one they mute. 16 mutants, all caught.
+
 - **Every number in the capex table opens** (`tracker/capex.py`,
   `tracker/webui/dataset.py`, `server.py`, `app.js`,
   `tracker/prompts/capex-overview-v1.txt`). An aggregate a reader cannot open is

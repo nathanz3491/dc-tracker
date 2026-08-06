@@ -3339,6 +3339,75 @@ def _point_build(name: str, point_mod, settings, max_articles: int) -> None:
         )
 
 
+@app.command("audit")
+def audit(
+    project_ids: Annotated[
+        list[int] | None,
+        typer.Argument(
+            help="Only these projects. Default: the whole database.", show_default=False
+        ),
+    ] = None,
+) -> None:
+    """Find figures that are physically or economically implausible.
+
+    `logic check` asks whether a row contradicts itself. This asks whether a
+    number could be true at all — and the difference matters, because the errors
+    it hunts leave a row perfectly self-consistent around a figure that is wrong
+    by a thousandfold. Project 72 sat as the largest number in the database:
+    11,250 MW for a colocation *expansion*, unquoted, implying $187k per MW.
+    Nothing contradicted it, so nothing flagged it.
+
+    Free — no LLM, no network, read-only. Run it after every sync or backfill;
+    an empty result is the point.
+    """
+    from tracker import audit as audit_mod
+
+    engine = _read_engine()
+    with session_scope(engine, commit=False) as session:
+        findings = audit_mod.run(session, project_ids=project_ids or None)
+
+    if json_mode():
+        emit(
+            {
+                "findings": [
+                    {
+                        "project_id": f.project_id,
+                        "name": f.name,
+                        "code": f.code,
+                        "summary": f.summary,
+                        "remedy": f.remedy,
+                    }
+                    for f in findings
+                ]
+            }
+        )
+        return
+
+    if not findings:
+        scope = f"{len(project_ids)} project(s)" if project_ids else "every project"
+        console.print(f"[green]nothing implausible[/green] [dim]— checked {scope}.[/dim]")
+        return
+
+    table = Table(
+        title="implausible figures", header_style="bold", box=TABLE_BOX, title_justify="left"
+    )
+    table.add_column("project")
+    table.add_column("what is implausible", max_width=58)
+    table.add_column("do this", max_width=44, style="dim")
+    for f in findings:
+        table.add_row(
+            f"#{f.project_id} {escape(f.name[:24])}\n[dim]{f.code}[/dim]",
+            escape(f.summary),
+            escape(f.remedy),
+        )
+    console.print(table)
+    console.print(
+        f"\n[yellow]{len(findings)} finding(s)[/yellow] on "
+        f"{len({f.project_id for f in findings})} project(s). "
+        "[dim]Nothing was changed — every remedy is a read or a re-read, never an edit.[/dim]"
+    )
+
+
 @app.command("backfill")
 def backfill(
     what: Annotated[str, typer.Argument(help="Only `blocks` for now.")] = "blocks",
