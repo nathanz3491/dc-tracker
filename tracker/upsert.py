@@ -67,6 +67,17 @@ NOTE_PREFIX = "[tracker]"
 #: citation, which accumulates rather than being regenerated. See _merge_notes.
 SOURCE_NOTE_PREFIX = "[source]"
 
+#: Derived lines only `upsert_record` can produce, because they describe the
+#: *ingest* rather than the claims: which identity routed here, and which existing
+#: row this one might duplicate. `recompute_from_sources` regenerates every other
+#: derived line from the current claims and must not delete these on the way —
+#: neither is recoverable from the row, and the duplicate proposal is the *only*
+#: record that the identity question is still open.
+_INGEST_ONLY_NOTES: tuple[str, ...] = (
+    "possible duplicate of project #",
+    "a record arriving as ",
+)
+
 
 class Policy(Enum):
     """How to pick one value for a field from several sources' claims."""
@@ -402,7 +413,12 @@ def record_tag(urls: list[str]) -> str:
 
 
 def _merge_notes(
-    existing: str | None, derived: list[str], contributed: list[str], *, tag: str
+    existing: str | None,
+    derived: list[str],
+    contributed: list[str],
+    *,
+    tag: str | None,
+    preserve_derived: tuple[str, ...] = (),
 ) -> str | None:
     """Rebuild the notes block from three kinds of line.
 
@@ -423,25 +439,38 @@ def _merge_notes(
     a corrected "dropped value" note appeared beside the wrong one it replaced.
 
     Scoping by record gives the right answer to both.
+
+    `tag=None` means *no ingest record is in scope* — nothing contributed is
+    superseded. `recompute_from_sources` calls it that way: it re-derives a row
+    from the citations it already holds, without an incoming record.
+
+    `preserve_derived` names derived lines the caller cannot regenerate, by the
+    text following the marker. Without it a caller holding only *some* of the
+    derived families would silently delete the others, since derived lines are
+    rebuilt wholesale. See :data:`_INGEST_ONLY_NOTES`.
     """
-    mine = f"{SOURCE_NOTE_PREFIX}[{tag}]"
+    mine = f"{SOURCE_NOTE_PREFIX}[{tag}]" if tag is not None else None
     human: list[str] = []
     other_contributed: list[str] = []
+    kept_derived: list[str] = []
     for raw in (existing or "").splitlines():
         line = raw.strip()
         if not line:
             continue
-        if line.startswith(mine):
+        if mine is not None and line.startswith(mine):
             continue  # this record's own, superseded by `contributed`
         if line.startswith(SOURCE_NOTE_PREFIX):
             other_contributed.append(line)
         elif line.startswith(NOTE_PREFIX):
+            body = line[len(NOTE_PREFIX) :].lstrip()
+            if any(body.startswith(prefix) for prefix in preserve_derived):
+                kept_derived.append(line)
             continue  # derived; rebuilt below
         else:
             human.append(line)
 
     all_contributed = sorted(dict.fromkeys(other_contributed + contributed))
-    combined = human + sorted(dict.fromkeys(derived)) + all_contributed
+    combined = human + sorted(dict.fromkeys(kept_derived + derived)) + all_contributed
     return "\n".join(combined) or None
 
 
@@ -978,6 +1007,12 @@ def recompute_from_sources(session: Session, project: Project) -> list[str]:
     the sources move, the surviving row's values are whatever the full set of
     citations now supports, computed by the declared per-field policy — not the
     values either row happened to be carrying.
+
+    The derived notes are rewritten here too. They used to be computed and thrown
+    away, which left a row's *disclosures* describing the claim set it had before
+    the recompute: after a `tracker merge` or a `logic resolve` repair, values
+    moved and the prose explaining them did not. Only the two ingest-only families
+    survive untouched — see :data:`_INGEST_ONLY_NOTES`.
     """
     by_field = claims_by_field(list(project.sources))
     for name in WRITABLE_FIELDS:
@@ -997,10 +1032,14 @@ def recompute_from_sources(session: Session, project: Project) -> list[str]:
     from tracker import blocks as blocks_mod
 
     blocks_mod.rebuild(session, project)
-    blocks_mod.reconcile(project)
+    block_notes = blocks_mod.reconcile(project)
     apply_h200_equivalent(project, by_field)
 
-    _derived, conflict_fields = _conflict_notes(by_field)
+    derived, conflict_fields = _conflict_notes(by_field)
+    derived.extend(f"{NOTE_PREFIX} {line}" for line in block_notes)
+    project.notes = _merge_notes(
+        project.notes, derived, [], tag=None, preserve_derived=_INGEST_ONLY_NOTES
+    )
 
     views = [conf.SourceView.from_row(s) for s in project.sources]
     populated = sum(1 for f in TRACKED_FIELDS if getattr(project, f, None) is not None)

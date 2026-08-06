@@ -18,10 +18,12 @@ from sqlalchemy.exc import IntegrityError
 from tracker.ingest.records import EventRecord, IngestRecord, RiskRecord, SourceRecord
 from tracker.models import Event, Project, Risk, Source
 from tracker.upsert import (
+    _INGEST_ONLY_NOTES,
     NOTE_PREFIX,
     SOURCE_NOTE_PREFIX,
     derive_fields,
     recompute_confidence,
+    recompute_from_sources,
     upsert_record,
 )
 from tracker.vocab import TRACKED_FIELDS
@@ -671,6 +673,122 @@ def test_duplicate_proposal_survives_reingest(session):
     county_row = session.scalar(select(Project).where(Project.county.is_not(None)))
     assert "possible duplicate" in county_row.notes
     assert county_row.notes.count("possible duplicate") == 1, "must not accumulate"
+
+
+# --- recompute_from_sources rewrites the notes it can regenerate -------------
+#
+# It used to compute the derived lines and throw them away, so a row re-derived by
+# `tracker merge` or a `logic resolve` repair kept prose describing the claim set
+# it held *before* the recompute.
+
+
+def test_a_recompute_clears_a_disclosure_its_claims_no_longer_support(session):
+    """The half of `_merge_notes`'s contract `recompute_from_sources` was missing."""
+    upsert_record(
+        session,
+        rec(
+            sources=[
+                SourceRecord(
+                    url="https://a.com/1",
+                    source_type="trade_press",
+                    fetched_at=T0,
+                    claims={"mw_planned": 300.0},
+                ),
+                SourceRecord(
+                    url="https://b.com/2",
+                    source_type="company_filing",
+                    fetched_at=T1,
+                    claims={"mw_planned": 900.0},
+                ),
+            ]
+        ),
+    )
+    project = session.scalar(select(Project))
+    assert "conflict mw_planned" in project.notes
+
+    # The disagreement goes away — as it would after a merge folded the rows, or
+    # after an operator deleted the citation behind one of them.
+    losing = next(s for s in project.sources if s.url == "https://a.com/1")
+    session.delete(losing)
+    session.flush()
+    session.expire(project, ["sources"])
+    recompute_from_sources(session, project)
+
+    assert "conflict mw_planned" not in (project.notes or "")
+
+
+def test_a_recompute_keeps_what_only_an_ingest_could_have_written(session):
+    """The duplicate proposal is the *only* record that the question is open.
+
+    `duplicate_of` is not a column — it is recomputed per ingest and disclosed in
+    `notes`. Regenerating derived lines wholesale from a recompute, which has no
+    ingest record in hand, would delete it silently.
+    """
+    upsert_record(session, rec(city="Racine"))
+    result = upsert_record(
+        session,
+        rec(
+            city=None,
+            county="Racine County",
+            sources=[
+                SourceRecord(
+                    url="https://www.pjm.com/q#AG1",
+                    source_type="iso_queue",
+                    fetched_at=T0,
+                    claims={"phase": "permitting"},
+                )
+            ],
+        ),
+    )
+    project = session.get(Project, result.project_id)
+    assert "possible duplicate of project #" in project.notes
+
+    recompute_from_sources(session, project)
+
+    assert "possible duplicate of project #" in project.notes, (
+        "a recompute must not erase the only record of an open identity question"
+    )
+
+
+def test_a_recompute_leaves_operator_prose_and_other_records_alone(session):
+    upsert_record(session, rec(notes=["queue MW is generator nameplate"]))
+    project = session.scalar(select(Project))
+    project.notes = f"Spoke to the county planner.\n{project.notes}"
+    session.flush()
+
+    recompute_from_sources(session, project)
+
+    assert "Spoke to the county planner." in project.notes
+    assert "queue MW is generator nameplate" in project.notes
+
+
+def test_the_preserved_note_prefixes_match_what_upsert_actually_writes(session):
+    """`_INGEST_ONLY_NOTES` is matched against prose written somewhere else.
+
+    Two string literals that have to agree and nothing forcing them to. If someone
+    rewords either disclosure, the preservation silently stops working and a
+    recompute starts deleting it again — so assert they still line up.
+    """
+    upsert_record(session, rec(city="Racine"))
+    result = upsert_record(
+        session,
+        rec(
+            city=None,
+            county="Racine County",
+            sources=[
+                SourceRecord(
+                    url="https://www.pjm.com/q#AG1",
+                    source_type="iso_queue",
+                    fetched_at=T0,
+                    claims={"phase": "permitting"},
+                )
+            ],
+        ),
+    )
+    notes = session.get(Project, result.project_id).notes.splitlines()
+    derived = [line[len(NOTE_PREFIX) :].lstrip() for line in notes if line.startswith(NOTE_PREFIX)]
+    matched = [d for d in derived if any(d.startswith(p) for p in _INGEST_ONLY_NOTES)]
+    assert matched, f"no derived line matched {_INGEST_ONLY_NOTES}; got {derived}"
 
 
 def test_a_city_row_that_knows_its_county_is_matched_against_county_rows(session):
