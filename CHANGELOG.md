@@ -717,6 +717,44 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **A citation that does not exist could set values** (`tracker/upsert.py`,
+  `tracker/blocks.py`). `confidence.compute` already dropped placeholder URLs
+  before weighting, and the comment there names the row that motivated it. That
+  fix stopped at the **score** and left the **values** alone — the more dangerous
+  half. A placeholder carries whatever `source_type` the seed file gave it, and
+  `sample-projects.json` types them `company_filing`: **weight 3, the heaviest in
+  the system, on a URL that does not exist.**
+
+  Observed live on Fairwater (#1), where the placeholder was source 1, created in
+  the same second as the project, and took every identity field on FILL_ONLY's
+  first-seen-never-overwritten rule.
+
+  **Demoted, not dropped.** `--allow-placeholders` exists so the shipped seed file
+  can smoke-test the pipeline, and a claim-less source makes that produce empty
+  rows. Demotion instead marks the claim 待确认, which routes it through a rule
+  `resolve` already applies to every policy at once: unconfirmed claims are
+  discarded outright the moment any confirmed claim exists. That covers the
+  `phase` ladder, which ranks by progression and ignores weight — so zeroing the
+  weight alone would not have saved it. A placeholder's "quote" is literally the
+  instruction to go and paste one, so `confirmed=False` is not a special case, it
+  is the truth about it.
+
+  Three places, not one. `claims_by_field` for field claims;  `blocks_by_key` for
+  the same hole at block level, where the **sort** is demoted too and not just the
+  claim weight, because `label`/`parent` are never resolved by weight —
+  `labels.setdefault` gives them to whichever source is seen first; and
+  `_conflict_notes`, which did not apply the 待确认 rule `resolve` does, so a claim
+  the engine had already discarded was still disclosed as a rival. #1's note read
+  `conflict phase: 'construction' (company_filing) vs 'operational'
+  (general_media); kept higher-weighted value` — crediting a URL that does not
+  exist, and describing a contest that never happened on either count.
+
+  Seven regression tests, all failing at the previous commit except the two
+  pinning the contract that must not move: a placeholder on its own still
+  populates its row. Values already written are untouched — identity fields are
+  FILL_ONLY and stay put; purging the three stored placeholder citations is step 2
+  of `docs/placeholder-remediation-plan.md`.
+
 - **A tunnel that had not reconnected was reported as a database failure**
   (`app.js`). Restarting a published console briefly takes the tunnel down; a tab
   left open then fetched `/api/dataset`, got **Cloudflare's own 502 HTML page**,
