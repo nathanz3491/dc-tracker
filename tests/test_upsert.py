@@ -18,10 +18,12 @@ from sqlalchemy.exc import IntegrityError
 from tracker.ingest.records import EventRecord, IngestRecord, RiskRecord, SourceRecord
 from tracker.models import Event, Project, Risk, Source
 from tracker.upsert import (
+    _INGEST_ONLY_NOTES,
     NOTE_PREFIX,
     SOURCE_NOTE_PREFIX,
     derive_fields,
     recompute_confidence,
+    recompute_from_sources,
     upsert_record,
 )
 from tracker.vocab import TRACKED_FIELDS
@@ -318,6 +320,149 @@ def test_cancelled_overrides_a_further_along_phase(session):
     assert session.scalar(select(Project)).phase == "cancelled"
 
 
+# --- placeholders -----------------------------------------------------------
+#
+# Fairwater (#1), pinned. `sample-projects.json` types its unreplaced seed URLs
+# `company_filing` — weight 3, the heaviest in the system, on a URL that does not
+# exist. `confidence.compute` had already learned to drop them before scoring; the
+# write path had not, so a placeholder set every identity field on a real project
+# and was then written into `notes` as the winning side of a conflict.
+
+
+PLACEHOLDER_URL = "https://news.microsoft.com/PLACEHOLDER-replace-with-the-release-you-verified/"
+
+
+def placeholder_source(**claims):
+    """A seed row exactly as `--allow-placeholders` admits one: heaviest type, no URL."""
+    return SourceRecord(
+        url=PLACEHOLDER_URL,
+        source_type="company_filing",
+        fetched_at=T1,
+        claims=claims,
+    )
+
+
+def test_a_placeholder_loses_to_a_real_source_it_outweighs_on_paper(session):
+    """company_filing (3) vs trade_press (2), and the lighter real source wins."""
+    upsert_record(
+        session,
+        rec(
+            sources=[
+                placeholder_source(mw_planned=900.0),
+                SourceRecord(
+                    url="https://www.dcd.com/a",
+                    source_type="trade_press",
+                    fetched_at=T0,
+                    claims={"mw_planned": 300.0},
+                ),
+            ]
+        ),
+    )
+    assert session.scalar(select(Project)).mw_planned == 300.0
+
+
+def test_a_placeholder_loses_on_the_phase_ladder_too(session):
+    """The case demotion-by-weight alone would miss.
+
+    LADDER takes the furthest-along value and never consults weight, so zeroing the
+    placeholder's weight would not have saved this. It is the 待确认 flag that does
+    it: `resolve` discards unconfirmed claims outright once any confirmed claim
+    exists, which is true of every policy at once.
+    """
+    upsert_record(
+        session,
+        rec(
+            sources=[
+                placeholder_source(phase="operational"),
+                SourceRecord(
+                    url="https://www.dcd.com/a",
+                    source_type="trade_press",
+                    fetched_at=T0,
+                    claims={"phase": "construction"},
+                ),
+            ]
+        ),
+    )
+    assert session.scalar(select(Project)).phase == "construction"
+
+
+def test_a_placeholder_is_not_disclosed_as_a_conflict(session):
+    """A discarded claim is not a rival, and there was no contest to report.
+
+    The note observed on #1 read `kept higher-weighted value` and named a URL that
+    does not exist — describing a resolution that never happened on either count.
+    """
+    result = upsert_record(
+        session,
+        rec(
+            sources=[
+                placeholder_source(mw_planned=900.0),
+                SourceRecord(
+                    url="https://www.dcd.com/a",
+                    source_type="trade_press",
+                    fetched_at=T0,
+                    claims={"mw_planned": 300.0},
+                ),
+            ]
+        ),
+    )
+    project = session.get(Project, result.project_id)
+    assert result.conflicts == []
+    assert "conflict mw_planned" not in (project.notes or "")
+    assert "PLACEHOLDER" not in (project.notes or "")
+
+
+def test_a_placeholder_alone_still_populates_the_row(session):
+    """Demoted, not dropped.
+
+    `--allow-placeholders` exists so the shipped seed file can smoke-test the
+    pipeline end to end. A claim-less source would make that produce empty rows,
+    which is why these are weighted to zero rather than filtered out.
+    """
+    upsert_record(
+        session,
+        rec(
+            sources=[
+                placeholder_source(
+                    name="Fairwater", company="Microsoft", city="Mount Pleasant", state="WI"
+                )
+            ]
+        ),
+    )
+    project = session.scalar(select(Project))
+    assert (project.name, project.city) == ("Fairwater", "Mount Pleasant")
+
+
+def test_a_placeholder_does_not_get_to_name_an_identity_field(session):
+    """FILL_ONLY takes `claims[0]`, so ordering *is* the policy here.
+
+    On #1 the placeholder was source 1, created in the same second as the project,
+    and its `company_filing` weight put it first — so "first seen, never
+    overwritten" handed it every identity field. Sorting 待确认 last is what moves
+    the real source into slot 0.
+
+    Note what this test cannot show, and step 2 of the remediation plan therefore
+    has to: once a placeholder has written an identity field, FILL_ONLY protects
+    the stored value from every later source regardless. The demotion prevents the
+    next one; it does not undo the ones already in the database.
+    """
+    upsert_record(
+        session,
+        rec(
+            sources=[
+                placeholder_source(county="Wrong County"),
+                SourceRecord(
+                    url="https://www.dcd.com/a",
+                    source_type="general_media",
+                    fetched_at=T0,
+                    claims={"county": "Racine County"},
+                ),
+            ],
+        ),
+    )
+    assert session.scalar(select(Project)).county == "Racine County"
+
+
 def test_ingest_order_does_not_change_the_result(session, engine, db_path):
     """Recompute-from-claims means PJM-then-news equals news-then-PJM."""
     iso = SourceRecord(
@@ -528,6 +673,122 @@ def test_duplicate_proposal_survives_reingest(session):
     county_row = session.scalar(select(Project).where(Project.county.is_not(None)))
     assert "possible duplicate" in county_row.notes
     assert county_row.notes.count("possible duplicate") == 1, "must not accumulate"
+
+
+# --- recompute_from_sources rewrites the notes it can regenerate -------------
+#
+# It used to compute the derived lines and throw them away, so a row re-derived by
+# `tracker merge` or a `logic resolve` repair kept prose describing the claim set
+# it held *before* the recompute.
+
+
+def test_a_recompute_clears_a_disclosure_its_claims_no_longer_support(session):
+    """The half of `_merge_notes`'s contract `recompute_from_sources` was missing."""
+    upsert_record(
+        session,
+        rec(
+            sources=[
+                SourceRecord(
+                    url="https://a.com/1",
+                    source_type="trade_press",
+                    fetched_at=T0,
+                    claims={"mw_planned": 300.0},
+                ),
+                SourceRecord(
+                    url="https://b.com/2",
+                    source_type="company_filing",
+                    fetched_at=T1,
+                    claims={"mw_planned": 900.0},
+                ),
+            ]
+        ),
+    )
+    project = session.scalar(select(Project))
+    assert "conflict mw_planned" in project.notes
+
+    # The disagreement goes away — as it would after a merge folded the rows, or
+    # after an operator deleted the citation behind one of them.
+    losing = next(s for s in project.sources if s.url == "https://a.com/1")
+    session.delete(losing)
+    session.flush()
+    session.expire(project, ["sources"])
+    recompute_from_sources(session, project)
+
+    assert "conflict mw_planned" not in (project.notes or "")
+
+
+def test_a_recompute_keeps_what_only_an_ingest_could_have_written(session):
+    """The duplicate proposal is the *only* record that the question is open.
+
+    `duplicate_of` is not a column — it is recomputed per ingest and disclosed in
+    `notes`. Regenerating derived lines wholesale from a recompute, which has no
+    ingest record in hand, would delete it silently.
+    """
+    upsert_record(session, rec(city="Racine"))
+    result = upsert_record(
+        session,
+        rec(
+            city=None,
+            county="Racine County",
+            sources=[
+                SourceRecord(
+                    url="https://www.pjm.com/q#AG1",
+                    source_type="iso_queue",
+                    fetched_at=T0,
+                    claims={"phase": "permitting"},
+                )
+            ],
+        ),
+    )
+    project = session.get(Project, result.project_id)
+    assert "possible duplicate of project #" in project.notes
+
+    recompute_from_sources(session, project)
+
+    assert "possible duplicate of project #" in project.notes, (
+        "a recompute must not erase the only record of an open identity question"
+    )
+
+
+def test_a_recompute_leaves_operator_prose_and_other_records_alone(session):
+    upsert_record(session, rec(notes=["queue MW is generator nameplate"]))
+    project = session.scalar(select(Project))
+    project.notes = f"Spoke to the county planner.\n{project.notes}"
+    session.flush()
+
+    recompute_from_sources(session, project)
+
+    assert "Spoke to the county planner." in project.notes
+    assert "queue MW is generator nameplate" in project.notes
+
+
+def test_the_preserved_note_prefixes_match_what_upsert_actually_writes(session):
+    """`_INGEST_ONLY_NOTES` is matched against prose written somewhere else.
+
+    Two string literals that have to agree and nothing forcing them to. If someone
+    rewords either disclosure, the preservation silently stops working and a
+    recompute starts deleting it again — so assert they still line up.
+    """
+    upsert_record(session, rec(city="Racine"))
+    result = upsert_record(
+        session,
+        rec(
+            city=None,
+            county="Racine County",
+            sources=[
+                SourceRecord(
+                    url="https://www.pjm.com/q#AG1",
+                    source_type="iso_queue",
+                    fetched_at=T0,
+                    claims={"phase": "permitting"},
+                )
+            ],
+        ),
+    )
+    notes = session.get(Project, result.project_id).notes.splitlines()
+    derived = [line[len(NOTE_PREFIX) :].lstrip() for line in notes if line.startswith(NOTE_PREFIX)]
+    matched = [d for d in derived if any(d.startswith(p) for p in _INGEST_ONLY_NOTES)]
+    assert matched, f"no derived line matched {_INGEST_ONLY_NOTES}; got {derived}"
 
 
 def test_a_city_row_that_knows_its_county_is_matched_against_county_rows(session):

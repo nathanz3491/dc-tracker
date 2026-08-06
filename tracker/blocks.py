@@ -707,25 +707,32 @@ def blocks_by_key(sources: list[Any], aliases: dict[str, str] | None = None) -> 
     import json
 
     from tracker import confidence as conf
-    from tracker.upsert import _Claim, resolve
+    from tracker.upsert import _Claim, is_placeholder, resolve
 
     aliases = aliases or {}
     grouped: dict[str, dict[str, list]] = {}
     labels: dict[str, tuple[str, str | None, bool]] = {}
 
-    ordered = sorted(
-        sources, key=lambda s: (-conf.SOURCE_WEIGHTS.get(s.source_type, 1), -(s.id or 0))
-    )
+    # Same demotion as `upsert.claims_by_field`: a placeholder's seed-file
+    # `source_type` is `company_filing` on a URL that does not exist, so left alone
+    # it would win every block field on weight. The sort is demoted too, not just
+    # the `_Claim` weight below, because `label`/`parent` are not resolved by weight
+    # at all — `labels.setdefault` gives them to whichever source is seen first.
+    def _weight_of(source: Any) -> int:
+        return 0 if is_placeholder(source) else conf.SOURCE_WEIGHTS.get(source.source_type, 1)
+
+    ordered = sorted(sources, key=lambda s: (-_weight_of(s), -(s.id or 0)))
     for source in ordered:
         if not source.blocks:
             continue
+        placeholder = is_placeholder(source)
         try:
             entries = json.loads(source.blocks)
         except (TypeError, ValueError):
             continue
         if not isinstance(entries, list):
             continue
-        weight = conf.SOURCE_WEIGHTS.get(source.source_type, 1)
+        weight = _weight_of(source)
         for entry in entries:
             if not isinstance(entry, dict) or not str(entry.get("label") or "").strip():
                 continue
@@ -745,7 +752,7 @@ def blocks_by_key(sources: list[Any], aliases: dict[str, str] | None = None) -> 
                         source.fetched_at,
                         source.source_type,
                         source.url,
-                        confirmed=name not in unconfirmed,
+                        confirmed=not placeholder and name not in unconfirmed,
                     )
                 )
             fields.setdefault("_quotes", []).append(entry.get("quotes") or {})

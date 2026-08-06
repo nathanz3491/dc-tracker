@@ -1150,3 +1150,112 @@ def test_an_audit_only_run_pays_for_no_contradiction_reads(session):
     assert examined == []
     assert report.examined == 0
     assert report.audited == 1
+
+
+# --- a stored scalar against the citations under it ----------------------------
+#
+# Stargate Abilene (#3), pinned. The row read `mw_built = 1200` while the only
+# `mw_built` claim on it was a well-quoted 200: the 1.2 GW quotes had been
+# re-extracted as `mw_planned` — "committed capacity" is not energised capacity —
+# and MAX, which counts the stored value among its own candidates, could not come
+# back down. `check_collisions` could not see it either, because a collision needs
+# two claims on a field and there was only one.
+
+
+def _capacity_claim(session, project, url, mw_built, *, source_type="trade_press"):
+    import json as _json
+
+    _source(
+        session,
+        project,
+        url,
+        source_type=source_type,
+        claims=_json.dumps({"mw_built": mw_built}),
+        fetched=T0,
+        fields="mw_built",
+    )
+
+
+def test_a_stored_figure_above_its_only_claim_is_reported(session):
+    """The shape a collision cannot have: one claim, and the row exceeds it."""
+    project = _project(session, name="Abilene", mw_built=1200)
+    _capacity_claim(session, project, "https://dcf.test/a", 200)
+    session.refresh(project)
+
+    findings = {f.code: f for f in logic.check_rules(project)}
+    assert "value_above_its_evidence" in findings
+    assert findings["value_above_its_evidence"].severity == logic.WARNING
+    assert "1200" in findings["value_above_its_evidence"].summary
+    assert "200" in findings["value_above_its_evidence"].summary
+
+
+def test_a_figure_its_claim_supports_is_silent(session):
+    project = _project(session, name="Agrees", mw_built=200)
+    _capacity_claim(session, project, "https://dcf.test/a", 200)
+    session.refresh(project)
+    assert "value_above_its_evidence" not in _codes(project)
+
+
+def test_a_stored_figure_below_its_claim_is_not_this_finding(session):
+    """Only *over*statement is reported here — an understated row is a different
+    question, and `reconcile` raising it is the normal repair."""
+    project = _project(session, name="Under", mw_built=100)
+    _capacity_claim(session, project, "https://dcf.test/a", 200)
+    session.refresh(project)
+    assert "value_above_its_evidence" not in _codes(project)
+
+
+def test_rounding_between_a_quote_and_a_row_is_not_drift(session):
+    """Same tolerance the conflict machinery uses; 205 against 200 is one story."""
+    project = _project(session, name="Rounded", mw_built=205)
+    _capacity_claim(session, project, "https://dcf.test/a", 200)
+    session.refresh(project)
+    assert "value_above_its_evidence" not in _codes(project)
+
+
+def test_a_scalar_the_blocks_account_for_is_silent(session):
+    """The false-positive class that made the first cut of this rule useless.
+
+    `blocks.reconcile` deliberately raises a campus scalar to the sum of its
+    tranches, so a figure above every *claim* can still be fully supported. Left
+    unhandled this reported 28 rows that were behaving exactly as designed.
+    """
+    from tracker.models import CapacityBlock
+
+    project = _project(session, name="Tranched", mw_built=300)
+    _capacity_claim(session, project, "https://dcf.test/a", 100)
+    for key, mw in (("phase-1", 150.0), ("phase-2", 150.0)):
+        session.add(
+            CapacityBlock(
+                project_id=project.id,
+                block_key=key,
+                label=key,
+                parent="Tranched",
+                mw=mw,
+                status="serving",
+            )
+        )
+    session.flush()
+    session.refresh(project)
+    assert "value_above_its_evidence" not in _codes(project)
+
+
+def test_a_figure_no_source_claims_at_all_is_reported(session):
+    """$4B of `investment_usd` resting on nothing was live on #33 when this landed."""
+    project = _project(session, name="Unsourced", investment_usd=4_000_000_000)
+    _capacity_claim(session, project, "https://dcf.test/a", 100)
+    session.refresh(project)
+
+    findings = {f.code: f for f in logic.check_rules(project)}
+    assert "value_without_evidence" in findings
+    assert findings["value_without_evidence"].fields == ("investment_usd",)
+    assert findings["value_without_evidence"].severity == logic.WARNING
+
+
+def test_a_row_with_no_citations_yet_is_not_accused(session):
+    """An unsourced row is a gap in what has been read, not a contradiction —
+    the same reasoning the block-aware rules above use."""
+    project = _project(session, name="Unread", mw_built=500)
+    session.refresh(project)
+    assert "value_without_evidence" not in _codes(project)
+    assert "value_above_its_evidence" not in _codes(project)

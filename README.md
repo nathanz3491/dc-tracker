@@ -924,6 +924,35 @@ reached today and drags the whole power track with it. `milestone_in_the_future`
 reports that rather than fixing it, because changing what "reached" means would
 move every track strip in the product.
 
+Two of them ask a narrower question than the rest: not whether the row's fields
+agree with each other, but whether a stored **number** agrees with the citations
+under it.
+
+| check | what it means |
+|---|---|
+| `value_above_its_evidence` | the row holds more than its claims and blocks can account for |
+| `value_without_evidence` | the row holds a figure no source on it claims at all |
+
+Both are restricted to money and megawatts — the fields that feed `tracker capex`
+and the national totals, where an unsupported figure misstates a rollup rather
+than just one row. On the live database: **5 and 22** findings across 20 projects.
+
+Stargate Abilene is why they exist. The row read `mw_built = 1200` while the only
+`mw_built` claim on it was a well-quoted **200**. Both "1.2 GW" quotes had since
+been re-extracted as `mw_planned`, correctly — committed capacity is not energised
+capacity — but `mw_built` merges by MAX, and MAX counts the value already stored
+among its own candidates. **So it can never come back down.** The figure outlived
+the claim that produced it by 1,000 MW, against a ~0.4 GW satellite read and the
+project's own `phase-1` block of 200 MW serving.
+
+The collision check below could not see it, and that is the point: a collision
+needs *two* claims on a field to compare. One claim and a row that disagrees with
+it is the cheapest possible version of the error, and it was invisible.
+
+Both consult the block rollup as well as the claims, because `blocks.reconcile`
+deliberately raises a campus scalar to the sum of its tranches. The first cut of
+the rule did not, and reported 28 rows behaving exactly as designed.
+
 **Collisions** are two sources claiming different values for one field. The winner
 is read back from `upsert.resolve_field` — the same function the write path used —
 and printed with its reason. That reason is **not always "the better source won"**:

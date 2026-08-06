@@ -67,6 +67,17 @@ NOTE_PREFIX = "[tracker]"
 #: citation, which accumulates rather than being regenerated. See _merge_notes.
 SOURCE_NOTE_PREFIX = "[source]"
 
+#: Derived lines only `upsert_record` can produce, because they describe the
+#: *ingest* rather than the claims: which identity routed here, and which existing
+#: row this one might duplicate. `recompute_from_sources` regenerates every other
+#: derived line from the current claims and must not delete these on the way —
+#: neither is recoverable from the row, and the duplicate proposal is the *only*
+#: record that the identity question is still open.
+_INGEST_ONLY_NOTES: tuple[str, ...] = (
+    "possible duplicate of project #",
+    "a record arriving as ",
+)
+
 
 class Policy(Enum):
     """How to pick one value for a field from several sources' claims."""
@@ -173,12 +184,39 @@ class _Claim:
     confirmed: bool = True
 
 
+def is_placeholder(source: Source) -> bool:
+    """A seed-file citation whose URL was never replaced with a real one.
+
+    `confidence.compute` already drops these before weighting, so a placeholder
+    cannot earn trust. That fix stopped at the *score* and left the *values*
+    alone, which is the more dangerous half: a placeholder carries whatever
+    `source_type` the seed file gave it, and `sample-projects.json` types them
+    `company_filing` — weight 3, the heaviest in the system, on a URL that does
+    not exist. Observed live on Fairwater (#1), where it set every identity field
+    and was then recorded in `notes` as the "higher-weighted" side of a phase
+    conflict it had no standing to enter.
+
+    Demoted rather than dropped, because `--allow-placeholders` exists so the
+    shipped seed file can smoke-test the pipeline, and a claim-less source would
+    make that produce empty rows. See `claims_by_field` for what demotion buys.
+    """
+    return conf.PLACEHOLDER_MARKER in (source.url or "")
+
+
 def claims_by_field(sources: list[Source]) -> dict[str, list[_Claim]]:
     """field -> every claim about it, strongest first."""
     out: dict[str, list[_Claim]] = {}
     for s in sources:
         if not s.claims:
             continue
+        # A placeholder is 待确认 by construction — its "quote" is the instruction
+        # to go and paste one. Saying so routes it through the rule `resolve`
+        # already applies to every policy: unconfirmed claims are discarded
+        # outright the moment any confirmed claim exists. So the seed file still
+        # populates a smoke-test row, and the first real source erases it —
+        # including on `phase`, which ranks by progression and would otherwise
+        # have let an unquoted "construction" outrank a cited "operational".
+        placeholder = is_placeholder(s)
         try:
             claims = json.loads(s.claims)
         except (TypeError, ValueError):
@@ -193,11 +231,11 @@ def claims_by_field(sources: list[Source]) -> dict[str, list[_Claim]]:
             out.setdefault(name, []).append(
                 _Claim(
                     value,
-                    _weight(s.source_type),
+                    0 if placeholder else _weight(s.source_type),
                     s.fetched_at,
                     s.source_type,
                     s.url,
-                    confirmed=name not in unconfirmed,
+                    confirmed=not placeholder and name not in unconfirmed,
                 )
             )
     # Confirmed first, then strongest source, then most recently fetched. `url` is
@@ -339,6 +377,13 @@ def _conflict_notes(by_field: dict[str, list[_Claim]]) -> tuple[list[str], list[
     fields: list[str] = []
     for field_name in conf.KEY_FIELDS:
         claims = by_field.get(field_name, [])
+        # The same 待确认 rule `resolve` applies, and for the same reason: a claim
+        # the engine discarded outright is not a rival, and reporting it as one
+        # describes a contest that never happened. Observed live on Fairwater (#1),
+        # whose notes credited a placeholder URL as the "higher-weighted" side of a
+        # phase conflict — a source that does not exist, disputing nothing.
+        if any(c.confirmed for c in claims):
+            claims = [c for c in claims if c.confirmed]
         if len(claims) < 2:
             continue
         best = claims[0]
@@ -368,7 +413,12 @@ def record_tag(urls: list[str]) -> str:
 
 
 def _merge_notes(
-    existing: str | None, derived: list[str], contributed: list[str], *, tag: str
+    existing: str | None,
+    derived: list[str],
+    contributed: list[str],
+    *,
+    tag: str | None,
+    preserve_derived: tuple[str, ...] = (),
 ) -> str | None:
     """Rebuild the notes block from three kinds of line.
 
@@ -389,25 +439,38 @@ def _merge_notes(
     a corrected "dropped value" note appeared beside the wrong one it replaced.
 
     Scoping by record gives the right answer to both.
+
+    `tag=None` means *no ingest record is in scope* — nothing contributed is
+    superseded. `recompute_from_sources` calls it that way: it re-derives a row
+    from the citations it already holds, without an incoming record.
+
+    `preserve_derived` names derived lines the caller cannot regenerate, by the
+    text following the marker. Without it a caller holding only *some* of the
+    derived families would silently delete the others, since derived lines are
+    rebuilt wholesale. See :data:`_INGEST_ONLY_NOTES`.
     """
-    mine = f"{SOURCE_NOTE_PREFIX}[{tag}]"
+    mine = f"{SOURCE_NOTE_PREFIX}[{tag}]" if tag is not None else None
     human: list[str] = []
     other_contributed: list[str] = []
+    kept_derived: list[str] = []
     for raw in (existing or "").splitlines():
         line = raw.strip()
         if not line:
             continue
-        if line.startswith(mine):
+        if mine is not None and line.startswith(mine):
             continue  # this record's own, superseded by `contributed`
         if line.startswith(SOURCE_NOTE_PREFIX):
             other_contributed.append(line)
         elif line.startswith(NOTE_PREFIX):
+            body = line[len(NOTE_PREFIX) :].lstrip()
+            if any(body.startswith(prefix) for prefix in preserve_derived):
+                kept_derived.append(line)
             continue  # derived; rebuilt below
         else:
             human.append(line)
 
     all_contributed = sorted(dict.fromkeys(other_contributed + contributed))
-    combined = human + sorted(dict.fromkeys(derived)) + all_contributed
+    combined = human + sorted(dict.fromkeys(kept_derived + derived)) + all_contributed
     return "\n".join(combined) or None
 
 
@@ -958,6 +1021,12 @@ def recompute_from_sources(session: Session, project: Project) -> list[str]:
     the sources move, the surviving row's values are whatever the full set of
     citations now supports, computed by the declared per-field policy — not the
     values either row happened to be carrying.
+
+    The derived notes are rewritten here too. They used to be computed and thrown
+    away, which left a row's *disclosures* describing the claim set it had before
+    the recompute: after a `tracker merge` or a `logic resolve` repair, values
+    moved and the prose explaining them did not. Only the two ingest-only families
+    survive untouched — see :data:`_INGEST_ONLY_NOTES`.
     """
     by_field = claims_by_field(list(project.sources))
     for name in WRITABLE_FIELDS:
@@ -977,10 +1046,14 @@ def recompute_from_sources(session: Session, project: Project) -> list[str]:
     from tracker import blocks as blocks_mod
 
     blocks_mod.rebuild(session, project)
-    blocks_mod.reconcile(project)
+    block_notes = blocks_mod.reconcile(project)
     apply_h200_equivalent(project, by_field)
 
-    _derived, conflict_fields = _conflict_notes(by_field)
+    derived, conflict_fields = _conflict_notes(by_field)
+    derived.extend(f"{NOTE_PREFIX} {line}" for line in block_notes)
+    project.notes = _merge_notes(
+        project.notes, derived, [], tag=None, preserve_derived=_INGEST_ONLY_NOTES
+    )
 
     views = [conf.SourceView.from_row(s) for s in project.sources]
     populated = sum(1 for f in TRACKED_FIELDS if getattr(project, f, None) is not None)
@@ -1064,6 +1137,7 @@ __all__ = [
     "claim_value",
     "claims_by_field",
     "derive_fields",
+    "is_placeholder",
     "recompute_blocks",
     "recompute_confidence",
     "recompute_from_sources",
