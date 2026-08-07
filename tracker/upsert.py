@@ -168,6 +168,19 @@ def _weight(source_type: str) -> int:
     return conf.SOURCE_WEIGHTS.get(source_type, 1)
 
 
+def _published_at(session: Session, url: str) -> Any:
+    """When the publisher published this URL, if anything recorded it.
+
+    Read from `ingest_url`, which `discover` fills from the feed. Returns None for
+    a URL supplied by hand: there is nowhere else to learn the date from, and
+    guessing one would put a fabricated timestamp into a merge tiebreak, which is
+    worse than falling back to `fetched_at`.
+    """
+    from tracker.models import IngestUrl
+
+    return session.scalar(select(IngestUrl.published_at).where(IngestUrl.url == url))
+
+
 @dataclass(frozen=True)
 class _Claim:
     """One source's assertion about one field, with its tiebreakers."""
@@ -182,6 +195,22 @@ class _Claim:
     #: so a 待确认 value can never displace a quote-backed one however heavy its
     #: source or however recently it was fetched.
     confirmed: bool = True
+    #: When the publisher published it (migration 0014), or None when nothing
+    #: recorded a date. Only consulted when `merge_by_publication_date` is on.
+    published_at: Any = None
+
+    def recency(self, *, by_publication: bool) -> Any:
+        """The timestamp this claim is ranked by.
+
+        `fetched_at` is when the crawler visited, which is arbitrary with respect
+        to the truth — it decided six stored values against publication order,
+        including Hyperion keeping Meta's superseded $10B. `published_at` is the
+        right question but is only known for URLs that came from a feed, so it
+        falls back rather than sorting an unknown date to the beginning of time.
+        """
+        if by_publication and self.published_at is not None:
+            return self.published_at
+        return self.fetched_at or _EPOCH
 
 
 def is_placeholder(source: Source) -> bool:
@@ -203,7 +232,23 @@ def is_placeholder(source: Source) -> bool:
     return conf.PLACEHOLDER_MARKER in (source.url or "")
 
 
-def claims_by_field(sources: list[Source]) -> dict[str, list[_Claim]]:
+def _prefer_publication_date(settings: Any = None) -> bool:
+    """Whether the merge tiebreak ranks by `published_at` instead of `fetched_at`.
+
+    Resolved here rather than at each call site so the read paths that report a
+    merge outcome — `gaps.provenance`, `logic.check_collisions` — cannot disagree
+    with the write path about which rule was applied. That is the same failure the
+    public `resolve_field` alias exists to prevent; re-deriving the order there
+    once reported 73 rows as drifted when nothing had drifted.
+    """
+    if settings is None:
+        from tracker.config import get_settings
+
+        settings = get_settings()
+    return bool(getattr(settings, "merge_by_publication_date", False))
+
+
+def claims_by_field(sources: list[Source], *, settings: Any = None) -> dict[str, list[_Claim]]:
     """field -> every claim about it, strongest first."""
     out: dict[str, list[_Claim]] = {}
     for s in sources:
@@ -236,18 +281,25 @@ def claims_by_field(sources: list[Source]) -> dict[str, list[_Claim]]:
                     s.source_type,
                     s.url,
                     confirmed=not placeholder and name not in unconfirmed,
+                    published_at=getattr(s, "published_at", None),
                 )
             )
-    # Confirmed first, then strongest source, then most recently fetched. `url` is
-    # the final tiebreaker so the ordering is total and therefore reproducible —
-    # without it, two equally-weighted same-timestamp sources could resolve
-    # differently between runs and break idempotence.
+    # Confirmed first, then strongest source, then most recent. `url` is the final
+    # tiebreaker so the ordering is total and therefore reproducible — without it,
+    # two equally-weighted same-timestamp sources could resolve differently between
+    # runs and break idempotence.
     #
     # `confirmed` leads because a quote-backed value must never be displaced by a
     # 待确认 one, however authoritative or recent that source is.
+    #
+    # What "most recent" means is the one part of this that is configurable, and
+    # the default is the wrong answer kept deliberately: `fetched_at` is crawl
+    # order. See `Settings.merge_by_publication_date`.
+    by_publication = _prefer_publication_date(settings)
     for claims_list in out.values():
         claims_list.sort(
-            key=lambda c: (c.confirmed, c.weight, c.fetched_at or _EPOCH, c.url), reverse=True
+            key=lambda c: (c.confirmed, c.weight, c.recency(by_publication=by_publication), c.url),
+            reverse=True,
         )
     return out
 
@@ -636,6 +688,12 @@ def upsert_record(session: Session, rec: IngestRecord, *, force_new: bool = Fals
         row.quotes = (
             json.dumps(sr.quotes, sort_keys=True, ensure_ascii=False) if sr.quotes else None
         )
+        # Restricted to fields that survived the gate, for the same reason
+        # `unconfirmed_reasons` is restricted to claimed fields: an envelope
+        # describing a value the row does not hold is a qualifier with nothing to
+        # qualify. Sorted, again for byte-identical re-ingest.
+        meta = {k: v for k, v in (sr.claim_meta or {}).items() if k in claims}
+        row.claim_meta = json.dumps(meta, sort_keys=True, ensure_ascii=False) if meta else None
         # Ordered by block key, for the same reason `claims` is sorted: a re-ingest
         # of the same article must write byte-identical JSON or the idempotence
         # test stops holding.
@@ -652,6 +710,15 @@ def upsert_record(session: Session, rec: IngestRecord, *, force_new: bool = Fals
         # make an old citation look newer than a genuinely newer one.
         if row.fetched_at is None or sr.fetched_at > row.fetched_at:
             row.fetched_at = sr.fetched_at
+        # Publication date is carried over from the discovery queue rather than
+        # threaded through every ingest path's record type. `discover` already
+        # writes it on `ingest_url` for anything found in a feed, and that is a
+        # fact about the URL, not about this particular reading of it — so the
+        # lookup is by URL and every path (crawl, manual, EDGAR) gets it for free.
+        # Only ever filled, never overwritten: a later re-read of the same article
+        # must not move the date the publisher put on it.
+        if row.published_at is None:
+            row.published_at = _published_at(session, sr.url)
     session.flush()
 
     # --- Recompute every field from all claims ------------------------------
@@ -672,6 +739,8 @@ def upsert_record(session: Session, rec: IngestRecord, *, force_new: bool = Fals
 
     if project.phase is None:
         project.phase = DEFAULT_PHASE
+
+    apply_date_precision(project, by_field)
 
     # Blocks first, then the rollup, then h200 — so `apply_h200_equivalent` sees a
     # `mw_built` that already reflects the energised tranches.
@@ -982,6 +1051,70 @@ def _derive_blocker(session: Session, project: Project) -> str | None:
     return max(open_risks, key=risk_precedence).summary
 
 
+#: Date columns whose stated precision is cached on the project.
+_DATE_PRECISION_FIELDS: tuple[str, ...] = ("first_announced", "expected_online")
+
+
+def apply_date_precision(project: Project, by_field: dict[str, list] | None = None) -> None:
+    """Cache how precisely each date was stated, from the claim that won.
+
+    A cache of a pure function of the claims, exactly like `confidence`,
+    `h200_equivalent` and `blocker`, and recomputed in the same place for the same
+    reason: anything derived that is stored instead of recomputed drifts the
+    moment a source changes.
+
+    The precision belongs to the *winning* claim rather than to the field. Two
+    sources can state the same date at different precision — a filing giving
+    2027-03-14 and a trade story giving "2027" — and the row must report the
+    precision of the value it actually holds, not the best precision anybody
+    offered.
+
+    NULL means day precision or nothing recorded. Storing "day" explicitly would
+    make every pre-envelope row indistinguishable from one whose article really
+    did give a day, which is the distinction the column exists to draw.
+    """
+    sources = {s.url: s for s in (getattr(project, "sources", ()) or ())}
+    claims = by_field if by_field is not None else claims_by_field(list(sources.values()))
+
+    for name in _DATE_PRECISION_FIELDS:
+        stored = getattr(project, name, None)
+        precision = None
+        if stored is not None:
+            target = claim_value(stored)
+            for claim in claims.get(name, []):
+                if not _same(claim.value, target):
+                    continue
+                source = sources.get(claim.url)
+                precision = _recorded_precision(source, name)
+                break
+        if getattr(project, f"{name}_precision", None) != precision:
+            setattr(project, f"{name}_precision", precision)
+
+
+def _same(claim_value_: Any, target: Any) -> bool:
+    """Loose equality for a JSON-round-tripped claim against a stored value."""
+    if isinstance(claim_value_, str) and isinstance(target, str):
+        return claim_value_.strip().lower() == target.strip().lower()
+    return claim_value_ == target
+
+
+def _recorded_precision(source: Source | None, field: str) -> str | None:
+    """The `date_precision` this source recorded for one field, if any."""
+    if source is None or not getattr(source, "claim_meta", None):
+        return None
+    try:
+        meta = json.loads(source.claim_meta)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(meta, dict):
+        return None
+    entry = meta.get(field)
+    if not isinstance(entry, dict):
+        return None
+    value = entry.get("date_precision")
+    return str(value) if value else None
+
+
 def apply_h200_equivalent(project: Project, by_field: dict[str, list] | None = None) -> None:
     """Set the accelerator count: a cited chip count if there is one, else derived.
 
@@ -1047,6 +1180,7 @@ def recompute_from_sources(session: Session, project: Project) -> list[str]:
 
     blocks_mod.rebuild(session, project)
     block_notes = blocks_mod.reconcile(project)
+    apply_date_precision(project, by_field)
     apply_h200_equivalent(project, by_field)
 
     derived, conflict_fields = _conflict_notes(by_field)
@@ -1133,6 +1267,7 @@ __all__ = [
     "NOTE_PREFIX",
     "Policy",
     "UpsertResult",
+    "apply_date_precision",
     "apply_h200_equivalent",
     "claim_value",
     "claims_by_field",

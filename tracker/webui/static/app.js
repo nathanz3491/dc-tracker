@@ -109,6 +109,7 @@ function fmt(key, v) {
          : String(n);
   }
   if (key === "lat" || key === "lon") return Number(v).toFixed(4);
+  if (key === "first_announced" || key === "expected_online") return String(v);
   if (key === "last_verified_at" || key === "updated_at") return String(v).slice(0, 10);
   return String(v);
 }
@@ -142,6 +143,33 @@ const chip = (token, outline) => {
 /* Which tier a field sits at, and the sentence behind it. Both come from the
    API — `gaps.provenance()` — so the page never has to reason about evidence. */
 const provOf = (p, key) => (p.prov || {})[key] || null;
+
+/* The claim envelope (migration 0015): what a value is a value *of*, and how
+ * exactly the article stated it. Rendered as one glyph on the number rather than
+ * as columns of its own — these qualify a figure, they are not figures, and a
+ * `bound` column would be empty on most rows and would break the numeric
+ * alignment on the rest.
+ *
+ * Silent unless an axis has something to say. That is the whole discipline: the
+ * previous round of added fields were rendered unconditionally, so they were
+ * noise on the 190 rows where nothing was in dispute. */
+const axesOf = (p, key) => provOf(p, key)?.axes || null;
+const BOUND_GLYPH = { approximate: "~", at_least: "≥", at_most: "≤" };
+const SCOPE_NOTE = {
+  programme: "a programme-wide figure, not this campus",
+  region: "economic impact on the region, which is not capex",
+  portfolio: "the operator's whole estate, not this site",
+  unnamed: "the article did not say what this figure covers",
+};
+const MODALITY_NOTE = {
+  speculated: "reported as a rumour, not stated",
+  targeted: "a target, not a commitment",
+  contracted: "signed, filed or committed",
+  achieved: "已完成 — the article says this has happened",
+};
+/* A year-precision date rendered as `2024-01-01` asserts a precision nobody
+ * published. `normalize.parse_date` has always known the difference. */
+const DATE_PRECISION_FMT = { year: 4, month: 7, quarter: 4, half: 4 };
 const tierOf = (p, key) => (p[key] == null || p[key] === "") ? "missing" : (provOf(p, key)?.tier || "reported");
 /* Why a 待确认 value is 待确认.
  *
@@ -402,12 +430,23 @@ function Value({ project, field, text, extra, onQuote }) {
   // An empty cell that is empty *correctly* reads differently from one that is
   // simply unknown.
   const na = tier === "missing" && (project.nulls || {})[field]?.status === "not_applicable";
+  const axes = axesOf(project, field);
+  // Two qualifiers that cost no space: the hedge the article used, and the
+  // precision it gave a date to. Both make the cell *shorter* — "2024" instead
+  // of "2024-01-01" — while claiming less.
+  let shown = text ?? fmt(field, project[field]);
+  if (axes && text == null) {
+    const cut = DATE_PRECISION_FMT[axes.date_precision];
+    if (cut && typeof shown === "string") shown = shown.slice(0, cut);
+    const glyph = BOUND_GLYPH[axes.bound];
+    if (glyph) shown = glyph + shown;
+  }
   return html`
     <span class=${`dc-v dc-v--${na ? "na" : tier}`} style=${extra}
           onMouseEnter=${(e) => onQuote(e, project, field)}
           onMouseLeave=${() => onQuote(null, project, field, { hover: true })}
           onClick=${(e) => { e.stopPropagation(); onQuote(e, project, field, { sticky: true }); }}
-          >${text ?? fmt(field, project[field])}</span>`;
+          >${shown}</span>`;
 }
 
 /* Column order and the default column set, both taken from measurement.
@@ -470,6 +509,21 @@ function QuotePopover({ quote }) {
           : quote.tier === "unconfirmed" ? "--warning"
           : quote.tier === "inferred" ? "--chart-5" : "--muted-foreground")}>${tier[0]}</span>
         ${quote.why && html`<span style=${chip("--danger")}>not this site's figure</span>`}
+        ${/* The scope chip. This is the one Hyperion needed: three investment
+              figures on one row, none of them in conflict, because $10B was the
+              buildout, $27B the campus JV and $50B the regional economic impact.
+              Shown only when the scope is something other than this campus —
+              a chip on every row saying "this site" would be noise. */
+          quote.scope && quote.scope !== "this_site" && html`
+          <span style=${chip(quote.scope === "unnamed" ? "--muted-foreground" : "--warning")}
+                title=${SCOPE_NOTE[quote.scope] || ""}>
+            ${quote.scope.startsWith("block:") ? quote.scope.slice(6) : quote.scope}
+          </span>`}
+        ${/* Modality, and likewise silent on the default. A target read as an
+              achievement is how a 2027 milestone came to count as reached. */
+          quote.modality && quote.modality !== "planned" && html`
+          <span style=${chip(quote.modality === "achieved" ? "--success" : "--muted-foreground")}
+                title=${MODALITY_NOTE[quote.modality] || ""}>${quote.modality}</span>`}
         ${quote.exact === false && quote.hasQuote && html`
           <span style=${{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--muted-foreground)" }}>
             from the source excerpt, not this field's own sentence
@@ -517,6 +571,8 @@ function useQuote() {
       text: q.text, exact: q.exact, hasQuote: !!provOf(project, field)?.quote,
       tier: tierOf(project, field), sticky: !!opts.sticky,
       why: whyUnconfirmed(project, field),
+      scope: axesOf(project, field)?.scope,
+      modality: axesOf(project, field)?.modality,
     });
   }, [quote]);
 

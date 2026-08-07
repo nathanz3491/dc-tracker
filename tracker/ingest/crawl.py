@@ -63,6 +63,10 @@ from tracker.normalize import (
 from tracker.prompts import Prompt, load_prompt
 from tracker.upsert import upsert_record
 from tracker.vocab import (
+    CLAIM_AXIS_DEFAULTS,
+    CLAIM_BOUNDS,
+    CLAIM_MODALITIES,
+    CLAIM_SCOPES,
     DEFAULT_RISK_SEVERITY,
     EVENT_TYPES,
     TRACKED_FIELDS,
@@ -114,10 +118,16 @@ SCALE_NOTE_MARKER = "plausibility ceiling"
 #: Marker inserted where the middle of an over-long article was dropped.
 TRUNCATION_MARKER = "\n\n[... middle of article omitted for length ...]\n\n"
 
+#: Subdomains a company publishes its own announcements under. Only consulted
+#: when the *parent* domain is already known to belong to an operator — see
+#: `classify_source_type`.
+_NEWSROOM_SUBDOMAINS: Final[frozenset[str]] = frozenset(
+    {"news", "about", "blog", "ir", "investor", "newsroom", "press"}
+)
+
 #: Domain patterns to source_type. Ordered: first match wins.
 _SOURCE_TYPE_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"(^|\.)sec\.gov$"), "company_filing"),
-    (re.compile(r"^(news|about|blog|ir|investor|newsroom|press)\."), "company_filing"),
     (re.compile(r"(^|\.)(gov|mil)$"), "government_doc"),
     (re.compile(r"\.state\.[a-z]{2}\.us$"), "government_doc"),
     (
@@ -164,8 +174,22 @@ def classify_source_type(url: str, *, operator_hosts: frozenset[str] | None = No
     scored `general_media`, weight 1. That is the opposite of what it deserves.
     """
     host = url.split("//", 1)[-1].split("/", 1)[0].split("@")[-1].split(":")[0].lower()
-    if operator_hosts and host.removeprefix("www.") in operator_hosts:
+    bare = host.removeprefix("www.")
+    if operator_hosts and bare in operator_hosts:
         return "company_filing"
+    # A company's own newsroom lives on a subdomain of its own site, so the
+    # subdomain is only evidence of authorship together with a domain we already
+    # know belongs to an operator. On its own it is not evidence of anything:
+    # `^(news|about|...)\.` used to match here unconditionally, which typed
+    # `news.17173.com` — a Chinese gaming portal — and `news.futunn.com` — a
+    # brokerage — as `company_filing`, weight 3, the heaviest in the system. On
+    # Fairwater (#1) the gaming site was the *only* company_filing on the row: it
+    # decided the stored $3.3B investment and supplied the "strongest source"
+    # line in the confidence rationale.
+    if operator_hosts and "." in bare:
+        parent = bare.split(".", 1)[1]
+        if parent in operator_hosts and bare.split(".", 1)[0] in _NEWSROOM_SUBDOMAINS:
+            return "company_filing"
     for pattern, source_type in _SOURCE_TYPE_RULES:
         if pattern.search(host):
             return source_type
@@ -692,6 +716,149 @@ def _matches_quantity(value: Any, quote: str, expr: re.Pattern[str], parser, fie
     return False
 
 
+#: Wording that licenses each non-default `bound`. The stored quote must contain
+#: one, or the bound degrades to `exact`.
+#:
+#: This is the difference between an axis that carries information and one that
+#: becomes the next `severity` — a judgement no article states, uniformly `watch`
+#: on every risk in the database. A bound is not a judgement: the article either
+#: hedged the number or it did not, and the hedge is a word in the sentence.
+_BOUND_MARKERS: Final[dict[str, tuple[str, ...]]] = {
+    "approximate": ("about ", "approximately", "roughly", "around ", "~", "some ", "nearly"),
+    "at_least": ("more than", "at least", "over ", "upwards of", "north of", "in excess of", "+"),
+    "at_most": ("up to", "as much as", "no more than", "as many as", "fewer than", "less than"),
+}
+
+#: Wording that licenses each non-default `modality`, same rule.
+#:
+#: `planned` is the default and needs no marker, because it is what an
+#: unqualified statement about a future data center means. The two that matter
+#: are the ends: `achieved` must not be assertable without evidence of having
+#: happened, and `speculated` is what keeps "some reports have surfaced that an
+#: interim milestone of 1.5 GW is being targeted" from standing beside an SEC
+#: filing at equal weight.
+_MODALITY_MARKERS: Final[dict[str, tuple[str, ...]]] = {
+    "achieved": (
+        "came online",
+        "went live",
+        "has begun",
+        "began ",
+        "broke ground",
+        "completed",
+        "opened",
+        "is now",
+        "has been",
+        "energized",
+        "energised",
+        "delivered",
+        "started",
+    ),
+    "contracted": (
+        "signed",
+        "has agreed",
+        "agreement",
+        "filed an application",
+        "contract",
+        "committed",
+        "approved",
+        "secured",
+        "entered into",
+    ),
+    "targeted": ("targeted", "target", "aims to", "hopes to", "goal of", "by the end of"),
+    "speculated": (
+        "reports have",
+        "reportedly",
+        "could ",
+        "may ",
+        "might ",
+        "potential",
+        "expected to grow",
+        "possible",
+        "rumou",
+        "unconfirmed",
+    ),
+}
+
+#: Wording that licenses a scope other than `this_site` or a resolvable block.
+_SCOPE_MARKERS: Final[dict[str, tuple[str, ...]]] = {
+    "programme": ("programme", "program", "across all", "in total", "nationwide", "overall"),
+    "region": ("to the region", "regional", "local economy", "statewide", "in the state", "county"),
+    "portfolio": ("portfolio", "its data centers", "all of its", "company-wide", "fleet"),
+}
+
+
+def axis_gate(
+    entry: dict[str, Any], quote: str, *, block_labels: frozenset[str] = frozenset()
+) -> dict[str, Any]:
+    """Keep the claim-envelope axes the quote actually licenses.
+
+    The counterpart of `evidence_gate`, and the same argument: a prompt
+    instruction is a request, a gate is a mechanism. `evidence_gate` asks whether
+    the article states the *value*; this asks whether it states the *qualifier*.
+
+    Every axis degrades to its neutral value rather than being dropped, and the
+    underlying figure is never touched — this pass cannot reduce coverage. A model
+    that labels everything `at_least` to sound careful therefore gains nothing,
+    which is the property that stops the axis drifting into decoration.
+
+    `as_of` is checked for parseability and for the one contradiction a date can
+    have with a modality: something `achieved` cannot be dated in the future. It
+    is deliberately not checked against the article's own publication date, which
+    would refuse every correct backward reference.
+    """
+    low = _normalize_for_match(quote or "")
+    out: dict[str, Any] = {}
+
+    scope = str(entry.get("scope") or "").strip()
+    if scope.startswith("block:"):
+        label = scope[len("block:") :].strip().lower()
+        # Referential integrity, not judgement: we cannot tell whether the model
+        # picked the *right* tranche, but we can refuse one that does not exist.
+        scope = scope if label and label in block_labels else CLAIM_AXIS_DEFAULTS["scope"]
+    elif scope in _SCOPE_MARKERS:
+        if not any(marker in low for marker in _SCOPE_MARKERS[scope]):
+            scope = CLAIM_AXIS_DEFAULTS["scope"]
+    elif scope not in CLAIM_SCOPES:
+        scope = CLAIM_AXIS_DEFAULTS["scope"]
+    out["scope"] = scope
+
+    bound = str(entry.get("bound") or "").strip()
+    if bound not in CLAIM_BOUNDS or (
+        bound in _BOUND_MARKERS and not any(m in low for m in _BOUND_MARKERS[bound])
+    ):
+        bound = CLAIM_AXIS_DEFAULTS["bound"]
+    out["bound"] = bound
+
+    as_of = str(entry.get("as_of") or "").strip() or None
+    if as_of:
+        try:
+            as_of = dt.date.fromisoformat(as_of).isoformat()
+        except ValueError:
+            as_of = None
+
+    modality = str(entry.get("modality") or "").strip()
+
+    # The hard invariant runs *before* the marker check, and the order matters.
+    # A thing that has happened cannot be dated later than today, and the date is
+    # itself the evidence for that — no wording in the sentence is needed to know
+    # it. Demoting to `targeted` here rather than letting the marker check drop it
+    # to the generic default keeps the more informative answer: this is exactly
+    # Hyperion's live defect, where "an interim milestone of 1.5 GW is being
+    # targeted by the end of 2027" was stored as `announced`, dated 2027-12-31,
+    # and counted as *reached* on the track strip.
+    if modality == "achieved" and as_of and dt.date.fromisoformat(as_of) > dt.date.today():
+        modality = "targeted"
+    elif modality not in CLAIM_MODALITIES or (
+        modality in _MODALITY_MARKERS and not any(m in low for m in _MODALITY_MARKERS[modality])
+    ):
+        modality = CLAIM_AXIS_DEFAULTS["modality"]
+
+    out["modality"] = modality
+    if as_of:
+        out["as_of"] = as_of
+    return out
+
+
 def evidence_gate(
     values: dict[str, Any], evidence: list[dict[str, Any]], article_text: str
 ) -> tuple[dict[str, Any], dict[str, str], dict[str, str]]:
@@ -819,7 +986,7 @@ def evidence_gate(
     return kept, quotes, dropped
 
 
-def _coerce(raw: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+def _coerce(raw: dict[str, Any]) -> tuple[dict[str, Any], list[str], dict[str, str]]:
     """Type-coerce one extracted project. Returns (values, disclosure notes).
 
     Every field goes through `normalize`, which is the direct mitigation for the
@@ -860,6 +1027,12 @@ def _coerce(raw: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
     money = numeric("investment_usd", norm_money_detail)
     values["investment_usd"] = None if money is None else int(money)
 
+    # `parse_date` has always reported how precisely the source stated a date,
+    # and its own docstring says why it matters: "Q3 2025" and "2025-07-01" are
+    # stored identically and mean very different things. Nothing outside
+    # `normalize` had ever read it -- the precision went into a prose note and the
+    # row rendered a day-precision date the article never gave.
+    precisions: dict[str, str] = {}
     for key in ("first_announced", "expected_online"):
         value = raw.get(key)
         if is_blank(value):
@@ -874,8 +1047,10 @@ def _coerce(raw: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
         if parsed.note:
             notes.append(parsed.note)
         values[key] = parsed.value
+        if parsed.precision:
+            precisions[key] = parsed.precision
 
-    return values, notes
+    return values, notes, precisions
 
 
 def _implausible_investment(claims: dict[str, Any]) -> str | None:
@@ -1299,7 +1474,7 @@ def build_records(
     for raw in projects[:max_projects]:
         if not isinstance(raw, dict):
             continue
-        values, coercion_notes = _coerce(raw)
+        values, coercion_notes, precisions = _coerce(raw)
         evidence = raw.get("evidence") if isinstance(raw.get("evidence"), list) else []
         kept, quotes, dropped = evidence_gate(values, evidence, result.markdown)
 
@@ -1435,6 +1610,11 @@ def build_records(
                     # verified sentence behind them, and pairing one with a quote
                     # would dress an unconfirmed value as a quoted fact.
                     quotes={k: q for k, q in quotes.items() if k in kept},
+                    # Same restriction as `quotes`, and for the same reason: an
+                    # axis describes a value the article was verified to state, so
+                    # attaching one to a 待确认 figure would qualify a claim
+                    # nothing supports.
+                    claim_meta=_claim_axes(evidence, quotes, kept, blocks, precisions),
                     blocks=blocks,
                     extractor=f"crawl:{prompt.stamp}:{reply.model}:{result.via}",
                 )
@@ -1453,6 +1633,47 @@ def build_records(
             max_projects,
         )
     return records
+
+
+def _claim_axes(
+    evidence: list[dict[str, Any]],
+    quotes: dict[str, str],
+    kept: dict[str, Any],
+    blocks: list[Any],
+    precisions: dict[str, str] | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Run every field's envelope through `axis_gate`, keyed by field.
+
+    Each axis is verified against the quote that was *stored* for the field, not
+    against the model's own offered text. That matters because `_verbatim_run`
+    may have repaired the quote to the article's own words — checking the model's
+    version instead would let it license a hedge by writing one into a sentence
+    nobody published, which is exactly the fabrication route `evidence_gate`
+    closed for values.
+    """
+    labels = frozenset(b.label.strip().lower() for b in blocks if getattr(b, "label", None))
+    out: dict[str, dict[str, Any]] = {}
+    for item in evidence:
+        if not isinstance(item, dict):
+            continue
+        field = str(item.get("field") or "").strip()
+        if field not in kept or field not in quotes:
+            continue
+        axes = axis_gate(item, quotes[field], block_labels=labels)
+        # An entry that is neutral on every axis says nothing, and storing it
+        # would inflate coverage with rows carrying no information — the exact
+        # measurement `axis_census` exists to catch, so it must not be gamed here.
+        if any(value != CLAIM_AXIS_DEFAULTS.get(axis) for axis, value in axes.items()):
+            out[field] = axes
+
+    # Date precision does not go through `axis_gate`, and should not: it is not a
+    # label the model asserted about the article, it is what our own parser
+    # observed while reading the date. There is nothing to verify against a quote
+    # -- the evidence is the parse itself.
+    for field, precision in (precisions or {}).items():
+        if field in kept and precision and precision != "day":
+            out.setdefault(field, {})["date_precision"] = precision
+    return out
 
 
 def _excerpt(quotes: dict[str, str]) -> str | None:
@@ -1604,6 +1825,33 @@ def record_url(session: Session, run_id: str, outcome: ExtractionOutcome) -> Non
     session.flush()
 
 
+def published_dates(session: Session, urls: list[str]) -> dict[str, str]:
+    """url -> the date its publisher published it, as `YYYY-MM-DD`.
+
+    Feeds the prompt's `ARTICLE_DATE`, which RULE 5 resolves relative timing
+    against — "construction starts next year" is only a date if you know when
+    "next" was written. With the date unknown the rule correctly forces every such
+    phrase to null, so an absent `ARTICLE_DATE` does not fabricate anything; it
+    quietly costs schedule fields instead.
+
+    It had never been supplied. `extract_one`'s `published_date` parameter has
+    defaulted to `"unknown"` since it was written and no caller ever passed it,
+    while `discover` was recording the date on `ingest_url` the whole time — 78%
+    populated when this was added.
+
+    URLs with no recorded date are simply absent from the map, so the caller keeps
+    the honest `"unknown"` rather than being handed a guess.
+    """
+    if not urls:
+        return {}
+    rows = session.execute(
+        select(IngestUrl.url, IngestUrl.published_at).where(
+            IngestUrl.url.in_(urls), IngestUrl.published_at.is_not(None)
+        )
+    )
+    return {url: when.date().isoformat() for url, when in rows if when}
+
+
 def already_done(session: Session, urls: list[str]) -> set[str]:
     """URLs a previous run already extracted successfully."""
     if not urls:
@@ -1635,6 +1883,50 @@ def stale_sources(session: Session, *, older_than_days: int, limit: int | None =
         .where(Source.url.not_like(f"%{PLACEHOLDER_MARKER}%"))
         .group_by(Source.url)
         .order_by("oldest")
+    )
+    if limit:
+        stmt = stmt.limit(limit)
+    return [row[0] for row in session.execute(stmt)]
+
+
+def stale_by_prompt(session: Session, *, stamp: str, limit: int | None = None) -> list[str]:
+    """Source URLs that were extracted by some prompt other than the current one.
+
+    `stale_sources` asks whether the *article* might have changed. This asks
+    whether *we* have — and the answer has never been checked. The gate has been
+    tightened repeatedly (placeholder demotion, the prose floor, per-field
+    quotes, `unconfirmed_reasons`), each improvement applies only to rows written
+    after it landed, and `source.extractor` has recorded which prompt produced
+    every row since `0001` without anything ever comparing it to the current one.
+
+    Measured when this was written: 348 of 368 extracted sources sat on a
+    superseded prompt, and **all 89** values stored as established with no
+    sentence behind them came from two vintages that predate migration `0007` —
+    the migration that added the column a quote lives in. So those rows are not
+    wrong because the model was worse; they are wrong because the gate that would
+    have caught them did not exist yet, and nothing re-ran it.
+
+    Distinct URLs, oldest first, so a `--limit`ed run works steadily through the
+    oldest stratum instead of reshuffling between runs. Placeholders are excluded
+    for the same reason `stale_sources` excludes them — they are not fetchable.
+    So are `derived:` and `inferred:` rows, which no prompt produced: a Census
+    lookup has no vintage to be stale against.
+
+    Callers should pass `cache_dir`, unlike the refresh path which deliberately
+    does not. Refreshing wants to know whether the article changed; this wants
+    the *same* article read by a better prompt, and re-fetching would confound
+    the two.
+    """
+    from tracker.confidence import PLACEHOLDER_MARKER
+    from tracker.models import Source
+
+    stmt = (
+        select(Source.url, func.min(Source.fetched_at).label("oldest"))
+        .where(Source.extractor.like("crawl:%"))
+        .where(Source.extractor.not_like(f"crawl:{stamp}:%"))
+        .where(Source.url.not_like(f"%{PLACEHOLDER_MARKER}%"))
+        .group_by(Source.url)
+        .order_by("oldest", Source.url)
     )
     if limit:
         stmt = stmt.limit(limit)
@@ -1710,6 +2002,11 @@ def run(
     if cache_dir:
         _write_cache(fetched, cache_dir)
 
+    # Looked up once for the whole batch rather than per URL: the loop below is
+    # already paying for an LLM call each time round, and one query is easier to
+    # reason about than N.
+    published = published_dates(session, [r.url for r in [*cached, *fetched] if r.ok])
+
     for result in [*cached, *fetched]:
         if not result.ok:
             report.fetch_error += 1
@@ -1726,7 +2023,13 @@ def run(
             _checkpoint(session, dry_run)
             continue
 
-        outcome = extract_one(result, prompt=prompt, extractor=extractor, settings=settings)
+        outcome = extract_one(
+            result,
+            prompt=prompt,
+            extractor=extractor,
+            settings=settings,
+            published_date=published.get(result.url, "unknown"),
+        )
         if outcome.status == "parse_error":
             report.parse_error += 1
             log.warning("could not parse a reply for %s: %s", result.url, outcome.error)

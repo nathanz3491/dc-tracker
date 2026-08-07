@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from dataclasses import field as dc_field
 from typing import Final
 
 from sqlalchemy import ColumnElement, func, select
@@ -208,6 +209,29 @@ class FieldProvenance:
     #: Position in the project's sources sorted by url, matching the order
     #: `export.to_json_object` emits them in, so a consumer can index straight in.
     source_index: int | None = None
+    #: The winning claim's envelope — `{scope, bound, modality, as_of,
+    #: date_precision}` — or an empty dict when the source predates migration
+    #: 0015. Carried here rather than read separately by each surface because both
+    #: `cli.show` and the console's `prov` payload already come through this one
+    #: function, so a value and the qualifiers on it cannot drift apart between
+    #: the terminal and the browser.
+    axes: dict[str, str] = dc_field(default_factory=dict)
+
+    @property
+    def bound(self) -> str:
+        return self.axes.get("bound") or "exact"
+
+    @property
+    def scope(self) -> str:
+        return self.axes.get("scope") or "unnamed"
+
+    @property
+    def modality(self) -> str:
+        return self.axes.get("modality") or "planned"
+
+    @property
+    def date_precision(self) -> str | None:
+        return self.axes.get("date_precision")
 
 
 def _winning_source(project, field: str, value):
@@ -313,7 +337,34 @@ def provenance(project, field: str) -> FieldProvenance | None:
     if quote is None:
         quote = source.excerpt
 
-    return FieldProvenance(field, _tier_of(source, field), quote, exact, source.url, index)
+    return FieldProvenance(
+        field,
+        _tier_of(source, field),
+        quote,
+        exact,
+        source.url,
+        index,
+        axes=_axes_of(source, field),
+    )
+
+
+def _axes_of(source, field: str) -> dict[str, str]:
+    """The claim envelope this source recorded for one field.
+
+    Empty for anything written before migration 0015, which is the honest answer:
+    the axes are facts about how an article worded something and cannot be
+    inferred after the fact. Rendering a default as though it had been observed
+    would be the same mistake as printing a `defaulted` phase in red as 待确认.
+    """
+    raw = getattr(source, "claim_meta", None)
+    if not raw:
+        return {}
+    try:
+        meta = json.loads(raw)
+    except (TypeError, ValueError):
+        return {}
+    entry = meta.get(field) if isinstance(meta, dict) else None
+    return {k: str(v) for k, v in entry.items() if v is not None} if isinstance(entry, dict) else {}
 
 
 def basis(project, field: str) -> str | None:

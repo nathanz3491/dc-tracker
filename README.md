@@ -1024,6 +1024,195 @@ automatic repairs, reports what needs a person, and stops.
 flags. `logic resolve` is gated too: it is the only command that rewrites fields
 in bulk.
 
+### What the stored data actually rests on
+
+```bash
+python scripts/measure_extraction.py
+python scripts/measure_extraction.py --mutants
+tracker ingest crawl --stale-prompt --limit 20
+```
+
+`gaps` counts empty fields. This counts *full* ones, and asks the harder
+question: does the value have a sentence behind it.
+
+Two numbers already existed and neither answers that. The evidence gate's 98.7%
+exact-substring rate measures the quotes that exist — a statement about a
+population it never looked at. And "66% of claims carry no quote" counts the
+model's raw output, most of which the gate correctly demoted to 待确认, so it
+reads as a scandal and is mostly the gate working.
+
+The measure that matters splits values three ways, and the third is the only
+defect. Measured before and after one full re-extraction:
+
+| | before | after |
+|---|---|---|
+| quote-backed | 368 (49.2%) | 434 (52.0%) |
+| 待确认 — no quote, **and the row says so** | 286 (38.2%) | 385 (46.1%) |
+| confirmed, no quote, and nothing says so | **89 (11.9%)** | **11 (1.3%)** |
+| total values measured | 748 | 835 |
+
+The second row is the gate doing its job. A measure that lumped it in with the
+third would report 286 successes as failures and hide the rows that actually
+needed re-reading.
+
+**All 89 came from prompts that no longer exist** — 61 from `extract-v1@8eb51f2a`
+and 28 from `extract-v1@cef10fb4`, both predating migration `0007`, the migration
+that added the column a per-field quote lives in. There was nowhere to record the
+sentence when those rows were written, so they read as established ever since.
+None came from the current extractor.
+
+That is a fact about *history*, not about any row, which is why no per-row check
+surfaced it: `tracker audit` asks whether a number could be true and `logic check`
+asks whether two fields agree, and each of those 89 values passed both.
+
+`--stale-prompt` is the re-read, and `source.extractor` is what makes it
+possible: it has recorded which prompt produced every row since `0001` and
+nothing had ever compared it to the current stamp. It serves from the article
+cache by default, so it is a re-read rather than a re-fetch — the point is to
+find out what a better prompt makes of the *same* article, and re-fetching would
+confound that with the page having changed.
+
+`--mutants` is the other half: it plants known faults in a throwaway copy and
+counts what gets caught. It exists because this README and `HANDOFF.md` both
+cited *"16 planted mutants, all caught"* as the evidence for `tracker audit`, and
+no script, test or commit contained it — the run was manual, against a copy of a
+live database nobody kept. A claim about detection that cannot be re-run is not
+evidence, so now it can be.
+
+**Why 14 remain, and why re-reading cannot clear them.** The write path is keyed
+on `(project_id, url)`, but which project an article describes is re-derived from
+the article on every read. So when a re-read routes to a different project — or
+to none — the original row keeps its old source at its old vintage, orphaned. Of
+61 URLs still stale after the run, 28 now return **no project at all**, 27 route
+elsewhere, 2 are refused by the prose floor and 4 are 403s with no cached copy.
+The Switch/Data Foundry acquisition story is the clearest case: the old prompt
+built two campuses out of it, and the current one declines it entirely. Whether
+that is the gate getting stricter or a regression is a judgement, so the rows are
+reported and left alone rather than deleted.
+
+### What a value is a value of
+
+Hyperion (#10) carries three investment figures, and they are not a disagreement:
+
+| figure | the sentence behind it | what it measures |
+|---|---|---|
+| $10B | *"the buildout of the infrastructure itself"* | this site |
+| $27B | the Blue Owl campus joint venture | this site, later |
+| $50B | *"more than $50B of investment to the region"* | roads, water, sewage, jobs |
+
+Every merge policy in this schema exists to pick a winner among rival claims about
+one quantity. These are three measurements of three different things, so picking a
+winner is the wrong operation — and the row held the oldest and smallest of them
+while its own notes read *"expanded to up to $50 billion"*.
+
+Four qualifiers now travel with each claim, in `source.claim_meta`:
+
+- **`scope`** — this site, a named tranche (`block:Phase 1`), the programme, the
+  region, the operator's portfolio, or `unnamed`. `unnamed` is a correct and
+  common answer; guessing `this_site` to be helpful is the error the axis exists
+  to prevent.
+- **`bound`** — `exact`, `approximate`, `at_least`, `at_most`. Prompt RULE 4 used
+  to say *"500-700 MW → 500 (the LOWER bound; say so in notes)"*, destroying the
+  range on purpose and routing it to prose nothing could read back.
+- **`modality`** — `speculated` → `targeted` → `planned` → `contracted` →
+  `achieved`.
+- **`as_of`** — the date the claim was true, when it differs from the article's.
+
+**One of the four axes failed its own test, and was not promoted.** The kill
+criteria were written down before the corpus was re-read: an axis whose modal
+value exceeds 95% is reporting a default rather than the article.
+
+| axis | coverage | modal value | verdict |
+|---|---|---|---|
+| `bound` | 32.0% | `exact` 87.4% | passes |
+| `modality` | 32.0% | `planned` 84.3% | passes, weakly |
+| `scope` | 32.0% | `this_site` **96.9%** | **failed** |
+
+`scope` failed the decisive test too. Across every `investment_usd` claim in the
+database it returned 44 `this_site`, 4 `unnamed`, 1 `block:VA13` — and **zero
+`region`, zero `programme`**. The two values that would have separated Hyperion's
+$10B buildout from its $50B regional figure never fired once. So it stays
+captured and measured, and nothing is built on it.
+
+`bound` earned its place on the same row: *"roughly $27 billion"* reads
+`approximate`, *"more than $50 billion"* reads `at_least`.
+
+**Every axis is checked against the quote.** That is the whole design, and the
+reason to expect these to carry information where `risk.severity` does not —
+severity is a judgement no article states, so it reads `watch` on every risk in
+the database, fully populated and carrying nothing. A bound is not a judgement:
+the article either hedged the number or it did not, and the hedge is a word in the
+sentence. `bound: at_least` needs one. `scope: block:<label>` must resolve to a
+tranche on the record. `modality: achieved` is demoted to `targeted` outright when
+the date is in the future — which is Hyperion's live defect, where *"an interim
+milestone of 1.5 GW is being targeted by the end of 2027"* was stored as
+`announced`, dated 2027-12-31, and counted as **reached** on the track strip.
+
+The check runs against the *stored* quote, never the model's offered text.
+`_verbatim_run` may have repaired the quote to the article's own words, and
+checking the model's version would let it license a hedge by writing one into a
+sentence nobody published — the fabrication route the evidence gate closed,
+reopened one level up.
+
+**A refused axis never costs the value.** `axis_gate` returns labels and is never
+given the figure, so the worst case is a claim described no better than it was
+yesterday, and a model labelling everything `at_least` to sound careful gains
+nothing. Nothing reads the axes to choose a value yet, deliberately: `source_type`
+became load-bearing before anyone measured it, and `confidence.find_conflicts` is
+now documented as too risky to correct.
+
+On screen they cost almost nothing. `bound` is one glyph on the number (`~5,000`,
+`≥$50B`) rather than a column that would be empty on most rows and would break the
+numeric alignment on the rest. `scope` and `modality` appear as chips in the
+citation popover **only when they say something** — no chip reading "this site" on
+a row where nothing is in dispute. That is what the previous round of added fields
+got wrong: they rendered unconditionally, so they were noise everywhere.
+
+And dates now print at the precision the source gave. `normalize.parse_date` has
+always returned `day|month|quarter|half|year`, and its docstring has always said
+why it matters; nothing outside that module had ever read it, so a year-only
+"in 2024" rendered as `2024-01-01`. It now renders as `2024` — shorter, and
+claiming less.
+
+### Crawl order is not publication order
+
+The measurement reports one more thing, and it is not fixed by re-reading.
+
+`upsert.claims_by_field` ranks claims by `(confirmed, weight, fetched_at, url)`.
+Most of this corpus is trade press, so ties on credibility are the common case,
+and `fetched_at` is the moment the crawler happened to visit the page. Six stored
+values are decided that way against publication order — Aligned Phoenix holds
+65 MW from a 2017 article over 400 MW from a 2022 one, and Hyperion holds Meta's
+superseded $10B over the $27B that replaced it, on a row whose own notes read
+*"expanded to up to $50 billion"*.
+
+Re-extraction made that sharper rather than better: it gave all three Hyperion
+figures quotes, so they now tie three ways and crawl order still picks.
+
+The date was already being collected — `discover` writes it to
+`ingest_url.published_at` from the feed — and nothing downstream had ever read
+it, because there was no column on `source` to carry it to. Migration `0014` adds
+one and backfills it by URL (241 of 553 sources).
+
+```bash
+TRACKER_MERGE_BY_PUBLICATION_DATE=1 python scripts/measure_extraction.py
+```
+
+**The tiebreak is off by default**, and the reason is worth stating rather than
+treating as caution. Turning it on takes the six inversions to zero, but they are
+not uniformly improvements: #116 would move from 120 MW to 40 MW, because the
+smaller figure was published a day later. Publication order is the more
+*defensible* rule; it is not the rule that always yields the larger number. Run
+the line above to see what it would change before deciding, and note that the
+flag changes the policy — stored values move as each row is next written.
+
+The same fact fixes a second bug. The prompt's `ARTICLE_DATE` was always
+`unknown`: `extract_one`'s `published_date` parameter existed, the prompt
+interpolated it, and no caller ever passed it. RULE 5 resolves relative timing
+against it, so with the date unknown every "next year" was correctly forced to
+null. Nothing was fabricated — the cost was silent, in schedule fields never
+extracted for want of a value already in the database.
+
 ### Seeing where the data is thin
 
 ```bash
@@ -1285,7 +1474,7 @@ directory, which is what lets `tracker init` work from anywhere.
 .venv/Scripts/python -m pytest
 ```
 
-1309 tests, well under a minute. **A fresh clone with no API key and no network access
+1685 tests, about two minutes. **A fresh clone with no API key and no network access
 must produce a green run.** Tests that would hit the network or spend MiniMax
 tokens are marked `network` / `llm` and deselected by default; run them
 explicitly with `-m network` or `-m llm`.

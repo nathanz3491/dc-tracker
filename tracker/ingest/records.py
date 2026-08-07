@@ -106,6 +106,15 @@ class SourceRecord:
     #: any prose behind them, and inventing one would be the fabrication the gate
     #: exists to prevent.
     quotes: dict[str, str] = field(default_factory=dict)
+    #: field -> {scope, bound, modality, as_of}: what the value is a value *of*,
+    #: how exactly the article stated it, whether it has happened, and when it was
+    #: true. Each axis is verified against that field's stored quote by
+    #: `crawl.axis_gate` and degrades to a neutral value rather than rejecting the
+    #: figure, so this can never reduce coverage. Only fields whose envelope says
+    #: something appear — an entry neutral on every axis carries no information and
+    #: would inflate the very coverage measurement that decides whether the axes
+    #: are worth keeping.
+    claim_meta: dict[str, dict[str, Any]] = field(default_factory=dict)
     #: Capacity blocks this source described — the tranches of the campus that have
     #: their own state, customer and dates. Belongs to the *source* rather than the
     #: project, unlike `events` and `risks`, because two sources routinely describe

@@ -225,6 +225,13 @@ def _provenance_json(project: Project) -> tuple[dict[str, str], dict[str, Any]]:
             "source_url": result.source_url,
             "source_index": result.source_index,
         }
+        # The claim envelope, only when it says something. Emitted inside `prov`
+        # rather than as a sibling map because the axes qualify the value the way
+        # the quote does, and every consumer that wants one wants the other —
+        # keeping them together is what stops a figure and its hedge being
+        # rendered from two different places and drifting apart.
+        if result.axes:
+            prov_out[field]["axes"] = dict(result.axes)
     return basis_out, prov_out
 
 

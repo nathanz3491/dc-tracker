@@ -1,0 +1,58 @@
+-- 0015_claim_meta: what a value is a value *of*.
+--
+-- A scalar cannot say what it measures. Hyperion (#10) holds three investment
+-- figures and they are not a disagreement:
+--
+--   $10B  "the buildout of the infrastructure itself"
+--   $27B  the Blue Owl campus joint venture
+--   $50B  "more than $50B of investment to the region" -- roads, water, sewage
+--
+-- Every merge policy in this schema exists to pick a winner among rival claims
+-- about one quantity. These are three measurements of three different things, so
+-- picking a winner is the wrong operation, and the row has held the oldest and
+-- smallest of them while its own notes read "expanded to up to $50 billion".
+--
+-- The same loss happens in three other dimensions, and in each of them the
+-- pipeline already computes what the schema discards:
+--
+--   * precision -- prompt RULE 4 said `"500-700 MW" -> 500 (the LOWER bound; say
+--     so in "notes")`. The range destroyed on purpose, routed to prose.
+--   * modality -- "an interim milestone of 1.5 GW is being targeted by the end of
+--     2027" was stored as an `announced` event dated 2027-12-31 and counted as
+--     reached.
+--   * date precision -- `normalize.parse_date` returns `day|month|quarter|half|
+--     year` and documents that "an operator reviewing a row needs to know which
+--     one they are looking at". Nothing outside that module reads it.
+--
+-- Stored as a JSON object, field -> {scope, bound, modality, as_of}, beside
+-- `quotes` rather than replacing it. Same argument as 0013 made for putting
+-- `unconfirmed_reasons` beside `unconfirmed_fields`: `quotes` answers "what
+-- sentence backs this", which is what almost every reader asks and what the
+-- provenance path reads on the hot path, and reshaping it would change the
+-- meaning of six existing call sites. Keeping both means no existing query
+-- changes meaning.
+--
+-- NOT backfilled, and cannot be. Every axis is a fact about how an article
+-- worded something, recoverable only by reading the article -- inferring "about"
+-- from a round number would manufacture hedges nobody wrote. NULL means the
+-- source predates the envelope, which `tracker ingest crawl --stale-prompt`
+-- fixes by re-reading.
+--
+-- Nothing reads this to choose a value yet, deliberately. The axes are captured,
+-- verified against their own quotes and displayed; they do not enter the merge,
+-- confidence or capex until the measurements in `scripts/measure_extraction.py`
+-- say they carry information. `source_type` is the cautionary case: it became
+-- load-bearing for both value selection and confidence before anybody measured
+-- it, and `confidence.find_conflicts` is now documented as too risky to correct.
+
+ALTER TABLE source ADD COLUMN claim_meta TEXT;
+
+-- Date precision, cached on the project for the same reason `confidence`,
+-- `h200_equivalent` and `blocker` are: it is a pure function of the claims, and
+-- the console and the CLI both need it per render. Recomputed on every upsert.
+--
+-- Two columns rather than one shared enum: `first_announced` is typically stated
+-- to a year and `expected_online` to a quarter, and a reader needs to know which
+-- of the two dates in front of them is the vague one.
+ALTER TABLE project ADD COLUMN first_announced_precision TEXT;
+ALTER TABLE project ADD COLUMN expected_online_precision TEXT;

@@ -12,6 +12,210 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **The claim envelope: what a value is a value *of*** (migration `0015`,
+  `tracker/vocab.py`, `tracker/ingest/crawl.py`, `tracker/prompts/extract-v1.txt`).
+  Hyperion (#10) carries three investment figures — $10B for "the buildout of the
+  infrastructure itself", $27B for the Blue Owl campus JV, $50B "of investment to
+  the region" — and they are not a disagreement. They are three measurements of
+  three different things, collapsed into one scalar because that is all the schema
+  had, so every merge policy was picking a winner among claims that were not
+  competing. The row held the oldest and smallest while its own notes read
+  "expanded to up to $50 billion".
+
+  Four axes now travel with each claim in `source.claim_meta`: `scope` (this site,
+  a named tranche, the programme, the region, the operator's portfolio, or
+  unnamed), `bound` (exact, approximate, at\_least, at\_most), `modality`
+  (speculated → targeted → planned → contracted → achieved) and `as_of`. They
+  extend the existing `evidence` array in the prompt, which already paired a field
+  with a quote and was the right home.
+
+  **Every axis is verified against the quote, and this is the whole design.**
+  `evidence_gate` asks whether the article states the value; the new `axis_gate`
+  asks whether it states the qualifier. `bound: at_least` needs a hedge word in
+  the sentence; `scope: block:<label>` must resolve to a tranche on the record;
+  `modality: achieved` needs evidence of something having happened, and is
+  demoted to `targeted` outright when the date is in the future — which is exactly
+  Hyperion's live defect, where "an interim milestone of 1.5 GW is being targeted
+  by the end of 2027" was stored as `announced`, dated 2027-12-31, and counted as
+  *reached* on the track strip.
+
+  The check runs against the *stored* quote, not the model's offered text, because
+  `_verbatim_run` may have repaired the quote to the article's own words —
+  checking the model's version would let it license a hedge by writing one into a
+  sentence nobody published, reopening one level up the fabrication route the
+  evidence gate closed.
+
+  **A refused axis never costs the value.** `axis_gate` returns labels and is
+  never given the figure, so the worst case is a claim described no better than it
+  was yesterday. A model labelling everything `at_least` to sound careful gains
+  nothing, which is the property that stops the axis drifting into decoration —
+  `risk.severity` being the cautionary case, a judgement no article states, `watch`
+  on every risk in the database, fully populated and carrying nothing. Nothing
+  reads the axes to choose a value yet, deliberately, for the reason `source_type`
+  demonstrates: it became load-bearing before it was measured and
+  `confidence.find_conflicts` is now documented as too risky to correct.
+
+  **Measured over a full re-extraction, and one axis failed its pre-registered
+  kill criterion.** `bound` passes (32.0% coverage, 87.4% `exact`) and works on
+  the case it was built for — "roughly $27 billion" reads `approximate`, "more
+  than $50 billion" reads `at_least`. `modality` passes weakly (84.3% `planned`).
+  **`scope` failed at 96.9% `this_site`**, and worse, the decisive test failed:
+  across every `investment_usd` claim in the database it returned 44 `this_site`,
+  4 `unnamed`, 1 `block:VA13` and **zero `region`, zero `programme`** — the two
+  values that would have separated Hyperion's $10B buildout from its $50B
+  regional figure never fired once. An axis whose informative values are never
+  produced is decoration however carefully it is verified, so `scope` must not
+  become load-bearing and that distinction needs a different mechanism.
+
+  One weakness found in `bound` and not yet fixed: the predicate asks whether a
+  hedge word is in the sentence, not whether it attaches to *this* number. A quote
+  reading "more than $50 billion… up from the roughly $27 billion plan" licensed
+  `approximate` from a "roughly" belonging to the other figure. The check needs to
+  be positional.
+
+- **Date precision is stored instead of discarded** (migration `0015`,
+  `tracker/upsert.py`). `normalize.parse_date` has always returned
+  `day|month|quarter|half|year` and its own docstring says why it matters — "Q3
+  2025" and "2025-07-01" are stored identically and mean very different things.
+  **Nothing outside that module had ever read it.** The precision went into a
+  prose note and the row rendered a day-precision date the article never gave.
+  Now cached on the project like `confidence` and `h200_equivalent`, taken from
+  the claim that actually won rather than from the best precision anybody offered,
+  and rendered at the precision the source gave: `2024`, not `2024-01-01`. The
+  rare display change that is both shorter and more honest.
+
+- **Bug: any host starting `news.` was treated as a company filing**
+  (`tracker/ingest/crawl.py`). `^(news|about|blog|ir|investor|newsroom|press)\.`
+  returned `company_filing` — weight 3, the heaviest in the system — with no check
+  on whose domain it was. Live that meant `news.17173.com`, a Chinese gaming
+  portal, and `news.futunn.com`, a stock brokerage. On Fairwater (#1) the gaming
+  site was the *only* `company_filing` on the row: it decided the stored $3.3B and
+  supplied the "strongest source is company_filing" line in the confidence
+  rationale. A newsroom subdomain is now only evidence together with a domain
+  already known to belong to an operator, which is what `classify_source_type`'s
+  own docstring always said it did — "never returns `company_filing` on a guess
+  about a general domain". The cost is that a genuine newsroom absent from
+  `feeds.toml` drops to `general_media`; adding it there is the designed fix.
+
+- **The planted-mutant harness now exists** (`scripts/measure_extraction.py
+  --mutants`). `HANDOFF.md` and `CHANGELOG.md` both cited "16 planted mutants, all
+  caught" as the evidence for `tracker audit`, and no script, test or commit
+  contained it — the run was manual, against a copy of a live database nobody
+  kept. It plants faults in a throwaway copy and reports the catch rate.
+
+- **`source.published_at`, and a merge tiebreak that can read it** (migration
+  `0014`, `tracker/models.py`, `tracker/upsert.py`, `tracker/config.py`).
+  `upsert.claims_by_field` ranks claims by `(confirmed, weight, fetched_at, url)`,
+  and `fetched_at` is the moment the crawler happened to visit the page. Most of
+  this corpus is trade press, so ties on credibility are the common case and the
+  tiebreak decides them — on crawl order, which is arbitrary with respect to the
+  truth.
+
+  The date was already being collected. `discover` writes it to
+  `ingest_url.published_at` from the feed, where it was 78% populated and had
+  never been read by anything downstream, because there was no column on `source`
+  to carry it to and the merge is the only place it matters. The migration adds
+  that column and backfills it by URL — unlike `unconfirmed_reasons` in `0013`,
+  which was deliberately *not* backfilled, and the difference is the point: that
+  column recorded a decision some past extraction made, so inferring it later
+  would have invented a refusal no gate ever issued, whereas this one records when
+  a publisher published something, which is a fact about the URL and not about our
+  reading of it. 241 of 553 sources filled; NULL stays meaningful, because a
+  hand-supplied URL has no date anywhere and must fall back to `fetched_at`
+  rather than sort as infinitely old.
+
+  **`merge_by_publication_date` is off by default.** With it on, the six live
+  inversions go to zero. It stays off because it moves stored values and they are
+  not uniformly improvements: Hyperion correctly stops holding Meta's superseded
+  $10B, but #116 would move from 120 MW to 40 MW because the smaller figure was
+  published a day later. Publication order is the more *defensible* rule, not the
+  one that always yields the larger number, and that is a judgement for somebody
+  with the report in front of them. Note for whoever flips it: the flag changes
+  the policy, and stored values only move as each row is next written.
+
+- **Bug: `ARTICLE_DATE` was always `unknown`** (`tracker/ingest/crawl.py`).
+  `extract_one`'s `published_date` parameter has existed since the prompt did,
+  the USER section interpolates it, and **no caller ever passed it**. Prompt
+  RULE 5 resolves relative timing against it — "construction begins next year" is
+  only a date if you know when "next" was written — so with the date unknown the
+  rule correctly forced every such phrase to null. Nothing was fabricated; the
+  cost was silent, in schedule fields never extracted, for want of a value that
+  was already in the database one join away.
+
+- **A measurement of what the stored data actually rests on** (`tracker/quality.py`,
+  `scripts/measure_extraction.py`, `tests/test_quality.py`). Two numbers already
+  existed and neither answered the question. "98.7% of stored quotes are exact
+  substrings of their own article" measures the quotes that *exist*, so it reads
+  as reassurance about a population it never looked at; "66% of claims carry no
+  quote" counts the model's raw output, most of which the evidence gate correctly
+  demoted, so it reads as a scandal and is mostly the gate working.
+
+  The number that matters is the share of **stored** values whose winning source
+  recorded a sentence for them. Measured over 748 values on the live database:
+  49.2% quote-backed, 38.2% correctly flagged 待确认, and **11.9% — 89 values —
+  confirmed with no quote at all**. That last bucket is the defect, because
+  nothing on the row says the value is unsupported, so every reader and every
+  rollup treats it as a fact.
+
+  All 89 come from two prompt vintages that predate migration `0007`, the
+  migration that added the column a quote lives in — 61 from `extract-v1@8eb51f2a`
+  and 28 from `extract-v1@cef10fb4`. **None come from the current extractor.** So
+  the gate works and the damage is stratigraphy: a fact about history, invisible
+  to every per-row check, findable only by counting.
+
+  Nothing is re-derived. The winning source comes from `gaps.provenance`, the
+  merge order from `upsert.claims_by_field` — the same definitions the write path
+  and both display surfaces use. That is not decoration: a hand-rolled version of
+  this measurement returned 83 rather than 89, differing on exactly the fields
+  whose merge policy is MAX/MIN/PHASE rather than PREFER_WEIGHT, because a
+  re-derived sort picks a different winning source than the write path did.
+
+  The script also reports two things no per-row check can see: which prompt
+  vintage produced each source (348 of 368 extracted sources are on a superseded
+  prompt), and 6 field values kept an older article over a newer one of equal
+  credibility because the merge tiebreak is `fetched_at` — when the crawler
+  visited, not when anybody published. Worst of them: Aligned Phoenix at 65 MW
+  from a 2017 article over 400 MW from a 2022 one.
+
+- **`tracker ingest crawl --stale-prompt` re-reads what an older prompt wrote**
+  (`crawl.stale_by_prompt`). `stale_sources` asks whether the *article* may have
+  changed; nothing asked whether *we* had. Every tightening of the gate —
+  placeholder demotion, the prose floor, per-field quotes, `unconfirmed_reasons` —
+  applied only to rows written after it landed, and `source.extractor` has
+  recorded which prompt produced every row since `0001` without anything ever
+  comparing it to the current stamp.
+
+  A fourth URL selector on the existing command rather than a new one, because
+  choosing URLs is all that differs: `--from-queue` already establishes the shape,
+  and the extractor setup, dry-run, cache and reporting are then shared rather
+  than duplicated. Served from the article cache by default, which makes it a
+  re-read rather than a re-fetch — `--no-cache` would confound "the prompt
+  improved" with "the page changed". Live, it selects 228 URLs of which 224 are
+  already cached.
+
+  Deliberately unlike `backfill`, which writes `source.blocks` and never updates
+  the stamp beside it, so a backfilled row still advertises the prompt that wrote
+  its scalars. `test_remediation_leaves_nothing_on_a_superseded_prompt` pins the
+  postcondition: after a re-read, the selector returns nothing.
+
+  **Run live against all 228 stale URLs**: 230 LLM calls, 15 projects inserted,
+  248 updated, 4 fetch errors and 2 pages refused by the prose floor. Silent
+  defects fell **89 → 14** and quote-backed values rose 368 → 435 of a total that
+  grew 748 → 808. Before and after reports are in `data/runs/`.
+
+  Two things the run established that measurement alone could not. First, **it
+  does not fix the recency inversions** — Hyperion still holds Meta's superseded
+  $10B over the $27B that replaced it, because re-extraction gave all three
+  claims quotes and left them tied, which is a tiebreak problem and not an
+  evidence problem. Second, **re-reading a URL does not always refresh the row it
+  wrote.** The write path is keyed on `(project_id, url)` and project identity is
+  re-derived from the article every time, so a re-read that routes to a different
+  project — or to none — orphans the original source at its old vintage. Of the
+  61 URLs still stale afterwards, 28 now yield no project at all: the
+  Switch/Data Foundry acquisition story built two campuses under the old prompt
+  and is declined outright by the current one. That is either the gate getting
+  stricter or a regression, so those rows are reported and left alone.
+
 - **A page with nothing to quote is refused before it costs an LLM call**
   (`tracker/ingest/crawl.py`, migration `0011`). A fetch that returns 200 and 600
   characters of navigation furniture is not an article, and nothing checked. The
@@ -87,7 +291,9 @@ initial build of the v1 PRD.
   sentence, so every remedy is a read or a re-read. Unit errors sort first, because
   those are the ones that poison totals. On the live database: 21 findings across 19
   of 206 projects — a rate you can work through, which is the difference between a
-  check people run and one they mute. 16 mutants, all caught.
+  check people run and one they mute. 16 mutants, all caught — measured by hand
+  against a copy of the live database, which is why
+  `scripts/measure_extraction.py --mutants` now exists to re-run it.
 
 - **Every number in the capex table opens** (`tracker/capex.py`,
   `tracker/webui/dataset.py`, `server.py`, `app.js`,

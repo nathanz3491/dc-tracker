@@ -244,6 +244,20 @@ class Settings(BaseSettings):
     #: Hard cap on LLM calls per URL: one attempt plus one corrective retry.
     llm_max_attempts: int = Field(default=2, ge=1, le=5)
 
+    # --- merge policy -----------------------------------------------------
+    #: Break a merge tie on when the article was *published* rather than on when
+    #: the crawler fetched it (`source.published_at`, migration 0014).
+    #:
+    #: Off by default because it moves stored values, and it has to be measured
+    #: before it is trusted. `scripts/measure_extraction.py` reports what it would
+    #: change; on the live database that is six values, and they are not uniformly
+    #: improvements — Hyperion correctly stops holding Meta's superseded $10B, but
+    #: #116 would move from 120 MW to 40 MW because the smaller figure was
+    #: published a day later. Publication order is the more *defensible* rule, not
+    #: the one that always yields the larger number, and turning it on is a
+    #: judgement somebody should make with the report in front of them.
+    merge_by_publication_date: bool = False
+
     def resolve_db(self, override: Path | None = None) -> Path:
         """Absolute DB path. Precedence: --db > TRACKER_DB > data/tracker.db."""
         chosen = override or self.db

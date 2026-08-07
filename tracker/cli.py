@@ -826,9 +826,18 @@ def ingest_crawl(
             "--from-queue", help="Crawl what `tracker discover` queued instead of a file."
         ),
     ] = False,
+    stale_prompt: Annotated[
+        bool,
+        typer.Option(
+            "--stale-prompt",
+            help="Re-read sources extracted by an older version of the prompt.",
+        ),
+    ] = False,
     limit: Annotated[
         int | None,
-        typer.Option("--limit", help="With --from-queue, take at most this many candidates."),
+        typer.Option(
+            "--limit", help="With --from-queue or --stale-prompt, take at most this many."
+        ),
     ] = None,
     prompt_name: Annotated[
         str, typer.Option("--prompt", help="Prompt name or path, e.g. extract-v1.")
@@ -857,6 +866,15 @@ def ingest_crawl(
     Every non-null value must be backed by a verbatim quote that really appears in
     the fetched article; unsupported values are dropped and the drop is recorded
     in the project's notes.
+
+    `--stale-prompt` re-reads articles this database has already read, using the
+    prompt as it stands today. The gate has been tightened repeatedly and each
+    improvement only ever applied to rows written after it landed — so a row
+    extracted before migration `0007` has no per-field quote, not because nothing
+    supported it but because there was nowhere to record the sentence. Those rows
+    read as established ever since. Served from the article cache by default,
+    which makes it a re-read rather than a re-fetch: `--no-cache` would confound
+    "the prompt improved" with "the page changed".
     """
     from tracker.ingest import crawl
     from tracker.llm import MiniMaxExtractor, MissingApiKey
@@ -879,14 +897,25 @@ def ingest_crawl(
 
     chosen = [
         name
-        for name, given in (("--urls", urls), ("--url", url), ("--from-queue", from_queue))
+        for name, given in (
+            ("--urls", urls),
+            ("--url", url),
+            ("--from-queue", from_queue),
+            ("--stale-prompt", stale_prompt),
+        )
         if given
     ]
     if len(chosen) > 1:
-        _fail(f"pass only one of --urls, --url or --from-queue (got {', '.join(chosen)})")
+        _fail(
+            "pass only one of --urls, --url, --from-queue or --stale-prompt "
+            f"(got {', '.join(chosen)})"
+        )
         return
     if not chosen:
-        _fail("pass --urls FILE, --url URL, --from-queue, or --check to test connectivity")
+        _fail(
+            "pass --urls FILE, --url URL, --from-queue, --stale-prompt, "
+            "or --check to test connectivity"
+        )
         return
 
     engine, _ = init_db(_db_path())
@@ -917,6 +946,22 @@ def ingest_crawl(
             return
         # A queued URL is `discovered`, not `ok`, so crawl would process it
         # anyway; forcing makes that explicit and independent of the skip rule.
+        force = True
+    elif stale_prompt:
+        from tracker.prompts import load_prompt
+
+        stamp = load_prompt(prompt_name).stamp
+        with session_scope(engine, commit=False) as session:
+            url_list = crawl.stale_by_prompt(session, stamp=stamp, limit=limit)
+        if not url_list:
+            console.print(
+                f"[green]every extracted source is on {stamp}[/green] — nothing to re-read"
+            )
+            return
+        source_label = f"prompts superseded by {stamp}"
+        # Every one of these is already `ok`, so the skip rule would drop all of
+        # them. Re-reading an article we have already read, under a prompt that
+        # has since been tightened, is the entire point of this selector.
         force = True
     else:
         if not urls.is_file():
@@ -1432,6 +1477,52 @@ def _print_itemisation(project: Project) -> None:
     )
 
 
+#: How a hedged quantity reads. The article either qualified the number or it did
+#: not, and until migration 0015 there was nowhere to record which — prompt RULE 4
+#: said `"500-700 MW" -> 500 (the LOWER bound; say so in "notes")`, so the hedge
+#: went into prose nothing could read back.
+#:
+#: One glyph rather than a column. These are qualifiers on a number, not facts of
+#: their own, and a `bound` column would be empty on most rows and would push the
+#: figures out of alignment on the rest.
+_BOUND_GLYPH: dict[str, str] = {"approximate": "~", "at_least": "≥", "at_most": "≤"}
+
+#: A date stated to a year rendered as `2024-01-01` asserts a precision the
+#: article never gave. `normalize.parse_date` has always known the difference.
+_DATE_FORMAT: dict[str, str] = {"year": "%Y", "half": "%Y", "quarter": "%Y", "month": "%Y-%m"}
+
+#: Suffix naming the bucket, where dropping the digits alone would lose it.
+_DATE_SUFFIX: dict[str, str] = {"half": " (H1/H2)", "quarter": " (quarter)"}
+
+
+def _qualified(project, field: str, rendered: str) -> str:
+    """Prefix a quantity with the hedge its own source used, if any."""
+    from tracker.gaps import provenance
+
+    prov = provenance(project, field)
+    glyph = _BOUND_GLYPH.get(prov.bound) if prov else None
+    return f"{glyph}{rendered}" if glyph else rendered
+
+
+def _fmt_date(project, field: str) -> str:
+    """A date at the precision the source actually offered.
+
+    "Q3 2025" and "2025-07-01" are stored identically and mean very different
+    things; the row used to print the second whatever the article said. This is
+    the rare display change that makes the output *shorter* and more honest at
+    once — a year-precision date renders as `2024`, four characters instead of
+    ten, and stops claiming a day nobody published.
+    """
+    value = getattr(project, field, None)
+    if value is None:
+        return NA
+    precision = getattr(project, f"{field}_precision", None)
+    fmt = _DATE_FORMAT.get(precision or "")
+    if not fmt:
+        return str(value)
+    return f"{value.strftime(fmt)}{_DATE_SUFFIX.get(precision, '')}"
+
+
 @app.command()
 def show(project_id: Annotated[int, typer.Argument(help="Project id.")]) -> None:
     """Show one project in full, with every citation."""
@@ -1472,7 +1563,7 @@ def show(project_id: Annotated[int, typer.Argument(help="Project id.")]) -> None
             # returns are markup by design and escaping them afterwards would
             # print the `[dim]` tags literally. A project name really can carry a
             # bracket — "Stargate (Phase [2])" — and Rich would eat it.
-            rendered = escape(str(rendered))
+            rendered = _qualified(project, field, escape(str(rendered)))
             tier = basis(project, field)
             if tier == UNCONFIRMED:
                 return f"[red]{rendered}[/red] [red]待确认[/red]"
@@ -1499,8 +1590,8 @@ def show(project_id: Annotated[int, typer.Argument(help="Project id.")]) -> None
             ("MW built", cell("mw_built", _fmt_mw(project.mw_built))),
             ("H200-equiv", _h200_cell(project)),
             ("investment", cell("investment_usd", _fmt_usd(project.investment_usd))),
-            ("first announced", cell("first_announced", str(project.first_announced or NA))),
-            ("expected online", cell("expected_online", str(project.expected_online or NA))),
+            ("first announced", cell("first_announced", _fmt_date(project, "first_announced"))),
+            ("expected online", cell("expected_online", _fmt_date(project, "expected_online"))),
             ("blocker", cell("blocker", project.blocker or NA)),
             ("open risks", str(_open_risk_count(project) or NA)),
             ("confidence", _confidence_cell(project.confidence)),

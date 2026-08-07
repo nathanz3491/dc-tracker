@@ -268,6 +268,94 @@ UNCONFIRMED_REASONS: Final[tuple[str, ...]] = (
     "out_of_scale",
 )
 
+# --- the claim envelope ----------------------------------------------------
+#
+# A value alone cannot say what it is a value *of*. Hyperion (#10) carries three
+# investment figures — $10B for "the buildout of the infrastructure itself", $27B
+# for the Blue Owl campus JV, $50B "of investment to the region" — and they are
+# not a disagreement. They are three measurements of three different things,
+# collapsed into one scalar because that is all the schema had.
+#
+# The three vocabularies below name what was being thrown away. Each is stored
+# per (source, field) in `source.claim_meta` and each has a verification
+# predicate in `crawl.axis_gate`: a value survives only if the sentence it was
+# quoted from licenses it. That is the whole design. `risk.severity` is the
+# cautionary case — a judgement no article ever states, uniformly `watch` on
+# every risk in the database, fully populated and carrying nothing.
+
+#: How exactly the article stated a quantity.
+#:
+#: Prompt RULE 4 used to say `"500-700 MW" -> 500 (the LOWER bound; say so in
+#: "notes")` — the range deliberately destroyed and routed to prose. Nothing
+#: could read it back, so `values_conflict` sees "about 2 GW" and 1,950 MW as a
+#: 20% disagreement when they are the same claim at different precision.
+CLAIM_BOUNDS: Final[tuple[str, ...]] = (
+    #: The article states this figure and no hedge. The default.
+    "exact",
+    #: "about", "roughly", "~", "approximately".
+    "approximate",
+    #: "more than", "at least", "over", "upwards of". The stored value is a floor.
+    "at_least",
+    #: "up to", "as much as", "no more than". The stored value is a ceiling.
+    "at_most",
+)
+
+#: Whether the article says a thing has happened, is contracted, or is hoped for.
+#:
+#: The domain is almost entirely about the future, and the schema had one `phase`
+#: enum per campus and dates with no modality at all. So Hyperion's "interim
+#: milestone of 1.5 GW is being targeted by the end of 2027" was stored as an
+#: `announced` event dated 2027-12-31 and counted as *reached* on the track strip.
+#: `logic.milestone_in_the_future` exists to catch that, which is a rule patching
+#: a category the type system was missing.
+#:
+#: Ordered least to most committed, so a reader can compare two claims.
+CLAIM_MODALITIES: Final[tuple[str, ...]] = (
+    #: Somebody floated it. "reports have surfaced", "could", "may".
+    "speculated",
+    #: An intention with a date attached. "targeted", "aims to", "hopes to".
+    "targeted",
+    #: A plan of record. "plans to", "expected to", "is set to".
+    "planned",
+    #: Signed, filed or committed. "has agreed", "filed an application", "signed".
+    "contracted",
+    #: It happened. "came online", "broke ground", "completed", "has begun".
+    "achieved",
+)
+
+#: What object a figure describes. The axis Hyperion needed.
+#:
+#: `block:<label>` is not listed here because it is parameterised — it names a
+#: tranche on the same record and is validated by resolving against it, not by
+#: membership. Everything else is a closed set.
+CLAIM_SCOPES: Final[tuple[str, ...]] = (
+    #: This campus, the row the claim is being written to.
+    "this_site",
+    #: A programme this campus belongs to — "OpenAI's $500 billion Stargate"
+    #: quoted in an article about one site. The `$/MW` ceiling already catches the
+    #: loudest of these; this names the rest.
+    "programme",
+    #: Economic impact on a region, which is not capex. Meta's "more than $50B of
+    #: investment to the region" includes roads, water and sewage.
+    "region",
+    #: The operator's whole estate, not this site.
+    "portfolio",
+    #: The article states the figure and does not say what it is a figure of.
+    #: The honest answer, and the default when nothing licenses another.
+    "unnamed",
+)
+
+#: The neutral value of each axis — what a claim degrades to when the gate cannot
+#: license what the model asserted. Never a rejection of the *value*: the figure
+#: survives exactly as it did before the envelope existed.
+CLAIM_AXIS_DEFAULTS: Final[dict[str, str]] = {
+    "bound": "exact",
+    "modality": "planned",
+    "scope": "unnamed",
+}
+
+CLAIM_AXES: Final[tuple[str, ...]] = ("scope", "bound", "modality", "as_of")
+
 # --- project fields --------------------------------------------------------
 #: Canonical order for the 12 tracked PRD fields. Used to render `source.fields`
 #: deterministically (so re-ingesting the same input produces byte-identical

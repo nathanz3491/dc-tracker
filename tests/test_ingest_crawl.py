@@ -138,17 +138,57 @@ def test_braces_inside_quoted_strings_do_not_confuse_the_scanner():
 @pytest.mark.parametrize(
     ("url", "expected"),
     [
-        ("https://news.microsoft.com/x", "company_filing"),
         ("https://www.sec.gov/Archives/x", "company_filing"),
-        ("https://ir.example.com/x", "company_filing"),
         ("https://dnr.wi.gov/permit", "government_doc"),
         ("https://www.datacenterdynamics.com/en/news/x", "trade_press"),
         ("https://www.utilitydive.com/news/x", "trade_press"),
         ("https://www.example-news.com/x", "general_media"),
+        # A newsroom subdomain, with nothing saying whose newsroom it is.
+        ("https://news.microsoft.com/x", "general_media"),
+        ("https://ir.example.com/x", "general_media"),
     ],
 )
 def test_classify_source_type(url, expected):
     assert crawl.classify_source_type(url) == expected
+
+
+# --- a newsroom subdomain is only evidence together with a known operator -----
+#
+# `^(news|about|blog|ir|investor|newsroom|press)\.` used to return
+# `company_filing` — weight 3, the heaviest in the system — for any host whose
+# first label matched, with no check on whose domain it was. It is not a
+# structural signal: `news.microsoft.com` and `news.17173.com` are the same
+# shape, and only one of them is a data center operator.
+
+
+@pytest.mark.parametrize("host", ["news.17173.com", "news.futunn.com"])
+def test_a_newsroom_subdomain_of_an_unknown_domain_is_not_official(host):
+    """Both were live: a Chinese gaming portal and a stock brokerage, at weight 3.
+
+    On Fairwater (#1) the gaming site was the *only* `company_filing` on the row.
+    It decided the stored $3.3B investment and supplied the "strongest source is
+    company_filing" line in the confidence rationale.
+    """
+    hosts = crawl.operator_hosts()
+    assert crawl.classify_source_type(f"https://{host}/x", operator_hosts=hosts) == "general_media"
+
+
+def test_a_newsroom_subdomain_of_a_known_operator_is_official():
+    """The case the rule was written for, now requiring the domain to be known."""
+    hosts = frozenset({"example-operator.com"})
+    assert (
+        crawl.classify_source_type("https://news.example-operator.com/x", operator_hosts=hosts)
+        == "company_filing"
+    )
+
+
+def test_the_operator_domain_itself_still_counts():
+    """`about.fb.com` is listed whole in `feeds.toml`, and must keep its weight."""
+    hosts = crawl.operator_hosts()
+    assert (
+        crawl.classify_source_type("https://about.fb.com/news/x", operator_hosts=hosts)
+        == "company_filing"
+    )
 
 
 def test_an_unknown_domain_is_never_treated_as_official():
@@ -1903,3 +1943,44 @@ def test_a_real_quote_that_does_not_state_the_value_keeps_no_quote():
     assert kept[0].mw == 999.0, "the value survives as a candidate"
     assert "mw" in kept[0].unconfirmed
     assert kept[0].quotes == {}, "no quote may vouch for a figure it does not state"
+
+
+# --- ARTICLE_DATE -----------------------------------------------------------
+#
+# RULE 5 resolves relative timing ("construction starts next year") against
+# ARTICLE_DATE, and with the date unknown it correctly forces every such phrase
+# to null. So an absent date fabricates nothing — it quietly costs schedule
+# fields instead, which is the harder failure to notice.
+
+
+def test_the_article_date_reaches_the_prompt(session):
+    """It never had. `extract_one`'s parameter defaulted to "unknown" and no
+    caller ever passed it, while `discover` had been recording the date on
+    `ingest_url` the whole time.
+    """
+    session.add(
+        IngestUrl(
+            url=URL, run_id="t", status="discovered", published_at=dt.datetime(2026, 1, 15, 9, 30)
+        )
+    )
+    session.flush()
+
+    llm = FakeLLM([canned("llm_response_microsoft_wi.json")])
+    crawl.run(session, [URL], fetcher=FakeFetcher({URL: fetched()}), extractor=llm, run_id="t1")
+
+    _, user = llm.seen[0]
+    assert "ARTICLE_DATE: 2026-01-15" in user
+
+
+def test_a_url_with_no_recorded_date_says_unknown_rather_than_guessing(session):
+    """A hand-supplied URL has no publication date anywhere.
+
+    "unknown" is the honest answer and the prompt already knows what to do with
+    it; inventing one — today's date, say — would turn every "next year" in the
+    article into a fabricated schedule.
+    """
+    llm = FakeLLM([canned("llm_response_microsoft_wi.json")])
+    crawl.run(session, [URL], fetcher=FakeFetcher({URL: fetched()}), extractor=llm, run_id="t1")
+
+    _, user = llm.seen[0]
+    assert "ARTICLE_DATE: unknown" in user

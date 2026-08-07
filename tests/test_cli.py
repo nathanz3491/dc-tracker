@@ -824,6 +824,161 @@ def test_stale_sources_returns_oldest_first(initialized: Path):
         ]
 
 
+# --- the claim envelope on screen -------------------------------------------
+#
+# The axes must not become five more columns. Both of these make the output
+# *shorter* while claiming less, which is the test that they are qualifiers on a
+# value rather than values of their own.
+
+
+def _envelope_project(db: Path) -> int:
+    """A project whose winning claim carries a hedge and a year-only date."""
+    from tracker.db import init_db, session_scope
+    from tracker.models import Source
+
+    pid = with_real_source(db)
+    engine, _ = init_db(db)
+    with session_scope(engine) as session:
+        session.add(
+            Source(
+                project_id=pid,
+                url="https://www.datacenterfrontier.com/envelope/",
+                # Same weight as the fixture's own citation, so the tiebreak falls
+                # to recency and this is the claim the row holds. A lower weight
+                # would lose outright and the test would be asserting on the other
+                # source's envelope, which is no envelope at all.
+                source_type="company_filing",
+                claims=json.dumps({"mw_planned": 300.0, "first_announced": "2024-01-01"}),
+                fields="mw_planned,first_announced",
+                quotes=json.dumps(
+                    {
+                        "mw_planned": "more than 300 megawatts at full buildout",
+                        "first_announced": "at the initial announcement of the projects in 2024",
+                    }
+                ),
+                claim_meta=json.dumps(
+                    {
+                        "mw_planned": {"bound": "at_least", "scope": "this_site"},
+                        "first_announced": {"date_precision": "year"},
+                    }
+                ),
+                extractor="crawl:extract-v1@test:m:httpx",
+                # Later than the fixture's own citation, so this is the claim that
+                # wins the merge. `provenance` reports the envelope of the *winning*
+                # source, which is the point: two sources can state the same figure
+                # with different hedges and the row must show the one it holds.
+                fetched_at=dt.datetime(2027, 6, 1),
+            )
+        )
+    with session_scope(engine) as session:
+        from tracker.models import Project
+        from tracker.upsert import recompute_from_sources
+
+        recompute_from_sources(session, session.get(Project, pid))
+    return pid
+
+
+def test_a_hedged_figure_shows_the_hedge(initialized: Path):
+    """ "more than 300 MW" is not 300 MW, and the row used to say it was."""
+    pid = _envelope_project(initialized)
+    result = invoke(initialized, "show", str(pid))
+    assert result.exit_code == 0, result.output
+    assert "≥300" in result.output
+
+
+def test_a_year_only_date_prints_as_a_year(initialized: Path):
+    """The article said "in 2024". Printing 2024-01-01 asserts a day nobody gave.
+
+    This is the rare display change that is both shorter and more honest — four
+    characters instead of ten, claiming less.
+    """
+    pid = _envelope_project(initialized)
+    result = invoke(initialized, "show", str(pid))
+    assert "first announced  2024\n" in result.output or "first announced  2024 " in result.output
+    assert "2024-01-01" not in result.output
+
+
+# --- prompt-vintage selection -----------------------------------------------
+#
+# `stale_sources` asks whether the article may have changed. These ask whether
+# *we* have: every gate improvement applies only to rows written after it landed,
+# and nothing had ever compared `source.extractor` to the current prompt stamp.
+
+
+def _extracted(session, pid: int, url: str, extractor: str, when: dt.datetime) -> None:
+    from tracker.models import Source
+
+    session.add(
+        Source(
+            project_id=pid,
+            url=url,
+            source_type="trade_press",
+            extractor=extractor,
+            fetched_at=when,
+        )
+    )
+
+
+def test_stale_by_prompt_selects_only_superseded_vintages(initialized: Path):
+    """A row written by an older prompt is stale; one on the current stamp is not."""
+    from tracker.db import init_db, session_scope
+    from tracker.ingest.crawl import stale_by_prompt
+
+    pid = with_real_source(initialized)
+    engine, _ = init_db(initialized)
+    with session_scope(engine) as session:
+        _extracted(
+            session,
+            pid,
+            "https://news.example.com/old/",
+            "crawl:extract-v1@old:m:httpx",
+            dt.datetime(2020, 1, 1),
+        )
+        _extracted(
+            session,
+            pid,
+            "https://news.example.com/current/",
+            "crawl:extract-v1@new:m:httpx",
+            dt.datetime(2024, 1, 1),
+        )
+
+    with session_scope(engine, commit=False) as session:
+        assert stale_by_prompt(session, stamp="extract-v1@new") == ["https://news.example.com/old/"]
+
+
+def test_stale_by_prompt_ignores_rows_no_prompt_produced(initialized: Path):
+    """A Census lookup has no vintage, so it can never be stale against one.
+
+    Without this it would be re-queued on every run and cost an LLM call to
+    re-derive a county from a coordinate table.
+    """
+    from tracker.db import init_db, session_scope
+    from tracker.ingest.crawl import stale_by_prompt
+
+    pid = with_real_source(initialized)
+    engine, _ = init_db(initialized)
+    with session_scope(engine) as session:
+        _extracted(
+            session,
+            pid,
+            "https://census.example.com/x/",
+            "derived:census-place-2020",
+            dt.datetime(2020, 1, 1),
+        )
+
+    with session_scope(engine, commit=False) as session:
+        assert stale_by_prompt(session, stamp="extract-v1@new") == []
+
+
+def test_stale_by_prompt_excludes_placeholders(seeded: Path):
+    """Same reason refresh excludes them: a placeholder URL is not fetchable."""
+    from tracker.db import open_db, session_scope
+    from tracker.ingest.crawl import stale_by_prompt
+
+    with session_scope(open_db(seeded), commit=False) as session:
+        assert stale_by_prompt(session, stamp="extract-v1@nothing-matches-this") == []
+
+
 # --- export -----------------------------------------------------------------
 
 

@@ -32,7 +32,7 @@ RULES
      "1.5 GW"        -> 1500          (convert to megawatts)
      "$3.3 billion"  -> 3300000000
      "$700 million"  -> 700000000
-     "500-700 MW"    -> 500           (the LOWER bound; say so in "notes")
+     "500-700 MW"    -> 500           (the LOWER bound; set "bound": "at_least")
 5. Dates: ISO 8601 "YYYY-MM-DD".
      month only  -> "YYYY-MM-01"
      year only   -> "YYYY-01-01"
@@ -92,12 +92,52 @@ RULES
     "delay_days":  integer|null
   }],
   "evidence": [{
-    "field": "<one field name from this schema>",
-    "quote": "<verbatim sentence from the ARTICLE>"
+    "field":    "<one field name from this schema>",
+    "quote":    "<verbatim sentence from the ARTICLE>",
+    "scope":    "this_site"|"block:<label of a block above>"|"programme"|"region"|"portfolio"|"unnamed",
+    "bound":    "exact"|"approximate"|"at_least"|"at_most",
+    "modality": "achieved"|"contracted"|"planned"|"targeted"|"speculated",
+    "as_of":    "YYYY-MM-DD"|null
   }]
 }]}
 
 === FIELD NOTES ===
+evidence[]       Four qualifiers beside each quote. Each is checked against the
+                 quote itself, so a label the sentence does not support is
+                 dropped and the value is kept regardless — you gain nothing by
+                 guessing and lose nothing by leaving a default.
+
+  scope          What the figure is a figure OF. This matters more than any other
+                 field here. One article can carry three investment numbers that
+                 are not in conflict:
+                   "the buildout of the infrastructure itself is expected to cost
+                    in the $10 billion range"           -> scope "this_site"
+                   "will bring more than $50B of investment to the region"
+                                                        -> scope "region"
+                   "OpenAI's $500 billion Stargate programme"
+                                                        -> scope "programme"
+                 Use "block:<label>" when the figure belongs to one tranche you
+                 listed in "blocks" — the label must match exactly. Use "unnamed"
+                 when the article states a figure without saying what it covers.
+                 "unnamed" is a correct and common answer. Do NOT guess
+                 "this_site" to be helpful; that is the error this field exists to
+                 prevent.
+
+  bound          How exactly it was stated. "about 2 GW" -> "approximate".
+                 "more than $50B" -> "at_least". "up to 800 MW" -> "at_most".
+                 A plain figure -> "exact".
+
+  modality       Whether it has happened. "came online in April" -> "achieved".
+                 "signed an agreement" -> "contracted". "is targeting 1.5 GW by
+                 the end of 2027" -> "targeted". "some reports have surfaced" ->
+                 "speculated". An unqualified statement about a future site ->
+                 "planned".
+                 "achieved" is a claim about the past: never use it for a date in
+                 the future.
+
+  as_of          The date the article says this was true, when it gives one and
+                 it differs from ARTICLE_DATE. null otherwise.
+
 name             The project or campus name the article uses ("Fairwater",
                  "Colossus 2"). If the article names no project, use
                  "<Company> <City>".

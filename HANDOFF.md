@@ -187,7 +187,9 @@ writing this.
   bigger than its own campus, a gigawatt with no quote, dollars-per-MW outside
   a generous band, a derived H200 figure drifted from its input. Read-only,
   free, scopeable to given ids. Live: 21 findings across 19 of 206 projects; 16
-  planted mutants, all caught.
+  planted mutants, all caught — that mutant run was manual, against a copy of the
+  live database that was not kept, so the claim was never reproducible.
+  `scripts/measure_extraction.py --mutants` now re-runs it on demand.
 
 - **Stop a citation that does not exist from setting values**
   (`tracker/upsert.py`, `tracker/blocks.py`, `20f75f8`). `confidence.compute`

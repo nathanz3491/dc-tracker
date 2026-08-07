@@ -90,6 +90,14 @@ class Project(Base):
     phase: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'announced'"))
     first_announced: Mapped[dt.date | None] = mapped_column(Date)
     expected_online: Mapped[dt.date | None] = mapped_column(Date)
+    #: How precisely the source stated each date — `day|month|quarter|half|year`,
+    #: from `normalize.parse_date`, which has always computed it and which nothing
+    #: outside that module has ever read. "Q3 2025" and "2025-07-01" are stored
+    #: identically and mean very different things, and the row was rendering the
+    #: second when the article said the first. Caches, recomputed on every upsert
+    #: exactly like `confidence` and `h200_equivalent`.
+    first_announced_precision: Mapped[str | None] = mapped_column(Text)
+    expected_online_precision: Mapped[str | None] = mapped_column(Text)
     blocker: Mapped[str | None] = mapped_column(Text)
     notes: Mapped[str | None] = mapped_column(Text)
 
@@ -178,6 +186,21 @@ class Source(Base):
     #: `claims LIKE '%"blocker"%'`.
     blocks: Mapped[str | None] = mapped_column(Text)
     extractor: Mapped[str | None] = mapped_column(Text)
+    #: When the publisher published it, as against `fetched_at`, which is when the
+    #: crawler visited. The merge tiebreak wants this one: two trade-press articles
+    #: tie on credibility constantly, and breaking that tie on crawl order decided
+    #: six stored values against publication order — Hyperion keeping Meta's
+    #: superseded $10B among them. NULL for a URL nobody found in a feed, so the
+    #: sort falls back to `fetched_at` rather than treating it as infinitely old.
+    published_at: Mapped[dt.datetime | None] = mapped_column(DateTime)
+    #: JSON object, field -> {scope, bound, modality, as_of} — what the value is a
+    #: value *of*, how exactly the article stated it, whether it has happened, and
+    #: when it was true. Parallel to `quotes`, which holds the sentence; each axis
+    #: is verified against that sentence by `crawl.axis_gate` and degrades to a
+    #: neutral value rather than rejecting the figure. NULL on every source written
+    #: before migration 0015, and not backfillable: the axes are facts about how an
+    #: article was worded, recoverable only by re-reading it.
+    claim_meta: Mapped[str | None] = mapped_column(Text)
 
     project: Mapped[Project] = relationship(back_populates="sources")
 
@@ -187,6 +210,7 @@ class Source(Base):
         CheckConstraint("excerpt IS NULL OR length(excerpt) <= 500", name="ck_source_excerpt_len"),
         Index("ix_source_project_id", "project_id"),
         Index("ix_source_type", "source_type"),
+        Index("ix_source_published_at", "published_at"),
     )
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
