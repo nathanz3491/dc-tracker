@@ -1260,6 +1260,138 @@ function InsightPanel({ project, allowWrite }) {
     </section>`;
 }
 
+/* `tracker infer`, as a button on the row it is about.
+ *
+ * The PRD asks two questions no article answers — 可能遇到的困难 and what signal
+ * would show the project is still advancing — and the CLI has answered them since
+ * the beginning. Reaching them meant leaving the page, finding the id and typing a
+ * command, which is the reason almost nobody ran it.
+ *
+ * **A button, not an automatic panel, and that is a deliberate difference from the
+ * overview above it.** The briefing generates on open because it is cached by
+ * content: a row is paid for once and reopening is free. An inference is not
+ * cached and never stored — its whole value is that somebody asked for it against
+ * the row as it stands right now — so running it on open would spend a call every
+ * time a drawer was opened. One click, one call, one answer.
+ *
+ * Everything rendered here is the model's judgement and none of it is evidence.
+ * The panel says so once, plainly, at the bottom, and uses the same tint the
+ * overview uses so a reader already knows what that colour means. */
+function InferPanel({ project, allowWrite }) {
+  const [state, setState] = useState({ status: "idle" });
+
+  // A new project means the previous project's analysis must go. Without this,
+  // opening a second row shows the first row's obstacles under the second name.
+  useEffect(() => { setState({ status: "idle" }); }, [project.id]);
+
+  // `api` throws on a refusal rather than returning `{error}` — a panel that
+  // checked the return value for an error sat on its loading state forever the
+  // first time the console was read-only.
+  const run = useCallback(async () => {
+    setState({ status: "running" });
+    try {
+      setState({ status: "done", data: await api("/api/infer", {
+        method: "POST",
+        body: { project_id: project.id, confirm: "infer" },
+      }) });
+    } catch (e) {
+      setState({ status: "failed", error: e.message });
+    }
+  }, [project.id]);
+
+  const d = state.data;
+  const empty = d && !d.obstacles?.length && !d.signals?.length;
+
+  return html`
+    <section class="dc-infer" aria-label="Model-inferred analysis">
+      <div class="dc-ai-head">
+        <span class="dc-ai-spark" aria-hidden="true">◈</span>
+        <span class="dc-ai-label">Inferred analysis</span>
+        <span class="dc-infer-sub">what could go wrong, and what would show it is moving</span>
+        ${allowWrite && state.status !== "running" && html`
+          <button type="button" class="dc-ai-redo" onClick=${run}>
+            ${state.status === "done" ? "Run again" : "Run analysis"}
+          </button>`}
+        ${state.status === "running" && html`
+          <span class="dc-ai-dots" aria-live="polite" aria-label="thinking"><i /><i /><i /></span>`}
+      </div>
+
+      ${!allowWrite && html`
+        <p class="dc-ai-quiet">Unavailable on a read-only console.</p>`}
+
+      ${allowWrite && state.status === "idle" && html`
+        <p class="dc-ai-quiet">
+          Not run yet — it costs one model call, and nothing here is cached or stored.
+        </p>`}
+
+      ${state.status === "running" && html`
+        <div class="dc-ai-wait" aria-hidden="true">
+          ${[92, 74, 84].map((w) => html`<span key=${w} style=${{ width: w + "%" }} />`)}
+        </div>`}
+
+      ${state.status === "failed" && html`
+        <p class="dc-ai-quiet">
+          ${state.error} <button type="button" class="dc-ai-redo" onClick=${run}>Try again</button>
+        </p>`}
+
+      ${d?.rejected?.length > 0 && html`
+        <p class="dc-infer-refused">
+          Refused to accept ${d.rejected.join(", ")} — a model may not assert a fact.
+        </p>`}
+
+      ${empty && html`<p class="dc-ai-quiet">No conclusion the recorded facts support.</p>`}
+
+      ${d?.obstacles?.length > 0 && html`
+        <div class="dc-infer-group">
+          <h4 class="dc-infer-h">What could obstruct this</h4>
+          ${d.obstacles.map((o, i) => html`
+            <div class="dc-infer-row" key=${"o" + i}>
+              <div class="dc-infer-head">
+                <${Meter} value=${o.confidence} />
+                <span style=${chip("--chart-5")}>${o.category}</span>
+                <span style=${chip(SEV_TONE[o.severity] || "--muted-foreground")}>${o.severity}</span>
+              </div>
+              <p class="dc-infer-why">${o.reasoning}</p>
+            </div>`)}
+        </div>`}
+
+      ${d?.signals?.length > 0 && html`
+        <div class="dc-infer-group">
+          <h4 class="dc-infer-h">What would show it is still moving</h4>
+          ${d.signals.map((s, i) => html`
+            <div class="dc-infer-row" key=${"s" + i}>
+              <div class="dc-infer-head">
+                <${Meter} value=${s.confidence} />
+                <span class="dc-infer-signal">${s.signal}</span>
+              </div>
+              <p class="dc-infer-why">${s.reasoning}</p>
+            </div>`)}
+        </div>`}
+
+      ${d && !empty && html`
+        <p class="dc-infer-foot">
+          Inferred by ${d.model} from this row's recorded obstacles, milestones and gaps.
+          Not stored, not evidence — a judgement drawn from the facts, shown beside them.
+        </p>`}
+    </section>`;
+}
+
+/* Confidence as five cells. A bare 0.65 beside three other decimals is something
+ * a reader decodes every time; the figure stays, and the shape carries it. */
+function Meter({ value }) {
+  const filled = Math.max(1, Math.min(5, Math.round((value || 0) * 5)));
+  const tone = value >= 0.7 ? "--success" : value >= 0.5 ? "--warning" : "--danger";
+  return html`
+    <span class="dc-meter" title=${`model confidence ${(value || 0).toFixed(2)}`}>
+      ${[0, 1, 2, 3, 4].map((i) => html`
+        <i key=${i} style=${{ background: i < filled ? `var(${tone})` : "var(--border)" }} />`)}
+      <b>${(value || 0).toFixed(2)}</b>
+    </span>`;
+}
+
+//: Severity to a colour token, shared by the inferred obstacles and the recorded ones.
+const SEV_TONE = { blocking: "--danger", material: "--warning", watch: "--muted-foreground" };
+
 function StatsTab({ data, p, populated, open, onQuote, allowWrite }) {
   const worst = open.slice().sort((a, b) => SEV_ORDER.indexOf(b.severity) - SEV_ORDER.indexOf(a.severity))[0];
   const stats = [
@@ -1289,6 +1421,12 @@ function StatsTab({ data, p, populated, open, onQuote, allowWrite }) {
             drawer you could not scroll past — and put a model's reading in front
             of the figures it is a reading *of*. A card, like the rest. */ ""}
       <${InsightPanel} project=${p} allowWrite=${allowWrite} />
+
+      ${/* Under the briefing, because it answers the next question: the overview
+            says what this row is, and this says what could stop it. Both are a
+            model's words and both carry the same tint; only this one costs a call
+            per click, so only this one has a button. */ ""}
+      <${InferPanel} project=${p} allowWrite=${allowWrite} />
 
       <div style=${{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(330px, 1fr))",
                      gap: 18, alignItems: "start" }}>

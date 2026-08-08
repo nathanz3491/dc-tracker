@@ -1363,3 +1363,59 @@ def test_capex_json_is_parseable(dated_pipeline: Path):
         "investment_duplicate_skipped_usd",
     ):
         assert key in position, key
+
+
+# --- what `--help` says about a command group ---------------------------------
+#
+# Four commands became groups when they grew an answer to the report they print:
+# `duplicates park`, `audit resolve`, `risks confirm`, `queue prune`. A group
+# takes its help text from `Typer(help=...)` when that is given and from the
+# callback's docstring when it is not — so passing one silently replaces a full
+# explanation with a single line, and leaves those four as the only commands in
+# this CLI whose `--help` will not tell you what they do.
+
+#: (group, a phrase only the callback's docstring contains, its subcommands)
+_GROUPS = [
+    ("duplicates", "builder, a landlord and an occupier", ("park", "unpark", "parked")),
+    ("audit", "wrong by a thousandfold", ("check", "resolve")),
+    ("risks", "single `blocker` column could not answer", ("confirm",)),
+    ("queue", "the whole URL", ("check", "prune")),
+]
+
+
+@pytest.mark.parametrize(("group", "phrase", "subcommands"), _GROUPS)
+def test_a_group_help_explains_itself(group, phrase, subcommands):
+    result = runner.invoke(app, [group, "--help"])
+    assert result.exit_code == 0
+    # Rich wraps the help, so compare on collapsed whitespace.
+    flat = " ".join(result.stdout.split())
+    assert phrase in flat, f"`tracker {group} --help` lost its explanation"
+    for name in subcommands:
+        assert name in flat, f"`{name}` is missing from `tracker {group} --help`"
+
+
+@pytest.mark.parametrize(("group", "phrase", "subcommands"), _GROUPS)
+def test_a_group_says_what_its_bare_form_does(group, phrase, subcommands):
+    """The usage line reads `[OPTIONS] COMMAND [ARGS]...`, which implies a
+    subcommand is required. For these four it is not — the bare form is the
+    listing they have always printed — so the prose has to say so."""
+    flat = " ".join(runner.invoke(app, [group, "--help"]).stdout.split())
+    assert f"Bare `tracker {group}`" in flat
+
+
+@pytest.mark.parametrize(("group", "phrase", "subcommands"), _GROUPS)
+def test_every_subcommand_help_is_more_than_its_summary(group, phrase, subcommands):
+    """A subcommand explains itself, not just names itself.
+
+    Asserted against the docstring rather than the rendered box, so the check is
+    about what was written and not about how wide the terminal was. Two
+    paragraphs is the bar every other command in this CLI clears: a summary line,
+    then why the command exists.
+    """
+    import typer.main
+
+    root = typer.main.get_command(app)
+    for name in subcommands:
+        command = root.commands[group].commands[name]
+        paragraphs = [p for p in (command.help or "").split("\n\n") if p.strip()]
+        assert len(paragraphs) >= 2, f"`tracker {group} {name}` has no explanation"

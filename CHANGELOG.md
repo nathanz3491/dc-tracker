@@ -12,6 +12,89 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **`tracker audit resolve`: the ladder that settles an impossible figure**
+  (`tracker/audit.py`, `tracker/prompts/audit-resolve-v1.txt`, `tracker/cli.py`).
+  `tracker audit` has reported the same 11,250 MW colocation expansion on every run
+  since it was written, because the only repair it could offer was a sentence
+  telling somebody to go and read an article. A report nobody can answer stops
+  being read.
+
+  Five rungs, each running only because the one above declined: **arithmetic**
+  (free), **the person at the keyboard** (free), **a reasoning model** on what the
+  row holds, **the open web** when the model says the row lacks the answer, and
+  **the model again** with what the search found. That ordering is the cost
+  control — most findings never reach a paid rung.
+
+  Rung one is deliberately two cases and no more. `h200_equivalent` is a fixed
+  ratio applied to capacity, so re-deriving it is not an opinion; and a tranche
+  *labelled* "2.4 MW Lease" carrying 2400 on a 15 MW campus is that label read as
+  kilowatts, where the correct figure is written down beside the wrong one. Rung
+  two offers `?` beside the edits, which hands the question down: not knowing is
+  the commonest honest answer and should cost one keystroke.
+
+  A model's entire output is one key from a list a person wrote, a confidence and a
+  sentence — it cannot type a capacity. Its fourth answer, `m`, means "the row does
+  not contain the answer" and is what makes this a ladder rather than one call.
+  Pages fetched at rung four are read and never stored: they inform one decision,
+  and a page skimmed for one number is not a citation for anything. Every edit
+  lands in the row's notes naming who made it, and a finding settled once is not
+  asked again.
+
+  `block_out_of_scale` gained two repairs in the process. It offered nothing, on
+  the reasoning that an excluded tranche only needs a re-crawl — but five of the
+  twenty-two live findings are one label stating its own capacity beside a stored
+  value a thousand times larger, which is the same arithmetic the campus-level
+  check already offered, applied one grain finer.
+
+- **`tracker duplicates park`: recording that two rows are *not* one campus**
+  (migration `0016`, `tracker/pairs.py`, `tracker/models.py`, `tracker/capex.py`).
+  The duplicates report proposes and never merges, which left it with exactly one
+  possible answer. A false pair came back on every run, ahead of the real ones —
+  and not merely as clutter: `capex.rollup` reads the same pairs and holds one row
+  of every suspected group out of the buyer table, so a wrong pair takes a real
+  campus's capacity out of a number somebody quotes.
+
+  Stored pairwise rather than per group, because a group is a closure computed at
+  read time and "these three are separate" says nothing about a fourth row that
+  appears next week. `decided_by` mirrors `project_alias`: a model may park a pair
+  and a reader must be able to tell that one did.
+
+- **`tracker risks confirm`: reading the article behind an unquoted obstacle**
+  (`tracker/riskcheck.py`, `tracker/prompts/risk-confirm-v1.txt`). A third of the
+  open obstacles are 待确认 — a source named them and the evidence gate could not
+  find a sentence that says so. They are counted anyway, and nobody had ever gone
+  back to check which reading was right.
+
+  One model call per obstacle, with the **whole article** from the crawl cache
+  rather than the excerpt the failed extraction chose, and with every other
+  obstacle on the row beside it — half these rows are `quote_off_target`, a real
+  sentence filed under the wrong category, which is invisible without seeing what
+  the other categories already claim.
+
+  What makes the answer trustworthy is not the model: a returned quote is accepted
+  only if it is verbatim in the article, checked with `crawl._verbatim_run`, and
+  only if the sentence carries wording for its category, checked with
+  `crawl._risk_quote_supports`. A confirmation looser than the gate it overturns
+  would be a way to launder a paraphrase into a citation. Refused quotes leave the
+  obstacle exactly as it was, so the worst case is a call that changed nothing.
+
+- **`tracker queue check` and `tracker queue prune`** (`tracker/ingest/discover.py`,
+  `tracker/cli.py`). A queue is a promise that everything in it is worth an LLM
+  call. `check` asks every queued URL whether it is still there — 404 and 410 are
+  dead, **403 and 429 are not**, because a newsroom answering 403 to a non-browser
+  is what `--browser` exists for and on the live queue that was 55 URLs across the
+  seven best-defended publishers. `prune` re-applies the filter in
+  `seed/feeds.toml` to rows queued under an earlier version of it, which nothing
+  had ever done: 417 of 1,241 live candidates no longer qualify.
+
+- **An inferred-analysis panel on every project in the console** (`/api/infer`,
+  `tracker/webui/static/app.js`). `tracker infer` answers the PRD's two analytical
+  questions and reaching it meant leaving the page, finding the id and typing a
+  command, which is why almost nobody ran it. A button, not an automatic panel:
+  the AI overview generates on open because it is cached by content, while an
+  inference is never cached or stored, so running it on open would spend a call
+  every time a drawer opened.
+
 - **The claim envelope: what a value is a value *of*** (migration `0015`,
   `tracker/vocab.py`, `tracker/ingest/crawl.py`, `tracker/prompts/extract-v1.txt`).
   Hyperion (#10) carries three investment figures — $10B for "the buildout of the
@@ -820,6 +903,42 @@ initial build of the v1 PRD.
 
 ### Changed
 
+- **`tracker risks` leads with whether an obstacle is quoted** (`tracker/cli.py`).
+  The old layout printed every obstacle at the same weight and admitted at the
+  bottom that a third of them rested on nothing quotable. That is the wrong way
+  round: it is the first thing a reader needs and it was the last thing they were
+  told. A kinds table now carries it per category — `4/15` on `grid_capacity` says
+  something different about that number than `16/18` on `transmission` — each
+  obstacle is marked in place, `--uncited` shows only those, and the footer breaks
+  the 待确认 count down by *why* rather than reporting one total. Duplicate rows
+  (same project, same category, same sentence, different `first_seen`, which the
+  unique constraint permits) are collapsed to one line.
+
+- **`tracker infer` answers two questions, laid out as two questions**
+  (`tracker/cli.py`). It was a four-column table whose widest column was free
+  prose, so reasoning wrapped to two characters a line on a narrow terminal, plus
+  a run of unaligned "watch for" lines underneath. Now a heading per question, the
+  judgement on its own line with a confidence bar and the figure beside it, the
+  reasoning indented under it, and the provenance stated plainly at the end.
+  `--json` emits the same structure, which is what the console's new panel reads.
+
+- **`tracker duplicates` says what raised each pair, and raises fewer of them**
+  (`tracker/dedup.py`, `tracker/capex.py`). "These two look similar" is not
+  something a reader can check. Pairs are now sorted by evidence — a shared tranche
+  key, a shared operator, a shared name word — and each prints the evidence beside
+  it, with `--no-weak` to hide the last kind.
+
+  Two live false positives forced the rules to tighten. `Aligned Data Centers
+  Phoenix` matched `NTT Global Data Centers Americas Phoenix` on the token
+  "centers", because the generic-word list held the singular and not the plural.
+  `Element Critical — Houston One` matched `Switch — Houston Data Center Campus`
+  because both had a tranche labelled "existing", a real word naming a kind of
+  tranche and no particular one, which the `generic` flag cannot catch because it
+  reads the label's own words. **A tranche key that turns up in more than one town
+  is vocabulary, not identity.** Rarity is measured across localities rather than
+  across rows, so the flagship case survives: the Abilene campus is stored four
+  times and all four hold `building-1`, in one town.
+
 - **A risk whose quote fails is kept as 待确认 instead of deleted** (migration
   `0012`, `tracker/ingest/crawl.py`, `upsert.py`, `capex.py`, `cli.py`).
   Migration 0006 gave every *field* a third outcome — retained, flagged, never
@@ -1041,6 +1160,75 @@ initial build of the v1 PRD.
   teach the flags they stand for.
 
 ### Fixed
+
+- **Every URL `tracker queue` printed was a prefix of a real one** (`tracker/cli.py`).
+  The column was `url[:60]`, which looked tidy and was the most damaging thing in
+  the output: the link on screen 404'd in a browser and matched nothing in `--drop
+  --url`, which is the only handle the command offered. A queue whose links all
+  fail is a queue nobody trusts. Whole URLs now, with a row id beside them that
+  cannot be mistaken for a link and that `--drop --id` takes, plus `--feed` to work
+  one source at a time and newest-first ordering, because a queue is read by a
+  person deciding what is worth a crawl while the crawl drains oldest-first.
+
+- **`tracker logic resolve --llm` spent most of its budget on questions no edit
+  could answer** (`tracker/logic.py`, `tracker/cli.py`). A live run read as twelve
+  refusals before a single decision, and both causes were ours.
+
+  Eleven of the sixteen rules offer no action on purpose — a phase enum arguing
+  with a campus that is half energised is a contradiction in the schema, not in
+  the data — and `decide` can only ever answer "nothing to choose between" for
+  them. That was 174 of 283 findings, and with the queue ordered by project id the
+  first `--limit 30` was almost entirely made of them. They are now counted and
+  reported in one line, and the limit is a budget for calls that can act.
+
+  The rest were duplicates: two `risk` rows for one obstacle produce two identical
+  findings, and the action offered for one closes both.
+
+- **The triage prompt was shown the wrong page, and the model correctly said so**
+  (`tracker/logic.py`). A finding about an open `grid_capacity` obstacle on a
+  finished power track declares `fields=("blocker",)`, so the evidence assembled
+  for the model was one provenance quote behind a derived string — a sentence
+  about something else. The model read it and answered "the provided quote
+  addresses grid service approval, not the turbines", which looked like a stubborn
+  model and was a prompt with the wrong page open. Findings now carry `subjects`
+  (`risk:water`, `track:permits`, `event:energized:2027-06-01`) and the context is
+  assembled from them: the obstacle with its own quote and source, the milestone
+  with its date and the sentence that reported it. The declines that follow are
+  now substantive — "the noise complaint was first seen after the permit was
+  approved" — so they are printed in full rather than clipped at 90 characters.
+
+- **The console served a stylesheet whose imported layers were unversioned**
+  (`tracker/webui/assets.py`, `server.py`). `stamp` puts a version token on every
+  URL the *page* references and did nothing for the twelve files `styles.css`
+  itself pulls in with `@import`, so a browser or an edge cache could hold one
+  layer from last month behind a parent that looked current. The visible symptom
+  was the form layer missing: every dropdown fell back to a native control with
+  the custom chevron still drawn beside it, and the switches rendered as bare
+  buttons. Stylesheets are now served with their imports inlined and relative
+  `url(...)` references re-anchored, and a parent's token covers every file it
+  imports — so editing a layer changes the parent's URL, which is the whole
+  mechanism. It also removes twelve serial round-trips, since an `@import` is
+  discovered only after its parent has been parsed.
+
+- **`_walk` dropped a command the moment it grew a subcommand**
+  (`tracker/webui/catalog.py`). The catalog skipped any group and recursed into
+  it, which was right while every group was only a namespace. `duplicates`,
+  `audit` and `risks` all run on their own, and all three vanished from the
+  console's palette the day they gained a subcommand.
+
+- **Becoming a group cost four commands their `--help`** (`tracker/cli.py`).
+  Typer takes a group's help text from `Typer(help=...)` when that is given and
+  from the callback's docstring when it is not, so passing a one-line summary
+  replaced the full explanation every other command in this CLI prints.
+  `tracker duplicates --help` said eleven words and stopped. The four invokable
+  groups no longer pass `help=`, which also restores the top-level listing to
+  each docstring's own first line.
+
+  Each group's prose now opens by saying what the *bare* form does, because the
+  usage line reads `[OPTIONS] COMMAND [ARGS]...` and implies a subcommand is
+  required — for these four it is not. Three tests pin all of it: the
+  explanation survives, the bare-form sentence is present, and every subcommand's
+  help is more than a restatement of its own name.
 
 - **A stored number could outlive the claim that produced it, unseen**
   (`tracker/logic.py`). Two new free rules, `value_above_its_evidence` and

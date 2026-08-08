@@ -929,16 +929,178 @@ def failure_summary(session: Session) -> list[tuple[str, int]]:
     return sorted(hosts.items(), key=lambda kv: (-kv[1], kv[0]))
 
 
-def drop_pending(session: Session, urls: list[str] | None = None) -> int:
-    """Remove queued candidates the operator judged not worth crawling."""
+def drop_pending(
+    session: Session,
+    urls: list[str] | None = None,
+    *,
+    ids: list[int] | None = None,
+    feeds: list[str] | None = None,
+) -> int:
+    """Remove queued candidates the operator judged not worth crawling.
+
+    By URL, by row id, or by feed. The id was added because the URL was
+    unusable as a handle: `tracker queue` printed `row.url[:60]`, so the string
+    on screen was a *prefix* of the real URL. Pasting it into `--drop --url`
+    matched nothing, and pasting it into a browser produced a 404 — which is what
+    a queue full of dead links looked like from the outside.
+    """
     stmt = select(IngestUrl).where(IngestUrl.status == PENDING_URL_STATUS)
     if urls:
         stmt = stmt.where(IngestUrl.url.in_(urls))
+    if ids:
+        stmt = stmt.where(IngestUrl.id.in_(ids))
+    if feeds:
+        stmt = stmt.where(IngestUrl.feed.in_(feeds))
     rows = list(session.scalars(stmt))
     for row in rows:
         session.delete(row)
     session.flush()
     return len(rows)
+
+
+# --- Keeping the queue honest -------------------------------------------------
+#
+# A queue is a promise: everything in it is worth an LLM call. Two things break
+# that promise quietly, and both had, measured on the live database of 1,241
+# queued candidates.
+#
+# **Links that are no longer there.** A sitemap is a snapshot; articles get
+# unpublished, and a queued URL is never re-checked between discovery and the
+# crawl that spends a call on it.
+#
+# **Articles that would not be queued today.** The filter in `seed/feeds.toml` is
+# data and it gets edited — a term added, an exclusion tightened. Nothing ever
+# re-applied it to what was already queued, so the queue held every candidate that
+# passed every *past* version of the filter: NTT case studies, DataBank compliance
+# blogs, and Meta's announcement of the winners of an AR effects contest.
+
+
+#: HTTP answers that mean the page is gone rather than defended. 403 and 429 are
+#: deliberately absent: a newsroom answering 403 to a non-browser is exactly the
+#: case `--browser` exists for, and dropping those would delete the queue's most
+#: valuable rows because they were the best defended.
+DEAD_STATUS: tuple[int, ...] = (404, 410)
+
+
+@dataclass
+class UrlVerdict:
+    """What one queued URL answered when asked."""
+
+    row_id: int
+    url: str
+    title: str
+    feed: str
+    status: int | None
+    #: "ok" | "dead" | "blocked" | "error"
+    verdict: str
+    detail: str = ""
+
+
+def classify_status(status: int | None, error: str = "") -> str:
+    """Reachable, gone, defended, or something else."""
+    if status in DEAD_STATUS:
+        return "dead"
+    if status is not None and 200 <= status < 400:
+        return "ok"
+    if status in (401, 403, 429):
+        return "blocked"
+    if status is None and error:
+        # A name that does not resolve is as dead as a 404 and stays dead; a
+        # timeout is a bad afternoon. Only the first is worth deleting.
+        gone = ("name or service not known", "nodename nor servname", "getaddrinfo", "no address")
+        return "dead" if any(term in error.lower() for term in gone) else "error"
+    return "error"
+
+
+def verify_urls(rows: list[IngestUrl], *, settings: Settings | None = None) -> list[UrlVerdict]:
+    """Fetch every URL and say which are gone. Read-only against the database.
+
+    Uses the project's own fetch stack — same user agent, same per-host
+    politeness — so a site that answers this differently from a crawl is telling
+    us something real rather than reacting to a different client.
+    """
+    import asyncio
+
+    from tracker.ingest.fetch import fetch_all
+
+    if not rows:
+        return []
+    by_url = {row.url: row for row in rows}
+    results = asyncio.run(fetch_all(list(by_url), settings=settings))
+    out: list[UrlVerdict] = []
+    for result in results:
+        row = by_url.get(result.url)
+        if row is None:
+            continue
+        verdict = classify_status(result.status, result.error or "")
+        out.append(
+            UrlVerdict(
+                row_id=row.id,
+                url=row.url,
+                title=row.title or "",
+                feed=row.feed or "",
+                status=result.status,
+                verdict=verdict,
+                detail=(result.error or "")[:120],
+            )
+        )
+    return out
+
+
+@dataclass
+class PruneCandidate:
+    """A queued row the current filter would not have queued, and why."""
+
+    row_id: int
+    url: str
+    title: str
+    feed: str
+    reason: str
+
+
+def refilter_pending(
+    session: Session, *, feeds_path: Path | None = None
+) -> tuple[list[PruneCandidate], int]:
+    """Re-apply the configured filter to everything already queued.
+
+    Returns `(no longer matching, total examined)`. Judges each row exactly as
+    discovery would today, including `topic_implied` for the feed it came from —
+    without that, every newsroom sitemap entry would be re-judged as though it
+    came from a general outlet and the whole queue would look like noise.
+
+    A row whose feed is no longer in `feeds.toml` is left alone rather than
+    dropped. Deleting somebody's queue because they commented out a feed would be
+    a surprising thing for a maintenance command to do.
+    """
+    feeds, spec = load_config(feeds_path)
+    implied = {f.name: f.topic_implied for f in feeds}
+    implied.update({s.name: s.topic_implied for s in load_sitemaps(feeds_path)})
+
+    rows = list(session.scalars(select(IngestUrl).where(IngestUrl.status == PENDING_URL_STATUS)))
+    out: list[PruneCandidate] = []
+    for row in rows:
+        if row.feed and row.feed not in implied and not row.feed.startswith("search:"):
+            continue
+        path = urlsplit(row.url).path
+        keep, reason = spec.matches(
+            f"{row.title or ''} {path}", topic_implied=implied.get(row.feed or "", False)
+        )
+        if not keep:
+            out.append(
+                PruneCandidate(
+                    row_id=row.id,
+                    url=row.url,
+                    title=row.title or "",
+                    feed=row.feed or "",
+                    reason=reason,
+                )
+            )
+    return out, len(rows)
+
+
+def drop_ids(session: Session, ids: list[int]) -> int:
+    """Delete queued rows by id. The handle `tracker queue` now prints."""
+    return drop_pending(session, ids=ids)
 
 
 # --- Run --------------------------------------------------------------------
@@ -1060,6 +1222,7 @@ class _RawFetcher:
 
 
 __all__ = [
+    "DEAD_STATUS",
     "MAX_PER_FEED",
     "RETRYABLE_STATUSES",
     "Candidate",
@@ -1068,9 +1231,13 @@ __all__ = [
     "FeedSpec",
     "FilterSpec",
     "ProjectIdentity",
+    "PruneCandidate",
     "SitemapSpec",
+    "UrlVerdict",
+    "classify_status",
     "crawl_sitemap",
     "default_feeds_path",
+    "drop_ids",
     "drop_pending",
     "failed",
     "failure_summary",
@@ -1083,7 +1250,9 @@ __all__ = [
     "pending_split",
     "project_identities",
     "queue_candidates",
+    "refilter_pending",
     "run",
     "select_candidates",
     "sweep_sitemaps",
+    "verify_urls",
 ]

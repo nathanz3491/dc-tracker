@@ -100,6 +100,20 @@ class Finding:
     remedy: str = ""
     #: True when a model produced it rather than a rule. Never presented as fact.
     inferred: bool = False
+    #: What, specifically, this finding is about — `risk:water`, `track:permits`,
+    #: `event:energized:2027-06-01`. Tokens, not prose.
+    #:
+    #: Added because the triage prompt was blind without it. A finding about an
+    #: open `grid_capacity` obstacle on a finished power track declares
+    #: `fields=("blocker",)`, so the evidence assembled for the model was one
+    #: quote behind the derived `blocker` string — a sentence about something
+    #: else entirely. The model read it and correctly answered "the provided
+    #: quote addresses grid service approval, not the turbines", which looked
+    #: like a stubborn model and was a prompt with the wrong page open. These
+    #: tokens are what `_triage_context` uses to put the *right* evidence in
+    #: front of it: the obstacle's own quote, and the milestone that is supposed
+    #: to contradict it.
+    subjects: tuple[str, ...] = ()
 
     def as_json(self) -> dict[str, Any]:
         return {
@@ -110,7 +124,21 @@ class Finding:
             "fields": list(self.fields),
             "remedy": self.remedy,
             "inferred": self.inferred,
+            "subjects": list(self.subjects),
         }
+
+    @property
+    def identity(self) -> tuple[Any, ...]:
+        """What makes two findings the same finding.
+
+        Duplicate `risk` rows produce duplicate findings — one campus had the
+        same `community_opposition` obstacle stored twice under different
+        `first_seen` dates, so `tracker logic resolve --llm` offered the identical
+        question four times and the first answer had already closed all of them.
+        Deduplicating on the sentence is enough: two findings that say the same
+        thing about the same row are one question.
+        """
+        return (self.project_id, self.code, self.summary)
 
 
 @dataclass(frozen=True)
@@ -397,7 +425,12 @@ def check_rules(project: Project) -> list[Finding]:
     partly_live = bool(live_blocks and pending_blocks)
 
     def add(
-        code: str, severity: str, summary: str, fields: tuple[str, ...], remedy: str = ""
+        code: str,
+        severity: str,
+        summary: str,
+        fields: tuple[str, ...],
+        remedy: str = "",
+        subjects: tuple[str, ...] = (),
     ) -> None:
         out.append(
             Finding(
@@ -407,6 +440,7 @@ def check_rules(project: Project) -> list[Finding]:
                 summary=summary,
                 fields=fields,
                 remedy=remedy,
+                subjects=subjects,
             )
         )
 
@@ -464,6 +498,7 @@ def check_rules(project: Project) -> list[Finding]:
             ("phase",),
             "these count as reached on the track strip; a scheduled date belongs in "
             "expected_online, not in a milestone",
+            subjects=tuple(f"event:{name}:{when}" for name, when in ahead),
         )
 
     if phase in _LIVE_PHASES and project.mw_built is None and project.mw_planned:
@@ -609,6 +644,7 @@ def check_rules(project: Project) -> list[Finding]:
             ("expected_online", "phase"),
             "either it slipped and we missed the news, or it is running and we "
             "missed that — both are worth one crawl",
+            subjects=("milestones:recent",),
         )
 
     # --- the blocks against themselves ----------------------------------------
@@ -676,6 +712,7 @@ def check_rules(project: Project) -> list[Finding]:
                 f"`{risk.category}` is still open, but the {track} track already reached `{final}`",
                 ("blocker",),
                 "resolve the obstacle in `tracker review`, or the milestone is wrong",
+                subjects=(f"risk:{risk.category}", f"track:{track}", f"event:{final}"),
             )
 
     # --- placeholder values that reached storage --------------------------------
@@ -1460,6 +1497,70 @@ def decide(project: Project, finding: Finding, *, extractor, prompt_name: str = 
     return Decision(key, confidence, reason)
 
 
+def _subject_evidence(project: Project, finding: Finding) -> list[str]:
+    """The obstacles and milestones this finding is actually about, quoted.
+
+    **This is the fix for a model that kept declining sensibly.** The old context
+    showed one provenance quote per declared field, and half the rules declare
+    `blocker` or `phase` — derived strings whose quote is about something else. So
+    a question like "`grid_capacity` is still open but the power track is
+    finished" arrived beside a sentence about a 150 MW grid service approval, and
+    the model answered, correctly, that the quote did not address the question. It
+    was reading the only page it had been given.
+
+    Each subject token names a row: the obstacle with its own quote and source,
+    the milestone with its date and the sentence that reported it.
+    """
+    lines: list[str] = []
+    wanted_risks = {s.split(":", 1)[1] for s in finding.subjects if s.startswith("risk:")}
+    wanted_events = {s.split(":", 1)[1] for s in finding.subjects if s.startswith("event:")}
+    tracks = {s.split(":", 1)[1] for s in finding.subjects if s.startswith("track:")}
+    if tracks:
+        wanted_events |= {m for t in tracks for m in TRACK_MILESTONES.get(t, ())}
+
+    sources = {s.id: s for s in getattr(project, "sources", ()) or ()}
+
+    for risk in getattr(project, "risks", ()) or ():
+        if risk.category not in wanted_risks:
+            continue
+        if getattr(risk, "status", OPEN_RISK_STATUS) != OPEN_RISK_STATUS:
+            continue
+        lines.append(f"  OBSTACLE {risk.category} ({risk.severity}), first seen {risk.first_seen}")
+        lines.append(f"    what it says: {risk.summary}")
+        quote = (risk.quote or "").strip().replace("\n", " ")
+        if quote:
+            lines.append(f'    quoted: "{quote[:280]}"')
+        else:
+            reason = risk.unconfirmed or "no quote recorded"
+            lines.append(f"    NOT QUOTED ({reason}) — a source named it and quoted nothing")
+        source = sources.get(risk.source_id)
+        if source is not None:
+            lines.append(f"    source: {source.url[:110]}")
+
+    for event in sorted(
+        getattr(project, "events", ()) or (), key=lambda e: (str(e.event_date), e.event_type)
+    ):
+        key = f"{event.event_type}:{event.event_date}"
+        if event.event_type not in wanted_events and key not in wanted_events:
+            continue
+        lines.append(f"  MILESTONE {event.event_type} dated {event.event_date}")
+        if event.description:
+            lines.append(f"    reported as: {event.description[:280]}")
+        source = sources.get(event.source_id)
+        if source is not None:
+            lines.append(f"    source: {source.url[:110]}")
+
+    if "milestones:recent" in finding.subjects:
+        recent = sorted(
+            getattr(project, "events", ()) or (), key=lambda e: str(e.event_date), reverse=True
+        )[:3]
+        for event in recent:
+            lines.append(f"  MOST RECENT MILESTONE {event.event_type} dated {event.event_date}")
+            if event.description:
+                lines.append(f"    reported as: {event.description[:200]}")
+    return lines
+
+
 def _triage_context(project: Project, finding: Finding, actions) -> dict[str, str]:
     from tracker.gaps import provenance
 
@@ -1475,6 +1576,11 @@ def _triage_context(project: Project, finding: Finding, actions) -> dict[str, st
         if quote:
             exact = "for this field" if prov.quote_is_exact else "from the source excerpt"
             evidence.append(f'      [{prov.tier}, {exact}] "{quote[:280]}"')
+    subject_lines = _subject_evidence(project, finding)
+    if subject_lines:
+        evidence.append("")
+        evidence.append("  WHAT THIS FINDING IS ABOUT, IN THE ROW'S OWN WORDS:")
+        evidence.extend(subject_lines)
 
     milestones = sorted(
         {(e.event_type, str(e.event_date)) for e in getattr(project, "events", ()) or ()}
@@ -1585,6 +1691,38 @@ def resolve_drift(session: Session, *, apply: bool = False) -> list[Repair]:
     return repairs
 
 
+def dedupe(findings: list[Finding]) -> list[Finding]:
+    """One question per question. Order preserved.
+
+    Two `risk` rows for the same obstacle — same category, different `first_seen`,
+    which the unique constraint permits — produce two identical findings, and the
+    action offered for one closes both. `tracker logic resolve --llm` was paying
+    for a model call per copy and printing the same line four times under one
+    project, which is most of what made a run unreadable.
+    """
+    seen: set[tuple[Any, ...]] = set()
+    out: list[Finding] = []
+    for finding in findings:
+        if finding.identity in seen:
+            continue
+        seen.add(finding.identity)
+        out.append(finding)
+    return out
+
+
+def resolvable(finding: Finding) -> bool:
+    """Whether any edit exists that answers this finding.
+
+    Eleven of the sixteen rules offer no action, on purpose — each names something
+    only a person can settle, or a contradiction between a phase enum and a campus
+    that is two things at once. Those are worth a reader's eye and are not worth an
+    LLM call: `decide` can only ever return "nothing to choose between" for them.
+    Filtering on this before spending is the difference between a run that reads as
+    twelve refusals and one that reads as three decisions.
+    """
+    return bool(ACTIONS.get(finding.code))
+
+
 def review(
     session: Session,
     *,
@@ -1617,7 +1755,7 @@ def review(
 
     report = Report(projects=len(projects))
     for project in projects:
-        found = check_rules(project)
+        found = dedupe(check_rules(project))
         report.findings.extend(found)
         report.collisions.extend(check_collisions(project))
 
@@ -1674,10 +1812,12 @@ __all__ = [
     "check_collisions",
     "check_rules",
     "decide",
+    "dedupe",
     "examine",
     "parse_contradictions",
     "parse_evidence_findings",
     "record_decision",
+    "resolvable",
     "resolve_drift",
     "review",
 ]

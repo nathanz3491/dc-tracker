@@ -16,6 +16,7 @@ import os
 import sys
 from pathlib import Path
 from typing import Annotated
+from urllib.parse import urlsplit
 
 import typer
 from rich import box
@@ -66,6 +67,32 @@ logic_app = typer.Typer(
     no_args_is_help=True,
 )
 app.add_typer(logic_app)
+
+#: `duplicates`, `audit`, `risks` and `queue` are groups whose bare form still runs
+#: the listing they have always run — `invoke_without_command=True` on the
+#: callback, and the report in the callback body. A report is only half a tool if
+#: there is nowhere to put the answer, and each of them grew one: `duplicates park`
+#: records a *no*, `audit resolve` works through the implausible figures, `risks
+#: confirm` reads the article behind an unquoted obstacle, `queue prune` throws out
+#: what the filter no longer wants. Making them groups is what lets the answer live
+#: next to the question instead of becoming `tracker park-duplicates`, two commands
+#: away in an alphabetical list.
+#:
+#: **None of them passes `help=`, and that is deliberate.** Typer takes the group's
+#: help from that string when it is given and from the callback's docstring when it
+#: is not — so passing one replaces a full explanation with a single line, and
+#: `tracker duplicates --help` becomes the only command in this CLI that will not
+#: tell you what it does. The docstrings say it; the first line of each is what the
+#: top-level listing shows, exactly as for every ordinary command.
+duplicates_app = typer.Typer(name="duplicates", invoke_without_command=True)
+app.add_typer(duplicates_app)
+
+audit_app = typer.Typer(name="audit", invoke_without_command=True)
+app.add_typer(audit_app)
+
+#: The listing and the confirmation pass over obstacles, under one name.
+risks_app = typer.Typer(name="risks", invoke_without_command=True)
+app.add_typer(risks_app)
 
 #: Tables use ASCII borders, not Rich's default box-drawing characters.
 #: This machine's console codepage is cp936, where Unicode box characters render
@@ -201,6 +228,23 @@ def _read_engine():
     except (FileNotFoundError, MigrationError) as exc:
         _fail(str(exc))
         raise  # unreachable; _fail always raises typer.Exit
+
+
+def _writable(command: str):
+    """Open the database for writing, holding the single-writer lock.
+
+    The lock is the thing: two commands deleting queued rows at once, or one
+    deleting while a `sync` is mid-crawl, is the failure mode SQLite reports as a
+    lock timeout twenty seconds later and this reports by name immediately.
+    """
+    engine, _ = init_db(_db_path())
+    try:
+        release = acquire_write_lock(_db_path(), command=command)
+    except AlreadyRunning as exc:
+        _fail(str(exc))
+        raise
+    atexit.register(release)
+    return engine
 
 
 @app.callback()
@@ -1652,8 +1696,9 @@ def show(project_id: Annotated[int, typer.Argument(help="Project id.")]) -> None
                 console.print(f"  {e.event_date}  [cyan]{e.event_type}[/cyan]  {e.description}")
 
 
-@app.command()
+@risks_app.callback(invoke_without_command=True)
 def risks(
+    ctx: typer.Context,
     category: Annotated[
         str | None, typer.Option("--category", help=f"One of: {', '.join(RISK_CATEGORIES)}")
     ] = None,
@@ -1661,17 +1706,45 @@ def risks(
         str | None, typer.Option("--severity", help=f"One of: {', '.join(RISK_SEVERITIES)}")
     ] = None,
     state: Annotated[str | None, typer.Option("--state", help="2-letter code.")] = None,
+    uncited: Annotated[
+        bool,
+        typer.Option("--uncited", help="Only the 待确认 ones — the obstacles nobody could quote."),
+    ] = False,
     all_statuses: Annotated[
         bool, typer.Option("--all", help="Include resolved and superseded risks.")
     ] = False,
-    limit: Annotated[int | None, typer.Option("--limit")] = None,
+    detail: Annotated[
+        bool,
+        typer.Option("--detail/--summary", help="Per-obstacle listing under each kind."),
+    ] = True,
+    limit: Annotated[
+        int | None,
+        typer.Option(
+            "--limit", help="Obstacles to list, across all kinds. The table is unaffected."
+        ),
+    ] = None,
 ) -> None:
     """Obstacles across the database, grouped by kind, with the MW behind each.
+
+    Bare `tracker risks` is the listing. The one subcommand, `confirm`, is what
+    answers the uncomfortable line at the bottom of it: a third of these obstacles
+    rest on no quote that stands up, and `confirm` reads the article behind each
+    one and settles it.
 
     This is the query the single `blocker` column could not answer: one sentence
     per project cannot be counted, and counting is what carries the read-through
     to chip, cloud and power companies.
+
+    **The evidence is a column now, not a footnote.** The old layout printed every
+    obstacle at the same weight and then admitted at the bottom that a third of
+    them rested on nothing quotable — which is the wrong way round, because
+    whether an obstacle is quoted is the first thing a reader needs and the last
+    thing they were told. The kinds table carries it per category, each obstacle
+    is marked in place, and `--uncited` shows only those. `tracker risks confirm`
+    is the command that reads their articles and settles them.
     """
+    if ctx.invoked_subcommand is not None:
+        return
     if category and category not in RISK_CATEGORIES:
         _fail(f"--category must be one of: {', '.join(RISK_CATEGORIES)}")
     if severity and severity not in RISK_SEVERITIES:
@@ -1688,7 +1761,9 @@ def risks(
             stmt = stmt.where(Risk.severity == severity)
         if state:
             stmt = stmt.where(Project.state == state.upper())
-        rows = session.execute(stmt).all()
+        if uncited:
+            stmt = stmt.where(Risk.unconfirmed.is_not(None))
+        rows = _dedupe_risks(session.execute(stmt).all())
 
         if not rows:
             scope = "" if all_statuses else "open "
@@ -1698,55 +1773,300 @@ def risks(
         by_category: dict[str, list] = {}
         for risk_row, project in rows:
             by_category.setdefault(risk_row.category, []).append((risk_row, project))
+        order = sorted(by_category, key=lambda c: (-len(by_category[c]), c))
 
-        shown = 0
-        for cat in sorted(
-            by_category, key=lambda c: (-len(by_category[c]), c)
-        ):  # busiest category first
-            entries = sorted(
-                by_category[cat],
-                key=lambda pair: (-severity_rank(pair[0].severity), pair[1].company, pair[1].id),
+        if json_mode():
+            emit(
+                {
+                    "risks": [
+                        {
+                            "id": r.id,
+                            "project_id": p.id,
+                            "project": f"{p.company} — {p.name}",
+                            "category": r.category,
+                            "severity": r.severity,
+                            "status": r.status,
+                            "mw_planned": p.mw_planned,
+                            "summary": r.summary,
+                            "quote": r.quote,
+                            "unconfirmed": r.unconfirmed,
+                        }
+                        for r, p in rows
+                    ]
+                }
             )
-            mw = sum(p.mw_planned or 0.0 for _, p in entries)
-            unknown_mw = sum(1 for _, p in entries if p.mw_planned is None)
-            heading = f"[bold cyan]{cat}[/bold cyan]  {len(entries)} project(s)"
-            if mw:
-                heading += f", {_fmt_mw(mw)} MW"
-            if unknown_mw:
-                heading += f" [dim](+{unknown_mw} with no cited capacity)[/dim]"
-            console.print(heading)
+            return
 
-            for risk_row, project in entries:
-                if limit is not None and shown >= limit:
-                    break
-                style = _severity_style(risk_row.severity)
-                console.print(
-                    f"  [bold]#{project.id}[/bold] {project.company} — {project.name} "
-                    f"({_location(project)})  [{style}]{risk_row.severity}[/{style}]"
-                    f"  {_fmt_mw(project.mw_planned)} MW"
-                )
-                console.print(f"    {escape(risk_row.summary)}")
-                if risk_row.quote:
-                    console.print(f'    "{escape(risk_row.quote)}"', style="dim")
-                else:
-                    console.print(f"    [yellow]{_why_uncited(risk_row)}[/yellow]")
-                shown += 1
-            console.print()
+        _print_risk_kinds(by_category, order)
+        if detail:
+            _print_risk_detail(by_category, order, limit=limit)
+        _print_risk_footer(rows)
 
-        console.print(
-            "[dim]MW sums cover only projects whose capacity is cited; they are a "
-            "floor, not a total.[/dim]"
+
+def _dedupe_risks(rows: list) -> list:
+    """One obstacle per (project, category, sentence).
+
+    The unique constraint on `risk` includes `first_seen`, so two crawls of two
+    articles reporting the same concern on the same day-but-one store it twice.
+    Measured on the live database that was 20 rows, and each appeared as its own
+    line here and as its own question in `tracker logic resolve`.
+    """
+    seen: set[tuple[int, str, str]] = set()
+    out = []
+    for risk_row, project in rows:
+        key = (project.id, risk_row.category, " ".join((risk_row.summary or "").lower().split()))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append((risk_row, project))
+    return out
+
+
+def _print_risk_kinds(by_category: dict[str, list], order: list[str]) -> None:
+    """The table that answers "what is stopping these projects", in one screen."""
+    table = Table(
+        title="obstacles by kind",
+        header_style="bold",
+        box=TABLE_BOX,
+        title_justify="left",
+    )
+    table.add_column("kind")
+    table.add_column("projects", justify="right")
+    table.add_column("capacity", justify="right")
+    table.add_column("blocking", justify="right")
+    table.add_column("material", justify="right")
+    table.add_column("watch", justify="right")
+    table.add_column("quoted", justify="right")
+    for cat in order:
+        entries = by_category[cat]
+        mw = sum(p.mw_planned or 0.0 for _, p in entries)
+        counts = {s: sum(1 for r, _ in entries if r.severity == s) for s in RISK_SEVERITIES}
+        quoted = sum(1 for r, _ in entries if not r.unconfirmed)
+        quoted_cell = f"{quoted}/{len(entries)}"
+        table.add_row(
+            f"[cyan]{cat}[/cyan]",
+            str(len(entries)),
+            _fmt_mw(mw) if mw else "—",
+            f"[bold red]{counts['blocking']}[/bold red]" if counts["blocking"] else "—",
+            f"[bright_red]{counts['material']}[/bright_red]" if counts["material"] else "—",
+            f"[yellow]{counts['watch']}[/yellow]" if counts["watch"] else "—",
+            quoted_cell if quoted == len(entries) else f"[yellow]{quoted_cell}[/yellow]",
         )
-        # Counted, and said so. An unconfirmed obstacle is still an obstacle a
-        # source reported, and leaving it out of the sums would understate exposure
-        # in the one direction that matters — but a total nobody can see the
-        # composition of is the thing this database exists not to produce.
-        vague = sum(1 for risk_row, _ in rows if risk_row.unconfirmed)
-        if vague:
+    console.print(table)
+    console.print()
+
+
+def _print_risk_detail(
+    by_category: dict[str, list], order: list[str], *, limit: int | None
+) -> None:
+    """Each obstacle under its kind, with its evidence directly beneath it."""
+    shown = 0
+    for cat in order:
+        entries = sorted(
+            by_category[cat],
+            key=lambda pair: (
+                -severity_rank(pair[0].severity),
+                -(pair[1].mw_planned or 0.0),
+                pair[1].id,
+            ),
+        )
+        mw = sum(p.mw_planned or 0.0 for _, p in entries)
+        unknown_mw = sum(1 for _, p in entries if p.mw_planned is None)
+        heading = f"[bold cyan]{cat}[/bold cyan]  {len(entries)} project(s)"
+        if mw:
+            heading += f", {_fmt_mw(mw)} MW"
+        if unknown_mw:
+            heading += f" [dim](+{unknown_mw} with no cited capacity)[/dim]"
+        console.print(heading)
+
+        for risk_row, project in entries:
+            if limit is not None and shown >= limit:
+                break
+            style = _severity_style(risk_row.severity)
+            capacity = f"{_fmt_mw(project.mw_planned)} MW" if project.mw_planned else "no capacity"
             console.print(
-                f"[dim]{vague} of {len(rows)} are 待确认 — reported by a source with no "
-                "quote that stands up. They are counted above.[/dim]"
+                f"  [{style}]{risk_row.severity:<8}[/{style}] [bold]#{project.id}[/bold] "
+                f"{escape(project.company)} — {escape(project.name)} "
+                f"[dim]({escape(_location(project))} · {capacity})[/dim]"
             )
+            console.print(f"      {escape(risk_row.summary)}")
+            if risk_row.quote:
+                console.print(f'      [dim]"{escape(risk_row.quote)}"[/dim]')
+            else:
+                console.print(f"      [yellow]待确认[/yellow] [dim]{_why_uncited(risk_row)}[/dim]")
+            shown += 1
+        console.print()
+        if limit is not None and shown >= limit:
+            console.print(f"[dim]stopped at --limit {limit}[/dim]")
+            break
+
+
+def _print_risk_footer(rows: list) -> None:
+    console.print(
+        "[dim]MW sums cover only projects whose capacity is cited; they are a "
+        "floor, not a total.[/dim]"
+    )
+    # Counted, and said so. An unconfirmed obstacle is still an obstacle a
+    # source reported, and leaving it out of the sums would understate exposure
+    # in the one direction that matters — but a total nobody can see the
+    # composition of is the thing this database exists not to produce.
+    vague = sum(1 for risk_row, _ in rows if risk_row.unconfirmed)
+    if not vague:
+        return
+    reasons: dict[str, int] = {}
+    for risk_row, _ in rows:
+        if risk_row.unconfirmed:
+            reasons[risk_row.unconfirmed] = reasons.get(risk_row.unconfirmed, 0) + 1
+    console.print(
+        f"[yellow]{vague} of {len(rows)}[/yellow] [dim]are 待确认 — reported by a source with "
+        "no quote that stands up, and counted above anyway.[/dim]"
+    )
+    for reason, count in sorted(reasons.items(), key=lambda kv: -kv[1]):
+        console.print(f"  [dim]{count:>4}  {escape(_UNCITED_BECAUSE.get(reason, reason))}[/dim]")
+    console.print("\n[dim]settle them by reading the articles again:[/dim] tracker risks confirm")
+
+
+@risks_app.command("confirm")
+def risks_confirm(
+    project_id: Annotated[
+        int | None, typer.Option("--project", help="Only this project.", show_default=False)
+    ] = None,
+    category: Annotated[
+        str | None, typer.Option("--category", help="Only this kind.", show_default=False)
+    ] = None,
+    limit: Annotated[int, typer.Option("--limit", help="Obstacles to read. One call each.")] = 20,
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="Judge at full cost and write nothing.")
+    ] = False,
+) -> None:
+    """Read the article behind each unquoted obstacle and settle it.
+
+    `tracker risks` reports that a third of the open obstacles are 待确认 —
+    a source named them and the evidence gate could not find a sentence that says
+    so — and counts them anyway, because a reported obstacle is still an obstacle.
+    Nobody has ever gone back to check which reading is right. This does.
+
+    **One model call per obstacle, with the whole article.** Not the excerpt: the
+    excerpt is the fragment the extraction that already failed chose, so re-reading
+    it would mostly reproduce the first answer. The article comes from the crawl
+    cache, and the project, the obstacle, and every other obstacle on the row go
+    with it — half these rows are a real sentence filed under the wrong category,
+    and that is invisible without seeing what the other categories already claim.
+
+    **The model's quote is checked before it is believed**, by the same matcher and
+    the same category test the extraction path's evidence gate uses. A paraphrase
+    is refused. A real sentence about the wrong thing is refused. The obstacle then
+    stays exactly as it was, which is the state it is already in — so the worst
+    case of running this is that it cost a call and changed nothing.
+
+    Three outcomes. **confirmed** attaches the quote and clears the 待确认 mark.
+    **refuted** marks the obstacle `superseded`, dropping it out of the open counts
+    without deleting the record of having believed it. **unclear** writes nothing,
+    and is the honest majority answer.
+    """
+    from tracker import riskcheck
+
+    path = _db_path()
+    if not path.is_file():
+        _fail(f"database not found: {path}\nRun `tracker init` first.")
+    if category and category not in RISK_CATEGORIES:
+        _fail(f"--category must be one of: {', '.join(RISK_CATEGORIES)}")
+
+    from tracker.llm import MissingApiKey, reasoning_extractor
+
+    try:
+        extractor = reasoning_extractor(get_settings())
+    except MissingApiKey as exc:
+        _fail(str(exc))
+        raise
+
+    engine = _read_engine() if dry_run else _writable("risks confirm")
+
+    cache_dir = install_root() / ".cache" / "articles"
+
+    def announce(outcome) -> None:
+        if json_mode():
+            return
+        style = {
+            "confirmed": "green",
+            "refuted": "red",
+            "unclear": "dim",
+            "no_article": "yellow",
+            "error": "yellow",
+        }.get(outcome.result, "white")
+        console.print(
+            f"  [{style}]{outcome.result:<10}[/{style}] #{outcome.project_id} "
+            f"{escape(outcome.category)} [dim]{escape(outcome.summary[:64])}[/dim]"
+        )
+        reason = outcome.judgement.reason
+        refused = ""
+        # The refusal is appended to the reason, and the reason is the long part —
+        # clipping the line threw away the only sentence that says *why* an
+        # obstacle the model was sure about stayed unevidenced.
+        if " — refused: " in reason:
+            reason, refused = reason.split(" — refused: ", 1)
+        if reason:
+            console.print(f"      [dim]{escape(reason[:170])}[/dim]")
+        if refused:
+            console.print(f"      [yellow]quote refused[/yellow] [dim]— {escape(refused)}[/dim]")
+        if outcome.result == "confirmed":
+            console.print(f'      [green]"{escape(outcome.judgement.quote[:170])}"[/green]')
+
+    with _explain_db_locks(), session_scope(engine, commit=not dry_run) as session:
+        risks_to_read = riskcheck.unconfirmed_risks(
+            session, project_id=project_id, category=category, limit=limit
+        )
+        total = len(riskcheck.unconfirmed_risks(session, project_id=project_id, category=category))
+        if not risks_to_read:
+            console.print("[green]every open obstacle already has a quote that stands up[/green]")
+            return
+        if not json_mode():
+            console.print(
+                f"[bold]{len(risks_to_read)}[/bold] of {total} unquoted obstacle(s), "
+                "worst first — one model call each, reading the whole article.\n"
+            )
+        outcomes = riskcheck.confirm(
+            session,
+            risks_to_read,
+            extractor=extractor,
+            cache_dir=cache_dir,
+            apply=not dry_run,
+            on_each=announce,
+        )
+
+    if json_mode():
+        emit({"outcomes": [o.as_json() for o in outcomes], "total_unconfirmed": total})
+        return
+
+    tally: dict[str, int] = {}
+    for outcome in outcomes:
+        tally[outcome.result] = tally.get(outcome.result, 0) + 1
+    _print_report_rows(
+        [
+            ("read", len(outcomes)),
+            ("confirmed", tally.get("confirmed", 0)),
+            ("refuted", tally.get("refuted", 0)),
+            ("left unclear", tally.get("unclear", 0)),
+            ("no article cached", tally.get("no_article", 0)),
+            ("call failed", tally.get("error", 0)),
+        ],
+        title="risks confirm (dry run)" if dry_run else "risks confirm",
+        warn={"call failed"},
+    )
+    refused = [o for o in outcomes if o.judgement.rejected_quote]
+    if refused:
+        console.print(
+            f"\n[yellow]{len(refused)} quote(s) were offered and refused[/yellow] "
+            "[dim]— not verbatim in the article, or not stating that kind of obstacle. "
+            "Those obstacles are unchanged.[/dim]"
+        )
+    if dry_run:
+        console.print("\n[yellow]dry run[/yellow] — nothing was written")
+    else:
+        console.print(
+            f"\n[dim]{total - len(outcomes)} unquoted obstacle(s) still unread; "
+            "raise --limit to continue.[/dim]"
+        )
 
 
 #: Weights for `exposure --weighted`. **A judgement, not a cited fact**, which is
@@ -2084,11 +2404,40 @@ def capex(
             console.print(f"  [dim]#{project_id} {operator} -> customer {customer!r}[/dim]")
 
 
-@app.command()
+#: How each duplicate signal reads on screen, and the colour of its confidence.
+#: The words matter more than they look: "both hold tranche horizon-1" is a fact a
+#: reader can check in one command, and "same locality" is not evidence of
+#: anything, which is why no pair is ever raised on it alone.
+_EVIDENCE_STYLE: dict[str, tuple[str, str]] = {
+    "tranche": ("green", "same tranche"),
+    "party": ("cyan", "shared operator"),
+    "name": ("yellow", "name overlap"),
+}
+
+
+@duplicates_app.callback(invoke_without_command=True)
 def duplicates(
+    ctx: typer.Context,
     limit: Annotated[int, typer.Option("--limit", help="Groups to show.")] = 30,
+    weak: Annotated[
+        bool,
+        typer.Option(
+            "--weak/--no-weak",
+            help="Include pairs raised only by a shared name word. Off shows the hard evidence.",
+        ),
+    ] = True,
+    parked_too: Annotated[
+        bool,
+        typer.Option("--parked", help="Show pairs already ruled out, and nothing else."),
+    ] = False,
 ) -> None:
     """Rows that look like one campus stored several times.
+
+    Bare `tracker duplicates` lists the suspected groups. The subcommands are the
+    two answers to one: `park` records that a group is *not* one campus, `unpark`
+    reopens that decision, and `parked` shows every pair already ruled out. The
+    other answer is `tracker merge`, which lives outside this group because it
+    deletes rows and that deserves its own name.
 
     One site often has a builder, a landlord and an occupier, and whichever name a
     source picks becomes its own row with its own dedup key. Every key is correct;
@@ -2096,51 +2445,267 @@ def duplicates(
     suspected group and discloses the rest — but the listing still carries every
     row, and only a merge repairs that.
 
-    Nothing here is merged. Confirm a group and fold it with `tracker merge`.
+    **Each pair now says what raised it**, strongest first, because "these two look
+    similar" is not something a reader can check and "both hold tranche horizon-1,
+    a key that appears nowhere else in the country" is. Three signals, and they are
+    not equal: a shared tranche is two readings of one building, a shared operator
+    is how one campus becomes four rows, and a shared name word is a word.
+
+    **A shared word had to get stricter.** `Aligned Data Centers Phoenix` and
+    `NTT Global Data Centers Americas Phoenix` were reported as one campus on the
+    token "centers" — the generic list held the singular and not the plural. So was
+    `Element Critical — Houston One` against `Switch — Houston Data Center Campus`,
+    on a tranche both had labelled "existing". A tranche key that turns up in more
+    than one town is vocabulary, not identity, and no longer pairs anything.
+
+    Nothing here is merged. Fold a real group with `tracker merge`; rule a false
+    one out for good with `tracker duplicates park`, which also stops `capex`
+    holding one of the two rows out of the buyer table.
     """
+    if ctx.invoked_subcommand is not None:
+        return
+
     from tracker import capex as capex_mod
+    from tracker import pairs as pairs_mod
 
     engine = _read_engine()
     with session_scope(engine, commit=False) as session:
+        if parked_too:
+            _print_parked(pairs_mod.listing(session))
+            return
         pairs = capex_mod.suspected_duplicates(session)
-        wasted = capex_mod.double_counted_mw(pairs)
-
-    if not pairs:
-        console.print("[green]no suspected duplicates[/green]")
-        return
-
-    groups = capex_mod.duplicate_groups(pairs)
-    labels: dict[int, str] = {}
-    for pair in pairs:
-        labels[pair.a_id] = f"{pair.a_company} — {pair.a_name}"
-        labels[pair.b_id] = f"{pair.b_company} — {pair.b_name}"
+        parked_count = len(pairs_mod.parked_keys(session))
+    if not weak:
+        pairs = [p for p in pairs if p.kinds and p.kinds[0] != "name"]
+    wasted = capex_mod.double_counted_mw(pairs)
 
     if json_mode():
         emit(
             {
                 "double_counted_mw": wasted,
-                "groups": [{"ids": ids, "members": [labels[i] for i in ids]} for ids in groups],
+                "parked_pairs": parked_count,
+                "pairs": [p.as_json() for p in pairs],
+                "groups": [
+                    {"ids": ids, "members": _dupe_labels(pairs, ids)}
+                    for ids in capex_mod.duplicate_groups(pairs)
+                ],
             }
         )
         return
 
+    if not pairs:
+        note = f" [dim]({parked_count} pair(s) already ruled out)[/dim]" if parked_count else ""
+        console.print(f"[green]no suspected duplicates[/green]{note}")
+        return
+
+    groups = capex_mod.duplicate_groups(pairs)
+    by_pair = {(p.a_id, p.b_id): p for p in pairs}
+
     console.print(
         f"[bold]{len(groups)}[/bold] suspected group(s), holding "
         f"[bold]{_fmt_mw(wasted)} MW[/bold] stored more than once — `tracker capex` "
-        "skips the extra rows and says so until each group is merged.\n"
+        "skips the extra rows and says so until each group is settled."
     )
-    for ids in groups[:limit]:
-        for project_id in ids:
-            console.print(f"  #{project_id:<5} {labels[project_id][:82]}")
+    if parked_count:
         console.print(
-            f"  [dim]merge with:[/dim] tracker merge --into {ids[0]} "
-            f"{' '.join(str(i) for i in ids[1:])}\n"
+            f"[dim]{parked_count} pair(s) already ruled out and not shown "
+            "— `tracker duplicates --parked`[/dim]"
         )
+    console.print()
+
+    for ids in groups[:limit]:
+        member = {p.a_id: p for p in pairs if p.a_id in ids}
+        member.update({p.b_id: p for p in pairs if p.b_id in ids})
+        strongest = min(
+            (by_pair[(a, b)] for a, b in by_pair if a in ids and b in ids),
+            key=lambda p: p.rank,
+        )
+        colour, label = _EVIDENCE_STYLE.get(strongest.kinds[0], ("white", "?"))
+        console.print(
+            f"  [{colour}]{label}[/{colour}]  [dim]{escape(strongest.locality)}, "
+            f"{strongest.state}[/dim]"
+        )
+        for project_id in ids:
+            console.print(f"    #{project_id:<5} {escape(_dupe_label(pairs, project_id)[:78])}")
+        # Every pair inside the group, with its own evidence: a group of three is
+        # three separate questions, and one of them is often the wrong one.
+        for a, b in sorted(by_pair):
+            if a in ids and b in ids:
+                console.print(f"    [dim]#{a} + #{b}: {escape(by_pair[(a, b)].why)}[/dim]")
+        console.print(
+            f"    [dim]one campus:[/dim]    tracker merge --into {ids[0]} "
+            f"{' '.join(str(i) for i in ids[1:])}"
+        )
+        console.print(
+            f"    [dim]different sites:[/dim] tracker duplicates park "
+            f"{' '.join(str(i) for i in ids)}\n"
+        )
+    if len(groups) > limit:
+        console.print(f"[dim]{len(groups) - limit} more; raise --limit[/dim]\n")
     console.print(
         "[dim]every quantitative field is recomputed from the combined citations after a "
         "merge; identity fields (name, company, locality) stay the survivor's, so pick "
         "the row whose identity should win.[/dim]"
     )
+
+
+def _dupe_label(pairs, project_id: int) -> str:
+    for pair in pairs:
+        if pair.a_id == project_id:
+            return f"{pair.a_company} — {pair.a_name}"
+        if pair.b_id == project_id:
+            return f"{pair.b_company} — {pair.b_name}"
+    return f"#{project_id}"
+
+
+def _dupe_labels(pairs, ids: list[int]) -> list[str]:
+    return [_dupe_label(pairs, i) for i in ids]
+
+
+def _print_parked(rows) -> None:
+    if json_mode():
+        emit({"parked": [r.as_json() for r in rows]})
+        return
+    if not rows:
+        console.print(
+            "[dim]no pair has been ruled out yet[/dim] — `tracker duplicates park A B` "
+            "records that two rows are different sites"
+        )
+        return
+    table = Table(
+        title=f"{len(rows)} pair(s) ruled out",
+        header_style="bold",
+        title_justify="left",
+        box=TABLE_BOX,
+    )
+    table.add_column("pair")
+    table.add_column("rows", max_width=64)
+    table.add_column("who")
+    table.add_column("why", max_width=40, style="dim")
+    for row in rows:
+        table.add_row(
+            f"#{row.a_id} + #{row.b_id}",
+            f"{escape(row.a_label[:60])}\n{escape(row.b_label[:60])}",
+            escape(row.decided_by),
+            escape(row.reason or "—"),
+        )
+    console.print(table)
+    console.print(
+        "\n[dim]reopen one with:[/dim] tracker duplicates unpark A B\n"
+        "[dim]a parked pair is dropped from the duplicates report and from the rows "
+        "`tracker capex` holds out of the buyer table.[/dim]"
+    )
+
+
+@duplicates_app.command("park")
+def duplicates_park(
+    project_ids: Annotated[
+        list[int], typer.Argument(help="Two or more project ids that are NOT one campus.")
+    ],
+    reason: Annotated[
+        str, typer.Option("--reason", help="Why, for whoever reads this in six months.")
+    ] = "",
+) -> None:
+    """Record that these rows are different sites, so the report stops asking.
+
+    The missing half of `tracker duplicates`. Until now the only answer available
+    was `merge`, so a pair that was simply wrong came back on every run — ahead of
+    the real ones, because there was nothing to push it down.
+
+    **This is not cosmetic.** `capex.rollup` reads the same suspected pairs and
+    holds one row of every group out of the buyer table, disclosed in the skip
+    fields. A false pair therefore takes a real campus's capacity out of a number
+    somebody quotes. Parking puts it back.
+
+    Every pair among the ids given is stored separately, so a third row appearing
+    next week is still asked about. Nothing is edited or deleted; `tracker
+    duplicates unpark` reopens the question.
+    """
+    from tracker import pairs as pairs_mod
+
+    if len(project_ids) < 2:
+        _fail("give at least two project ids — parking is a statement about a pair")
+
+    engine = _writable("duplicates park")
+
+    try:
+        with _explain_db_locks(), session_scope(engine) as session:
+            written = pairs_mod.park(session, list(project_ids), reason=reason)
+            labels = {
+                p.id: f"{p.company} — {p.name}"
+                for p in session.scalars(
+                    select(Project).where(Project.id.in_(list(project_ids)))
+                ).all()
+            }
+    except pairs_mod.UnknownProject as exc:
+        _fail(str(exc))
+        raise
+
+    if json_mode():
+        emit({"parked": [{"a_id": a, "b_id": b} for a, b in written]})
+        return
+
+    for project_id in sorted(set(project_ids)):
+        console.print(f"  #{project_id:<5} {escape(labels.get(project_id, '')[:78])}")
+    already = len(project_ids) * (len(project_ids) - 1) // 2 - len(written)
+    console.print(
+        f"\n[green]{len(written)} pair(s) recorded as different sites[/green]"
+        + (f" [dim]({already} already were)[/dim]" if already > 0 else "")
+    )
+    console.print(
+        "[dim]they are gone from `tracker duplicates`, and `tracker capex` will stop "
+        "holding either row out of the buyer table. Reopen with `tracker duplicates "
+        "unpark`.[/dim]"
+    )
+
+
+@duplicates_app.command("unpark")
+def duplicates_unpark(
+    project_ids: Annotated[list[int], typer.Argument(help="Two or more project ids.")],
+) -> None:
+    """Reopen a pair somebody ruled out, putting it back in the report.
+
+    The exact inverse of `park`, including its shape: with two ids it reopens one
+    question, and with more it reopens every pair among them, so an operator
+    undoing a decision does not have to work out which spellings were written.
+
+    A reopened pair reappears in `tracker duplicates` and goes back to being one
+    of the rows `tracker capex` holds out of the buyer table.
+    """
+    from tracker import pairs as pairs_mod
+
+    if len(project_ids) < 2:
+        _fail("give at least two project ids")
+
+    engine = _writable("duplicates unpark")
+
+    with _explain_db_locks(), session_scope(engine) as session:
+        removed = pairs_mod.unpark(session, list(project_ids))
+
+    if json_mode():
+        emit({"unparked": [{"a_id": a, "b_id": b} for a, b in removed]})
+        return
+    if not removed:
+        console.print("[dim]none of those pairs was parked[/dim]")
+        return
+    for a, b in removed:
+        console.print(f"  [yellow]reopened[/yellow] #{a} + #{b}")
+    console.print(f"\n{len(removed)} pair(s) back in `tracker duplicates`")
+
+
+@duplicates_app.command("parked")
+def duplicates_parked() -> None:
+    """Every pair ruled out so far, who ruled it out, and why.
+
+    `decided_by` is the column to read: "operator" and "model (0.82)" are
+    different claims about how much reading happened before the question was
+    closed. The same listing is available as `tracker duplicates --parked`.
+    """
+    from tracker import pairs as pairs_mod
+
+    engine = _read_engine()
+    with session_scope(engine, commit=False) as session:
+        _print_parked(pairs_mod.listing(session))
 
 
 @app.command()
@@ -3015,6 +3580,11 @@ def logic_resolve(
         repairs = logic_mod.resolve_drift(session, apply=writing)
         report = logic_mod.review(session)
         findings = [f for f in report.findings if not code or f.code == code]
+        # Findings something can be done about, first. The list was ordered by
+        # project id, so `--limit 30` handed a person — or a model — thirty
+        # questions whose only answers were "verify" and "skip", and the ones with
+        # a real edit behind them sat at position 190.
+        findings.sort(key=lambda f: (not logic_mod.resolvable(f), f.project_id))
 
         if json_mode():
             emit(
@@ -3045,7 +3615,11 @@ def logic_resolve(
             return
 
         if llm:
-            _triage_by_model(session, findings[:limit], logic_mod, extractor)
+            # The whole list, not `[:limit]`: the limit is a budget for *calls*,
+            # and slicing before the unanswerable ones are filtered out spent it
+            # on findings the model can only decline. Ordered by project id, the
+            # first thirty were almost all of that kind.
+            _triage_by_model(session, findings, logic_mod, extractor, limit=limit)
             return
 
         if not interactive:
@@ -3059,14 +3633,44 @@ def logic_resolve(
         _triage(session, findings[:limit], logic_mod)
 
 
-def _triage_by_model(session, findings: list, logic_mod, extractor) -> None:
+def _triage_by_model(session, findings: list, logic_mod, extractor, *, limit: int = 30) -> None:
     """Let a model answer each finding. One call per finding; it skips when unsure.
 
     Prints every decision *and* every skip with the reason, because a run that
     silently resolved 12 of 30 and said nothing about the other 18 would read as
     "the rest were fine". They were not — nobody has looked at them.
+
+    **Findings no edit can answer never reach the model.** Eleven of the sixteen
+    rules offer no action — a phase enum arguing with a campus that is half
+    energised is a contradiction in the schema, not in the data — and `decide`
+    can only ever answer "nothing to choose between" for them. On the live
+    database that was 174 of 283 findings, and with the queue ordered by project
+    id the first `--limit 30` was almost entirely made of them: twelve lines of
+    "left alone" before a single decision. They are counted here and reported in
+    one line, which is what they are worth.
     """
     from tracker.models import Project
+
+    unanswerable = [f for f in findings if not logic_mod.resolvable(f)]
+    findings = [f for f in findings if logic_mod.resolvable(f)]
+    if unanswerable:
+        by_code: dict[str, int] = {}
+        for finding in unanswerable:
+            by_code[finding.code] = by_code.get(finding.code, 0) + 1
+        listed = ", ".join(
+            f"{code} x{n}" for code, n in sorted(by_code.items(), key=lambda kv: -kv[1])
+        )
+        console.print(
+            f"[dim]{len(unanswerable)} finding(s) have no edit that answers them and were "
+            f"not sent to the model — {escape(listed)}.\n"
+            "They are still worth reading: `tracker logic check`.[/dim]\n"
+        )
+    if not findings:
+        console.print("[yellow]nothing here a model could act on[/yellow]")
+        return
+
+    over_budget = max(0, len(findings) - limit)
+    findings = findings[:limit]
 
     applied = 0
     declined = 0
@@ -3085,7 +3689,13 @@ def _triage_by_model(session, findings: list, logic_mod, extractor) -> None:
             # prompt inside a pile of sensible caution.
             if decision.outcome == "declined":
                 declined += 1
-                console.print(f"{head}  [dim]left alone — {escape(decision.note[:90])}[/dim]")
+                # On its own line and not truncated to 90 characters. A decline is
+                # now a substantive reading of the obstacle and the milestone —
+                # "the noise complaint was first seen after the permit was
+                # approved" is the answer, and clipping it mid-word threw away the
+                # most useful thing the run produced.
+                console.print(f"{head}  [dim]left alone[/dim]")
+                console.print(f"      [dim]{escape(decision.note[:220])}[/dim]")
             else:
                 rejected[decision.note.split(":")[0]] = (
                     rejected.get(decision.note.split(":")[0], 0) + 1
@@ -3118,6 +3728,7 @@ def _triage_by_model(session, findings: list, logic_mod, extractor) -> None:
     console.print(
         f"\n[bold]{applied}[/bold] resolved, [bold]{declined}[/bold] the model declined"
         + (f", [yellow]{sum(rejected.values())}[/yellow] unusable" if rejected else "")
+        + (f", {over_budget} beyond --limit" if over_budget else "")
     )
     for reason, count in sorted(rejected.items(), key=lambda kv: -kv[1]):
         console.print(f"  [yellow]{count:>3}[/yellow]  [dim]{escape(reason)}[/dim]")
@@ -3480,16 +4091,17 @@ def _point_build(name: str, point_mod, settings, max_articles: int) -> None:
         )
 
 
-@app.command("audit")
-def audit(
-    project_ids: Annotated[
-        list[int] | None,
-        typer.Argument(
-            help="Only these projects. Default: the whole database.", show_default=False
-        ),
-    ] = None,
-) -> None:
+@audit_app.callback(invoke_without_command=True)
+def audit(ctx: typer.Context) -> None:
     """Find figures that are physically or economically implausible.
+
+    Bare `tracker audit` checks every project and is what this group runs with no
+    subcommand. `check` is the same listing with project ids — `tracker audit
+    check 72 25` — and `resolve` is the ladder that settles what either one finds.
+
+    The ids moved onto `check` when `resolve` arrived, because a command group
+    cannot take a variable number of positional arguments *and* dispatch a
+    subcommand: `tracker audit resolve` would parse "resolve" as a project id.
 
     `logic check` asks whether a row contradicts itself. This asks whether a
     number could be true at all — and the difference matters, because the errors
@@ -3500,6 +4112,27 @@ def audit(
 
     Free — no LLM, no network, read-only. Run it after every sync or backfill;
     an empty result is the point.
+    """
+    if ctx.invoked_subcommand is not None:
+        return
+    audit_check(project_ids=None)
+
+
+@audit_app.command("check")
+def audit_check(
+    project_ids: Annotated[
+        list[int] | None,
+        typer.Argument(
+            help="Only these projects. Default: the whole database.", show_default=False
+        ),
+    ] = None,
+) -> None:
+    """The implausibility listing, optionally scoped to project ids.
+
+    Identical to bare `tracker audit`, which runs it over everything. The only
+    reason to type the longer form is to name the rows you care about:
+    `tracker audit check 72 25`. Free, read-only, no LLM; `tracker audit resolve`
+    is what settles anything it reports.
     """
     from tracker import audit as audit_mod
 
@@ -3545,7 +4178,242 @@ def audit(
     console.print(
         f"\n[yellow]{len(findings)} finding(s)[/yellow] on "
         f"{len({f.project_id for f in findings})} project(s). "
-        "[dim]Nothing was changed — every remedy is a read or a re-read, never an edit.[/dim]"
+        "[dim]Nothing was changed here.[/dim]\n"
+        "[dim]answer them with:[/dim] tracker audit resolve"
+    )
+
+
+@audit_app.command("resolve")
+def audit_resolve(
+    project_ids: Annotated[
+        list[int] | None,
+        typer.Argument(help="Only these projects.", show_default=False),
+    ] = None,
+    ask: Annotated[
+        bool,
+        typer.Option(
+            "--ask/--no-ask",
+            help="Put each one to you first. Off, or with no terminal, goes straight to the model.",
+        ),
+    ] = True,
+    llm: Annotated[
+        bool, typer.Option("--llm/--no-llm", help="Let a reasoning model decide what you did not.")
+    ] = True,
+    search: Annotated[
+        bool,
+        typer.Option(
+            "--search/--no-search",
+            help="When the model says the row lacks the answer, go and look for sources.",
+        ),
+    ] = True,
+    code: Annotated[
+        str | None, typer.Option("--code", help="Only this kind of finding.", show_default=False)
+    ] = None,
+    again: Annotated[
+        bool, typer.Option("--again", help="Re-ask findings a previous run already settled.")
+    ] = False,
+    limit: Annotated[int, typer.Option("--limit", help="Findings to work through.")] = 20,
+) -> None:
+    """Settle the implausible figures, escalating only as far as it has to.
+
+    `tracker audit` has always been able to say that 11,250 MW on a colocation
+    expansion cannot be true. It could not do anything about it, so the same
+    finding came back on every run with the same sentence telling somebody to go
+    and read an article. This is that somebody.
+
+    **Five rungs, and each one only runs because the one above declined.**
+
+    1. **Arithmetic**, free. `h200_equivalent` is a fixed ratio applied to
+       capacity, so re-deriving it is not a judgement. Nor is preferring the one
+       of two claims that carries a quote when the other carries none.
+    2. **You**, free, with every claim and its quote on screen and one-key
+       answers. This is the best rung and it is second because it is the only one
+       that needs a person present. `--no-ask`, or no terminal, skips it.
+    3. **A reasoning model** on what the row holds, one call. Its whole output is
+       one key from a list a person wrote, a confidence and a sentence — it cannot
+       type a capacity.
+    4. **The open web**, when the model answers "the row does not contain the
+       answer". A search, up to four pages fetched, and the sentences that mention
+       a capacity or a sum. Nothing fetched here is stored as a citation: it
+       informs one decision and the decision records what was read.
+    5. **The model again**, with those passages in front of it.
+
+    Every edit is written into the row's notes naming who made it — `rule`,
+    `operator`, `model` or `model after search` — and a finding settled once is not
+    asked again unless you pass `--again`. A model may not mark a row verified;
+    that is a claim only a person may make.
+    """
+    import sys as _sys
+
+    from tracker import audit as audit_mod
+
+    path = _db_path()
+    if not path.is_file():
+        _fail(f"database not found: {path}\nRun `tracker init` first.")
+
+    settings = get_settings()
+    extractor = None
+    if llm:
+        from tracker.llm import MissingApiKey, reasoning_extractor
+
+        try:
+            extractor = reasoning_extractor(settings)
+        except MissingApiKey as exc:
+            _fail(str(exc))
+
+    interactive = ask and _sys.stdin.isatty() and not json_mode()
+
+    engine = _writable("audit resolve")
+
+    resolutions: list = []
+    with _explain_db_locks(), session_scope(engine) as session:
+        findings = audit_mod.run(session, project_ids=list(project_ids) if project_ids else None)
+        if code:
+            findings = [f for f in findings if f.code == code]
+
+        pending = []
+        settled_before = 0
+        for finding in findings:
+            project = session.get(Project, finding.project_id)
+            if project is None:
+                continue
+            if not again and finding.code in audit_mod.settled_codes(project):
+                settled_before += 1
+                continue
+            pending.append((project, finding))
+
+        if not pending:
+            if json_mode():
+                emit({"resolved": [], "settled_before": settled_before})
+                return
+            if settled_before:
+                console.print(
+                    f"[green]nothing left to settle[/green] [dim]— {settled_before} finding(s) "
+                    "were answered on an earlier run; --again re-asks them.[/dim]"
+                )
+            else:
+                console.print("[green]nothing implausible[/green]")
+            return
+
+        if not json_mode():
+            console.print(
+                f"[bold]{len(pending)}[/bold] finding(s) to settle"
+                + (f" [dim]({settled_before} already answered)[/dim]" if settled_before else "")
+                + "\n"
+            )
+
+        asker = _audit_ask if interactive else None
+        for index, (project, finding) in enumerate(pending[:limit], start=1):
+            if not json_mode():
+                console.rule(
+                    f"[dim]{index} of {min(len(pending), limit)}[/dim]  "
+                    f"#{project.id} {escape(project.name[:40])}",
+                    align="left",
+                )
+            got = audit_mod.resolve_one(
+                session,
+                project,
+                finding,
+                extractor=extractor,
+                ask=asker,
+                allow_search=search,
+                settings=settings,
+            )
+            resolutions.append(got)
+            session.commit()
+            if not json_mode():
+                _print_resolution(got)
+
+        from tracker.upsert import recompute_confidence
+
+        rescored = recompute_confidence(session)
+        session.commit()
+
+    if json_mode():
+        emit(
+            {
+                "resolved": [r.as_json() for r in resolutions],
+                "settled_before": settled_before,
+                "rescored": rescored,
+            }
+        )
+        return
+
+    _print_resolution_summary(resolutions, rescored)
+
+
+def _audit_ask(project, finding, options):
+    """Stage 2: put one implausible figure to the person at the keyboard.
+
+    Returns a key to apply, `"s"` to skip it entirely, or None to hand it down to
+    the model. That third answer is the one that makes the ladder worth having —
+    "I don't know" is the commonest honest response to a figure nobody has a
+    source for, and it should cost the operator one keystroke, not a decision.
+    """
+    from tracker import audit as audit_mod
+
+    console.print(f"[yellow]{finding.code}[/yellow] {escape(finding.summary)}")
+    console.print(f"[dim]{escape(finding.remedy)}[/dim]")
+    console.print(escape(audit_mod.evidence_block(project, finding)))
+    for action in options:
+        console.print(f"  [bold cyan]{action.key}[/bold cyan]  {action.label}")
+    console.print(
+        "  [bold cyan]?[/bold cyan]  I do not know — hand it to the model\n"
+        "  [bold cyan]s[/bold cyan]  skip this one entirely"
+    )
+    valid = {a.key for a in options} | {"?", "s"}
+    choice = ""
+    while choice not in valid:
+        choice = typer.prompt("  >", default="?", show_default=False).strip().lower()
+    return None if choice == "?" else choice
+
+
+#: Colour per rung, so a run reads at a glance: green was free and certain, cyan
+#: was a person, magenta cost a call, yellow cost a call and a fetch.
+_STAGE_STYLE: dict[str, str] = {
+    "arithmetic": "green",
+    "operator": "cyan",
+    "model": "magenta",
+    "model-after-search": "yellow",
+}
+
+
+def _print_resolution(got) -> None:
+    if got.acted:
+        style = _STAGE_STYLE.get(got.stage, "white")
+        confidence = f" [dim]({got.confidence:.2f})[/dim]" if got.confidence < 1.0 else ""
+        console.print(f"  [{style}]{got.stage}[/{style}]{confidence} {escape(got.changed)}")
+        if got.reason:
+            console.print(f"    [dim]{escape(got.reason[:150])}[/dim]")
+        if got.searched and got.searched.urls:
+            for url in got.searched.urls[:3]:
+                console.print(f"    [dim]read {escape(url[:96])}[/dim]")
+        return
+    console.print(f"  [dim]left alone — {escape(got.note[:120])}[/dim]")
+    if got.searched and got.searched.queries and not got.searched.passages:
+        console.print(f"    [dim]searched: {escape(got.searched.queries[0][:90])}[/dim]")
+
+
+def _print_resolution_summary(resolutions: list, rescored: int) -> None:
+    if not resolutions:
+        return
+    acted = [r for r in resolutions if r.acted]
+    by_stage: dict[str, int] = {}
+    for got in acted:
+        by_stage[got.stage] = by_stage.get(got.stage, 0) + 1
+    console.print(
+        f"\n[bold]{len(acted)}[/bold] of {len(resolutions)} settled"
+        + (f", {rescored} row(s) rescored" if rescored else "")
+    )
+    for stage, count in sorted(by_stage.items(), key=lambda kv: -kv[1]):
+        style = _STAGE_STYLE.get(stage, "white")
+        console.print(f"  [{style}]{count:>3}[/{style}]  [dim]{stage}[/dim]")
+    left = len(resolutions) - len(acted)
+    if left:
+        console.print(f"  [dim]{left:>3}  nobody could decide — they stay in `tracker audit`[/dim]")
+    console.print(
+        "\n[dim]every edit is in the row's notes with who made it. A model's answer is "
+        "recorded as `model resolved`, never as `operator resolved`.[/dim]"
     )
 
 
@@ -3713,6 +4581,7 @@ def infer(
         raise
 
     engine = _read_engine()
+    payloads: list[dict] = []
     with session_scope(engine, commit=False) as session:
         for project_id in project_ids:
             project = session.get(Project, project_id)
@@ -3720,35 +4589,126 @@ def infer(
                 err.print(f"[yellow]no project with id {project_id}[/yellow]")
                 continue
 
-            console.print(f"\n[bold]#{project.id}[/bold] {project.company} — {project.name}")
-            analysis = analyse(project, extractor=extractor)
-            if analysis.rejected:
-                console.print(
-                    f"[yellow]refused to accept[/yellow] {', '.join(analysis.rejected)} "
-                    "— a model may not assert a fact"
+            if not json_mode():
+                console.rule(
+                    f"[bold]#{project.id}[/bold] {escape(project.company)} — "
+                    f"{escape(project.name)}  [dim]{escape(_location(project))}[/dim]",
+                    align="left",
                 )
-            if analysis.empty:
-                console.print("[dim]no conclusion the facts support[/dim]")
+            analysis = analyse(project, extractor=extractor)
+            if json_mode():
+                payloads.append(_infer_json(project, analysis))
                 continue
+            _print_analysis(project, analysis)
 
-            if analysis.obstacles:
-                table = Table(header_style="bold", box=TABLE_BOX, title_justify="left")
-                table.add_column("likely obstacle")
-                table.add_column("severity")
-                table.add_column("conf", justify="right")
-                table.add_column("reasoning")
-                for risk in analysis.obstacles:
-                    table.add_row(
-                        f"[magenta]{risk.category}[/magenta]",
-                        risk.severity,
-                        f"{risk.confidence:.2f}",
-                        risk.reasoning,
-                    )
-                console.print(table)
-            for signal in analysis.signals:
-                console.print(f"[bold]watch for[/bold] ({signal.confidence:.2f}): {signal.signal}")
-                console.print(f"  [dim]{signal.reasoning}[/dim]")
-            console.print(f"[dim]inferred by {analysis.model}; not stored as fact[/dim]")
+    if json_mode():
+        emit({"analyses": payloads})
+
+
+def _infer_json(project, analysis) -> dict:
+    return {
+        "project_id": project.id,
+        "project": f"{project.company} — {project.name}",
+        "model": analysis.model,
+        "rejected": list(analysis.rejected),
+        "obstacles": [
+            {
+                "category": r.category,
+                "severity": r.severity,
+                "confidence": round(r.confidence, 2),
+                "reasoning": r.reasoning,
+            }
+            for r in analysis.obstacles
+        ],
+        "signals": [
+            {
+                "signal": s.signal,
+                "confidence": round(s.confidence, 2),
+                "reasoning": s.reasoning,
+            }
+            for s in analysis.signals
+        ],
+    }
+
+
+def _confidence_bar(value: float) -> str:
+    """Five cells of confidence, coloured by how much of it there is.
+
+    A number between 0 and 1 beside four other numbers between 0 and 1 is
+    something a reader has to decode every time. The bar is read at a glance and
+    the figure is still printed beside it, so nothing is lost.
+    """
+    filled = max(1, min(5, round(value * 5)))
+    colour = "green" if value >= 0.7 else "yellow" if value >= 0.5 else "red"
+    return f"[{colour}]{'█' * filled}[/{colour}][dim]{'·' * (5 - filled)}[/dim]"
+
+
+def _print_analysis(project, analysis) -> None:
+    """One project's inference, laid out as two answers to two questions.
+
+    **The old layout put the caveat first and the answer in a table column.** The
+    PRD asks two things — what could go wrong, and what would show it is still
+    moving — and they were rendered as a four-column table whose widest column was
+    free prose, plus a run of unaligned "watch for" lines underneath. Reasoning
+    wrapped to two characters a line on a narrow terminal, the two questions were
+    indistinguishable, and the disclaimer that none of it is a fact sat at the
+    bottom in grey.
+
+    Now: a heading per question, the judgement on its own line with a confidence
+    bar, its reasoning indented under it, and the provenance line last but stated
+    plainly. Nothing here is stored, and the layout should not look like the
+    tables that hold things that are.
+    """
+    if analysis.rejected:
+        console.print(
+            f"[yellow]refused to accept[/yellow] {', '.join(analysis.rejected)} "
+            "[dim]— a model may not assert a fact[/dim]"
+        )
+    if analysis.empty:
+        console.print("[dim]no conclusion the facts support[/dim]\n")
+        return
+
+    if analysis.obstacles:
+        console.print("\n[bold]What could obstruct this[/bold] [dim]— 可能遇到的困难[/dim]")
+        for risk in analysis.obstacles:
+            style = _severity_style(risk.severity)
+            console.print(
+                f"  {_confidence_bar(risk.confidence)} [dim]{risk.confidence:.2f}[/dim]  "
+                f"[magenta]{risk.category}[/magenta] [{style}]{risk.severity}[/{style}]"
+            )
+            for line in _wrap(risk.reasoning, 96):
+                console.print(f"        [dim]{escape(line)}[/dim]")
+
+    if analysis.signals:
+        console.print("\n[bold]What would show it is still moving[/bold] [dim]— 推进的信号[/dim]")
+        for signal in analysis.signals:
+            # A signal is a sentence, not a label — "a TVA interconnection study
+            # notice for a third substation" runs past any terminal. Wrapped with
+            # a hanging indent so the continuation lines up under the text and not
+            # under the confidence bar.
+            head, *rest = _wrap(signal.signal, 88)
+            console.print(
+                f"  {_confidence_bar(signal.confidence)} [dim]{signal.confidence:.2f}[/dim]  "
+                f"{escape(head)}"
+            )
+            for line in rest:
+                console.print(f"        {escape(line)}")
+            for line in _wrap(signal.reasoning, 96):
+                console.print(f"        [dim]{escape(line)}[/dim]")
+
+    open_risks = _open_risk_count(project)
+    console.print(
+        f"\n[dim]Inferred by {analysis.model} from this row's {open_risks} recorded "
+        "obstacle(s), its milestones and its gaps. Not stored, not evidence — a "
+        "judgement drawn from the facts, printed beside them.[/dim]\n"
+    )
+
+
+def _wrap(text: str, width: int) -> list[str]:
+    """Wrap prose ourselves so the indent is ours, not Rich's cell padding."""
+    import textwrap
+
+    return textwrap.wrap(" ".join((text or "").split()), width=width) or [""]
 
 
 @app.command()
@@ -4333,8 +5293,13 @@ def utcnow_placeholder():
     return utcnow()
 
 
-@app.command()
+queue_app = typer.Typer(name="queue", invoke_without_command=True)
+app.add_typer(queue_app)
+
+
+@queue_app.callback(invoke_without_command=True)
 def queue(
+    ctx: typer.Context,
     limit: Annotated[int, typer.Option("--limit", help="Rows to show.")] = 40,
     failed: Annotated[
         bool,
@@ -4342,6 +5307,17 @@ def queue(
             "--failed", help="Show URLs a previous run could not read, instead of pending ones."
         ),
     ] = False,
+    feed: Annotated[
+        str | None,
+        typer.Option("--feed", help="Only candidates from this feed.", show_default=False),
+    ] = None,
+    newest: Annotated[
+        bool,
+        typer.Option(
+            "--newest/--oldest",
+            help="Newest first. The crawl drains oldest-first; you want to read newest-first.",
+        ),
+    ] = True,
     drop: Annotated[
         bool, typer.Option("--drop", help="Delete the listed candidates instead of showing them.")
     ] = False,
@@ -4349,58 +5325,305 @@ def queue(
         list[str] | None,
         typer.Option("--url", help="Restrict --drop to these URLs. Repeatable."),
     ] = None,
+    row_id: Annotated[
+        list[int] | None,
+        typer.Option("--id", help="Restrict --drop to these queue ids. Repeatable."),
+    ] = None,
 ) -> None:
-    """Show articles discovery has queued but nothing has crawled yet."""
+    """Show articles discovery has queued but nothing has crawled yet.
+
+    Bare `tracker queue` is that listing. The two subcommands keep the promise it
+    makes — that everything in it is worth an LLM call: `check` asks every queued
+    URL whether it is still there, and `prune` re-applies the filter in
+    `seed/feeds.toml` to rows queued under an older version of it. Both report
+    first and only delete with `--drop`.
+
+    **The URL column is the whole URL.** It used to be `url[:60]`, which looked
+    tidy and was the single most damaging thing in this output: the string on
+    screen was a *prefix* of a real link, so opening it gave "404 not found" and
+    pasting it into `--drop --url` matched nothing. A queue whose links all 404 is
+    a queue nobody trusts. Every row now also carries its id, which is a short
+    handle for `--drop --id` and cannot be mistaken for a link.
+
+    Newest first, because a queue is read by a person deciding what is worth a
+    crawl and the crawl itself drains oldest-first. `--oldest` restores the
+    crawl's own order.
+    """
+    if ctx.invoked_subcommand is not None:
+        return
+
     from tracker.ingest import discover as disc
 
     if drop:
+        if not (url or row_id or feed):
+            _fail(
+                "--drop needs something to drop: --url, --id or --feed.\n"
+                "Dropping the entire queue is `tracker queue prune --drop` or a "
+                "deliberate `--feed` per feed."
+            )
         engine, _ = init_db(_db_path())
         with session_scope(engine) as session:
-            removed = disc.drop_pending(session, list(url) if url else None)
+            removed = disc.drop_pending(
+                session,
+                list(url) if url else None,
+                ids=list(row_id) if row_id else None,
+                feeds=[feed] if feed else None,
+            )
         console.print(f"dropped {removed} queued candidate(s)")
         return
 
     engine = _read_engine()
     with session_scope(engine, commit=False) as session:
-        if failed:
-            rows = disc.failed(session, limit=limit)
-            total = len(disc.failed(session))
-        else:
-            rows = disc.pending(session, limit=limit)
-            total = len(disc.pending(session))
+        rows = disc.failed(session) if failed else disc.pending(session)
+        if feed:
+            rows = [r for r in rows if (r.feed or "") == feed]
+        total = len(rows)
+        if newest:
+            rows = sorted(rows, key=lambda r: (str(r.published_at or ""), r.id), reverse=True)
+        rows = rows[:limit] if limit else rows
+
         if not rows:
             if failed:
                 console.print("[green]no failed URLs[/green]")
+            elif feed:
+                console.print(f"[green]nothing queued from {escape(feed)}[/green]")
             else:
                 console.print(
                     "[green]queue is empty[/green] — run `tracker discover` to look for articles"
                 )
             return
 
+        if json_mode():
+            emit(
+                {
+                    "total": total,
+                    "rows": [
+                        {
+                            "id": r.id,
+                            "url": r.url,
+                            "title": r.title,
+                            "feed": r.feed,
+                            "published_at": str(r.published_at or ""),
+                            "status": r.status,
+                        }
+                        for r in rows
+                    ],
+                }
+            )
+            return
+
         table = Table(
-            title=f"{total} {'unread' if failed else 'queued'} candidate(s)",
+            title=f"{total} {'unread' if failed else 'queued'} candidate(s)"
+            + (f" from {feed}" if feed else ""),
             header_style="bold",
             title_justify="left",
             box=TABLE_BOX,
         )
+        table.add_column("id", justify="right")
         table.add_column("published")
         table.add_column("feed")
-        table.add_column("headline")
-        table.add_column("url")
+        table.add_column("headline", max_width=52)
+        table.add_column("url", overflow="fold")
         for row in rows:
             table.add_row(
+                str(row.id),
                 str(row.published_at or NA)[:10],
                 escape(row.feed or NA),
                 escape((row.title or NA)[:70]),
-                escape(row.url[:60]),
+                escape(row.url),
             )
         console.print(table)
         if total > len(rows):
             console.print(f"[dim]showing {len(rows)} of {total}; --limit to see more[/dim]")
         console.print(
-            "\n[dim]crawl them:[/dim] tracker ingest crawl --from-queue\n"
-            "[dim]drop one:  [/dim] tracker queue --drop --url <URL>"
+            "\n[dim]crawl them:  [/dim] tracker ingest crawl --from-queue\n"
+            "[dim]drop one:    [/dim] tracker queue --drop --id <ID>\n"
+            "[dim]drop a feed: [/dim] tracker queue --drop --feed <FEED>\n"
+            "[dim]dead links:  [/dim] tracker queue check\n"
+            "[dim]off-topic:   [/dim] tracker queue prune"
         )
+
+
+@queue_app.command("check")
+def queue_check(
+    limit: Annotated[
+        int, typer.Option("--limit", help="URLs to probe. 0 checks the whole queue.")
+    ] = 200,
+    feed: Annotated[
+        str | None, typer.Option("--feed", help="Only this feed.", show_default=False)
+    ] = None,
+    drop: Annotated[
+        bool, typer.Option("--drop", help="Delete the ones that are gone. Nothing else.")
+    ] = False,
+) -> None:
+    """Ask every queued URL whether it is still there, and optionally drop the dead.
+
+    A queued URL is never re-checked between the sitemap that produced it and the
+    crawl that spends an LLM call on it, and a sitemap is a snapshot: articles get
+    unpublished. This is the check, and it is deliberately conservative about what
+    "dead" means.
+
+    **404 and 410 are dead. 403 and 429 are not.** A newsroom answering 403 to a
+    non-browser is exactly the case `tracker ingest crawl --browser` exists for,
+    and on the live queue that was 55 URLs across seven publishers — the
+    best-defended sources, which is often to say the good ones. Dropping those
+    would have been the most expensive tidy-up available.
+    """
+    from tracker.ingest import discover as disc
+
+    engine = _read_engine() if not drop else _writable("queue check")
+    settings = get_settings()
+
+    with session_scope(engine, commit=drop) as session:
+        rows = disc.pending(session)
+        if feed:
+            rows = [r for r in rows if (r.feed or "") == feed]
+        if limit:
+            rows = rows[:limit]
+        if not rows:
+            console.print("[green]nothing queued to check[/green]")
+            return
+
+        if not json_mode():
+            console.print(f"[dim]asking {len(rows)} URL(s)…[/dim]")
+        verdicts = disc.verify_urls(rows, settings=settings)
+        dead = [v for v in verdicts if v.verdict == "dead"]
+        blocked = [v for v in verdicts if v.verdict == "blocked"]
+        errored = [v for v in verdicts if v.verdict == "error"]
+        alive = [v for v in verdicts if v.verdict == "ok"]
+
+        removed = 0
+        if drop and dead:
+            removed = disc.drop_ids(session, [v.row_id for v in dead])
+
+    if json_mode():
+        emit(
+            {
+                "checked": len(verdicts),
+                "ok": len(alive),
+                "dead": [{"id": v.row_id, "url": v.url, "status": v.status} for v in dead],
+                "blocked": len(blocked),
+                "errors": len(errored),
+                "dropped": removed,
+            }
+        )
+        return
+
+    _print_report_rows(
+        [
+            ("checked", len(verdicts)),
+            ("reachable", len(alive)),
+            ("gone (404/410)", len(dead)),
+            ("blocked (403/429)", len(blocked)),
+            ("could not tell", len(errored)),
+        ],
+        title="queue check",
+        warn={"gone (404/410)"},
+    )
+    for verdict in dead[:20]:
+        console.print(
+            f"  [red]{verdict.status or 'no answer'}[/red] #{verdict.row_id} {escape(verdict.url)}"
+        )
+    if len(dead) > 20:
+        console.print(f"  [dim]…and {len(dead) - 20} more[/dim]")
+    if blocked:
+        hosts: dict[str, int] = {}
+        for verdict in blocked:
+            host = urlsplit(verdict.url).netloc.removeprefix("www.")
+            hosts[host] = hosts.get(host, 0) + 1
+        listed = ", ".join(f"{h} x{n}" for h, n in sorted(hosts.items(), key=lambda kv: -kv[1])[:6])
+        console.print(
+            f"\n[yellow]{len(blocked)} blocked[/yellow] [dim]— {escape(listed)}. "
+            "Kept: these are the pages `tracker ingest crawl --browser` is for.[/dim]"
+        )
+    if drop:
+        console.print(f"\n[green]dropped {removed} dead URL(s)[/green]")
+    elif dead:
+        console.print("\n[dim]remove them with:[/dim] tracker queue check --drop")
+
+
+@queue_app.command("prune")
+def queue_prune(
+    drop: Annotated[
+        bool, typer.Option("--drop", help="Delete them. Without this it only reports.")
+    ] = False,
+    limit: Annotated[int, typer.Option("--limit", help="Examples to print.")] = 25,
+) -> None:
+    """Re-apply the discovery filter to everything already queued.
+
+    The filter in `seed/feeds.toml` is data, and data gets edited — a term added, an
+    exclusion tightened, a newsroom marked `topic_implied`. Nothing ever re-applied
+    it to rows that were queued under an earlier version, so the queue accumulated
+    everything that passed any *past* filter. Measured on the live database, 417 of
+    1,241 queued candidates no longer qualified: NTT marketing articles, DataBank
+    compliance blogs, sponsored posts and Meta's announcement of the winners of an
+    AR effects contest, each of which would have cost an extraction call to
+    discover it says nothing about a data center project.
+
+    Free and read-only until `--drop`. Rows from a feed that is no longer in the
+    config are left alone: commenting out a feed should not delete a queue.
+    """
+    from tracker.ingest import discover as disc
+
+    engine = _writable("queue prune") if drop else _read_engine()
+    with session_scope(engine, commit=drop) as session:
+        try:
+            stale, examined = disc.refilter_pending(session)
+        except disc.DiscoverError as exc:
+            _fail(str(exc))
+            raise
+        removed = disc.drop_ids(session, [c.row_id for c in stale]) if drop and stale else 0
+
+    if json_mode():
+        emit(
+            {
+                "examined": examined,
+                "no_longer_matching": [
+                    {"id": c.row_id, "url": c.url, "feed": c.feed, "reason": c.reason}
+                    for c in stale
+                ],
+                "dropped": removed,
+            }
+        )
+        return
+
+    if not stale:
+        console.print(
+            f"[green]the whole queue still matches the filter[/green] "
+            f"[dim]— {examined} candidate(s) examined.[/dim]"
+        )
+        return
+
+    by_feed: dict[str, int] = {}
+    by_reason: dict[str, int] = {}
+    for candidate in stale:
+        by_feed[candidate.feed or "?"] = by_feed.get(candidate.feed or "?", 0) + 1
+        by_reason[candidate.reason] = by_reason.get(candidate.reason, 0) + 1
+
+    console.print(
+        f"[yellow]{len(stale)}[/yellow] of {examined} queued candidate(s) would not be "
+        "queued by today's filter\n"
+    )
+    table = Table(header_style="bold", box=TABLE_BOX, title_justify="left", title="by feed")
+    table.add_column("feed")
+    table.add_column("would go", justify="right")
+    for name, count in sorted(by_feed.items(), key=lambda kv: -kv[1])[:15]:
+        table.add_row(escape(name), str(count))
+    console.print(table)
+    console.print("\n[bold]why[/bold]")
+    for reason, count in sorted(by_reason.items(), key=lambda kv: -kv[1])[:6]:
+        console.print(f"  {count:>4}  [dim]{escape(reason)}[/dim]")
+    console.print("\n[bold]examples[/bold]")
+    for candidate in stale[:limit]:
+        console.print(f"  #{candidate.row_id} [dim]{escape((candidate.title or '')[:64])}[/dim]")
+        console.print(f"        {escape(candidate.url)}")
+    if len(stale) > limit:
+        console.print(f"  [dim]…and {len(stale) - limit} more[/dim]")
+
+    if drop:
+        console.print(f"\n[green]dropped {removed} candidate(s)[/green]")
+    else:
+        console.print("\n[dim]remove them with:[/dim] tracker queue prune --drop")
 
 
 @app.command("export")

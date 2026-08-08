@@ -36,6 +36,11 @@ LLM_COMMANDS: frozenset[str] = frozenset(
         "ingest crawl",
         "ingest edgar",
         "backfill",
+        # Both spend one call per item by default, and `audit resolve` can also
+        # spend a web search and four page fetches per finding when the model says
+        # the row does not hold the answer.
+        "audit resolve",
+        "risks confirm",
     }
 )
 
@@ -59,6 +64,12 @@ DESTRUCTIVE: dict[str, str] = {
     # deletion. Over-warning is the safe direction; the sentence says what it
     # really does rather than implying loss.
     "logic resolve": "rewrites every row whose stored values its own sources no longer support.",
+    # Named, not flag-read, per the rule above: both default to reporting and both
+    # delete queued candidates with `--drop`, and a gate that reads arguments is a
+    # gate with a bypass in it. What is lost is recoverable — `tracker discover`
+    # re-finds anything the filter still wants — but it is a delete.
+    "queue prune": "deletes queued candidates the current filter would not queue, with --drop.",
+    "queue check": "deletes queued candidates whose URL is gone, with --drop.",
 }
 
 #: Commands the console will not run at any cost, with the reason shown in the UI.
@@ -127,8 +138,22 @@ GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
         "Inspect",
         ("list", "show", "risks", "exposure", "capex", "stats", "gaps", "queue"),
     ),
-    ("Judge", ("review", "verify", "infer", "logic check", "audit")),
-    ("Repair", ("duplicates", "merge", "logic resolve")),
+    ("Judge", ("review", "verify", "infer", "logic check", "audit", "audit check")),
+    (
+        "Repair",
+        (
+            "duplicates",
+            "duplicates park",
+            "duplicates unpark",
+            "duplicates parked",
+            "merge",
+            "logic resolve",
+            "audit resolve",
+            "risks confirm",
+            "queue check",
+            "queue prune",
+        ),
+    ),
     ("Maintain", ("init", "backfill", "export")),
 )
 
@@ -266,7 +291,12 @@ def _walk(group, prefix: str = "") -> list[Command]:
         full = f"{prefix}{name}"
         if hasattr(command, "commands"):
             out.extend(_walk(command, prefix=f"{full} "))
-            continue
+            # A group that runs on its own — `duplicates`, `audit`, `risks` — is
+            # also a command, and skipping it removed three listings from the
+            # console the day each grew a subcommand. The group's own parameters
+            # live on its callback, which is where `_flags_for` reads them from.
+            if not getattr(command, "invoke_without_command", False):
+                continue
         out.append(
             Command(
                 name=full,

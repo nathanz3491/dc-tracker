@@ -61,6 +61,12 @@ _COMPANY_ALIASES: dict[str, str] = {
     "aligned data centers": "aligned",
     "crusoe energy systems": "crusoe",
     "applied digital corporation": "applied digital",
+    # A rename, not a resemblance: Iris Energy became IREN in 2024 and both names
+    # are still in circulation, so the Childress campus was stored twice. Caught
+    # by the shared-tranche test only because that site happens to have four
+    # labelled tranches; a renamed operator with none would have sat there.
+    "iris energy": "iren",
+    "iren limited": "iren",
 }
 
 #: County-equivalent suffixes to strip, so "Racine County" and "Racine" agree.
@@ -286,30 +292,53 @@ def is_cross_granularity_match(a: str, b: str) -> bool:
 #: Words that appear in half the project names in the industry and identify
 #: nothing. A name token has to be rarer than these to suggest two rows are the
 #: same site.
+#:
+#: **The plurals are not padding.** The singular list alone paired Aligned Data
+#: *Centers* Phoenix with NTT Global Data *Centers* Americas Phoenix, on the shared
+#: token "centers" — two unrelated operators, one city, and a word that appears in
+#: a third of the names in the industry. Every generic word here is a word that
+#: sends a false pair to the top of the duplicates report, and a false pair costs
+#: more than a missed one: `capex.rollup` holds one row of each suspected group
+#: out of the buyer table.
 _GENERIC_NAME_TOKENS = frozenset(
     {
         "data",
         "center",
+        "centers",
         "centre",
+        "centres",
         "datacenter",
+        "datacenters",
         "datacentre",
+        "datacentres",
         "campus",
+        "campuses",
         "project",
         "site",
+        "sites",
         "facility",
+        "facilities",
         "expansion",
+        "expansions",
         "phase",
+        "phases",
         "building",
+        "buildings",
         "park",
         "technology",
+        "technologies",
         "tech",
         "digital",
         "cloud",
         "ai",
+        "americas",
+        "global",
+        "international",
         "the",
         "and",
         "of",
         "at",
+        "new",
         "north",
         "south",
         "east",

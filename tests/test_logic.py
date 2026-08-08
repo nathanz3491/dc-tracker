@@ -1259,3 +1259,132 @@ def test_a_row_with_no_citations_yet_is_not_accused(session):
     session.refresh(project)
     assert "value_without_evidence" not in _codes(project)
     assert "value_above_its_evidence" not in _codes(project)
+
+
+# --- what `logic resolve --llm` is allowed to spend a call on -------------------
+#
+# A run over the live database read as twelve refusals before a single decision.
+# Two causes, both here: the same question asked four times, and questions no edit
+# can answer being sent to a model that can only decline them.
+
+
+def test_the_same_obstacle_stored_twice_is_one_question(session):
+    """Duplicate `risk` rows — same category, different `first_seen`, which the
+    unique constraint permits — produced two identical findings, and the action
+    offered for one closes both."""
+    project = _project(session, name="Twice")
+    for seen in (dt.date(2026, 1, 1), dt.date(2026, 2, 1)):
+        session.add(
+            Risk(
+                project_id=project.id,
+                category="permitting",
+                severity="watch",
+                status="open",
+                summary="Zoning appeal outstanding.",
+                first_seen=seen,
+            )
+        )
+    _event(session, project, "permit_approved", dt.date(2026, 3, 1))
+    session.flush()
+    session.refresh(project)
+
+    raw = [f for f in logic.check_rules(project) if f.code == "obstacle_on_a_finished_track"]
+    assert len(raw) == 2, "the rule fires per risk row"
+    assert len(logic.dedupe(raw)) == 1, "an operator is asked once"
+
+
+def test_a_finding_no_edit_can_answer_is_not_offered_to_a_model(session):
+    """Eleven of the sixteen rules offer no action on purpose — a phase enum
+    arguing with a campus that is half energised is a contradiction in the schema,
+    not in the data. `decide` can only ever answer "nothing to choose between"."""
+    assert not logic.resolvable(
+        logic.Finding(
+            project_id=1, code="phase_without_construction", severity=logic.WARNING, summary="x"
+        )
+    )
+    assert logic.resolvable(
+        logic.Finding(
+            project_id=1, code="milestone_in_the_future", severity=logic.WARNING, summary="x"
+        )
+    )
+
+
+def test_a_finding_names_the_obstacle_and_the_milestone_it_is_about(session):
+    """Without this the triage prompt was blind: the finding declares
+    `fields=("blocker",)`, so the evidence assembled was one quote behind a derived
+    string — a sentence about something else entirely."""
+    project = _project(session, name="Subjects")
+    session.add(
+        Risk(
+            project_id=project.id,
+            category="permitting",
+            severity="watch",
+            status="open",
+            summary="Zoning appeal outstanding.",
+            quote="the county deferred the rezoning application",
+            first_seen=dt.date(2026, 1, 1),
+        )
+    )
+    _event(session, project, "permit_approved", dt.date(2026, 3, 1))
+    session.flush()
+    session.refresh(project)
+
+    finding = next(
+        f for f in logic.check_rules(project) if f.code == "obstacle_on_a_finished_track"
+    )
+    assert "risk:permitting" in finding.subjects
+    assert "track:permits" in finding.subjects
+
+
+def test_the_triage_evidence_carries_that_obstacle_and_that_milestone(session):
+    """The model kept declining sensibly against the wrong page. This is the page."""
+    project = _project(session, name="Evidence")
+    session.add(
+        Risk(
+            project_id=project.id,
+            category="permitting",
+            severity="watch",
+            status="open",
+            summary="Zoning appeal outstanding.",
+            quote="the county deferred the rezoning application",
+            first_seen=dt.date(2026, 1, 1),
+        )
+    )
+    _event(session, project, "permit_approved", dt.date(2026, 3, 1))
+    session.flush()
+    session.refresh(project)
+
+    finding = next(
+        f for f in logic.check_rules(project) if f.code == "obstacle_on_a_finished_track"
+    )
+    evidence = logic._subject_evidence(project, finding)
+    text = "\n".join(evidence)
+    assert "OBSTACLE permitting" in text
+    assert "the county deferred the rezoning application" in text
+    assert "MILESTONE permit_approved dated 2026-03-01" in text
+
+
+def test_an_unquoted_obstacle_says_so_in_the_evidence(session):
+    """ "A source named it and quoted nothing" is a fact about the evidence, and it
+    is what should make a model decline rather than guess."""
+    project = _project(session, name="Unquoted")
+    session.add(
+        Risk(
+            project_id=project.id,
+            category="permitting",
+            severity="watch",
+            status="open",
+            summary="Zoning appeal outstanding.",
+            unconfirmed="no_quote",
+            first_seen=dt.date(2026, 1, 1),
+        )
+    )
+    _event(session, project, "permit_approved", dt.date(2026, 3, 1))
+    session.flush()
+    session.refresh(project)
+
+    finding = next(
+        f for f in logic.check_rules(project) if f.code == "obstacle_on_a_finished_track"
+    )
+    text = "\n".join(logic._subject_evidence(project, finding))
+    assert "NOT QUOTED (no_quote)" in text

@@ -301,6 +301,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._start_workflow(body)
             if parsed.path == "/api/run/cancel":
                 return self._json({"cancelled": self.console.runner.cancel()})
+            if parsed.path == "/api/infer":
+                # `body`, not `self._body()`: the request body was already read
+                # above, and reading it twice blocks on `rfile` waiting for bytes
+                # that will never come — the request hangs until the client's
+                # timeout rather than failing.
+                return self._infer(body)
             if parsed.path == "/api/overview":
                 return self._overview(body)
             if parsed.path == "/api/overview/stream":
@@ -370,7 +376,16 @@ class Handler(BaseHTTPRequestHandler):
         asked = (query or {}).get("v", [""])[0]
         fresh = asked and asked == assets.version_token(path)
         cache = "public, max-age=31536000, immutable" if fresh else "no-cache"
-        self._send(200, path.read_bytes(), assets.content_type(path), cache=cache)
+        # A stylesheet is served with its `@import`s already folded in, so the
+        # version token on the URL covers every layer rather than only the file
+        # that lists them. See `assets.bundle_css`: unversioned children behind a
+        # versioned parent is how the console ended up rendering with its form
+        # styles missing while everything else was current.
+        if path.suffix.lower() == ".css":
+            body = assets.bundle_css(path).encode("utf-8")
+        else:
+            body = path.read_bytes()
+        self._send(200, body, assets.content_type(path), cache=cache)
 
     def _dataset(self) -> None:
         from tracker.webui.dataset import build
@@ -433,6 +448,81 @@ class Handler(BaseHTTPRequestHandler):
         except Busy as exc:
             return self._error(409, str(exc))
         self._json({"run": run.summary()}, status=202)
+
+    def _infer(self, body: dict[str, Any]) -> None:
+        """Run `tracker infer` for one project and return it as structured JSON.
+
+        A POST, and gated on a confirmation string, for the same reason the
+        briefing is: it spends LLM tokens, and a GET that spends money is a GET a
+        browser will re-issue on a back button.
+
+        **Deliberately not cached and deliberately not stored.** The briefing is
+        cached by content fingerprint because it describes the row as it stands;
+        an inference is a judgement about what might go wrong next, its value is
+        that somebody asked for it just now, and `tracker infer` has never written
+        one to the database. So the panel behind it is a button, not something
+        that runs when a drawer opens — the one place in this console where a cost
+        is paid only on a deliberate click.
+
+        The response shape is `infer.Analysis` with nothing added: obstacles,
+        signals, whatever the model tried to assert and was refused, and the model
+        that said it. The refusals are included rather than dropped because a
+        model reaching for `investment_usd` is something the operator should see.
+        """
+        from tracker.infer import analyse
+        from tracker.models import Project
+
+        try:
+            project_id = int(body.get("project_id"))
+        except (TypeError, ValueError):
+            return self._error(400, "project_id must be an integer")
+
+        with self.console.read_session() as session:
+            project = session.get(Project, project_id)
+            if project is None:
+                return self._error(404, f"no project #{project_id}")
+
+            if not self.console.allow_write:
+                return self._error(403, "this console was started read-only (--no-run)")
+            if str(body.get("confirm") or "").strip() != "infer":
+                return self._error(
+                    400, 'Running an inference spends LLM tokens. Re-send with confirm="infer".'
+                )
+
+            from tracker.config import get_settings
+            from tracker.llm import MissingApiKey, reasoning_extractor
+
+            try:
+                extractor = reasoning_extractor(get_settings())
+            except MissingApiKey as exc:
+                return self._error(503, str(exc))
+
+            analysis = analyse(project, extractor=extractor)
+            payload = {
+                "project_id": project.id,
+                "model": analysis.model,
+                "rejected": list(analysis.rejected),
+                "obstacles": [
+                    {
+                        "category": r.category,
+                        "severity": r.severity,
+                        "confidence": round(r.confidence, 2),
+                        "reasoning": r.reasoning,
+                    }
+                    for r in analysis.obstacles
+                ],
+                "signals": [
+                    {
+                        "signal": s.signal,
+                        "confidence": round(s.confidence, 2),
+                        "reasoning": s.reasoning,
+                    }
+                    for s in analysis.signals
+                ],
+            }
+        if analysis.empty:
+            payload["empty"] = True
+        self._json(payload)
 
     def _overview(self, body: dict[str, Any]) -> None:
         """Write, or return, the briefing for one project.

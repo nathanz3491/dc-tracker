@@ -9,6 +9,7 @@ right in both layouts.
 
 from __future__ import annotations
 
+import hashlib
 import mimetypes
 import re
 from pathlib import Path
@@ -55,6 +56,89 @@ def resolve(relative: str) -> Path | None:
 #: `/static/...` in an href or src, up to the closing quote.
 _ASSET_REF = re.compile(r'(?P<attr>href|src)="(?P<path>/static/[^"?#]+)"')
 
+#: `@import url("./css/components-forms.css");`, quoted or not.
+_CSS_IMPORT = re.compile(r"""@import\s+url\(\s*(['"]?)(?P<path>[^'")]+)\1\s*\)\s*;""", re.I)
+
+#: A relative `url(...)` inside a stylesheet — not absolute, not a data URI.
+_CSS_URL = re.compile(
+    r"""url\(\s*(?P<q>['"]?)(?P<path>(?!data:|https?:|//|/)[^'")]+)(?P=q)\s*\)""", re.I
+)
+
+#: How deep an `@import` chain may nest before we stop following it. The vendored
+#: sheet is one level; anything deeper is a loop or a mistake.
+_MAX_IMPORT_DEPTH = 4
+
+
+def css_parts(path: Path, *, depth: int = 0) -> list[Path]:
+    """`path` and every stylesheet it imports, transitively, in load order."""
+    out = [path]
+    if depth >= _MAX_IMPORT_DEPTH:
+        return out
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return out
+    for match in _CSS_IMPORT.finditer(text):
+        child = (path.parent / match["path"]).resolve()
+        try:
+            child.relative_to(STATIC_ROOT.resolve())
+        except ValueError:
+            continue
+        if child.is_file():
+            out.extend(css_parts(child, depth=depth + 1))
+    return out
+
+
+def bundle_css(path: Path, *, depth: int = 0) -> str:
+    """One stylesheet with its `@import`s inlined and their asset URLs re-anchored.
+
+    **This closes a hole in the versioning below.** `stamp` puts a version token on
+    every URL the *page* references, which made `styles.css` uncacheably fresh —
+    and did nothing at all for the twelve files `styles.css` itself pulls in with
+    `@import`. Those were requested at bare URLs, so a browser or an edge cache
+    between the operator and the console could hold one layer from last month
+    behind a parent that looked current. The visible symptom is the one that
+    started this: the form layer missing while everything else was fine, so every
+    dropdown fell back to a native control with the custom chevron still drawn
+    beside it, and the switches rendered as bare buttons.
+
+    Inlining also removes twelve serial round-trips — an `@import` is discovered
+    only after its parent has been parsed — which is the other way this used to go
+    wrong: on a slow link the page painted before the form layer arrived.
+
+    Relative `url(...)` references are rewritten to absolute `/static/...` paths as
+    each file is folded in. Without that, `tokens/fonts.css` asking for
+    `../../fonts/Inter.woff2` would resolve against the *parent's* directory once
+    inlined, and the console would silently lose its fonts.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+    def absolutise(match: re.Match[str]) -> str:
+        target = (path.parent / match["path"]).resolve()
+        try:
+            relative = target.relative_to(STATIC_ROOT.resolve())
+        except ValueError:
+            return match[0]
+        return f'url("/static/{relative.as_posix()}")'
+
+    def inline(match: re.Match[str]) -> str:
+        child = (path.parent / match["path"]).resolve()
+        try:
+            child.relative_to(STATIC_ROOT.resolve())
+        except ValueError:
+            return match[0]
+        if not child.is_file() or depth >= _MAX_IMPORT_DEPTH:
+            # Leave the @import alone rather than dropping the layer: a missing
+            # file should fail as a 404 in the network panel, not as a stylesheet
+            # that quietly lost a third of its rules.
+            return match[0]
+        return f"/* {match['path']} */\n{bundle_css(child, depth=depth + 1)}"
+
+    return _CSS_URL.sub(absolutise, _CSS_IMPORT.sub(inline, text))
+
 
 def version_token(path: Path) -> str:
     """A short token that changes when the file does.
@@ -64,12 +148,23 @@ def version_token(path: Path) -> str:
     JavaScript to discover it has not changed is a poor trade. A touched-but-
     identical file gets a new token, which costs one re-download and is the
     harmless direction to be wrong in.
+
+    A stylesheet's token covers every file it imports, because that is what is
+    actually served for it — see :func:`bundle_css`. Editing a layer therefore
+    changes the parent's URL, which is the whole mechanism.
     """
-    try:
-        stat = path.stat()
-    except OSError:
-        return "0"
-    return f"{stat.st_mtime_ns:x}-{stat.st_size:x}"
+    parts = css_parts(path) if path.suffix.lower() == ".css" else [path]
+    tokens: list[str] = []
+    for part in parts:
+        try:
+            stat = part.stat()
+        except OSError:
+            return "0"
+        tokens.append(f"{stat.st_mtime_ns:x}-{stat.st_size:x}")
+    if len(tokens) == 1:
+        return tokens[0]
+    digest = hashlib.sha1("|".join(tokens).encode("ascii"), usedforsecurity=False)
+    return digest.hexdigest()[:16]
 
 
 def stamp(html: str) -> str:

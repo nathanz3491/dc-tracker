@@ -395,6 +395,34 @@ exclude = [
   "cryptomine",
   "crypto mine",
   "bitcoin",
+  # Sections of a site that are structurally not project news.
+  #
+  # `normalize_haystack` turns the URL path's slashes and hyphens into spaces, so
+  # a two-word term matches a path segment pair. That is what makes these safe: a
+  # bare "resources" would drop `databank.com/resources/news/...`, which is real
+  # press, while "resources blogs" only ever matches the blog shelf.
+  #
+  # Every one of these is measured against the live queue rather than guessed at.
+  # 1,241 candidates had accumulated, and these accounted for 260 of them: 103
+  # DataBank compliance blogs, 62 sponsored posts, 60 NTT marketing articles, 18
+  # executive roundtables. Each would have cost an extraction call to discover it
+  # says nothing about any specific project.
+  #
+  # "ebook" was tried and rejected: it matches inside "facebook", which is the same
+  # trap the padded " sue " above documents.
+  "resources blogs",
+  "en us insights",
+  "en us services",
+  "en us accounts",
+  "en us industries",
+  "en us about us",
+  "case studies",
+  "sponsored",
+  "roundtable",
+  "voices of the industry",
+  "white paper",
+  "whitepaper",
+  "spec sheets",
 ]
 
 

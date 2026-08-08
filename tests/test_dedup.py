@@ -230,3 +230,24 @@ def test_the_locality_is_never_a_distinctive_token():
 
 def test_generic_industry_words_are_not_distinctive():
     assert dedup.distinctive_name_tokens("Data Center Campus Phase II") == frozenset()
+
+
+def test_the_plural_of_a_generic_word_is_still_generic():
+    """`Aligned Data Centers Phoenix` and `NTT Global Data Centers Americas Phoenix`
+    were reported as one campus on the shared token "centers" — two unrelated
+    operators, one city, and a word that appears in a third of the names in the
+    industry. The list held the singular and not the plural."""
+    assert not dedup.looks_like_the_same_site(
+        "Aligned Data Centers Phoenix",
+        "Aligned Data Centers",
+        "NTT Global Data Centers Americas Phoenix",
+        "NTT Global Data Centers Americas",
+        locality="Phoenix",
+    )
+
+
+def test_a_renamed_operator_folds_to_one_key():
+    """Iris Energy became IREN in 2024 and both names are still in circulation, so
+    the Childress campus was stored twice."""
+    assert dedup.company_key("Iris Energy") == dedup.company_key("IREN Limited") == "iren"
+    assert dedup.shares_a_party("IREN Limited", "Iris Energy")

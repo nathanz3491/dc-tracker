@@ -816,3 +816,74 @@ def test_quarter_columns_stay_data_only():
     position = capex.Position(name="m", key="m", mw_by_quarter={"2026Q1": 1.0, "2027Q3": 2.0})
     assert capex.quarter_columns([position], start="2026Q1") == ["2026Q1", "2027Q3"]
     assert capex.quarter_columns([position], start="2026Q2") == ["2027Q3"]
+
+
+# --- Which tranche keys may pair two rows ------------------------------------
+
+
+def test_a_tranche_key_seen_in_two_towns_identifies_nothing(session):
+    """`existing` paired Element Critical's Houston One with Switch's Houston
+    campus: two unrelated operators, one shared word, and a false pair above the
+    two real ones. `generic` is decided from the label's own words, so it cannot
+    catch a real word that names a kind of tranche and no particular one."""
+    from tracker.models import CapacityBlock
+
+    for company, city in [("Element Critical", "Houston"), ("Switch", "Houston")]:
+        row = _project(session, name=f"{city} site", company=company, city=city, state="TX")
+        row.blocks.append(
+            CapacityBlock(block_key="existing", label="Existing", mw=10.0, status="serving")
+        )
+    # The same key on a third row in another town is what proves it is vocabulary.
+    other = _project(session, name="Austin site", company="Other", city="Austin", state="TX")
+    other.blocks.append(
+        CapacityBlock(block_key="existing", label="Existing", mw=10.0, status="serving")
+    )
+    session.flush()
+
+    assert capex.suspected_duplicates(session) == []
+
+
+def test_a_tranche_key_confined_to_one_town_still_pairs(session):
+    """The Abilene case must survive: a campus stored four times has four rows
+    holding `building-1`, so a count-based rarity rule would throw the flagship
+    duplicate away. All four are in one town, which is what keeps it."""
+    from tracker.models import CapacityBlock
+
+    for company in ("IREN Limited", "Iris Energy"):
+        row = _project(session, name="Childress", company=company, city="Childress", state="TX")
+        row.blocks.append(
+            CapacityBlock(block_key="horizon-1", label="Horizon 1", mw=50.0, status="planned")
+        )
+    session.flush()
+
+    (pair,) = capex.suspected_duplicates(session)
+    assert pair.shared_blocks == ("horizon-1",)
+    assert "tranche" in pair.kinds
+
+
+def test_a_pair_says_what_raised_it(session):
+    """ "These two look similar" is not something a reader can check."""
+    _project(session, name="Stargate Abilene", company="Crusoe", city="Abilene", mw_planned=1200)
+    _project(session, name="Stargate", company="Crusoe/Oracle", city="Abilene", mw_planned=1200)
+
+    (pair,) = capex.suspected_duplicates(session)
+    assert "party" in pair.kinds
+    assert "crusoe" in pair.why
+
+
+def test_the_strongest_evidence_is_offered_first(session):
+    """A shared tranche is two readings of one building; a shared word is a word."""
+    from tracker.models import CapacityBlock
+
+    for company in ("A Corp", "B Corp"):
+        row = _project(session, name="Sweetwater", company=company, city="Sweetwater", state="TX")
+        row.blocks.append(
+            CapacityBlock(block_key="sweetwater-2", label="Sweetwater 2", mw=50.0, status="planned")
+        )
+    _project(session, name="Stargate Milam", company="SoftBank", city="Milam", mw_planned=700)
+    _project(session, name="Stargate", company="OpenAI", city="Milam", mw_planned=700)
+    session.flush()
+
+    pairs = capex.suspected_duplicates(session)
+    assert pairs[0].kinds[0] == "tranche"
+    assert pairs[-1].kinds[0] == "name"

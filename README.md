@@ -854,15 +854,54 @@ Which id survives decides more than a row number: quantitative fields are
 recomputed from the combined citations, but identity fields — name, company,
 locality — keep the survivor's values, so pick the row whose identity should win.
 
+#### Saying no: `tracker duplicates park`
+
+```bash
+tracker duplicates                       # suspected groups, strongest evidence first
+tracker duplicates --no-weak             # only pairs raised by more than a shared word
+tracker duplicates park 55 58 --reason "different operators, different buildings"
+tracker duplicates parked                # every pair ruled out, and who ruled it out
+tracker duplicates unpark 55 58          # put the question back
+```
+
+The report proposes and never merges, which left it with exactly one possible
+answer. A pair that was simply wrong came back on every run, ahead of the real
+ones — and this is not only clutter: `capex` reads the same pairs and holds one row
+of every suspected group out of the buyer table, so a false pair takes a real
+campus's capacity out of a number somebody quotes. Parking is stored pairwise, so a
+third row appearing next week is still asked about.
+
+**Each pair now says what raised it**, because "these look similar" is not
+something a reader can check:
+
+| evidence | what it means |
+|---|---|
+| `same tranche` | both rows hold one derived `block_key` that appears in no other town |
+| `shared operator` | one company string names the other's operator — how one campus becomes four rows |
+| `name overlap` | a distinctive word in common, the weakest signal, hidden by `--no-weak` |
+
+Two false pairs on the live database prompted the scan's rules to tighten. `Aligned
+Data Centers Phoenix` matched `NTT Global Data Centers Americas Phoenix` on the
+token "centers" — the generic-word list held the singular and not the plural. And
+`Element Critical — Houston One` matched `Switch — Houston Data Center Campus`
+because both had a tranche labelled "existing". **A tranche key that turns up in
+more than one town is vocabulary, not identity**, and no longer pairs anything;
+rarity is measured across localities rather than across rows so the flagship case
+survives — the Abilene campus is stored four times and all four hold `building-1`,
+in one town.
+
 ### Numbers that cannot be true
 
 ```bash
-tracker audit          # every project
-tracker audit 72 25    # only these
+tracker audit                # every project
+tracker audit check 72 25    # only these
+tracker audit resolve        # settle what it found
 ```
 
 Free, read-only, no LLM. Run it after every sync or backfill; an empty result is
-the point.
+the point. (The ids moved onto `check` when `resolve` arrived: a command group
+cannot take a variable number of positional arguments *and* dispatch a
+subcommand — `tracker audit resolve` would parse "resolve" as a project id.)
 
 **Why this is not `logic check`.** That command asks whether a row's fields
 contradict *each other*, and it cannot help here, because each of these rows was
@@ -885,13 +924,45 @@ threshold somebody picked:
 | `usd_per_mw_out_of_band` | outside $0.3M–$60M per MW, when real builds run $2M–$30M |
 | `h200_disagrees_with_capacity` | a derived figure that drifted from the capacity it came from |
 
-Unit errors sort first, because those are the ones that poison totals. **Nothing is
-ever changed** — every remedy is a read or a re-read, because which of two figures
-is wrong is a judgement about a sentence, not something a threshold can settle.
+Unit errors sort first, because those are the ones that poison totals.
 
-On the live database it returns 21 findings across 19 of 206 projects: a rate you
+On the live database it returns 22 findings across 20 of 225 projects: a rate you
 can actually work through, which is the difference between a check people run and
 a check people mute.
+
+#### Settling them: `tracker audit resolve`
+
+The listing was half a tool. It reported the same 11,250 MW expansion on every run
+because the only repair it could offer was a sentence telling somebody to go and
+read an article. `resolve` is that somebody, and it climbs only as far as it has
+to:
+
+| rung | what it is | cost |
+|---|---|---|
+| 1 | **Arithmetic** — the answer is not a judgement | free |
+| 2 | **You**, with every claim and quote on screen and one-key answers | free |
+| 3 | **A reasoning model** on what the row holds | one call |
+| 4 | **The open web**, when the model says the row lacks the answer | a search + up to 4 fetches |
+| 5 | **The model again**, with those passages | one call |
+
+Each rung runs only because the one above declined, which is the whole cost
+control. Rung 1 is deliberately two cases and no more: `h200_equivalent` is a fixed
+ratio applied to capacity, and a tranche *labelled* "2.4 MW Lease" carrying 2400 on
+a 15 MW campus is that label read as kilowatts — the correct figure is written down
+beside the wrong one, so nothing is being guessed. Rung 2 offers a third answer
+besides the edits, `?`, which hands the question down; not knowing is the commonest
+honest response and it should cost one keystroke.
+
+**A model's output is one key from a list a person wrote**, plus a confidence and a
+sentence. It cannot type a capacity. It may answer `m` — "the row does not contain
+the answer" — which is what sends the question to rung 4 rather than forcing a
+guess. Pages fetched there are read and not stored: they inform one decision, and a
+page skimmed for one number is not a citation for anything.
+
+Every edit is written into the row's notes naming who made it — `rule`, `operator`,
+`model` or `model after search` — and a finding settled once is not asked again
+unless you pass `--again`. `--no-ask`, `--no-llm` and `--no-search` each stop the
+ladder at that rung; `--no-llm --no-ask` does the free repairs and nothing else.
 
 ### Values that contradict each other
 
@@ -1320,8 +1391,38 @@ that point — `queue` shows you the headlines so you can drop the noise before
 paying for extraction:
 
 ```bash
-tracker queue --drop --url https://example.com/not-a-project/
+tracker queue                     # newest first, whole URLs, one id per row
+tracker queue --feed ntt-newsroom # one source at a time
+tracker queue --drop --id 1904    # the id is the handle; the URL is a link
+tracker queue --drop --feed ntt-newsroom
+tracker queue check               # ask every queued URL whether it is still there
+tracker queue prune               # re-apply the filter to what is already queued
 ```
+
+**The URL column is the whole URL.** It used to be `url[:60]`, which looked tidy
+and was the most damaging thing in this output: the string on screen was a *prefix*
+of a real link, so opening it gave "404 not found" and pasting it into `--drop
+--url` matched nothing. A queue whose links all 404 is a queue nobody trusts. Every
+row now carries its id, which is a short handle that cannot be mistaken for a link.
+The order is newest-first, because a queue is read by a person deciding what is
+worth a crawl while the crawl itself drains oldest-first.
+
+The two maintenance commands exist because a queue is a promise that everything in
+it is worth an LLM call, and two things break that promise quietly:
+
+* **`check`** fetches every queued URL and reports which are gone. Conservative
+  about what "gone" means: 404 and 410 are dead, **403 and 429 are not** — a
+  newsroom answering 403 to a non-browser is what `ingest crawl --browser` is for,
+  and on the live queue that was 55 URLs across seven publishers, which is to say
+  the best-defended sources. `--drop` removes the dead ones and nothing else.
+* **`prune`** re-applies the filter in `seed/feeds.toml` to rows that were queued
+  under an earlier version of it. The filter is data and data gets edited; nothing
+  ever re-applied it, so the queue accumulated everything that passed any *past*
+  filter. On the live database that was 417 of 1,241 queued candidates — NTT
+  marketing articles, DataBank compliance blogs, sponsored posts, and Meta's
+  announcement of the winners of an AR effects contest. Report-only until `--drop`,
+  and a row from a feed no longer in the config is left alone: commenting out a
+  feed should not delete a queue.
 
 A representative run over seven feeds saw 150 entries, filtered 132, and queued
 18. Of those 18, four were genuine US project announcements. **Precision is
@@ -1350,22 +1451,39 @@ tracker export md > tracker.md    # Markdown table, byte-stable across runs
 ```bash
 tracker risks                          # every open obstacle, grouped by kind
 tracker risks --severity blocking      # only the ones that have stopped work
+tracker risks --uncited                # only the 待确认 ones
+tracker risks --summary                # the kinds table alone
+tracker risks confirm                  # read the articles behind the uncited ones
 tracker list --risk transmission       # projects waiting on grid work
 tracker stats                          # includes MW at risk per category
 tracker exposure --by company          # capacity behind an obstacle, rolled up
 ```
 
 ```text
-transmission  1 project(s), 900 MW
-  #1 Microsoft — Fairwater (Mount Pleasant, WI)  material  900 MW
-    Two 345-kilovolt upgrades outstanding before full load.
-    "must complete two 345-kilovolt upgrades"
+obstacles by kind
++----------------------+----------+----------+----------+----------+-------+--------+
+| kind                 | projects | capacity | blocking | material | watch | quoted |
++----------------------+----------+----------+----------+----------+-------+--------+
+| community_opposition |       21 |   18,836 |        3 |        4 |    14 |   9/21 |
+| transmission         |       18 |   23,806 |        — |        2 |    16 |  16/18 |
+| grid_capacity        |       15 |   22,176 |        — |        2 |    13 |   4/15 |
++----------------------+----------+----------+----------+----------+-------+--------+
 
-water  1 project(s), 900 MW  (+1 with no cited capacity)
-  #1 Microsoft — Fairwater (Mount Pleasant, WI)  watch  900 MW
-    Cooling draw questioned by the county board.
-    uncited — the source named it but quoted nothing for it; confirm in `tracker review`
+transmission  18 project(s), 23,806 MW  (+4 with no cited capacity)
+  material #1 Microsoft — Fairwater (Mount Pleasant, WI · 900 MW)
+      Two 345-kilovolt upgrades outstanding before full load.
+      "must complete two 345-kilovolt upgrades"
+  watch    #29 NTT — Hillsboro (Hillsboro, OR · no capacity)
+      Cooling draw questioned by the county board.
+      待确认 uncited — the quoted sentence does not state this category
 ```
+
+**Whether an obstacle is quoted is a column, not a footnote.** The old layout
+printed every obstacle at the same weight and then admitted at the bottom that a
+third of them rested on nothing quotable, which is the wrong way round: that is the
+first thing a reader needs and it was the last thing they were told. The kinds
+table carries it per category — `4/15` on `grid_capacity` is a different statement
+about that number than `16/18` on `transmission`.
 
 Categories map onto the PRD's obstacle list — `grid_capacity`, `transmission`,
 `permitting`, `environmental`, `equipment_supply`, `chip_supply`, `financing`,
@@ -1391,6 +1509,31 @@ confirmed obstacle always outranks an unconfirmed one, and if an unconfirmed one
 does fill the column it is marked 待确认 there too, so confidence and the 9-of-12
 count are never told it was cited.
 
+#### Settling them: `tracker risks confirm`
+
+Counting an unevidenced obstacle and marking it 待确认 are both honest, and together
+they were unsatisfying: nobody had ever gone back to check which reading was right.
+This does, one model call per obstacle, worst first.
+
+**With the whole article, not the excerpt.** The excerpt is the fragment chosen by
+the extraction that already failed to find the sentence, so re-reading it would
+mostly reproduce the first answer; the article comes from the crawl cache. The
+project, the obstacle, and *every other obstacle on the row* go with it — half
+these rows are `quote_off_target`, a real sentence filed under the wrong category,
+and that is invisible without seeing what the other categories already claim.
+
+**What makes the answer trustworthy is not the model.** A returned quote is
+accepted only if it is verbatim in the article, checked with the same matcher the
+extraction path's evidence gate uses, and only if the sentence carries wording for
+the category it is filed under. A paraphrase is refused. A real sentence about the
+wrong thing is refused. The obstacle then stays exactly as it was — so the worst
+case of running this is that it cost a call and changed nothing.
+
+Three outcomes: **confirmed** attaches the quote and clears the 待确认 mark;
+**refuted** marks the obstacle `superseded`, dropping it out of the open counts
+without deleting the record of having believed it; **unclear** writes nothing and
+is the honest majority answer. `--dry-run` judges at full cost and writes nothing.
+
 `tracker exposure` is the rollup, and it deliberately **does not produce a single
 "MW at risk" number**:
 
@@ -1414,6 +1557,50 @@ Grouping by anything other than `category` counts each project once, in its most
 severe open category. Grouping by `category` deliberately does not — a project
 obstructed three ways belongs under all three — so that view says so rather than
 inviting you to add the column up.
+
+### What no article says: `tracker infer`
+
+The PRD asks for two things no document contains — 你还需要分析项目可能遇到的困难,
+and 接下来出现什么信号，才可以证明项目正在继续推进. Those are analysis, not
+extraction, and this is the command that does them.
+
+```bash
+tracker infer 2 3        # one call per project
+tracker --json infer 2   # the same, as structure
+```
+
+```text
+#2 xAI — Colossus  Memphis, TN ─────────────────────────────────────────────
+
+What could obstruct this — 可能遇到的困难
+  ████· 0.75  financing material
+        Only $6B is announced against a planned 2,000 MW buildout; hyperscale
+        capex typically runs $10–15M per MW…
+
+What would show it is still moving — 推进的信号
+  ████· 0.75  Announcement of a new xAI debt facility earmarked for Colossus
+        Would close the financing gap that gates the full buildout.
+
+Inferred by MiniMax-M3 from this row's 5 recorded obstacle(s), its milestones and
+its gaps. Not stored, not evidence — a judgement drawn from the facts.
+```
+
+Two questions, two headings, ranked by the model's own confidence with the figure
+beside the bar. The previous layout was a four-column table whose widest column was
+free prose, which wrapped to two characters a line on a narrow terminal and made
+the two questions indistinguishable.
+
+**It cannot write a fact.** Only obstacles and next-signals are accepted; anything
+quantitative the model volunteers is dropped and reported, because 关键数字 must come
+from a document. That is enforced in code — `infer.INFERABLE` — not by asking the
+model nicely.
+
+In the console, every project's drawer has an **Inferred analysis** panel with a
+**Run analysis** button. It is a button and not an automatic panel, which is a
+deliberate difference from the AI overview above it: the briefing is cached by
+content, so a row is paid for once and reopening is free, while an inference is
+never cached or stored and its value is that somebody asked for it against the row
+as it stands. One click, one call, one answer.
 
 ### Slippage is measured, but only where it is unambiguous
 

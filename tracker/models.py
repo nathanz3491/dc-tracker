@@ -472,3 +472,44 @@ class ProjectAlias(Base):
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return f"<ProjectAlias {self.from_dedup_key}->#{self.to_project_id}>"
+
+
+class NotDuplicate(Base):
+    """Two rows somebody has looked at and ruled are different sites.
+
+    The counterpart to `ProjectAlias`, which records a yes. `tracker duplicates`
+    proposes pairs and never merges, so without somewhere to put a *no* a false
+    pair returns on every run — and, because `capex.rollup` reads the same pairs
+    and sets one row of each group aside, quietly keeps a real campus out of the
+    buyer table.
+
+    Pairwise on purpose: a group is a transitive closure computed at read time,
+    and "1, 2 and 3 are distinct" says nothing about a fourth row that pairs with
+    2 next week. `a_id < b_id` is a CHECK, so a pair has one spelling and UNIQUE
+    means what it says; `pairs.park` orders the ids for its callers.
+    """
+
+    __tablename__ = "not_duplicate"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    a_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("project.id", ondelete="CASCADE"), nullable=False
+    )
+    b_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("project.id", ondelete="CASCADE"), nullable=False
+    )
+    #: "operator" or "model (0.82)". A model may park a pair; a reader must be
+    #: able to tell that one did.
+    decided_by: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'operator'"))
+    reason: Mapped[str | None] = mapped_column(Text)
+    decided_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False, server_default=_NOW)
+
+    __table_args__ = (
+        UniqueConstraint("a_id", "b_id", name="uq_not_duplicate_pair"),
+        CheckConstraint("a_id < b_id", name="ck_not_duplicate_order"),
+        Index("ix_not_duplicate_a_id", "a_id"),
+        Index("ix_not_duplicate_b_id", "b_id"),
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return f"<NotDuplicate #{self.a_id} != #{self.b_id}>"

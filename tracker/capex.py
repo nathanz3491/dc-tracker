@@ -44,7 +44,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from tracker.dedup import company_key, customer_key, is_undisclosed, looks_like_the_same_site
+from tracker.dedup import company_key, customer_key, is_undisclosed
 from tracker.models import Event, Project, Risk, Source
 from tracker.vocab import (
     BLOCK_LIVE,
@@ -634,6 +634,17 @@ def suspect_attributions(session: Session) -> list[tuple[int, str, str]]:
     return out
 
 
+#: How a pair was raised, strongest evidence first. The order is the sort order of
+#: the report and is a claim about how much each signal is worth:
+#:
+#: * a **tranche** both rows hold under one derived key, where that key appears
+#:   nowhere else in the country, is two readings of one building;
+#: * a **party** in common means one company string names the other's operator,
+#:   which is how one campus becomes four rows;
+#: * a **name** token in common is the weakest — it is a word, and words recur.
+EVIDENCE_ORDER: tuple[str, ...] = ("tranche", "party", "name")
+
+
 @dataclass(frozen=True)
 class DuplicatePair:
     """Two rows that look like one campus. Plain values, not ORM instances.
@@ -657,9 +668,92 @@ class DuplicatePair:
     #: readings of one building rather than two similarly-named campuses. Three rows
     #: in Andrews, TX each ended up holding the same 70 MW AWS tranche.
     shared_blocks: tuple[str, ...] = ()
+    #: Operators both company strings name — "OpenAI/Oracle" against "Oracle".
+    shared_parties: tuple[str, ...] = ()
+    #: Name words that survive the generic and locality filters.
+    shared_tokens: tuple[str, ...] = ()
+
+    @property
+    def kinds(self) -> tuple[str, ...]:
+        """Which signals raised this pair, strongest first."""
+        got = {
+            "tranche": bool(self.shared_blocks),
+            "party": bool(self.shared_parties),
+            "name": bool(self.shared_tokens),
+        }
+        return tuple(k for k in EVIDENCE_ORDER if got[k])
+
+    @property
+    def rank(self) -> int:
+        """Sort key: 0 is the strongest evidence available."""
+        kinds = self.kinds
+        return EVIDENCE_ORDER.index(kinds[0]) if kinds else len(EVIDENCE_ORDER)
+
+    @property
+    def why(self) -> str:
+        """One line naming the evidence, for a reader deciding whether to merge."""
+        parts: list[str] = []
+        if self.shared_blocks:
+            listed = ", ".join(self.shared_blocks[:3])
+            parts.append(
+                f"both hold tranche {listed}"
+                + (f" (+{len(self.shared_blocks) - 3} more)" if len(self.shared_blocks) > 3 else "")
+            )
+        if self.shared_parties:
+            parts.append(f"both name {', '.join(self.shared_parties[:3])}")
+        if self.shared_tokens:
+            parts.append(f"both names carry {', '.join(sorted(self.shared_tokens)[:3])}")
+        return "; ".join(parts) or "same locality"
+
+    def as_json(self) -> dict[str, Any]:
+        return {
+            "a_id": self.a_id,
+            "a": f"{self.a_company} — {self.a_name}",
+            "b_id": self.b_id,
+            "b": f"{self.b_company} — {self.b_name}",
+            "locality": f"{self.locality}, {self.state}",
+            "b_mw": self.b_mw,
+            "evidence": list(self.kinds),
+            "why": self.why,
+        }
 
 
-def suspected_duplicates(session: Session) -> list[DuplicatePair]:
+def identifying_block_keys(projects) -> dict[int, set[str]]:
+    """Per project, the tranche keys that could identify a *building*.
+
+    Two filters, and the second is the one that matters.
+
+    **Generic labels are dropped**, as they always were: `phase-1` is held by 26
+    rows in 25 different towns, and pairing on it would pair every row in a city
+    with every other.
+
+    **A key that turns up in more than one locality is vocabulary, not identity.**
+    `generic` is decided from the label's own words, so it cannot catch `existing`,
+    `expansion`, `hyperscale` or `planned` — real words that name a kind of tranche
+    and no particular one. Measured on the live database, `existing` alone paired
+    Element Critical's Houston One with Switch's Houston campus: two unrelated
+    operators, one shared word, and a false pair sitting above the two real ones.
+
+    Rarity is measured across localities rather than across rows on purpose. A
+    campus stored four times — Abilene was — has four rows holding `building-1`,
+    and a count-based rule would throw the flagship case away. All four are in
+    Abilene, so the locality test keeps it and still discards a key that shows up
+    in Ashburn and Corsicana as well.
+    """
+    where: dict[str, set[tuple[str, str]]] = {}
+    per_project: dict[int, set[str]] = {}
+    for project in projects:
+        locality = (project.city or project.county or "").strip().lower()
+        keys = {
+            b.block_key for b in (getattr(project, "blocks", ()) or ()) if not b.generic or b.parent
+        }
+        per_project[project.id] = keys
+        for key in keys:
+            where.setdefault(key, set()).add((locality, project.state))
+    return {pid: {k for k in keys if len(where[k]) == 1} for pid, keys in per_project.items()}
+
+
+def suspected_duplicates(session: Session, *, include_parked: bool = False) -> list[DuplicatePair]:
     """Pairs of rows in one locality that are probably one campus.
 
     **Why this warning belongs on the capex table specifically.** A duplicate is
@@ -678,8 +772,19 @@ def suspected_duplicates(session: Session) -> list[DuplicatePair]:
     happen to resemble each other — and since a block's megawatts are summed, an
     unmerged pair now double-counts at the tranche grain as well as the campus one.
     So a shared tranche both raises a pair the name test would have missed and is
-    reported as the evidence for the pairs it already found.
+    reported as the evidence for the pairs it already found. Which keys count is
+    `identifying_block_keys`, and it is stricter than it was.
+
+    **A pair an operator has ruled out is gone from here**, not merely marked. That
+    is deliberate and it is the reason parking exists at all: `rollup` reads this
+    function, so a false pair does not just clutter a report — it holds a real
+    campus out of the buyer table. `include_parked=True` shows them anyway, which
+    is what `tracker duplicates --parked` uses to let somebody review their own
+    past decisions.
     """
+    from tracker.dedup import company_parts, distinctive_name_tokens
+    from tracker.pairs import canonical, parked_keys
+
     projects = session.scalars(select(Project)).all()
     by_locality: dict[tuple[str, str], list[Project]] = {}
     for project in projects:
@@ -688,24 +793,24 @@ def suspected_duplicates(session: Session) -> list[DuplicatePair]:
             continue
         by_locality.setdefault((locality, project.state), []).append(project)
 
-    # A generic key like `phase-1` is shared by half the database and would pair
-    # every row in a city with every other, so only a key that names something is
-    # kept. `generic` is read off the row rather than re-derived from the key: it is
-    # what `block_key` decided at write time, and a second derivation could disagree.
-    keys: dict[int, set[str]] = {
-        p.id: {b.block_key for b in (getattr(p, "blocks", ()) or ()) if not b.generic or b.parent}
-        for p in projects
-    }
+    keys = identifying_block_keys(projects)
+    parked = set() if include_parked else parked_keys(session)
 
     pairs: list[DuplicatePair] = []
     for (locality, state), group in by_locality.items():
         for i, a in enumerate(group):
             for b in group[i + 1 :]:
+                if canonical(a.id, b.id) in parked:
+                    continue
                 shared = tuple(sorted(keys[a.id] & keys[b.id]))
-                same_site = looks_like_the_same_site(
-                    a.name, a.company, b.name, b.company, locality=locality
+                parties = tuple(sorted(company_parts(a.company) & company_parts(b.company)))
+                tokens = tuple(
+                    sorted(
+                        distinctive_name_tokens(a.name, locality=locality)
+                        & distinctive_name_tokens(b.name, locality=locality)
+                    )
                 )
-                if not (same_site or shared):
+                if not (shared or parties or tokens):
                     continue
                 pairs.append(
                     DuplicatePair(
@@ -719,9 +824,14 @@ def suspected_duplicates(session: Session) -> list[DuplicatePair]:
                         state=state,
                         b_mw=float(b.mw_planned or 0.0),
                         shared_blocks=shared,
+                        shared_parties=parties,
+                        shared_tokens=tokens,
                     )
                 )
-    return pairs
+    # Strongest evidence first, so the pair most worth merging is the one on
+    # screen. `looks_like_the_same_site` decided the same things in the same order
+    # and threw the reason away; nothing is detected differently here.
+    return sorted(pairs, key=lambda p: (p.rank, p.a_id, p.b_id))
 
 
 def duplicate_groups(pairs: list[DuplicatePair]) -> list[list[int]]:

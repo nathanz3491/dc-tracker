@@ -261,8 +261,97 @@ writing this.
   its own module-scoped temp database at current schema, and asserts the
   command printed something at all.
 
+## Today (2026-08-08 run, worktree `claude/audit-duplicates-cli-ui-44227f`)
+
+One session on a single theme: **every report this project has grown could
+state a problem and none of them could take an answer.** `audit` printed
+implausible figures and offered a sentence telling you to go and read an
+article. `duplicates` proposed groups whose only possible reply was `merge`.
+`risks` counted 43 obstacles as 待确认 and left it there. `queue` printed links
+that 404'd because they were truncated at 60 characters. Uncommitted at the
+time of writing; 1759 tests green, ruff clean.
+
+- **`tracker audit resolve`** (`tracker/audit.py`, `prompts/audit-resolve-v1.txt`).
+  Five rungs, each running only because the one above declined: arithmetic,
+  the operator, a model on the row, a web search, the model again. Rung one is
+  two cases and no more — `h200_equivalent` is a fixed ratio, and a tranche
+  labelled "2.4 MW Lease" carrying 2400 is that label read as kilowatts. The
+  model's whole output is one key from a list a person wrote; its fourth answer,
+  `m`, means "the row does not contain the answer" and is what sends the
+  question to the web instead of forcing a guess. `block_out_of_scale` gained
+  two repairs in the process, having previously offered none.
+
+- **`tracker duplicates park`** (migration `0016`, `tracker/pairs.py`). The
+  missing *no*. Not cosmetic: `capex.rollup` reads the same pairs and holds one
+  row of each group out of the buyer table, so a false pair took a real campus
+  out of a number. Two live false pairs also forced the scan to tighten —
+  "centers" was missing from the generic-word list (the singular was there), and
+  a tranche key that appears in more than one town is vocabulary, not identity.
+  Both false pairs are now gone without anyone parking anything; the two real
+  ones (Memphis, Childress) remain, with their evidence printed.
+
+- **`tracker risks confirm`** (`tracker/riskcheck.py`). One model call per
+  unquoted obstacle, with the whole cached article and every sibling obstacle on
+  the row. Its quote is accepted only if `crawl._verbatim_run` finds it verbatim
+  and `crawl._risk_quote_supports` finds the category in it — the same two gates
+  that refused it in the first place. A four-obstacle live dry run: 1 confirmed,
+  3 quotes offered and refused, nothing written. One of the refusals was a
+  Chinese-language source, which the ASCII-folding matcher can never verify.
+
+- **`tracker queue`, and the reason the links 404'd.** The URL column was
+  `url[:60]`, so every link on screen was a *prefix* of a real one — and
+  `--drop --url` was the only handle offered, which the truncated string also
+  could not satisfy. Whole URLs, an id per row, `--feed`, newest-first. Plus
+  `queue check` (fetch each URL; 404/410 are dead, 403/429 are not) and `queue
+  prune` (re-apply `feeds.toml` to rows queued under an older filter).
+
+- **`logic resolve --llm` was spending its budget on questions no edit could
+  answer.** 174 of 283 live findings come from rules that offer no action on
+  purpose, and ordered by project id they filled the first `--limit 30`. They
+  are now counted in one line. Separately, the triage prompt had been shown the
+  wrong page: a finding about an obstacle declares `fields=("blocker",)`, so the
+  model got one quote behind a derived string and correctly answered that it did
+  not address the question. Findings now carry `subjects` and the context is
+  built from them. Verified live — the declines that follow are substantive.
+
+- **The console's dropdowns had lost their styling.** `stamp` versions every
+  URL the page references and did nothing for the twelve files `styles.css`
+  imports, so one layer could go stale behind a fresh parent. Stylesheets are
+  now served with imports inlined, relative `url()`s re-anchored, and a token
+  covering every constituent. Also `_walk` in the catalog dropped any group that
+  gained a subcommand, which would have removed `duplicates`, `audit` and
+  `risks` from the palette this session.
+
+- **`tracker infer`** got a two-question layout with confidence bars, and a
+  **Run analysis** panel in every project drawer (`POST /api/infer`). A button,
+  not an automatic panel: unlike the AI overview it is never cached, so opening
+  a drawer must not spend a call.
+
+- **Live data cleaned.** Backup at `data/tracker.backup-before-cleanup.db`.
+  Migration 0016 applied. `queue prune --drop` removed 417 of 1,241 queued
+  candidates (NTT marketing, DataBank compliance blogs, sponsored posts, Meta AR
+  contest results); `queue check` then fetched all 824 survivors and found **zero
+  dead links** — 51 blocked (403), all kept, mostly datacenterdynamics and
+  quantumloophole. The 404s were never in the data; they were the truncated
+  column. `audit resolve --no-llm --no-ask` fixed one tranche (2400 → 2.4 MW on
+  WPA-1 Boyers).
+
 ## Tomorrow
 
+- **21 audit findings are still unsettled and now have somewhere to go.** Run
+  `tracker audit resolve` interactively — it costs nothing until you answer `?`,
+  and the model rungs behind it were measured settling 4 of 4 on a copy. Worth
+  doing before the next capex read, since three of them are tranches larger than
+  their own campus.
+- **43 obstacles are still 待确认.** `tracker risks confirm --dry-run` first: the
+  live sample refused 3 of 4 offered quotes, so expect a low confirm rate and a
+  useful one. The Chinese-language sources will never confirm through the ASCII
+  matcher — worth deciding whether that is a gap to close or a limit to state.
+- **Two real duplicate groups remain** (#2/#226 Memphis, #143/#255 Childress).
+  Both are `same tranche` matches and both look genuine; the Childress pair is
+  an operator rename (Iris Energy → IREN) and is the safer merge of the two.
+- **824 queued candidates remain**, all reachable. `--from-queue` has a fresh,
+  filtered backlog for the first time.
 - **Six decisions left open by the placeholder-plan closeout, all needing a
   person** (`docs/placeholder-remediation-plan.md`, "Open decisions"):
   `confidence.find_conflicts` still counts 待确认 claims — a third copy of a

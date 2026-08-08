@@ -1526,3 +1526,106 @@ def test_the_position_briefing_endpoint_guards_before_it_spends(server):
 
     status, body = request(address, "/api/capex/overview/stream", "POST", {"key": "microsoft"})
     assert status == 400 and "confirm" in body["error"]
+
+
+# --- one stylesheet, versioned as a whole ------------------------------------
+
+
+def test_a_stylesheet_is_served_with_its_imports_folded_in(server):
+    """`stamp` versioned every URL the page references and nothing the stylesheet
+    itself pulls in, so a browser or an edge cache could hold one layer from last
+    month behind a parent that looked current. The visible symptom was the form
+    layer missing: every dropdown fell back to a native control with the custom
+    chevron still drawn beside it."""
+    address, _ = server
+    status, body = request(address, "/static/vendor/meridian/styles.css")
+    assert status == 200
+    assert "@import url(" not in body
+    assert ".mrd-select{" in body.replace("\n", ""), "the form layer is in the one response"
+
+
+def test_relative_asset_urls_survive_being_inlined(server):
+    """`tokens/fonts.css` asks for `../../fonts/Inter.woff2`. Folded into the parent
+    without rewriting, that resolves one directory too high and the console
+    silently loses its fonts."""
+    address, _ = server
+    _, body = request(address, "/static/vendor/meridian/styles.css")
+    assert "/static/vendor/fonts/" in body
+    assert "../../fonts/" not in body
+
+
+def test_editing_any_layer_changes_the_parent_url(tmp_path, monkeypatch):
+    """The whole mechanism. An unchanged tree keeps its token and stays cached."""
+    from tracker.webui import assets
+
+    root = tmp_path / "static"
+    (root / "css").mkdir(parents=True)
+    parent = root / "main.css"
+    child = root / "css" / "layer.css"
+    parent.write_text('@import url("./css/layer.css");\n', encoding="utf-8")
+    child.write_text(".a{color:red}\n", encoding="utf-8")
+    monkeypatch.setattr(assets, "STATIC_ROOT", root)
+
+    before = assets.version_token(parent)
+    assert assets.version_token(parent) == before
+    child.write_text(".a{color:blue}\n", encoding="utf-8")
+    assert assets.version_token(parent) != before
+    assert ".a{color:blue}" in assets.bundle_css(parent)
+
+
+def test_a_missing_layer_stays_a_missing_layer(tmp_path, monkeypatch):
+    """A 404 in the network panel is a better failure than a stylesheet that
+    quietly lost a third of its rules."""
+    from tracker.webui import assets
+
+    root = tmp_path / "static"
+    root.mkdir(parents=True)
+    parent = root / "main.css"
+    parent.write_text('@import url("./nope.css");\n.b{color:red}\n', encoding="utf-8")
+    monkeypatch.setattr(assets, "STATIC_ROOT", root)
+
+    bundled = assets.bundle_css(parent)
+    assert "@import" in bundled and "nope.css" in bundled
+    assert ".b{color:red}" in bundled
+
+
+# --- the inference endpoint ---------------------------------------------------
+
+
+def test_the_infer_route_guards_before_it_spends(server):
+    address, _ = server
+    status, body = request(address, "/api/infer", "POST", {"project_id": 1})
+    assert status == 400 and 'confirm="infer"' in body["error"]
+
+    status, body = request(address, "/api/infer", "POST", {"project_id": 9999, "confirm": "infer"})
+    assert status == 404
+
+    status, body = request(address, "/api/infer", "POST", {"confirm": "infer"})
+    assert status == 400 and "must be an integer" in body["error"]
+
+
+def test_the_infer_route_returns_the_analysis_as_structure(server, monkeypatch):
+    """Structured, not prose: the panel ranks obstacles and signals by the model's
+    own confidence, and cannot do that with a paragraph."""
+    from tracker import infer as infer_mod
+
+    def fake(project, **kwargs):
+        return infer_mod.Analysis(
+            project_id=project.id,
+            model="test-model",
+            obstacles=[infer_mod.InferredRisk("transmission", "material", "because", 0.8)],
+            signals=[infer_mod.InferredSignal("an interconnection filing", "public", 0.7)],
+        )
+
+    monkeypatch.setattr("tracker.infer.analyse", fake)
+    # The suite runs without an API key on purpose, and the route builds its
+    # extractor before it calls `analyse`.
+    monkeypatch.setattr("tracker.llm.reasoning_extractor", lambda settings=None: object())
+    address, _ = server
+    status, body = request(address, "/api/infer", "POST", {"project_id": 1, "confirm": "infer"})
+
+    assert status == 200
+    assert body["model"] == "test-model"
+    assert body["obstacles"][0]["category"] == "transmission"
+    assert body["signals"][0]["confidence"] == 0.7
+    assert body["rejected"] == []

@@ -23,13 +23,17 @@ threshold somebody will delete.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
-from typing import Any
+import logging
+import re
+from dataclasses import dataclass, field
+from typing import Any, Final
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from tracker.models import Project
+
+log = logging.getLogger(__name__)
 
 #: Dollars per megawatt outside which one of the two figures is wrong. The band is
 #: deliberately generous: a bare powered shell can be under $2M/MW and a
@@ -197,12 +201,691 @@ def run(session: Session, *, project_ids: list[int] | None = None) -> list[UnitF
     return findings
 
 
+# --- Settling one -------------------------------------------------------------
+#
+# Finding an impossible number was only ever half the job. `tracker audit` has
+# reported the same 11,250 MW colocation expansion on every run since it was
+# written, because the only repair it could offer was a sentence telling somebody
+# to go and read an article. A report nobody can answer is a report nobody reads.
+#
+# So each finding declares the concrete edits that answer it, and `resolve` walks a
+# ladder from free to expensive:
+#
+#   1. **Arithmetic**, where the answer is not a judgement at all. Free.
+#   2. **The person at the keyboard**, with the claims and their quotes on screen
+#      and single-key answers. Free, and better than anything below it.
+#   3. **A reasoning model**, given every claim, quote and source on the row.
+#   4. **The open web**, when the model says the row does not contain the answer —
+#      search, fetch, and put the sentences that mention the figure in front of it.
+#   5. **The model again**, with what the search found.
+#
+# The ladder only ever descends when the rung above declined. That ordering is the
+# whole cost control: stage 1 costs nothing, stage 2 costs nothing, and most rows
+# never reach stage 4.
+
+
+@dataclass(frozen=True)
+class Action:
+    """One edit that answers one finding. `apply` returns what it changed."""
+
+    key: str
+    label: str
+    apply: Any  # (session, project, finding) -> str
+
+
+def _lowest_claim(session: Session, project: Project, _f: UnitFinding) -> str:
+    """Adopt the smallest cited capacity — the classic kilowatts-as-megawatts fix."""
+    claims = sorted(_claims_for(project, "mw_planned"))
+    was, project.mw_planned = project.mw_planned, claims[0]
+    _resync_h200(project)
+    return f"mw_planned {was:g} -> {claims[0]:g} (the lower cited figure)"
+
+
+def _divide_by_1000(session: Session, project: Project, _f: UnitFinding) -> str:
+    was = project.mw_planned or 0.0
+    project.mw_planned = round(was / 1000.0, 3)
+    _resync_h200(project)
+    return f"mw_planned {was:g} -> {project.mw_planned:g} (read as kilowatts)"
+
+
+def _clear_capacity(session: Session, project: Project, _f: UnitFinding) -> str:
+    was, project.mw_planned = project.mw_planned, None
+    _resync_h200(project)
+    return f"mw_planned {was:g} -> empty (no source states it)"
+
+
+def _clear_investment(session: Session, project: Project, _f: UnitFinding) -> str:
+    was, project.investment_usd = project.investment_usd, None
+    return f"investment_usd {was:,} -> empty"
+
+
+def _recompute_h200(session: Session, project: Project, _f: UnitFinding) -> str:
+    was = project.h200_equivalent
+    _resync_h200(project)
+    return f"h200_equivalent {was:,} -> {project.h200_equivalent or 0:,} (recomputed from capacity)"
+
+
+def _out_of_scale_blocks(project: Project) -> list:
+    """The tranches the campus cannot contain, recomputed the way the check found them.
+
+    Re-derived rather than carried on the finding: `check_project` is pure and its
+    findings are plain values, and a list of ORM rows on a dataclass that outlives
+    its session is the bug that `DuplicatePair` documents. Same call, same answer.
+    """
+    from tracker import blocks as blocks_mod
+
+    got = blocks_mod.account(project)
+    labels = {
+        label
+        for residual in got.residuals
+        if residual.reason == "out_of_scale"
+        for label in residual.labels
+    }
+    return [b for b in (getattr(project, "blocks", ()) or ()) if b.label in labels]
+
+
+def _blocks_are_kw(session: Session, project: Project, _f: UnitFinding) -> str:
+    """Read the offending tranche capacities as kilowatts.
+
+    The signature is unmistakable and it is on the live database four times over:
+    a tranche *labelled* "2.4 MW Lease" carrying `mw = 2400`, on a 15 MW campus.
+    Nobody leased 2.4 GW into a building that size — an extraction read the label's
+    own number as megawatts twice.
+    """
+    fixed = []
+    for block in _out_of_scale_blocks(project):
+        if block.mw is None:
+            continue
+        was, block.mw = block.mw, round(block.mw / 1000.0, 3)
+        fixed.append(f"{block.label} {was:g} -> {block.mw:g} MW")
+    session.flush()
+    return "read as kilowatts: " + ("; ".join(fixed) if fixed else "nothing to change")
+
+
+def _clear_block_capacity(session: Session, project: Project, _f: UnitFinding) -> str:
+    """Empty the capacity on tranches larger than their own campus."""
+    cleared = []
+    for block in _out_of_scale_blocks(project):
+        if block.mw is None:
+            continue
+        cleared.append(f"{block.label} ({block.mw:g} MW)")
+        block.mw = None
+    session.flush()
+    return "cleared the capacity on " + ("; ".join(cleared) if cleared else "nothing")
+
+
+def _dismiss(session: Session, project: Project, _f: UnitFinding) -> str:
+    """Write nothing. The record of the decision is the point."""
+    return "left as it stands — the figure was judged correct"
+
+
+def _resync_h200(project: Project) -> None:
+    from tracker.compute import h200_equivalent
+
+    project.h200_equivalent = h200_equivalent(project.mw_built or project.mw_planned)
+
+
+#: finding code -> the edits that answer it. `d` (dismiss) is offered on every
+#: finding and is a real answer: an implausible-looking figure that a source
+#: actually states is a fact about an unusual project, and recording that stops the
+#: check asking again.
+#:
+#: No entry rewrites a value to something nobody claimed. `_divide_by_1000` looks
+#: like an exception and is not — a unit misread means the *source* said 36,000 and
+#: meant 36,000 kW, so 36 MW is that source's own figure in the column's units.
+ACTIONS: Final[dict[str, tuple[Action, ...]]] = {
+    "same_figure_two_units": (
+        Action("l", "the low figure is right — the other is kW or a decimal slip", _lowest_claim),
+        Action("c", "neither is trustworthy — clear the capacity", _clear_capacity),
+    ),
+    "campus_exceeds_worlds_largest": (
+        Action("k", "it is kilowatts — divide by 1000", _divide_by_1000),
+        Action("c", "clear the capacity until a source is re-read", _clear_capacity),
+    ),
+    "giant_capacity_unconfirmed": (
+        Action("c", "no quote names it — clear the capacity", _clear_capacity),
+    ),
+    "usd_per_mw_out_of_band": (
+        Action("i", "the investment figure is the wrong one — clear it", _clear_investment),
+        Action("c", "the capacity is the wrong one — clear it", _clear_capacity),
+    ),
+    "h200_disagrees_with_capacity": (
+        Action("r", "recompute the H200 estimate from the stored capacity", _recompute_h200),
+    ),
+    # These used to offer nothing, on the reasoning that the tranche is already
+    # excluded from every total so the repair is a re-crawl. That was wrong in the
+    # commonest case: five of the twenty-two findings on the live database are one
+    # tranche labelled "2.4 MW Lease" carrying 2400, on a 15 MW campus. The label
+    # states the true figure and the stored value is it in kilowatts, so the fix is
+    # the same arithmetic `campus_exceeds_worlds_largest` already offers — applied
+    # to the tranche rather than to the campus.
+    "block_out_of_scale": (
+        Action("k", "the tranche figure is kilowatts — divide it by 1000", _blocks_are_kw),
+        Action("c", "clear that tranche's capacity until it is re-read", _clear_block_capacity),
+    ),
+}
+
+#: Offered on every finding, after the code's own options.
+DISMISS = Action("d", "the figure is right as it stands — stop asking", _dismiss)
+
+
+def actions_for(code: str) -> tuple[Action, ...]:
+    return (*ACTIONS.get(code, ()), DISMISS)
+
+
+def settled_codes(project: Project) -> set[str]:
+    """Finding codes already answered on this row, read back out of its notes.
+
+    Decisions live in prose in `project.notes`, the one kind of note re-ingesting
+    never erases — the same place `logic.record_decision` writes. That is why there
+    is no `audit_decision` table: a column would need a migration, would have to be
+    kept in step with merges, and would say less than the sentence does.
+    """
+    pattern = re.compile(r"resolved `([a-z_]+)`")
+    return set(pattern.findall(project.notes or ""))
+
+
+# --- Stage 1: the answers that are arithmetic ----------------------------------
+
+
+def free_answer(project: Project, finding: UnitFinding) -> tuple[str, str] | None:
+    """The key an unattended run may apply without asking anybody, and why.
+
+    Deliberately two cases and no more. Everything else on this list is a judgement
+    about which of two sourced figures to believe, and a tool that guesses at that
+    is manufacturing facts — which is the failure the whole evidence model exists
+    to prevent.
+    """
+    if finding.code == "h200_disagrees_with_capacity":
+        return "r", (
+            "h200_equivalent is a pure function of capacity at a fixed kW/H200 ratio, "
+            "so re-deriving it is arithmetic and not an opinion"
+        )
+    if finding.code == "same_figure_two_units":
+        quoted = {value for value, quote, _ in _claims_detail(project, "mw_planned") if quote}
+        claims = sorted(_claims_for(project, "mw_planned"))
+        if claims and quoted == {claims[0]}:
+            return "l", (
+                f"only the {claims[0]:g} MW claim carries a quote; the "
+                f"{claims[-1]:g} figure is cited by nothing"
+            )
+    if finding.code == "block_out_of_scale":
+        blocks = _out_of_scale_blocks(project)
+        stated = [_label_states_mw(b) for b in blocks]
+        if blocks and all(s is not None for s in stated):
+            listed = ", ".join(f"{b.label!r} holds {b.mw:g}" for b in blocks)
+            return "k", (
+                f"each tranche's own label states its capacity and the stored value is "
+                f"exactly a thousand times it ({listed}) — that is the label read as "
+                "kilowatts, not a disagreement"
+            )
+    return None
+
+
+#: A capacity written into a tranche label: "2.4 MW Lease", "48MW Building 2".
+_LABEL_MW = re.compile(r"(\d+(?:\.\d+)?)\s*(mw|megawatt)", re.IGNORECASE)
+
+
+def _label_states_mw(block: Any) -> float | None:
+    """The megawatts a tranche's own label states, when the stored value is that a thousandfold.
+
+    Narrow on purpose. This is the one shape where the correct figure is written
+    down beside the wrong one, so no judgement is involved: "2.4 MW Lease" carrying
+    2400 is 2.4 MW recorded in kilowatts, and 2.4 is not a guess — the label says
+    it. Any other mismatch returns None and the finding goes on down the ladder.
+    """
+    if block.mw is None:
+        return None
+    match = _LABEL_MW.search(block.label or "")
+    if not match:
+        return None
+    stated = float(match.group(1))
+    if stated <= 0:
+        return None
+    return stated if abs(block.mw - stated * 1000.0) <= stated else None
+
+
+def _claims_detail(project: Project, field: str) -> list[tuple[float, str, str]]:
+    """(value, quote, url) for every numeric claim any source made for one field."""
+    out: list[tuple[float, str, str]] = []
+    for source in project.sources:
+        if not source.claims:
+            continue
+        try:
+            value = json.loads(source.claims).get(field)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(value, (int, float)) or value <= 0:
+            continue
+        quote = ""
+        try:
+            quote = str((json.loads(source.quotes or "{}") or {}).get(field) or "").strip()
+        except (TypeError, ValueError):
+            quote = ""
+        out.append((float(value), quote, source.url or ""))
+    return out
+
+
+# --- Stages 3 and 5: asking a model ---------------------------------------------
+
+#: Below this a model's answer is discarded. The same floor `logic` uses for
+#: triage, and for the same reason: this edits a row, and the cost of being wrong
+#: is not symmetrical with the cost of asking a person.
+MIN_CONFIDENCE: Final = 0.6
+
+#: Room for the reasoning models, which think before they answer.
+MAX_TOKENS: Final = 8000
+
+
+@dataclass(frozen=True)
+class Verdict:
+    """One model answer about one implausible figure."""
+
+    key: str
+    confidence: float
+    reason: str
+    #: "applied" | "declined" | "rejected" | "needs_evidence"
+    outcome: str = "applied"
+    note: str = ""
+
+    @property
+    def acted(self) -> bool:
+        return self.outcome == "applied"
+
+
+def evidence_block(project: Project, finding: UnitFinding) -> str:
+    """Every claim behind the figures in question, with its quote and source."""
+    lines: list[str] = []
+    for name in ("mw_planned", "mw_built", "investment_usd"):
+        stored = getattr(project, name, None)
+        detail = _claims_detail(project, name)
+        if stored is None and not detail:
+            continue
+        lines.append(f"  {name} = {stored if stored is not None else 'unknown'}")
+        for value, quote, url in sorted(detail, key=lambda d: -d[0]):
+            lines.append(f"      claim {value:g} — {url[:110] or 'no url'}")
+            if quote:
+                lines.append(f'        "{quote[:280]}"')
+            else:
+                lines.append("        (no quote — nothing in the article states this figure)")
+    for block in getattr(project, "blocks", ()) or ():
+        mw = f"{block.mw:g} MW" if block.mw is not None else "no capacity"
+        lines.append(f"  tranche {block.label}: {mw}, {block.status}")
+    return "\n".join(lines) or "  (no claims recorded)"
+
+
+def ask_model(
+    project: Project,
+    finding: UnitFinding,
+    *,
+    extractor,
+    found_online: str = "",
+    prompt_name: str = "audit-resolve-v1",
+) -> Verdict:
+    """Ask a reasoning model which offered edit applies. One call.
+
+    The model's whole output is one key from a closed set, a confidence and a
+    sentence — it cannot type a capacity. `more_evidence` is the fourth answer and
+    the reason this is a ladder rather than a single call: "the row does not
+    contain the answer" is a *useful* reply, and it is what sends the question to
+    the open web instead of forcing a guess out of what is already stored.
+    """
+    from tracker.llm import LLMError, LLMJsonError, parse_json_object
+    from tracker.prompts import load_prompt
+
+    options = actions_for(finding.code)
+    prompt = load_prompt(prompt_name)
+    context = {
+        "project_id": str(project.id),
+        "company": project.company or "unknown",
+        "name": project.name or "unknown",
+        "location": f"{project.city or project.county or 'unknown'}, {project.state}",
+        "phase": project.phase or "unknown",
+        "summary": finding.summary,
+        "remedy": finding.remedy,
+        "evidence": evidence_block(project, finding),
+        "found_online": found_online or "  (nothing was searched for yet)",
+        "options": "\n".join(f"  {a.key}  {a.label}" for a in options),
+    }
+    try:
+        reply = extractor.complete(
+            system=prompt.system, user=prompt.render_user(**context), max_tokens=MAX_TOKENS
+        )
+    except LLMError as exc:
+        log.warning("audit resolve failed for project %s: %s", project.id, exc)
+        return Verdict("s", 0.0, "", outcome="rejected", note=f"call failed: {exc}")
+
+    try:
+        payload = parse_json_object(reply.text)
+    except (LLMJsonError, ValueError):
+        return Verdict("s", 0.0, "", outcome="rejected", note="unusable reply")
+
+    key = str(payload.get("key") or "").strip().lower()[:1]
+    reason = str(payload.get("reason") or "").strip()
+    try:
+        confidence = float(payload.get("confidence", 0))
+    except (TypeError, ValueError):
+        confidence = 0.0
+
+    if key == "m":
+        # Not a decision and not a failure: the model is saying the row does not
+        # hold the answer. Counting this as a decline would hide the one signal
+        # that makes searching worth paying for.
+        return Verdict("m", confidence, reason, outcome="needs_evidence", note=reason)
+    if key == "s" or not key:
+        return Verdict(
+            "s", confidence, reason, outcome="declined", note=reason or "no option was favoured"
+        )
+    if key not in {a.key for a in options}:
+        return Verdict("s", confidence, reason, outcome="rejected", note=f"{key!r} is not offered")
+    if confidence < MIN_CONFIDENCE:
+        return Verdict(
+            "s",
+            confidence,
+            reason,
+            outcome="declined",
+            note=f"confidence {confidence:.2f} is below the {MIN_CONFIDENCE} floor",
+        )
+    if not reason:
+        return Verdict("s", confidence, reason, outcome="rejected", note="no reason given")
+    return Verdict(key, confidence, reason)
+
+
+# --- Stage 4: going and looking -------------------------------------------------
+
+#: Pages fetched per finding. Small on purpose: this runs after two cheaper stages
+#: declined, and the question is a single figure — five well-chosen articles either
+#: state it or the answer is not on the open web today.
+SEARCH_RESULTS: Final = 6
+SEARCH_PAGES: Final = 4
+#: Characters of each page kept. A whole article would crowd the prompt with
+#: paragraphs about other sites.
+PAGE_BUDGET: Final = 1400
+
+
+@dataclass
+class Searched:
+    """What the web turned up about one figure."""
+
+    queries: list[str] = field(default_factory=list)
+    urls: list[str] = field(default_factory=list)
+    passages: list[str] = field(default_factory=list)
+    error: str = ""
+
+    @property
+    def text(self) -> str:
+        return "\n\n".join(self.passages)
+
+
+def search_queries(project: Project, finding: UnitFinding) -> list[str]:
+    """What to ask the web about this figure, most specific first."""
+    where = project.city or project.county or ""
+    base = f"{project.company} {project.name}".strip()
+    queries = [f"{base} {where} data center megawatts capacity"]
+    if finding.code == "usd_per_mw_out_of_band":
+        queries.append(f"{base} {where} data center investment billion")
+    if finding.code in {"giant_capacity_unconfirmed", "campus_exceeds_worlds_largest"}:
+        queries.append(f'"{project.name}" data center MW {project.state}')
+    return [q for q in dict.fromkeys(q.strip() for q in queries) if q]
+
+
+def find_online(project: Project, finding: UnitFinding, *, settings=None) -> Searched:
+    """Search, fetch, and keep the sentences that mention a capacity or a sum.
+
+    Reads pages and stores nothing. That is worth being explicit about: everything
+    else in this project that fetches an article writes a `source` row, and this
+    deliberately does not — the passages exist to inform one decision, the decision
+    is recorded as prose with its reasoning, and a page skimmed for one number is
+    not a citation for anything.
+    """
+    import asyncio
+
+    from tracker.ingest.fetch import fetch_all
+    from tracker.ingest.search import SearchError, build_provider, is_useful_host
+
+    got = Searched()
+    try:
+        provider = build_provider(settings)
+    except SearchError as exc:
+        got.error = str(exc)
+        return got
+
+    hits: list[Any] = []
+    for query in search_queries(project, finding):
+        got.queries.append(query)
+        try:
+            hits.extend(provider.search(query, limit=SEARCH_RESULTS))
+        except SearchError as exc:
+            got.error = str(exc)
+            break
+        if len(hits) >= SEARCH_RESULTS:
+            break
+
+    urls: list[str] = []
+    for hit in hits:
+        url = getattr(hit, "url", "")
+        if url and url not in urls and is_useful_host(url):
+            urls.append(url)
+    urls = urls[:SEARCH_PAGES]
+    if not urls:
+        got.error = got.error or "no usable search results"
+        return got
+
+    try:
+        results = asyncio.run(fetch_all(urls, settings=settings))
+    except Exception as exc:
+        got.error = f"fetch failed: {exc}"
+        return got
+
+    for result in results:
+        if not result.ok or not result.markdown:
+            continue
+        passage = relevant_passage(result.markdown, project)
+        if not passage:
+            continue
+        got.urls.append(result.url)
+        got.passages.append(f"FROM {result.url}\n{passage}")
+    if not got.passages:
+        got.error = got.error or "the pages fetched say nothing about a capacity or a sum"
+    return got
+
+
+#: A sentence worth showing the model: one that carries a capacity, a dollar sum or
+#: a chip count. Everything else on a data-center news page is prose about the
+#: industry, and it costs tokens to say nothing.
+_FIGURE = re.compile(
+    r"\b\d[\d,.]*\s*(?:mw|megawatt|gw|gigawatt|kw|kilowatt|billion|million|bn|m\b)",
+    re.IGNORECASE,
+)
+
+
+def relevant_passage(article: str, project: Project) -> str:
+    """The sentences in one page that carry a figure and name this project."""
+    name = (project.name or "").lower()
+    company = (project.company or "").lower().split()[0] if project.company else ""
+    place = (project.city or project.county or "").lower()
+    kept: list[str] = []
+    for raw in re.split(r"(?<=[.!?])\s+|\n+", article):
+        sentence = " ".join(raw.split())
+        if len(sentence) < 40 or not _FIGURE.search(sentence):
+            continue
+        lowered = sentence.lower()
+        if not any(term and term in lowered for term in (name, company, place)):
+            continue
+        kept.append(sentence)
+        if sum(len(s) for s in kept) > PAGE_BUDGET:
+            break
+    return "\n".join(kept)
+
+
+# --- The ladder ------------------------------------------------------------------
+
+
+@dataclass
+class Resolution:
+    """What happened to one finding, and at which rung."""
+
+    finding: UnitFinding
+    #: "arithmetic" | "operator" | "model" | "model-after-search" | "unresolved"
+    stage: str = "unresolved"
+    key: str = ""
+    changed: str = ""
+    reason: str = ""
+    confidence: float = 0.0
+    searched: Searched | None = None
+    note: str = ""
+
+    @property
+    def acted(self) -> bool:
+        return bool(self.changed)
+
+    def as_json(self) -> dict[str, Any]:
+        return {
+            "project_id": self.finding.project_id,
+            "code": self.finding.code,
+            "summary": self.finding.summary,
+            "stage": self.stage,
+            "key": self.key,
+            "changed": self.changed,
+            "reason": self.reason,
+            "confidence": round(self.confidence, 2),
+            "searched": bool(self.searched and self.searched.passages),
+            "note": self.note,
+        }
+
+
+def apply_action(session: Session, project: Project, finding: UnitFinding, key: str) -> str:
+    """Run the chosen edit and return what it changed."""
+    action = next(a for a in actions_for(finding.code) if a.key == key)
+    return action.apply(session, project, finding)
+
+
+def record(project: Project, code: str, what: str, *, by: str, detail: str = "") -> None:
+    """Write the decision into the row's notes, naming who made it.
+
+    Shares `logic.record_decision` rather than growing a second format, so
+    `settled_codes` reads both and a reader meets one sentence shape.
+    """
+    from tracker.logic import record_decision
+
+    record_decision(project, code, what, by=by, detail=detail)
+
+
+def resolve_one(
+    session: Session,
+    project: Project,
+    finding: UnitFinding,
+    *,
+    extractor=None,
+    ask=None,
+    allow_search: bool = True,
+    settings=None,
+) -> Resolution:
+    """Walk one finding down the ladder until something answers it.
+
+    Args:
+        extractor: the reasoning model. None stops the ladder after the operator.
+        ask: called with (project, finding, options) and returns a key, "s" to
+            skip, or None to hand the question down to the model. The CLI supplies
+            the keyboard; a script supplies nothing.
+        allow_search: whether a model that says "not in this row" may spend a
+            search and four fetches on it.
+    """
+    got = Resolution(finding=finding)
+
+    # 1. arithmetic
+    free = free_answer(project, finding)
+    if free is not None:
+        key, why = free
+        got.stage, got.key, got.reason, got.confidence = "arithmetic", key, why, 1.0
+        got.changed = apply_action(session, project, finding, key)
+        record(project, finding.code, got.changed, by="rule", detail=why)
+        return got
+
+    # 2. the person at the keyboard
+    if ask is not None:
+        answer = ask(project, finding, actions_for(finding.code))
+        if answer == "s":
+            got.stage, got.note = "unresolved", "skipped at the keyboard"
+            return got
+        if answer:
+            got.stage, got.key, got.confidence = "operator", answer, 1.0
+            got.changed = apply_action(session, project, finding, answer)
+            record(project, finding.code, got.changed, by="operator")
+            return got
+
+    if extractor is None:
+        got.note = "nobody decided, and no model was configured"
+        return got
+
+    # 3. the model, on what the row holds
+    verdict = ask_model(project, finding, extractor=extractor)
+    if verdict.acted:
+        got.stage, got.key = "model", verdict.key
+        got.reason, got.confidence = verdict.reason, verdict.confidence
+        got.changed = apply_action(session, project, finding, verdict.key)
+        record(
+            project,
+            finding.code,
+            got.changed,
+            by=f"model ({verdict.confidence:.2f})",
+            detail=verdict.reason,
+        )
+        return got
+
+    # 4 and 5. the open web, then the model again
+    if verdict.outcome == "needs_evidence" and allow_search:
+        got.searched = find_online(project, finding, settings=settings)
+        if got.searched.passages:
+            second = ask_model(
+                project, finding, extractor=extractor, found_online=got.searched.text
+            )
+            if second.acted:
+                got.stage, got.key = "model-after-search", second.key
+                got.reason, got.confidence = second.reason, second.confidence
+                got.changed = apply_action(session, project, finding, second.key)
+                record(
+                    project,
+                    finding.code,
+                    got.changed,
+                    by=f"model after search ({second.confidence:.2f})",
+                    detail=f"{second.reason} [read {', '.join(got.searched.urls[:2])}]",
+                )
+                return got
+            got.note = second.note or "the model declined again after reading"
+            return got
+        got.note = got.searched.error or "the search found nothing about this figure"
+        return got
+
+    got.note = verdict.note or "the model declined"
+    return got
+
+
 __all__ = [
+    "ACTIONS",
+    "DISMISS",
     "GIANT_UNCONFIRMED_MW",
+    "MAX_TOKENS",
+    "MIN_CONFIDENCE",
     "SINGLE_CAMPUS_CEILING_MW",
     "USD_PER_MW_CEILING",
     "USD_PER_MW_FLOOR",
+    "Action",
+    "Resolution",
+    "Searched",
     "UnitFinding",
+    "Verdict",
+    "actions_for",
+    "apply_action",
+    "ask_model",
     "check_project",
+    "evidence_block",
+    "find_online",
+    "free_answer",
+    "record",
+    "relevant_passage",
+    "resolve_one",
     "run",
+    "search_queries",
+    "settled_codes",
 ]
