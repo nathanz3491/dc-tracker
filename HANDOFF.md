@@ -1,6 +1,31 @@
 # Handoff
 
-## Yesterday (state at start of 2026-08-07)
+## Yesterday (state at start of 2026-08-08)
+
+The prior handoff (`b47dca4`, committed 2026-08-07 05:33) closed out ten
+commits — `tracker audit`, the placeholder-citation fixes, and the
+evidence-quote gate — and left a backlog: six placeholder-plan decisions
+needing a person, 5 deferred merge candidates, 16 projects with no blocks
+read, two untriaged block signals, `docs/feedback-2026-08-03.md` unreviewed,
+20 unrun EDGAR utility/contractor companies, the 30-required-projects gap,
+unverified ERCOT/CAISO column names, two unconfigured Google CSE keys, an
+untested cloudflare tunnel, and an untracked 2 MB reference PDF sitting in
+`docs/`.
+
+The day didn't end at that handoff. Later the same day (2026-08-07, sometime
+between 21:43 and 23:03) one more commit landed — `b18ba5a` — reading two
+source-abundant rows (Fairwater #1, Hyperion #10) closely enough to find a
+schema-level gap rather than just fix those two rows: every claim arrives with
+a scope, a precision, a modality, a time, and a provenance, and the schema has
+one scalar per field, so all four extra dimensions were stripped at write
+time. That commit shipped the fix, a real measurement of the evidence gate's
+actual defect rate, and several bug fixes — updating CHANGELOG.md and
+README.md itself in the process — but never got its own HANDOFF entry. That's
+what "Today" below accounts for. None of the backlog above was touched by it,
+except that the mutant-harness reproducibility gap it also carried is now
+closed.
+
+## Older context (state at start of 2026-08-07)
 
 The prior handoff (`f805bf5`, committed 2026-08-06 05:33) closed out `be16d37`
 — durable merges (`project_alias`), capex quadruple-counting and
@@ -21,7 +46,7 @@ unreviewed, the 20 EDGAR utility/contractor companies unrun, the
 Google CSE keys, and `tracker cloudflare --name` untested against a real
 tunnel.
 
-## Yesterday's older context (state at start of 2026-08-06)
+## Older context (state at start of 2026-08-06)
 
 The prior handoff (`124a562`, committed 2026-08-05) closed out the tail of the
 2026-08-04 session — nine commits landing `capacity_block`, backfilling it
@@ -54,7 +79,7 @@ utility/contractor EDGAR companies from `seed/edgar-companies.toml` still
 wired up but unrun, and `tracker cloudflare --name` untested against a real
 named tunnel.
 
-## Today's older context, continued (2026-08-06 05:33 run)
+## Older context, continued (2026-08-06 05:33 run)
 
 No new commits landed during that run's window; the working tree was already
 clean of code changes, just uncommitted. What follows is that run's first
@@ -167,7 +192,7 @@ Verified 1578 tests green offline first.
   launch config and a session lock file (this run's own PID), neither of
   which belongs in the shared repository.
 
-## Today (2026-08-07 run, accounting for 2026-08-06 15:32–21:43)
+## Older context, continued (2026-08-07 05:33 run, accounting for 2026-08-06 15:32–21:43)
 
 Ten commits, on this branch and on two Claude worktrees
 (`claude/evidence-gate-plan-2998b8`, `claude/placeholder-remediation-plan-1492da`)
@@ -261,15 +286,101 @@ writing this.
   its own module-scoped temp database at current schema, and asserts the
   command printed something at all.
 
-## Today (2026-08-08 run, worktree `claude/audit-duplicates-cli-ui-44227f`)
+## Today, earlier (2026-08-08 05:34 run, accounting for 2026-08-07 21:43–23:03)
+
+One commit (`b18ba5a`), not made during this run's window — the working tree
+was already clean and code-complete, CHANGELOG.md and README.md already
+updated in detail, when this run started. What follows is this run's first
+accounting of it. Re-verified test suite green first (`.venv` pytest, exit 0,
+~1685 tests, no failures).
+
+- **A real measurement of what the stored data rests on**
+  (`tracker/quality.py`, `scripts/measure_extraction.py`,
+  `tests/test_quality.py`). Two numbers already existed and neither answered
+  "is this value supported": the evidence gate's 98.7% exact-substring rate
+  measures only the quotes that exist, and "66% of claims carry no quote"
+  counts raw model output the gate correctly demotes to 待确认. The number
+  that matters — the share of *stored* values whose winning source recorded a
+  sentence — splits values three ways: quote-backed, 待确认-and-flagged-as-such,
+  and confirmed-with-no-quote-and-nothing-says-so. That last bucket is the
+  defect. Measured live before/after a full re-extraction: silent defects 89
+  (11.9%) → 11 (1.3%), quote-backed 368 (49.2%) → 434 (52.0%), of a total that
+  grew 748 → 835. All 89 came from two prompt vintages predating migration
+  `0007` (the migration that added the column a quote lives in); none from the
+  current extractor — the gate works, and the damage was stratigraphy nothing
+  had ever swept, because `source.extractor` was never compared against the
+  current prompt stamp. Nothing is re-derived: winning source comes from
+  `gaps.provenance`, merge order from `upsert.claims_by_field` — a hand-rolled
+  version returned 83, differing on exactly the MAX/MIN/PHASE fields.
+- **The claim envelope: what a value is a value *of*** (migration `0015`,
+  `tracker/vocab.py`, `tracker/ingest/crawl.py`, `tracker/prompts/extract-v1.txt`,
+  `docs/plan-claim-envelope.md`). Hyperion (#10) stores $10B investment while
+  its own notes read "expanded to up to $50 billion" — $10B (the buildout),
+  $27B (the campus JV) and $50B (regional impact) are three measurements of
+  three different things, collapsed into one scalar because the schema has
+  only one slot. Four axes now travel with each claim: `scope`, `bound`,
+  `modality`, `as_of`, each verified against its own stored quote by
+  `crawl.axis_gate` and each degrading to a neutral label rather than ever
+  touching the value. Pre-registered kill criteria, measured live: `bound`
+  passes (32.0% coverage, 87.4% `exact`, correctly reads "roughly $27B" as
+  approximate and "more than $50B" as at_least); `modality` passes weakly;
+  **`scope` failed its kill criterion at 96.9% `this_site`** — across every
+  `investment_usd` claim in the database it returned zero `region` and zero
+  `programme`, the two values that would have separated Hyperion's figures, so
+  it stays captured and displayed but not load-bearing.
+- **`source.published_at`, and a merge tiebreak that can read it** (migration
+  `0014`). Most of this corpus is trade press, so credibility ties are the
+  common case and the tiebreak (currently `fetched_at` — crawl order, not
+  publication order) decides them; six live values were on the wrong side of
+  it. `merge_by_publication_date` exists but is **off by default** — turning it
+  on zeroes those six but moves #116 from 120 MW to 40 MW on a smaller figure
+  published a day later, which is a judgement call left to a person.
+- **Date precision is stored instead of discarded.** `normalize.parse_date` has
+  always returned `day|month|quarter|half|year`; nothing outside that module
+  had ever read it, so a day-precision date rendered for evidence that only
+  ever said "2024." Now cached on the project and rendered at the precision
+  the source actually gave.
+- **Two silent bugs fixed**: `ARTICLE_DATE` was always "unknown" (the
+  extractor's `published_date` parameter existed since the prompt did; no
+  caller ever passed it, so every relative-date phrase like "construction
+  begins next year" was silently dropped rather than resolved) — and any host
+  starting `news.` was typed `company_filing` (the heaviest source weight) with
+  no check on whose domain it was, which on Fairwater (#1) meant a Chinese
+  gaming portal decided the stored $3.3B.
+- **`tracker ingest crawl --stale-prompt`**: a fourth URL selector that
+  re-reads what an older prompt wrote, served from cache by default so it
+  measures "did the prompt improve" without confounding it with "did the page
+  change." Run live against all 228 stale URLs: 230 LLM calls, 15 projects
+  inserted, 248 updated, silent defects 89 → 14 in that pass (a second
+  application brought it to the 11 reported above). Two things it could not
+  fix: it doesn't resolve the recency inversions (still a tiebreak problem, see
+  `published_at` above), and re-reading a URL doesn't always refresh the row it
+  wrote — write is keyed on `(project_id, url)` but project identity is
+  re-derived from the article each time, so 28 of 61 still-stale URLs now
+  route to no project at all (clearest case: the Switch/Data Foundry story,
+  which the old prompt read as two campuses and the current prompt declines
+  outright — gate getting stricter, or regression, left as a judgement).
+- **The planted-mutant harness now actually exists**
+  (`scripts/measure_extraction.py --mutants`). HANDOFF.md and CHANGELOG.md had
+  both cited "16 planted mutants, all caught" as evidence for `tracker audit`,
+  and no script, test, or commit contained it — that run was manual, against a
+  copy of the live database nobody kept. Now reproducible on demand.
+- **Not done, by design or otherwise** (`docs/plan-claim-envelope.md`):
+  promoting any axis to actually choose a value (deliberately not, for
+  `scope`); three of six planned console-rendering items for the new axes;
+  `events[]` still bypasses the evidence gate entirely, unquoted and
+  unchecked — which is how Hyperion's 2027-12-31 `announced` milestone exists
+  on the record at all.
+
+## Today, later (2026-08-08 run, `claude/audit-duplicates-cli-ui-44227f`)
 
 One session on a single theme: **every report this project has grown could
 state a problem and none of them could take an answer.** `audit` printed
 implausible figures and offered a sentence telling you to go and read an
 article. `duplicates` proposed groups whose only possible reply was `merge`.
 `risks` counted 43 obstacles as 待确认 and left it there. `queue` printed links
-that 404'd because they were truncated at 60 characters. Uncommitted at the
-time of writing; 1759 tests green, ruff clean.
+that 404'd because they were truncated at 60 characters. Landed as `95a18ab`;
+1771 tests green, ruff clean.
 
 - **`tracker audit resolve`** (`tracker/audit.py`, `prompts/audit-resolve-v1.txt`).
   Five rungs, each running only because the one above declined: arithmetic,
@@ -352,48 +463,63 @@ time of writing; 1759 tests green, ruff clean.
   an operator rename (Iris Energy → IREN) and is the safer merge of the two.
 - **824 queued candidates remain**, all reachable. `--from-queue` has a fresh,
   filtered backlog for the first time.
+
+- **`events[]` still bypasses the evidence gate entirely** — no quote required
+  or checked. Fixing it needs an `unconfirmed` column on `event`; named in the
+  plan rather than half-done.
+- **The `published_at` merge tiebreak is off**, and flipping it needs a bulk
+  recompute that doesn't exist yet — `recompute_from_sources` is reachable only
+  through `merge` today.
+- **11 silent defects remain**, all on rows whose articles no longer support
+  them (mostly the 28 URLs now orphaned by re-derived project identity).
+- **`bound`'s hedge-word check is not positional** — a quote with two figures
+  and two hedges can license the wrong one ("roughly $27B... more than $50B"
+  read `approximate` off the wrong number's hedge). Needs to check attachment,
+  not mere presence.
+- `news.microsoft.com`-style newsroom subdomains now read `general_media`
+  unless the parent domain is already in `feeds.toml` — add genuine newsrooms
+  there as they're found.
+- The claim envelope pushed some replies past `max_completion_tokens`, each
+  costing a corrective retry — worth watching if it gets worse as more axes
+  are asked for.
 - **Six decisions left open by the placeholder-plan closeout, all needing a
-  person** (`docs/placeholder-remediation-plan.md`, "Open decisions"):
-  `confidence.find_conflicts` still counts 待确认 claims — a third copy of a
-  rule the other two now apply, so a row's confidence rationale and its notes
-  can disagree on screen, deliberately left alone since fixing it moves a
-  stored score across an unknown share of 207 rows; #3's `mw_built=1200` needs
-  a manual `tracker review` demotion since MAX-merge won't lower it on its
-  own; #1 and #201's `mw_built=350` (one hedged sentence read as a per-site
-  figure on two rows); #1's `blocker` prose is unsupported by its cited
-  passage (found by `--audit`, not in the original plan); `placeholder_quote`
-  isn't firing on source 108 despite a confirmed `mw_built=350` with no stored
-  quote at all — rule or row, undetermined; and the two Fairwater block
-  questions (duplicate energisation dates, NULL `mw_planned`).
+  person** (`docs/placeholder-remediation-plan.md`, "Open decisions") — still
+  untouched by this session: `confidence.find_conflicts` still counts 待确认
+  claims as a third copy of a rule the other two now apply; #3's
+  `mw_built=1200` needs a manual `tracker review` demotion since MAX-merge
+  won't lower it on its own; #1 and #201's `mw_built=350` (one hedged sentence
+  read as a per-site figure on two rows); #1's `blocker` prose is unsupported
+  by its cited passage; `placeholder_quote` isn't firing on source 108 despite
+  a confirmed `mw_built=350` with no stored quote at all; and the two
+  Fairwater block questions (duplicate energisation dates, NULL `mw_planned`).
 - **Review the 5 deferred merge candidates** in
   `docs/merge-review-2026-08-05.md` — two building-vs-campus pairs, one
   utility-recorded-as-operator row, one Doña Ana locality-grain pair, one
   locality typo. None auto-merge for good reason; each needs a human call.
 - **Finish the block backfill.** Still 16 projects with a real energisation
-  and no blocks read — carried three days now.
+  and no blocks read — carried four days now.
 - **Review the two block-shaped report-only signals** —
   `blocks_may_double_count` (6 live hits as of the 2026-08-04 session) and
-  `block_label_ambiguous` — still untriaged, unchanged by this session's work.
-- Review `docs/feedback-2026-08-03.md`, now four days old and untouched.
+  `block_label_ambiguous` — still untriaged.
+- Review `docs/feedback-2026-08-03.md`, now five days old and untouched.
 - The 20 utility/contractor EDGAR companies in `seed/edgar-companies.toml` are
-  still wired up but unrun — fifth day carried.
+  still wired up but unrun — sixth day carried.
 - The 30-required-projects gap, unverified ERCOT/CAISO column names, and the
-  two unconfigured Google CSE keys are still open — fifth day carried.
+  two unconfigured Google CSE keys are still open — sixth day carried.
 - `tracker cloudflare --name`/`TRACKER_TUNNEL_HOSTNAME` still need a real run
   against a named tunnel with DNS actually pointed at it.
-- `tracker audit` and the evidence-quote gate are both new and measured only
-  against the live database as it stands today — worth rerunning after the
-  next sync to see whether the numbers hold up against fresh ingest.
-- **An untracked 2 MB PDF sits in `docs/`**
+- `tracker audit`, the evidence-quote gate, and now `quality`/the claim
+  envelope are all measured only against the live database as it stands
+  today — worth rerunning after the next sync.
+- **An untracked 2 MB PDF still sits in `docs/`**
   (`docs/能源科技AI系列报告（三）：北美AI电力新趋势PPT+ED (1).pdf`, added
-  2026-08-06 14:52, read-only). Not committed by this run — it's reference
-  material, not project output, and its filename/permissions suggest it was
-  dropped there deliberately rather than a leftover to delete. Needs a human
-  call on whether it belongs in the repo, `.gitignore`, or somewhere else
-  entirely.
+  2026-08-06 14:52, unchanged since). Still not committed by this run for the
+  same reason as before — reference material, not project output — and still
+  needs a human call on whether it belongs in the repo, `.gitignore`, or
+  somewhere else entirely.
 - No AGENTS.md exists for this project and none was added today: still a
   single CLI/data-pipeline codebase with no distinct agent roles to document.
-  `docs/architecture.md` stays high-level by design (logic, not command-level
-  detail) and doesn't need updates for `tracker audit`, the evidence gate, or
-  the placeholder-plan closeout — all three are pipeline-internal behaviour
-  already covered at the right altitude in README/CHANGELOG.
+  `docs/architecture.md` stays high-level by design (logic, not
+  command-level detail) and doesn't need updates for the claim envelope or
+  `--stale-prompt` — both are pipeline-internal behaviour already covered at
+  the right altitude in README/CHANGELOG.
