@@ -1,6 +1,32 @@
 # Handoff
 
-## Yesterday (state at start of 2026-08-08)
+## Yesterday (state at start of 2026-08-09)
+
+The prior handoff (`e9be28a`, committed 2026-08-08) accounted for `b18ba5a`
+(the claim envelope and quality measurement) and, via a merge, for `95a18ab`
+on `claude/audit-duplicates-cli-ui-44227f` (`audit resolve`, `duplicates
+park`, `risks confirm`, `queue check`/`prune`, `tracker infer`'s panel). That
+merge (`8162c1c`) landed the same day, 13:09.
+
+The day didn't end there either. At 17:26 one more commit landed —
+`cd2d462`, "Name the failure when the source moves under a running
+console" — fixing a production crash: the console reads its Python once at
+startup but its migrations and static files from disk on every request, so
+merging under a running instance split it in two, and the first request to
+touch a module not yet imported (`tracker.capex`, importing `tracker.pairs`,
+importing `NotDuplicate`) hit an `ImportError` against a `tracker.models`
+that had been in memory since the previous evening. Never recorded in a
+handoff until now; none of the backlog below was touched by it.
+
+Past that point the session kept going but stopped committing. This run
+found a second day's more work sitting uncommitted in the working tree —
+CHANGELOG.md and README.md already updated in detail, 1788 tests green,
+ruff clean, but nothing staged. That work is what "Today" below accounts
+for. Carried in unchanged: everything the 2026-08-08 backlog listed below
+except the one item today's session resolved (`events[]` and the evidence
+gate — see Today).
+
+## Older context (state at start of 2026-08-08)
 
 The prior handoff (`b47dca4`, committed 2026-08-07 05:33) closed out ten
 commits — `tracker audit`, the placeholder-citation fixes, and the
@@ -286,7 +312,7 @@ writing this.
   its own module-scoped temp database at current schema, and asserts the
   command printed something at all.
 
-## Today, earlier (2026-08-08 05:34 run, accounting for 2026-08-07 21:43–23:03)
+## Older context, continued (2026-08-08 05:34 run, accounting for 2026-08-07 21:43–23:03)
 
 One commit (`b18ba5a`), not made during this run's window — the working tree
 was already clean and code-complete, CHANGELOG.md and README.md already
@@ -372,7 +398,7 @@ accounting of it. Re-verified test suite green first (`.venv` pytest, exit 0,
   unchecked — which is how Hyperion's 2027-12-31 `announced` milestone exists
   on the record at all.
 
-## Today, later (2026-08-08 run, `claude/audit-duplicates-cli-ui-44227f`)
+## Older context, continued (2026-08-08 run, `claude/audit-duplicates-cli-ui-44227f`)
 
 One session on a single theme: **every report this project has grown could
 state a problem and none of them could take an answer.** `audit` printed
@@ -447,8 +473,67 @@ that 404'd because they were truncated at 60 characters. Landed as `95a18ab`;
   column. `audit resolve --no-llm --no-ask` fixed one tranche (2400 → 2.4 MW on
   WPA-1 Boyers).
 
+## Today (2026-08-09 run)
+
+One session on one branch (`data-quality-adjustments`), committed as
+`5908c68`. Verified 1788 tests green (`.venv` pytest, exit 0) and ruff clean
+before writing this.
+
+- **`events[]` gets the evidence gate risks already had** (migration `0017`,
+  `tracker/ingest/crawl.py`, `tracker/upsert.py`, `tracker/models.py`,
+  `tracker/export.py`, the console's milestones card). The last extracted
+  structure with no gate behind it at all — the prompt has said "only
+  milestones whose date you can quote" since v1, a request with no
+  mechanism. Observed live on Fairwater (#1): a `groundbreaking` dated
+  2026-06-23 whose own description reads "Open house event held to announce
+  opening," feeding the track strip like any verified milestone. `event` now
+  carries `quote` (verified verbatim against the fetched article, same
+  recovery path as `Risk.quote`) and `unconfirmed` (from
+  `vocab.UNCONFIRMED_REASONS`). The backfill deliberately differs from how
+  risks were backfilled in 0012: no gate ever ran on an event before, so
+  NULL-means-confirmed would misstate every existing row — all 843 pre-gate
+  rows are marked `no_quote` instead. Live after backfill plus one
+  `--stale-prompt` pass: 837 of 860 events still `no_quote`, 23 confirmed. A
+  verified quote upgrades a `no_quote` row on re-read; a later article that
+  merely fails to quote the event never downgrades one already confirmed.
+  On screen, an unverified milestone carries a "not cited" chip and a
+  verified one shows the article's sentence on hover.
+- **`built_capacity_uncited_in_blocks`** (`tracker/logic.py`). Names the
+  sibling gap its cousin `live_block_without_cited_capacity` couldn't see,
+  because that rule guards on `mw_built is None` — exactly wrong for a row
+  where the scalar *is* set. Fairwater (#1) again: the console read "0 MW
+  delivering of 350 MW" directly above an energized 350, honestly, because
+  only cited capacity is summed and the 350 is 待确认 — but nothing named the
+  contradiction between the scalar, the blocks and the events. Report-only,
+  like every block rule: the fix is a citation for a running tranche, and no
+  automatic edit can find one. Live: 19 findings across 19 projects,
+  including a 46,500 MW `mw_built` on #62 that's plainly a unit error. The
+  blocks tab headline now says why a zero next to a running tranche is a
+  zero ("3 tranches are running with no cited MW — 350 MW stated, 待确认")
+  instead of leaving the page to disagree with itself.
+- **`tracker enrich --all`** (`tracker/cli.py`, `tracker/ingest/enrich.py`).
+  `--select N` needed a count picked in advance to mean "all of them."
+  `--all` is `--select` with no cap — same query, same closest-first
+  ordering, and `select_projects` already excludes projects at or past
+  `--target`, so it never spends on finished rows. `--budget` remains the
+  real ceiling; passing more than one of project ids, `--select`, `--all` is
+  now a refused combination rather than a silent union.
+- **Housekeeping**: this HANDOFF.md accounts for `cd2d462` (the merge-time
+  `ImportError` fix), which had landed 2026-08-08 17:26 but was never
+  recorded — see Yesterday above. README and CHANGELOG were already current
+  for today's three changes before this run started; no drift found in
+  `docs/architecture.md` (still high-level by design) or the absence of an
+  AGENTS.md (still a single CLI/data-pipeline codebase, no distinct agent
+  roles to document).
+
 ## Tomorrow
 
+- ~~`events[]` still bypasses the evidence gate entirely~~ **Done** (see
+  Today). What's still open: the gate checks only that a quote exists and is
+  verbatim, not that it actually supports the *event_type* it's filed
+  under — a verified "Open house event" sentence can still sit beside a
+  `groundbreaking` chip. `docs/plan-claim-envelope.md` names the risk gate's
+  `_RISK_EVIDENCE` vocabulary as the template if that's worth building.
 - **21 audit findings are still unsettled and now have somewhere to go.** Run
   `tracker audit resolve` interactively — it costs nothing until you answer `?`,
   and the model rungs behind it were measured settling 4 of 4 on a copy. Worth
@@ -497,15 +582,15 @@ that 404'd because they were truncated at 60 characters. Landed as `95a18ab`;
   utility-recorded-as-operator row, one Doña Ana locality-grain pair, one
   locality typo. None auto-merge for good reason; each needs a human call.
 - **Finish the block backfill.** Still 16 projects with a real energisation
-  and no blocks read — carried four days now.
+  and no blocks read — carried five days now.
 - **Review the two block-shaped report-only signals** —
   `blocks_may_double_count` (6 live hits as of the 2026-08-04 session) and
   `block_label_ambiguous` — still untriaged.
-- Review `docs/feedback-2026-08-03.md`, now five days old and untouched.
+- Review `docs/feedback-2026-08-03.md`, now six days old and untouched.
 - The 20 utility/contractor EDGAR companies in `seed/edgar-companies.toml` are
-  still wired up but unrun — sixth day carried.
+  still wired up but unrun — seventh day carried.
 - The 30-required-projects gap, unverified ERCOT/CAISO column names, and the
-  two unconfigured Google CSE keys are still open — sixth day carried.
+  two unconfigured Google CSE keys are still open — seventh day carried.
 - `tracker cloudflare --name`/`TRACKER_TUNNEL_HOSTNAME` still need a real run
   against a named tunnel with DNS actually pointed at it.
 - `tracker audit`, the evidence-quote gate, and now `quality`/the claim
@@ -513,8 +598,8 @@ that 404'd because they were truncated at 60 characters. Landed as `95a18ab`;
   today — worth rerunning after the next sync.
 - **An untracked 2 MB PDF still sits in `docs/`**
   (`docs/能源科技AI系列报告（三）：北美AI电力新趋势PPT+ED (1).pdf`, added
-  2026-08-06 14:52, unchanged since). Still not committed by this run for the
-  same reason as before — reference material, not project output — and still
+  2026-08-06 14:52, unchanged since — three days now). Still not committed by
+  this run for the same reason as before — reference material, not project output — and still
   needs a human call on whether it belongs in the repo, `.gitignore`, or
   somewhere else entirely.
 - No AGENTS.md exists for this project and none was added today: still a
