@@ -888,6 +888,77 @@ def test_reingesting_events_does_not_duplicate_them(session):
     assert session.scalar(select(func.count()).select_from(Event)) == 1
 
 
+def test_a_verified_quote_upgrades_an_uncited_milestone(session):
+    """How the 0017 backfill's `no_quote` rows get confirmed: a re-read under the
+    new prompt arrives carrying the verified sentence, and the existing row takes
+    it. This is the repair path for every pre-gate milestone in the database."""
+    url = "https://news.microsoft.com/fairwater/"
+    upsert_record(
+        session,
+        rec(
+            sources=[manual_source(url)],
+            events=[
+                EventRecord(
+                    dt.date(2023, 3, 1), "announced", "Announced.", url, unconfirmed="no_quote"
+                )
+            ],
+        ),
+    )
+    upsert_record(
+        session,
+        rec(
+            sources=[manual_source(url)],
+            events=[
+                EventRecord(
+                    dt.date(2023, 3, 1),
+                    "announced",
+                    "Announced.",
+                    url,
+                    quote="Microsoft announced the project on March 1.",
+                )
+            ],
+        ),
+    )
+    event = session.scalar(select(Event))
+    assert event.unconfirmed is None
+    assert event.quote == "Microsoft announced the project on March 1."
+
+
+def test_a_later_uncited_read_does_not_strip_a_verified_quote(session):
+    """The reverse must never happen: an article that merely fails to quote the
+    milestone is not evidence against the sentence one already did."""
+    url = "https://news.microsoft.com/fairwater/"
+    upsert_record(
+        session,
+        rec(
+            sources=[manual_source(url)],
+            events=[
+                EventRecord(
+                    dt.date(2023, 3, 1),
+                    "announced",
+                    "Announced.",
+                    url,
+                    quote="Microsoft announced the project on March 1.",
+                )
+            ],
+        ),
+    )
+    upsert_record(
+        session,
+        rec(
+            sources=[manual_source(url)],
+            events=[
+                EventRecord(
+                    dt.date(2023, 3, 1), "announced", "Announced.", url, unconfirmed="no_quote"
+                )
+            ],
+        ),
+    )
+    event = session.scalar(select(Event))
+    assert event.quote == "Microsoft announced the project on March 1."
+    assert event.unconfirmed is None
+
+
 def test_two_same_key_events_in_one_record_collapse_rather_than_crash(session):
     """One document can date two milestones of the same kind to the same day.
 

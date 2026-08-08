@@ -81,7 +81,8 @@ RULES
   "events": [{
     "event_date":  "YYYY-MM-DD",
     "event_type":  "announced"|"land_acquired"|"permit_filed"|"permit_approved"|"interconnection_agreement"|"site_work"|"groundbreaking"|"equipment_install"|"energized"|"first_customer"|"delayed"|"expanded",
-    "description": string
+    "description": string,
+    "quote":       "<verbatim sentence from the ARTICLE stating this milestone>"
   }],
   "risks": [{
     "category":    "grid_capacity"|"transmission"|"permitting"|"environmental"|"equipment_supply"|"chip_supply"|"financing"|"offtake"|"community_opposition"|"water",
@@ -197,7 +198,13 @@ first_announced  When the project was first made public, if the article says.
 expected_online  When the first megawatts are expected to come online.
 notes            At most two sentences on the latest progress. Also record here
                  any range or ambiguity you collapsed to a single number.
-events           Only milestones whose date you can quote.
+events           Only milestones whose date you can quote — and the quote now has
+                 a field of its own. "quote" must be the verbatim sentence from
+                 the ARTICLE that states the milestone, copied character for
+                 character like every other quote here. It is checked against the
+                 article; an event whose quote fails is kept but marked
+                 unverified, so a missing or invented quote gains you nothing.
+                 "description" stays your own one-line wording.
 
                  These matter more than `phase`, which has four states and
                  cannot say where a project really stands. A campus can own its

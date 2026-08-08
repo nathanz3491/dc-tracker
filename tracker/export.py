@@ -288,6 +288,12 @@ def to_json_object(project: Project) -> dict[str, Any]:
                 "event_date": _iso(e.event_date),
                 "event_type": e.event_type,
                 "description": e.description,
+                # The sentence the milestone stands on, and why there is none.
+                # NULL `unconfirmed` means the gate verified the quote — a claim
+                # that is only ever true for rows written after migration 0017,
+                # because the backfill marked every older one `no_quote`.
+                "quote": e.quote,
+                "unconfirmed": e.unconfirmed,
                 "source_id": e.source_id,
             }
             for e in sorted(project.events, key=lambda e: (e.event_date, e.event_type))

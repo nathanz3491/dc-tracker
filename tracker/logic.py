@@ -526,6 +526,31 @@ def check_rules(project: Project) -> list[Finding]:
                 "a live campus has energised capacity; find it or step the phase back",
             )
 
+    # The sibling gap, observed live on Fairwater (#1): `mw_built` IS set, so the
+    # branch above stays silent — but every running tranche carries either no
+    # capacity at all or a 待确认 one `rollup` refuses to sum. The console then
+    # prints "0 MW delivering of 350 MW" directly above an energized 350, and the
+    # events say the site came online in April. Nothing was wrong *inside* any one
+    # of those statements; the contradiction only exists between the scalar, the
+    # blocks and the events, which is precisely the kind this module exists to
+    # name. The remedy is the same citation hunt as its sibling — never summing
+    # the 待确认 figure to make the zero go away.
+    if phase in _LIVE_PHASES and project.mw_built and live_blocks:
+        from tracker.blocks import mw_is_confirmed
+
+        if not any(b.mw is not None and mw_is_confirmed(b) for b in live_blocks):
+            named = ", ".join(sorted(b.label for b in live_blocks)[:3])
+            add(
+                "built_capacity_uncited_in_blocks",
+                WARNING,
+                f"{project.mw_built:g} MW is recorded as built and {len(live_blocks)} "
+                f"block(s) are running ({named}), but no running block carries a "
+                "capacity any quote confirms — so the delivering total reads 0",
+                ("mw_built",),
+                "find a source that states the megawatts of a running tranche; the "
+                "待确认 figure is deliberately never summed in its place",
+            )
+
     # Only on an energisation that has actually happened. A future-dated one is
     # caught by `milestone_in_the_future` above, and calling it a contradiction
     # with the phase as well would report one data fault twice.
@@ -1378,6 +1403,9 @@ ACTIONS: Final[dict[str, tuple[Action, ...]]] = {
     # sub-site grain, which is the grain this whole design exists to stop guessing at.
     "block_past_its_own_date": (),
     "live_block_without_cited_capacity": (),
+    # Same reasoning as its sibling above: the fix is a citation for a running
+    # tranche, and no automatic edit can find one.
+    "built_capacity_uncited_in_blocks": (),
     "block_label_ambiguous": (),
     "blocks_may_double_count": (),
     "no_block_for_energisation": (),

@@ -930,6 +930,56 @@ def test_a_running_tranche_with_no_cited_capacity_is_a_missing_citation(session)
     assert "operational_without_built_capacity" not in codes
 
 
+def test_built_capacity_no_running_block_can_cite_is_reported(session):
+    """Fairwater (#1), verbatim: mw_built=350, three tranches running, and the
+    only capacity any of them carries is 待确认 — so the console's delivering
+    total reads 0 directly under an operational phase and an April energisation.
+
+    The sibling rule above guards on `mw_built is None`, so this exact shape —
+    the scalar set, the blocks running, the citation absent — was invisible.
+    """
+    project = _project(session, phase="operational", mw_built=350.0)
+    _blk(session, project, label="Building 1", status="serving")  # no mw at all
+    _blk(
+        session,
+        project,
+        label="Wisconsin campus",
+        mw=350.0,
+        status="energized",
+        unconfirmed_fields="mw",
+    )
+    session.refresh(project)
+    codes = _codes(project)
+    assert "built_capacity_uncited_in_blocks" in codes
+    assert "live_block_without_cited_capacity" not in codes, "one gap, one finding"
+
+
+def test_a_running_block_with_a_cited_capacity_keeps_the_rule_silent(session):
+    """The near-miss: one confirmed running megawatt is agreement, not a gap."""
+    project = _project(session, phase="operational", mw_built=350.0)
+    _blk(session, project, label="Building 1", mw=350.0, status="serving")
+    _blk(session, project, label="Building 2", status="under_construction")
+    session.refresh(project)
+    assert "built_capacity_uncited_in_blocks" not in _codes(project)
+
+
+def test_a_campus_not_yet_live_is_not_asked_for_running_citations(session):
+    """Under construction with 待确认 tranche capacity is the ordinary shape of
+    a campus being built — nothing is delivering, so a zero is not a
+    contradiction."""
+    project = _project(session, phase="construction", mw_built=100.0)
+    _blk(
+        session,
+        project,
+        label="Phase 1",
+        mw=100.0,
+        status="under_construction",
+        unconfirmed_fields="mw",
+    )
+    session.refresh(project)
+    assert "built_capacity_uncited_in_blocks" not in _codes(project)
+
+
 def test_nested_tranche_labels_are_reported_as_possible_double_counting(session):
     """Riot Rockdale: one AMD lease described at three grains, summed three times."""
     project = _project(session, phase="construction", mw_planned=700.0)
@@ -952,6 +1002,7 @@ def test_every_block_rule_is_report_only(session):
     for code in (
         "block_past_its_own_date",
         "live_block_without_cited_capacity",
+        "built_capacity_uncited_in_blocks",
         "block_label_ambiguous",
         "blocks_may_double_count",
     ):

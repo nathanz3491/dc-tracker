@@ -164,10 +164,14 @@ not merely present.
   `recompute_from_sources` exists but is reachable only through `merge`.
 - **The envelope costs tokens.** The longer schema pushed replies past
   `max_completion_tokens` on some articles, each costing a corrective retry.
-- **`events[]` still bypasses the evidence gate entirely** — no quote required or
-  checked, which is how Hyperion's 2027-12-31 `announced` event exists. Fixing it
-  needs an `unconfirmed` column on `event`, so it is named here rather than
-  half-done.
+- ~~`events[]` still bypasses the evidence gate entirely~~ **Done** (migration
+  `0017`): events carry `quote` + `unconfirmed` exactly as risks do, every
+  pre-gate row is backfilled `no_quote`, and the console marks unverified
+  milestones `not cited`. What remains open is the *type* check — a verbatim
+  quote does not yet have to contain wording for the event_type it is filed
+  under, so "Open house event" can still sit beside a `groundbreaking` chip;
+  the risk gate's `_RISK_EVIDENCE` vocabulary is the template if that proves
+  worth building.
 - **14 silent defects remain**, all on rows whose articles no longer support them.
 - **`news.microsoft.com` is now `general_media`.** The subdomain rule required a
   known operator domain; a genuine newsroom absent from `feeds.toml` loses weight.

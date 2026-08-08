@@ -667,6 +667,69 @@ def test_events_are_extracted_and_cite_the_article(prompt):
     assert all(e.source_url == URL for e in events)
 
 
+# --- the event gate ------------------------------------------------------------
+#
+# Events were the last extracted structure with no gate at all: the prompt said
+# "Only milestones whose date you can quote" and nothing enforced it, so every
+# milestone fed the track strip on the model's say-so. Observed on Fairwater
+# (#1): a `groundbreaking` dated 2026-06-23 whose own description reads "Open
+# house event held to announce opening". Same shape as the risk gate — the
+# quote must be real, the description stays the model's words, and a failure
+# demotes rather than deletes.
+
+
+def _one_event(entry: dict) -> object:
+    events = crawl._events({"events": [entry]}, article(), URL)
+    assert len(events) == 1, "the gate demotes; it must never delete"
+    return events[0]
+
+
+def test_an_event_with_a_real_quote_is_confirmed():
+    got = _one_event(
+        {
+            "event_date": "2023-06-15",
+            "event_type": "groundbreaking",
+            "description": "Crews broke ground.",
+            "quote": "Construction crews broke ground on the site on 15 June 2023.",
+        }
+    )
+    assert got.unconfirmed is None
+    assert got.quote is not None
+    assert "broke ground" in got.quote
+
+
+def test_an_event_quote_nobody_published_is_stripped_and_flagged():
+    """The fabrication case: the event survives, the sentence does not.
+
+    A quote that fails verification must not be stored either — showing an
+    invented sentence as though it were the article's is worse than showing
+    nothing, which is exactly the rule risks follow.
+    """
+    got = _one_event(
+        {
+            "event_date": "2023-06-15",
+            "event_type": "groundbreaking",
+            "description": "Crews broke ground.",
+            "quote": "A ceremonial shovel event was attended by the governor of Wisconsin.",
+        }
+    )
+    assert got.unconfirmed == "quote_unverified"
+    assert got.quote is None
+
+
+def test_an_event_offered_without_a_quote_is_kept_as_uncited():
+    """The pre-0017 shape, now declared instead of silent."""
+    got = _one_event(
+        {
+            "event_date": "2023-06-15",
+            "event_type": "groundbreaking",
+            "description": "Crews broke ground.",
+        }
+    )
+    assert got.unconfirmed == "no_quote"
+    assert got.quote is None
+
+
 def test_the_dropped_note_lists_only_what_was_really_dropped(prompt):
     """Identity fields are restored after the gate, so they are not "dropped".
 

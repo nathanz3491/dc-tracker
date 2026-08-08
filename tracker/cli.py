@@ -3064,6 +3064,13 @@ def enrich(
         int,
         typer.Option("--select", help="Choose this many projects automatically, best first."),
     ] = 0,
+    enrich_all: Annotated[
+        bool,
+        typer.Option(
+            "--all",
+            help="Every project still below --target. --budget is the actual bound.",
+        ),
+    ] = False,
     target: Annotated[
         int,
         typer.Option("--target", help="Stop a project once it holds this many of the 12 fields."),
@@ -3102,18 +3109,36 @@ def enrich(
 
         tracker enrich 90 93            two projects by id
         tracker enrich --select 30      the 30 worth finishing, chosen for you
+        tracker enrich --all            everything below --target, best first
 
     `--select` orders by how close a project already is to `--target`, because
     taking one project from 8 fields to 9 costs a single article while taking
     another from 4 to 9 may not get there at all. `--budget` is shared across the
     whole run, and a project stops at `--target` so the rest goes to the next one.
     The archives are swept ONCE for the batch.
+
+    `--all` is `--select` with no cap: every project still below the target, in
+    the same closest-first order. It is not unbounded spend — `--budget` is the
+    real ceiling, and the ordering decides who gets the articles before it runs
+    dry, so raise `--budget` when the point is genuinely the whole database.
     """
     from tracker.ingest import enrich as enrich_mod
     from tracker.ingest.fetch import Crawl4AIFetcher, MissingDependency
 
-    if not project_ids and not select:
-        _fail("give at least one project id, or use --select N to choose automatically")
+    chosen_ways = [
+        name
+        for name, given in (
+            ("project ids", bool(project_ids)),
+            ("--select", bool(select)),
+            ("--all", enrich_all),
+        )
+        if given
+    ]
+    if len(chosen_ways) > 1:
+        _fail(f"pass only one of project ids, --select or --all (got {' and '.join(chosen_ways)})")
+        return
+    if not chosen_ways:
+        _fail("give at least one project id, use --select N, or --all for every project")
         return
 
     escalate = None
@@ -3140,8 +3165,13 @@ def enrich(
     try:
         with _explain_db_locks(), session_scope(engine, commit=not dry_run) as session:
             wanted = list(project_ids or [])
-            if select:
-                chosen = enrich_mod.select_projects(session, select, target=target)
+            if select or enrich_all:
+                # --all is --select with no cap: same query, same ordering, and
+                # `select_projects` already excludes projects at or past the
+                # target, so "all" never wastes budget on finished rows.
+                chosen = enrich_mod.select_projects(
+                    session, None if enrich_all else select, target=target
+                )
                 wanted += [p for p in chosen if p not in wanted]
                 if not wanted:
                     console.print(

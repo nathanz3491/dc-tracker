@@ -863,6 +863,8 @@ def _upsert_events(session: Session, project: Project, rec: IngestRecord) -> int
                 event_date=ev.event_date,
                 event_type=ev.event_type,
                 description=ev.description,
+                quote=ev.quote,
+                unconfirmed=ev.unconfirmed,
                 source_id=source_id,
             )
             session.add(row)
@@ -879,6 +881,13 @@ def _upsert_events(session: Session, project: Project, rec: IngestRecord) -> int
             found.description = ev.description
             if source_id is not None:
                 found.source_id = source_id
+            # A verified sentence upgrades an unverified milestone — this is how
+            # the 0017 backfill's `no_quote` rows get confirmed on re-read. Never
+            # the reverse: a later article that merely fails to quote the event is
+            # not evidence against the sentence one already did.
+            if ev.quote and ev.unconfirmed is None:
+                found.quote = ev.quote
+                found.unconfirmed = None
     session.flush()
     return inserted
 

@@ -266,6 +266,15 @@ class Event(Base):
     event_date: Mapped[dt.date] = mapped_column(Date, nullable=False)
     event_type: Mapped[str] = mapped_column(Text, nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)
+    #: The verbatim sentence the milestone stands on, verified against the fetched
+    #: article exactly like `Risk.quote`. NULL plus a NULL `unconfirmed` would mean
+    #: "confirmed with no sentence", which is why the 0017 backfill marks every
+    #: pre-gate row `no_quote` instead of leaving it ambiguous.
+    quote: Mapped[str | None] = mapped_column(Text)
+    #: Why the gate did not confirm this milestone, from
+    #: `vocab.UNCONFIRMED_REASONS`. NULL means it did — a claim that is only true
+    #: for rows written after migration 0017, which is what the backfill encodes.
+    unconfirmed: Mapped[str | None] = mapped_column(Text)
     source_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("source.id", ondelete="SET NULL")
     )
@@ -277,6 +286,7 @@ class Event(Base):
             "project_id", "event_type", "event_date", name="uq_event_project_type_date"
         ),
         CheckConstraint(sql_in("event_type", EVENT_TYPES), name="ck_event_type"),
+        CheckConstraint("quote IS NULL OR length(quote) <= 500", name="ck_event_quote_len"),
         Index("ix_event_project_id", "project_id"),
         Index("ix_event_date", "event_date"),
     )

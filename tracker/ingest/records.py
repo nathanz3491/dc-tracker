@@ -144,6 +144,14 @@ class EventRecord:
     event_type: str
     description: str
     source_url: str | None = None
+    #: The verbatim sentence the milestone stands on, article's own words, or None
+    #: when the gate could not verify one. Mirrors `RiskRecord.quote`.
+    quote: str | None = None
+    #: Why the gate did not confirm it (`vocab.UNCONFIRMED_REASONS`); None means it
+    #: did. Events had no gate at all until migration 0017, which is why the
+    #: backfill there marks every older row `no_quote` rather than leaving NULL to
+    #: make a claim nobody checked.
+    unconfirmed: str | None = None
 
 
 @dataclass(frozen=True)

@@ -898,6 +898,50 @@ def test_a_year_only_date_prints_as_a_year(initialized: Path):
     assert "2024-01-01" not in result.output
 
 
+# --- enrich: choosing what to spend on ----------------------------------------
+#
+# Three ways to pick projects — explicit ids, --select N, --all — and exactly one
+# must be given. The guard runs before the write lock and before any LLM setup,
+# so these tests are free.
+
+
+def test_enrich_requires_a_selection(initialized: Path):
+    result = invoke(initialized, "enrich")
+    assert result.exit_code == 2
+    assert "--all" in result.output, "the failure must advertise every way to select"
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ("enrich", "1", "--all"),
+        ("enrich", "--select", "5", "--all"),
+        ("enrich", "1", "--select", "5"),
+    ],
+)
+def test_enrich_refuses_two_selection_methods_at_once(initialized: Path, args):
+    """Ids, --select and --all answer the same question; two answers is a typo.
+
+    Silently unioning them would make `enrich 90 --all` spend the whole budget
+    while reading as though it targeted one project.
+    """
+    result = invoke(initialized, *args)
+    assert result.exit_code == 2
+    assert "only one of" in result.output
+
+
+def test_enrich_all_on_a_finished_database_spends_nothing(initialized: Path):
+    """--all with nothing below the target must say so and stop.
+
+    An empty database is the degenerate case of "every project is done", and it
+    must exit cleanly before acquiring an API key, a fetcher, or a single
+    article of budget.
+    """
+    result = invoke(initialized, "enrich", "--all")
+    assert result.exit_code == 0, result.output
+    assert "nothing to do" in result.output
+
+
 # --- prompt-vintage selection -----------------------------------------------
 #
 # `stale_sources` asks whether the article may have changed. These ask whether

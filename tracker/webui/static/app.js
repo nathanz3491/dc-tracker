@@ -1538,7 +1538,8 @@ function StatsTab({ data, p, populated, open, onQuote, allowWrite }) {
       <${Card}>
         <${CardHeader}>
           <${CardTitle}>${p.events.length} milestone event${p.events.length === 1 ? "" : "s"}<//>
-          <${CardDescription}>Milestones as reported, each pointing at the source that stated it.<//>
+          <${CardDescription}>Milestones as reported. A cited one carries the article's own
+            sentence — hover it; the rest are the model's reading, marked.<//>
         <//>
         <div style=${{ display: "grid", gap: 0 }}>
           ${p.events.map((e, i) => html`
@@ -1547,7 +1548,21 @@ function StatsTab({ data, p, populated, open, onQuote, allowWrite }) {
               <span class="dc-num" style=${{ fontSize: 12, color: "var(--muted-foreground)" }}>${e.event_date}</span>
               <span style=${chip(e.event_type === "delayed" ? "--danger"
                 : e.event_type === "expanded" ? "--chart-5" : "--muted-foreground")}>${e.event_type}</span>
-              <span style=${{ fontSize: 14, lineHeight: "20px" }}>${e.description}</span>
+              <span style=${{ fontSize: 14, lineHeight: "20px" }}
+                    title=${e.quote ? `“${e.quote}”` : undefined}>
+                ${e.description}
+                ${/* The tier, event-sized. `quote` is the verified sentence; its
+                      absence used to be invisible, so every milestone read as
+                      equally established — including a "groundbreaking" whose own
+                      description was an open house. Same vocabulary as everywhere
+                      else: not cited is a fact about the evidence, not a verdict
+                      on the event. */
+                  e.unconfirmed && html`
+                  <span style=${{ ...chip("--warning"), marginLeft: 8 }}
+                        title=${e.unconfirmed === "quote_unverified"
+                          ? "a quote was offered and is not in the article"
+                          : "no quote supports this milestone yet"}>not cited</span>`}
+              </span>
             </div>`)}
         </div>
         ${p.events.length === 0 && html`
@@ -1657,6 +1672,22 @@ function BlocksTab({ p }) {
     .filter(([s]) => s === "serving" || s === "energized")
     .reduce((sum, [, mw]) => sum + mw, 0);
 
+  /* Why the headline can honestly read 0 while the table below shows tranches
+   * running: only cited capacity is summed, and a campus can be genuinely live
+   * with every running tranche's MW either absent or 待确认. Fairwater was the
+   * live case — energized in April per its own events, "0 MW delivering of
+   * 350 MW" on screen. The zero stays (summing an unconfirmed figure to make it
+   * go away is the 36,000 MW mistake in the comment above, in reverse), but a
+   * bare zero next to running tranches reads as the page disagreeing with
+   * itself, so it says why. */
+  const running = blocks.filter(
+    (b) => (b.status === "serving" || b.status === "energized") && !outOfScale(b),
+  );
+  const statedLive = running.reduce(
+    (sum, b) => sum + (b.mw != null && !b.mw_counted ? b.mw : 0), 0,
+  );
+  const liveIsUncited = live === 0 && running.length > 0;
+
   // The bar is the accounting, drawn: confirmed capacity by state, then what is
   // stated but unconfirmed, then the remainder nobody has itemised. It is built to
   // sum to the campus total exactly, so the bar reaching full width *is* the
@@ -1712,6 +1743,11 @@ function BlocksTab({ p }) {
             ${" "}· ${blocks.length} tranche${blocks.length === 1 ? "" : "s"}${customers.length > 1
               ? ` · ${customers.length} customers`
               : customers.length === 1 ? ` · ${customers[0]}` : ""}</span>
+          ${liveIsUncited && html`
+            <span style=${{ fontSize: 12, color: "var(--warning)" }}>
+              ${running.length} tranche${running.length === 1 ? " is" : "s are"} running with no
+              cited MW${statedLive > 0 ? ` — ${fmtMw(statedLive)} MW stated, 待确认` : ""}
+            </span>`}
         </div>
         <div style=${{ display: "flex", height: 8, marginTop: 10, borderRadius: 4, overflow: "hidden",
              background: "var(--border)" }}>

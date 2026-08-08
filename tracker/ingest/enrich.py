@@ -564,9 +564,14 @@ class BatchReport:
 
 
 def select_projects(
-    session: Session, limit: int, *, target: int = DEFAULT_TARGET_FIELDS
+    session: Session, limit: int | None, *, target: int = DEFAULT_TARGET_FIELDS
 ) -> list[int]:
     """The projects worth spending a bounded budget on, best first.
+
+    ``limit=None`` means every project below the target — the `--all` case. The
+    ordering still matters there: the run shares one `--budget`, so whichever
+    projects sort first get the articles, and closest-first is what converts the
+    most projects before the budget runs dry.
 
     Ordered by how close each already is to `target`, then by planned capacity.
     Two reasons, and the first is the important one:
@@ -586,12 +591,14 @@ def select_projects(
         (case((getattr(Project, f).is_not(None), 1), else_=0) for f in TRACKED_FIELDS),
         start=literal(0),
     )
-    rows = session.execute(
+    stmt = (
         select(Project.id, filled.label("n"))
         .where(filled < target)
         .order_by(desc("n"), desc(Project.mw_planned.is_not(None)), desc(Project.mw_planned))
-        .limit(limit)
-    ).all()
+    )
+    if limit is not None:
+        stmt = stmt.limit(limit)
+    rows = session.execute(stmt).all()
     return [row[0] for row in rows]
 
 

@@ -1079,7 +1079,24 @@ def _implausible_investment(claims: dict[str, Any]) -> str | None:
     )
 
 
-def _events(raw: dict[str, Any], url: str) -> list[EventRecord]:
+def _events(raw: dict[str, Any], article_text: str, url: str) -> list[EventRecord]:
+    """Milestones from one extracted project, each verified against the article.
+
+    The last extracted structure to get a gate. The prompt has said "Only
+    milestones whose date you can quote" since v1 — a request with no mechanism,
+    which is exactly the distinction this module's docstring draws — and the
+    events fed the track strip on the model's say-so. Observed live on Fairwater
+    (#1): a `groundbreaking` dated 2026-06-23 whose own description reads "Open
+    house event held to announce opening", counted as breaking ground two years
+    after the site actually did.
+
+    Same discipline as `_risks`, and the same non-requirement: the *description*
+    stays the model's own words (demanding it be verbatim is what took the old
+    `blocker` to zero coverage). What must be real is the quote beside it — a
+    failed or missing one demotes the event to 待确认 rather than deleting it,
+    because a milestone an article stated vaguely is still worth showing, just
+    never worth showing as verified.
+    """
     events: list[EventRecord] = []
     for entry in raw.get("events") or []:
         if not isinstance(entry, dict):
@@ -1094,7 +1111,24 @@ def _events(raw: dict[str, Any], url: str) -> list[EventRecord]:
         description = norm_text(entry.get("description"))
         if when is None or not description:
             continue
-        events.append(EventRecord(when, event_type, description, url))
+
+        offered = norm_text(entry.get("quote"))
+        unconfirmed: str | None = None
+        quote: str | None = None
+        if not offered:
+            unconfirmed = "no_quote"
+        else:
+            recovered = _verbatim_run(offered, article_text)
+            if recovered.text is None:
+                # A sentence nobody published cannot vouch for a date. The event
+                # survives; the fabrication does not.
+                unconfirmed = "quote_unverified"
+            else:
+                quote = recovered.text[:500]
+
+        events.append(
+            EventRecord(when, event_type, description, url, quote=quote, unconfirmed=unconfirmed)
+        )
     return events
 
 
@@ -1619,7 +1653,7 @@ def build_records(
                     extractor=f"crawl:{prompt.stamp}:{reply.model}:{result.via}",
                 )
             ],
-            events=_events(raw, result.url),
+            events=_events(raw, result.markdown, result.url),
             risks=risks,
             notes=notes,
         )

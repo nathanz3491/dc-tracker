@@ -12,6 +12,67 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **Milestones now carry evidence, and say so when they carry none** (migration
+  `0017`, `tracker/ingest/crawl.py`, `tracker/upsert.py`, the console's
+  milestones card). `events[]` was the last extracted structure with no gate
+  behind it at all: the prompt has said "Only milestones whose date you can
+  quote" since v1 — a request with no mechanism — and every milestone fed the
+  track strip on the model's say-so. Observed live on Fairwater (#1): a
+  `groundbreaking` dated 2026-06-23 whose own description reads "Open house
+  event held to announce opening", counted as breaking ground two years after
+  the site actually did.
+
+  Events get exactly what risks got in 0004+0012: a `quote` column verified
+  verbatim against the fetched article (same recovery path), an `unconfirmed`
+  reason when the gate cannot confirm it, demotion instead of deletion, and the
+  article's own words stored rather than the model's edit. The description stays
+  the model's one-line wording, for the same reason risk summaries do — demanding
+  it be verbatim is what took the old `blocker` field to zero coverage.
+
+  **The backfill deliberately differs from 0012.** Risks left pre-gate rows NULL
+  because the old gate deleted whatever it refused, so survivors really were
+  confirmed. No gate ever ran on an event, so NULL-means-confirmed would be a
+  false statement about every existing row: all 843 are marked `no_quote`. A
+  re-read under the new prompt upgrades them — a verified sentence replaces the
+  flag, and never the reverse, because a later article that merely fails to
+  quote a milestone is not evidence against the sentence one already did.
+
+  On screen, an unverified milestone carries a `not cited` chip and a verified
+  one carries the article's sentence on hover. Today that chip is on every
+  event, which is the truth: none was ever checked. The prompt change moves the
+  stamp, so `--stale-prompt` already knows which sources to re-read to start
+  confirming them.
+
+- **A live campus whose running tranches can cite no capacity is now a finding**
+  (`tracker/logic.py`, `built_capacity_uncited_in_blocks`). Observed on Fairwater
+  (#1): the console read "0 MW delivering of 350 MW" directly above an energized
+  350, while the phase said operational and the events said the site came online
+  in April. Nothing was wrong inside any one of those statements — the zero is
+  honest, because only cited capacity is summed and the 350 is 待确认 — but the
+  contradiction between the scalar, the blocks and the events had no rule naming
+  it. Its sibling `live_block_without_cited_capacity` guards on `mw_built is
+  None`, so a row with the scalar *set* was exactly the shape it could not see.
+  Report-only like every block rule, because the fix is a citation for a running
+  tranche and no automatic edit can find one. Live: 19 findings on 19 projects,
+  including a 46,500 MW `mw_built` on #62 that is plainly a unit error.
+
+  The console's blocks headline says why the zero is a zero instead of leaving
+  the page to disagree with itself: "3 tranches are running with no cited MW —
+  350 MW stated, 待确认". The number itself stays 0 — summing an unconfirmed
+  figure to make a zero go away is the same mistake that once reported 36,000
+  unconfirmed megawatts as running, in reverse.
+
+- **`tracker enrich --all`: every project still below the target**
+  (`tracker/cli.py`, `tracker/ingest/enrich.py`). `--select N` existed for "the N
+  worth finishing"; there was no way to say "all of them" without first counting
+  them. `--all` is `--select` with no cap — same query, same closest-first
+  ordering, and projects already at the target are still excluded, so it never
+  spends on finished rows. It is not unbounded spend: `--budget` remains the real
+  ceiling, and the ordering is what decides who gets the articles before it runs
+  dry. Exactly one of ids, `--select` or `--all` may be given — silently unioning
+  them would let `enrich 90 --all` spend the whole budget while reading as though
+  it targeted one project.
+
 - **`tracker audit resolve`: the ladder that settles an impossible figure**
   (`tracker/audit.py`, `tracker/prompts/audit-resolve-v1.txt`, `tracker/cli.py`).
   `tracker audit` has reported the same 11,250 MW colocation expansion on every run

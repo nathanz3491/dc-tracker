@@ -336,6 +336,8 @@ tracker sync --retry-failed   # re-attempt them
 ```bash
 tracker enrich 93 --dry-run     # what it would read, spending nothing
 tracker enrich 93
+tracker enrich --select 30      # the 30 worth finishing, chosen closest-first
+tracker enrich --all            # everything below --target; --budget is the bound
 ```
 
 `tracker sync` spreads a budget across the whole database. `tracker enrich` inverts

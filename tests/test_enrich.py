@@ -716,6 +716,36 @@ def test_select_breaks_ties_toward_larger_projects(session):
     assert chosen.index(big.id) < chosen.index(small.id)
 
 
+def test_select_with_no_limit_returns_every_project_below_target(session):
+    """The `--all` case: no cap, same ordering, finished projects still excluded.
+
+    The ordering is not decoration even when everything is selected — the run
+    shares one budget, so whoever sorts first gets the articles before it runs
+    dry, and closest-first is what converts the most projects.
+    """
+    ids = [add_project(session, city=c, company=f"Op {c}").id for c in ("Reno", "Mesa", "Ames")]
+    done = add_project(
+        session,
+        city="Provo",
+        company="Done Co",
+        customer="T",
+        mw_planned=1.0,
+        mw_built=1.0,
+        investment_usd=1,
+        phase="construction",
+        first_announced=dt.date(2024, 1, 1),
+        expected_online=dt.date(2027, 1, 1),
+        blocker="x",
+    )
+
+    chosen = enrich.select_projects(session, None, target=9)
+    assert set(chosen) == set(ids), "everything below the target, nothing above it"
+    assert done.id not in chosen
+    assert chosen == enrich.select_projects(session, 10, target=9), (
+        "None must mean 'no cap', not a different ordering"
+    )
+
+
 def test_the_batch_report_counts_projects_over_the_bar(session):
     ids = [add_project(session, city=c, company=f"Op {c}").id for c in ("Reno", "Mesa")]
     batch = enrich.run_many(
