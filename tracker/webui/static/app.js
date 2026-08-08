@@ -239,8 +239,15 @@ async function api(path, options) {
   // sentence — the confirmation word for a command, say — and the caller cannot
   // get at it if only the message survives.
   if (!res.ok) {
+    // `unreachable` means "something in front of the console answered instead of
+    // it", and a JSON `error` body is proof that it did not — that shape comes
+    // from `Handler._error` and from nowhere else. Without this test the console's
+    // own 503s were reported as the console being down, which is the opposite of
+    // what happened and sends the reader to check the tunnel.
+    const answered = payload?.error != null;
     throw Object.assign(new Error(payload?.error || _gatewayReason(res) || res.statusText),
-                        { status: res.status, payload, unreachable: _isGateway(res.status) });
+                        { status: res.status, payload,
+                          unreachable: _isGateway(res.status) && !answered });
   }
   return payload;
 }
@@ -3777,6 +3784,10 @@ function App() {
   }).catch((e) => setError({
     message: e.message || "the request failed before it reached the server",
     unreachable: e.unreachable === undefined ? e.name === "TypeError" : e.unreachable,
+    // `status` as well, and for the same reason: the panel distinguishes a
+    // console whose own modules disagree (503) from one that could not read the
+    // data, and dropping the code here left it unable to tell.
+    status: e.status,
   })), []);
   useEffect(() => { load(); }, [load]);
   useEffect(() => { document.documentElement.classList.toggle("dark", dark); }, [dark]);
@@ -3837,14 +3848,27 @@ function App() {
   useEffect(() => { if (window.lucide?.createIcons) window.lucide.createIcons(); });
 
   if (error) {
-    // Two different failures, and telling a reader the wrong one costs them a
-    // debugging session: the server answering with a problem, versus nothing
-    // answering at all. Only the first is about the database.
+    // Three different failures, and telling a reader the wrong one costs them a
+    // debugging session: nothing answering at all, the server answering that its
+    // own code is inconsistent, and the server failing to read the data. Only the
+    // last is about the database.
+    //
+    // The middle case was added after it cost exactly that. A console published
+    // the night before answered `/api/dataset` with "internal error"; this page
+    // said "could not read the database"; the database was fine and had been read
+    // on that very request. The tree had been merged underneath a running process,
+    // so a module loaded at startup and one imported after the merge disagreed.
+    // The server now names that case — see `Handler._stale_source`.
     const unreachable = !!error.unreachable;
+    const stale = error.status === 503 && /source changed on disk/.test(error.message || "");
     return html`<div style=${{ padding: 40, maxWidth: "70ch" }}>
-      <${Alert} variant=${unreachable ? "warning" : "danger"}><div>
+      <${Alert} variant=${unreachable || stale ? "warning" : "danger"}><div>
         <div class="mrd-alert-title">
-          ${unreachable ? "The console is not answering" : "The console could not read the database"}
+          ${unreachable
+            ? "The console is not answering"
+            : stale
+            ? "The console is running code that has since changed"
+            : "The console could not read the database"}
         </div>
         <div class="mrd-alert-desc" style=${{ whiteSpace: "pre-wrap" }}>${error.message}</div>
         ${unreachable && html`

@@ -218,11 +218,43 @@ class Handler(BaseHTTPRequestHandler):
             # socketserver and printed a second traceback under "Exception
             # occurred during processing of request".
             log.debug("GET %s: client went away", route)
+        except ImportError as exc:
+            self._stale_source(f"GET {route}", exc)
         except Exception:
             log.exception("GET %s failed", route)
             self._error(500, "internal error; see the server log")
 
     do_HEAD = do_GET
+
+    #: What a lazily-imported module failing to import almost always means here.
+    #:
+    #: This server reads its Python once, at startup, and its static files and
+    #: migrations from disk on every request. Update the tree underneath a running
+    #: instance — a merge, a pull — and the process is half of each: modules loaded
+    #: at startup stay yesterday's, and any module first imported *after* the change
+    #: is loaded fresh from today's files. The two then disagree.
+    #:
+    #: Observed exactly once and reported as a database fault, which cost an hour:
+    #: a console published at 23:19 answered `/api/dataset` with "internal error"
+    #: the next day. `capex` had never been imported, so the first request after
+    #: the merge loaded the new one, which imports `tracker.pairs`, which imports
+    #: `NotDuplicate` from a `tracker.models` that had been in memory since the
+    #: previous evening and did not have it. Nothing was wrong with the database;
+    #: it was read successfully on the same request.
+    #:
+    #: An `ImportError` reaching this handler is very nearly diagnostic: every
+    #: import this codebase performs at request time is of a module that ships
+    #: beside it, so the only ways to fail are a broken install — which would not
+    #: have started — or a tree that moved.
+    def _stale_source(self, what: str, exc: ImportError) -> None:
+        log.exception("%s failed on an import; the source tree changed underneath", what)
+        self._error(
+            503,
+            f"{exc}\n\n"
+            "The console's source changed on disk after this process started, so its "
+            "modules no longer agree with each other. Nothing is wrong with the "
+            "database. Restart the console and this goes away.",
+        )
 
     def _unauthenticated(self, route: str) -> None:
         """Serve the login form, and otherwise nothing at all.
@@ -316,6 +348,8 @@ class Handler(BaseHTTPRequestHandler):
             self._error(404, f"no route {parsed.path!r}")
         except ConnectionError:
             log.debug("POST %s: client went away", parsed.path)
+        except ImportError as exc:
+            self._stale_source(f"POST {parsed.path}", exc)
         except Exception:
             log.exception("POST %s failed", parsed.path)
             self._error(500, "internal error; see the server log")

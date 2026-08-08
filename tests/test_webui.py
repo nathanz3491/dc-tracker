@@ -1629,3 +1629,67 @@ def test_the_infer_route_returns_the_analysis_as_structure(server, monkeypatch):
     assert body["obstacles"][0]["category"] == "transmission"
     assert body["signals"][0]["confidence"] == 0.7
     assert body["rejected"] == []
+
+
+# --- a process whose source moved underneath it --------------------------------
+
+
+def test_a_stale_process_says_so_instead_of_blaming_the_database(server, monkeypatch):
+    """This server reads its Python once and its files every request.
+
+    Merge under a running instance and it becomes half of each: modules loaded at
+    startup stay yesterday's, and anything first imported afterwards is loaded
+    fresh from today's files. Observed live — a console published at 23:19
+    answered `/api/dataset` with "internal error" the next day, because `capex`
+    had never been imported, so the first request after a merge loaded the new
+    one, which imports `tracker.pairs`, which imports `NotDuplicate` from a
+    `tracker.models` that had been in memory since the previous evening.
+
+    The database was read successfully on that very request. Reporting it as a
+    database fault cost an hour, so the shape of the failure is asserted here:
+    503, not 500, and a sentence naming the restart.
+    """
+
+    def explode(*args, **kwargs):
+        raise ImportError("cannot import name 'NotDuplicate' from 'tracker.models'")
+
+    monkeypatch.setattr("tracker.webui.dataset.build", explode)
+    address, _ = server
+    status, body = request(address, "/api/dataset")
+
+    assert status == 503, "not a 500: this is a diagnosable condition with a known fix"
+    assert "NotDuplicate" in body["error"], "the original import failure survives"
+    assert "Restart the console" in body["error"]
+    assert "Nothing is wrong with the database" in body["error"]
+
+
+def test_a_stale_process_is_caught_on_the_write_routes_too(server, monkeypatch):
+    def explode(*args, **kwargs):
+        raise ImportError("no module named 'tracker.pairs'")
+
+    monkeypatch.setattr("tracker.infer.analyse", explode)
+    monkeypatch.setattr("tracker.llm.reasoning_extractor", lambda settings=None: object())
+    address, _ = server
+    status, body = request(address, "/api/infer", "POST", {"project_id": 1, "confirm": "infer"})
+
+    assert status == 503
+    assert "Restart the console" in body["error"]
+
+
+def test_the_consoles_own_error_is_never_reported_as_the_console_being_down(server, monkeypatch):
+    """`unreachable` means something in front answered instead of the console.
+
+    A JSON `error` body is proof that it did not — that shape comes from
+    `Handler._error` and nowhere else. The client used to read any 503 as a
+    gateway failure, so the console's own "restart me" answer arrived under the
+    heading "The console is not answering", which sends the reader to check a
+    tunnel that is working.
+    """
+    from tracker.webui import assets
+
+    served = assets.STATIC_ROOT / "app.js"
+    source = served.read_text(encoding="utf-8")
+    assert "const answered = payload?.error != null" in source
+    assert "_isGateway(res.status) && !answered" in source
+    # And the panel needs the code to tell the two apart, which means carrying it.
+    assert "status: e.status," in source
