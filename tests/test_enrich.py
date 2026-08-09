@@ -276,6 +276,33 @@ def test_search_harvester_uses_the_provider(session, monkeypatch):
     assert provider.queries, "the provider must actually be queried"
 
 
+def test_search_harvester_mines_wikipedia_hits(session, monkeypatch):
+    """A Wikipedia hit is worth more than its own page: its references name the
+    primary sources — the operator's IR release above all."""
+    from tracker.config import Settings
+    from tracker.ingest import wiki
+
+    monkeypatch.setitem(Settings.model_config, "env_file", None)
+    monkeypatch.setattr(
+        wiki,
+        "external_links",
+        lambda url, settings=None: [
+            "https://investor.example/press/stack-hillsboro-data-center-expansion",
+            "https://opencorporates.example/companies/123",
+        ],
+    )
+    settings = Settings(minimax_api_key="x")
+    project = add_project(session)
+    provider = FakeSearch(["https://en.wikipedia.org/wiki/STACK_Hillsboro"])
+
+    harvest = enrich.harvest_search(
+        session, project, enrich.for_project(project), settings=settings, provider=provider
+    )
+    assert "https://investor.example/press/stack-hillsboro-data-center-expansion" in harvest.urls
+    assert not any("opencorporates" in u for u in harvest.urls), "no keyword in the slug"
+    assert harvest.note and "wikipedia reference" in harvest.note
+
+
 # --- the loop ---------------------------------------------------------------
 
 

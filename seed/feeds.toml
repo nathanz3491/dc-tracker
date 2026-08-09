@@ -489,6 +489,21 @@ company = "Meta"
 topic_implied = false
 max_urls = 20000
 
+# Meta's dedicated data-center site: one page per campus plus a news archive
+# ("Deepening our investment in Richland Parish"). Google's top result for a
+# Meta campus is this site, and until this entry existed it classified as
+# general_media (weight 1) — the operator's own page ranked below the trade
+# press that rewrote it. robots.txt allows crawling and advertises the sitemap
+# (verified 2026-08-08). topic_implied: every page here is a data center.
+[[sitemap]]
+name = "meta-datacenters"
+url = "https://datacenters.atmeta.com/sitemap.xml"
+source_type = "company_filing"
+company = "Meta"
+topic_implied = true
+max_children = 8
+max_urls = 20000
+
 [[sitemap]]
 name = "databank-newsroom"
 url = "https://www.databank.com/sitemap.xml"

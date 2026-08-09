@@ -91,6 +91,16 @@ PLACEHOLDER_MARKER = "PLACEHOLDER"
 #: move the score. See :func:`compute`.
 DERIVED_PREFIX = "derived:"
 
+#: Registrable domains that are *tertiary*: they aggregate and summarize other
+#: publications rather than reporting first-hand. A citation from one is kept —
+#: it floors the score at 1 and its quotes are real — but it never counts toward
+#: domain independence, key-field agreement, or conflict: Wikipedia's capacity
+#: figure IS the trade-press figure one step removed, so letting it corroborate
+#: would launder aggregation into independence. The same reasoning already
+#: counts five articles on one outlet as one source; this extends it to an
+#: outlet whose every article is a digest of the others.
+TERTIARY_DOMAINS = frozenset({"wikipedia.org"})
+
 #: Multi-part public suffixes we must not truncate to two labels, or
 #: "bbc.co.uk" and "guardian.co.uk" would collapse into one "source".
 _COMPOUND_SUFFIXES = frozenset(
@@ -153,6 +163,11 @@ class SourceView:
 def is_derived(source: SourceView) -> bool:
     """True when this row was computed from reference data, not reported."""
     return (source.extractor or "").startswith(DERIVED_PREFIX)
+
+
+def is_tertiary(source: SourceView) -> bool:
+    """True when this citation aggregates other coverage rather than reporting."""
+    return registrable_domain(source.url) in TERTIARY_DOMAINS
 
 
 @dataclass(frozen=True)
@@ -293,6 +308,15 @@ def compute(
     weights = [SOURCE_WEIGHTS.get(s.source_type, 1) for s in sources]
     best = max(weights)
     best_type = sources[weights.index(best)].source_type
+    # A tertiary source (Wikipedia) is a citation and floors the score at 1, but
+    # it is one step removed from the coverage it summarizes, so it takes no part
+    # in corroboration, agreement, or conflict below. Without this, one press
+    # release plus the Wikipedia paragraph written from it would read as two
+    # independent domains and reach 3 — the score reserved for two parties.
+    tertiary = sum(1 for s in sources if is_tertiary(s))
+    testimony = [s for s in sources if not is_tertiary(s)]
+    if tertiary:
+        reasons.append(f"{tertiary} tertiary source(s) do not corroborate")
     # Corroboration is counted only over citations that support a confirmed value.
     # `source.fields` lists quote-backed values only, so an empty one means every
     # claim that source made is 待确认 — and counting it as an independent domain
@@ -300,9 +324,9 @@ def compute(
     # guesses. That is a guess buying the trust of a quote, which the tier exists to
     # prevent. Such a source is still a citation, so the floor rule below still
     # grants it 1: it just cannot corroborate anything.
-    domains = independent_domains(s for s in sources if (s.fields or "").strip())
-    conflicts = find_conflicts(sources)
-    agreements = find_agreements(sources)
+    domains = independent_domains(s for s in testimony if (s.fields or "").strip())
+    conflicts = find_conflicts(testimony)
+    agreements = find_agreements(testimony)
 
     # A single source caps at 2 no matter how authoritative it is. 3 means
     # "corroborated or human-checked", and one press release is neither — it is
@@ -368,6 +392,7 @@ __all__ = [
     "OFFICIAL_TYPES",
     "PLACEHOLDER_MARKER",
     "SOURCE_WEIGHTS",
+    "TERTIARY_DOMAINS",
     "Score",
     "SourceView",
     "cited_fields",
@@ -377,6 +402,7 @@ __all__ = [
     "find_conflicts",
     "independent_domains",
     "is_derived",
+    "is_tertiary",
     "needs_review",
     "registrable_domain",
 ]

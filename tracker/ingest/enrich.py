@@ -13,8 +13,9 @@ for a field a free one would have filled:
 3. **retry** — this project's URLs that previously failed to fetch.
 4. **archive** — sitemap sweep, filtered to this project. Key-free, reaches back
    years, and is the main reason this works without a search API.
-5. **search** — Google CSE, with queries built from the project's *own* gaps.
-   Skipped with a clear message when no key is configured.
+5. **search** — the configured web-search backend (Serper recommended), with
+   queries built from the project's *own* gaps, and Wikipedia hits mined for
+   their references. Skipped with a clear message when no key is configured.
 6. **refresh** — re-read the project's existing citations. Articles get edited,
    and a re-read under the current gate can lift a value the old one dropped.
 
@@ -341,7 +342,15 @@ def harvest_search(
     settings: Settings,
     provider: object | None = None,
 ) -> Harvest:
-    """Google CSE, aimed at this project's gaps. Needs keys."""
+    """The configured search backend (Serper/Google/Brave/Bocha), aimed at this
+    project's gaps. Needs one key in .env.
+
+    A Wikipedia article among the hits is mined for its references too — the
+    campus article's bibliography names the operator's own announcements and
+    the local coverage, which is precisely what a gap-filling read wants.
+    """
+    from tracker.ingest import wiki
+    from tracker.ingest.discover import load_config
     from tracker.ingest.search import (
         QuotaExhausted,
         SearchError,
@@ -365,12 +374,14 @@ def harvest_search(
 
     urls: list[str] = []
     ran = 0
+    note = ""
     for query in queries:
         try:
             hits = provider.search(query, limit=settings.search_results_per_query)
         except QuotaExhausted as exc:
             log.warning("%s", exc)
-            return Harvest("search", urls, note=f"quota exhausted after {ran} quer(ies): {exc}")
+            note = f"quota exhausted after {ran} quer(ies): {exc}"
+            break
         except SearchError as exc:
             log.warning("query %r failed: %s", query, exc)
             continue
@@ -378,7 +389,25 @@ def harvest_search(
         for hit in hits:
             if is_useful_host(hit.url) and hit.url not in urls:
                 urls.append(hit.url)
-    return Harvest("search", urls, note=f"{ran} quer(ies) run")
+
+    wiki_urls = [u for u in urls if wiki.is_wikipedia(u)]
+    mined = 0
+    if wiki_urls:
+        try:
+            _, spec = load_config()
+        except Exception as exc:  # a broken feeds.toml should not kill the harvest
+            log.warning("skipping wikipedia mining: %s", exc)
+        else:
+            for candidate in wiki.mine(wiki_urls, spec, settings=settings):
+                if candidate.url not in urls:
+                    urls.append(candidate.url)
+                    mined += 1
+
+    if not note:
+        note = f"{ran} quer(ies) run"
+    if mined:
+        note += f"; {mined} wikipedia reference(s)"
+    return Harvest("search", urls, note=note)
 
 
 def harvest_refresh(session: Session, project_id: int) -> Harvest:

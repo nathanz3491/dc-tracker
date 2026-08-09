@@ -147,7 +147,9 @@ tracker sync
 
 Four phases: **discover** new candidate articles from the feeds, **extract** them
 into the database, **refresh** existing projects by re-reading their sources, then
-**list** the result. Needs the API key set as above.
+**list** the result. Needs the API key set as above. When a search key is also
+configured (see "Search" below), the discover phase runs LLM-proposed web
+searches automatically — `--search 0` skips them for a run.
 
 Both crawl phases are capped, because each article costs an LLM call:
 
@@ -254,21 +256,37 @@ ago never appears in them. Search reaches back for it.
 tracker search "Meta Richland Parish Louisiana data center megawatts"
 tracker search --from-llm 20            # let MiniMax propose the queries
 tracker search --from-llm 20 --print-only   # just show them, search nothing
-tracker sync --search 10                # fold searching into the one-command loop
+tracker sync --search 10                # more searches than the default
+tracker sync --search 0                 # skip searching this run
 ```
 
-Needs one search key in `.env`. Three backends are supported, and whichever key
-you add is picked up automatically:
+Needs one search key in `.env` — **this project uses Serper**
+(`TRACKER_SEARCH_PROVIDER=serper`). Once any key is configured, `tracker sync`
+runs its search phase automatically and `tracker enrich`'s search harvester
+stops being skipped; `--search 0` opts a sync out. Four backends are supported,
+and whichever key you add is picked up automatically:
 
 | backend | variables | free tier | card to sign up | index |
 |---|---|---|---|---|
 | **Serper** | `TRACKER_SERPER_API_KEY` | 2500 queries | no | Google |
 | Google | `TRACKER_GOOGLE_API_KEY` + `TRACKER_GOOGLE_CSE_ID` | 100/day | no | Google |
 | Brave | `TRACKER_BRAVE_API_KEY` | 2000/month | yes | Brave's own |
+| Bocha | `TRACKER_BOCHA_API_KEY` | pay-as-you-go | no (CN signup) | Chinese-web-heavy; leads, not citations |
 
 Pin one explicitly with `TRACKER_SEARCH_PROVIDER=serper`. `tracker search` prints
 exactly where to get each key if none is set, and `--print-only` works without any
 of them so you can run the queries by hand.
+
+**A Wikipedia hit is mined for its references.** The top result for a tracked
+campus is routinely its Wikipedia article, and the article's References section
+is a curated bibliography of primary sources — measured on Hyperion, 50 external
+links including the investor-relations release behind the Blue Owl joint
+venture, which no configured feed carries. Search (and `enrich`) queue the
+survivors of a keyword pass alongside the article itself, with Wayback wrappers
+unwrapped to the URL they archived. The article is also extracted like any page,
+under one guard: a wikipedia.org citation never counts as an independent domain
+in `confidence`, because Wikipedia summarizes the same coverage the row already
+cites — it can supply quotes and leads, never corroboration.
 
 **Serper is the least friction and the best default here.** It returns Google's
 index, which has the deepest coverage of US data center trade press, and its
@@ -292,11 +310,14 @@ instrument here regardless of the plumbing. Asking for it by name
 (`TRACKER_SEARCH_PROVIDER=bing`) prints that explanation rather than "unknown
 provider".
 
-**You probably do not need this.** `--deep` above reaches the same historical
-projects with no key and no quota, and it was added after search precisely because
-setting up two Google credentials to find articles that a sitemap lists for free is
-poor value. Search earns its place only when you want a *specific* project that no
-configured site has covered.
+**Why search runs by default now, where it used to be optional.** `--deep` still
+reaches the configured archives with no key and no quota — but only those. On a
+database `sync` has already worked through, `enrich`'s free harvesters (queue,
+retry, archive) draw from exactly the corpora sync drained, so search was the
+one harvester that could reach new ground and it was silently skipped without a
+key. Measured on Hyperion (#10) after configuring Serper: queue 0, retry 0,
+search 42 URLs — the official campus page, the state economic-development
+release, and 25 Wikipedia references among them.
 
 **`--from-llm` lets the model guess, and that is safe for one reason: nothing it
 says is stored.** Asked for candidate projects it returns names from its training
@@ -353,7 +374,7 @@ field a free one would have filled:
 | queue | free | already-discovered candidates whose slug names this project |
 | retry | fetch | this project's URLs that previously failed |
 | archive | fetch | sitemap sweep filtered to this project — the key-free search |
-| search | API | Google CSE, queried against this project's *own* gaps |
+| search | API | the configured backend (Serper here), queried against this project's *own* gaps; Wikipedia hits mined for their references |
 | refresh | fetch | re-read its existing citations, which get edited |
 
 Each round harvests, extracts, re-measures, and repeats. It stops when a round fills
@@ -371,11 +392,14 @@ specifically: `crawl.run(dry_run=True)` still fetches every page and still pays 
 every LLM call — it only declines to commit — so on the most expensive command in the
 tool, extraction is skipped outright instead.
 
-**Its reach is capped by the corpus, not by the budget.** Measured on a 94-project
-database with no search key: 17 projects had unread archive articles and 77 had none,
-because the configured archives simply never covered them. A search key is what lifts
-that ceiling — see the backend table below; without one, `enrich` on a project the
-trade press ignored will honestly report that it found nothing to read.
+**Without a search key, its reach is capped by the corpus.** Measured on a
+94-project database with none: 17 projects had unread archive articles and 77 had
+none, because the configured archives simply never covered them — on a database
+`sync` has already worked through, the free harvesters draw from exactly the
+corpora sync drained, and `enrich` honestly reports that it found nothing to
+read. The configured Serper key is what lifts that ceiling: measured on Hyperion
+(#10), queue and retry harvested 0 and search harvested 42 URLs, 25 of them
+references mined from the campus's Wikipedia article.
 
 ### The whole dataset as one page
 
@@ -2108,6 +2132,14 @@ is counted by **registrable domain**, not by row: five articles on one outlet ar
 one source, because aggregators recycle each other's reporting and counting rows
 would inflate confidence exactly where it should not be. Any citation at all
 floors the score at 1, per the PRD's definition of done.
+
+The same reasoning extends to **tertiary domains** (`TERTIARY_DOMAINS`, today
+just wikipedia.org): a Wikipedia citation is kept, quotable and worth its floor
+of 1, but it never counts toward domain independence, agreement, or conflict.
+Its paragraph on a campus is the trade-press coverage one step removed, so
+letting it corroborate would launder aggregation into independence — and letting
+it *conflict* would dock a row for Wikipedia's staleness rather than for a real
+disagreement between reporters.
 
 `updated_at` means "a field changed". `last_verified_at` means "an operator says
 this row is right" (PRD open question Q4), and it is the only path from a single

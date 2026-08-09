@@ -72,6 +72,45 @@ initial build of the v1 PRD.
   dry. Exactly one of ids, `--select` or `--all` may be given — silently unioning
   them would let `enrich 90 --all` spend the whole budget while reading as though
   it targeted one project.
+- **Wikipedia is a source now — cited under guard, and mined for its references**
+  (`tracker/ingest/wiki.py`, `tracker/ingest/search.py`, `tracker/confidence.py`).
+  Google's first result for a tracked campus is routinely its Wikipedia article,
+  and the blocklist threw it away. It is now kept, with the two halves handled
+  differently because they are different things:
+
+  - **The article** is extracted like any page — the evidence gate applies
+    unchanged — but `confidence.TERTIARY_DOMAINS` keeps a wikipedia.org citation
+    out of domain independence, key-field agreement, and conflicts. Wikipedia's
+    capacity figure IS the trade-press figure one step removed, so letting it
+    corroborate would launder aggregation into independence; letting it *conflict*
+    would dock rows for Wikipedia's staleness. It still floors the score at 1.
+  - **Its references** are mined through the MediaWiki API (`action=parse`,
+    `prop=externallinks`) — the cached article text has its hrefs stripped, so the
+    API is the only honest way to read them. Measured on Hyperion: 50 external
+    links, among them the investor.atmeta.com release behind the Blue Owl joint
+    venture — the primary source for the $27B figure this database has held the
+    superseded $10B against. Wayback wrappers are unwrapped to the URL they
+    archived, the wikimedia tool family is dropped, and a keyword pass over the
+    slug keeps a link when *any* tier fires (a reference cited by a data-center
+    article has already had its relevance judged by an editor). Capped per page.
+    Mining runs in `tracker search`, `sync`'s search phase, and `enrich`'s search
+    harvester — from the raw hits, so an opaque wiki snippet failing the keyword
+    filter does not cost the references.
+
+- **Searching is on by default once a key is configured** (`tracker/cli.py`,
+  `tracker/ingest/enrich.py`). `tracker sync` now runs its search phase
+  automatically when any backend holds a key (`--search 0` still disables it;
+  the count defaults to `TRACKER_SEARCH_MAX_QUERIES`). This closes the measured
+  gap that prompted the change: after a sync, `enrich`'s queue/retry/archive
+  harvesters draw from corpora sync already drained, so on a well-synced database
+  the search harvester was the only one that could reach new ground — and it was
+  silently skipped without a key. Verified live on Hyperion (#10) with Serper:
+  queue 0, retry 0, **search 42** URLs, 25 of them Wikipedia references.
+  The project's configured backend is Serper (`TRACKER_SERPER_API_KEY`).
+
+- **`tracker/ingest/wiki.py` tests and live fixtures** (`tests/test_wiki.py`):
+  the miner's fixtures are the Hyperion article's real external-links list as
+  returned on 2026-08-08, so the branches the live data exercises stay pinned.
 
 - **`tracker audit resolve`: the ladder that settles an impossible figure**
   (`tracker/audit.py`, `tracker/prompts/audit-resolve-v1.txt`, `tracker/cli.py`).
@@ -1221,6 +1260,23 @@ initial build of the v1 PRD.
   teach the flags they stand for.
 
 ### Fixed
+
+- **The search blocklist matched substrings, and `"x.com"` blocked every
+  `equinix.com` URL** (`tracker/ingest/search.py`). `is_useful_host` tested
+  `skip in host+path`, so a top-five operator whose newsroom already answers 403
+  — search was the one path to its coverage — was silently unreachable, along
+  with xilinx.com, spacex.com and anything else ending in those letters. Domains
+  now match on label boundaries (`host == entry` or `host.endswith("." + entry)`),
+  with `bloomberg.com/profile` carried as the one host+path prefix rule.
+  Regression-tested against equinix.com, spacex.com, and a Bloomberg article URL.
+
+- **`datacenters.atmeta.com` classified as `general_media`** (`seed/feeds.toml`).
+  Meta's dedicated data-center site — the top search result for a Meta campus,
+  one page per campus plus a news archive — was weight 1, ranking the operator's
+  own page below the trade press that rewrote it. Added as a `company = "Meta"`
+  newsroom sitemap (robots.txt allows crawling and advertises the sitemap,
+  verified live), which makes it `company_filing` weight 3, matchable on
+  locality alone, and sweepable by `sync --deep`.
 
 - **Every URL `tracker queue` printed was a prefix of a real one** (`tracker/cli.py`).
   The column was `url[:60]`, which looked tidy and was the most damaging thing in

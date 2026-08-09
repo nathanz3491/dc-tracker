@@ -306,3 +306,47 @@ def test_reasons_are_populated_for_explainability():
     score = compute([src("company_filing", "https://news.microsoft.com/a")])
     assert score.reasons
     assert any("company_filing" in r for r in score.reasons)
+
+
+# --- Tertiary sources (Wikipedia) --------------------------------------------
+
+
+def test_wikipedia_never_corroborates():
+    """One press release plus the Wikipedia paragraph written from it is one
+    party's account plus its summary — not two independent domains, and must
+    not reach 3."""
+    from tracker.confidence import is_tertiary
+
+    release = src("company_filing", "https://news.operator.com/campus", mw_planned=900)
+    wiki = src("general_media", "https://en.wikipedia.org/wiki/Campus", mw_planned=900)
+    assert is_tertiary(wiki) and not is_tertiary(release)
+
+    score = compute([release, wiki])
+    assert score.value == 2, "a tertiary source must not lift a lone release to 3"
+    assert any("tertiary" in r for r in score.reasons)
+
+
+def test_wikipedia_agreement_is_not_independent_agreement():
+    two = [
+        src("trade_press", "https://outlet.example/a", mw_planned=900),
+        src("general_media", "https://en.wikipedia.org/wiki/X", mw_planned=900),
+    ]
+    score = compute(two)
+    assert not any("independent agreement" in r for r in score.reasons)
+
+
+def test_wikipedia_disagreement_is_not_a_conflict():
+    """Wikipedia carries stale figures by nature; a mismatch with it must not
+    dock the score the way two reporters disagreeing does."""
+    two = [
+        src("trade_press", "https://outlet.example/a", mw_planned=900),
+        src("general_media", "https://en.wikipedia.org/wiki/X", mw_planned=200),
+    ]
+    score = compute(two)
+    assert not any("unresolved conflict" in r for r in score.reasons)
+
+
+def test_wikipedia_alone_still_floors_at_one():
+    """A tertiary citation is still a citation: kept, quotable, worth 1."""
+    score = compute([src("general_media", "https://en.wikipedia.org/wiki/X", mw_planned=900)])
+    assert score.value == 1
