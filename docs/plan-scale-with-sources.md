@@ -3,10 +3,12 @@
 Written 2026-08-09, after search, Wikipedia reference mining and the escalation
 ladder took the best-covered rows from 8 citations to 21–26.
 
-> **Status.** Nothing here is implemented. This is the measurement and the design
-> argument, recorded before building anything, because two of this project's four
-> added axes rotted for want of exactly that — see "The rule that should govern
-> both" below.
+> **Status, updated 2026-08-09 after building Part 2's free pass.**
+> `tracker blocks` (`tracker/blockcheck.py`) is implemented. **The measurement
+> reverses this document's own conclusion about the LLM**: the deterministic pass
+> resolves 21 of the 22 resolvable groups across the whole database, and the
+> residue an LLM would be asked about is **one question**. See "What the free pass
+> actually measured" below. Part 1 (`logic check`) is still unimplemented.
 
 Every number in this document is from `data/tracker.db` on 2026-08-09: 252
 projects, median **2** sources per project, best-covered rows at **26** (#10
@@ -223,6 +225,68 @@ This is why I think the model *can* earn its place here, where it did not for
   found, the model is decoration and should be removed rather than kept "in case".*
   That is the discipline that caught `scope`, and it only works if the number is
   written down first.
+
+## What the free pass actually measured
+
+Built as `tracker/blockcheck.py`, surfaced as `tracker blocks`. It groups by
+*designator family* — the ordinal plus the class of subdivision the label names —
+and reports; it never writes.
+
+Across the whole live database (252 projects, 286 blocks):
+
+| | |
+|---|---|
+| groups found | **23**, across 16 projects |
+| `mergeable` | **21** — 44 block rows that are 21 things |
+| `collides` | **1** |
+| `ambiguous` | **1** |
+| block rows retired if the mergeable ones are folded | **23 of 286 (8%)** |
+
+**The residue is one question.** On Fairwater, `Building 2` + `Facility 2` +
+`Second facility` + `Area II` resolve to one structure with no call. What does not
+resolve is whether `Facility 1` is `Building 1` or `Phase 1` — a bare ordinal
+between two families — and that is the only such case in the database.
+
+**So the LLM is not worth building yet, and this document was wrong to plan for
+one.** One question does not justify a prompt, a verifier, a kill criterion and a
+per-article budget. The honest next step is to answer it by hand, and revisit if
+the count grows as coverage does — which it will, since `?-1` exists on the
+best-covered row in the database and nowhere else.
+
+### What the collision found, which is worth more than the merges
+
+The single `collides` group is Hyperion (#10):
+
+```
+Phase 1            2,000 MW   under_construction
+Initial Phase      2,000 MW   under_construction
+Phase 1 IT Load    1,500 MW   planned
+```
+
+Two confirmed capacities for one phase, because **facility load and IT load are
+different measurements of the same thing** — the claim envelope's "what is a value
+a value of", arriving one level below where that plan looked for it. A merge that
+picked 2,000 would erase the distinction; one that picked 1,500 would understate
+the campus. The rule that a merge must refuse over two confirmed capacities is
+what turns this from a silent wrong number into a question, and it is the same
+rule whose absence let `mw_built` MAX stand at 1,200 MW on Abilene.
+
+### Two false positives the build found in itself
+
+Both were caught by running against live data rather than fixtures, and both are
+recorded because each is a way string folding lies about identity:
+
+- **A capacity read as an ordinal.** `blocks._fold` turns `1.2` into `1 2`, so
+  *"Initial 1.2 GW Phase"* claimed **ordinal 2** and offered itself as a reading of
+  Building 2. Capacities are now stripped before any ordinal is read.
+  `blocks.py` knew the hazard — its own comment says "8 MW expansion says a size,
+  not a place" — and guarded it by marking such keys generic, which is not enough
+  when a bare ordinal is what you match on.
+- **A named place claiming a subdivision's ordinal.** *"Campus Two (International
+  Drive)"* is numbered 2, and it was absorbing *"Second facility"*. A bare ordinal
+  exists only because a type word was dropped, so it names a slice of this campus
+  and a named place is not a candidate for it. Fixing that turned an ambiguous
+  group into a correct four-member merge.
 
 ### What I would not do
 

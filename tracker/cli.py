@@ -2407,6 +2407,100 @@ def capex(
 
 
 #: How each duplicate signal reads on screen, and the colour of its confidence.
+@app.command()
+def blocks(
+    project_ids: Annotated[
+        list[int] | None,
+        typer.Argument(help="Only these projects. Omit for the whole database."),
+    ] = None,
+    limit: Annotated[int, typer.Option("--limit", help="Groups to show.")] = 40,
+    only: Annotated[
+        str | None,
+        typer.Option("--only", help="One verdict: mergeable, collides or ambiguous."),
+    ] = None,
+) -> None:
+    """Blocks on one project that look like one tranche named more than once.
+
+    Free, read-only, no LLM. A campus read by 25 sources acquires a name per
+    source: Fairwater held `Building 2`, `Facility 2`, `Second facility` and
+    `Area II` for one building, because `blocks.block_key` folds ordinals hard and
+    cannot fold *which noun a source chose*.
+
+    Three verdicts, and only the first is a proposal:
+
+    \b
+      mergeable  one tranche under several names; nothing disagrees
+      collides   two sources confirm DIFFERENT capacities for it — not one
+                 figure told twice, and a merge must refuse rather than pick
+      ambiguous  a bare ordinal that fits two families, e.g. "Facility 1"
+                 against both `Building 1` and `Phase 1`
+    """
+    from tracker import blockcheck
+
+    engine, _ = init_db(_db_path())
+    with session_scope(engine, commit=False) as session:
+        groups = blockcheck.scan(session, list(project_ids or []) or None)
+
+    if only:
+        wanted = only.strip().lower()
+        if wanted not in ("mergeable", "collides", "ambiguous"):
+            _fail("--only takes mergeable, collides or ambiguous")
+            return
+        groups = [g for g in groups if g.verdict == wanted]
+
+    if not groups:
+        console.print("[green]no block looks like a duplicate of another[/green]")
+        return
+
+    from collections import Counter
+
+    counts = Counter(g.verdict for g in groups)
+    saved = sum(len(g.members) for g in groups if g.verdict == "mergeable") - counts["mergeable"]
+    console.print(
+        f"[bold]{len(groups)}[/bold] group(s) across "
+        f"{len({g.project_id for g in groups})} project(s): "
+        + ", ".join(f"{counts[v]} {v}" for v in ("mergeable", "collides", "ambiguous") if counts[v])
+    )
+    if saved > 0:
+        console.print(f"[dim]folding the mergeable ones would retire {saved} block row(s)[/dim]")
+
+    style = {"mergeable": "green", "collides": "red", "ambiguous": "yellow"}
+    for group in groups[:limit]:
+        console.print()
+        console.print(
+            f"  [{style[group.verdict]}]{group.verdict:9}[/{style[group.verdict]}] "
+            f"[bold]#{group.project_id}[/bold] {group.family}  [dim]({group.evidence})[/dim]"
+        )
+        for member in group.members:
+            mw = f"{member.mw:,.0f} MW" if member.mw is not None else NA
+            if member.mw is not None and not member.mw_confirmed:
+                mw += " 待确认"
+            console.print(
+                f"    {member.label[:34]:34} {mw:>14}  {member.status:18} "
+                f"[dim]src {member.source_id}[/dim]"
+            )
+        if group.ambiguous_with:
+            console.print(
+                f"    [yellow]could equally be[/yellow]: {', '.join(group.ambiguous_with)}"
+            )
+        for conflict in group.conflicts:
+            values = ", ".join(str(v) for _, v in conflict.values)
+            if conflict.confirmed_both_ways:
+                console.print(
+                    f"    [red]{conflict.field}[/red]: {values} "
+                    "[red]— both confirmed, so this is two figures, not one[/red]"
+                )
+            else:
+                console.print(f"    [dim]{conflict.field}: {values}[/dim]")
+
+    if len(groups) > limit:
+        console.print(f"\n[dim]{len(groups) - limit} more; raise --limit to see them[/dim]")
+    console.print(
+        "\n[dim]Nothing here is written. A block is identity, and folding two of them "
+        "is a judgement — the same reason `duplicates` proposes and never merges.[/dim]"
+    )
+
+
 #: The words matter more than they look: "both hold tranche horizon-1" is a fact a
 #: reader can check in one command, and "same locality" is not evidence of
 #: anything, which is why no pair is ever raised on it alone.
