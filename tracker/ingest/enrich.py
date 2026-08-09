@@ -159,6 +159,20 @@ def report_score(states: list[FieldState]) -> tuple[int, int]:
     return sum(1 for s in attemptable if s.status == FILLED), len(attemptable)
 
 
+def will_harvest(project: Project, target: int | None) -> bool:
+    """Whether :func:`run` would harvest anything for this project at all.
+
+    Mirrors the two conditions `run` breaks on before its first round, so a
+    caller can decide whether the archive sweep is worth paying for. Kept beside
+    them deliberately: if they diverge, the sweep is either wasted or skipped
+    when it was needed.
+    """
+    gaps = for_project(project)
+    if not any(state.is_gap for state in gaps):
+        return False
+    return target is None or report_score(gaps)[0] < target
+
+
 def _label(project: Project) -> str:
     where = project.city or project.county or ""
     return f"{project.company} {project.name}".strip() + (
@@ -491,7 +505,19 @@ def run(
         if target_fields is not None:
             filled, _ = report_score(gaps)
             if filled >= target_fields:
-                report.stopped_because = f"reached the {target_fields}-field target"
+                # Say that nothing was done, not just why. On the first round this
+                # is a refusal to work, and "reached the N-field target" reads as an
+                # accomplishment — which is how `enrich 10` looked successful while
+                # never searching, reading the queue, or extracting anything.
+                report.stopped_because = (
+                    f"reached the {target_fields}-field target"
+                    if number > 1
+                    else (
+                        f"nothing harvested — already holds {filled} of the 12 tracked "
+                        f"fields, at or past the {target_fields}-field target. "
+                        f"Raise it (--target 12) or drop it (--target 0) to keep going."
+                    )
+                )
                 break
 
         current = Round(number=number)
@@ -662,14 +688,22 @@ def run_many(
     settings = settings or get_settings()
     batch = BatchReport()
 
+    # Sweep only if some project will actually harvest. The sweep is ~30 HTTP
+    # requests across 22 sitemaps and it used to run before anything asked
+    # whether it was needed, so `enrich 10` on a project already at `--target`
+    # fetched every archive in the config and then declined to do any work —
+    # a minute of requests to produce an empty report. A dry run still sweeps,
+    # because reporting what it *would* harvest is the whole point of one.
     sweep = None
-    if not skip_archive and not dry_run:
-        sweep = sweep_archives(settings, kwargs.get("fetcher"))
-        batch.sweep_note = sweep.skipped or sweep.note
-    elif not skip_archive:
-        # A dry run reports what it would harvest, and the sweep is read-only.
-        sweep = sweep_archives(settings, kwargs.get("fetcher"))
-        batch.sweep_note = sweep.skipped or sweep.note
+    if not skip_archive:
+        if any(
+            project is None or will_harvest(project, target_fields)
+            for project in (session.get(Project, pid) for pid in project_ids)
+        ):
+            sweep = sweep_archives(settings, kwargs.get("fetcher"))
+            batch.sweep_note = sweep.skipped or sweep.note
+        else:
+            batch.sweep_note = "not swept — every project named already meets the field target"
 
     # Divide the budget rather than letting the first project take what it likes.
     # Measured: with a flat per-round cap of 25 and a budget of 120, five projects
@@ -763,4 +797,5 @@ __all__ = [
     "search_queries",
     "select_projects",
     "sweep_archives",
+    "will_harvest",
 ]

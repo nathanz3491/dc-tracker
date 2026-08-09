@@ -1277,6 +1277,31 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **`tracker enrich <id>` did nothing at all on most projects, after fetching
+  every archive sitemap to find that out** (`tracker/cli.py`,
+  `tracker/ingest/enrich.py`). Two ordering defects, one symptom.
+
+  `--target` defaulted to **9**, and `run` checks it *before* its first round. So
+  on any project already holding 9+ of the 12 tracked fields — which is most of
+  the good ones — `enrich 10` broke out immediately: no queue, no retry, no
+  search, no refresh, no extraction. It reported `reached the 9-field target`,
+  which reads as an accomplishment rather than as a refusal to work. That target
+  is a *budget-sharing* rule — its own docstring says it leaves "the rest of a
+  shared budget for the next project" — and there is no next project when you
+  name one. Naming ids now means **no target**, i.e. exhaust the row, while
+  `--select`/`--all` keep 9 to spread a shared budget. `--target 12` / `--target
+  0` still override, and the first-round message now says plainly that nothing
+  was harvested and how to change it.
+
+  Worse, `run_many` swept all 22 configured sitemaps **before** anything asked
+  whether a single project needed them — ~30 HTTP requests, then an immediate
+  decline. The sweep is now conditional on some project actually reaching its
+  harvesters (`will_harvest`, kept beside the loop's own break conditions so the
+  two cannot drift apart).
+
+  Measured on Hyperion (#10), same command both times: **0 articles read → 25**,
+  behind 3 Serper queries and 23 mined Wikipedia references.
+
 - **The search blocklist matched substrings, and `"x.com"` blocked every
   `equinix.com` URL** (`tracker/ingest/search.py`). `is_useful_host` tested
   `skip in host+path`, so a top-five operator whose newsroom already answers 403

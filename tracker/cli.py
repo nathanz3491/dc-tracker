@@ -3073,8 +3073,15 @@ def enrich(
     ] = False,
     target: Annotated[
         int,
-        typer.Option("--target", help="Stop a project once it holds this many of the 12 fields."),
-    ] = 9,
+        typer.Option(
+            "--target",
+            help=(
+                "Stop a project once it holds this many of the 12 fields. Default: no "
+                "target when you name project ids (exhaust them), 9 with --select/--all "
+                "(spread the budget). 0 also means no target."
+            ),
+        ),
+    ] = -1,
     budget: Annotated[
         int,
         typer.Option("--budget", help="Total articles for the whole run, shared across projects."),
@@ -3124,6 +3131,7 @@ def enrich(
     """
     from tracker.ingest import enrich as enrich_mod
     from tracker.ingest.fetch import Crawl4AIFetcher, MissingDependency
+    from tracker.vocab import TRACKED_FIELDS
 
     chosen_ways = [
         name
@@ -3140,6 +3148,17 @@ def enrich(
     if not chosen_ways:
         _fail("give at least one project id, use --select N, or --all for every project")
         return
+
+    # The field target is a budget-sharing rule, not a definition of done: its own
+    # docstring says it leaves "the rest of a shared budget for the next project".
+    # When you name a project there IS no next project, and applying 9 there turned
+    # `enrich 10` into a no-op on any row already holding 10 of 12 fields — it
+    # printed "reached the 9-field target" without harvesting, searching or reading
+    # anything, having first fetched all 22 archive sitemaps. Naming a row is an
+    # instruction to work on it.
+    if target < 0:
+        target = 0 if project_ids else enrich_mod.DEFAULT_TARGET_FIELDS
+    target_fields = target or None
 
     escalate = None
     if browser:
@@ -3170,13 +3189,17 @@ def enrich(
                 # `select_projects` already excludes projects at or past the
                 # target, so "all" never wastes budget on finished rows.
                 chosen = enrich_mod.select_projects(
-                    session, None if enrich_all else select, target=target
+                    session,
+                    None if enrich_all else select,
+                    # `--target 0` means "no target", which for *selection* means
+                    # every project short of all twelve rather than none of them.
+                    target=target_fields or len(TRACKED_FIELDS),
                 )
                 wanted += [p for p in chosen if p not in wanted]
                 if not wanted:
                     console.print(
                         f"[green]nothing to do[/green] — every project already holds "
-                        f"{target} of the 12 tracked fields"
+                        f"{target_fields or len(TRACKED_FIELDS)} of the 12 tracked fields"
                     )
                     return
                 console.print(f"selected {len(chosen)} project(s), closest to target first")
@@ -3184,7 +3207,7 @@ def enrich(
             batch = enrich_mod.run_many(
                 session,
                 wanted,
-                target_fields=target,
+                target_fields=target_fields,
                 max_articles=budget,
                 max_articles_per_round=max_articles,
                 max_rounds=max_rounds,
@@ -3201,7 +3224,9 @@ def enrich(
     if len(batch.reports) == 1:
         _render_enrich(batch.reports[0], dry_run=dry_run)
         return
-    _render_batch(batch, target=target, dry_run=dry_run)
+    # With no target enforced, still measure against the PRD's nine: it is the bar
+    # a reader cares about even when the run was told not to stop there.
+    _render_batch(batch, target=target_fields or enrich_mod.DEFAULT_TARGET_FIELDS, dry_run=dry_run)
 
 
 def _render_batch(batch, *, target: int, dry_run: bool) -> None:

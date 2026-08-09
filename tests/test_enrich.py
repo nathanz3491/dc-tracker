@@ -853,3 +853,102 @@ def test_the_budget_is_divided_fairly_not_first_come_first_served(session):
     assert all(r.articles_read <= 2 for r in batch.reports), (
         f"one project took more than its share: {[r.articles_read for r in batch.reports]}"
     )
+
+
+# --- the target must not silently refuse to work ----------------------------
+
+
+def test_a_project_past_the_target_reports_that_it_did_nothing(session):
+    """The old message read as an accomplishment.
+
+    `enrich 10` on a row holding 10 of 12 fields printed "reached the 9-field
+    target" without harvesting, searching or extracting anything — and had
+    already fetched all 22 archive sitemaps to get there.
+    """
+    project = add_project(
+        session,
+        mw_planned=230.0,
+        mw_built=100.0,
+        investment_usd=1,
+        expected_online=dt.date(2027, 1, 1),
+        first_announced=dt.date(2024, 3, 4),
+        customer="Someone",
+        county="Washington",
+        phase="construction",
+    )
+    report = run(session, project.id, target_fields=9)
+
+    assert report.rounds == [], "no round may run once the target is already met"
+    assert "nothing harvested" in report.stopped_because
+    assert "--target" in report.stopped_because, "must say how to override it"
+
+
+def test_no_target_means_the_harvesters_actually_run(session):
+    """Naming a project is an instruction to work on it, not a suggestion."""
+    project = add_project(session, mw_planned=230.0, investment_usd=1)
+    add_queued(session, "https://x.com/stack-hillsboro-target", "STACK Hillsboro campus")
+
+    report = run(session, project.id, target_fields=None)
+    assert report.rounds, "with no target the loop must reach its harvesters"
+
+
+def test_will_harvest_mirrors_the_loops_own_break_conditions(session):
+    project = add_project(session)
+    assert enrich.will_harvest(project, None) is True
+    assert enrich.will_harvest(project, 1) is False, "already past a target of 1"
+    assert enrich.will_harvest(project, 12) is True
+
+
+def test_the_archive_is_not_swept_for_projects_that_will_not_harvest(session, monkeypatch):
+    """The sweep is ~30 requests over 22 sitemaps. It used to run before anything
+    asked whether any project needed it."""
+    swept: list[bool] = []
+
+    def spy(settings, fetcher=None):
+        swept.append(True)
+        return enrich.ArchiveSweep(candidates=[])
+
+    monkeypatch.setattr(enrich, "sweep_archives", spy)
+    project = add_project(
+        session,
+        mw_planned=230.0,
+        mw_built=100.0,
+        investment_usd=1,
+        expected_online=dt.date(2027, 1, 1),
+        first_announced=dt.date(2024, 3, 4),
+        customer="Someone",
+        county="Washington",
+        phase="construction",
+    )
+
+    batch = enrich.run_many(
+        session,
+        [project.id],
+        target_fields=9,
+        fetcher=FakeFetcher(),
+        extractor=FakeLLM(),
+        skip_archive=False,
+    )
+    assert swept == [], "nothing needed the archive, so it must not be fetched"
+    assert batch.sweep_note and "not swept" in batch.sweep_note
+
+
+def test_the_archive_is_still_swept_when_a_project_needs_it(session, monkeypatch):
+    swept: list[bool] = []
+
+    def spy(settings, fetcher=None):
+        swept.append(True)
+        return enrich.ArchiveSweep(candidates=[])
+
+    monkeypatch.setattr(enrich, "sweep_archives", spy)
+    project = add_project(session)
+
+    enrich.run_many(
+        session,
+        [project.id],
+        target_fields=None,
+        fetcher=FakeFetcher(),
+        extractor=FakeLLM(),
+        skip_archive=False,
+    )
+    assert swept == [True]
