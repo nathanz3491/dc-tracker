@@ -63,6 +63,7 @@ from tracker.normalize import (
 from tracker.prompts import Prompt, load_prompt
 from tracker.upsert import upsert_record
 from tracker.vocab import (
+    BOUND_MARKERS,
     CLAIM_AXIS_DEFAULTS,
     CLAIM_BOUNDS,
     CLAIM_MODALITIES,
@@ -716,18 +717,18 @@ def _matches_quantity(value: Any, quote: str, expr: re.Pattern[str], parser, fie
     return False
 
 
-#: Wording that licenses each non-default `bound`. The stored quote must contain
-#: one, or the bound degrades to `exact`.
+#: Wording that licenses each non-default `bound` — `vocab.BOUND_MARKERS`, not a
+#: copy of it. It moved there when the console and the CLI needed to *display* a
+#: bound derived from a stored quote: two readers of one rule, and this codebase's
+#: recurring defect is the same rule written down twice.
 #:
-#: This is the difference between an axis that carries information and one that
-#: becomes the next `severity` — a judgement no article states, uniformly `watch`
-#: on every risk in the database. A bound is not a judgement: the article either
-#: hedged the number or it did not, and the hedge is a word in the sentence.
-_BOUND_MARKERS: Final[dict[str, tuple[str, ...]]] = {
-    "approximate": ("about ", "approximately", "roughly", "around ", "~", "some ", "nearly"),
-    "at_least": ("more than", "at least", "over ", "upwards of", "north of", "in excess of", "+"),
-    "at_most": ("up to", "as much as", "no more than", "as many as", "fewer than", "less than"),
-}
+#: **Still not positional here**, which is a known limitation recorded in
+#: HANDOFF.md: this asks only whether a hedge appears somewhere in the sentence, so
+#: Hyperion's "more than $50 billion ... up from the roughly $27 billion plan" can
+#: license `approximate` off the other number's hedge. Making it positional needs
+#: the figure, and `axis_gate` is deliberately never given one — see its docstring.
+#: `vocab.bound_from_quote` is positional and is what the display path uses.
+_BOUND_MARKERS: Final[dict[str, tuple[str, ...]]] = BOUND_MARKERS
 
 #: Wording that licenses each non-default `modality`, same rule.
 #:

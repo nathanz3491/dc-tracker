@@ -1343,6 +1343,44 @@ initial build of the v1 PRD.
   having installed it — the same class of bug as the colour probes reading the
   developer's own database.
 
+- **A hedged figure reads as a hedged figure, on every surface** (`tracker/vocab.py`,
+  `tracker/export.py`, `tracker/cli.py`, `app.js`). Fairwater's `mw_built` rests on
+  *"Each exceeds 350 MW"* — a floor, stated across two sites — and every surface
+  rendered it as a bare `350`. It now reads **`350+`**.
+
+  A floor is a **suffix** rather than `≥350`, because that is how a reader outside
+  this codebase writes "or more", and the floor is the case that matters most in
+  this corpus. `~` and `≤` stay prefixes. The CLI and the console share the two
+  affix tables, so notation cannot drift between them.
+
+  Three things had to change before the number appeared at all:
+
+  - **`exceeds` was not in the marker list** — the commonest hedge in this corpus,
+    and the one under Fairwater's own figure. Also added: `exceeding`, `greater
+    than`, `or more`, `under`, `below`, `at most`, `circa`, `estimated`. The list
+    moved from `crawl` into `vocab` so the gate that *assigns* a bound and the
+    surfaces that *display* one read one copy; writing this rule down twice is how
+    `confidence.find_conflicts` became a third copy of another and started
+    disagreeing with the other two on screen.
+  - **Blocks had no bound at all.** A tranche carries no `claim_meta`, so there is
+    no axis to read — but it does store the verbatim sentence, and `_mw_bound`
+    derives one from that. Server-side, because the browser draws judgements and
+    never makes them. Hyperion's `Phase 1` now reads `~400`.
+  - **A stored `exact` falls back to the quote.** The `bound` axis reached 32% of
+    claims, and everything extracted before `exceeds` existed says `exact` — so
+    trusting the axis alone would keep reporting a floor as a point value until
+    every row is re-read.
+
+  `vocab.bound_from_quote` is **positional**, which closes a defect HANDOFF.md has
+  carried: Hyperion's *"more than $50 billion ... up from the roughly $27 billion
+  plan"* gave `approximate` to the $50B figure off the *other* number's hedge. Each
+  figure now takes only a hedge within 32 characters of itself — a window measured
+  against the two cases that decide it (gap 15 must match, gap 52 must not) rather
+  than picked — and a stated direction outranks a stated imprecision, so *"more than
+  approximately 350"* is a floor and not an estimate. The ingest gate is left
+  non-positional on purpose: it is never given the figure, and that is what stops a
+  refused axis from costing a value.
+
 - **`tracker enrich <id>` did nothing at all on most projects, after fetching
   every archive sitemap to find that out** (`tracker/cli.py`,
   `tracker/ingest/enrich.py`). Two ordering defects, one symptom.

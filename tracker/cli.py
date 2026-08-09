@@ -1460,7 +1460,13 @@ def _print_blocks(project: Project) -> None:
     for block in sorted(blocks, key=lambda b: b.block_key):
         style = _BLOCK_STYLE.get(block.status, "")
         status = f"[{style}]{block.status}[/{style}]" if style else block.status
-        mw = _fmt_mw(block.mw)
+        # The hedge the block's own quote put on this figure. A block carries no
+        # `claim_meta`, so there is no stored axis to read — but it does store the
+        # verbatim sentence, and "Each exceeds 350 MW" is a floor whether or not
+        # anything recorded that at ingest time.
+        from tracker.export import _mw_bound
+
+        mw = with_bound(_fmt_mw(block.mw), _mw_bound(block))
         if block.mw is not None and not blocks_mod.mw_is_confirmed(block):
             mw = f"[red]{mw} 待确认[/red]"
         when = block.energized_on or block.expected_online
@@ -1531,7 +1537,20 @@ def _print_itemisation(project: Project) -> None:
 #: One glyph rather than a column. These are qualifiers on a number, not facts of
 #: their own, and a `bound` column would be empty on most rows and would push the
 #: figures out of alignment on the rest.
-_BOUND_GLYPH: dict[str, str] = {"approximate": "~", "at_least": "≥", "at_most": "≤"}
+#: `at_least` is a SUFFIX — "350+" rather than "≥350" — because that is how a
+#: reader outside this codebase writes "or more", and the floor is the case that
+#: matters most: Fairwater's 350 MW rests on "Each exceeds 350 MW". The console
+#: uses the same two tables, so the two surfaces cannot drift apart.
+_BOUND_PREFIX: dict[str, str] = {"approximate": "~", "at_most": "≤"}
+_BOUND_SUFFIX: dict[str, str] = {"at_least": "+"}
+
+
+def with_bound(rendered: str, bound: str | None) -> str:
+    """A rendered quantity carrying the hedge its own source used."""
+    if not rendered or rendered == NA or not bound or bound == "exact":
+        return rendered
+    return f"{_BOUND_PREFIX.get(bound, '')}{rendered}{_BOUND_SUFFIX.get(bound, '')}"
+
 
 #: A date stated to a year rendered as `2024-01-01` asserts a precision the
 #: article never gave. `normalize.parse_date` has always known the difference.
@@ -1542,12 +1561,26 @@ _DATE_SUFFIX: dict[str, str] = {"half": " (H1/H2)", "quarter": " (quarter)"}
 
 
 def _qualified(project, field: str, rendered: str) -> str:
-    """Prefix a quantity with the hedge its own source used, if any."""
+    """A quantity carrying the hedge its own source used, if any.
+
+    The stored axis wins, and where it says `exact` the quote is read directly.
+    That fallback is doing most of the work today for two reasons: the `bound`
+    axis reached only 32% of claims, and `exceeds` — the commonest hedge in this
+    corpus, and the one under Fairwater's own `mw_built` — was missing from the
+    marker list until it moved into `vocab`. Rows extracted before that say
+    `exact` and will keep saying it until they are re-read, so a display that
+    trusted the axis alone would report "Each exceeds 350 MW" as a point value.
+    """
     from tracker.gaps import provenance
+    from tracker.vocab import bound_from_quote
 
     prov = provenance(project, field)
-    glyph = _BOUND_GLYPH.get(prov.bound) if prov else None
-    return f"{glyph}{rendered}" if glyph else rendered
+    if prov is None:
+        return rendered
+    bound = prov.bound
+    if bound == "exact" and prov.quote:
+        bound = bound_from_quote(prov.quote, getattr(project, field, None))
+    return with_bound(rendered, bound)
 
 
 def _fmt_date(project, field: str) -> str:

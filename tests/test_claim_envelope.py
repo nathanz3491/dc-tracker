@@ -25,7 +25,7 @@ import datetime as dt
 import pytest
 
 from tracker.ingest import crawl
-from tracker.vocab import CLAIM_AXIS_DEFAULTS
+from tracker.vocab import BOUND_MARKERS, CLAIM_AXIS_DEFAULTS, bound_from_quote
 
 
 def gate(entry: dict, quote: str, *, blocks: frozenset[str] = frozenset()) -> dict:
@@ -278,3 +278,66 @@ def test_a_full_date_records_no_precision_to_disclose():
         }
     )
     assert precisions.get("expected_online") in (None, "day")
+
+
+# --- reading a bound off the stored quote ------------------------------------
+
+
+class TestBoundFromQuote:
+    """`vocab.bound_from_quote`, which is what every *display* surface uses.
+
+    Distinct from `crawl.axis_gate`, which assigns a bound at ingest and is
+    deliberately never given the figure. This one is positional *because* it has
+    the figure, which is how it settles the two-hedge sentence the gate cannot.
+    """
+
+    @pytest.mark.parametrize(
+        ("quote", "value", "expected"),
+        [
+            # The live Fairwater case: a floor stored as a point value on two rows.
+            ("Each exceeds 350 MW and is scaling toward multi-GW", 350.0, "at_least"),
+            ("the campus will draw about 2,000 megawatts", 2000.0, "approximate"),
+            ("up to 1.2 GW of capacity", 1200.0, "at_most"),
+            ("over 200 megawatts of power capacity", 200.0, "at_least"),
+            ("a 900 MW campus", 900.0, "exact"),
+            # Written as gigawatts where the column holds megawatts.
+            ("more than 1.2 GW committed", 1200.0, "at_least"),
+            # Dollars, where the sentence says "billion" and the column holds digits.
+            ("roughly $27 billion in total development costs", 27_000_000_000, "approximate"),
+            # No quote at all, and a figure the sentence does not contain.
+            (None, 350.0, "exact"),
+            ("", 350.0, "exact"),
+            ("more than 500 MW", 350.0, "exact"),
+        ],
+    )
+    def test_reads_the_hedge_the_article_used(self, quote, value, expected):
+        assert bound_from_quote(quote, value) == expected
+
+    def test_two_figures_two_hedges_each_keeps_its_own(self):
+        """The defect HANDOFF.md records against the ingest gate.
+
+        Source 12 on Hyperion reads this sentence, and a presence-only check read
+        `approximate` for the $50B figure off the *other* number's "roughly".
+        """
+        quote = "require more than $50 billion in investment, up from the roughly $27 billion plan"
+        assert bound_from_quote(quote, 50_000_000_000) == "at_least"
+        assert bound_from_quote(quote, 27_000_000_000) == "approximate"
+
+    def test_the_nearest_hedge_wins(self):
+        """ "more than approximately 350" is a floor, not an estimate."""
+        assert bound_from_quote("more than approximately 350 MW", 350.0) == "at_least"
+
+    def test_a_hedge_far_from_the_figure_is_not_its_hedge(self):
+        far = "roughly a decade of planning went into the site before the 350 MW campus"
+        assert bound_from_quote(far, 350.0) == "exact"
+
+    def test_the_gate_and_the_display_share_one_marker_list(self):
+        """Two copies of this rule is how `find_conflicts` became a third copy of
+        the 待确认 rule and started disagreeing with the other two on screen."""
+        from tracker.ingest.crawl import _BOUND_MARKERS
+
+        assert _BOUND_MARKERS is BOUND_MARKERS
+
+    def test_exceeds_is_licensed(self):
+        """It was missing, and it is the commonest hedge in this corpus."""
+        assert "exceeds" in BOUND_MARKERS["at_least"]

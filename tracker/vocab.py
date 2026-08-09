@@ -300,6 +300,94 @@ CLAIM_BOUNDS: Final[tuple[str, ...]] = (
     "at_most",
 )
 
+#: Wording that licenses each non-default `bound`. One list, read by the extraction
+#: gate that *assigns* a bound and by the readers that *display* one.
+#:
+#: This is the difference between an axis that carries information and one that
+#: becomes the next `severity` — a judgement no article states, uniformly `watch`
+#: on every risk in the database. A bound is not a judgement: the article either
+#: hedged the number or it did not, and the hedge is a word in the sentence.
+#:
+#: It lives here rather than in `crawl` because two surfaces need it and this
+#: codebase's recurring defect is the same rule written down twice —
+#: `confidence.find_conflicts` is documented as a third copy of the 待确认 rule,
+#: already inconsistent with the other two on screen.
+BOUND_MARKERS: Final[dict[str, tuple[str, ...]]] = {
+    "approximate": (
+        "about ",
+        "approximately",
+        "roughly",
+        "around ",
+        "~",
+        "some ",
+        "nearly",
+        "circa",
+        "estimated",
+        "an estimated",
+        "close to",
+        "almost",
+    ),
+    "at_least": (
+        "more than",
+        "at least",
+        "over ",
+        "upwards of",
+        "north of",
+        "in excess of",
+        "+",
+        # `exceeds` was missing, and it is the commonest form of all: Fairwater's
+        # own `mw_built` rests on "Each exceeds 350 MW and is scaling toward
+        # multi-GW", a floor across two sites that the row stored as a point value
+        # on both of them.
+        "exceeds",
+        "exceeding",
+        "greater than",
+        "at minimum",
+        "or more",
+        "plus",
+        "surpasses",
+        "beyond ",
+    ),
+    "at_most": (
+        "up to",
+        "as much as",
+        "no more than",
+        "as many as",
+        "fewer than",
+        "less than",
+        "under ",
+        "below ",
+        "at most",
+        "or less",
+        "capped at",
+    ),
+}
+
+#: How many characters before a figure a hedge may sit and still be *its* hedge.
+#:
+#: **The check is positional, and the version it replaces was not.** Asking only
+#: whether a hedge appears anywhere in the sentence licensed the wrong one on
+#: Hyperion: source 12 reads "require more than $50 billion in investment, up from
+#: the roughly $27 billion plan" — two figures, two hedges — and `approximate` was
+#: read off the *other* number's "roughly".
+#:
+#: Measured against the cases that decide it, rather than picked:
+#:
+#:     "more than approximately 350 MW"                       gap 15  -> must match
+#:     "roughly a decade of planning ... before the 350 MW"   gap 52  -> must NOT
+#:
+#: 32 sits between them with room for stacked hedges ("in excess of approximately"
+#: is 27) and none for reaching across a clause into another figure's hedge.
+BOUND_WINDOW: Final = 32
+
+#: A stated direction outranks a stated imprecision when both attach to one figure.
+#:
+#: "more than approximately 350 MW" is a floor around an estimate, and the floor is
+#: the load-bearing half: rendering it `~350` throws away the one thing the sentence
+#: committed to. Nearest-marker-wins gets this backwards, because "approximately"
+#: always sits closer to the number than the qualifier wrapping it.
+_BOUND_PRECEDENCE: Final[dict[str, int]] = {"at_least": 2, "at_most": 2, "approximate": 1}
+
 #: Whether the article says a thing has happened, is contracted, or is hoped for.
 #:
 #: The domain is almost entirely about the future, and the schema had one `phase`
@@ -430,3 +518,81 @@ def sql_in(column: str, allowed: tuple[str, ...]) -> str:
     """
     values = ", ".join(f"'{v}'" for v in allowed)
     return f"{column} IN ({values})"
+
+
+def bound_from_quote(quote: str | None, value: object) -> str:
+    """The bound a quoted sentence puts on one figure. `exact` when it hedges none.
+
+    Reads the *stored* quote, which is verbatim article text — the same rule the
+    evidence gate follows, and the reason this cannot be talked into a hedge:
+    `_verbatim_run` may have repaired the model's wording to the article's own, and
+    checking the model's version would let it license a bound by writing one into a
+    sentence nobody published.
+
+    **Positional.** The hedge has to sit within `BOUND_WINDOW` characters before
+    the figure itself, so a sentence carrying two figures and two hedges gives each
+    number its own — Hyperion's "more than $50 billion ... up from the roughly $27
+    billion plan" no longer reads `approximate` off the wrong one.
+
+    `value` is matched loosely, because the sentence writes "1.2 GW" or "$50
+    billion" where the column holds 1200.0 or 50000000000. Every plausible spelling
+    of the leading digits is tried, and a figure the sentence does not contain
+    yields `exact` rather than a guess.
+    """
+    text = (quote or "").lower()
+    if not text:
+        return "exact"
+
+    positions = [index for token in _value_spellings(value) for index in _find_all(text, token)]
+    if not positions:
+        return "exact"
+
+    # A stated direction beats a stated imprecision, and only then does the nearer
+    # marker win. Ordering by distance alone reads "more than approximately 350" as
+    # an estimate, because "approximately" is always the closer of the two.
+    best: tuple[int, int, str] | None = None
+    for bound, markers in BOUND_MARKERS.items():
+        rank = _BOUND_PRECEDENCE.get(bound, 0)
+        for marker in markers:
+            for start in _find_all(text, marker):
+                for figure in positions:
+                    gap = figure - (start + len(marker))
+                    if not 0 <= gap <= BOUND_WINDOW:
+                        continue
+                    candidate = (-rank, gap, bound)
+                    if best is None or candidate < best:
+                        best = candidate
+    return best[2] if best else "exact"
+
+
+def _find_all(text: str, needle: str) -> list[int]:
+    out: list[int] = []
+    start = text.find(needle)
+    while start != -1:
+        out.append(start)
+        start = text.find(needle, start + 1)
+    return out
+
+
+def _value_spellings(value: object) -> set[str]:
+    """How a sentence might write this number: 1200 as "1,200", "1.2", "1200"."""
+    try:
+        number = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return {str(value).lower()} if value else set()
+    if number <= 0:
+        return set()
+
+    out: set[str] = set()
+    whole = int(number)
+    for candidate in (whole, number):
+        text = f"{candidate:,.0f}" if candidate == int(candidate) else f"{candidate:,}"
+        out.add(text)
+        out.add(text.replace(",", ""))
+    # Scaled forms: 1200 MW is written "1.2 GW", 50_000_000_000 as "50 billion".
+    for divisor in (1_000, 1_000_000, 1_000_000_000):
+        scaled = number / divisor
+        if 0.1 <= scaled < 1000:
+            trimmed = f"{scaled:.10f}".rstrip("0").rstrip(".")
+            out.add(trimmed)
+    return {t for t in out if t}

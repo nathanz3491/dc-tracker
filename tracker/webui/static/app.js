@@ -154,7 +154,17 @@ const provOf = (p, key) => (p.prov || {})[key] || null;
  * previous round of added fields were rendered unconditionally, so they were
  * noise on the 190 rows where nothing was in dispute. */
 const axesOf = (p, key) => provOf(p, key)?.axes || null;
-const BOUND_GLYPH = { approximate: "~", at_least: "≥", at_most: "≤" };
+/* `at_least` is a SUFFIX — "350+" rather than "≥350" — because that is how a
+ * reader outside this codebase writes "or more", and the floor is the case that
+ * matters most here: Fairwater's 350 MW rests on "Each exceeds 350 MW". The other
+ * two stay prefixes, where they read naturally and where no plain-ASCII suffix
+ * exists that is not ambiguous with a minus sign. */
+const BOUND_PREFIX = { approximate: "~", at_most: "≤" };
+const BOUND_SUFFIX = { at_least: "+" };
+const withBound = (text, bound) =>
+  text == null || text === "" || !bound || bound === "exact"
+    ? text
+    : `${BOUND_PREFIX[bound] || ""}${text}${BOUND_SUFFIX[bound] || ""}`;
 const SCOPE_NOTE = {
   programme: "a programme-wide figure, not this campus",
   region: "economic impact on the region, which is not capex",
@@ -445,8 +455,7 @@ function Value({ project, field, text, extra, onQuote }) {
   if (axes && text == null) {
     const cut = DATE_PRECISION_FMT[axes.date_precision];
     if (cut && typeof shown === "string") shown = shown.slice(0, cut);
-    const glyph = BOUND_GLYPH[axes.bound];
-    if (glyph) shown = glyph + shown;
+    shown = withBound(shown, axes.bound);
   }
   return html`
     <span class=${`dc-v dc-v--${na ? "na" : tier}`} style=${extra}
@@ -1797,7 +1806,7 @@ function BlocksTab({ p }) {
                 <div class="dc-num" style=${{ fontSize: 14, textAlign: "right",
                        textDecoration: outOfScale(b) ? "line-through" : "none",
                        color: b.mw == null ? "var(--muted-foreground)"
-                         : outOfScale(b) ? "var(--danger)" : "inherit" }}>${fmtMw(b.mw)}</div>
+                         : outOfScale(b) ? "var(--danger)" : "inherit" }}>${withBound(fmtMw(b.mw), b.mw_bound)}</div>
                 <!-- Magnitude, so 1 against 36 is visible without reading. Skipped for a
                      rejected figure: a bar 250x the width of its own campus is noise. -->
                 ${b.mw != null && !outOfScale(b) && html`

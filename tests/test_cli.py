@@ -892,11 +892,17 @@ def _envelope_project(db: Path) -> int:
 
 
 def test_a_hedged_figure_shows_the_hedge(initialized: Path):
-    """ "more than 300 MW" is not 300 MW, and the row used to say it was."""
+    """ "more than 300 MW" is not 300 MW, and the row used to say it was.
+
+    A floor renders as a **suffix** — `300+`, not `≥300` — because that is how a
+    reader outside this codebase writes "or more". The console shares the two
+    affix tables, so the CLI and the page cannot drift apart on notation.
+    """
     pid = _envelope_project(initialized)
     result = invoke(initialized, "show", str(pid))
     assert result.exit_code == 0, result.output
-    assert "≥300" in result.output
+    assert "300+" in result.output
+    assert "≥300" not in result.output
 
 
 def test_a_year_only_date_prints_as_a_year(initialized: Path):

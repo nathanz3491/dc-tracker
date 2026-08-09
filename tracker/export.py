@@ -32,6 +32,7 @@ from sqlalchemy.orm import Session, selectinload
 from tracker import blocks as blocks_mod
 from tracker.models import Project
 from tracker.upsert import NOTE_PREFIX, SOURCE_NOTE_PREFIX
+from tracker.vocab import bound_from_quote
 
 #: CSV columns, frozen. Appending is safe for consumers; reordering or removing
 #: is not, so a test asserts this tuple exactly.
@@ -119,6 +120,26 @@ def _iso(value: Any) -> str | None:
     if isinstance(value, dt.datetime | dt.date):
         return value.isoformat()
     return str(value)
+
+
+def _mw_bound(block: Any) -> str:
+    """The hedge a block's own quote puts on its capacity: `exact` when none.
+
+    A block has no `claim_meta`, so unlike a project field there is no stored axis
+    to read — but it does store the verbatim sentence, and the hedge is a word in
+    that sentence. Deriving it here gives every tranche a bound where the claim
+    envelope's axis reached only 32% of project claims.
+    """
+
+    if block.mw is None or not block.quotes:
+        return "exact"
+    try:
+        quotes = json.loads(block.quotes)
+    except (TypeError, ValueError):
+        return "exact"
+    if not isinstance(quotes, dict):
+        return "exact"
+    return bound_from_quote(quotes.get("mw"), block.mw)
 
 
 def _sorted_risks(project: Project) -> list:
@@ -232,6 +253,16 @@ def _provenance_json(project: Project) -> tuple[dict[str, str], dict[str, Any]]:
         # rendered from two different places and drifting apart.
         if result.axes:
             prov_out[field]["axes"] = dict(result.axes)
+        # Where no axis recorded a hedge, read the stored quote. The axis reached
+        # 32% of claims and `exceeds` was missing from its marker list until that
+        # list moved into `vocab`, so rows extracted earlier say `exact` and will
+        # until re-read — and Fairwater's `mw_built` rests on "Each exceeds 350 MW".
+        # Derived here, not in the page: the browser draws judgements, never makes
+        # them.
+        if (prov_out[field].get("axes") or {}).get("bound", "exact") == "exact" and result.quote:
+            derived = bound_from_quote(result.quote, getattr(project, field, None))
+            if derived != "exact":
+                prov_out[field].setdefault("axes", {})["bound"] = derived
     return basis_out, prov_out
 
 
@@ -327,6 +358,13 @@ def to_json_object(project: Project) -> dict[str, Any]:
                 "generic": bool(b.generic),
                 "mw": b.mw,
                 "mw_counted": blocks_mod.mw_is_confirmed(b),
+                # The hedge the source put on this capacity, read from the stored
+                # (verbatim) quote. Computed here rather than in the page for the
+                # same reason every other judgement is: two implementations of one
+                # rule eventually disagree and nothing tells you when. Fairwater's
+                # 350 MW rests on "Each exceeds 350 MW", so a bare "350" reports a
+                # floor as a point value.
+                "mw_bound": _mw_bound(b),
                 "status": b.status,
                 "customer": b.customer,
                 "expected_online": _iso(b.expected_online),
