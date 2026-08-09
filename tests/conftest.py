@@ -8,6 +8,7 @@ specifically want covered.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -31,12 +32,29 @@ def _fast_and_keyless_settings(monkeypatch):
     * **No API key**, even if the developer has one exported. Tests that reach the
       LLM must do so through an injected fake, and this makes a missed injection
       fail loudly rather than quietly spending money.
-    * **No `.env` leakage** into settings.
+    * **No `.env` leakage** into settings, by any route.
     """
+    # Every TRACKER_* variable goes, not a hand-listed few.
+    #
+    # **Why the list was not enough.** Neutralizing `env_file` below only stops
+    # pydantic reading the file; it cannot stop something else having already
+    # copied it into `os.environ`, which pydantic always consults. Installing the
+    # `[crawl]` extra does exactly that: `import crawl4ai` pulls in a litellm fork
+    # that calls `load_dotenv()` at import time, so the developer's whole `.env` —
+    # search keys, provider pin, tunnel hostname, and the API key itself — lands
+    # in the process environment. Measured: `TRACKER_SERPER_API_KEY` absent before
+    # the import and present after it.
+    #
+    # Four tests then failed, all of them asserting "nothing is configured", and
+    # they failed only on a machine that had both the extra and a real `.env`.
+    # That is the same class of bug as the colour probes reading the developer's
+    # own database: a suite whose result depends on the operator's setup.
+    for name in [key for key in os.environ if key.startswith("TRACKER_")]:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
+
     monkeypatch.setenv("TRACKER_POLITENESS_DELAY_S", "0")
     monkeypatch.setenv("TRACKER_RETRY_BACKOFF_BASE_S", "0")
-    monkeypatch.delenv("TRACKER_MINIMAX_API_KEY", raising=False)
-    monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
 
     # Deleting the environment variables is not enough: `.env` is also read, and
     # once a real one exists on the developer's machine the suite silently starts

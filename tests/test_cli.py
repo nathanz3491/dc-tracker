@@ -38,6 +38,19 @@ def set_key(monkeypatch, value: str = "test-key") -> None:
     get_settings.cache_clear()
 
 
+def hide_crawl4ai(monkeypatch) -> None:
+    """Make the `[crawl]` extra look absent, whether or not it is installed.
+
+    A test about the *missing-dependency* message must not depend on the developer
+    happening not to have installed it — that is a suite whose result changes with
+    the machine. `sys.modules[name] = None` makes `import name` raise ImportError,
+    so `ensure_available` takes its real failure path rather than being stubbed.
+    """
+    import sys
+
+    monkeypatch.setitem(sys.modules, "crawl4ai", None)
+
+
 @pytest.fixture
 def initialized(tmp_path: Path) -> Path:
     db = tmp_path / "t.db"
@@ -1254,6 +1267,7 @@ def test_an_error_message_is_not_eaten_by_rich_markup(initialized: Path, monkeyp
     same mechanism it was describing.
     """
     set_key(monkeypatch)
+    hide_crawl4ai(monkeypatch)
     result = invoke(initialized, "ingest", "crawl", "--url", "https://a.test/x", "--browser")
     assert result.exit_code == 2
     assert '".[crawl]"' in result.output
@@ -1267,6 +1281,7 @@ def test_browser_without_the_extra_fails_on_the_flag(initialized: Path, monkeypa
     first page that needed escalating before anything noticed.
     """
     set_key(monkeypatch)
+    hide_crawl4ai(monkeypatch)
     result = invoke(initialized, "ingest", "crawl", "--url", "https://a.test/x", "--browser")
     assert "crawl4ai is not installed" in result.output
     assert "context manager" not in result.output

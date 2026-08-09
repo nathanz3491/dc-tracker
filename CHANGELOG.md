@@ -1277,6 +1277,72 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **A fifth of what search returned was unreadable, and none of it was a
+  paywall** (`tracker/ingest/fetch.py`, `pyproject.toml`). Six of ~31 fetches in
+  one live `enrich 10` answered 403, including the Meta/Blue Owl press release
+  that is the primary source for Hyperion's **$27B** — the figure the row has
+  been holding the superseded $10B against.
+
+  Diagnosed rather than assumed: **the same URL with the same User-Agent gets 200
+  from curl and 403 from httpx.** The block is on the TLS ClientHello, and every
+  host's `robots.txt` permits us (`investor.atmeta.com` says `Allow: /` with
+  `Crawl-delay: 10`). So this is the over-broad-WAF case the project already
+  sanctions escalating for, not anybody's access control, and DataCenterDynamics'
+  genuine bot-management block stays discovery-only exactly as before.
+
+  Escalation is now a **ladder, cheapest rung first**, which is the ordering
+  `enrich` already uses for its harvesters:
+
+  | rung | cost | what it clears |
+  |---|---|---|
+  | `httpx` | one request | the default; most pages |
+  | `curl_cffi` (`[impersonate]`) | one request | a WAF fingerprinting the TLS handshake |
+  | Chromium (`[crawl]`) | seconds | pages that assemble themselves after load |
+
+  `curl_cffi` needs no flag — it costs an ordinary request — while Chromium stays
+  behind `--browser`. `fetch_all` takes a sequence, starts each rung lazily on the
+  first page that needs it, and closes every rung it entered. A single fetcher is
+  still accepted, so existing callers are untouched.
+
+  Measured end to end on the three permitted hosts: `entergy.com` 403 → **10,266
+  characters of prose** via curl_cffi, `lailluminator.com` 403 → 2,844, and the
+  Blue Owl release 403 → thin-200 → **8,638 via Chromium**.
+
+  Two defects in the browser rung had to be fixed before it worked at all, and
+  both had been silently making it useless on the pages it exists for:
+
+  - **No settle time.** The Blue Owl page returned HTTP 200 and *one character* —
+    a Q4 Inc. shell that fetches its own body after load. `JS_SETTLE_S = 3.0`
+    turns that into 15,546 characters. Investor-relations pages are the worst case
+    and the most valuable one, because `investment_usd` is the field this database
+    is thinnest on and a press release states it in the first sentence.
+  - **`form` was in `excluded_tags`.** ASP.NET WebForms — which every Q4 Inc.
+    investor-relations site is built on — wraps the entire document body in one
+    `<form runat="server">`, so excluding it deleted the article along with the
+    search box. Same page, same settle, the only difference being that list:
+    **1 character with `form` excluded, 9,180 without.**
+
+- **`instagram.com` was not in the search blocklist** (`tracker/ingest/search.py`).
+  One live `enrich 10` fetched four Instagram URLs and the prose floor measured
+  **0 characters of prose** in every one — a reel has no sentence for the evidence
+  gate to quote. Added with `threads.net` and `tiktok.com`. The 403 hosts are
+  deliberately *not* blocklisted: they are permitted sources we simply cannot open
+  yet, and this project keeps those visible for `--retry-failed` rather than
+  disappearing them.
+
+- **Installing the `[crawl]` extra made four tests fail, on some machines only**
+  (`tests/conftest.py`, `tests/test_cli.py`). `import crawl4ai` pulls in a litellm
+  fork that calls `load_dotenv()` at import time, so the developer's entire `.env`
+  — search keys, provider pin, tunnel hostname and the API key itself — lands in
+  `os.environ`. Neutralizing pydantic's `env_file` cannot help, because
+  `os.environ` is always consulted: measured, `TRACKER_SERPER_API_KEY` absent
+  before the import and present after. The autouse fixture's docstring already
+  promised "no `.env` leakage" while stripping two variables by name; it now
+  strips every `TRACKER_*`. And the two tests asserting the *missing*-extra
+  message now hide the module explicitly instead of depending on the developer not
+  having installed it — the same class of bug as the colour probes reading the
+  developer's own database.
+
 - **`tracker enrich <id>` did nothing at all on most projects, after fetching
   every archive sitemap to find that out** (`tracker/cli.py`,
   `tracker/ingest/enrich.py`). Two ordering defects, one symptom.

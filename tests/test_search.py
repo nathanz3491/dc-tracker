@@ -147,6 +147,11 @@ def test_the_prompt_tells_the_model_its_output_is_not_stored():
         "https://x.com/elonmusk/status/1",
         "https://mobile.x.com/someone/status/2",
         "https://www.bloomberg.com/profile/company/0117059D:US",
+        # Measured on a live `enrich 10`: four Instagram URLs fetched, 0 characters
+        # of prose in each. A reel has no sentence for the gate to quote.
+        "https://www.instagram.com/reel/Davo4TaglwZ/",
+        "https://www.instagram.com/p/DavxJuyljGD/",
+        "https://www.tiktok.com/@someone/video/123",
     ],
 )
 def test_aggregators_and_social_sites_are_rejected(url):

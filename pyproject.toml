@@ -22,9 +22,18 @@ dependencies = [
 # ISO queue readers. PJM exports .xls/.xlsx and CAISO/ERCOT publish .xlsx, so
 # plain csv is not enough for the real files.
 iso = ["openpyxl>=3.1"]
+# A browser's TLS fingerprint, for hosts whose WAF blocks on the handshake
+# rather than on the User-Agent. Measured: five URLs from one live `enrich` run
+# answered 403 to httpx and 200 to curl with the SAME User-Agent, and every one
+# of them returns 200 here. Cheap (one request, no browser), so it is the first
+# escalation rung and needs no flag. Their robots.txt permits us — this clears
+# an over-broad WAF rule, it does not defeat anybody's access control.
+impersonate = ["curl_cffi>=0.7"]
 # Browser-based fetching, used only as escalation for 403 / JS-rendered pages.
 # Heavy (~33 transitive deps + a Chromium download via `crawl4ai-setup`), which
-# is exactly why it is optional rather than required.
+# is exactly why it is optional rather than required. Still earns its place
+# above `impersonate`: the Meta/Blue Owl press release returns 200 and 106
+# characters to curl_cffi, being a shell that assembles itself in the browser.
 crawl = ["crawl4ai>=0.9"]
 dev = [
     "pytest>=8.0",

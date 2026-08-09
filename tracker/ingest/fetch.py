@@ -21,11 +21,12 @@ import hashlib
 import logging
 import re
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from html import unescape
 from pathlib import Path
-from typing import Protocol
+from typing import Final, Protocol
 from urllib.parse import urlsplit
 
 import httpx
@@ -168,12 +169,176 @@ class HttpxFetcher:
         )
 
 
+_MISSING_CURL_CFFI = (
+    "curl_cffi is not installed. It is an optional extra:\n"
+    '  python -m pip install -e ".[impersonate]"\n\n'
+    "It is what reaches sites whose WAF fingerprints the TLS handshake rather "
+    "than reading the User-Agent. The default httpx fetcher needs nothing."
+)
+
+
+class CurlCffiFetcher:
+    """HTTP presenting a real browser's TLS fingerprint.
+
+    **Why this exists, measured.** A growing share of hosts answer 403 to
+    `httpx` and 200 to `curl` *for the same URL and the same User-Agent*. The
+    block is on the TLS ClientHello — cipher and extension ordering, a JA3/JA4
+    fingerprint — so it cannot be argued with by setting headers, and it is not
+    a statement about who we are.
+
+    On the five 403s from one live `enrich` run, every one returned 200 here:
+
+        investor.atmeta.com   403 -> 200      (Meta/Blue Owl JV press release)
+        entergy.com           403 -> 200      10,266 characters of prose
+        lailluminator.com     403 -> 200
+        bloomberg.com         403 -> 200      (paywall teaser, ~1.1k prose)
+        electricchoice.com    403 -> 200
+
+    **This is not defeating an access control, and the distinction is the whole
+    justification.** Each of those hosts' `robots.txt` permits us — investor.
+    atmeta.com says `Allow: /` with `Crawl-delay: 10`, entergy.com disallows only
+    `/wp-admin/`. An over-broad WAF rule is not a policy, which is the same
+    reasoning that already sanctions `--browser` for the operator sitemaps that
+    serve curl and refuse httpx. Where a site genuinely *does* refuse crawlers —
+    DataCenterDynamics' bot management — it stays discovery-only, and this
+    changes nothing about that.
+
+    It sits *below* the browser on the ladder because it is far cheaper: one
+    request, no Chromium. It cannot render JavaScript, which is why the rung
+    above it still earns its place — the Blue Owl release returns 200 here and
+    only 106 characters of text, being an ASP.NET shell that assembles itself in
+    the browser.
+    """
+
+    VIA = "curl_cffi"
+
+    #: Which browser to impersonate. "chrome" tracks curl_cffi's current stable
+    #: Chrome profile rather than pinning a version that ages out of relevance.
+    IMPERSONATE = "chrome"
+
+    def __init__(self, settings: Settings | None = None) -> None:
+        self.settings = settings or get_settings()
+
+    @staticmethod
+    def available() -> bool:
+        """Whether the optional extra is importable, for building the ladder."""
+        try:
+            import curl_cffi  # noqa: F401
+        except ImportError:
+            return False
+        return True
+
+    @staticmethod
+    def ensure_available() -> None:
+        """Raise now, naming the install command, rather than at first use."""
+        try:
+            import curl_cffi  # noqa: F401
+        except ImportError as exc:
+            raise MissingDependency(_MISSING_CURL_CFFI) from exc
+
+    async def fetch(self, url: str) -> FetchResult:
+        try:
+            from curl_cffi.requests import AsyncSession
+        except ImportError as exc:
+            raise MissingDependency(_MISSING_CURL_CFFI) from exc
+
+        headers = {
+            "User-Agent": self.settings.user_agent,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+        }
+        try:
+            async with AsyncSession(impersonate=self.IMPERSONATE) as session:
+                response = await session.get(
+                    url,
+                    headers=headers,
+                    timeout=self.settings.fetch_timeout_s,
+                    allow_redirects=True,
+                )
+        except Exception as exc:  # curl_cffi raises its own error hierarchy
+            return FetchResult(url, False, error=str(exc), fetched_at=utcnow(), via=self.VIA)
+
+        status = response.status_code
+        if status >= 400:
+            return FetchResult(
+                url,
+                False,
+                status=status,
+                error=f"HTTP {status}",
+                fetched_at=utcnow(),
+                via=self.VIA,
+            )
+
+        text = html_to_text(_decode(response))
+        return FetchResult(
+            url,
+            bool(text.strip()),
+            markdown=text,
+            status=status,
+            fetched_at=utcnow(),
+            via=self.VIA,
+        )
+
+
+def _decode(response: object) -> str:
+    """Response body as text, without mangling smart quotes.
+
+    curl_cffi's `.text` guessed wrong on entergy.com and turned the apostrophe in
+    "Meta's" into replacement characters, which then reach the model and the
+    evidence gate as literal mojibake. Trying the declared charset first and
+    UTF-8 before falling back keeps the article's own punctuation intact.
+    """
+    body = getattr(response, "content", None)
+    if not isinstance(body, bytes):
+        return str(getattr(response, "text", "") or "")
+    declared = (getattr(response, "encoding", None) or "").strip()
+    for encoding in (declared, "utf-8", "cp1252", "latin-1"):
+        if not encoding:
+            continue
+        try:
+            return body.decode(encoding)
+        except (UnicodeDecodeError, LookupError):
+            continue
+    return body.decode("utf-8", errors="replace")
+
+
 _MISSING_CRAWL4AI = (
     "crawl4ai is not installed. It is an optional extra:\n"
     '  python -m pip install -e ".[crawl]"\n'
     "  crawl4ai-setup            # downloads the Chromium build\n\n"
     "The default httpx fetcher needs neither."
 )
+
+#: Seconds to let a page finish assembling itself after load, before reading it.
+#:
+#: **Why this is not zero.** Without it the browser rung was worthless on exactly
+#: the pages it exists for. Meta's investor-relations release announcing the Blue
+#: Owl joint venture — the primary source for Hyperion's $27B, which the row has
+#: been holding the superseded $10B against — returned HTTP 200 and **one
+#: character** of text: a Q4 Inc. shell that fetches its own body after load. At
+#: 3 seconds the same page yields 15,546 characters containing both "Blue Owl"
+#: and the figure.
+#:
+#: Investor-relations pages are the worst case and the most valuable one, because
+#: `investment_usd` is the field this database is thinnest on and a press release
+#: states it in the first sentence. The cost is bounded: this rung only runs after
+#: httpx *and* curl_cffi have both fallen short, which is a few pages per run.
+JS_SETTLE_S: Final = 3.0
+
+#: Tags the browser rung drops as furniture before reading a page.
+#:
+#: **`form` is deliberately NOT here, and that is the whole point of the list
+#: existing.** ASP.NET WebForms wraps the entire document body in a single
+#: `<form runat="server">` — which is what every Q4 Inc. investor-relations site
+#: is built on — so excluding `form` deleted the article along with the search
+#: box. Measured on Meta's Blue Owl press release, same page, same 3-second
+#: settle, the only difference being this list:
+#:
+#:     excluded_tags with "form"     ->      1 character
+#:     excluded_tags without "form"  ->  9,180 characters, "Blue Owl" present
+#:
+#: A stray search box costs a few tokens. Losing the body costs the citation.
+_BOILERPLATE_TAGS: Final = ("nav", "footer", "aside", "script")
 
 
 class Crawl4AIFetcher:
@@ -225,7 +390,8 @@ class Crawl4AIFetcher:
                 config=CrawlerRunConfig(
                     cache_mode=CacheMode.BYPASS,
                     page_timeout=int(self.settings.fetch_timeout_s * 1000),
-                    excluded_tags=["nav", "footer", "aside", "form", "script"],
+                    excluded_tags=list(_BOILERPLATE_TAGS),
+                    delay_before_return_html=JS_SETTLE_S,
                 ),
             )
         except Exception as exc:
@@ -306,19 +472,44 @@ async def fetch_with_retry(fetcher: Fetcher, url: str, *, attempts: int = 3) -> 
 
 
 def should_escalate(result: FetchResult) -> bool:
-    """Whether a browser is worth trying after a plain HTTP attempt."""
-    if result.via != "httpx":
-        return False
+    """Whether a stronger fetcher is worth trying after this attempt.
+
+    True for a status a different client might get past, and for an ok-but-thin
+    body — which is what a JavaScript shell looks like. Any rung below the top
+    may escalate, so the check is "did this rung fall short", not "was this
+    httpx": the Blue Owl press release returns 200 and 106 characters through
+    `curl_cffi` and needs the browser above it.
+    """
+    if result.via == "crawl4ai":
+        return False  # nothing left to escalate to
     if result.status in BROWSER_WORTHY_STATUS:
         return True
     return result.ok and result.looks_thin
+
+
+def escalation_ladder(settings: Settings | None = None, *, browser: bool = False) -> list[Fetcher]:
+    """Escalation rungs available in this install, cheapest first.
+
+    `curl_cffi` is included whenever it is installed, without a flag: it costs
+    one ordinary request and recovers a whole class of 403s that are a WAF's TLS
+    fingerprinting rather than anybody's policy. The browser stays behind
+    `--browser` because Chromium is seconds and hundreds of megabytes, which is
+    the same cost-proportionate ordering `enrich` uses for its harvesters.
+    """
+    settings = settings or get_settings()
+    rungs: list[Fetcher] = []
+    if CurlCffiFetcher.available():
+        rungs.append(CurlCffiFetcher(settings))
+    if browser:
+        rungs.append(Crawl4AIFetcher(settings))
+    return rungs
 
 
 async def fetch_all(
     urls: list[str],
     *,
     fetcher: Fetcher | None = None,
-    escalate: Fetcher | None = None,
+    escalate: Fetcher | Sequence[Fetcher] | None = None,
     settings: Settings | None = None,
 ) -> list[FetchResult]:
     """Fetch concurrently, at most one request in flight per host.
@@ -326,67 +517,92 @@ async def fetch_all(
     The per-host gate plus the politeness delay matter: fanning ten simultaneous
     requests at one newsroom is how a scraper earns a block.
 
-    **This is also where the escalation fetcher is started and stopped.** A
-    browser fetcher is an async context manager — it has to launch Chromium and
-    tear it down — and only code already inside the event loop can enter it. Every
-    caller here is synchronous (`crawl.run` owns the `asyncio.run`), so if this
-    function did not do it, nobody could: `--browser` raised "must be used as an
-    async context manager" the first time a page needed escalating, on every path
-    that offered the flag.
+    **`escalate` is a ladder, cheapest rung first**, and a single fetcher is still
+    accepted so existing callers and test doubles are unaffected. Each rung is
+    tried only because the one below it fell short, which is the same
+    cost-proportionate ordering `enrich` uses for its harvesters:
+    `curl_cffi` costs one ordinary request and clears a WAF that fingerprints
+    TLS; Chromium costs seconds and renders JavaScript. The Blue Owl press
+    release needs both — 403 from httpx, 200-but-106-characters from curl_cffi,
+    real text only from the browser.
 
-    It is entered lazily, on the first page that actually needs it. Most runs
-    never escalate, and launching a browser for them would cost several seconds
-    and a Chromium process for nothing.
+    **This is also where each rung is started and stopped.** A browser fetcher is
+    an async context manager — it has to launch Chromium and tear it down — and
+    only code already inside the event loop can enter it. Every caller here is
+    synchronous (`crawl.run` owns the `asyncio.run`), so if this function did not
+    do it, nobody could: `--browser` raised "must be used as an async context
+    manager" the first time a page needed escalating, on every path that offered
+    the flag.
+
+    Rungs are entered lazily, on the first page that actually needs each one.
+    Most runs never escalate, and launching a browser for them would cost several
+    seconds and a Chromium process for nothing.
     """
     settings = settings or get_settings()
     primary = fetcher or HttpxFetcher(settings)
     gate = asyncio.Semaphore(settings.fetch_concurrency)
     host_gates: dict[str, asyncio.Semaphore] = {}
 
-    #: The started escalation fetcher, once something has needed it. `False`
-    #: means starting it failed and we are not going to keep retrying — a missing
-    #: Chromium fails the same way for every URL, and twenty identical tracebacks
-    #: help nobody.
-    started: Fetcher | bool | None = None
+    if escalate is None:
+        ladder: list[Fetcher] = []
+    elif isinstance(escalate, (list, tuple)):
+        ladder = list(escalate)
+    else:
+        ladder = [escalate]
+
+    #: Started rungs, by index. `False` means starting that rung failed and we are
+    #: not going to keep retrying — a missing Chromium fails the same way for
+    #: every URL, and twenty identical tracebacks help nobody.
+    started: dict[int, Fetcher | bool] = {}
     start_lock = asyncio.Lock()
 
     def host_gate(url: str) -> asyncio.Semaphore:
         host = urlsplit(url).netloc.lower()
         return host_gates.setdefault(host, asyncio.Semaphore(1))
 
-    async def browser() -> Fetcher | None:
-        """The escalation fetcher, started on first use. None if unavailable."""
-        nonlocal started
-        if started is not None:
-            return started or None
+    async def rung(index: int) -> Fetcher | None:
+        """One escalation rung, started on first use. None if unavailable."""
+        if index in started:
+            return started[index] or None
         async with start_lock:
-            if started is None:
-                enter = getattr(escalate, "__aenter__", None)
+            if index not in started:
+                candidate = ladder[index]
+                enter = getattr(candidate, "__aenter__", None)
                 if enter is None:
-                    started = escalate  # a plain fetcher, e.g. a test double
+                    started[index] = candidate  # a plain fetcher, e.g. a test double
                 else:
                     try:
-                        started = await enter()
+                        started[index] = await enter()
                     except Exception as exc:
                         # Loud, once. The pages still get their plain-HTTP result,
                         # and `tracker queue --failed` will show what could not be
                         # read, so this degrades visibly rather than silently.
                         log.error(
-                            "could not start the browser fetcher, continuing without it: %s", exc
+                            "could not start the %s fetcher, continuing without it: %s",
+                            type(candidate).__name__,
+                            exc,
                         )
-                        started = False
-        return started or None
+                        started[index] = False
+        return started[index] or None
 
     async def one(url: str) -> FetchResult:
         async with gate, host_gate(url):
             result = await fetch_with_retry(primary, url)
-            if escalate is not None and should_escalate(result):
-                browser_fetcher = await browser()
-                if browser_fetcher is not None:
-                    log.info("escalating %s to a browser (status=%s)", url, result.status)
-                    escalated = await fetch_with_retry(browser_fetcher, url, attempts=2)
-                    if escalated.ok:
-                        result = escalated
+            for index in range(len(ladder)):
+                if not should_escalate(result):
+                    break
+                stronger = await rung(index)
+                if stronger is None:
+                    continue
+                log.info(
+                    "escalating %s to %s (status=%s)",
+                    url,
+                    getattr(stronger, "VIA", type(stronger).__name__),
+                    result.status,
+                )
+                escalated = await fetch_with_retry(stronger, url, attempts=2)
+                if escalated.ok:
+                    result = escalated
             if settings.politeness_delay_s:
                 await asyncio.sleep(settings.politeness_delay_s)
             return result
@@ -398,11 +614,15 @@ async def fetch_all(
         return await asyncio.gather(*(one(u) for u in unique))
     finally:
         # Chromium does not exit on its own, and a leaked one survives the
-        # command that started it.
-        exit_ = getattr(escalate, "__aexit__", None)
-        if started and exit_ is not None:
-            with contextlib.suppress(Exception):
-                await exit_(None, None, None)
+        # command that started it. Every rung that was actually entered is closed,
+        # not just the last one.
+        for index, instance in started.items():
+            if not instance:
+                continue
+            exit_ = getattr(ladder[index], "__aexit__", None)
+            if exit_ is not None:
+                with contextlib.suppress(Exception):
+                    await exit_(None, None, None)
 
 
 __all__ = [
@@ -411,11 +631,13 @@ __all__ = [
     "MIN_USEFUL_CHARS",
     "RETRYABLE_STATUS",
     "Crawl4AIFetcher",
+    "CurlCffiFetcher",
     "FetchResult",
     "Fetcher",
     "HttpxFetcher",
     "MissingDependency",
     "cache_path",
+    "escalation_ladder",
     "fetch_all",
     "fetch_with_retry",
     "html_to_text",

@@ -1690,7 +1690,10 @@ async def test_a_browser_that_will_not_start_degrades_loudly(caplog):
     with caplog.at_level("ERROR"):
         results = await fetch_all(urls, fetcher=_Blocked(), escalate=_Broken())
     assert [r.status for r in results] == [403, 403, 403]
-    assert sum("could not start the browser" in r.message for r in caplog.records) == 1
+    # The message names which rung failed, now that escalation is a ladder and
+    # "the browser" is no longer the only thing it could have been.
+    assert sum("could not start the" in r.message for r in caplog.records) == 1
+    assert any("_Broken" in r.message for r in caplog.records)
 
 
 def test_a_foreign_language_quote_cannot_evidence_a_phase():
@@ -2047,3 +2050,133 @@ def test_a_url_with_no_recorded_date_says_unknown_rather_than_guessing(session):
 
     _, user = llm.seen[0]
     assert "ARTICLE_DATE: unknown" in user
+
+
+# --- the escalation ladder --------------------------------------------------
+
+
+class _ThinButOk:
+    """200 with almost no text: a JavaScript shell.
+
+    This is what curl_cffi returns for the Meta/Blue Owl press release — it gets
+    past the WAF and receives 106 characters, because the page assembles itself
+    in the browser. It must not end the ladder.
+    """
+
+    VIA = "curl_cffi"
+
+    def __init__(self):
+        self.fetched: list[str] = []
+
+    async def fetch(self, url):
+        self.fetched.append(url)
+        return FetchResult(url, True, markdown="tiny", status=200, via=self.VIA, fetched_at=NOW)
+
+
+class _CurlCffiOk:
+    VIA = "curl_cffi"
+
+    def __init__(self):
+        self.fetched: list[str] = []
+
+    async def fetch(self, url):
+        self.fetched.append(url)
+        return FetchResult(url, True, markdown="z" * 5000, status=200, via=self.VIA, fetched_at=NOW)
+
+
+@pytest.mark.asyncio
+async def test_the_cheap_rung_is_tried_first_and_the_browser_never_starts():
+    """Chromium costs seconds; a request costs milliseconds. If the cheap rung
+    succeeds, the expensive one must not even be entered."""
+    from tracker.ingest.fetch import fetch_all
+
+    cheap, browser = _CurlCffiOk(), _RecordingBrowser()
+    results = await fetch_all(
+        ["https://blocked.test/a"], fetcher=_Blocked(), escalate=[cheap, browser]
+    )
+    assert cheap.fetched == ["https://blocked.test/a"]
+    assert browser.entered == 0, "the browser must not start when curl_cffi sufficed"
+    assert results[0].via == "curl_cffi"
+
+
+@pytest.mark.asyncio
+async def test_a_thin_page_climbs_from_curl_cffi_to_the_browser():
+    """The Blue Owl case: 403 from httpx, 200-but-106-characters from curl_cffi,
+    real text only from the browser. Both rungs are needed."""
+    from tracker.ingest.fetch import fetch_all
+
+    cheap, browser = _ThinButOk(), _RecordingBrowser()
+    results = await fetch_all(
+        ["https://blocked.test/shell"], fetcher=_Blocked(), escalate=[cheap, browser]
+    )
+    assert cheap.fetched == ["https://blocked.test/shell"]
+    assert browser.entered == 1, "an ok-but-thin body must keep climbing"
+    assert results[0].via == "crawl4ai"
+
+
+@pytest.mark.asyncio
+async def test_a_single_escalation_fetcher_is_still_accepted():
+    """Backward compatibility: every existing caller passes one fetcher."""
+    from tracker.ingest.fetch import fetch_all
+
+    browser = _RecordingBrowser()
+    results = await fetch_all(["https://blocked.test/a"], fetcher=_Blocked(), escalate=browser)
+    assert results[0].via == "crawl4ai"
+    assert browser.entered == 1
+
+
+class _ThinBrowser(_RecordingBrowser):
+    """Enters like a browser but comes back with a shell, so the ladder climbs on."""
+
+    async def fetch(self, url):
+        await super().fetch(url)
+        return FetchResult(url, True, markdown="tiny", via="curl_cffi", fetched_at=NOW)
+
+
+@pytest.mark.asyncio
+async def test_every_entered_rung_is_closed():
+    """Chromium does not exit on its own, and a leaked one outlives the command.
+
+    Both rungs are entered here — the first returns a shell — so both must be
+    torn down, not just whichever one answered last.
+    """
+    from tracker.ingest.fetch import fetch_all
+
+    first, second = _ThinBrowser(), _RecordingBrowser()
+    await fetch_all(["https://blocked.test/a"], fetcher=_Blocked(), escalate=[first, second])
+    assert first.entered == 1 and second.entered == 1
+    assert first.exited == 1
+    assert second.exited == 1
+
+
+@pytest.mark.asyncio
+async def test_a_rung_that_is_never_needed_is_never_entered():
+    """The corollary: no Chromium process for a run that did not need one."""
+    from tracker.ingest.fetch import fetch_all
+
+    first, second = _RecordingBrowser(), _RecordingBrowser()
+    await fetch_all(["https://blocked.test/a"], fetcher=_Blocked(), escalate=[first, second])
+    assert first.entered == 1
+    assert second.entered == 0 and second.exited == 0
+
+
+def test_the_ladder_puts_the_cheap_rung_below_the_browser():
+    from tracker.ingest.fetch import CurlCffiFetcher, escalation_ladder
+
+    rungs = escalation_ladder(browser=False)
+    if CurlCffiFetcher.available():
+        assert [type(r).__name__ for r in rungs] == ["CurlCffiFetcher"]
+        with_browser = [type(r).__name__ for r in escalation_ladder(browser=True)]
+        assert with_browser == ["CurlCffiFetcher", "Crawl4AIFetcher"], "cheapest first"
+    else:  # pragma: no cover - depends on the optional extra
+        assert rungs == []
+
+
+def test_should_escalate_stops_at_the_top_rung():
+    """A browser result has nowhere left to climb to."""
+    from tracker.ingest.fetch import should_escalate
+
+    assert should_escalate(FetchResult("u", False, status=403, via="httpx")) is True
+    assert should_escalate(FetchResult("u", False, status=403, via="curl_cffi")) is True
+    assert should_escalate(FetchResult("u", False, status=403, via="crawl4ai")) is False
+    assert should_escalate(FetchResult("u", True, markdown="x" * 5000, via="curl_cffi")) is False

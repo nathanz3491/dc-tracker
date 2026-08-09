@@ -1025,10 +1025,9 @@ def ingest_crawl(
         _fail(str(exc))
         return
 
-    escalate = None
-    if browser:
-        from tracker.ingest.fetch import Crawl4AIFetcher, MissingDependency
+    from tracker.ingest.fetch import Crawl4AIFetcher, MissingDependency, escalation_ladder
 
+    if browser:
         # Fail on the flag, not twenty pages in. `__aenter__` holds the import,
         # so nothing before this point would have noticed the extra was absent.
         try:
@@ -1036,7 +1035,10 @@ def ingest_crawl(
         except MissingDependency as exc:
             _fail(str(exc))
             return
-        escalate = Crawl4AIFetcher(settings)
+    # A ladder, cheapest rung first. curl_cffi needs no flag: it costs one
+    # ordinary request and clears the WAFs that fingerprint TLS rather than
+    # reading the User-Agent. Chromium stays behind --browser.
+    escalate = escalation_ladder(settings, browser=browser)
 
     cache_dir = None if no_cache else install_root() / ".cache" / "articles"
     console.print(f"[dim]crawling {len(url_list)} URL(s) from {source_label}[/dim]")
@@ -3130,7 +3132,11 @@ def enrich(
     dry, so raise `--budget` when the point is genuinely the whole database.
     """
     from tracker.ingest import enrich as enrich_mod
-    from tracker.ingest.fetch import Crawl4AIFetcher, MissingDependency
+    from tracker.ingest.fetch import (
+        Crawl4AIFetcher,
+        MissingDependency,
+        escalation_ladder,
+    )
     from tracker.vocab import TRACKED_FIELDS
 
     chosen_ways = [
@@ -3160,7 +3166,6 @@ def enrich(
         target = 0 if project_ids else enrich_mod.DEFAULT_TARGET_FIELDS
     target_fields = target or None
 
-    escalate = None
     if browser:
         # Checked here rather than caught around the constructor: the import
         # lives in `__aenter__`, so building the fetcher never raises and the
@@ -3170,7 +3175,8 @@ def enrich(
         except MissingDependency as exc:
             _fail(str(exc))
             return
-        escalate = Crawl4AIFetcher(get_settings())
+    # Cheapest rung first; curl_cffi needs no flag. See fetch.escalation_ladder.
+    escalate = escalation_ladder(get_settings(), browser=browser)
 
     engine, _ = init_db(_db_path())
     try:
@@ -4946,10 +4952,9 @@ def sync(
         _fail(str(exc))
         return
 
-    escalate = None
-    if browser:
-        from tracker.ingest.fetch import Crawl4AIFetcher, MissingDependency
+    from tracker.ingest.fetch import Crawl4AIFetcher, MissingDependency, escalation_ladder
 
+    if browser:
         # Fail on the flag, not twenty pages in. `__aenter__` holds the import,
         # so nothing before this point would have noticed the extra was absent.
         try:
@@ -4957,7 +4962,10 @@ def sync(
         except MissingDependency as exc:
             _fail(str(exc))
             return
-        escalate = Crawl4AIFetcher(settings)
+    # A ladder, cheapest rung first. curl_cffi needs no flag: it costs one
+    # ordinary request and clears the WAFs that fingerprint TLS rather than
+    # reading the User-Agent. Chromium stays behind --browser.
+    escalate = escalation_ladder(settings, browser=browser)
 
     engine, _ = init_db(_db_path())
     cache_dir = install_root() / ".cache" / "articles"

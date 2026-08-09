@@ -73,13 +73,37 @@ ranges. Regenerate the lock after any dependency change:
 .venv/Scripts/python -m pip freeze --exclude-editable > requirements.lock
 ```
 
-Two optional extras, neither required:
+Three optional extras, none required:
 
 - `.[iso]` adds `openpyxl`, for the ISO queue exports that ship as XLSX rather
   than CSV. The loader reads CSV and JSON without it.
-- `.[crawl]` adds Crawl4AI plus `crawl4ai-setup` (a Chromium download), used only
-  as an escalation for pages plain HTTP cannot read. The crawl path defaults to
-  `httpx` and works without it.
+- `.[impersonate]` adds `curl_cffi`, which presents a browser's TLS fingerprint.
+  **This is the one worth installing.** A growing share of hosts answer 403 to
+  `httpx` and 200 to `curl` for the same URL and the same User-Agent — the block
+  is on the TLS handshake, not on who we say we are — and one live `enrich` run
+  lost six of about thirty-one fetches that way. It costs one ordinary request, so
+  it is used automatically once installed, with no flag.
+- `.[crawl]` adds Crawl4AI plus a Chromium download (`python -m playwright
+  install chromium`), the last escalation rung, for pages that assemble themselves
+  after load. Reached only with `--browser`. Heavy — Chromium plus ~70 transitive
+  packages — which is why it stays opt-in, and why the cheap rung above it exists.
+
+**Escalation is a ladder, cheapest rung first**, the same ordering `enrich` uses
+for its harvesters. Measured on three hosts whose `robots.txt` permits us and
+whose WAF refuses `httpx` anyway:
+
+| URL | httpx | `curl_cffi` | Chromium |
+|---|---|---|---|
+| `entergy.com` news release | 403 | **10,266 chars of prose** | not needed |
+| `lailluminator.com` brief | 403 | **2,844** | not needed |
+| Meta/Blue Owl IR release | 403 | 200, but 106 chars | **8,638** |
+
+Nothing here defeats an access control, and the distinction is the whole
+justification: those sites' `robots.txt` files permit crawling —
+`investor.atmeta.com` says `Allow: /` with `Crawl-delay: 10` — so an over-broad
+WAF rule is not a policy. Where a site genuinely refuses crawlers, as
+DataCenterDynamics does with Cloudflare bot management, it stays discovery-only;
+see "Why DataCenterDynamics is discovery-only" below.
 
 ## Run
 

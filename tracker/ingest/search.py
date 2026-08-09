@@ -138,6 +138,13 @@ _SKIP_DOMAINS = (
     "facebook.com",
     "twitter.com",
     "x.com",
+    # Instagram was missing, and search surfaces it: one live `enrich 10` fetched
+    # four Instagram URLs, and the prose floor measured **0 characters of prose**
+    # in each. A reel is categorically not an article — there is no sentence for
+    # the evidence gate to quote — so the fetch is pure waste.
+    "instagram.com",
+    "threads.net",
+    "tiktok.com",
     "youtube.com",
     "reddit.com",
     "pinterest.com",
