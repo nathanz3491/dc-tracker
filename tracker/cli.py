@@ -3077,7 +3077,7 @@ def enrich(
     ] = 6,
     max_articles: Annotated[int, typer.Option("--max-articles", help="Articles per round.")] = 25,
     skip_search: Annotated[
-        bool, typer.Option("--skip-search", help="Do not use the Google search API.")
+        bool, typer.Option("--skip-search", help="Do not use the web-search backend.")
     ] = False,
     skip_archive: Annotated[
         bool, typer.Option("--skip-archive", help="Do not sweep the sitemap archives.")
@@ -4823,9 +4823,13 @@ def sync(
         int,
         typer.Option(
             "--search",
-            help="Also run this many LLM-proposed Google searches. Needs the Google keys.",
+            help=(
+                "LLM-proposed web searches to run. Default: automatic when a search "
+                "key is configured (Serper/Google/Brave/Bocha), 0 otherwise. "
+                "Pass 0 to skip searching."
+            ),
         ),
-    ] = 0,
+    ] = -1,
     skip_discover: Annotated[
         bool, typer.Option("--skip-discover", help="Do not poll feeds; work the existing queue.")
     ] = False,
@@ -4955,6 +4959,18 @@ def sync(
     # Runs inside phase 1 because it is the same job as polling a feed: turn the
     # outside world into queued candidates. Feeds only see what was published
     # recently; search reaches back for anything already announced.
+    #
+    # -1 means "not given": a configured key turns searching on by default,
+    # because a sync that quietly skips the one phase reaching beyond the
+    # configured feeds is how enrich ends up with nothing new to read. An
+    # explicit --search 0 still disables it, and no key means no searching —
+    # silently, since a keyless setup is a configuration, not an error.
+    if search < 0:
+        search = settings.search_max_queries if settings.has_search_keys() else 0
+        if search:
+            console.print(
+                f"[dim]search: on by default ({search} queries; --search 0 to skip)[/dim]"
+            )
     if search:
         from tracker.ingest import search as srch
 

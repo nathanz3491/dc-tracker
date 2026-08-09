@@ -108,8 +108,22 @@ reseller), a free tier, one header, no cloud account.
 #: repetition and invented names, which cost a search quota each.
 LLM_BATCH = 25
 
-#: Domains that are never worth queueing: aggregators, directories and
-#: encyclopaedias carry no first-hand project reporting.
+#: Domains that are never worth queueing: aggregators, directories and social
+#: sites carry no first-hand project reporting.
+#:
+#: Matched on registrable-domain **boundaries** (`host == entry` or
+#: `host.endswith("." + entry)`), never by substring. The original substring
+#: test made `"x.com"` block every `equinix.com` URL — a top-five operator whose
+#: newsroom already answers 403, so search was the one path to its coverage and
+#: the filter silently closed it.
+#:
+#: `wikipedia.org` is deliberately NOT here. A campus's Wikipedia article is
+#: routinely the top search hit, its prose is quotable (the evidence gate
+#: applies unchanged), and its References section is mined for the primary
+#: sources it cites — see `tracker.ingest.wiki`. What keeps that honest is
+#: `confidence.TERTIARY_DOMAINS`: a wikipedia citation never counts as an
+#: independent domain, so it can never corroborate the coverage it merely
+#: summarizes.
 #:
 #: The second and third groups were added after measuring Bocha, whose index is
 #: Chinese-web-heavy: a single query returned sohu, zhihu, toutiao, csdn,
@@ -118,9 +132,8 @@ LLM_BATCH = 25
 #: or an unrelated academic paper — and any excerpt stored from one could not
 #: satisfy the evidence gate, which requires a verbatim quote supporting an
 #: English value.
-_SKIP_HOSTS = (
-    # Social, directories, encyclopaedias
-    "wikipedia.org",
+_SKIP_DOMAINS = (
+    # Social, directories, listings
     "linkedin.com",
     "facebook.com",
     "twitter.com",
@@ -133,7 +146,6 @@ _SKIP_HOSTS = (
     "zillow.com",
     "loopnet.com",
     "crunchbase.com",
-    "bloomberg.com/profile",
     "datacentermap.com",
     "baxtel.com",
     # Chinese portals and UGC platforms. They repost and translate US coverage
@@ -172,6 +184,10 @@ _SKIP_HOSTS = (
     "zaixian-fanyi.com",
 )
 
+#: host+path prefixes, for sites where only one section is junk. Bloomberg's
+#: /profile pages are company stubs; its articles were never blocked.
+_SKIP_PATH_PREFIXES = ("bloomberg.com/profile",)
+
 
 class SearchError(RuntimeError):
     """Search is unconfigured or the provider refused the request."""
@@ -192,6 +208,9 @@ class SearchReport:
     filtered: int = 0
     already_known: int = 0
     queued: int = 0
+    #: References mined from Wikipedia articles among the hits — leads a search
+    #: snippet alone could never surface, e.g. the operator's IR press release.
+    wiki_mined: int = 0
     quota_exhausted: bool = False
     errors: list[tuple[str, str]] = field(default_factory=list)
 
@@ -200,6 +219,7 @@ class SearchReport:
             ("queries run", self.queries_run),
             ("search hits", self.hits),
             ("filtered out", self.filtered),
+            ("wikipedia refs mined", self.wiki_mined),
             ("already known", self.already_known),
             ("queued", self.queued),
         ]
@@ -430,7 +450,7 @@ class BochaProvider:
     fixes an index gap.
 
     So it is best treated as a way to learn that a project *exists*, not as a way
-    to obtain the citation. `_SKIP_HOSTS` carries the Chinese portals it favours,
+    to obtain the citation. `_SKIP_DOMAINS` carries the Chinese portals it favours,
     so its reposts are dropped before they cost a fetch and an LLM call.
     """
 
@@ -617,10 +637,18 @@ def known_projects(session: Session) -> list[str]:
 
 
 def is_useful_host(url: str) -> bool:
-    """Reject aggregators and social sites, which carry no first-hand reporting."""
-    host = urlsplit(url).netloc.lower().removeprefix("www.")
-    full = host + urlsplit(url).path.lower()
-    return not any(skip in full for skip in _SKIP_HOSTS)
+    """Reject aggregators and social sites, which carry no first-hand reporting.
+
+    Domains are matched on label boundaries, not as substrings: ``x.com`` blocks
+    ``x.com`` and ``mobile.x.com``, and must not block ``equinix.com`` — which
+    the substring version this replaces silently did.
+    """
+    parts = urlsplit(url)
+    host = parts.netloc.lower().split("@")[-1].split(":")[0].removeprefix("www.")
+    if any(host == d or host.endswith("." + d) for d in _SKIP_DOMAINS):
+        return False
+    hostpath = host + parts.path.lower()
+    return not any(hostpath.startswith(p) for p in _SKIP_PATH_PREFIXES)
 
 
 def hits_to_candidates(
@@ -676,8 +704,11 @@ def run(
     settings: Settings | None = None,
     run_id: str | None = None,
     dry_run: bool = False,
+    mine_wikipedia: bool = True,
 ) -> tuple[SearchReport, list[Candidate]]:
     """Run each query, filter the hits, and queue what survives."""
+    from tracker.ingest import wiki
+
     settings = settings or get_settings()
     _, spec = load_config()
     report = SearchReport()
@@ -701,6 +732,20 @@ def run(
         all_hits.extend(hits)
 
     candidates = hits_to_candidates(all_hits, spec, report=report)
+
+    # A Wikipedia hit is worth more than its own page: its References section
+    # names the primary sources. Mined from the raw hits rather than the kept
+    # candidates, because the wiki page itself can fail the keyword filter (an
+    # opaque snippet) while its references are still exactly what we want.
+    if mine_wikipedia:
+        wiki_urls = [h.url for h in all_hits if wiki.is_wikipedia(h.url)]
+        if wiki_urls:
+            already = {c.url for c in candidates}
+            mined = [
+                c for c in wiki.mine(wiki_urls, spec, settings=settings) if c.url not in already
+            ]
+            report.wiki_mined = len(mined)
+            candidates.extend(mined)
 
     # Reuses the feed-discovery queueing wholesale, including its rule that a URL
     # already in ingest_url is left completely alone.

@@ -140,11 +140,13 @@ def test_the_prompt_tells_the_model_its_output_is_not_stored():
 @pytest.mark.parametrize(
     "url",
     [
-        "https://en.wikipedia.org/wiki/Data_center",
         "https://www.linkedin.com/posts/someone",
         "https://www.reddit.com/r/datacenter/comments/x",
         "https://www.indeed.com/jobs?q=data+center",
         "https://www.datacentermap.com/usa/",
+        "https://x.com/elonmusk/status/1",
+        "https://mobile.x.com/someone/status/2",
+        "https://www.bloomberg.com/profile/company/0117059D:US",
     ],
 )
 def test_aggregators_and_social_sites_are_rejected(url):
@@ -158,9 +160,31 @@ def test_aggregators_and_social_sites_are_rejected(url):
         "https://news.microsoft.com/source/2026/06/fairwater/",
         "https://www.datacenterknowledge.com/article/x",
         "https://www.wtmj.com/news/2026/06/microsoft/",
+        # Wikipedia is deliberately allowed: the article is quotable, its
+        # references are mined, and confidence.TERTIARY_DOMAINS keeps it from
+        # ever corroborating the coverage it summarizes.
+        "https://en.wikipedia.org/wiki/Hyperion_Data_Center",
     ],
 )
 def test_real_outlets_are_kept(url):
+    assert is_useful_host(url) is True
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        # "x.com" must block only x.com itself, never a host that merely ends in
+        # those letters. The substring matcher this pins against silently blocked
+        # a top-five operator whose newsroom already answers 403 — search was the
+        # one path to its coverage.
+        "https://www.equinix.com/newsroom/press-releases/2026/dc-expansion",
+        "https://blog.equinix.com/blog/2026/x/",
+        "https://www.spacex.com/updates/",
+        # Bloomberg articles were never meant to be blocked, only /profile stubs.
+        "https://www.bloomberg.com/news/articles/2026-01-01/meta-data-center",
+    ],
+)
+def test_domains_are_matched_on_boundaries_not_substrings(url):
     assert is_useful_host(url) is True
 
 
@@ -303,6 +327,71 @@ def test_run_dry_run_writes_nothing(session):
     report, candidates = srch.run(session, ["q"], provider=provider, dry_run=True)
     assert report.queued == 1, "the report still describes what would happen"
     assert candidates
+    assert list(session.scalars(select(IngestUrl))) == []
+
+
+def test_run_mines_wikipedia_hits_for_their_references(session, monkeypatch):
+    """The top hit for a tracked campus is routinely its Wikipedia article, and
+    the article's references name the primary sources. Both must queue."""
+    from tracker.ingest import wiki
+
+    monkeypatch.setattr(
+        wiki,
+        "external_links",
+        lambda url, settings=None: [
+            "https://investor.example/press/hyperion-data-center-joint-venture",
+        ],
+    )
+    provider = FakeProvider(
+        {
+            "q": [
+                hit(
+                    "https://en.wikipedia.org/wiki/Hyperion_Data_Center",
+                    "Hyperion Data Center - Wikipedia",
+                    snippet="a 2,000 megawatt data center campus in Louisiana",
+                    query="q",
+                )
+            ]
+        }
+    )
+    report, _ = srch.run(session, ["q"], provider=provider)
+    urls = {row.url for row in session.scalars(select(IngestUrl))}
+    assert "https://en.wikipedia.org/wiki/Hyperion_Data_Center" in urls
+    assert "https://investor.example/press/hyperion-data-center-joint-venture" in urls
+    assert report.wiki_mined == 1
+    mined = session.scalar(
+        select(IngestUrl).where(IngestUrl.url.like("https://investor.example/%"))
+    )
+    assert mined.feed == "wikipedia:Hyperion_Data_Center"
+
+
+def test_run_mines_even_when_the_wiki_page_itself_is_filtered(session, monkeypatch):
+    """An opaque snippet can fail the keyword filter while the article's
+    references are still exactly what we want, so mining reads the raw hits."""
+    from tracker.ingest import wiki
+
+    monkeypatch.setattr(
+        wiki,
+        "external_links",
+        lambda url, settings=None: [
+            "https://investor.example/press/hyperion-data-center-joint-venture",
+        ],
+    )
+    provider = FakeProvider(
+        {"q": [hit("https://en.wikipedia.org/wiki/Hyperion", "Hyperion", query="q")]}
+    )
+    _report, _ = srch.run(session, ["q"], provider=provider)
+    urls = {row.url for row in session.scalars(select(IngestUrl))}
+    assert "https://en.wikipedia.org/wiki/Hyperion" not in urls, "the page failed the filter"
+    assert "https://investor.example/press/hyperion-data-center-joint-venture" in urls
+
+
+def test_run_can_skip_mining(session):
+    provider = FakeProvider(
+        {"q": [hit("https://en.wikipedia.org/wiki/Hyperion", "Hyperion", query="q")]}
+    )
+    report, _ = srch.run(session, ["q"], provider=provider, mine_wikipedia=False)
+    assert report.wiki_mined == 0
     assert list(session.scalars(select(IngestUrl))) == []
 
 
