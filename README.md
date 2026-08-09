@@ -23,7 +23,7 @@ Articles to extract from come from `tracker discover`, which polls news feeds an
 queues candidates for triage.
 
 Then query: `tracker list`, `tracker show ID`, `tracker stats`, `tracker capex`,
-`tracker duplicates`, `tracker review`, `tracker verify`,
+`tracker duplicates`, `tracker blocks`, `tracker review`, `tracker verify`,
 `tracker export {md,csv,json}`. `tracker merge` folds rows that turned out to be
 one campus; it is the only command here that deletes anything. `tracker point
 "<name>"` goes and gets one named data center on demand — matching it to an
@@ -1013,6 +1013,36 @@ Every edit is written into the row's notes naming who made it — `rule`, `opera
 `model` or `model after search` — and a finding settled once is not asked again
 unless you pass `--again`. `--no-ask`, `--no-llm` and `--no-search` each stop the
 ladder at that rung; `--no-llm --no-ask` does the free repairs and nothing else.
+
+### One tranche wearing several names
+
+```bash
+tracker blocks                    # every project, strongest evidence first
+tracker blocks 1 10                # only these projects
+tracker blocks --only mergeable    # one verdict at a time
+```
+
+Free, read-only, no LLM — the shape `tracker duplicates` already established,
+one level down: a campus read by 25 sources acquires a name per source.
+Fairwater held `Building 2`, `Facility 2`, `Second facility` and `Area II` for
+one building, because `blocks.block_key` folds ordinals hard ("Phase I" and
+"first phase" already converge) but cannot fold *which noun a source chose*.
+
+Three verdicts, and only the first proposes anything:
+
+| verdict | what it means |
+|---|---|
+| `mergeable` | one tranche under several names; nothing disagrees |
+| `collides` | two sources confirm *different* capacities for it — one figure told twice would agree, this doesn't, so it refuses rather than picks |
+| `ambiguous` | a bare ordinal that fits two families — "Facility 1" reads as both `Building 1` and `Phase 1` |
+
+It never writes: `block_key` is the write path's identity, and folding it
+further to collapse these names would also fold `Phase 1` into `Building 1`.
+On the live database: 23 groups across 16 projects, 21 mergeable (44 rows
+that are 21 things), 1 collides, 1 ambiguous. The collision is worth more
+than the merges — Hyperion holds `Phase 1` at 2,000 MW and `Phase 1 IT Load`
+at 1,500, which are facility load and IT load, two measurements of one
+phase, not a disagreement to resolve by picking.
 
 ### Values that contradict each other
 

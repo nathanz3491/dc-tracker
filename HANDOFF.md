@@ -1,6 +1,29 @@
 # Handoff
 
-## Yesterday (state at start of 2026-08-09)
+## Yesterday (state at start of 2026-08-10)
+
+The prior handoff (`218f453`, committed 2026-08-09 05:37) accounted for
+`5908c68` (the milestone evidence gate, `built_capacity_uncited_in_blocks`,
+`tracker enrich --all`) and, further back, `cd2d462`'s unrecorded merge-time
+`ImportError` fix.
+
+The day didn't end there. Eight more commits landed between 11:36 and 23:51
+the same day — on this branch and via a merge from
+`claude/data-source-coordination-analysis-66de67` — none recorded until this
+run: `tracker enrich` reaching past the corpora `sync` already drains via
+Wikipedia reference mining and a host-blocklist fix (`3e5e20f`, merged
+`ed0bd54`); naming which search backend actually answered, after finding the
+pinned one doesn't index this trade press at all (`0170c22`); two ordering
+defects that made `tracker enrich N` decline a row before starting
+(`f7715782`); an escalation ladder past WAFs that block the TLS handshake
+rather than the crawler (`0b93988`); a plan document measuring what 26-source
+projects do to `logic check` and to block identity (`f41f70e`); `tracker
+blocks`, a free report finding one tranche wearing several names
+(`d0ce423`); a positional fix to the floor/ceiling hedge-word reader
+(`3c30e0a`); and the tranche panel rewrite from provenance ledger to site
+plan (`f6ec88c`). That's what "Today" below accounts for.
+
+## Older context (state at start of 2026-08-09)
 
 The prior handoff (`e9be28a`, committed 2026-08-08) accounted for `b18ba5a`
 (the claim envelope and quality measurement) and, via a merge, for `95a18ab`
@@ -473,7 +496,7 @@ that 404'd because they were truncated at 60 characters. Landed as `95a18ab`;
   column. `audit resolve --no-llm --no-ask` fixed one tranche (2400 → 2.4 MW on
   WPA-1 Boyers).
 
-## Today (2026-08-09 run)
+## Older context, continued (2026-08-09 05:35 run)
 
 One session on one branch (`data-quality-adjustments`), committed as
 `5908c68`. Verified 1788 tests green (`.venv` pytest, exit 0) and ruff clean
@@ -526,85 +549,132 @@ before writing this.
   AGENTS.md (still a single CLI/data-pipeline codebase, no distinct agent
   roles to document).
 
+## Today (2026-08-10 run)
+
+No new commits landed during this run's window — a housekeeping pass,
+accounting for the 2026-08-09 11:36–23:51 stretch above (see Yesterday) and
+tidying docs. Verified 1884 tests green (`.venv` pytest, exit 0) and ruff
+clean before writing this — up from the ~1826 the `ed0bd54` merge counted,
+mostly new coverage for search, Wikipedia mining, the escalation ladder and
+`tracker blocks`.
+
+- **Recorded the eight unrecorded commits** listed under Yesterday — this
+  file had no entry for any of them until now.
+- **`tracker blocks` had shipped with no README entry.** Every other free,
+  read-only report command (`duplicates`, `audit`, `logic check`) gets one in
+  README.md; this one didn't. Added a "One tranche wearing several names"
+  section documenting verdicts and flags, and listed the command alongside
+  `duplicates` in the top-level command summary. Also corrected
+  `docs/README.md`'s description of `plan-scale-with-sources.md`, which still
+  read "nothing built yet" after Part 2 (`tracker blocks`) had shipped.
+  `docs/architecture.md` needs no change — the new modules (`blockcheck.py`,
+  `vocab.py`, `ingest/wiki.py`) are pipeline-internal, not a shift in the
+  CLI/database/console split it describes.
+- **Live counts have moved since the plan doc's 2026-08-09 22:31
+  measurement, from the same source-growth it was written to describe** —
+  recorded here as a wider backlog, not investigated further this run:
+  - `tracker blocks`: 35 groups on 25 projects (31 mergeable, 2 collides, 2
+    ambiguous), against the doc's 23/16/21/1/1.
+  - `tracker duplicates --no-weak`: 7 strong groups, against the 2 this file
+    had been carrying (Memphis, Childress — both still open; five new:
+    Southaven MS, West Jordan UT, Ashburn VA, Harwood ND, Manassas VA).
+  - `tracker audit`: 27 findings on 25 projects, against 21 on 19.
+  - `tracker risks`: 118 of 305 obstacles 待确认, against 43 previously cited.
+  - `tracker logic check`: 361 projects checked (395 source collisions, 426
+    contradictions, 23 impossible), against the plan doc's 252 projects.
+  - `tracker queue`: 803 candidates, down from 824.
+
+  361 projects is a real jump from the 252 the plan doc measured the same
+  day — plausibly `sync`/`enrich` running unattended between commits rather
+  than anything wrong, but nobody has confirmed which.
+- **One unplanned model call**: `tracker risks confirm --dry-run`, run to
+  check the 待确认 count above, made two live LLM calls despite the name —
+  it writes nothing, but it isn't free. Noting it so it isn't repeated by
+  habit; the other counts above came from free, read-only commands.
+
 ## Tomorrow
 
-- ~~`events[]` still bypasses the evidence gate entirely~~ **Done** (see
-  Today). What's still open: the gate checks only that a quote exists and is
-  verbatim, not that it actually supports the *event_type* it's filed
-  under — a verified "Open house event" sentence can still sit beside a
-  `groundbreaking` chip. `docs/plan-claim-envelope.md` names the risk gate's
-  `_RISK_EVIDENCE` vocabulary as the template if that's worth building.
-- **21 audit findings are still unsettled and now have somewhere to go.** Run
-  `tracker audit resolve` interactively — it costs nothing until you answer `?`,
-  and the model rungs behind it were measured settling 4 of 4 on a copy. Worth
-  doing before the next capex read, since three of them are tranches larger than
-  their own campus.
-- **43 obstacles are still 待确认.** `tracker risks confirm --dry-run` first: the
-  live sample refused 3 of 4 offered quotes, so expect a low confirm rate and a
-  useful one. The Chinese-language sources will never confirm through the ASCII
-  matcher — worth deciding whether that is a gap to close or a limit to state.
-- **Two real duplicate groups remain** (#2/#226 Memphis, #143/#255 Childress).
-  Both are `same tranche` matches and both look genuine; the Childress pair is
-  an operator rename (Iris Energy → IREN) and is the safer merge of the two.
-- **824 queued candidates remain**, all reachable. `--from-queue` has a fresh,
-  filtered backlog for the first time.
-
-- **`events[]` still bypasses the evidence gate entirely** — no quote required
-  or checked. Fixing it needs an `unconfirmed` column on `event`; named in the
-  plan rather than half-done.
+- The evidence gate checks only that a quote exists and is verbatim, not
+  that it actually supports the *event_type* it's filed under — a verified
+  "Open house event" sentence can still sit beside a `groundbreaking` chip.
+  `docs/plan-claim-envelope.md` names the risk gate's `_RISK_EVIDENCE`
+  vocabulary as the template if that's worth building.
+- ~~`bound`'s hedge-word check is not positional~~ **Done** — `3c30e0a` made
+  attachment (a hedge within 32 characters of its figure) decide it instead
+  of mere presence.
+- **27 audit findings are unsettled** (up from 21) and have somewhere to go —
+  run `tracker audit resolve` interactively; costs nothing until you answer
+  `?`.
+- **118 of 305 obstacles are 待确认** (up from 43) — `tracker risks confirm
+  --dry-run` first. The live sample previously refused most offered quotes,
+  so expect a low confirm rate; Chinese-language sources will never confirm
+  through the ASCII matcher — worth deciding whether that's a gap to close
+  or a limit to state.
+- **Duplicate groups grew from 2 to 7 strong (`--no-weak`) matches**, likely
+  surfaced by the new search/Wikipedia reach pulling in overlapping
+  coverage. Memphis (#2/#226/#291) and Childress (Iris Energy → IREN rename)
+  are the two previously reviewed; Southaven MS, West Jordan UT, Ashburn VA,
+  Harwood ND and Manassas VA are new and unreviewed.
+- **`tracker blocks` proposes 31 mergeable groups** (up from 21) — folding
+  them would retire 36 rows. It never writes; someone still has to act on
+  the proposals. The 2 collides and 2 ambiguous groups need a person, not a
+  merge — Hyperion's Phase 1 (2,000 MW) vs. Phase 1 IT Load (1,500 MW) is
+  the collision worth reading first, since it's facility load vs. IT load
+  rather than a disagreement.
+- **`docs/plan-scale-with-sources.md` Part 1 is still unimplemented** — the
+  deterministic grouping/normalisation for `logic check`'s quadratic source
+  collisions (275 → 395 live since the doc was written), no model call
+  needed per the doc's own conclusion. Part 2 (`tracker blocks`) is done.
+- **803 queued candidates remain** (down from 824), all reachable.
 - **The `published_at` merge tiebreak is off**, and flipping it needs a bulk
-  recompute that doesn't exist yet — `recompute_from_sources` is reachable only
-  through `merge` today.
+  recompute that doesn't exist yet — `recompute_from_sources` is reachable
+  only through `merge` today.
 - **11 silent defects remain**, all on rows whose articles no longer support
-  them (mostly the 28 URLs now orphaned by re-derived project identity).
-- **`bound`'s hedge-word check is not positional** — a quote with two figures
-  and two hedges can license the wrong one ("roughly $27B... more than $50B"
-  read `approximate` off the wrong number's hedge). Needs to check attachment,
-  not mere presence.
-- `news.microsoft.com`-style newsroom subdomains now read `general_media`
-  unless the parent domain is already in `feeds.toml` — add genuine newsrooms
-  there as they're found.
+  them (mostly the 28 URLs orphaned by re-derived project identity) —
+  unverified against the current, larger database.
+- `news.microsoft.com`-style newsroom subdomains still read `general_media`
+  unless the parent domain is already in `feeds.toml`; `datacenters.atmeta.com`
+  was added as a `company="Meta"` newsroom on 08-09 — add genuine newsrooms
+  as they're found the same way.
 - The claim envelope pushed some replies past `max_completion_tokens`, each
   costing a corrective retry — worth watching if it gets worse as more axes
   are asked for.
 - **Six decisions left open by the placeholder-plan closeout, all needing a
-  person** (`docs/placeholder-remediation-plan.md`, "Open decisions") — still
-  untouched by this session: `confidence.find_conflicts` still counts 待确认
-  claims as a third copy of a rule the other two now apply; #3's
-  `mw_built=1200` needs a manual `tracker review` demotion since MAX-merge
-  won't lower it on its own; #1 and #201's `mw_built=350` (one hedged sentence
-  read as a per-site figure on two rows); #1's `blocker` prose is unsupported
-  by its cited passage; `placeholder_quote` isn't firing on source 108 despite
-  a confirmed `mw_built=350` with no stored quote at all; and the two
-  Fairwater block questions (duplicate energisation dates, NULL `mw_planned`).
+  person** (`docs/placeholder-remediation-plan.md`, "Open decisions") —
+  still untouched: `confidence.find_conflicts` still counts 待确认 claims as
+  a third copy of a rule the other two now apply; #3's `mw_built=1200` needs
+  a manual `tracker review` demotion since MAX-merge won't lower it on its
+  own; #1 and #201's `mw_built=350` (one hedged sentence read as a per-site
+  figure on two rows); #1's `blocker` prose is unsupported by its cited
+  passage; `placeholder_quote` isn't firing on source 108 despite a
+  confirmed `mw_built=350` with no stored quote at all; and the two
+  Fairwater block questions (duplicate energisation dates, NULL
+  `mw_planned`).
 - **Review the 5 deferred merge candidates** in
   `docs/merge-review-2026-08-05.md` — two building-vs-campus pairs, one
   utility-recorded-as-operator row, one Doña Ana locality-grain pair, one
   locality typo. None auto-merge for good reason; each needs a human call.
-- **Finish the block backfill.** Still 16 projects with a real energisation
-  and no blocks read — carried five days now.
+- **Finish the block backfill.** Still projects with a real energisation and
+  no blocks read — carried six days now.
 - **Review the two block-shaped report-only signals** —
-  `blocks_may_double_count` (6 live hits as of the 2026-08-04 session) and
-  `block_label_ambiguous` — still untriaged.
-- Review `docs/feedback-2026-08-03.md`, now six days old and untouched.
-- The 20 utility/contractor EDGAR companies in `seed/edgar-companies.toml` are
-  still wired up but unrun — seventh day carried.
+  `blocks_may_double_count` and `block_label_ambiguous` (5 live hits) —
+  still untriaged.
+- Review `docs/feedback-2026-08-03.md`, now seven days old and untouched.
+- The 20 utility/contractor EDGAR companies in `seed/edgar-companies.toml`
+  are still wired up but unrun — eighth day carried.
 - The 30-required-projects gap, unverified ERCOT/CAISO column names, and the
-  two unconfigured Google CSE keys are still open — seventh day carried.
-- `tracker cloudflare --name`/`TRACKER_TUNNEL_HOSTNAME` still need a real run
-  against a named tunnel with DNS actually pointed at it.
-- `tracker audit`, the evidence-quote gate, and now `quality`/the claim
-  envelope are all measured only against the live database as it stands
-  today — worth rerunning after the next sync.
+  two unconfigured Google CSE keys are still open — eighth day carried.
+- `tracker cloudflare --name`/`TRACKER_TUNNEL_HOSTNAME` still need a real
+  run against a named tunnel with DNS actually pointed at it.
+- `tracker audit`, the evidence-quote gate, and `quality`/the claim envelope
+  are all measured only against the live database as it stands today — worth
+  rerunning after the next sync, truer than ever now that today's counts
+  moved this much since 08-09.
 - **An untracked 2 MB PDF still sits in `docs/`**
   (`docs/能源科技AI系列报告（三）：北美AI电力新趋势PPT+ED (1).pdf`, added
-  2026-08-06 14:52, unchanged since — three days now). Still not committed by
-  this run for the same reason as before — reference material, not project output — and still
-  needs a human call on whether it belongs in the repo, `.gitignore`, or
-  somewhere else entirely.
-- No AGENTS.md exists for this project and none was added today: still a
-  single CLI/data-pipeline codebase with no distinct agent roles to document.
-  `docs/architecture.md` stays high-level by design (logic, not
-  command-level detail) and doesn't need updates for the claim envelope or
-  `--stale-prompt` — both are pipeline-internal behaviour already covered at
-  the right altitude in README/CHANGELOG.
+  2026-08-06 14:52, unchanged since — four days now). Still reference
+  material, not project output; still needs a human call on whether it
+  belongs in the repo, `.gitignore`, or somewhere else entirely.
+- No AGENTS.md exists for this project: still a single CLI/data-pipeline
+  codebase with no distinct agent roles to document. `docs/architecture.md`
+  stays high-level by design and didn't need updates today (see Today).
