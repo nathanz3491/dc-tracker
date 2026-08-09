@@ -380,7 +380,44 @@ def to_json_object(project: Project) -> dict[str, Any]:
         # itself, and then there would be two definitions of "what is in the campus
         # total" free to disagree — the objection `webui/dataset.py` opens with.
         "accounting": _accounting_json(project),
+        # The campus as its real subdivisions, one entry per section however many
+        # sources named it. This is the shape a reader wants — "Building 2, under
+        # construction, delivering 0 of 150 MW" — and the flat tranche list could
+        # not give it: identity is the primary key of a block and state is one of
+        # its attributes, where the list was ordered by state and grouped by
+        # evidence tier. Computed here because deciding that `Area II` is
+        # `Building 2` is a judgement, and the browser draws judgements rather than
+        # making them.
+        "sections": _sections_json(project),
     }
+
+
+def _sections_json(project: Project) -> list[dict[str, Any]]:
+    """Sections in identity order, each carrying what it delivers of what it holds."""
+    from tracker.blockcheck import sections
+
+    return [
+        {
+            "key": s.key,
+            "label": s.label,
+            "aliases": list(s.aliases),
+            "class": s.klass,
+            "ordinal": s.ordinal,
+            "status": s.status,
+            "capacity": s.capacity,
+            "capacity_confirmed": s.capacity_confirmed,
+            "delivering": s.delivering,
+            "capacity_conflict": list(s.capacity_conflict),
+            "verdict": s.verdict,
+            "parent": s.parent,
+            "generic": s.generic,
+            "customer": s.customer,
+            "energized_on": _iso(s.energized_on),
+            "expected_online": _iso(s.expected_online),
+            "source_ids": list(s.source_ids),
+        }
+        for s in sections(project.id, list(project.blocks))
+    ]
 
 
 def _accounting_json(project: Project) -> dict[str, Any] | None:

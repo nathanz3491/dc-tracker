@@ -1343,6 +1343,42 @@ initial build of the v1 PRD.
   having installed it — the same class of bug as the colour probes reading the
   developer's own database.
 
+- **The tranche panel is a site plan, not a provenance ledger** (`tracker/blockcheck.py`,
+  `tracker/export.py`, `app.js`). A block is a **section of a facility**, so which
+  section it is comes first and its state is one of its attributes. The panel had it
+  the other way round: rows sorted by `status`, arithmetic grouped by evidence tier.
+  That answers "what do we believe", which is a question the rest of the drawer
+  already answers, and it left Applied Digital's Polaris Forge reading as seven rows
+  in status order when it is **four buildings**.
+
+  Rows are now sections, in **identity order** — class then ordinal, never state —
+  each saying what it delivers of what it holds:
+
+  ```
+  Building 2   also called Building 2 (ELN-02)     100 / 100 MW   Serving
+  Building 3   also called Building 3 (ELN-03)       0 / 150 MW   Under construction
+  Building 4   also called Building 4 (ELN-02 C)     0 / 150 MW   Under construction
+  HPC Facility                                       0 / 100 MW   Under construction
+  ```
+
+  `delivering / held` is the distinction one `mw_planned` and one `mw_built` per
+  campus cannot draw: a building under construction holds 150 MW and delivers none
+  of it. The duplicate names are shown rather than hidden ("also called …") so the
+  grouping can be checked instead of trusted, and `blockcheck.sections` computes it
+  server-side because deciding that `Area II` is `Building 2` is a judgement.
+
+  Two things it deliberately does not do. It **never picks between two confirmed
+  capacities** — Hyperion's `Phase 1` at 2,000 MW beside `Phase 1 IT Load` at 1,500
+  shows both and says they are two figures. And a section whose identity could not
+  be settled says so rather than being filed under a guess. Only those two states
+  take a hue; "four sources named this building" is said in words, because colour in
+  this product means how much to believe a value or that a value is broken.
+
+  Measured against the data first: **69% of blocks carry a capacity**, so
+  `delivering / held` renders on most rows — but a parent string names another block
+  only **8 times in 286**, so there is no hierarchy in this data to nest and building
+  a tree would have been theatre.
+
 - **A hedged figure reads as a hedged figure, on every surface** (`tracker/vocab.py`,
   `tracker/export.py`, `tracker/cli.py`, `app.js`). Fairwater's `mw_built` rests on
   *"Each exceeds 350 MW"* — a floor, stated across two sites — and every surface

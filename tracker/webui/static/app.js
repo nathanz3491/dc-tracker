@@ -18,6 +18,11 @@ import { HelpView } from "/static/views-help.js";
 
 const html = htm.bind(React.createElement);
 const { useState, useEffect, useMemo, useRef, useCallback } = React;
+
+/* A fragment, so one loop iteration can emit a group header plus its row without
+   wrapping them in a div — the 5-column `dc-blockrow` grid is a direct child of the
+   table container, and an extra element between them breaks the alignment. */
+const Frag = React.Fragment;
 const NS = window.MeridianDesignSystem_6e9015 || {};
 const {
   Button, Card, CardHeader, CardTitle, CardDescription, Input, Select, Switch,
@@ -1641,10 +1646,20 @@ function BlocksTab({ p }) {
   // Furthest along first, then largest, so the eye lands on running capacity before
   // plans. Sorted here rather than server-side because it is a reading order, not a
   // fact about the data.
-  const rows = [...blocks].sort((a, b) => {
-    const d = blockState(b.status).rank - blockState(a.status).rank;
-    return d !== 0 ? d : (b.mw || 0) - (a.mw || 0);
-  });
+  /* **Rows are sections, ordered by identity — not by state.**
+   *
+   * A block is a section of a facility, so which section it is comes first and its
+   * state is one of its attributes: "Building 3, under construction, delivering 0 of
+   * 150 MW". This table used to sort by status and group its arithmetic by evidence
+   * tier, which answers a provenance question ("what do we believe") in a panel
+   * whose job is a site plan. Applied Digital's Polaris Forge read as seven rows in
+   * status order; it is four buildings.
+   *
+   * The sections come from the backend. Deciding that `Building 2 (ELN-02)` and
+   * `Building 2` are one building is a judgement, and the browser draws judgements
+   * rather than making them. */
+  const rows = p.sections || [];
+
   const cited = acct && acct.total != null ? acct.total : null;
   const campusTotal =
     cited != null ? cited : blocks.reduce((sum, b) => sum + (b.mw || 0), 0);
@@ -1780,58 +1795,87 @@ function BlocksTab({ p }) {
         <div class="dc-blockrow dc-blockhead" style=${{ padding: "0 4px 7px",
              fontSize: 11, textTransform: "uppercase", letterSpacing: "0.07em",
              color: "var(--muted-foreground)" }}>
-          <span>Tranche</span>
-          <span style=${{ textAlign: "right" }}>MW</span>
+          <span>Section</span>
+          <span style=${{ textAlign: "right" }}>Delivering / held</span>
           <span>State</span>
           <span>Customer</span>
           <span style=${{ textAlign: "right" }}>Online</span>
         </div>
 
-        ${rows.map((b, i) => {
-          const state = blockState(b.status);
-          const when = b.energized_on || b.expected_online;
+        ${rows.map((sec, i) => {
+          const state = blockState(sec.status);
+          const when = sec.energized_on || sec.expected_online;
+          const cap = sec.capacity;
+          const live = sec.delivering || 0;
+          const overdue = !sec.energized_on && sec.expected_online
+            && new Date(sec.expected_online) < new Date()
+            && !["energized", "serving"].includes(sec.status);
+          /* Only the two verdicts that mean something is *wrong* take a hue.
+           * "Four sources named this building" is not a defect, so it is said in
+           * words. Colour in this product means how much to believe a value, or
+           * that a value is broken — never a category. */
+          const bad = sec.capacity_conflict.length > 1 ? "var(--danger)"
+                    : sec.verdict === "ambiguous" ? "var(--warning)" : null;
           return html`
             <div key=${i} class="dc-blockrow"
                  style=${{ padding: "11px 4px", borderTop: "1px solid var(--border)" }}>
               <div style=${{ minWidth: 0 }}>
-                ${b.parent && html`
+                ${sec.parent && html`
                   <div style=${{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em",
-                         color: "var(--muted-foreground)" }}>${b.parent}</div>`}
-                <div style=${{ fontSize: 14, fontWeight: 500 }}>${b.label}</div>
-                ${b.generic && !b.parent && html`
+                         color: "var(--muted-foreground)" }}>${sec.parent}</div>`}
+                <div style=${{ fontSize: 14, fontWeight: 500 }}>${sec.label}</div>
+                <!-- The other names sources gave this same section. Shown so the
+                     grouping can be checked rather than trusted. -->
+                ${sec.aliases.length > 0 && html`
+                  <div style=${{ fontSize: 12, color: "var(--muted-foreground)", marginTop: 2 }}>
+                    also called ${sec.aliases.join(", ")}</div>`}
+                ${sec.verdict === "ambiguous" && html`
+                  <div style=${{ fontSize: 12, color: "var(--warning)", marginTop: 2 }}>
+                    which section this is could not be settled</div>`}
+                ${sec.generic && !sec.parent && sec.aliases.length === 0 && html`
                   <div style=${{ fontSize: 12, color: "var(--muted-foreground)", marginTop: 2 }}>
                     not tied to a named facility</div>`}
               </div>
+              <!-- Delivering of held: the question a section answers, and the one a
+                   single planned-versus-built pair per campus cannot. NOTE no
+                   backticks in here - this sits inside a template literal, and one
+                   ends it early and turns the next word into bare code. -->
               <div>
                 <div class="dc-num" style=${{ fontSize: 14, textAlign: "right",
-                       textDecoration: outOfScale(b) ? "line-through" : "none",
-                       color: b.mw == null ? "var(--muted-foreground)"
-                         : outOfScale(b) ? "var(--danger)" : "inherit" }}>${withBound(fmtMw(b.mw), b.mw_bound)}</div>
-                <!-- Magnitude, so 1 against 36 is visible without reading. Skipped for a
-                     rejected figure: a bar 250x the width of its own campus is noise. -->
-                ${b.mw != null && !outOfScale(b) && html`
+                       color: cap == null ? "var(--muted-foreground)" : bad || "inherit" }}>
+                  ${cap == null ? "—" : html`
+                    <span style=${{ color: live > 0 ? "inherit" : "var(--muted-foreground)" }}
+                      >${fmtMw(live)}</span
+                    ><span style=${{ color: "var(--muted-foreground)" }}> / ${
+                      withBound(fmtMw(cap), sec.capacity_confirmed ? "exact" : null)} MW</span>`}
+                </div>
+                ${cap != null && html`
                   <div style=${{ height: 3, marginTop: 4, marginLeft: "auto", borderRadius: 2,
-                         width: `${Math.max(4, (b.mw / widest) * 100)}%`,
-                         background: `var(${state.tone})`, opacity: b.mw_counted ? 1 : 0.4 }} />`}
-                ${outOfScale(b) && html`
-                  <div style=${{ fontSize: 10, textAlign: "right", marginTop: 3, color: "var(--danger)" }}>
-                    out of scale</div>`}
-                ${b.mw != null && !outOfScale(b) && !b.mw_counted && html`
-                  <div style=${{ fontSize: 10, textAlign: "right", marginTop: 3, color: "var(--warning)" }}>
-                    待确认</div>`}
+                         width: "100%", background: "var(--border)", overflow: "hidden" }}>
+                    <div style=${{ height: "100%", width: `${Math.min(100, (live / cap) * 100)}%`,
+                           background: `var(${state.tone})`,
+                           opacity: sec.capacity_confirmed ? 1 : 0.4 }} /></div>`}
+                ${sec.capacity_conflict.length > 1 && html`
+                  <div style=${{ fontSize: 10, textAlign: "right", marginTop: 3,
+                         color: "var(--danger)" }}>
+                    two sources confirm ${sec.capacity_conflict.map((v) => fmtMw(v)).join(" and ")}
+                    — two figures, not one</div>`}
+                ${cap != null && !sec.capacity_confirmed && html`
+                  <div style=${{ fontSize: 10, textAlign: "right", marginTop: 3,
+                         color: "var(--warning)" }}>待确认</div>`}
               </div>
               <div class="dc-bmeta" data-label="State">
                 <span style=${chip(state.tone)}>${state.label}</span></div>
               <div class="dc-bmeta" data-label="Customer"
                    style=${{ fontSize: 13, minWidth: 0, overflowWrap: "anywhere" }}>
-                ${b.customer || html`<span style=${{ color: "var(--muted-foreground)" }}>—</span>`}</div>
+                ${sec.customer || html`<span style=${{ color: "var(--muted-foreground)" }}>—</span>`}</div>
               <div class="dc-bmeta"
-                   data-label=${b.energized_on ? "Live since" : isOverdue(b) ? "Was due" : "Online"}
+                   data-label=${sec.energized_on ? "Live since" : overdue ? "Was due" : "Online"}
                    style=${{ textAlign: "right",
-                          color: isOverdue(b) ? "var(--warning)" : "var(--muted-foreground)" }}>
-                ${(b.energized_on || isOverdue(b)) && html`
+                          color: overdue ? "var(--warning)" : "var(--muted-foreground)" }}>
+                ${(sec.energized_on || overdue) && html`
                   <div class="dc-bmeta-label" style=${{ fontSize: 10, textTransform: "uppercase",
-                         letterSpacing: "0.05em" }}>${b.energized_on ? "live since" : "was due"}</div>`}
+                         letterSpacing: "0.05em" }}>${sec.energized_on ? "live since" : "was due"}</div>`}
                 <span class="dc-num" style=${{ fontSize: 12 }}>${when ? fmtMonth(when) : "—"}</span>
               </div>
             </div>`;

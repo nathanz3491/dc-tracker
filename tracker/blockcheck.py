@@ -121,6 +121,9 @@ class Member:
     energized_on: Any = None
     expected_online: Any = None
     customer: str | None = None
+    #: `blocks.block_key` marked this label as naming a kind of thing without
+    #: saying which campus — "Phase 1" with no parent.
+    generic: bool = False
 
     @classmethod
     def of(cls, block: Any) -> Member:
@@ -136,6 +139,7 @@ class Member:
             energized_on=getattr(block, "energized_on", None),
             expected_online=getattr(block, "expected_online", None),
             customer=getattr(block, "customer", None),
+            generic=bool(getattr(block, "generic", False)),
         )
 
 
@@ -380,8 +384,159 @@ __all__ = [
     "Conflict",
     "Group",
     "Member",
+    "Section",
     "families",
     "group_blocks",
     "scan",
+    "sections",
     "segment_family",
 ]
+
+
+# --- the campus as sections, which is what a block actually is ---------------
+
+#: Reading order for the classes, so a site plan reads structures then their
+#: schedule then the rooms inside them. Within a class, by ordinal.
+_CLASS_ORDER: Final[dict[str, int]] = {"structure": 0, "hall": 1, "phase": 2}
+
+
+@dataclass
+class Section:
+    """One real subdivision of a campus, however many sources named it.
+
+    **This is the unit a reader wants and the unit the table did not have.** The
+    tranche list was ordered by `status` and its arithmetic grouped by evidence
+    tier, which answers "what do we believe" — a provenance question. A block is a
+    *section of a facility*, so identity is the primary key and state is one of its
+    attributes: "Building 2, under construction, delivering 0 of 150 MW".
+    """
+
+    key: str
+    label: str
+    #: Every other name a source gave this same section, for the reader who wants
+    #: to check the grouping rather than trust it.
+    aliases: tuple[str, ...]
+    klass: str
+    ordinal: str | None
+    status: str
+    #: The section's capacity, and how much of it is actually delivering power.
+    #: `delivering` is 0 until the section is live, which is the whole distinction
+    #: `mw_planned` versus `mw_built` cannot make per building.
+    capacity: float | None
+    capacity_confirmed: bool
+    delivering: float
+    parent: str | None
+    generic: bool
+    source_ids: tuple[int, ...]
+    #: Set when two sources confirm different capacities for this one section, in
+    #: which case nothing here picks a winner — see `Group.verdict`.
+    capacity_conflict: tuple[float, ...] = ()
+    verdict: str = "single"
+    customer: str | None = None
+    energized_on: Any = None
+    expected_online: Any = None
+
+    @property
+    def sort_key(self) -> tuple[int, int, str, str]:
+        """Identity order: class, then ordinal, then name. Never status."""
+        return (
+            _CLASS_ORDER.get(self.klass, 3),
+            int(self.ordinal) if self.ordinal and self.ordinal.isdigit() else 9_999,
+            self.label.lower(),
+            self.key,
+        )
+
+
+def _canonical(members: list[Member]) -> Member:
+    """The member whose label names the section best.
+
+    Prefers a label that says what kind of thing it is *and* numbers it in digits,
+    so "Building 2" beats "Area II" and "Second facility". Deterministic, because
+    the same campus must not rename itself between two page loads.
+    """
+
+    def score(member: Member) -> tuple[int, int, int, str]:
+        segments = _segments(_CAPACITY.sub(" ", member.label or ""))
+        heads = [s.partition("-")[0] for s in segments]
+        named = any(h in SUBDIVISION_CLASSES for h in heads)
+        digit = any(char.isdigit() for char in member.label or "")
+        return (-int(named), -int(digit), len(member.label or ""), (member.label or "").lower())
+
+    return sorted(members, key=score)[0]
+
+
+def sections(project_id: int, blocks: list[Any]) -> list[Section]:
+    """The campus as its real subdivisions, one entry each, in identity order.
+
+    Duplicate namings collapse into one section — that is what `group_blocks`
+    established — but a group whose members disagree on a *confirmed* capacity is
+    reported with both figures rather than resolved, for the same reason a merge
+    refuses there.
+    """
+    from tracker.blocks import BLOCK_LIVE, furthest_status
+
+    members = [Member.of(b) for b in blocks]
+    grouped: dict[int, Group] = {}
+    for group in group_blocks(project_id, blocks):
+        for member in group.members:
+            grouped[member.block_id] = group
+
+    seen: set[str] = set()
+    out: list[Section] = []
+    for member in members:
+        group = grouped.get(member.block_id)
+        family = group.family if group else member.block_key
+        if family in seen:
+            continue
+        seen.add(family)
+
+        crowd = group.members if group else [member]
+        head = _canonical(crowd)
+
+        confirmed = {m.mw for m in crowd if m.mw is not None and m.mw_confirmed}
+        unconfirmed = {m.mw for m in crowd if m.mw is not None and not m.mw_confirmed}
+        if len(confirmed) == 1:
+            capacity, capacity_confirmed = next(iter(confirmed)), True
+        elif confirmed:
+            # Two sources confirm different figures. Show the larger so the bar has a
+            # denominator, and carry both so the row can say they disagree.
+            capacity, capacity_confirmed = max(confirmed), True
+        elif unconfirmed:
+            capacity, capacity_confirmed = max(unconfirmed), False
+        else:
+            capacity, capacity_confirmed = None, False
+
+        status = furthest_status([m.status for m in crowd])
+        ordinal = group.ordinal if group else None
+        klass = group.klass if group else ""
+        if not group:
+            fam = next(iter(families(member)), None)
+            if fam:
+                klass, ordinal = fam
+        out.append(
+            Section(
+                key=family,
+                label=head.label,
+                aliases=tuple(sorted({m.label for m in crowd} - {head.label})),
+                klass=klass or UNKNOWN_CLASS,
+                ordinal=ordinal,
+                status=status,
+                capacity=capacity,
+                capacity_confirmed=capacity_confirmed,
+                # Nothing is delivering until the section is live. This is the
+                # distinction one `mw_built` per campus cannot draw.
+                delivering=float(capacity) if capacity and status in BLOCK_LIVE else 0.0,
+                parent=head.parent,
+                generic=all(m.generic for m in crowd),
+                source_ids=tuple(sorted({m.source_id for m in crowd if m.source_id})),
+                capacity_conflict=tuple(sorted(confirmed)) if len(confirmed) > 1 else (),
+                verdict=group.verdict if group else "single",
+                # One value each from whichever member states one. A section named
+                # four ways is one building, so its tenant and its dates are the
+                # building's, not each reading's.
+                customer=next((m.customer for m in crowd if m.customer), None),
+                energized_on=next((m.energized_on for m in crowd if m.energized_on), None),
+                expected_online=next((m.expected_online for m in crowd if m.expected_online), None),
+            )
+        )
+    return sorted(out, key=lambda s: s.sort_key)

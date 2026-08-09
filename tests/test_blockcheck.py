@@ -19,7 +19,15 @@ from tracker.blockcheck import UNKNOWN_CLASS, families, group_blocks, segment_fa
 
 @dataclass
 class Blk:
-    """A stand-in for `CapacityBlock`, with only what grouping reads."""
+    """A stand-in for `CapacityBlock`, with only what grouping reads.
+
+    `block_key` is derived with the real `blocks.block_key` rather than defaulted
+    to a constant. It used to be the literal `"k"` for every stub, which made all
+    of them share one identity — and `sections` dedupes ungrouped blocks on that
+    key, so three distinct buildings collapsed into one. The schema's
+    `UNIQUE(project_id, block_key)` means that cannot happen to real rows, so the
+    fixture was lying rather than the code being wrong.
+    """
 
     id: int
     label: str
@@ -27,11 +35,18 @@ class Blk:
     mw: float | None = None
     unconfirmed_fields: str | None = None
     parent: str | None = None
-    block_key: str = "k"
+    block_key: str = ""
     source_id: int | None = 1
     energized_on: object = None
     expected_online: object = None
     customer: str | None = None
+    generic: bool = False
+
+    def __post_init__(self) -> None:
+        if not self.block_key:
+            from tracker.blocks import block_key
+
+            self.block_key = block_key(self.label, self.parent).value
 
 
 def verdicts(blocks):
@@ -225,3 +240,87 @@ def test_labels_without_an_ordinal_are_left_alone():
 
 def test_a_single_block_is_not_a_group():
     assert group_blocks(1, [Blk(id=1, label="Building 2")]) == []
+
+
+# --- the campus as sections, which is what the table shows ------------------
+
+
+def test_sections_collapse_the_duplicate_namings():
+    """The live Polaris Forge case: seven blocks are four buildings."""
+    from tracker.blockcheck import sections
+
+    blocks = [
+        Blk(id=1, label="Building 2 (ELN-02)", status="serving", mw=100.0),
+        Blk(id=2, label="Building 2", status="serving", mw=100.0),
+        Blk(id=3, label="Building 3 (ELN-03)", status="under_construction", mw=150.0),
+        Blk(id=4, label="Building 3", status="under_construction", mw=150.0),
+        Blk(id=5, label="HPC Facility", status="under_construction", mw=100.0),
+    ]
+    secs = sections(135, blocks)
+    assert [s.label for s in secs] == ["Building 2", "Building 3", "HPC Facility"]
+    assert secs[0].aliases == ("Building 2 (ELN-02)",)
+
+
+def test_a_section_says_what_it_delivers_of_what_it_holds():
+    """The question the flat list could not answer: 0 of 150, not just 150."""
+    from tracker.blockcheck import sections
+
+    live, building = sections(
+        1,
+        [
+            Blk(id=1, label="Building 1", status="serving", mw=100.0),
+            Blk(id=2, label="Building 2", status="under_construction", mw=150.0),
+        ],
+    )
+    assert (live.delivering, live.capacity) == (100.0, 100.0)
+    assert (building.delivering, building.capacity) == (0.0, 150.0)
+
+
+def test_sections_are_ordered_by_identity_not_by_state():
+    """The defect this replaced: a site plan sorted by how far along things are.
+
+    Building 1 comes before Building 2 even though Building 2 is further along.
+    """
+    from tracker.blockcheck import sections
+
+    secs = sections(
+        1,
+        [
+            Blk(id=1, label="Building 2", status="serving", mw=100.0),
+            Blk(id=2, label="Building 1", status="planned", mw=50.0),
+            Blk(id=3, label="Phase 1", status="energized", mw=25.0),
+        ],
+    )
+    # Structures before phases, and within a class by ordinal.
+    assert [s.label for s in secs] == ["Building 1", "Building 2", "Phase 1"]
+
+
+def test_a_section_never_picks_between_two_confirmed_capacities():
+    from tracker.blockcheck import sections
+
+    (sec,) = sections(
+        10,
+        [
+            Blk(id=1, label="Phase 1", mw=2000.0),
+            Blk(id=2, label="Phase 1 IT Load", mw=1500.0),
+        ],
+    )
+    assert sec.capacity_conflict == (1500.0, 2000.0)
+    assert sec.verdict == "collides"
+
+
+def test_the_canonical_name_is_the_one_that_says_what_the_thing_is():
+    """ "Building 2" over "Area II" and "Second facility": a class word plus a digit."""
+    from tracker.blockcheck import sections
+
+    (sec,) = sections(1, FAIRWATER_SECOND)
+    assert sec.label == "Building 2"
+    assert set(sec.aliases) == {"Area II", "Facility 2", "Second facility"}
+
+
+def test_an_unconfirmed_capacity_is_carried_but_flagged():
+    from tracker.blockcheck import sections
+
+    (sec,) = sections(1, [Blk(id=1, label="Building 1", mw=350.0, unconfirmed_fields="mw")])
+    assert sec.capacity == 350.0
+    assert sec.capacity_confirmed is False
