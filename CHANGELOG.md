@@ -108,6 +108,22 @@ initial build of the v1 PRD.
   queue 0, retry 0, **search 42** URLs, 25 of them Wikipedia references.
   The project's configured backend is Serper (`TRACKER_SERPER_API_KEY`).
 
+- **Every harvest now says which search backend answered** (`tracker/cli.py`,
+  `tracker/ingest/enrich.py`, `tracker/ingest/search.py`). `enrich` had been
+  running its searches against **Bocha** — pinned by `TRACKER_SEARCH_PROVIDER`,
+  and by this repo's own measurement an index that "does not index US data center
+  trade press at article depth" — so the harvester was working exactly as built
+  and returning almost nothing citable. Nothing on screen said which engine it
+  asked, because `_render_enrich` assembled each harvester's `note` and then
+  never printed it: the run reported a method that found nothing rather than one
+  pointed at the wrong index.
+
+  Providers now carry a `NAME`, the search harvest reads `3 quer(ies) run via
+  serper; 24 wikipedia reference(s)`, every harvester's note is rendered under
+  the round table, and `sync` names the backend when it turns searching on. A
+  misconfigured index is now a visible fact rather than something you have to
+  remember. The pin is `serper`.
+
 - **`tracker/ingest/wiki.py` tests and live fixtures** (`tests/test_wiki.py`):
   the miner's fixtures are the Hyperion article's real external-links list as
   returned on 2026-08-08, so the branches the live data exercises stay pinned.

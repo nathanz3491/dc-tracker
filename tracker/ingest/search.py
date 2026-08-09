@@ -226,7 +226,18 @@ class SearchReport:
 
 
 class SearchProvider(Protocol):
+    #: The backend's own name, as it appears in a report. Which engine answered
+    #: is load-bearing information, not trivia: this project spent weeks with
+    #: `enrich` searching Bocha's Chinese-web index for US trade press, which no
+    #: output ever named, so the harvest looked broken rather than misconfigured.
+    NAME: str
+
     def search(self, query: str, *, limit: int) -> list[SearchHit]: ...
+
+
+def provider_name(provider: object) -> str:
+    """The backend's name, for a report. Falls back to the class name."""
+    return getattr(provider, "NAME", None) or type(provider).__name__
 
 
 # --- Google Programmable Search --------------------------------------------
@@ -241,6 +252,7 @@ class GoogleCSEProvider:
     """
 
     ENDPOINT = "https://www.googleapis.com/customsearch/v1"
+    NAME = "google"
 
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or get_settings()
@@ -308,6 +320,7 @@ class BraveProvider:
     """
 
     ENDPOINT = "https://api.search.brave.com/res/v1/web/search"
+    NAME = "brave"
 
     #: Seconds to wait out the free tier's per-second limit before giving up on a
     #: query. Brave does not always send Retry-After, so this is a fixed pause.
@@ -391,6 +404,7 @@ class SerperProvider:
     """
 
     ENDPOINT = "https://google.serper.dev/search"
+    NAME = "serper"
 
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or get_settings()
@@ -455,6 +469,7 @@ class BochaProvider:
     """
 
     ENDPOINT = "https://api.bochaai.com/v1/web-search"
+    NAME = "bocha"
 
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or get_settings()
@@ -781,5 +796,6 @@ __all__ = [
     "hits_to_candidates",
     "is_useful_host",
     "known_projects",
+    "provider_name",
     "run",
 ]

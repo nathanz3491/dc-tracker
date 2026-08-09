@@ -3284,6 +3284,23 @@ def _render_enrich(report, *, dry_run: bool) -> None:
             "and the project's own citations are swept once — re-sweeping a fixed corpus "
             "returns the same URLs for thousands of fetches.[/dim]"
         )
+        # What each harvester says about itself, once per harvester rather than
+        # once per round. Until this printed, `note` was assembled and thrown
+        # away — which is how `enrich` searched Bocha's Chinese-web index for US
+        # trade press for weeks while reporting only that it found nothing. The
+        # engine that answered belongs on screen, not in a debug log.
+        for harvest_name in ("queue", "retry", "archive", "search", "refresh"):
+            note = next(
+                (
+                    h.note
+                    for rnd in report.rounds
+                    for h in rnd.harvests
+                    if h.name == harvest_name and h.note
+                ),
+                None,
+            )
+            if note:
+                console.print(f"[dim]{harvest_name}: {note}[/dim]")
 
     fields = Table(header_style="bold", box=TABLE_BOX, title_justify="left")
     fields.add_column("field")
@@ -4999,7 +5016,9 @@ def sync(
         search = settings.search_max_queries if settings.has_search_keys() else 0
         if search:
             console.print(
-                f"[dim]search: on by default ({search} queries; --search 0 to skip)[/dim]"
+                f"[dim]search: on by default via "
+                f"[bold]{settings.resolve_search_provider()}[/bold] "
+                f"({search} queries; --search 0 to skip)[/dim]"
             )
     if search:
         from tracker.ingest import search as srch
@@ -5028,6 +5047,11 @@ def sync(
                     f"searched {s_report.queries_run} quer(ies), {s_report.hits} hit(s), "
                     f"queued [bold]{s_report.queued}[/bold] more"
                 )
+                if s_report.wiki_mined:
+                    console.print(
+                        f"[dim]  {s_report.wiki_mined} of those came from Wikipedia's own "
+                        "references[/dim]"
+                    )
                 if s_report.quota_exhausted:
                     err.print("[yellow]daily search quota exhausted[/yellow]")
 

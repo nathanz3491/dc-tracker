@@ -356,6 +356,7 @@ def harvest_search(
         SearchError,
         build_provider,
         is_useful_host,
+        provider_name,
     )
 
     if provider is None:
@@ -403,8 +404,13 @@ def harvest_search(
                     urls.append(candidate.url)
                     mined += 1
 
+    # Naming the engine is the point of this note, not decoration. `enrich` ran
+    # against Bocha — an index with almost no US trade press in it — for weeks,
+    # and nothing it printed said so, so a misconfiguration read as a harvester
+    # that simply found nothing.
     if not note:
         note = f"{ran} quer(ies) run"
+    note += f" via {provider_name(provider)}"
     if mined:
         note += f"; {mined} wikipedia reference(s)"
     return Harvest("search", urls, note=note)

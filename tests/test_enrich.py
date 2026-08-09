@@ -276,6 +276,43 @@ def test_search_harvester_uses_the_provider(session, monkeypatch):
     assert provider.queries, "the provider must actually be queried"
 
 
+def test_the_search_harvest_names_the_backend_it_used(session, monkeypatch):
+    """Which engine answered is load-bearing, not trivia.
+
+    This project ran `enrich` against Bocha's Chinese-web index for weeks while
+    looking for US trade press, and nothing on screen said so — the harvest read
+    as a method that found nothing rather than one pointed at the wrong index.
+    """
+    from tracker.config import Settings
+    from tracker.ingest.search import provider_name
+
+    monkeypatch.setitem(Settings.model_config, "env_file", None)
+    settings = Settings(minimax_api_key="x")
+    project = add_project(session)
+
+    class NamedSearch(FakeSearch):
+        NAME = "serper"
+
+    harvest = enrich.harvest_search(
+        session,
+        project,
+        enrich.for_project(project),
+        settings=settings,
+        provider=NamedSearch(["https://trade.example/stack-hillsboro"]),
+    )
+    assert harvest.note and "via serper" in harvest.note
+    assert provider_name(NamedSearch([])) == "serper"
+
+
+def test_every_real_backend_can_name_itself(session):
+    """A provider with no NAME would report as a class name in the run log."""
+    from tracker.ingest.search import PROVIDERS, provider_name
+
+    for expected, cls in PROVIDERS.items():
+        assert expected == cls.NAME, f"{cls.__name__} must call itself {expected!r}"
+        assert expected == provider_name(cls.__new__(cls))
+
+
 def test_search_harvester_mines_wikipedia_hits(session, monkeypatch):
     """A Wikipedia hit is worth more than its own page: its references name the
     primary sources — the operator's IR release above all."""
