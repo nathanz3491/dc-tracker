@@ -1,6 +1,6 @@
 # Documentation
 
-Six documents, and honestly you need at most two of them. Start with
+Seven documents, and honestly you need at most two of them. Start with
 `what-we-built.zh-CN.md` if you are new.
 
 | | What it is | Read it when |
@@ -11,6 +11,7 @@ Six documents, and honestly you need at most two of them. Start with
 | [`guide.zh-CN.md`](guide.zh-CN.md) | 中文使用指南。按「你想做什么」组织。 | 你想用它，而不是改它。 |
 | [`architecture.zh-CN.md`](architecture.zh-CN.md) | 架构说明，中文。 | 同上。 |
 | [`government-sources.md`](government-sources.md) | Four routes to bulk government data, all measured, all rejected — and what to do instead. | You are about to go looking for permit or docket data. Read this first; it is a day you do not have to spend. |
+| [`plan-scale-with-sources.md`](plan-scale-with-sources.md) | What breaks now that the best rows hold 26 citations instead of 2: `logic check`'s findings growing quadratically, and one building acquiring sixteen names. Measured; nothing built yet. | You are about to work on contradictions or capacity blocks, or you are wondering whether to point an LLM at either. |
 
 There is no English counterpart to `guide.zh-CN.md`, and that is deliberate:
 the root `README.md` already is one, and two documents covering the same ground
