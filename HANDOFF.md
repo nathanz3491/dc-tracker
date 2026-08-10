@@ -592,6 +592,26 @@ mostly new coverage for search, Wikipedia mining, the escalation ladder and
   it writes nothing, but it isn't free. Noting it so it isn't repeated by
   habit; the other counts above came from free, read-only commands.
 
+## Today (2026-08-11 run)
+
+No work was done this day. `data-quality-adjustments` is unchanged since
+`15b1f44` (2026-08-10 05:43) — no new commits, and the working tree carries
+nothing beyond the same untracked reference PDF noted below under Tomorrow.
+Checked, not just assumed: `git log` on this branch and on
+`claude/audit-duplicates-cli-ui-44227f`/`-f60464`,
+`claude/data-source-coordination-analysis-66de67` and
+`claude/project-overview-logo-a8041f` all show no commits past 2026-08-10;
+README.md/CHANGELOG.md/`docs/architecture.md` need no update since nothing
+changed; no AGENTS.md exists, still correctly so (single CLI/data-pipeline
+codebase, no distinct agent roles).
+
+One thing outside this branch's scope, noted but not touched: the
+`.claude/worktrees/audit-duplicates-cli-ui-cc70ff` worktree (on
+`claude/project-overview-logo-a8041f`) carries uncommitted changes to
+CHANGELOG.md, README.md, and three webui static files (`app.js`,
+`index.html`, `login.html`) — a separate, apparently in-progress feature
+branch, not this branch's work, left alone.
+
 ## Tomorrow
 
 - The evidence gate checks only that a quote exists and is verbatim, not
