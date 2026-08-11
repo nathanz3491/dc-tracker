@@ -965,6 +965,32 @@ def test_enrich_all_on_a_finished_database_spends_nothing(initialized: Path):
     assert "nothing to do" in result.output
 
 
+def test_enrich_keeps_the_articles_it_reads(seeded: Path, monkeypatch):
+    """The regression that cost ~3,000 uncached articles over a 36-hour run.
+
+    `enrich` accepted `cache_dir`, forwarded it to `crawl.run`, and was the one
+    caller of ten that never passed it — so every article it read was thrown away.
+    Three later steps read that cache rather than the network: `ingest crawl
+    --stale-prompt`, `backfill blocks`, and `riskcheck.article_for`, which settles
+    nothing without it. A silent omission, because filling fields is what `enrich`
+    is judged on and it did that perfectly.
+    """
+    from tracker.ingest import enrich as enrich_mod
+
+    seen: dict[str, object] = {}
+
+    def spy(session, project_ids, **kwargs):
+        seen.update(kwargs)
+        return enrich_mod.BatchReport()
+
+    monkeypatch.setattr(enrich_mod, "run_many", spy)
+    result = invoke(seeded, "enrich", "--all")
+
+    assert result.exit_code == 0, result.output
+    assert seen.get("cache_dir") is not None, "enrich must keep what it reads"
+    assert seen["cache_dir"].name == "articles"
+
+
 # --- prompt-vintage selection -----------------------------------------------
 #
 # `stale_sources` asks whether the article may have changed. These ask whether

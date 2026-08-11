@@ -87,6 +87,8 @@ def merge_projects(session: Session, keep_id: int, dupe_ids: list[int]) -> Merge
     #: url -> the surviving source, so a citation held by both rows is not moved
     #: into a UNIQUE violation.
     kept_urls = {s.url: s for s in keep.sources}
+    #: Operator prose from the rows being folded away, carried to the survivor.
+    carried: list[str] = []
 
     for dupe_id in targets:
         dupe = session.get(Project, dupe_id)
@@ -139,13 +141,23 @@ def merge_projects(session: Session, keep_id: int, dupe_ids: list[int]) -> Merge
             alias.to_project_id = keep.id
         result.aliases_recorded += _record_alias(session, dupe.dedup_key, keep)
 
+        # Read the decision history off before the row goes. Sources, events,
+        # risks and the identity are all carried across; the record of what a
+        # person or a model *decided* about this campus was the one thing a merge
+        # threw away. Hyperion (#10) holds two model decisions in its notes, and
+        # `audit.settled_codes` reads that prose to know what has been answered —
+        # so losing it silently re-opens every question the folded row had settled.
+        carried.extend(_operator_prose(dupe.notes))
+
         session.delete(dupe)
         result.removed.append(dupe_id)
         session.flush()
 
     session.refresh(keep)
     result.conflicts = recompute_from_sources(session, keep)
-    keep.notes = _record_merge(keep.notes, result.removed)
+    # After the recompute, which regenerates the derived `[tracker]` block. Prose
+    # survives that untouched, so the order only matters for readability.
+    keep.notes = _record_merge(keep.notes, result.removed, carried=carried)
     keep.updated_at = utcnow()
     session.flush()
     log.info("merged %s into #%d", ", ".join(f"#{i}" for i in result.removed), keep_id)
@@ -223,13 +235,35 @@ def _move_risks(session: Session, keep: Project, dupe: Project) -> tuple[int, in
     return moved, dropped
 
 
-def _record_merge(notes: str | None, removed: list[int]) -> str:
+def _operator_prose(notes: str | None) -> list[str]:
+    """The lines a person or a model wrote, as against the ones ingest generates.
+
+    The same three-way split `upsert._merge_notes` makes, read from the other end:
+    `[tracker]` lines are a pure function of the current claims and are regenerated
+    wholesale, `[source:…]` lines belong to one ingest record, and anything
+    unprefixed is a decision — which is exactly what must survive.
+    """
+    from tracker.upsert import NOTE_PREFIX, SOURCE_NOTE_PREFIX
+
+    return [
+        line
+        for raw in (notes or "").splitlines()
+        if (line := raw.strip()) and not line.startswith((NOTE_PREFIX, SOURCE_NOTE_PREFIX))
+    ]
+
+
+def _record_merge(notes: str | None, removed: list[int], *, carried: list[str] = ()) -> str:
     """Append a durable line naming the rows that were folded in.
 
     A `[tracker]` line would be wiped by the next upsert, which regenerates that
     class wholesale. A merge is a one-off operator decision and has to outlive
     every later ingest, so it is written as plain operator prose — the one kind
     of note `_merge_notes` never touches.
+
+    `carried` holds the folded rows' own prose, attributed so a reader can tell a
+    decision made about this row from one inherited from a row that no longer
+    exists. Dropping it would silently re-open every question those rows had
+    answered, because `audit.settled_codes` reads the record out of this text.
     """
     line = (
         f"merged project(s) {', '.join(f'#{i}' for i in removed)} into this row: "
@@ -238,6 +272,10 @@ def _record_merge(notes: str | None, removed: list[int]) -> str:
     lines = [current for current in (notes or "").splitlines() if current.strip()]
     if line not in lines:
         lines.append(line)
+    for inherited in carried:
+        marked = f"{inherited} [carried from a merged row]"
+        if inherited not in lines and marked not in lines:
+            lines.append(marked)
     return "\n".join(lines)
 
 

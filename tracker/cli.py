@@ -904,6 +904,13 @@ def ingest_crawl(
     no_cache: Annotated[
         bool, typer.Option("--no-cache", help="Ignore the on-disk article cache.")
     ] = False,
+    cached_only: Annotated[
+        bool,
+        typer.Option(
+            "--cached-only",
+            help="Read only articles already cached; never fetch. Pair with --stale-prompt.",
+        ),
+    ] = False,
 ) -> None:
     """Extract projects from news articles with an LLM.
 
@@ -1041,6 +1048,9 @@ def ingest_crawl(
     escalate = escalation_ladder(settings, browser=browser)
 
     cache_dir = None if no_cache else install_root() / ".cache" / "articles"
+    if cached_only and cache_dir is None:
+        _fail("--cached-only and --no-cache ask for opposite things")
+        return
     console.print(f"[dim]crawling {len(url_list)} URL(s) from {source_label}[/dim]")
 
     with session_scope(engine) as session:
@@ -1054,6 +1064,7 @@ def ingest_crawl(
             dry_run=dry_run,
             force=force,
             cache_dir=cache_dir,
+            cached_only=cached_only,
         )
 
     _print_report(report, title=f"ingest crawl: {source_label}{' (dry run)' if dry_run else ''}")
@@ -3344,6 +3355,15 @@ def enrich(
                 max_articles=budget,
                 max_articles_per_round=max_articles,
                 max_rounds=max_rounds,
+                # Without this, every article `enrich` reads is thrown away. It was
+                # missing here and passed at all ten sibling call sites, so a
+                # 36-hour `--all` run read ~3,000 articles and cached none of them,
+                # and the newest file in the cache predated the run by two days.
+                # Three later steps read that cache and not the network:
+                # `ingest crawl --stale-prompt` (re-extract with a better prompt),
+                # `backfill blocks`, and `riskcheck.article_for` — which reports
+                # `no_article` and settles nothing without it.
+                cache_dir=install_root() / ".cache" / "articles",
                 census_dir=census if census.exists() else None,
                 escalate=escalate,
                 skip_search=skip_search,

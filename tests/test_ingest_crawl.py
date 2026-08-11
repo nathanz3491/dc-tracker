@@ -1500,6 +1500,62 @@ def test_cache_avoids_a_second_fetch(session, tmp_path: Path):
     assert len(fetcher.calls) == 1, "the second run must come from cache"
 
 
+def test_cached_only_refuses_to_fetch_a_cache_miss(session, tmp_path: Path):
+    """`--stale-prompt` wants the SAME article read by a better prompt.
+
+    Without this, a re-extraction run silently becomes a crawl: the URLs are chosen
+    by prompt vintage, and on the live database three quarters of them have no
+    cached text — so an operator asking to re-read 113 cached pages would have paid
+    for 1,754 fetches. A cache miss is a URL to leave alone, and the count is
+    reported so a run that skipped most of its worklist does not read as one that
+    covered it.
+    """
+    cache = tmp_path / "cache"
+    fetcher = FakeFetcher({URL: fetched()})
+    report = crawl.run(
+        session,
+        [URL],
+        fetcher=fetcher,
+        extractor=FakeLLM([canned("llm_response_microsoft_wi.json")]),
+        run_id="t1",
+        cache_dir=cache,
+        cached_only=True,
+    )
+
+    assert fetcher.calls == [], "nothing may be fetched"
+    assert report.skipped_uncached == 1
+    assert report.inserted == 0
+
+
+def test_cached_only_still_reads_what_is_cached(session, tmp_path: Path):
+    """The other half: the flag is a fetch ban, not a no-op."""
+    cache = tmp_path / "cache"
+    fetcher = FakeFetcher({URL: fetched()})
+    crawl.run(
+        session,
+        [URL],
+        fetcher=fetcher,
+        extractor=FakeLLM([canned("llm_response_microsoft_wi.json")]),
+        run_id="t1",
+        cache_dir=cache,
+    )
+    assert len(fetcher.calls) == 1
+
+    report = crawl.run(
+        session,
+        [URL],
+        fetcher=fetcher,
+        extractor=FakeLLM([canned("llm_response_microsoft_wi.json")]),
+        run_id="t2",
+        force=True,
+        cache_dir=cache,
+        cached_only=True,
+    )
+    assert len(fetcher.calls) == 1, "still no second fetch"
+    assert report.skipped_uncached == 0
+    assert report.read == 1
+
+
 def test_conflicting_sources_keep_both_and_flag_it(session):
     """A queue row and an article disagreeing on capacity, end to end."""
     from tracker.ingest import pjm

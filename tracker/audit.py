@@ -373,16 +373,72 @@ def actions_for(code: str) -> tuple[Action, ...]:
     return (*ACTIONS.get(code, ()), DISMISS)
 
 
+#: One recorded decision: the code, and the sentence saying what it did.
+#:
+#: The character class is wider than any code in use. It costs nothing now and a
+#: code containing a digit would otherwise never match — silently, and only in the
+#: skip path, which is the hardest place to notice a regex that stopped working.
+_DECISION = re.compile(r"resolved `([a-z0-9_-]+)`: *([^\n]*)")
+
+#: An edit of one project scalar, in the shape every value-changing action writes:
+#: `mw_planned 13620 -> empty (no source states it)`, `investment_usd 10,000 ->
+#: empty`, `h200_equivalent 1,000 -> 2,000 (recomputed from capacity)`. A decision
+#: that is not an edit — a dismissal, `removed 2 milestone(s)`, `closed 3
+#: obstacle(s)` — deliberately does not match.
+_EDIT = re.compile(r"^([a-z][a-z0-9_]*) .+? -> ([^(—]+?)(?: *[(—]|$)")
+
+
+def _edit_still_holds(project: Project, field: str, expected: str) -> bool:
+    """Does the row still carry the value a decision recorded writing?
+
+    Conservative on anything it cannot read: an unparseable note leaves the code
+    settled. The failure this exists to catch is a *specific, parseable* revert,
+    and re-opening every question whose sentence we failed to parse would bury it.
+    """
+    if field not in {c.name for c in Project.__table__.columns}:
+        return True
+    current = getattr(project, field, None)
+    if expected.strip().lower() == "empty":
+        return current is None
+    if current is None:
+        return False
+    try:
+        return abs(float(str(current)) - float(expected.strip().replace(",", ""))) < 0.5
+    except (TypeError, ValueError):
+        return True
+
+
 def settled_codes(project: Project) -> set[str]:
-    """Finding codes already answered on this row, read back out of its notes.
+    """Finding codes already answered on this row *and still standing*.
 
     Decisions live in prose in `project.notes`, the one kind of note re-ingesting
     never erases — the same place `logic.record_decision` writes. That is why there
     is no `audit_decision` table: a column would need a migration, would have to be
     kept in step with merges, and would say less than the sentence does.
+
+    **A code is settled only while the edit that settled it survives.** Every action
+    in `ACTIONS` writes a project scalar or a block row, and both are caches that
+    `upsert.recompute_from_sources` and `upsert.recompute_blocks` re-derive from the
+    claim set. So an answered question can come *undone* — and answering by code
+    alone then muzzled the detector on exactly the rows where it had most recently
+    been right.
+
+    Observed on Hyperion (#10): a model cleared `mw_planned` 13,620 as uncited on
+    2026-08-09, `blocks.reconcile` raised it back to 14,462 from the tranche sum,
+    and `campus_exceeds_worlds_largest` — which fires on that value — was skipped
+    from then on. The row was the worst in the database and the check that would
+    have said so had been switched off by its own repair.
+
+    A dismissal is different and stays settled: it records a judgement that the
+    figure is right, not an edit that could be reverted.
     """
-    pattern = re.compile(r"resolved `([a-z_]+)`")
-    return set(pattern.findall(project.notes or ""))
+    settled: set[str] = set()
+    for code, what in _DECISION.findall(project.notes or ""):
+        edit = _EDIT.match(what.strip())
+        if edit and not _edit_still_holds(project, edit.group(1), edit.group(2)):
+            continue
+        settled.add(code)
+    return settled
 
 
 # --- Stage 1: the answers that are arithmetic ----------------------------------

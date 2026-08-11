@@ -1233,6 +1233,14 @@ cache by default, so it is a re-read rather than a re-fetch — the point is to
 find out what a better prompt makes of the *same* article, and re-fetching would
 confound that with the page having changed.
 
+**Pair it with `--cached-only`.** Serving from the cache "by default" only covers
+the URLs that are *in* the cache; a miss used to fall through to a fetch, silently,
+which turns a free re-read into a paid crawl. On the live database three quarters
+of the stale URLs have no cached text, so an operator asking to re-read 113 pages
+would have paid for 1,754 fetches. `--cached-only` refuses the miss and reports it
+as `not cached` in the run summary, so a run that skipped most of its worklist does
+not read as one that covered it. Same discipline as `backfill`'s `refetch=False`.
+
 `--mutants` is the other half: it plants known faults in a throwaway copy and
 counts what gets caught. It exists because this README and `HANDOFF.md` both
 cited *"16 planted mutants, all caught"* as the evidence for `tracker audit`, and

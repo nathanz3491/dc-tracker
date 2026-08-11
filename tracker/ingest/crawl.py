@@ -1997,6 +1997,7 @@ def run(
     dry_run: bool = False,
     force: bool = False,
     cache_dir: Path | None = None,
+    cached_only: bool = False,
     run_id: str | None = None,
 ) -> IngestReport:
     """Fetch, extract and upsert a list of article URLs.
@@ -2004,6 +2005,11 @@ def run(
     `extractor` is injectable and is resolved *before* any fetch, so a missing API
     key fails immediately rather than after paying for forty page loads — and so
     tests can supply a fake without needing a key at all.
+
+    `cached_only` reads what is already on disk and skips the rest, counting them in
+    `report.skipped_uncached`. Without it a re-extraction run quietly becomes a
+    crawl: `--stale-prompt` picks URLs by prompt vintage, and three quarters of
+    those have no cached text.
     """
     import asyncio
 
@@ -2029,6 +2035,17 @@ def run(
         return report
 
     cached, to_fetch = _split_cached(wanted, cache_dir)
+    if cached_only and to_fetch:
+        # The re-extraction case, and the one this flag exists for. `--stale-prompt`
+        # wants the *same* article read by a better prompt, so a cache miss is a URL
+        # to leave alone rather than a page to go and get: re-fetching confounds
+        # "the prompt improved" with "the article changed", and doing it silently
+        # turned a free re-read of 113 cached pages into 1,754 paid fetches inside
+        # what the operator asked to be a cache-only run. Same discipline as
+        # `backfill.run`'s `refetch=False`.
+        log.info("cached-only: leaving %d URL(s) with no cached text", len(to_fetch))
+        report.skipped_uncached += len(to_fetch)
+        to_fetch = []
     fetched = (
         asyncio.run(fetch_all(to_fetch, fetcher=fetcher, escalate=escalate, settings=settings))
         if to_fetch

@@ -51,6 +51,68 @@ initial build of the v1 PRD.
   a lifecycle word meaning something earlier, generation quoted as the site's
   capacity, and a figure the source itself presents as superseded.
 
+### Fixed
+
+- **A repaired figure could be reverted and the check that found it would stay
+  quiet** (`tracker/audit.py`). `settled_codes` answered by finding *code*, but
+  every action in `ACTIONS` writes a project scalar or a block row — and both are
+  caches that `recompute_from_sources` and `recompute_blocks` re-derive from the
+  claim set. So an answered question could come undone while remaining marked as
+  answered.
+
+  Observed on Hyperion (#10), the most heavily cited row we have: a model cleared
+  `mw_planned` 13,620 as uncited on 2026-08-09, `blocks.reconcile` raised it back to
+  14,462 from the tranche sum, and `campus_exceeds_worlds_largest` — which fires on
+  that value — was skipped from then on. The worst row in the database had switched
+  off the check that would have said so, using its own repair.
+
+  A code is now settled only while the edit that settled it survives: the recorded
+  value is parsed back out of the note and compared to the row. A **dismissal** is
+  different and still settles forever — it records a judgement that the figure is
+  right, not an edit that can be reverted. Conservative on anything it cannot
+  parse, since re-opening every unparseable note would bury the real reverts.
+
+  Also widened the decision regex from `[a-z_]+` to `[a-z0-9_-]+`. No code contains
+  a digit today, which is exactly why this was free now and would have been
+  undetectable later: the failure is silent and only in the skip path.
+
+- **`enrich` threw away every article it read** (`tracker/cli.py`). It accepted
+  `cache_dir`, forwarded it to `crawl.run`, and was the one caller of ten that never
+  passed it. A 36-hour `--all` run read ~3,000 articles and cached none of them; the
+  newest file in the cache predated the run by two days. Three later steps read that
+  cache rather than the network — `ingest crawl --stale-prompt`, `backfill blocks`,
+  and `riskcheck.article_for`, which settles nothing without it — so re-extraction
+  and all 443 pending risk confirmations would have had to pay for the network again.
+
+- **`[tracker] conflict …` claimed credibility settled fields that credibility had
+  not** (`tracker/upsert.py`, `tracker/logic.py`). The note read "kept
+  higher-weighted value" unconditionally, which is false whenever two claims carry
+  the same weight — the common case, since `government_doc` and `company_filing` are
+  both 3. Hyperion's notes asserted credibility chose $10B over $50B when both
+  sources were weight 3 and the tiebreak was crawl order. `Collision.why`'s phrasing
+  is now a shared `logic.why_decided`, with `logic.decision()` as the public pair, so
+  the row's own notes and the collision report say the same true thing.
+
+- **A merge left the folded rows' decisions behind** (`tracker/merge.py`). Sources,
+  milestones, obstacles and the identity all move; the record of what a person or a
+  model *decided* did not. Since `audit.settled_codes` reads that prose, folding a
+  row silently re-opened every question it had answered — and Hyperion (#10) holds
+  two model decisions among its 124 note lines. Operator prose is now carried to the
+  survivor and marked `[carried from a merged row]`; generated `[tracker]` and
+  `[source:…]` lines are not, because they assert something about the wrong row's
+  citations.
+
+### Added
+
+- **`ingest crawl --cached-only`** (`tracker/ingest/crawl.py`, `tracker/cli.py`).
+  Reads what is on disk and refuses to fetch the rest, counting them as `not cached`
+  in the run summary. `--stale-prompt` picks URLs by prompt vintage and serves from
+  the cache "by default", but a miss fell through to a fetch — silently — so a
+  re-read became a crawl. On the live database three quarters of the stale URLs have
+  no cached text: 113 cached pages would have come with 1,754 paid fetches. Mirrors
+  `backfill.run`'s `refetch=False` discipline, including reporting the skip so a run
+  that covered a quarter of its worklist does not read as one that covered it.
+
 ### Changed
 
 - **Extraction reasons now** (`tracker/llm.py`, `tracker/config.py`,

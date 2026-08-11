@@ -450,7 +450,21 @@ def _conflict_notes(by_field: dict[str, list[_Claim]]) -> tuple[list[str], list[
             if scale:
                 spread = abs(float(best.value) - float(rival.value)) / scale
                 detail += f" [{spread:.0%} spread]"
-        lines.append(f"{NOTE_PREFIX} conflict {field_name}: {detail}; kept higher-weighted value")
+        # Say which rule actually settled it. This used to read "kept
+        # higher-weighted value" unconditionally, which is false whenever the two
+        # claims carry the same weight — the common case, since `government_doc`
+        # and `company_filing` are both 3. Hyperion's notes asserted credibility
+        # decided $10B over $50B when both sources were weight 3 and the tiebreak
+        # was crawl order. The notes are where an operator judges whether a value
+        # is trustworthy, so a wrong reason there is worse than no reason.
+        #
+        # Imported inside the function: `logic` imports this module, so a
+        # module-level import would close the cycle.
+        from tracker.logic import decision
+
+        policy = FIELD_POLICY.get(field_name, Policy.PREFER_WEIGHT)
+        _, why = decision(policy, best, rival, claims)
+        lines.append(f"{NOTE_PREFIX} conflict {field_name}: {detail}; {why}")
     return lines, fields
 
 

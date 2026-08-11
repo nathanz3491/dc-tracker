@@ -230,6 +230,10 @@ class IngestReport:
     #: because it is a saving, not a failure — and because a run reporting eight
     #: of these from one host is how the operator sees the pattern.
     thin_content: int = 0
+    #: URLs `--cached-only` declined to fetch. A saving, like `thin_content`, and
+    #: reported for the same reason: a re-extraction run that silently skipped
+    #: three quarters of its worklist reads as a run that covered it.
+    skipped_uncached: int = 0
     events: int = 0
     risks: int = 0
 
@@ -261,6 +265,7 @@ class IngestReport:
             ("fetch errors", self.fetch_error),
             ("parse errors", self.parse_error),
             ("not an article", self.thin_content),
+            ("not cached", self.skipped_uncached),
         ]
 
 

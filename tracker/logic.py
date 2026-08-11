@@ -178,29 +178,15 @@ class Collision:
         along unless somebody says it stopped. Reporting all of them as "the better
         source won" would be a plausible sentence and the wrong one.
         """
-        if self.decided_by == "confirmed":
-            return "the other value has no quote behind it"
-        if self.decided_by == "credibility":
-            return (
-                f"{self.winner_type} (weight {self.winner_weight}) "
-                f"beats {self.loser_type} (weight {self.loser_weight})"
-            )
-        if self.decided_by == "recency":
-            return (
-                f"same credibility; kept the newer reading "
-                f"({_day(self.winner_fetched)} over {_day(self.loser_fetched)})"
-            )
-        if self.decided_by == "largest":
-            return "built capacity only grows, so the largest cited figure wins"
-        if self.decided_by == "earliest":
-            return "first announced means the earliest anybody saw, whatever the source"
-        if self.decided_by == "furthest along":
-            return "the phase furthest along the progression wins"
-        if self.decided_by == "terminal":
-            return "a source saying it stopped overrides one saying it progressed"
-        if self.decided_by == "first seen":
-            return "identity fields are never overwritten once set; churn is worse than staleness"
-        return "identical credibility and date; settled on the source URL so the result is stable"
+        return why_decided(
+            self.decided_by,
+            winner_type=self.winner_type,
+            winner_weight=self.winner_weight,
+            loser_type=self.loser_type,
+            loser_weight=self.loser_weight,
+            winner_fetched=self.winner_fetched,
+            loser_fetched=self.loser_fetched,
+        )
 
     def as_json(self) -> dict[str, Any]:
         return {
@@ -875,6 +861,73 @@ def check_collisions(project: Project) -> list[Collision]:
             )
         )
     return out
+
+
+def why_decided(
+    decided_by: str,
+    *,
+    winner_type: str = "",
+    winner_weight: int = 0,
+    loser_type: str = "",
+    loser_weight: int = 0,
+    winner_fetched: Any = None,
+    loser_fetched: Any = None,
+) -> str:
+    """A rule name rendered in the reader's terms, and it is not always credibility.
+
+    Only fields on the `prefer_weight` policy are settled by how good the source is
+    and how recent it is. Built capacity takes the largest figure because energised
+    megawatts only go up; the first-announced date takes the earliest because that
+    is what "first" means; the phase takes the furthest along unless somebody says
+    it stopped. Reporting all of them as "the better source won" would be a
+    plausible sentence and the wrong one.
+
+    Taken out of `Collision.why` so `upsert._conflict_notes` can say the same thing
+    in the row's own notes. It used to hardcode "kept higher-weighted value" there,
+    which was **false** whenever two equally-weighted sources disagreed — and that
+    is the common case, because `government_doc` and `company_filing` are both
+    weight 3. Hyperion's notes claimed credibility settled $10B over $50B when the
+    two sources were the same weight and crawl order decided it.
+    """
+    if decided_by == "confirmed":
+        return "the other value has no quote behind it"
+    if decided_by == "credibility":
+        return f"{winner_type} (weight {winner_weight}) beats {loser_type} (weight {loser_weight})"
+    if decided_by == "recency":
+        return (
+            f"same credibility; kept the newer reading "
+            f"({_day(winner_fetched)} over {_day(loser_fetched)})"
+        )
+    if decided_by == "largest":
+        return "built capacity only grows, so the largest cited figure wins"
+    if decided_by == "earliest":
+        return "first announced means the earliest anybody saw, whatever the source"
+    if decided_by == "furthest along":
+        return "the phase furthest along the progression wins"
+    if decided_by == "terminal":
+        return "a source saying it stopped overrides one saying it progressed"
+    if decided_by == "first seen":
+        return "identity fields are never overwritten once set; churn is worse than staleness"
+    return "identical credibility and date; settled on the source URL so the result is stable"
+
+
+def decision(policy, winner, rival, claims) -> tuple[str, str]:
+    """The rule that settled a field, and why, from the claims themselves.
+
+    The public pair. Every surface that reports a contested field must ask this
+    rather than re-derive it: the first version of `check_collisions` re-derived the
+    ordering and reported 73 rows as drifted when none had.
+    """
+    code = _decided_by(policy, winner, rival, claims)
+    return code, why_decided(
+        code,
+        winner_type=winner.source_type,
+        winner_weight=winner.weight,
+        loser_type=rival.source_type,
+        loser_weight=rival.weight,
+        winner_fetched=winner.fetched_at,
+        loser_fetched=rival.fetched_at,
+    )
 
 
 def _decided_by(policy, winner, rival, claims) -> str:

@@ -244,6 +244,66 @@ def test_a_settled_finding_is_remembered_across_runs(session):
     assert "block_out_of_scale" in audit.settled_codes(project)
 
 
+def test_a_reverted_repair_re_opens_the_question(session):
+    """The defect that hid the worst row in the database behind its own repair.
+
+    Every action here writes a project scalar or a block row, and both are caches
+    that `recompute_from_sources` and `recompute_blocks` re-derive from the claim
+    set. So an answered question can come undone — and answering by code alone then
+    muzzles the detector on exactly the row where it was most recently right.
+
+    Observed on Hyperion (#10): a model cleared `mw_planned` 13,620 as uncited,
+    `blocks.reconcile` raised it back from the tranche sum, and
+    `campus_exceeds_worlds_largest` was skipped from then on.
+    """
+    project = _project(session, name="Reverted", mw_planned=13620.0)
+    finding = next(
+        f for f in audit.check_project(project) if f.code == "campus_exceeds_worlds_largest"
+    )
+    audit.resolve_one(session, project, finding, ask=lambda *_: "c")
+
+    assert project.mw_planned is None, "the action clears the figure"
+    assert "campus_exceeds_worlds_largest" in audit.settled_codes(project)
+
+    # Whatever put it back — a rollup, a recompute, a hand edit — the question is
+    # open again, because the row no longer holds the value the decision recorded.
+    project.mw_planned = 14462.0
+    settled = audit.settled_codes(project)
+    assert "campus_exceeds_worlds_largest" not in settled
+    open_now = [f.code for f in audit.check_project(project) if f.code not in settled]
+    assert "campus_exceeds_worlds_largest" in open_now
+
+
+def test_a_dismissal_survives_a_value_changing_under_it(session):
+    """A dismissal is a judgement, not an edit, so nothing can revert it.
+
+    The counterpart to the test above, and the reason the check is not simply "does
+    the finding still fire": an operator who has said the figure is right is
+    entitled to stop being asked, even as the figure moves.
+    """
+    project = _project(session, name="Genuinely huge", mw_planned=9000.0)
+    finding = next(
+        f for f in audit.check_project(project) if f.code == "campus_exceeds_worlds_largest"
+    )
+    audit.resolve_one(session, project, finding, ask=lambda *_: "d")
+    assert "campus_exceeds_worlds_largest" in audit.settled_codes(project)
+
+    project.mw_planned = 9500.0
+    assert "campus_exceeds_worlds_largest" in audit.settled_codes(project)
+
+
+def test_a_code_carrying_a_digit_round_trips(session):
+    """The regex used to be `[a-z_]+`, so such a code would never mark settled.
+
+    No code contains a digit today, which is exactly why this was free to fix and
+    would have been undetectable later — the failure is silent and only in the skip
+    path.
+    """
+    project = _project(session, name="Digits")
+    audit.record(project, "rule_42-b", "left as it stands", by="operator")
+    assert "rule_42-b" in audit.settled_codes(project)
+
+
 def test_dismissing_writes_nothing_but_the_decision(session):
     """Some projects genuinely are enormous. Saying so has to be an answer."""
     project = _project(session, name="Huge", mw_planned=9000.0)
