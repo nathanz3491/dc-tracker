@@ -12,6 +12,28 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **The console has an identity mark** (`tracker/webui/static/index.html`,
+  `login.html`, `app.js`). A citation bracket with a bar that starts at the source
+  and stops where the evidence stops, so the empty half of the bracket states the
+  rule the whole tool is built on: an unpublished figure stays null rather than
+  guessed. It replaces the placeholder favicon — a honey square with two white
+  bars, which said nothing and, having a background plate, showed as a lit tile in
+  dark browser chrome. The mark has no plate for that reason: it inverts with
+  whatever the tab strip is.
+
+  168 bytes of inline SVG in three places rather than one file fetched from three,
+  because a request costs more than the drawing and because filling from
+  `currentColor` is what lets one copy serve both themes — `--primary` is
+  `#a05e1c` on cream and `#dca75f` on espresso, so the mark re-skins with
+  everything else and never needs a second asset or a media query.
+
+  In the lockup it sits on the wordmark's baseline, not the centre of its line
+  box. A block-level flex item has no baseline of its own, so flexbox aligns its
+  bottom edge, which lands the mark exactly on the baseline; `dc-tracker` has no
+  descenders, so centring instead drops the mark 3.5px and reads as a sag next to
+  24px Instrument Serif. At 16px the brackets rasterise to 2px stems with open
+  counters, and the interior bar is joined to the left spine so it cannot orphan.
+
 - **Milestones now carry evidence, and say so when they carry none** (migration
   `0017`, `tracker/ingest/crawl.py`, `tracker/upsert.py`, the console's
   milestones card). `events[]` was the last extracted structure with no gate

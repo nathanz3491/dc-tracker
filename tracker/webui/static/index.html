@@ -19,7 +19,14 @@
 -->
 <link rel="stylesheet" href="/static/vendor/meridian/styles.css" />
 <link rel="stylesheet" href="/static/app.css" />
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' rx='3' fill='%23a05e1c'/><rect x='3' y='4' width='10' height='2.4' rx='1' fill='%23fffdf8'/><rect x='3' y='9.6' width='10' height='2.4' rx='1' fill='%23fffdf8'/></svg>" />
+<!--
+  The identity mark: a citation bracket whose bar stops where the evidence stops.
+  No background plate, deliberately — a honey square would show as a light tile in
+  dark browser chrome, whereas the bare mark inverts with whatever the tab strip
+  is. Drawn at 24 units and inlined as a data: URI, which keeps the "no network
+  requests" rule true for the favicon too.
+-->
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23a05e1c'><path d='M2 2h6v3H5v14h3v3H2zM22 2h-6v3h3v14h-3v3h6z'/><path d='M5 10h8v4H5z'/></svg>" />
 </head>
 <body>
 <div id="root"></div>
