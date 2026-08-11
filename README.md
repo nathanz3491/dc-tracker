@@ -613,6 +613,18 @@ no build step and the repo has no `package.json`: React is a UMD global, the
 Meridian component bundle is already compiled, and `htm` supplies JSX-like
 templates from tagged template literals.
 
+**The mark**, beside the wordmark in the header, on the sign-in card and in the
+tab, is a citation bracket whose bar stops where the evidence stops — the empty
+half of the bracket is this project's one rule drawn literally: a figure nobody
+published stays null rather than guessed. It is 168 bytes of inline SVG filled
+from `currentColor`, which is what lets a single copy serve both themes (`--primary`
+is honey `#a05e1c` on cream and `#dca75f` on espresso) at no request. The favicon
+is the same two paths with **no background plate** — a honey tile would sit lit in
+dark browser chrome, whereas the bare mark takes whatever the tab strip is. It is
+drawn full-height on its 24-unit grid and aligned by baseline rather than centred,
+because `dc-tracker` has no descenders and centring the mark on the line box drops
+it 3.5px below the wordmark's optical middle.
+
 ### Putting the console on the internet
 
 ```bash

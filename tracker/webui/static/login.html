@@ -48,7 +48,12 @@
     border-radius:20px; padding:28px 26px;
     box-shadow:0 4px 8px -2px rgb(84 58 24 / .08), 0 16px 40px -12px rgb(84 58 24 / .18);
   }
-  .brand { display:flex; align-items:baseline; gap:9px; margin-bottom:4px; }
+  /* Mark, wordmark and tag on one baseline. `display:block` on the mark is what
+     puts it there: a block-level flex item has no baseline of its own, so flexbox
+     aligns its bottom edge, landing the mark on the wordmark's baseline. It fills
+     from --primary through currentColor, so this one copy serves both schemes. */
+  .brand { display:flex; align-items:baseline; gap:11px; margin-bottom:4px; }
+  .brand svg { display:block; flex:none; color:var(--primary); }
   .brand b { font:500 26px var(--serif); letter-spacing:-.015em; }
   .brand span { font:400 12px var(--mono); color:var(--muted-foreground); }
   h1 { margin:14px 0 6px; font:500 20px/1.3 var(--serif); letter-spacing:-.01em; }
@@ -86,7 +91,13 @@
 </head>
 <body>
   <main class="card">
-    <div class="brand"><b>dc-tracker</b><span>console</span></div>
+    <div class="brand">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true">
+        <path d="M2 2h6v3H5v14h3v3H2zM22 2h-6v3h3v14h-3v3h6z"/>
+        <path d="M5 10h8v4H5z"/>
+      </svg>
+      <b>dc-tracker</b><span>console</span>
+    </div>
     <h1>This console runs commands</h1>
     <p class="lede">It reads and writes a real database and can spend LLM tokens.
       Sign in to continue.</p>

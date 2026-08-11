@@ -382,6 +382,25 @@ const Counted = ({ value }) => html`${useCountUp(value).toLocaleString()}`;
 
 /* ---- small shared pieces ------------------------------------------------- */
 
+/* The identity mark: a citation bracket with a bar that starts at the source and
+ * stops where the evidence stops, so the empty half of the bracket is the
+ * governing rule drawn literally — an unpublished figure stays null rather than
+ * guessed.
+ *
+ * Inline and in `currentColor` rather than an <img> to a file: it is 168 bytes,
+ * so a request would cost more than the drawing, and filling from the cascade is
+ * what lets one copy serve both themes — `--primary` is honey #a05e1c on cream
+ * and #dca75f on espresso — without a second asset or a media query.
+ *
+ * `aria-hidden`, because the wordmark it sits beside already says the name; a
+ * label here would make a screen reader announce it twice. */
+const Mark = ({ size = 20, color = "var(--primary)" }) => html`
+  <svg viewBox="0 0 24 24" width=${size} height=${size} fill="currentColor"
+       aria-hidden="true" style=${{ display: "block", flex: "none", color }}>
+    <path d="M2 2h6v3H5v14h3v3H2zM22 2h-6v3h3v14h-3v3h6z" />
+    <path d="M5 10h8v4H5z" />
+  </svg>`;
+
 /* One log line, with its ANSI colour intact.
  *
  * Every run is a React child, so the text is escaped on the way in — log lines
@@ -3990,7 +4009,14 @@ function App() {
           borderBottom: "1px solid var(--border)",
           background: "color-mix(in oklab, var(--background) 75%, transparent)",
           backdropFilter: "blur(12px)" }}>
-          <div style=${{ display: "flex", alignItems: "baseline", gap: 9, flex: "none" }}>
+          ${/* The lockup sits on one baseline, mark included. A block-level flex item
+                has no baseline of its own, so flexbox aligns the mark by its bottom
+                edge — which lands it exactly on the wordmark's baseline, and the mark
+                is drawn full-height on its 24-unit grid to match a wordmark with no
+                descenders. Centring the mark on the line box instead drops it 3.5px,
+                which reads as a sag next to a 24px serif. */ ""}
+          <div style=${{ display: "flex", alignItems: "baseline", gap: 10, flex: "none" }}>
+            <${Mark} />
             <span style=${{ fontFamily: "var(--font-display)", fontSize: 24, fontWeight: 500,
                             letterSpacing: "-0.015em" }}>dc-tracker</span>
             <span style=${{ fontFamily: "var(--font-mono)", fontSize: 12,
