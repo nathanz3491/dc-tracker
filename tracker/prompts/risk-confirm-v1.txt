@@ -25,6 +25,14 @@ Six rules.
    before 2028" is. If the closest sentence is merely adjacent to the subject,
    answer "unclear" rather than stretching it.
 
+   The test that separates them, from section 8 above: can somebody with standing
+   — a regulator, a court, a utility, an organized group, a lender — delay or stop
+   THIS project's work, and does the sentence say so? A statement that data
+   centers use a lot of water, that AI demand will raise bills statewide, or that
+   a project is large and expensive, is a description of the industry. Those are
+   `refuted` when that is all the article offers, not `confirmed` against the
+   nearest sentence on the same theme.
+
 3. **The category is part of the question.** The commonest failure behind these
    rows is a real sentence filed under the wrong kind of obstacle — a water
    sentence recorded as `environmental`, a rate-case sentence recorded as

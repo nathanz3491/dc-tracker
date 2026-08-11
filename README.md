@@ -2096,6 +2096,42 @@ independent domains and reach confidence 3 — the score reserved for corroborat
 facts. `county`, `lat` and `lon` are all `FILL_ONLY`, so a value an article really
 stated is never overwritten by a lookup.
 
+### The prompts needed to know what a data center is
+
+Reading one campus closely — Meta's Hyperion, the most heavily sourced row in the
+database at 59 sources — turned up a cluster of failures that looked unrelated and
+were not. `mw_planned` read **15,962 MW**, which would be three times the largest
+campus announced anywhere; `investment_usd` held **$10B** against 5 GW, about a
+fifth of what that costs; `phase` said **operational** for a site that has never
+been powered, evidenced by a sentence about breaking ground.
+
+The prompts were not missing rules. `extract-v1` already said, in as many words,
+that `mw_planned` "is NOT the capacity of a power plant, solar farm or substation
+built to serve it". The gap was that **nothing told the model what a data center
+is dimensionally**, so no rule had anything to bite on: 5,962 MW of gas turbines
+and solar panels read as ordinary tranches of a campus, and a superseded
+announcement read as a current figure.
+
+So `prompts/_industry.txt` is prepended to every prompt's system message. Eight
+sections of durable background — the campus/building/hall hierarchy; IT load
+versus generating capacity and the words that mark which is which; the five other
+things a dollar figure in these articles is usually about; a plausibility envelope
+in orders of magnitude ($8–15M per MW, ~5 GW as the largest campus announced
+anywhere); who the operator is as against the utility, the EPC and the financier;
+the lifecycle phrases that get misread as "running"; how a project gets restated
+upward over years; and what actually obstructs one.
+
+**It is background for judgement, never a source of values**, and that constraint
+is the load-bearing part. It sits in tension with extraction's first rule — never
+draw on knowledge from outside the article — and the tension is resolved
+explicitly in both places, because a model that answered *from* this block would
+fill megawatts with plausible industry averages and pass the evidence gate while
+doing it. There is a test asserting the block still forbids itself.
+
+Prepended, not appended, so the per-prompt rules come last and win where the two
+touch. About 2,700 tokens on every call, which on a stable system prompt is a
+cache hit: 0.00005 CNY.
+
 ### Crawl4AI fetches, it does not extract
 
 The PRD names Crawl4AI as the extraction framework. Here it is an **optional
@@ -2342,9 +2378,13 @@ tracker ingest pjm --csv data/raw/pjm_2025q3.csv --iso pjm
   a directory cannot share a name inside one package, and the PRD asks for both
   `tracker/prompts.py` and `tracker/prompts/*.txt`. `tracker.prompts.load_prompt`
   imports identically either way.
-- **Prompt version identity is filename + SHA-1 of the file bytes.** A filename
-  alone starts lying the moment you edit the file, which is exactly what iterating
-  on a prompt means.
+- **Prompt version identity is filename + SHA-1 of the file bytes**, including the
+  shared block's. A filename alone starts lying the moment you edit the file,
+  which is exactly what iterating on a prompt means — and a shared partial that
+  could change underneath the hash would reintroduce that failure through the back
+  door.
+- **One industry block is prepended to all eleven prompts** (`prompts/_industry.txt`).
+  See "The prompts needed to know what a data center is" below.
 - **Prompts template with `string.Template` (`$var`), not `str.format`.** The
   prompt contains a JSON schema block full of literal braces, which `str.format`
   would raise on.

@@ -17,6 +17,11 @@ RULES
 
 1. Extract ONLY facts stated in the ARTICLE. Never infer, estimate, or draw on
    knowledge from outside the article.
+   The industry context above is the one thing you may bring to this, and only
+   for deciding what a sentence MEANS and whether a reading is plausible — that
+   a megawatt figure is a power plant's rather than the site's, that a
+   groundbreaking is not an opening. It never supplies a value. If the article
+   does not state it, the answer is null no matter how confident you are.
 2. If the article does not state a value, output null. Do NOT guess.
    A null is a CORRECT answer and is strongly preferred over a plausible guess.
 3. Every non-null field MUST have a verbatim supporting quote in "evidence".
@@ -148,9 +153,19 @@ company          Who builds and operates the site. NOT the electric utility.
 customer         The end tenant, when different from company. For example
                  company="Crusoe", customer="OpenAI". null if the operator uses
                  the site itself, or if the article does not say.
-city             The municipality. If the article gives only a county or parish,
-                 leave city null and put it in "county" instead.
-county           County, parish or borough, copied as written.
+city             The municipality — a city, town or village. If the article gives
+                 only a county or parish, leave city null and put it in "county"
+                 instead. Do NOT copy a county or parish name into city.
+                 Many of these campuses are genuinely in unincorporated land with
+                 no municipality, and null is then the honest answer. But if the
+                 article names the nearest town, or the community the site sits
+                 in or beside ("near Holly Ridge", "between Rayville and Delhi"),
+                 give it here with that sentence as the evidence — an operator's
+                 or a utility's own page naming the locality is as quotable as
+                 any other source, and leaving it null when the document names it
+                 is a lost fact, not caution.
+county           County, parish or borough, copied as written. Louisiana has
+                 parishes and Alaska has boroughs; both go here.
 state            Two-letter USPS code ("WI", "TX").
 country          Two-letter ISO code. "US" for the United States.
 blocks           The parts of this site that have their own capacity, schedule or
@@ -162,6 +177,31 @@ blocks           The parts of this site that have their own capacity, schedule o
                  list is the correct and commonest answer: a campus the article
                  treats as one thing IS one thing. Never invent tranches by
                  dividing a single stated capacity.
+
+                 THREE THINGS ARE NEVER BLOCKS. Each has been recorded as one,
+                 and each corrupted a campus total:
+                   1. GENERATION AND GRID ASSETS. Gas plants, turbines, solar
+                      farms, batteries, nuclear uprates, substations,
+                      transmission lines. They belong to the utility, they are
+                      measured in a different kind of megawatt (section 2), and
+                      a campus once recorded 5,962 MW of them as its own
+                      capacity. If a named thing generates or delivers power
+                      rather than consuming it, it is not a block. Put it in
+                      "notes".
+                   2. THE CAMPUS ITSELF. A block whose capacity equals the whole
+                      site's is the site, listed twice. "The campus will scale to
+                      5 GW" is mw_planned, not a phase.
+                   3. A MILESTONE OR A TARGET DATE. "1.5 GW by the end of 2027"
+                      is a schedule for capacity you have already listed, not an
+                      additional tranche beside it.
+
+                 Phase figures are usually CUMULATIVE, not additive. "2 GW in
+                 phase one, 5 GW at full buildout" means the campus reaches 5 GW
+                 in total — phase two is the 3 GW difference, not another 5 GW.
+                 If you cannot tell from the article whether two figures stack,
+                 emit the blocks with their labels and leave "mw" null on the one
+                 you are unsure of. A null there is recoverable; a double count
+                 is not.
                  "label" is what the article calls it. "parent" is the facility a
                  bare label belongs to — for "Phase 3 of AZP-3", label is "Phase 3"
                  and parent is "AZP-3" — and it matters because one operator often
@@ -172,16 +212,41 @@ blocks           The parts of this site that have their own capacity, schedule o
                  Each block's "evidence" is scoped to THAT block. A quote about the
                  campus total must not appear there — it is evidence for
                  mw_planned, not for a phase.
-mw_planned       Total planned electrical capacity of the DATA CENTER at full
+mw_planned       Total planned IT/compute capacity of the DATA CENTER at full
                  buildout. Critically: this is NOT the capacity of a power plant,
-                 solar farm or substation built to serve it. If the article only
-                 gives generating capacity, leave this null and mention the figure
+                 solar farm, battery or substation built to serve it — see
+                 section 2 of the industry context above, which lists the words
+                 that mark a figure as generation. If the article only gives
+                 generating capacity, leave this null and mention the figure
                  in "notes".
                  If the article describes only ONE phase or building, leave this
                  null and put that phase in "blocks". Do not promote a phase's
                  capacity to the campus total — that is how one facility's 8 MW
                  ends up recorded as another facility's size.
-mw_built         Capacity already energized or in operation today.
+                 When the article gives BOTH a staged figure and a full-buildout
+                 figure for the same campus ("2 GW by 2030, scaling to 5 GW"),
+                 mw_planned is the full-buildout one. Those are two dates for one
+                 campus, not two tranches.
+                 Sanity-check the result against section 4 before returning it. A
+                 campus above 6 GW is beyond anything yet announced anywhere; if
+                 you have arrived at one, you have almost certainly added figures
+                 that are about different things, and the right answer is the
+                 single figure the article states for the data center itself.
+mw_built         IT capacity that is ENERGIZED AND IN SERVICE TODAY — drawing
+                 power and running, or accepting customer load. Nothing else
+                 counts toward it:
+                   built but not powered      -> not mw_built (block
+                                                 "shell_complete")
+                   powered for commissioning  -> not mw_built until in service
+                   contracted, leased, sold   -> not mw_built
+                   a substation energized     -> not mw_built; that is the
+                                                 utility's equipment
+                   a serving gas plant online -> not mw_built; not this site
+                 A campus under construction has mw_built null, NOT 0. Null means
+                 nobody said; 0 is a claim that the site is running nothing, and
+                 needs a quote like anything else.
+                 If the article says a site is operating but gives no figure,
+                 leave this null and let "phase" carry the fact.
 h200_equivalent  Accelerator count, ONLY if the article states one. Convert other
                  NVIDIA data-center parts to H200-equivalents by rough compute:
                  H100 ~0.9, A100 ~0.3, B200 ~2.2, GB200 ~2.5 per H200. Leave null
@@ -190,10 +255,29 @@ h200_equivalent  Accelerator count, ONLY if the article states one. Convert othe
                  conversion from capacity is done in code, and a guess here
                  overwrites it with a worse number wearing a citation.
 investment_usd   Whole US dollars, as an integer. Campus-wide only; a figure
-                 stated for one phase belongs on that block, not here.
+                 stated for one phase belongs on that block, not here. Section 3
+                 lists the five other things a dollar figure in these articles is
+                 usually about — a programme total, a region, the utility's own
+                 spending, a financing structure, or chips. Set "scope" on the
+                 evidence entry accordingly, and never add two figures together.
+                 When the article states an OLD figure and a NEW one for this
+                 campus ("up from the $10 billion committed at groundbreaking"),
+                 take the NEW one and put the article's date in "as_of". These
+                 projects are enlarged repeatedly (section 7) and the superseded
+                 figure is the single most common wrong number in this database.
 phase            The furthest stage the article says the project has reached.
                  Use "paused" for an indefinite hold and "cancelled" for
                  abandoned or withdrawn.
+                 "operational" REQUIRES the article to say the data center is
+                 running: in service, energized and operating, or serving a
+                 customer. Section 6 lists the phrases that are misread as
+                 saying so — breaking ground, construction spending, workforce
+                 numbers, "once operational" — and none of them qualify. If the
+                 article shows only construction, the answer is "construction",
+                 however large the numbers in it.
+                 A utility energizing a substation, or a serving power plant
+                 reaching commercial operation, does NOT make the data center
+                 operational.
 first_announced  When the project was first made public, if the article says.
 expected_online  When the first megawatts are expected to come online.
 notes            At most two sentences on the latest progress. Also record here
@@ -205,6 +289,33 @@ events           Only milestones whose date you can quote — and the quote now 
                  article; an event whose quote fails is kept but marked
                  unverified, so a missing or invented quote gains you nothing.
                  "description" stays your own one-line wording.
+
+                 AN EVENT IS SOMETHING THAT HAPPENED. This is the bar, and three
+                 kinds of entry keep failing it:
+                   * A SCHEDULED OR EXPECTED FUTURE EVENT IS NOT AN EVENT. "The
+                     commission will vote on November 18", "partial energisation
+                     expected in 2027", "peak workforce expected to reach 5,000",
+                     "targeted for 2029" — none of these are milestones. They are
+                     plans, they belong in "expected_online" or in "notes", and
+                     recording them made a campus that has not been powered read
+                     as energized. If the date is in the future relative to
+                     ARTICLE_DATE, it is almost never an event.
+                   * SOMEBODY ELSE'S MILESTONE IS NOT THIS PROJECT'S. A utility
+                     breaking ground on a substation, a legislature opening a
+                     session, a state signing a tax bill, a contractor winning
+                     other work. Emit these only if the article ties them to this
+                     project's own progress.
+                   * A MILESTONE THAT MOVED NOTHING IS NOT WORTH RECORDING. A
+                     meeting, an award, a press mention, a restatement of a
+                     figure already known. Ask: did the project reach a stage it
+                     had not reached before? If not, leave it out.
+
+                 One entry per real occurrence. If the article mentions the same
+                 groundbreaking three times, or gives it two different dates, emit
+                 it ONCE, with the most specific date the article supports.
+                 Prefer few, dated, consequential events over many. An empty list
+                 is a perfectly good answer for an article that reports no
+                 progress.
 
                  These matter more than `phase`, which has four states and
                  cannot say where a project really stands. A campus can own its
@@ -227,6 +338,28 @@ risks            Every obstacle the article reports for THIS project, one entry
                  each. An empty list is the correct and common answer: most
                  articles report no obstacle, and inventing one is worse than
                  omitting it.
+
+                 THE BAR: somebody with standing — a regulator, a court, a
+                 utility, an organized group, a lender — can delay or stop this
+                 project's work, and the article says so. Apply it before you
+                 write anything:
+                   * A TOPIC IS NOT AN OBSTACLE. That a site uses a lot of power,
+                     or water, or sits near houses, is a description. "Data
+                     centers require large quantities of water for cooling" is a
+                     fact about the industry and belongs nowhere in this list.
+                   * A GENERAL CONCERN IS NOT THIS PROJECT'S OBSTACLE. Commentary
+                     about AI power demand, or ratepayer bills statewide, is
+                     about the sector unless the article ties the consequence to
+                     this site.
+                   * BEING BIG, EXPENSIVE OR CONTROVERSIAL IS NOT AN OBSTACLE.
+                     Nor is criticism, nor an unfavourable opinion, unless the
+                     critic can act.
+                   * DO NOT SPLIT ONE OBSTACLE INTO SEVERAL. One dispute over a
+                     gas-plant approval is one entry, not four across
+                     permitting, environmental, grid_capacity and financing. Pick
+                     the category the article's own complaint is actually about.
+                 Two or three real obstacles from an article is a lot. If you have
+                 written more than that, most of them are topics.
 
                  category   Pick the closest. What each covers:
                    grid_capacity        the local grid cannot supply the load

@@ -21,6 +21,29 @@ Report only failures. Three kinds exist and you must name which one:
                  for", "at full build-out" — language that promises, recorded
                  as though it reported.
 
+Three patterns account for most real failures here, all of them cases where the
+sentence is about this very project and still does not state the value:
+
+  A LIFECYCLE WORD THAT MEANS SOMETHING EARLIER. Section 6 above lists them.
+  "Since breaking ground in December 2024 we have contracted more than $875
+  million with local businesses" is a real sentence about this campus, and it
+  supports phase = construction. Recorded against phase = operational it is
+  `unsupported`: it says building, and building is not running. The same goes
+  for construction headcounts, "once operational, it will support N jobs", and a
+  utility energizing a substation.
+
+  GENERATION QUOTED AS THE SITE'S CAPACITY. A sentence about gas turbines, solar,
+  batteries or a substation states a utility's megawatts, not the data center's
+  (section 2). Against mw_planned or mw_built that is `misattributed`, even
+  though the plant exists only to serve this campus.
+
+  A SUPERSEDED FIGURE. A sentence stating a figure the article itself presents as
+  the OLD one — "up from the $10 billion committed at groundbreaking", "the
+  original $27 billion plan" — does not support that figure as the current value.
+  Call it `misattributed` and say in the reason which figure the article gives as
+  current. This is not you knowing better than the source: it is the same source
+  saying so in the same sentence.
+
 Five rules bound your answer.
 
 1. Normalisation is NOT a failure. The pipeline converts on purpose: a sentence

@@ -10,6 +10,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 First working version. Nothing has been released yet, so everything below is the
 initial build of the v1 PRD.
 
+### Added
+
+- **Every prompt now knows what a data center is** (`tracker/prompts/_industry.txt`,
+  prepended to all eleven system messages). Reading Hyperion — 59 sources, the
+  most heavily cited row we have — found `mw_planned` at 15,962 MW, `phase` at
+  `operational` on a site that has never been powered, and `investment_usd` at
+  $10B against 5 GW. The prompts were not missing rules: `extract-v1` already said
+  `mw_planned` "is NOT the capacity of a power plant, solar farm or substation
+  built to serve it". Nothing told the model how big a campus can be or what a
+  gigawatt costs, so no rule had anything to bite on.
+
+  Eight sections of durable background: the campus/building/hall hierarchy; IT
+  load versus generating capacity, with the vocabulary that marks which is which;
+  the five other things a dollar figure in these articles is usually about; a
+  plausibility envelope in orders of magnitude; operator versus utility versus EPC
+  versus financier; the lifecycle phrases misread as "running"; how a project is
+  restated upward over years; and what actually obstructs one.
+
+  **Background for judgement, never a source of values** — stated in the block and
+  again in extraction's first rule, because a model answering *from* it would fill
+  capacity with industry averages and clear the evidence gate while doing so.
+  Prepended rather than appended so per-prompt rules come last and win.
+
+  Its bytes are folded into every prompt's SHA-1. `extract-v1@4ea77aad` has to
+  identify the whole system message, and a shared file that could change
+  underneath the hash would reintroduce exactly the failure the stamp exists to
+  prevent. `available()` hides the partial; a missing one degrades to the old
+  behaviour with a warning rather than taking down every command that loads a
+  prompt. New `tests/test_prompts.py` covers all of it.
+
+  Alongside it, the rule each defect actually needed: three things that are never
+  capacity blocks (generation and grid assets, the campus itself, a milestone) and
+  that phase figures are cumulative rather than additive; a definition of
+  `mw_built` that distinguishes energized-and-in-service from built, powered,
+  contracted or leased, and null from 0; `operational` requiring the site to be
+  running; scheduled and expected future events not being milestones; a bar for
+  what counts as an obstacle rather than a topic; and, in the evidence auditor and
+  the contradiction checker, the three patterns behind most real failures —
+  a lifecycle word meaning something earlier, generation quoted as the site's
+  capacity, and a figure the source itself presents as superseded.
+
 ### Changed
 
 - **The model provider is DeepSeek, not MiniMax** (`tracker/llm.py`,
