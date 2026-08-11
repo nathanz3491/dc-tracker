@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -77,18 +78,28 @@ class Settings(BaseSettings):
     #: Still a separate setting, but on DeepSeek the two jobs no longer need two
     #: *models*: `deepseek-v4-flash` and `deepseek-v4-pro` are one family, and the
     #: depth dial is the `thinking` parameter, not the model name (see
-    #: :data:`deepseek_reasoning_effort` and `tracker.llm`). The setting is kept so
+    #: :data:`deepseek_infer_effort` and `tracker.llm`). The setting is kept so
     #: an operator who wants the heavier model for judgement calls can say
     #: `TRACKER_DEEPSEEK_REASONING_MODEL=deepseek-v4-pro` without touching the
     #: high-volume extraction path, which is where the token bill is.
     deepseek_reasoning_model: str = "deepseek-v4-flash"
 
-    #: How hard the reasoning tier thinks: "low" | "high" | "max".
+    #: How hard each reasoning tier thinks. Two settings, because the two tiers
+    #: have opposite cost shapes and the same number cannot serve both.
     #:
-    #: Only consulted for the reasoning extractor. Extraction and the drawer
-    #: briefing run with thinking *disabled*, which is a request-time flag rather
-    #: than a model choice — see `tracker.llm.DeepSeekExtractor`.
-    deepseek_reasoning_effort: str = "high"
+    #: Extraction is the high-volume path — every article, every run — so effort
+    #: here multiplies the token bill by the size of the corpus. `high` buys the
+    #: judgement the job needs (which megawatt figure is the site's, which dollar
+    #: figure is this campus's) without paying `max` several thousand times over.
+    #: If the bill bites, `low` is the first lever, ahead of turning it off.
+    deepseek_extraction_effort: Literal["low", "high", "max"] = "high"
+
+    #: `tracker infer` is ONE call per project, against a whole row, asking for the
+    #: conclusion the database cannot look up — which obstacle actually binds, and
+    #: what would show the project still moving. It is the most reasoning-shaped
+    #: question in the tool and the cheapest place to pay for depth, so it runs at
+    #: `max` while extraction does not.
+    deepseek_infer_effort: Literal["low", "high", "max"] = "max"
 
     #: Model for the drawer's written briefing — the one call a person waits for.
     #:
@@ -247,7 +258,13 @@ class Settings(BaseSettings):
     #: suppresses the reasoning it was just given. `infer` does not survive it at
     #: all: it logs and returns an empty Analysis, so the drawer's panel simply
     #: comes back blank.
-    max_completion_tokens: int = Field(default=16384, ge=256)
+    #:
+    #: 32768 rather than 16384 because `infer` runs at `max` effort, whose whole
+    #: point is to deliberate at length, and whose failure is the silent one. The
+    #: headroom is free until it is used, and the alternative — a second budget
+    #: setting beside the second effort setting — is a knob per tier for a number
+    #: nobody would tune separately.
+    max_completion_tokens: int = Field(default=32768, ge=256)
     #: Hard cap on LLM calls per URL: one attempt plus one corrective retry.
     llm_max_attempts: int = Field(default=2, ge=1, le=5)
 

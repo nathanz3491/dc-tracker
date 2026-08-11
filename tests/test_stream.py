@@ -265,6 +265,64 @@ def test_the_tiers_differ_by_thinking_not_by_model_name():
     assert fast_extractor(settings).thinking is False
 
 
+def test_infer_thinks_harder_than_extraction():
+    """The two reasoning tiers have opposite cost shapes, so they differ in effort.
+
+    Extraction runs once per article, so its effort multiplies by the size of the
+    corpus. `infer` runs once per project against a whole row, which makes it the
+    cheapest place in the tool to pay for depth. A single shared setting would have
+    to be wrong for one of them.
+    """
+    from tracker.config import Settings
+    from tracker.llm import default_extractor, reasoning_extractor
+
+    settings = Settings(deepseek_api_key="test-key")
+    assert reasoning_extractor(settings).effort == "max"
+    assert default_extractor(settings).effort == settings.deepseek_extraction_effort
+    assert default_extractor(settings).effort != "max", (
+        "the high-volume path must not silently inherit the expensive setting"
+    )
+
+
+def test_reasoning_off_and_an_effort_cannot_disagree():
+    """`thinking` is derived from `effort`, so the invalid pair cannot be built.
+
+    Two independent fields would allow "reasoning on, no effort" — which the API
+    cannot express — and would let one be changed without the other.
+    """
+    from tracker.config import Settings
+    from tracker.llm import DeepSeekExtractor
+
+    settings = Settings(deepseek_api_key="test-key")
+    off = DeepSeekExtractor(settings)
+    assert off.thinking is False
+    assert off._payload(system="s", user="u", max_tokens=8, stream=False)["thinking"] == {
+        "type": "disabled"
+    }
+    on = DeepSeekExtractor(settings, effort="max")
+    assert on.thinking is True
+    assert on._payload(system="s", user="u", max_tokens=8, stream=False)["thinking"] == {
+        "type": "enabled",
+        "reasoning_effort": "max",
+    }
+
+
+def test_a_typo_in_the_effort_setting_fails_at_config_time():
+    """Not at request time, three hundred articles into a run.
+
+    `reasoning_effort` is a closed set of three values. An unrecognised one is the
+    kind of mistake that gets made in a .env file and discovered by an HTTP 400 in
+    the middle of a paid crawl.
+    """
+    import pytest as _pytest
+    from pydantic import ValidationError
+
+    from tracker.config import Settings
+
+    with _pytest.raises(ValidationError):
+        Settings(deepseek_api_key="test-key", deepseek_infer_effort="maximum")
+
+
 def test_the_reasoning_tiers_have_room_to_reason():
     """The budget has to clear the deliberation, or the answer never starts.
 
@@ -294,18 +352,20 @@ def test_thinking_reaches_the_wire_as_the_documented_shape():
     from tracker.config import Settings
     from tracker.llm import DeepSeekExtractor
 
-    settings = Settings(deepseek_api_key="test-key", deepseek_reasoning_effort="high")
+    settings = Settings(deepseek_api_key="test-key")
     off = DeepSeekExtractor(settings)._payload(system="s", user="u", max_tokens=64, stream=False)
-    on = DeepSeekExtractor(settings, thinking=True)._payload(
-        system="s", user="u", max_tokens=64, stream=False
-    )
+    # Both states are sent explicitly. Omitting the disabled one would leave the
+    # provider's default in charge of the drawer's latency.
     assert off["thinking"] == {"type": "disabled"}
-    assert on["thinking"] == {"type": "enabled", "reasoning_effort": "high"}
     # max_tokens, not max_completion_tokens: the rename was the whole migration.
     assert off["max_tokens"] == 64
     assert "max_completion_tokens" not in off
     # Off by default, and never on a stream.
     assert "response_format" not in off
+    streamed = DeepSeekExtractor(settings, effort="max")._payload(
+        system="s", user="u", max_tokens=64, stream=True
+    )
+    assert "response_format" not in streamed
 
 
 def test_the_console_asks_for_the_fast_model():

@@ -54,9 +54,24 @@ initial build of the v1 PRD.
 ### Changed
 
 - **Extraction reasons now** (`tracker/llm.py`, `tracker/config.py`,
-  `tracker/infer.py`). Reasoning is ON for extraction and `tracker infer`, OFF for
-  the drawer's briefing — a request flag, not a model choice, so all three tiers
-  still run `deepseek-v4-flash`.
+  `tracker/infer.py`). Reasoning is ON for extraction at `high` effort and for
+  `tracker infer` at `max`, OFF for the drawer's briefing — a request flag, not a
+  model choice, so all three tiers still run `deepseek-v4-flash`.
+
+  Two effort settings rather than one, because the tiers have opposite cost
+  shapes. Extraction runs once per *article*, so effort there multiplies by the
+  size of the corpus; `infer` runs once per *project* against a whole row, asking
+  for the conclusion the database cannot look up, which makes it the most
+  reasoning-shaped question in the tool and the cheapest place to pay for depth. A
+  single shared number would have to be wrong for one of them.
+
+  `DeepSeekExtractor` takes `effort: str | None` instead of a `thinking` flag
+  beside it, and `thinking` is now a derived property. The two were never
+  independent — an effort is meaningless with reasoning off, and reasoning on
+  without one is a state the API cannot express — so collapsing them makes the
+  invalid combination unconstructable. The effort settings are `Literal` types, so
+  a typo in `.env` fails at config load rather than as an HTTP 400 three hundred
+  articles into a paid crawl.
 
   Reading an article for twelve fields is not transcription. It is deciding which
   of three megawatt figures is the data center's rather than the utility's, which
@@ -75,15 +90,17 @@ initial build of the v1 PRD.
   worth more than depth. What improves is that the same behaviour is now a flag
   rather than a different and less accurate model.
 
-- **`max_completion_tokens` defaults to 16384, up from 4096.** A ceiling, not a
+- **`max_completion_tokens` defaults to 32768, up from 4096.** A ceiling, not a
   reservation — raising it costs nothing unless the model generates more. 4096 was
   sized for MiniMax, and reasoning is spent from the same budget as the reply,
   before a character of the answer appears. At 4096 both thinking tiers starve:
   extraction recovers by paying for a second call that tells the model *not* to
   deliberate, which suppresses the reasoning it was just given, and `infer` does
   not recover at all — it logs and returns an empty Analysis, so a starved panel
-  is indistinguishable from a quiet one. `infer.analyse` also stops hardcoding
-  4096 and follows the setting.
+  is indistinguishable from a quiet one. 32768 rather than 16384 because `infer`
+  runs at `max` effort, whose whole point is to deliberate at length and whose
+  failure is the silent one; the headroom is free until it is used.
+  `infer.analyse` also stops hardcoding 4096 and follows the setting.
 
 - **The model provider is DeepSeek, not MiniMax** (`tracker/llm.py`,
   `tracker/config.py`, `.env.example`). `deepseek-v4-flash` on all three tiers,

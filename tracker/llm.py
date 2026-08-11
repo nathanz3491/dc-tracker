@@ -369,22 +369,29 @@ class DeepSeekExtractor:
         settings: Settings | None = None,
         *,
         model: str | None = None,
-        thinking: bool = False,
+        effort: str | None = None,
     ) -> None:
         self.settings = settings or get_settings()
         if not self.settings.has_api_key():
             raise MissingApiKey(KEY_HELP)
         self.base_url = self.settings.deepseek_base_url.rstrip("/")
         # `model` overrides the configured extraction model. On DeepSeek the
-        # extraction/reasoning split is mostly `thinking` rather than the model
-        # name, but the override stays: an operator can point the reasoning tier at
-        # `deepseek-v4-pro` without moving the high-volume path onto it too.
+        # tiers differ by reasoning rather than by model name, but the override
+        # stays: an operator can point one tier at `deepseek-v4-pro` without moving
+        # the high-volume path onto it too.
         self.model = model or self.settings.deepseek_model
-        #: On for extraction and inference, off for the drawer briefing. The
-        #: constructor default is off because a caller that has not thought about
-        #: it is usually a cheap one; the three factory functions below are where
-        #: the real policy lives.
-        self.thinking = thinking
+        #: Reasoning effort, or None for no reasoning at all. ONE field rather than
+        #: a `thinking` flag beside it, because the two are not independent: an
+        #: effort is meaningless with reasoning off, and reasoning on without one
+        #: is a state the API has no way to express. Collapsing them means the
+        #: invalid combination cannot be constructed. The three factories below are
+        #: where the actual per-tier policy lives.
+        self.effort = effort
+
+    @property
+    def thinking(self) -> bool:
+        """Whether this tier reasons. Derived, so it cannot disagree with `effort`."""
+        return self.effort is not None
 
     def _budget(self, max_tokens: int | None) -> int:
         """The completion budget, clamped to what this model will accept."""
@@ -412,8 +419,8 @@ class DeepSeekExtractor:
             "max_tokens": self._budget(max_tokens),
             "stream": stream,
             "thinking": (
-                {"type": "enabled", "reasoning_effort": self.settings.deepseek_reasoning_effort}
-                if self.thinking
+                {"type": "enabled", "reasoning_effort": self.effort}
+                if self.effort is not None
                 else {"type": "disabled"}
             ),
         }
@@ -602,21 +609,34 @@ def default_extractor(settings: Settings | None = None) -> Extractor:
     reading and invented a utility. Extraction is the path where a wrong value gets
     *stored*, so it is the last place to economise.
 
+    Runs at `high`, not `max`, and that is the one place the two reasoning tiers
+    part company: this is the high-volume path, so effort here multiplies by the
+    size of the corpus. `high` buys the judgement the job needs without paying
+    `max` several thousand times over.
+
     Costs completion tokens. See `Settings.max_completion_tokens`, which was raised
     to leave room for it, and `crawl.py`'s starvation retry for what happens when
     there still is not enough.
     """
-    return DeepSeekExtractor(settings, thinking=True)
+    settings = settings or get_settings()
+    return DeepSeekExtractor(settings, effort=settings.deepseek_extraction_effort)
 
 
 def reasoning_extractor(settings: Settings | None = None) -> Extractor:
     """The tier for judgement rather than transcription. See `tracker.infer`.
 
-    One call per project against a whole row, asking for a conclusion the database
-    cannot look up. If anything gets to think, this does.
+    ONE call per project, against a whole row, asking for the conclusion the
+    database cannot look up: which obstacle actually binds, and what would show the
+    project still moving. The most reasoning-shaped question in the tool and the
+    cheapest place to pay for depth — one call per project rather than one per
+    article — so it runs at `max` while extraction runs at `high`.
     """
     settings = settings or get_settings()
-    return DeepSeekExtractor(settings, model=settings.deepseek_reasoning_model, thinking=True)
+    return DeepSeekExtractor(
+        settings,
+        model=settings.deepseek_reasoning_model,
+        effort=settings.deepseek_infer_effort,
+    )
 
 
 def fast_extractor(settings: Settings | None = None) -> Extractor:
