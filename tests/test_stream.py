@@ -247,17 +247,42 @@ def test_the_tiers_differ_by_thinking_not_by_model_name():
 
     On MiniMax the fast tier had to be a *different and less accurate model*,
     because `thinking` was accepted and ignored and `M2-her` was the only model
-    that did not deliberate. DeepSeek honours the flag, so all three tiers can run
-    the same model and only `infer` pays for reasoning. If this ever silently
-    inverts, extraction quietly starts costing reasoning tokens on every article.
+    that did not deliberate. DeepSeek honours the flag, so all three tiers run the
+    same model and the tier is entirely a matter of whether it reasons.
+
+    Extraction reasons: it is the path where a wrong value gets STORED, and
+    deciding which of three megawatt figures belongs to the data center is not
+    transcription. The briefing does not: nothing it writes is stored, and there
+    latency is the feature. If this ever silently inverts, the cheap panel starts
+    costing reasoning tokens and the expensive extraction stops getting any.
     """
     from tracker.config import Settings
     from tracker.llm import default_extractor, fast_extractor, reasoning_extractor
 
     settings = Settings(deepseek_api_key="test-key")
+    assert default_extractor(settings).thinking is True
     assert reasoning_extractor(settings).thinking is True
-    assert default_extractor(settings).thinking is False
     assert fast_extractor(settings).thinking is False
+
+
+def test_the_reasoning_tiers_have_room_to_reason():
+    """The budget has to clear the deliberation, or the answer never starts.
+
+    Reasoning is spent from the same completion budget as the reply, before a
+    character of the answer appears. At MiniMax's 4096 this starved: extraction
+    recovers by paying for a second call that tells the model NOT to deliberate,
+    and `infer` does not recover at all — it returns an empty Analysis, which is
+    indistinguishable from having nothing to say.
+    """
+    from tracker.config import Settings
+    from tracker.llm import default_extractor, reasoning_extractor
+
+    settings = Settings(deepseek_api_key="test-key")
+    assert settings.max_completion_tokens >= 8192, (
+        "a thinking tier needs room for the deliberation AND the answer"
+    )
+    for tier in (default_extractor(settings), reasoning_extractor(settings)):
+        assert tier._budget(None) == settings.max_completion_tokens
 
 
 def test_thinking_reaches_the_wire_as_the_documented_shape():

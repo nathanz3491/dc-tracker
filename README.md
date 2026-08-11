@@ -521,8 +521,12 @@ actually changes. It is never stored, never becomes a source, and cannot move
 confidence. See `overview.py`.
 
 It is written by `fast_extractor` — `TRACKER_DEEPSEEK_FAST_MODEL` with **reasoning
-disabled** — rather than by the reasoning tier, because this is the one call
-somebody sits and waits for.
+disabled**, and it is now the *only* tier that does not reason. That is
+deliberate, and it is the one place in this tool where speed beats depth: the
+briefing is a reading of values already on the page, it is labelled as a model's
+opinion, it is never stored, it never becomes a source, and it cannot move
+confidence. Nothing it writes reaches the database. Extraction and `infer`, which
+do write, both reason.
 
 **The latency here is a thinking question, not a model question**, and that took a
 provider migration to be able to act on. Measured across MiniMax's whole roster on
@@ -543,9 +547,9 @@ and a permit process that appear nowhere in the data.
 
 DeepSeek honours `thinking: {"type": "disabled"}`, so the fast path is now the
 same `deepseek-v4-flash` as everything else with reasoning switched off at request
-time, and **that accuracy trade is gone** — the briefing is written by the same
-model that does the extraction. Any reasoning that does arrive is still stripped as
-it streams, so it never reaches the page.
+time, and **that accuracy trade is gone** — the role is unchanged, but it is no
+longer paid for with a worse model. Any reasoning that does arrive is still
+stripped as it streams, so it never reaches the page.
 
 One guard survives the move and earns its place:
 

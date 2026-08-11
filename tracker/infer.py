@@ -214,12 +214,19 @@ def analyse(
     *,
     extractor: Extractor,
     prompt_name: str = "infer-v1",
-    max_tokens: int = 4096,
+    max_tokens: int | None = None,
 ) -> Analysis:
     """Ask a reasoning model what is obstructing this project and what to watch.
 
     Raises nothing on a useless reply: an empty Analysis is a valid outcome and the
     caller stores nothing.
+
+    `max_tokens` defaults to None so the extractor applies
+    `Settings.max_completion_tokens`. It used to hardcode 4096, which stopped being
+    safe the moment this tier began reasoning: the budget is spent on deliberation
+    before the answer starts, and the failure here is silent — an empty Analysis is
+    indistinguishable from "the model had nothing to say", so a starved panel looks
+    like a quiet one. One number to raise, in the one place that documents why.
     """
     from tracker.llm import LLMError, LLMJsonError, parse_json_object
     from tracker.prompts import load_prompt

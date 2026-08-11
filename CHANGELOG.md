@@ -53,6 +53,38 @@ initial build of the v1 PRD.
 
 ### Changed
 
+- **Extraction reasons now** (`tracker/llm.py`, `tracker/config.py`,
+  `tracker/infer.py`). Reasoning is ON for extraction and `tracker infer`, OFF for
+  the drawer's briefing — a request flag, not a model choice, so all three tiers
+  still run `deepseek-v4-flash`.
+
+  Reading an article for twelve fields is not transcription. It is deciding which
+  of three megawatt figures is the data center's rather than the utility's, which
+  of four dollar figures is this site's rather than the programme's, and whether
+  "since breaking ground" describes a building site or a running one. The
+  `_industry.txt` block gives the model what it needs to make those calls;
+  thinking is what lets it make them instead of matching the nearest number. It is
+  also the path where a wrong value gets *stored*, which makes it the last place
+  to economise — and the only accuracy comparison this project has measured runs
+  against economising, since the no-think model inverted a track reading and
+  invented a utility.
+
+  The briefing keeps the role `M2-her` held on MiniMax, unchanged: it reads values
+  already on the page, is labelled as a model's opinion, is never stored and
+  cannot move confidence, so nothing it writes reaches the database and speed is
+  worth more than depth. What improves is that the same behaviour is now a flag
+  rather than a different and less accurate model.
+
+- **`max_completion_tokens` defaults to 16384, up from 4096.** A ceiling, not a
+  reservation — raising it costs nothing unless the model generates more. 4096 was
+  sized for MiniMax, and reasoning is spent from the same budget as the reply,
+  before a character of the answer appears. At 4096 both thinking tiers starve:
+  extraction recovers by paying for a second call that tells the model *not* to
+  deliberate, which suppresses the reasoning it was just given, and `infer` does
+  not recover at all — it logs and returns an empty Analysis, so a starved panel
+  is indistinguishable from a quiet one. `infer.analyse` also stops hardcoding
+  4096 and follows the setting.
+
 - **The model provider is DeepSeek, not MiniMax** (`tracker/llm.py`,
   `tracker/config.py`, `.env.example`). `deepseek-v4-flash` on all three tiers,
   against the single host `https://api.deepseek.com`. Every `TRACKER_MINIMAX_*`

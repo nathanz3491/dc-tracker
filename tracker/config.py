@@ -233,7 +233,21 @@ class Settings(BaseSettings):
     # --- LLM cost bounds --------------------------------------------------
     #: Input truncation, in characters of markdown (~4 chars/token).
     max_input_chars: int = Field(default=24_000, ge=1_000)
-    max_completion_tokens: int = Field(default=4096, ge=256)
+    #: Ceiling on one reply's completion tokens — a LIMIT, not a reservation.
+    #: Raising it costs nothing unless the model actually generates more.
+    #:
+    #: 4096 was sized for MiniMax, whose models thought whether or not you asked
+    #: and whose ceilings were low. Two things changed together: DeepSeek v4 accepts
+    #: up to 384K, and extraction and inference now run with reasoning ON, which
+    #: spends this budget before a single character of the answer appears.
+    #:
+    #: At 4096 that combination starves. Extraction survives it — `crawl.py`
+    #: notices an unclosed `<think>`, retries at double the budget and tells the
+    #: model not to deliberate — but the recovery costs a second paid call and
+    #: suppresses the reasoning it was just given. `infer` does not survive it at
+    #: all: it logs and returns an empty Analysis, so the drawer's panel simply
+    #: comes back blank.
+    max_completion_tokens: int = Field(default=16384, ge=256)
     #: Hard cap on LLM calls per URL: one attempt plus one corrective retry.
     llm_max_attempts: int = Field(default=2, ge=1, le=5)
 

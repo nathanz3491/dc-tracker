@@ -380,9 +380,10 @@ class DeepSeekExtractor:
         # name, but the override stays: an operator can point the reasoning tier at
         # `deepseek-v4-pro` without moving the high-volume path onto it too.
         self.model = model or self.settings.deepseek_model
-        #: Reasoning off by default. Every caller but `tracker infer` is doing
-        #: transcription against a quoted source, where deliberation buys nothing
-        #: and costs the whole latency budget.
+        #: On for extraction and inference, off for the drawer briefing. The
+        #: constructor default is off because a caller that has not thought about
+        #: it is usually a cheap one; the three factory functions below are where
+        #: the real policy lives.
         self.thinking = thinking
 
     def _budget(self, max_tokens: int | None) -> int:
@@ -585,28 +586,52 @@ def _retry_after(response: httpx.Response) -> float | None:
 
 
 def default_extractor(settings: Settings | None = None) -> Extractor:
-    """Transcription: read what the article says, quote it, do not deliberate."""
-    return DeepSeekExtractor(settings)
+    """Extraction, **with reasoning on**.
+
+    Reading an article for twelve fields is not transcription. It is deciding
+    which of three megawatt figures is the data center's rather than the utility's,
+    which of four dollar figures is this site's rather than the programme's, and
+    whether "since breaking ground" describes a building site or a running one. The
+    `_industry.txt` block gives the model what it needs to make those calls;
+    thinking is what lets it actually make them instead of pattern-matching the
+    nearest number.
+
+    The evidence for turning it on is indirect but points one way: the only
+    accuracy comparison this project has measured is a no-think model against a
+    thinking one on the briefing prompt, and the no-think model inverted a track
+    reading and invented a utility. Extraction is the path where a wrong value gets
+    *stored*, so it is the last place to economise.
+
+    Costs completion tokens. See `Settings.max_completion_tokens`, which was raised
+    to leave room for it, and `crawl.py`'s starvation retry for what happens when
+    there still is not enough.
+    """
+    return DeepSeekExtractor(settings, thinking=True)
 
 
 def reasoning_extractor(settings: Settings | None = None) -> Extractor:
     """The tier for judgement rather than transcription. See `tracker.infer`.
 
-    The only caller that turns thinking on. Inferring what is obstructing a
-    project is one call per project against a whole row, so the reasoning is worth
-    paying for here and nowhere else.
+    One call per project against a whole row, asking for a conclusion the database
+    cannot look up. If anything gets to think, this does.
     """
     settings = settings or get_settings()
     return DeepSeekExtractor(settings, model=settings.deepseek_reasoning_model, thinking=True)
 
 
 def fast_extractor(settings: Settings | None = None) -> Extractor:
-    """The tier for the one call a person sits and waits for.
+    """The tier for the one call a person sits and waits for. **The only one that
+    does not think.**
 
     Used by the drawer's briefing, where latency *is* the feature: the panel
-    generates when a row is opened, so the model's speed is the page's speed.
-    Thinking off, which on DeepSeek is a request flag rather than — as it was on
-    MiniMax — a reason to run a different and less accurate model.
+    generates when a row is opened, so the model's speed is the page's speed. This
+    is the role `M2-her` played on MiniMax and it is kept unchanged — the briefing
+    is a reading of values already on the page, it is labelled as a model's
+    opinion, it is never stored, and it cannot move confidence. Nothing here
+    reaches the database, so speed is worth more than depth.
+
+    On DeepSeek the same behaviour is a request flag rather than a different and
+    less accurate model, which is the one part of the arrangement that improves.
     """
     settings = settings or get_settings()
     return DeepSeekExtractor(settings, model=settings.deepseek_fast_model)
