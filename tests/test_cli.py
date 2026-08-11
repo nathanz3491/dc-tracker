@@ -34,7 +34,7 @@ def set_key(monkeypatch, value: str = "test-key") -> None:
     """
     from tracker.config import get_settings
 
-    monkeypatch.setenv("TRACKER_MINIMAX_API_KEY", value)
+    monkeypatch.setenv("TRACKER_DEEPSEEK_API_KEY", value)
     get_settings.cache_clear()
 
 
@@ -691,8 +691,12 @@ def test_crawl_from_queue_needs_a_key_and_says_so(initialized: Path):
     queue_one(initialized)
     result = invoke(initialized, "ingest", "crawl", "--from-queue")
     assert result.exit_code == 2
-    assert "MINIMAX_API_KEY" in result.output
-    assert "api.minimaxi.com" in result.output, "must mention the CN/global key split"
+    assert "DEEPSEEK_API_KEY" in result.output
+    assert "api.deepseek.com" in result.output, "must name the host the key has to work against"
+    assert "MiniMax" in result.output, (
+        "must say the old provider's key will not work, or the first thing an "
+        "operator tries after the migration is pasting it back in"
+    )
 
 
 def test_discover_reports_a_broken_feed_config(initialized: Path, tmp_path: Path):
@@ -728,7 +732,7 @@ def test_sync_needs_a_key_before_touching_the_network(initialized: Path):
     """
     result = invoke(initialized, "sync")
     assert result.exit_code == 2
-    assert "TRACKER_MINIMAX_API_KEY" in result.output
+    assert "TRACKER_DEEPSEEK_API_KEY" in result.output
 
 
 def test_sync_runs_all_four_phases(initialized: Path, monkeypatch):

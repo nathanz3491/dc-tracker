@@ -90,7 +90,7 @@ BUCKETS: Final[tuple[str, ...]] = (
     NO_SOURCE,
 )
 
-#: `crawl:extract-v1@5d479a68:MiniMax-M2.7-highspeed:httpx` -> `extract-v1@5d479a68`.
+#: `crawl:extract-v1@5d479a68:deepseek-v4-flash:httpx` -> `extract-v1@5d479a68`.
 _STAMP = re.compile(r"^[a-z]+:([a-z0-9-]+@[0-9a-f]+):")
 
 

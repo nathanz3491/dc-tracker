@@ -212,13 +212,17 @@ def write(project: Project, *, extractor, prompt_name: str = "overview-v2") -> O
 
 #: The model finishing the briefing and then carrying on.
 #:
-#: Every model is asked to end with `[[END]]`. Some honour it, some do not, and
-#: `M2-her` — the one MiniMax model that does not think, and so the fastest by a
-#: wide margin — reliably writes a good answer and then keeps talking: repeating
-#: itself under headings like "Final answer (last round)", narrating its own word
-#: count ("Total word count: **75** (markdown consumed)"), emitting stray
-#: brackets. The API's own `stop` parameter is accepted and ignored, so this is
-#: the only place the tap can be turned off.
+#: Every model is asked to end with `[[END]]`. Some honour it, some do not. The
+#: behaviour was measured on MiniMax's `M2-her`, which reliably wrote a good
+#: answer and then kept talking: repeating itself under headings like "Final
+#: answer (last round)", narrating its own word count ("Total word count: **75**
+#: (markdown consumed)"), emitting stray brackets. The API's own `stop` parameter
+#: was accepted and ignored, so this was the only place the tap could be turned
+#: off.
+#:
+#: Kept after the move to DeepSeek. The sentinel costs a regex on a stream that is
+#: already being filtered, and "the model stops when asked" is not a property to
+#: assume of a provider on the strength of not having seen it fail yet.
 #:
 #: Cutting the *stream* rather than the finished text is the point: closing the
 #: connection early is what turns a 17s reply into a 3.5s one, because the tokens

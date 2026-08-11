@@ -1,20 +1,32 @@
-"""LLM access behind a protocol, with MiniMax as one implementation.
+"""LLM access behind a protocol, with DeepSeek as one implementation.
 
-**MiniMax has no structured output.** `response_format` — both `json_object` and
-`json_schema` — is *silently ignored* on the M2.x and M3 models: no error, no
-warning, just prose-wrapped JSON as if you had never asked. So the JSON contract
-is enforced here, in code we can test, by parse → repair → validate → one
-corrective retry. Anything that promised schema enforcement (including
-Crawl4AI's `LLMExtractionStrategy` `schema=` parameter) would be promising
-something the provider does not do.
+**The JSON contract is still enforced here, not by the provider.** DeepSeek does
+support ``response_format={"type": "json_object"}`` — unlike MiniMax, which
+accepted it and silently ignored it — but the docs attach two conditions to it
+that make it the wrong foundation for this codebase: the literal word ``json``
+must appear in the prompt (ours say ``JSON``, and the requirement is documented
+case-sensitively), and the endpoint "has a probability of returning empty
+content" in that mode. An extraction run that occasionally returns *nothing* is
+worse than one that returns prose-wrapped JSON, because the tolerant reader below
+recovers from the second and cannot recover from the first. So the contract stays
+where it has always been: parse → repair → validate → one corrective retry, in
+code we can test. :data:`Settings.deepseek_json_mode` turns the provider flag on
+for anyone who wants to measure it; it is off by default.
 
-Three MiniMax-specific details that each cost a debugging session if missed:
+Three DeepSeek details worth writing down, because two of them are the opposite
+of what this file used to do:
 
-* the parameter is ``max_completion_tokens``, not ``max_tokens``;
-* ``role`` must be ``"system"`` — ``"developer"`` returns *invalid role* (2013);
-* the global (``api.minimax.io``) and China (``api.minimaxi.com``) platforms are
-  separate, and **their keys are not interchangeable**. The wrong host answers
-  *invalid api key*, which reads like a bad key rather than a wrong URL.
+* the parameter is ``max_tokens`` — MiniMax wanted ``max_completion_tokens``;
+* thinking is a **request flag**, ``thinking={"type": "enabled"|"disabled"}`` with
+  ``reasoning_effort``. It is honoured, which is why there is no longer a separate
+  no-think model in the roster (see `Settings.deepseek_fast_model`);
+* reasoning may come back either in its own ``reasoning_content`` field or inline
+  in ``<think>`` tags depending on the surface. Both are handled — the field is
+  read where the API offers it, and :func:`split_thinking` / :class:`_ThinkFilter`
+  still strip the tags, so neither shape can leak a model's deliberation into a
+  stored value or onto the page.
+
+One platform, one host (``https://api.deepseek.com``), OpenAI-compatible.
 """
 
 from __future__ import annotations
@@ -33,23 +45,21 @@ from tracker.config import Settings, get_settings
 
 log = logging.getLogger(__name__)
 
-KEY_HELP = """TRACKER_MINIMAX_API_KEY is not set.
+KEY_HELP = """TRACKER_DEEPSEEK_API_KEY is not set.
 
   Recommended -- add it to the .env file beside pyproject.toml, which is
   gitignored and is read no matter which directory you run `tracker` from:
-    TRACKER_MINIMAX_API_KEY=your-key
+    TRACKER_DEEPSEEK_API_KEY=your-key
 
   Or just for this shell:
-    PowerShell   $env:TRACKER_MINIMAX_API_KEY = 'your-key'
-    Git Bash     export TRACKER_MINIMAX_API_KEY=your-key
+    PowerShell   $env:TRACKER_DEEPSEEK_API_KEY = 'your-key'
+    Git Bash     export TRACKER_DEEPSEEK_API_KEY=your-key
 
   Note the TRACKER_ prefix: every setting this tool reads carries it.
 
-MiniMax runs two separate platforms and the keys are NOT interchangeable:
-  global  platform.minimax.io   (email signup) -> https://api.minimax.io/v1
-  China   platform.minimaxi.com (phone signup) -> https://api.minimaxi.com/v1
-Set TRACKER_MINIMAX_BASE_URL to match the platform your key came from; the wrong
-host reports "invalid api key", which looks like a bad key but is a bad URL.
+Keys are issued at platform.deepseek.com and work against the one host,
+https://api.deepseek.com. A MiniMax key will NOT work here: this tool moved off
+MiniMax, and TRACKER_MINIMAX_* settings are no longer read at all.
 
 Check connectivity without ingesting anything:
   tracker ingest crawl --check
@@ -108,8 +118,9 @@ class LLMReply:
 class Extractor(Protocol):
     """Anything that can turn a system+user prompt into text.
 
-    Narrow on purpose: tests inject a fake in one line, and swapping MiniMax for
-    another provider touches only this file.
+    Narrow on purpose: tests inject a fake in one line, and swapping the provider
+    touches only this file. The MiniMax → DeepSeek move proved it — outside this
+    module and `config`, the change was a rename.
     """
 
     def complete(self, *, system: str, user: str, max_tokens: int | None = None) -> LLMReply: ...
@@ -217,11 +228,14 @@ class _ThinkFilter:
 def split_thinking(text: str) -> tuple[str, str]:
     """Separate a reply into (answer, chain-of-thought).
 
-    The MiniMax M2.x and M3 models put reasoning in ``<think>`` blocks inside the
-    *content* field rather than a separate field, so anything reading the reply has
-    to strip it. Returned rather than discarded so `--check` can report whether the
-    model is spending completion tokens on reasoning — which is what decides
-    whether the JSON budget needs raising.
+    Reasoning reaches this function as a ``<think>`` block inside the text either
+    because the model emitted it inline or because :meth:`DeepSeekExtractor.complete`
+    folded a ``reasoning_content`` field back into that shape. One reader for both.
+
+    Returned rather than discarded so `--check` can report whether the model is
+    spending completion tokens on reasoning — which is what decides whether the JSON
+    budget needs raising, and, since DeepSeek actually honours `thinking:
+    disabled`, whether the flag is taking effect at all.
     """
     thinking = " ".join(m.strip() for m in _THINK.findall(text))
     answer = _THINK.sub("", text).strip()
@@ -329,72 +343,114 @@ def _scan(text: str) -> str | None:
         return None
 
 
-# --- MiniMax ----------------------------------------------------------------
+# --- DeepSeek ---------------------------------------------------------------
 
 
 #: Models that reject the budget the rest accept.
 #:
-#: `M2-her` answers HTTP 400 to anything over 2048 — "does not support max tokens
-#: > 2048 (2013)" — so a caller passing the ordinary 4096 gets nothing at all
-#: rather than a shorter reply. Clamped here rather than at the call site because
-#: the budget is chosen for the *task* and the ceiling belongs to the *model*, and
-#: nothing that picks a budget should have to know the model roster.
-MODEL_TOKEN_CAP: dict[str, int] = {"M2-her": 2048, "MiniMax-M2-her": 2048}
+#: Empty against the current roster, and kept anyway. It exists because the budget
+#: is chosen for the *task* while the ceiling belongs to the *model*, and nothing
+#: that picks a budget should have to know the roster — MiniMax's `M2-her` answered
+#: HTTP 400 to anything over 2048, so a caller asking for the ordinary 4096 got
+#: nothing at all rather than a shorter reply. The v4 models take 384K, far above
+#: anything this tool asks for, so today the clamp is a no-op.
+MODEL_TOKEN_CAP: dict[str, int] = {}
 
 
-class MiniMaxExtractor:
-    """OpenAI-compatible chat completions against MiniMax.
+class DeepSeekExtractor:
+    """OpenAI-compatible chat completions against DeepSeek.
 
     The key check lives in ``__init__``, deliberately not at module import: the
     test suite must be importable and runnable on a machine with no key.
     """
 
-    def __init__(self, settings: Settings | None = None, *, model: str | None = None) -> None:
+    def __init__(
+        self,
+        settings: Settings | None = None,
+        *,
+        model: str | None = None,
+        thinking: bool = False,
+    ) -> None:
         self.settings = settings or get_settings()
         if not self.settings.has_api_key():
             raise MissingApiKey(KEY_HELP)
-        self.base_url = self.settings.minimax_base_url.rstrip("/")
-        # `model` overrides the configured extraction model. Reasoning and
-        # extraction want different tiers: extraction is high-volume transcription
-        # where speed pays, while inferring a project's binding constraint is one
-        # call and wants the strongest model available.
-        self.model = model or self.settings.minimax_model
+        self.base_url = self.settings.deepseek_base_url.rstrip("/")
+        # `model` overrides the configured extraction model. On DeepSeek the
+        # extraction/reasoning split is mostly `thinking` rather than the model
+        # name, but the override stays: an operator can point the reasoning tier at
+        # `deepseek-v4-pro` without moving the high-volume path onto it too.
+        self.model = model or self.settings.deepseek_model
+        #: Reasoning off by default. Every caller but `tracker infer` is doing
+        #: transcription against a quoted source, where deliberation buys nothing
+        #: and costs the whole latency budget.
+        self.thinking = thinking
 
     def _budget(self, max_tokens: int | None) -> int:
         """The completion budget, clamped to what this model will accept."""
         asked = max_tokens or self.settings.max_completion_tokens
         return min(asked, MODEL_TOKEN_CAP.get(self.model, asked))
 
-    @property
-    def endpoint(self) -> str:
-        return f"{self.base_url}/chat/completions"
+    def _payload(self, *, system: str, user: str, max_tokens: int | None, stream: bool) -> dict:
+        """The request body both `complete` and `stream` send.
 
-    def complete(self, *, system: str, user: str, max_tokens: int | None = None) -> LLMReply:
-        payload = {
+        One builder rather than two near-identical literals: the pair drifted under
+        MiniMax, and a `thinking` flag set on one path and not the other is exactly
+        the kind of difference that shows up as "the drawer is slow" months later.
+        """
+        payload: dict[str, Any] = {
             "model": self.model,
             "messages": [
-                # "system", never "developer": MiniMax rejects the latter (2013).
+                # "system", never "developer": DeepSeek documents system/user/
+                # assistant/tool and no developer role.
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
             "temperature": 0.1,
             "top_p": 0.9,
-            # max_completion_tokens, not max_tokens.
-            "max_completion_tokens": self._budget(max_tokens),
-            "stream": False,
-            # No response_format on purpose: M2.x/M3 ignore it silently, so
-            # sending it would imply a guarantee that does not exist.
+            # max_tokens — MiniMax wanted max_completion_tokens.
+            "max_tokens": self._budget(max_tokens),
+            "stream": stream,
+            "thinking": (
+                {"type": "enabled", "reasoning_effort": self.settings.deepseek_reasoning_effort}
+                if self.thinking
+                else {"type": "disabled"}
+            ),
         }
-        data = self._post(payload)
+        # Off by default; see `Settings.deepseek_json_mode` for why. Never on the
+        # streaming path, which returns prose a person reads, not an object.
+        if self.settings.deepseek_json_mode and not stream:
+            payload["response_format"] = {"type": "json_object"}
+        return payload
+
+    @property
+    def endpoint(self) -> str:
+        return f"{self.base_url}/chat/completions"
+
+    def complete(self, *, system: str, user: str, max_tokens: int | None = None) -> LLMReply:
+        data = self._post(
+            self._payload(system=system, user=user, max_tokens=max_tokens, stream=False)
+        )
         try:
             choice = data["choices"][0]
-            content = choice["message"]["content"]
+            message = choice["message"]
+            content = message.get("content")
         except (KeyError, IndexError, TypeError) as exc:
             raise LLMError(f"unexpected response shape from {self.endpoint}: {data!r}") from exc
 
+        # DeepSeek may return reasoning in its own field rather than inline in
+        # `<think>` tags. Folded back into the text in the tag form the rest of this
+        # module already understands, so `split_thinking` keeps working and
+        # `--check` can still report whether tokens went to deliberation. Doing it
+        # the other way — teaching every caller about a second field — would put
+        # the same knowledge in a dozen places.
+        reasoning = message.get("reasoning_content")
+        text = content or ""
+        if reasoning:
+            text = f"{_THINK_OPEN}{reasoning}{_THINK_CLOSE}{text}"
+
         usage = data.get("usage") or {}
         return LLMReply(
-            text=content or "",
+            text=text,
             finish_reason=choice.get("finish_reason"),
             prompt_tokens=usage.get("prompt_tokens"),
             completion_tokens=usage.get("completion_tokens"),
@@ -409,24 +465,14 @@ class MiniMaxExtractor:
         a retry would restart the paragraph mid-sentence. A stream that breaks is
         reported as broken and the caller can ask again.
 
-        Reasoning is filtered out *as it arrives*, which is the only fiddly part:
-        these models put `<think>` in the content field, so a naive passthrough
-        would type the model's private deliberation into the drawer and then have
-        to erase it.
+        Reasoning is filtered out *as it arrives*. With `thinking` disabled — which
+        is how the drawer calls this — there should be none to filter, but the
+        filter stays: it is cheap, and a naive passthrough would type a model's
+        private deliberation into the drawer and then have to erase it.
         """
-        payload = {
-            "model": self.model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            "temperature": 0.1,
-            "top_p": 0.9,
-            "max_completion_tokens": self._budget(max_tokens),
-            "stream": True,
-        }
+        payload = self._payload(system=system, user=user, max_tokens=max_tokens, stream=True)
         headers = {
-            "Authorization": f"Bearer {self.settings.minimax_api_key.get_secret_value()}",
+            "Authorization": f"Bearer {self.settings.deepseek_api_key.get_secret_value()}",
             "Content-Type": "application/json",
         }
         filter_ = _ThinkFilter()
@@ -443,7 +489,7 @@ class MiniMaxExtractor:
                     if response.status_code == 401:
                         raise MissingApiKey(KEY_HELP)
                     raise LLMError(
-                        f"MiniMax returned HTTP {response.status_code}: {response.text[:500]}"
+                        f"DeepSeek returned HTTP {response.status_code}: {response.text[:500]}"
                     )
                 for line in response.iter_lines():
                     piece = _sse_delta(line)
@@ -455,7 +501,7 @@ class MiniMaxExtractor:
 
     def _post(self, payload: dict[str, Any], *, attempts: int = 3) -> dict[str, Any]:
         headers = {
-            "Authorization": f"Bearer {self.settings.minimax_api_key.get_secret_value()}",
+            "Authorization": f"Bearer {self.settings.deepseek_api_key.get_secret_value()}",
             "Content-Type": "application/json",
         }
         last: Exception | None = None
@@ -484,15 +530,16 @@ class MiniMaxExtractor:
                     continue
                 if response.status_code == 401:
                     raise MissingApiKey(
-                        "MiniMax rejected the key (HTTP 401).\n\n"
+                        "DeepSeek rejected the key (HTTP 401).\n\n"
                         f"Base URL in use: {self.base_url}\n"
-                        "The most common cause is a key from the other MiniMax "
-                        "platform: global keys work only against api.minimax.io "
-                        "and China keys only against api.minimaxi.com.\n\n" + KEY_HELP
+                        "The most common cause after the MiniMax migration is a "
+                        "leftover MiniMax key in TRACKER_DEEPSEEK_API_KEY: the two "
+                        "providers issue their own keys and neither accepts the "
+                        "other's.\n\n" + KEY_HELP
                     )
                 if response.status_code >= 400:
                     raise LLMError(
-                        f"MiniMax returned HTTP {response.status_code}: {response.text[:500]}"
+                        f"DeepSeek returned HTTP {response.status_code}: {response.text[:500]}"
                     )
                 return response.json()
             if attempt < attempts:
@@ -502,15 +549,17 @@ class MiniMaxExtractor:
     def check(self) -> dict[str, Any]:
         """Cheap round-trip, for `tracker ingest crawl --check`.
 
-        Worth having on day one: it distinguishes "wrong region host" from "bad
-        key" from "no network" before an operator spends a run's worth of fetches.
+        Worth having on day one: it distinguishes "bad key" from "wrong host" from
+        "no network" before an operator spends a run's worth of fetches. After the
+        MiniMax migration it also answers the first question anyone will have —
+        `thinking_tokens` reports whether `thinking: disabled` is actually being
+        honoured, which MiniMax never did.
         """
         started = time.monotonic()
-        # Not a tiny budget: the M2.x/M3 models emit chain-of-thought inside
-        # <think> blocks in the *content* field, so a 16-token cap is spent
-        # entirely on reasoning and the check reports a truncated thought instead
-        # of the answer. 512 is enough to see a real reply and still costs almost
-        # nothing.
+        # Not a tiny budget. Reasoning is disabled by default so this should answer
+        # in a few tokens, but a 16-token cap would report a truncated thought
+        # rather than the answer the moment anything is thinking; 512 is enough to
+        # see a real reply and still costs almost nothing.
         reply = self.complete(system="Reply with the single word OK.", user="ping", max_tokens=512)
         answer, thinking = split_thinking(reply.text)
         return {
@@ -536,36 +585,46 @@ def _retry_after(response: httpx.Response) -> float | None:
 
 
 def default_extractor(settings: Settings | None = None) -> Extractor:
-    return MiniMaxExtractor(settings)
+    """Transcription: read what the article says, quote it, do not deliberate."""
+    return DeepSeekExtractor(settings)
 
 
 def reasoning_extractor(settings: Settings | None = None) -> Extractor:
-    """The model for judgement rather than transcription. See `tracker.infer`."""
+    """The tier for judgement rather than transcription. See `tracker.infer`.
+
+    The only caller that turns thinking on. Inferring what is obstructing a
+    project is one call per project against a whole row, so the reasoning is worth
+    paying for here and nowhere else.
+    """
     settings = settings or get_settings()
-    return MiniMaxExtractor(settings, model=settings.minimax_reasoning_model)
+    return DeepSeekExtractor(settings, model=settings.deepseek_reasoning_model, thinking=True)
 
 
 def fast_extractor(settings: Settings | None = None) -> Extractor:
-    """The model for the one call a person sits and waits for.
+    """The tier for the one call a person sits and waits for.
 
     Used by the drawer's briefing, where latency *is* the feature: the panel
     generates when a row is opened, so the model's speed is the page's speed.
+    Thinking off, which on DeepSeek is a request flag rather than — as it was on
+    MiniMax — a reason to run a different and less accurate model.
     """
     settings = settings or get_settings()
-    return MiniMaxExtractor(settings, model=settings.minimax_fast_model)
+    return DeepSeekExtractor(settings, model=settings.deepseek_fast_model)
 
 
 __all__ = [
     "KEY_HELP",
     "RETRYABLE_STATUS",
+    "DeepSeekExtractor",
     "Extractor",
     "LLMError",
     "LLMJsonError",
     "LLMReply",
-    "MiniMaxExtractor",
     "MissingApiKey",
     "ResponseTruncated",
     "default_extractor",
+    "fast_extractor",
     "parse_json_object",
+    "reasoning_extractor",
     "split_thinking",
 ]

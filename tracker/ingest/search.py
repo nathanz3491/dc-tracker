@@ -7,7 +7,7 @@ the number.
 
 Two halves, and the division between them is the important part:
 
-* **MiniMax proposes what to look for.** Asked for candidate US data center
+* **The model proposes what to look for.** Asked for candidate US data center
   projects, it returns names and locations from its training data. Those are
   *guesses*, and this module treats them as nothing more than search-query
   material. **Not one of them is ever written to the database.**

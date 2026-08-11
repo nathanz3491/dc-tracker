@@ -921,13 +921,13 @@ def ingest_crawl(
     "the prompt improved" with "the page changed".
     """
     from tracker.ingest import crawl
-    from tracker.llm import MiniMaxExtractor, MissingApiKey
+    from tracker.llm import DeepSeekExtractor, MissingApiKey
 
     settings = get_settings()
 
     if check:
         try:
-            info = MiniMaxExtractor(settings).check()
+            info = DeepSeekExtractor(settings).check()
         except MissingApiKey as exc:
             _fail(str(exc))
             return
@@ -1020,7 +1020,7 @@ def ingest_crawl(
     # Resolved before any fetching, so a missing key fails immediately rather
     # than after paying for a page load per URL.
     try:
-        extractor = MiniMaxExtractor(settings)
+        extractor = DeepSeekExtractor(settings)
     except MissingApiKey as exc:
         _fail(str(exc))
         return
@@ -3105,7 +3105,7 @@ def ingest_edgar(
 
     if not settings.has_api_key():
         _fail(
-            f"{len(urls)} filing(s) are prepared, but extraction needs TRACKER_MINIMAX_API_KEY.\n"
+            f"{len(urls)} filing(s) are prepared, but extraction needs TRACKER_DEEPSEEK_API_KEY.\n"
             "The prepared text is cached, so setting the key and re-running costs no fetches."
         )
 
@@ -4778,9 +4778,9 @@ def infer(
     try:
         extractor = reasoning_extractor(settings)
         if model:
-            from tracker.llm import MiniMaxExtractor
+            from tracker.llm import DeepSeekExtractor
 
-            extractor = MiniMaxExtractor(settings, model=model)
+            extractor = DeepSeekExtractor(settings, model=model)
     except MissingApiKey as exc:
         _fail(str(exc))
         raise
@@ -5066,7 +5066,7 @@ def sync(
     """
     from tracker.ingest import crawl
     from tracker.ingest import discover as disc
-    from tracker.llm import MiniMaxExtractor, MissingApiKey
+    from tracker.llm import DeepSeekExtractor, MissingApiKey
     from tracker.upsert import recompute_confidence
 
     settings = get_settings()
@@ -5074,7 +5074,7 @@ def sync(
     # Checked before any network call: every later phase needs it, and failing
     # here costs nothing rather than after a round of feed polling.
     try:
-        extractor = MiniMaxExtractor(settings)
+        extractor = DeepSeekExtractor(settings)
     except MissingApiKey as exc:
         _fail(str(exc))
         return
@@ -5363,7 +5363,7 @@ def search_cmd(
     ] = None,
     from_llm: Annotated[
         int,
-        typer.Option("--from-llm", help="Ask MiniMax for this many project search queries."),
+        typer.Option("--from-llm", help="Ask the model for this many project search queries."),
     ] = 0,
     print_only: Annotated[
         bool,
@@ -5378,20 +5378,20 @@ def search_cmd(
     Feeds only surface what was published recently, so a project announced two
     years ago never appears in them. Search goes looking for it.
 
-    With --from-llm, MiniMax proposes which projects to search for. Those are
+    With --from-llm, the model proposes which projects to search for. Those are
     leads, never facts: nothing the model names is stored, and a project only
     becomes a row once a real article has been fetched and its values backed by
     verbatim quotes. If the model invents a project, the search finds nothing.
     """
     from tracker.ingest import search as srch
-    from tracker.llm import MiniMaxExtractor, MissingApiKey
+    from tracker.llm import DeepSeekExtractor, MissingApiKey
 
     settings = get_settings()
     queries = list(query or [])
 
     if from_llm:
         try:
-            extractor = MiniMaxExtractor(settings)
+            extractor = DeepSeekExtractor(settings)
         except MissingApiKey as exc:
             _fail(str(exc))
             return

@@ -10,6 +10,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 First working version. Nothing has been released yet, so everything below is the
 initial build of the v1 PRD.
 
+### Changed
+
+- **The model provider is DeepSeek, not MiniMax** (`tracker/llm.py`,
+  `tracker/config.py`, `.env.example`). `deepseek-v4-flash` on all three tiers,
+  against the single host `https://api.deepseek.com`. Every `TRACKER_MINIMAX_*`
+  setting is renamed to `TRACKER_DEEPSEEK_*` and **the old names are no longer
+  read at all** — deliberately not aliased, because the two providers issue their
+  own keys and silently accepting a stale MiniMax key would turn a config error
+  into an HTTP 401 at ingest time. The 401 handler names the migration as the
+  likely cause.
+
+  Three wire-level differences, two of them reversals of what this code did:
+
+  * the budget parameter is `max_tokens`, not `max_completion_tokens`;
+  * **thinking is a request flag and is actually honoured** —
+    `thinking={"type": "enabled"|"disabled"}` with `reasoning_effort`. MiniMax
+    accepted `thinking`, `reasoning_effort` and `enable_thinking` and ignored all
+    three, which is the only reason the fast tier had to be a *different and less
+    accurate model* (`M2-her`, the sole no-think model in that roster). That
+    workaround is gone: all three tiers now run one model, and only `tracker
+    infer` turns reasoning on. The measured cost of the old default — a briefing
+    that wrote "All tracks complete" over a construction track that had reached
+    nothing — is gone with it;
+  * reasoning may arrive in a `reasoning_content` field rather than inline
+    `<think>` tags. Both are handled, and the field is folded back into the tag
+    shape so `split_thinking` and the stream filter stay the one reader.
+
+  `MODEL_TOKEN_CAP` is kept but empty — the v4 models take 384K, far above
+  anything asked for here — because the hazard it guards (a model answering HTTP
+  400 to the ordinary budget, so no reply at all rather than a shorter one) has
+  happened once and cost a debugging session.
+
+  **The JSON contract stays in code.** DeepSeek does support
+  `response_format={"type": "json_object"}`, unlike MiniMax, but its docs require
+  the literal word `json` in the prompt (ours say `JSON`) and warn the endpoint
+  "has a probability of returning empty content" in that mode. An empty reply is
+  the one failure the parse → repair → validate → retry reader cannot recover
+  from, so the flag is available as `TRACKER_DEEPSEEK_JSON_MODE` and off by
+  default.
+
 ### Added
 
 - **The console has an identity mark** (`tracker/webui/static/index.html`,

@@ -251,7 +251,7 @@ def test_search_is_skipped_with_an_actionable_message(session, monkeypatch):
     from tracker.config import Settings
 
     monkeypatch.setitem(Settings.model_config, "env_file", None)
-    settings = Settings(minimax_api_key="x")
+    settings = Settings(deepseek_api_key="x")
     project = add_project(session)
 
     harvest = enrich.harvest_search(
@@ -265,7 +265,7 @@ def test_search_harvester_uses_the_provider(session, monkeypatch):
     from tracker.config import Settings
 
     monkeypatch.setitem(Settings.model_config, "env_file", None)
-    settings = Settings(minimax_api_key="x")
+    settings = Settings(deepseek_api_key="x")
     project = add_project(session)
     provider = FakeSearch(["https://trade.example/stack-hillsboro"])
 
@@ -287,7 +287,7 @@ def test_the_search_harvest_names_the_backend_it_used(session, monkeypatch):
     from tracker.ingest.search import provider_name
 
     monkeypatch.setitem(Settings.model_config, "env_file", None)
-    settings = Settings(minimax_api_key="x")
+    settings = Settings(deepseek_api_key="x")
     project = add_project(session)
 
     class NamedSearch(FakeSearch):
@@ -328,7 +328,7 @@ def test_search_harvester_mines_wikipedia_hits(session, monkeypatch):
             "https://opencorporates.example/companies/123",
         ],
     )
-    settings = Settings(minimax_api_key="x")
+    settings = Settings(deepseek_api_key="x")
     project = add_project(session)
     provider = FakeSearch(["https://en.wikipedia.org/wiki/STACK_Hillsboro"])
 
@@ -513,7 +513,7 @@ def test_skipped_harvesters_are_reported_once(session, monkeypatch):
     report = enrich.run(
         session,
         project.id,
-        settings=Settings(minimax_api_key="x"),
+        settings=Settings(deepseek_api_key="x"),
         fetcher=FakeFetcher(),
         extractor=FakeLLM(),
         skip_archive=True,

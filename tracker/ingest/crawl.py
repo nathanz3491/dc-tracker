@@ -1814,7 +1814,7 @@ def extract_one(
             payload = parse_json_object(reply.text)
         except LLMJsonError as exc:
             last_error = str(exc)
-            # `finish_reason` is not reliable here: MiniMax has reported "stop" on
+            # `finish_reason` is not reliable here: a provider has reported "stop" on
             # a reply that plainly stops mid-sentence inside `<think>`. An unclosed
             # block is the observable fact, so trust that over the label.
             starved = exc.ran_out_thinking

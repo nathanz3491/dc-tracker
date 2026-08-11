@@ -51,7 +51,7 @@ def _fast_and_keyless_settings(monkeypatch):
     # own database: a suite whose result depends on the operator's setup.
     for name in [key for key in os.environ if key.startswith("TRACKER_")]:
         monkeypatch.delenv(name, raising=False)
-    monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
 
     monkeypatch.setenv("TRACKER_POLITENESS_DELAY_S", "0")
     monkeypatch.setenv("TRACKER_RETRY_BACKOFF_BASE_S", "0")

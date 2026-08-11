@@ -237,26 +237,50 @@ def test_the_briefing_uses_the_fast_model_not_the_reasoning_one():
     from tracker.config import Settings
     from tracker.llm import fast_extractor, reasoning_extractor
 
-    settings = Settings(minimax_api_key="test-key")
-    assert fast_extractor(settings).model == settings.minimax_fast_model
-    assert reasoning_extractor(settings).model != settings.minimax_fast_model
+    settings = Settings(deepseek_api_key="test-key")
+    assert fast_extractor(settings).model == settings.deepseek_fast_model
+    assert reasoning_extractor(settings).model == settings.deepseek_reasoning_model
 
 
-def test_the_default_briefing_model_can_actually_be_called():
-    """The default is `M2-her`, which rejects the budget every other model takes.
+def test_the_tiers_differ_by_thinking_not_by_model_name():
+    """What separates the three tiers on DeepSeek, now that it is not the roster.
 
-    Without the clamp this configuration is not merely slow or sloppy — it is an
-    HTTP 400 on every request and a drawer that never shows a briefing at all. The
-    two settings have to agree, and they are declared in different files.
+    On MiniMax the fast tier had to be a *different and less accurate model*,
+    because `thinking` was accepted and ignored and `M2-her` was the only model
+    that did not deliberate. DeepSeek honours the flag, so all three tiers can run
+    the same model and only `infer` pays for reasoning. If this ever silently
+    inverts, extraction quietly starts costing reasoning tokens on every article.
     """
     from tracker.config import Settings
-    from tracker.llm import MODEL_TOKEN_CAP, MiniMaxExtractor
+    from tracker.llm import default_extractor, fast_extractor, reasoning_extractor
 
-    settings = Settings(minimax_api_key="test-key")
-    extractor = MiniMaxExtractor(settings, model=settings.minimax_fast_model)
-    cap = MODEL_TOKEN_CAP.get(settings.minimax_fast_model)
-    if cap is not None:
-        assert extractor._budget(overview.MAX_TOKENS) <= cap
+    settings = Settings(deepseek_api_key="test-key")
+    assert reasoning_extractor(settings).thinking is True
+    assert default_extractor(settings).thinking is False
+    assert fast_extractor(settings).thinking is False
+
+
+def test_thinking_reaches_the_wire_as_the_documented_shape():
+    """`thinking` is a request flag, and both states have to be sent explicitly.
+
+    Omitting it on the disabled path would leave the provider's default in charge
+    of the one property the drawer's latency depends on.
+    """
+    from tracker.config import Settings
+    from tracker.llm import DeepSeekExtractor
+
+    settings = Settings(deepseek_api_key="test-key", deepseek_reasoning_effort="high")
+    off = DeepSeekExtractor(settings)._payload(system="s", user="u", max_tokens=64, stream=False)
+    on = DeepSeekExtractor(settings, thinking=True)._payload(
+        system="s", user="u", max_tokens=64, stream=False
+    )
+    assert off["thinking"] == {"type": "disabled"}
+    assert on["thinking"] == {"type": "enabled", "reasoning_effort": "high"}
+    # max_tokens, not max_completion_tokens: the rename was the whole migration.
+    assert off["max_tokens"] == 64
+    assert "max_completion_tokens" not in off
+    # Off by default, and never on a stream.
+    assert "response_format" not in off
 
 
 def test_the_console_asks_for_the_fast_model():
@@ -298,7 +322,7 @@ def test_the_default_prompt_is_the_short_one(session):
 
 
 class _Runaway:
-    """Answers, then keeps going. Exactly what `M2-her` does on this prompt."""
+    """Answers, then keeps going. Exactly what `M2-her` did on this prompt."""
 
     model = "test-model"
 
@@ -363,14 +387,22 @@ def test_ordinary_prose_is_not_mistaken_for_a_runaway():
         assert cut is None or cut.start() > 0, text
 
 
-def test_a_models_token_ceiling_is_respected(session):
-    """`M2-her` answers HTTP 400 to anything over 2048, so an unclamped budget
-    means no briefing at all rather than a shorter one."""
-    from tracker.config import Settings
-    from tracker.llm import MODEL_TOKEN_CAP, MiniMaxExtractor
+def test_a_models_token_ceiling_is_respected(session, monkeypatch):
+    """A model that rejects the budget the rest accept gets a shorter ask, not a 400.
 
-    settings = Settings(minimax_api_key="test-key")
-    assert MiniMaxExtractor(settings, model="M2-her")._budget(4096) == 2048
-    assert MiniMaxExtractor(settings, model="MiniMax-M2")._budget(4096) == 4096
-    assert MiniMaxExtractor(settings, model="M2-her")._budget(512) == 512, "a smaller ask stands"
-    assert "M2-her" in MODEL_TOKEN_CAP
+    `MODEL_TOKEN_CAP` is empty against the v4 roster — the models take 384K, far
+    above anything asked for here — so the ceiling is injected rather than named.
+    The mechanism is what is under test: MiniMax's `M2-her` answered HTTP 400 to
+    anything over 2048, which meant no briefing at all rather than a shorter one,
+    and a roster that gains such a model again should not have to rediscover that.
+    """
+    from tracker.config import Settings
+    from tracker.llm import MODEL_TOKEN_CAP, DeepSeekExtractor
+
+    monkeypatch.setitem(MODEL_TOKEN_CAP, "tiny-model", 2048)
+    settings = Settings(deepseek_api_key="test-key")
+    assert DeepSeekExtractor(settings, model="tiny-model")._budget(4096) == 2048
+    assert DeepSeekExtractor(settings, model="deepseek-v4-flash")._budget(4096) == 4096
+    assert DeepSeekExtractor(settings, model="tiny-model")._budget(512) == 512, (
+        "a smaller ask stands"
+    )

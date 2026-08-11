@@ -64,76 +64,69 @@ class Settings(BaseSettings):
         case_sensitive=False,
     )
 
-    # --- MiniMax ----------------------------------------------------------
-    # Global and China are separate platforms whose keys are NOT interchangeable;
-    # the wrong host returns "invalid api key". See .env.example.
-    minimax_api_key: SecretStr | None = None
-    minimax_base_url: str = "https://api.minimax.io/v1"
-    minimax_model: str = "MiniMax-M2.5"
+    # --- DeepSeek ---------------------------------------------------------
+    # One platform, one host, OpenAI-compatible. Replaced MiniMax, whose two
+    # platforms had non-interchangeable keys, no structured output, and a
+    # separate no-think model to work around.
+    deepseek_api_key: SecretStr | None = None
+    deepseek_base_url: str = "https://api.deepseek.com"
+    deepseek_model: str = "deepseek-v4-flash"
 
     #: Model used for *reasoning* rather than extraction — `tracker infer`.
     #:
-    #: A separate setting because the two jobs want different models. Extraction is
-    #: a high-volume transcription task where a fast model is right; inferring what
-    #: is obstructing a project is one call per project and wants the strongest
-    #: reasoning available. Verified present on both MiniMax platforms.
-    minimax_reasoning_model: str = "MiniMax-M3"
+    #: Still a separate setting, but on DeepSeek the two jobs no longer need two
+    #: *models*: `deepseek-v4-flash` and `deepseek-v4-pro` are one family, and the
+    #: depth dial is the `thinking` parameter, not the model name (see
+    #: :data:`deepseek_reasoning_effort` and `tracker.llm`). The setting is kept so
+    #: an operator who wants the heavier model for judgement calls can say
+    #: `TRACKER_DEEPSEEK_REASONING_MODEL=deepseek-v4-pro` without touching the
+    #: high-volume extraction path, which is where the token bill is.
+    deepseek_reasoning_model: str = "deepseek-v4-flash"
+
+    #: How hard the reasoning tier thinks: "low" | "high" | "max".
+    #:
+    #: Only consulted for the reasoning extractor. Extraction and the drawer
+    #: briefing run with thinking *disabled*, which is a request-time flag rather
+    #: than a model choice — see `tracker.llm.DeepSeekExtractor`.
+    deepseek_reasoning_effort: str = "high"
 
     #: Model for the drawer's written briefing — the one call a person waits for.
     #:
     #: A third setting, because this job's constraint is neither volume nor depth
     #: but *latency*: the panel generates when a row is opened, so the model's
-    #: speed is the page's speed. `M2-her` is the only MiniMax model that does not
-    #: emit a `<think>` block, and on this prompt that is the whole race.
+    #: speed is the page's speed.
     #:
-    #: Time to the first *visible* word, measured on this prompt. Tokens spent
-    #: inside `<think>` are invisible to a reader, so a model that streams
-    #: instantly and then deliberates is not fast:
+    #: **This setting used to carry the workaround; DeepSeek carries it natively.**
+    #: On MiniMax the only way to stop a model spending the first ten to forty
+    #: seconds inside an invisible `<think>` block was to pick the one model that
+    #: could not think at all (`M2-her`, 2.7s to first visible word against 12-47s
+    #: for every other model in the roster) — and to accept that a dialogue model
+    #: got the data wrong: on Fairwater it wrote "All tracks complete" over a
+    #: construction track that had reached nothing, and named a utility and a permit
+    #: process that appear nowhere in the data. `thinking`, `reasoning_effort` and
+    #: `enable_thinking` were all accepted by MiniMax and all silently ignored, so
+    #: there was no other lever.
     #:
-    #:     MiniMax-M3               46.6s, and returned nothing at all
-    #:     MiniMax-M2.5-highspeed   17.9s
-    #:     MiniMax-M2.7             16.0s
-    #:     MiniMax-M2.7-highspeed   15.5s
-    #:     MiniMax-M2.1-highspeed   12.5s
-    #:     MiniMax-M2               12.4s
-    #:     M2-her                    2.7s   <- this, and it does not think
+    #: DeepSeek honours `thinking: {"type": "disabled"}`, so the fast path is now
+    #: the *same* model as everything else with reasoning switched off at request
+    #: time, and the accuracy trade is gone. Kept as a setting because the fast
+    #: path's model is still a legitimate thing to want to change independently.
     #:
-    #: Note that plain `MiniMax-M2` beats every `-highspeed` variant. "Highspeed"
-    #: is output tokens per second, and this job emits ~70 words after a fixed slab
-    #: of reasoning, so throughput is the one thing that barely matters. Only
-    #: removing the reasoning changes the number, and only `M2-her` does that.
+    #: Two things outside this setting still bound the reply, and both still earn
+    #: their place: the prompt asks for an `[[END]]` sentinel and `overview.RUNAWAY`
+    #: cuts the stream there.
+    deepseek_fast_model: str = "deepseek-v4-flash"
+
+    #: Send `response_format={"type": "json_object"}` on the JSON-returning calls.
     #:
-    #: Three things make `M2-her` usable, and all three live outside this setting:
-    #: the prompt asks for an `[[END]]` sentinel (the API's own `stop` parameter is
-    #: accepted and ignored), `overview.RUNAWAY` cuts the stream there, and
-    #: `MODEL_TOKEN_CAP` clamps the budget to the 2048 it accepts. Without them it
-    #: writes 756-982 words against a 110-word instruction, repeats itself under
-    #: "Final answer (last round)", and narrates its own word count. With them:
-    #: 65 words on average, nothing leaking.
-    #:
-    #: **Known cost of this choice.** `M2-her` is built for dialogue, and it
-    #: sometimes gets the data wrong in a way `MiniMax-M2` did not. On Fairwater —
-    #: construction track `nothing reached`, the other four passed — it wrote "All
-    #: tracks complete; construction the last to finish", inverting the most
-    #: informative field in the row. It has also named a utility and a permit
-    #: process that appear nowhere in the data ("WEPCO", "Wind chill plant
-    #: licensing is pending") and written phrases that mean nothing ("Major capex
-    #: is confirmed via gas"). The behaviour is variable: four consecutive runs on
-    #: that same row came back clean.
-    #:
-    #: This is a deliberate trade, made with the failure measured rather than
-    #: assumed — the panel is labelled as a model's reading, is never stored, and
-    #: cannot move confidence, so a wrong briefing is a wrong *opinion* beside
-    #: correct cited values rather than a wrong value. `TRACKER_MINIMAX_FAST_MODEL`
-    #: = `MiniMax-M2` buys the accuracy back for about ten seconds a row.
-    #:
-    #: Thinking cannot be switched off on the others: `thinking`,
-    #: `reasoning_effort` and `enable_thinking` are all accepted by the API and all
-    #: ignored, and an assistant prefill of `</think>` does not suppress it.
-    #: Shrinking the prompt does not help either — measured with the provenance
-    #: quotes stripped, 1300 fewer characters moved the first word by less than the
-    #: run-to-run noise.
-    minimax_fast_model: str = "M2-her"
+    #: Off by default, and the default is the recommendation. DeepSeek's own docs
+    #: attach two conditions to JSON mode: the prompt must contain the word `json`,
+    #: and the endpoint "has a probability of returning empty content". This
+    #: codebase already enforces the JSON contract in `tracker.llm` by parse →
+    #: repair → validate → retry, which recovers from prose-wrapped JSON but cannot
+    #: recover from an empty reply. Turning this on trades a failure we handle for
+    #: one we do not, so it stays a measured experiment rather than a default.
+    deepseek_json_mode: bool = False
 
     # --- Web search ------------------------------------------------------------
     # Which backend `tracker search` and `tracker enrich` use: "auto" picks the
@@ -264,7 +257,7 @@ class Settings(BaseSettings):
         return chosen if chosen.is_absolute() else (find_project_root() / chosen).resolve()
 
     def has_api_key(self) -> bool:
-        return bool(self.minimax_api_key and self.minimax_api_key.get_secret_value().strip())
+        return bool(self.deepseek_api_key and self.deepseek_api_key.get_secret_value().strip())
 
     def has_google_keys(self) -> bool:
         return bool(
