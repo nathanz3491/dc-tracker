@@ -211,7 +211,6 @@ def missing_vendor() -> list[str]:
         "vendor/meridian/_ds_bundle.js",
         "vendor/dc-map.js",
         "vendor/dc-map3d.js",
-        "vendor/dc-campus.js",
     )
     return [name for name in required if not (STATIC_ROOT / name).is_file()]
 

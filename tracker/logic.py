@@ -915,6 +915,16 @@ def why_decided(
     if decided_by == "credibility":
         return f"{winner_type} (weight {winner_weight}) beats {loser_type} (weight {loser_weight})"
     if decided_by == "recency":
+        # Same-day fetches print the same date twice, which reads as a typo and
+        # hides the real answer: the two were crawled minutes apart and the clock
+        # decided a contested figure. Say that instead — it is the case an operator
+        # most needs to distrust, and Hyperion's $10B is exactly it.
+        if _day(winner_fetched) == _day(loser_fetched):
+            return (
+                "same credibility and both read on "
+                f"{_day(winner_fetched)}; settled by which was crawled last, "
+                "which is arbitrary with respect to the truth"
+            )
         return (
             f"same credibility; kept the newer reading "
             f"({_day(winner_fetched)} over {_day(loser_fetched)})"
