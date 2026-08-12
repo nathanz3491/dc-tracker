@@ -29,11 +29,20 @@ corrupt data is a generic "Phase 1" from two different campuses colliding on one
 key and summing their megawatts. Hence `parent`, the `generic` flag, and excluding
 an unplaceable block from the rollup rather than guessing where it belongs.
 
-**The rollup only ever raises.** `reconcile` may lift a project scalar or fill a
-null; it may never lower one or blank one. A block sum is a *floor* on the campus
-and a cited campus total is a different, also-valid figure, so the larger wins.
-That is what makes this safe to turn on over 227 existing rows: a project with no
-blocks is untouched, and the "9 of 12" count can only go up.
+**The rollup fills, and never overwrites.** `reconcile` may fill a null scalar; it
+may not change one that holds a value. A project with no blocks is untouched, so
+this stayed safe to turn on over 227 existing rows and the "9 of 12" count can
+only go up.
+
+It used to *raise* `mw_planned` to the block sum as well, on the reasoning that a
+block sum is a floor on the campus. **That holds only if the blocks partition the
+campus, and they routinely do not** — generation belonging to the utility, a
+whole-campus figure filed as a sibling tranche, and a milestone repeating capacity
+already listed all break it, and Hyperion had all three at once. Summed, they made
+`mw_planned` 14,462 MW against the 5,000 that seven sources cite and that the
+merge engine had already resolved correctly. A sum above the cited figure is still
+worth knowing, so it is disclosed rather than acted on: either something is
+double-counted or the cited figure is stale, and arithmetic cannot say which.
 """
 
 from __future__ import annotations
@@ -315,6 +324,68 @@ def is_type_word_only(label: str) -> bool:
     return block_key(label).generic
 
 
+#: Words that mark a named thing as GENERATING or DELIVERING power rather than
+#: consuming it. Taken from the vocabulary `prompts/_industry.txt` §2 enumerates,
+#: so the prompt that refuses to emit these as blocks and the rollup that refuses
+#: to count them cite one list.
+#:
+#: These belong to the utility, not the operator, and they are measured in a
+#: different kind of megawatt — a plant's nameplate output against a data center's
+#: IT load. Generation to serve a site is normally LARGER than the load: gas runs
+#: 1.1-1.5x for reserve margin, solar 3-4x because it produces about a quarter of
+#: nameplate over a year.
+_GENERATION_WORDS: Final[frozenset[str]] = frozenset(
+    {
+        "battery",
+        "bess",
+        "ccct",
+        "ccgt",
+        "generating",
+        "generation",
+        "grid",
+        "interconnection",
+        "nuclear",
+        "plant",
+        "plants",
+        "powerplant",
+        "ppa",
+        "solar",
+        "storage",
+        "substation",
+        "transmission",
+        "turbine",
+        "turbines",
+        "uprate",
+        "uprates",
+        "wind",
+    }
+)
+
+
+def is_generation(label: str | None, parent: str | None = None) -> bool:
+    """Whether a block names generation or grid plant rather than data center.
+
+    Hyperion (#10) recorded 5,962 MW of Entergy's gas plants, solar farm and
+    generating facilities as tranches of the campus, and `rollup` summed them into
+    `mw_planned` alongside the data halls. Two different quantities were added
+    together and the result — 14,462 MW — was published as the size of a data
+    center, roughly three times the largest campus announced anywhere.
+
+    A predicate rather than a stored `kind` column, deliberately: a column needs a
+    migration, cannot be backfilled without re-reading every article, and would be
+    a derived judgement frozen into a cache — which is how caches drift. This reads
+    the label the article itself used, every time.
+
+    `parent` is checked too because a bare "Unit 1" under a parent named for a
+    power station is the station's unit, not the campus's.
+    """
+    words = set()
+    for text in (label, parent):
+        if text:
+            words.update(part.strip(".,()") for part in str(text).lower().split())
+    return bool(words & _GENERATION_WORDS)
+
+
 # --- merge policy ------------------------------------------------------------
 
 #: How to pick one value when two sources describe the same block differently.
@@ -369,6 +440,7 @@ RESIDUAL_REASONS: Final[tuple[str, ...]] = (
     "unconfirmed",
     "unplaceable",
     "unitemised",
+    "generation",
     "overlap",
     "out_of_scale",
 )
@@ -387,6 +459,7 @@ _RESIDUAL_NOTES: Final[dict[str, str]] = {
     "unconfirmed": "stated, but no quote in the article names that tranche",
     "unplaceable": "names a phase without saying of which facility",
     "unitemised": "no source breaks this part of the campus down",
+    "generation": "a utility's plant, not the data center — generation is a different megawatt",
     "overlap": "tranches sum past the cited campus total — probably one described twice",
     "out_of_scale": "larger than the whole campus — almost always kilowatts read as megawatts",
 }
@@ -452,6 +525,13 @@ def account(project: Any) -> Accounting:
     wants another article, `overlap` wants two tranches merged.
     """
     blocks = list(getattr(project, "blocks", ()) or ())
+    # Generation is split off first, exactly as `rollup` does, and then reported as
+    # its own residual. Dropping it silently would leave the reader looking at a
+    # campus figure with 5,962 MW of gas plants and solar unaccounted for and no
+    # line saying where they went — and this module's whole discipline is that
+    # nothing leaves the arithmetic without being named.
+    generation = [b for b in blocks if is_generation(b.label, getattr(b, "parent", None))]
+    blocks = [b for b in blocks if b not in generation]
     usable = placeable(blocks)
     unplaced = [b for b in blocks if b not in usable]
 
@@ -487,6 +567,7 @@ def account(project: Any) -> Accounting:
     for reason, group in (
         ("unconfirmed", unconfirmed),
         ("unplaceable", unplaceable_blocks),
+        ("generation", running(generation)),
         ("out_of_scale", rejected),
     ):
         if group:
@@ -571,6 +652,10 @@ class Rollup:
     uncited: tuple[str, ...] = ()
     #: Every distinct customer the blocks name, largest first, for disclosure.
     customers: tuple[tuple[str, float], ...] = ()
+    #: Blocks naming generation or grid plant, excluded from the sums because they
+    #: are a utility's megawatts and not the data center's. Kept so `account` can
+    #: name them on screen rather than dropping them silently.
+    generation: tuple[str, ...] = ()
 
 
 def placeable(blocks: list[Any], *, families: int | None = None) -> list[Any]:
@@ -615,6 +700,15 @@ def rollup(blocks: list[Any]) -> Rollup:
 
     usable = placeable(blocks)
     skipped = tuple(b.block_key for b in blocks if b not in usable)
+
+    # Generation comes out before anything is summed. A gas plant built to serve
+    # the campus is real, cited, and placeable — it fails none of the other floor
+    # rules — and it is still not the data center's capacity.
+    generation = tuple(
+        b.block_key for b in usable if is_generation(b.label, getattr(b, "parent", None))
+    )
+    usable = [b for b in usable if b.block_key not in set(generation)]
+
     counted = [b for b in usable if mw_is_confirmed(b)]
     uncited = tuple(b.block_key for b in usable if not mw_is_confirmed(b) and b.mw)
     live = [b for b in counted if b.status in BLOCK_LIVE]
@@ -628,7 +722,10 @@ def rollup(blocks: list[Any]) -> Rollup:
             by_customer[block.customer] = by_customer.get(block.customer, 0.0) + (block.mw or 0.0)
     ranked = tuple(sorted(by_customer.items(), key=lambda kv: (-kv[1], kv[0])))
 
-    statuses = [b.status for b in blocks]
+    # Generation excluded here too: a utility energising its own gas plant is not
+    # the data center coming online, and letting it set the campus phase is one of
+    # the ways Hyperion came to read `operational` while nothing was built.
+    statuses = [b.status for b in blocks if b.block_key not in set(generation)]
     phase = None
     if statuses:
         # Terminal only when *every* block is terminal: a cancelled phase 3 must
@@ -652,6 +749,7 @@ def rollup(blocks: list[Any]) -> Rollup:
         unplaceable=skipped,
         uncited=uncited,
         customers=ranked,
+        generation=generation,
     )
 
 
@@ -872,14 +970,34 @@ def rebuild(session: Any, project: Any) -> int:
 
 
 def reconcile(project: Any) -> list[str]:
-    """Raise the project's scalars to what its blocks support. Returns disclosures.
+    """Fill the project's scalars from its blocks where they are empty. Disclosures.
 
-    **Monotone: it may raise a value or fill a null, never lower one or blank one.**
-    That is the guarantee which makes this safe to turn on over an existing
-    database. A project with no blocks is untouched, so the 227 rows that predate
-    this are unaffected and the "9 of 12" count can only go up. A block sum is a
-    *floor* on the campus; a cited campus total is a different, also-valid figure,
-    so the larger of the two wins.
+    **It may fill a null, never overwrite a value.** That is the guarantee which
+    makes this safe over an existing database: a project with no blocks is
+    untouched, so rows predating this are unaffected and the "9 of 12" count can
+    only go up.
+
+    It used to *raise* a non-null `mw_planned` to the block sum as well, on the
+    reasoning that "a block sum is a floor on the campus". **That reasoning holds
+    only if the blocks partition the campus, and they routinely do not.** Three
+    ways they break it, all three present on Hyperion (#10) at once:
+
+    * generation and grid plant, which belong to the utility and are a different
+      quantity — 5,962 MW of it (now excluded by `is_generation` upstream);
+    * a whole-campus restatement stored as a sibling tranche, so the campus was
+      counted once as itself and again as its own "Phase 3" (5,000 MW);
+    * a milestone target repeating capacity already listed under another name
+      (1,500 MW "by the end of 2027", which is Phase 1 again).
+
+    Summed, those made `mw_planned` 14,462 MW against a figure seven sources cite
+    as 5,000 — and the merge engine had already resolved 5,000 correctly from the
+    claims. `reconcile` was the only thing overwriting it, and it did so *after*
+    an `audit` action had cleared the same bad figure, which is how the repair came
+    undone and the detector was muzzled.
+
+    A block sum above a cited campus total is still worth knowing, so it is
+    disclosed rather than acted on: something is either double-counted or the cited
+    figure is stale, and neither is a question arithmetic can settle.
     """
     if not project.blocks:
         return []
@@ -889,13 +1007,14 @@ def reconcile(project: Any) -> list[str]:
     got = rollup(list(project.blocks))
     notes: list[str] = []
 
-    if got.mw_planned is not None and (project.mw_planned or 0) < got.mw_planned:
-        was = project.mw_planned
-        project.mw_planned = got.mw_planned
-        if was:
+    if got.mw_planned is not None:
+        if project.mw_planned is None:
+            project.mw_planned = got.mw_planned
+        elif got.mw_planned > project.mw_planned:
             notes.append(
-                f"blocks total {got.mw_planned:g} MW, above the cited campus figure "
-                f"of {was:g} MW; raised mw_planned"
+                f"blocks total {got.mw_planned:g} MW, above the cited campus figure of "
+                f"{project.mw_planned:g} MW; kept the cited figure — the tranches "
+                "either double-count or the campus figure is stale"
             )
 
     if got.mw_built is not None and (project.mw_built or 0) < got.mw_built:
@@ -923,6 +1042,13 @@ def reconcile_notes(got: Rollup) -> list[str]:
     Every caller that shows a capacity owes the reader both.
     """
     notes: list[str] = []
+
+    if got.generation:
+        notes.append(
+            f"{len(got.generation)} block(s) name generation or grid plant "
+            f"({', '.join(got.generation)}); that is a utility's capacity, measured "
+            "differently, and is not counted toward this campus"
+        )
 
     if len(got.customers) > 1:
         named = ", ".join(f"{name} ({mw:g} MW)" for name, mw in got.customers)
@@ -963,6 +1089,7 @@ __all__ = [
     "block_key",
     "blocks_by_key",
     "furthest_status",
+    "is_generation",
     "is_type_word_only",
     "itemisation",
     "label_tokens",

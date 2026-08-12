@@ -324,9 +324,13 @@ def resolve_field(field_name: str, claims: list[_Claim], existing: Any) -> Any:
     return _resolve(field_name, claims, existing)
 
 
-def _resolve(field_name: str, claims: list[_Claim], existing: Any) -> Any:
+def _resolve(
+    field_name: str, claims: list[_Claim], existing: Any, *, ratchet: bool = True
+) -> Any:
     """Apply the *field's* policy to choose one value. Thin wrapper over `resolve`."""
-    return resolve(FIELD_POLICY.get(field_name, Policy.PREFER_WEIGHT), claims, existing)
+    return resolve(
+        FIELD_POLICY.get(field_name, Policy.PREFER_WEIGHT), claims, existing, ratchet=ratchet
+    )
 
 
 def resolve(
@@ -337,6 +341,7 @@ def resolve(
     rank: dict[str, int] | None = None,
     terminal: tuple[str, ...] = PHASE_TERMINAL,
     default: Any = None,
+    ratchet: bool = True,
 ) -> Any:
     """Apply a merge policy to choose one value.
 
@@ -383,6 +388,7 @@ def resolve(
             rank=rank or _PHASE_RANK,
             terminal=terminal,
             default=default if default is not None else DEFAULT_PHASE,
+            ratchet=ratchet,
         )
 
     # PREFER_WEIGHT: claims are pre-sorted by (weight, recency).
@@ -396,6 +402,7 @@ def _resolve_ladder(
     rank: dict[str, int],
     terminal: tuple[str, ...],
     default: Any,
+    ratchet: bool = True,
 ) -> Any:
     """Furthest along a progression, but a terminal state always wins.
 
@@ -405,13 +412,29 @@ def _resolve_ladder(
 
     Parameterised so a block's status ladder reuses it: same argument, different
     rungs.
+
+    `ratchet` folds the value already on the row into the comparison, so an
+    incremental upsert cannot let one thin new source drag a well-established
+    project backwards. **`recompute_from_sources` turns it off**, and the reason is
+    in that function's own docstring: it derives the row from the complete set of
+    citations rather than from whatever either row happened to be carrying. A full
+    recompute is not a thin new source, so the guard has nothing to protect and the
+    stored value stops being self-justifying.
+
+    Without that, `phase` can only ever climb. Hyperion (#10) read `operational`
+    because a single Instagram post said so — a claim the evidence gate had already
+    marked 待确认, which `resolve` discards outright whenever any confirmed claim
+    exists. The confirmed claims say `construction`, `resolve` returns
+    `construction` from them, and the row still said `operational` for weeks
+    because nothing could lower it. It cannot flap, either: a recompute is a
+    deterministic function of the claim set.
     """
     stopped = [c for c in claims if c.value in terminal]
     if stopped:
         # Claims are sorted strongest-and-newest first.
         return stopped[0].value
     ranked = [c.value for c in claims if c.value in rank]
-    if existing in rank:
+    if ratchet and existing in rank:
         ranked.append(existing)
     if not ranked:
         return existing or default
@@ -741,7 +764,11 @@ def upsert_record(session: Session, rec: IngestRecord, *, force_new: bool = Fals
         if name in DERIVED_FIELDS:
             continue
         current = getattr(project, name)
-        chosen = _resolve(name, by_field.get(name, []), current)
+        # `ratchet=False`: this function re-derives from the complete claim set, so
+        # the value the row happens to be carrying gets no vote. It is what lets
+        # `phase` come back DOWN when nothing confirmed supports it any more —
+        # otherwise a single unquoted "operational" is permanent.
+        chosen = _resolve(name, by_field.get(name, []), current, ratchet=False)
         if chosen is not None:
             chosen = _coerce_like(chosen, current if current is not None else _template_for(name))
         if name == "state" and isinstance(chosen, str):
@@ -1189,7 +1216,12 @@ def recompute_from_sources(session: Session, project: Project) -> list[str]:
         if name in DERIVED_FIELDS:
             continue
         current = getattr(project, name)
-        chosen = _resolve(name, by_field.get(name, []), current)
+        # `ratchet=False`: this function re-derives from the complete claim set, so
+        # the value the row happens to be carrying gets no vote. That is what lets
+        # `phase` come back DOWN when nothing confirmed supports it any more —
+        # otherwise one unquoted "operational" is permanent, which is how Hyperion
+        # (#10) reported a never-powered site as running for weeks.
+        chosen = _resolve(name, by_field.get(name, []), current, ratchet=False)
         if chosen is not None:
             chosen = _coerce_like(chosen, current if current is not None else _template_for(name))
         if name in {"state", "country"} and isinstance(chosen, str):

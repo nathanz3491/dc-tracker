@@ -417,7 +417,19 @@ def test_reconcile_never_lowers_a_cited_campus_total(session):
     assert row.mw_planned == 1000.0, "the cited campus total must survive"
 
 
-def test_reconcile_raises_a_total_the_blocks_exceed(session):
+def test_reconcile_discloses_a_total_the_blocks_exceed_but_keeps_the_cited_one(session):
+    """A block sum above the cited campus figure is a QUESTION, not an answer.
+
+    This asserted the opposite until Hyperion (#10) showed what the old rule does
+    to a real row: gas plants, a whole-campus restatement filed as "Phase 3", and
+    a milestone repeating Phase 1's capacity summed to 14,462 MW, `reconcile`
+    wrote that over a cited 5,000, and it did so *after* an audit action had
+    already cleared the same bad figure.
+
+    "A block sum is a floor on the campus" holds only if the blocks partition the
+    campus. When they do not, the sum is evidence of double-counting — so it is
+    disclosed and the cited figure stands.
+    """
     from tracker import blocks as blocks_mod
     from tracker.models import CapacityBlock, Project
 
@@ -436,8 +448,98 @@ def test_reconcile_raises_a_total_the_blocks_exceed(session):
     session.flush()
 
     notes = blocks_mod.reconcile(row)
+    assert row.mw_planned == 100.0, "the cited figure stands"
+    assert any("kept the cited figure" in n for n in notes), notes
+
+
+def test_reconcile_still_fills_a_null_total(session):
+    """The half of the old behaviour that was right, and that keeps 9-of-12 rising."""
+    from tracker import blocks as blocks_mod
+    from tracker.models import CapacityBlock, Project
+
+    row = Project(
+        name="Unsized",
+        company="Meta",
+        city="Mesa",
+        state="AZ",
+        dedup_key="meta|unsized",
+        phase="construction",
+    )
+    for key, mw in (("p1", 150.0), ("p2", 150.0)):
+        row.blocks.append(CapacityBlock(block_key=key, label=key, mw=mw, status="planned"))
+    session.add(row)
+    session.flush()
+
+    blocks_mod.reconcile(row)
     assert row.mw_planned == 300.0
-    assert any("raised mw_planned" in n for n in notes)
+
+
+def test_generation_is_not_the_campus(session):
+    """A utility's gas plant is real, cited, placeable — and not a data center.
+
+    Hyperion carried 5,962 MW of Entergy's plant as tranches of the campus. Two
+    different quantities were added together: a plant's nameplate output and a
+    data center's IT load. Generation to serve a site is normally LARGER than the
+    load it serves, so this inflates rather than merely blurring.
+    """
+    from tracker import blocks as blocks_mod
+    from tracker.models import CapacityBlock, Project
+
+    row = Project(
+        name="With plant",
+        company="Meta",
+        city="Rayville",
+        state="LA",
+        dedup_key="meta|withplant",
+        phase="construction",
+    )
+    for key, label, mw in (
+        ("hall-1", "Phase 1", 500.0),
+        ("gas", "Franklin Farms Gas Plants", 2262.0),
+        ("solar", "Franklin Farms Solar", 1500.0),
+        ("sub", "Smalling Substation", 55.0),
+    ):
+        row.blocks.append(CapacityBlock(block_key=key, label=label, mw=mw, status="planned"))
+    session.add(row)
+    session.flush()
+
+    got = blocks_mod.rollup(list(row.blocks))
+    assert got.mw_planned == 500.0, "only the data hall counts"
+    assert set(got.generation) == {"gas", "solar", "sub"}
+
+    # Named on screen, not silently dropped: the module's own discipline is that
+    # nothing leaves the arithmetic without a line saying where it went.
+    notes = blocks_mod.reconcile_notes(got)
+    assert any("generation or grid plant" in n for n in notes), notes
+
+    accounting = blocks_mod.account(row)
+    assert any(r.reason == "generation" for r in accounting.residuals)
+
+
+def test_a_utility_energising_its_own_plant_is_not_the_campus_going_live(session):
+    """One of the ways Hyperion came to read `operational` with nothing built."""
+    from tracker import blocks as blocks_mod
+    from tracker.models import CapacityBlock, Project
+
+    row = Project(
+        name="Plant live",
+        company="Meta",
+        city="Rayville",
+        state="LA",
+        dedup_key="meta|plantlive",
+        phase="construction",
+    )
+    row.blocks.append(
+        CapacityBlock(block_key="hall-1", label="Phase 1", mw=500.0, status="under_construction")
+    )
+    row.blocks.append(
+        CapacityBlock(block_key="gas", label="Gas Turbine 1", mw=800.0, status="serving")
+    )
+    session.add(row)
+    session.flush()
+
+    got = blocks_mod.rollup(list(row.blocks))
+    assert got.phase == "construction", "the serving gas turbine must not promote the campus"
 
 
 def test_a_customer_already_on_the_row_is_not_churned(session):
