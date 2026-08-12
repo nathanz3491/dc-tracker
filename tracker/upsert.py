@@ -164,6 +164,28 @@ def claim_value(raw: Any) -> Any:
     return raw
 
 
+#: Unconfirmed reasons that record a DECISION about a claim rather than a
+#: measurement of it, and so must outlive a re-read of the same article.
+#:
+#: Everything else in `vocab.UNCONFIRMED_REASONS` is re-derived from the page
+#: every time it is read — whether a quote was offered, whether it is really in the
+#: text, whether it states this value. `superseded` is not: the article has not
+#: changed, the world has. Re-crawling the page that reported $10B would otherwise
+#: clear the mark and hand the merge straight back to crawl order.
+DECIDED_REASONS: frozenset[str] = frozenset({"superseded"})
+
+
+def _carried_reasons(row: Source, claims: dict[str, Any]) -> dict[str, str]:
+    """Decisions already recorded on this source row, for fields it still claims."""
+    try:
+        existing = json.loads(row.unconfirmed_reasons or "{}")
+    except (TypeError, ValueError):
+        return {}
+    if not isinstance(existing, dict):
+        return {}
+    return {k: v for k, v in existing.items() if v in DECIDED_REASONS and k in claims}
+
+
 def _weight(source_type: str) -> int:
     return conf.SOURCE_WEIGHTS.get(source_type, 1)
 
@@ -324,9 +346,11 @@ def resolve_field(field_name: str, claims: list[_Claim], existing: Any) -> Any:
     return _resolve(field_name, claims, existing)
 
 
-def _resolve(field_name: str, claims: list[_Claim], existing: Any) -> Any:
+def _resolve(field_name: str, claims: list[_Claim], existing: Any, *, ratchet: bool = True) -> Any:
     """Apply the *field's* policy to choose one value. Thin wrapper over `resolve`."""
-    return resolve(FIELD_POLICY.get(field_name, Policy.PREFER_WEIGHT), claims, existing)
+    return resolve(
+        FIELD_POLICY.get(field_name, Policy.PREFER_WEIGHT), claims, existing, ratchet=ratchet
+    )
 
 
 def resolve(
@@ -337,6 +361,7 @@ def resolve(
     rank: dict[str, int] | None = None,
     terminal: tuple[str, ...] = PHASE_TERMINAL,
     default: Any = None,
+    ratchet: bool = True,
 ) -> Any:
     """Apply a merge policy to choose one value.
 
@@ -383,6 +408,7 @@ def resolve(
             rank=rank or _PHASE_RANK,
             terminal=terminal,
             default=default if default is not None else DEFAULT_PHASE,
+            ratchet=ratchet,
         )
 
     # PREFER_WEIGHT: claims are pre-sorted by (weight, recency).
@@ -396,6 +422,7 @@ def _resolve_ladder(
     rank: dict[str, int],
     terminal: tuple[str, ...],
     default: Any,
+    ratchet: bool = True,
 ) -> Any:
     """Furthest along a progression, but a terminal state always wins.
 
@@ -405,13 +432,29 @@ def _resolve_ladder(
 
     Parameterised so a block's status ladder reuses it: same argument, different
     rungs.
+
+    `ratchet` folds the value already on the row into the comparison, so an
+    incremental upsert cannot let one thin new source drag a well-established
+    project backwards. **`recompute_from_sources` turns it off**, and the reason is
+    in that function's own docstring: it derives the row from the complete set of
+    citations rather than from whatever either row happened to be carrying. A full
+    recompute is not a thin new source, so the guard has nothing to protect and the
+    stored value stops being self-justifying.
+
+    Without that, `phase` can only ever climb. Hyperion (#10) read `operational`
+    because a single Instagram post said so — a claim the evidence gate had already
+    marked 待确认, which `resolve` discards outright whenever any confirmed claim
+    exists. The confirmed claims say `construction`, `resolve` returns
+    `construction` from them, and the row still said `operational` for weeks
+    because nothing could lower it. It cannot flap, either: a recompute is a
+    deterministic function of the claim set.
     """
     stopped = [c for c in claims if c.value in terminal]
     if stopped:
         # Claims are sorted strongest-and-newest first.
         return stopped[0].value
     ranked = [c.value for c in claims if c.value in rank]
-    if existing in rank:
+    if ratchet and existing in rank:
         ranked.append(existing)
     if not ranked:
         return existing or default
@@ -450,7 +493,21 @@ def _conflict_notes(by_field: dict[str, list[_Claim]]) -> tuple[list[str], list[
             if scale:
                 spread = abs(float(best.value) - float(rival.value)) / scale
                 detail += f" [{spread:.0%} spread]"
-        lines.append(f"{NOTE_PREFIX} conflict {field_name}: {detail}; kept higher-weighted value")
+        # Say which rule actually settled it. This used to read "kept
+        # higher-weighted value" unconditionally, which is false whenever the two
+        # claims carry the same weight — the common case, since `government_doc`
+        # and `company_filing` are both 3. Hyperion's notes asserted credibility
+        # decided $10B over $50B when both sources were weight 3 and the tiebreak
+        # was crawl order. The notes are where an operator judges whether a value
+        # is trustworthy, so a wrong reason there is worse than no reason.
+        #
+        # Imported inside the function: `logic` imports this module, so a
+        # module-level import would close the cycle.
+        from tracker.logic import decision
+
+        policy = FIELD_POLICY.get(field_name, Policy.PREFER_WEIGHT)
+        _, why = decision(policy, best, rival, claims)
+        lines.append(f"{NOTE_PREFIX} conflict {field_name}: {detail}; {why}")
     return lines, fields
 
 
@@ -680,9 +737,20 @@ def upsert_record(session: Session, rec: IngestRecord, *, force_new: bool = Fals
         # the value it explains. Sorted for the same byte-identical re-ingest
         # reason as `claims`.
         why = {k: v for k, v in dict(sr.unconfirmed_reasons).items() if k in claims}
+        # `superseded` is an operator's decision about this claim, not a
+        # measurement of it, so it survives a re-crawl of the same URL. Everything
+        # else here is re-derived from the article and rightly overwritten — but
+        # re-reading the page that said $10B would otherwise silently un-supersede
+        # the figure and hand the merge back to crawl order.
+        carried = _carried_reasons(row, claims)
+        why = {**carried, **{k: v for k, v in why.items() if k not in carried}}
         row.unconfirmed_reasons = (
             json.dumps(why, sort_keys=True, ensure_ascii=False) if why else None
         )
+        if carried:
+            row.unconfirmed_fields = derive_fields(
+                {k: v for k, v in claims.items() if k in sr.unconfirmed or k in carried}
+            )
         # Sorted so a re-ingest of the same article writes byte-identical JSON and
         # the idempotence test keeps holding, exactly as `claims` above.
         row.quotes = (
@@ -727,7 +795,11 @@ def upsert_record(session: Session, rec: IngestRecord, *, force_new: bool = Fals
         if name in DERIVED_FIELDS:
             continue
         current = getattr(project, name)
-        chosen = _resolve(name, by_field.get(name, []), current)
+        # `ratchet=False`: this function re-derives from the complete claim set, so
+        # the value the row happens to be carrying gets no vote. It is what lets
+        # `phase` come back DOWN when nothing confirmed supports it any more —
+        # otherwise a single unquoted "operational" is permanent.
+        chosen = _resolve(name, by_field.get(name, []), current, ratchet=False)
         if chosen is not None:
             chosen = _coerce_like(chosen, current if current is not None else _template_for(name))
         if name == "state" and isinstance(chosen, str):
@@ -1175,7 +1247,12 @@ def recompute_from_sources(session: Session, project: Project) -> list[str]:
         if name in DERIVED_FIELDS:
             continue
         current = getattr(project, name)
-        chosen = _resolve(name, by_field.get(name, []), current)
+        # `ratchet=False`: this function re-derives from the complete claim set, so
+        # the value the row happens to be carrying gets no vote. That is what lets
+        # `phase` come back DOWN when nothing confirmed supports it any more —
+        # otherwise one unquoted "operational" is permanent, which is how Hyperion
+        # (#10) reported a never-powered site as running for weeks.
+        chosen = _resolve(name, by_field.get(name, []), current, ratchet=False)
         if chosen is not None:
             chosen = _coerce_like(chosen, current if current is not None else _template_for(name))
         if name in {"state", "country"} and isinstance(chosen, str):

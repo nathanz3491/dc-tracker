@@ -13,9 +13,19 @@ Three rules bound your answer.
 
 1. Reason only from what you are given, plus general knowledge of how US data
    center development works — interconnection queues, county zoning, transformer
-   lead times, PPA structures. Do NOT invent a fact about this project. If you
+   lead times, PPA structures. The industry context above, section 8 especially,
+   is the shape of that knowledge. Do NOT invent a fact about this project. If you
    believe the site is in an ERCOT queue, say that is an inference from its state
    and capacity, not that you read it somewhere.
+
+   You are asked which obstacle BINDS — the one that has to clear before the
+   project can advance — not which obstacles exist. A row may carry twenty
+   recorded concerns; naming the loudest, or the most recently added, is not an
+   answer. Reason about sequence: a campus that cannot get power in 2029 is not
+   really blocked by a 2032 tenant question, and a permit refused this month
+   outranks a concern nobody has acted on. If the recorded obstacles are all
+   watch-level commentary and nothing is actually stopping the work, say so with
+   low confidence rather than promoting one of them.
 
 2. Give a calibrated confidence. 0.9 means the reasoning is nearly forced by the
    facts given (a 1GW load in Northern Virginia announced last year is

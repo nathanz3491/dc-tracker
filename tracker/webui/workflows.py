@@ -174,6 +174,97 @@ WORKFLOWS: tuple[Workflow, ...] = (
         ),
     ),
     Workflow(
+        name="clean-free",
+        title="Raise rows to T1, free",
+        summary=(
+            "The whole cleanliness pass that costs nothing: no LLM, no network. "
+            "Reads blocks already cached, applies the repairs a comparison settles, "
+            "and scores every row before and after."
+        ),
+        steps=(
+            Step(
+                "duplicates",
+                because=(
+                    "First, because merging afterwards recomputes every field from the "
+                    "combined citations — so any work done on a row that is about to be "
+                    "folded away is work done twice."
+                ),
+                tolerate_failure=True,
+            ),
+            Step(
+                "backfill",
+                {"what": "blocks", "--limit": 150},
+                because=(
+                    "Before logic and audit, not after. Five logic rules gate on whether "
+                    "a campus has tranches at all, so running them on a blockless "
+                    "partly-live site tells an operator to fix correct data."
+                ),
+            ),
+            Step(
+                "logic resolve",
+                {"--auto": True, "--apply": True},
+                because=(
+                    "Re-derives every row that has drifted from its own sources, and "
+                    "answers the findings a date comparison settles. This is where a "
+                    "stuck `phase` comes back down and a bad campus total is recomputed."
+                ),
+            ),
+            Step(
+                "blocks",
+                because="Proposes the tranches that are one thing under several names.",
+                tolerate_failure=True,
+            ),
+            Step(
+                "clean",
+                {"--snapshot": True},
+                because=(
+                    "Records the tier histogram and the evidence census, so the next run "
+                    "can say what moved. `clean --since 1` is the diff."
+                ),
+                tolerate_failure=True,
+            ),
+        ),
+    ),
+    Workflow(
+        name="clean-paid",
+        title="Raise rows to T3, with a model",
+        summary=(
+            "The rungs that cost calls: settles implausible figures, reads articles "
+            "again to confirm obstacles, and puts the rest to a model. Run it after "
+            "clean-free, which removes most of the work for nothing."
+        ),
+        steps=(
+            Step(
+                "audit resolve",
+                {"--ask": False, "--llm": True},
+                because=(
+                    "Implausible figures first — they are the ones that poison totals, "
+                    "and the free arithmetic rung answers some without a call."
+                ),
+            ),
+            Step(
+                "risks confirm",
+                {"--limit": 50},
+                because=(
+                    "Needs the article cache, which is why `enrich` passing `cache_dir` "
+                    "had to be fixed first. An obstacle with no usable quote is counted "
+                    "in the exposure numbers and cannot be checked by a reader."
+                ),
+            ),
+            Step(
+                "logic resolve",
+                {"--llm": True, "--limit": 40},
+                because="Whatever the free rung could not answer, one call each.",
+            ),
+            Step(
+                "clean",
+                {"--snapshot": True},
+                because="The second snapshot. Compare with `clean --since 1`.",
+                tolerate_failure=True,
+            ),
+        ),
+    ),
+    Workflow(
         name="report",
         title="Prepare a report",
         summary=(

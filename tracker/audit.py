@@ -58,6 +58,18 @@ UNIT_RATIO_TOLERANCE = 0.15
 #: human eye before it deserves a place in a total.
 GIANT_UNCONFIRMED_MW = 1_000
 
+#: Below this, a campus's stated capex cannot pay for its stated capacity.
+#:
+#: A gigawatt-scale AI campus runs $8-15M per MW for buildings and power
+#: infrastructure alone. This sits at a third of the low end deliberately: it
+#: should fire on "superseded by five times" and stay silent on a merely cheap
+#: build. Hyperion's $10B over 5,000 MW is $2M/MW.
+_BUILD_COST_FLOOR_USD_PER_MW: Final = 3_000_000
+
+#: Only asked of campuses big enough for the industry figures to apply. A 20 MW
+#: colocation shell genuinely can cost less per MW than a liquid-cooled AI hall.
+_SUPERSEDED_MIN_MW: Final = 500
+
 
 @dataclass(frozen=True)
 class UnitFinding:
@@ -149,6 +161,31 @@ def check_project(project: Project, *, settings: Any = None) -> list[UnitFinding
                 "check which figure has the quote; the unquoted one is the suspect",
             )
 
+    # --- capex far below what the capacity costs to build ---------------------
+    #
+    # A gigawatt-scale AI campus costs $8-15M per MW for the buildings and power
+    # infrastructure alone (`prompts/_industry.txt` §4). A multi-GW site reported
+    # at a fifth of that is nearly always a SUPERSEDED figure — these projects are
+    # announced small and enlarged repeatedly, and the first number keeps
+    # circulating.
+    #
+    # `usd_per_mw_out_of_band` does not catch it: Hyperion's $10B over 5,000 MW is
+    # $2M/MW, comfortably inside that check's deliberately generous [$300k, $60M]
+    # band. The band is wide because it hunts unit misreads; this is a different
+    # question, so it gets its own check rather than a narrower band that would
+    # start firing on real small projects.
+    if project.investment_usd and mw and mw >= _SUPERSEDED_MIN_MW:
+        per_mw = project.investment_usd / mw
+        if per_mw < _BUILD_COST_FLOOR_USD_PER_MW:
+            add(
+                "investment_below_build_cost",
+                f"${per_mw / 1e6:.1f}M per MW (${project.investment_usd:,} over {mw:g} MW) "
+                f"— a campus this size costs $8-15M per MW to build, so this figure is "
+                "probably an early announcement the project has since outgrown",
+                "check the claim table for a later figure from the same publisher; "
+                "mark the old claim `superseded` rather than editing the field",
+            )
+
     # --- the H200 estimate disagreeing with its own input ---------------------
     # `h200_equivalent` is derived from capacity, so the pair can only disagree
     # when one moved and the other did not — which is how Applied Digital
@@ -195,7 +232,8 @@ def run(session: Session, *, project_ids: list[int] | None = None) -> list[UnitF
         "block_out_of_scale": 2,
         "giant_capacity_unconfirmed": 3,
         "usd_per_mw_out_of_band": 4,
-        "h200_disagrees_with_capacity": 5,
+        "investment_below_build_cost": 5,
+        "h200_disagrees_with_capacity": 6,
     }
     findings.sort(key=lambda f: (order.get(f.code, 9), f.project_id))
     return findings
@@ -373,16 +411,72 @@ def actions_for(code: str) -> tuple[Action, ...]:
     return (*ACTIONS.get(code, ()), DISMISS)
 
 
+#: One recorded decision: the code, and the sentence saying what it did.
+#:
+#: The character class is wider than any code in use. It costs nothing now and a
+#: code containing a digit would otherwise never match — silently, and only in the
+#: skip path, which is the hardest place to notice a regex that stopped working.
+_DECISION = re.compile(r"resolved `([a-z0-9_-]+)`: *([^\n]*)")
+
+#: An edit of one project scalar, in the shape every value-changing action writes:
+#: `mw_planned 13620 -> empty (no source states it)`, `investment_usd 10,000 ->
+#: empty`, `h200_equivalent 1,000 -> 2,000 (recomputed from capacity)`. A decision
+#: that is not an edit — a dismissal, `removed 2 milestone(s)`, `closed 3
+#: obstacle(s)` — deliberately does not match.
+_EDIT = re.compile(r"^([a-z][a-z0-9_]*) .+? -> ([^(—]+?)(?: *[(—]|$)")
+
+
+def _edit_still_holds(project: Project, field: str, expected: str) -> bool:
+    """Does the row still carry the value a decision recorded writing?
+
+    Conservative on anything it cannot read: an unparseable note leaves the code
+    settled. The failure this exists to catch is a *specific, parseable* revert,
+    and re-opening every question whose sentence we failed to parse would bury it.
+    """
+    if field not in {c.name for c in Project.__table__.columns}:
+        return True
+    current = getattr(project, field, None)
+    if expected.strip().lower() == "empty":
+        return current is None
+    if current is None:
+        return False
+    try:
+        return abs(float(str(current)) - float(expected.strip().replace(",", ""))) < 0.5
+    except (TypeError, ValueError):
+        return True
+
+
 def settled_codes(project: Project) -> set[str]:
-    """Finding codes already answered on this row, read back out of its notes.
+    """Finding codes already answered on this row *and still standing*.
 
     Decisions live in prose in `project.notes`, the one kind of note re-ingesting
     never erases — the same place `logic.record_decision` writes. That is why there
     is no `audit_decision` table: a column would need a migration, would have to be
     kept in step with merges, and would say less than the sentence does.
+
+    **A code is settled only while the edit that settled it survives.** Every action
+    in `ACTIONS` writes a project scalar or a block row, and both are caches that
+    `upsert.recompute_from_sources` and `upsert.recompute_blocks` re-derive from the
+    claim set. So an answered question can come *undone* — and answering by code
+    alone then muzzled the detector on exactly the rows where it had most recently
+    been right.
+
+    Observed on Hyperion (#10): a model cleared `mw_planned` 13,620 as uncited on
+    2026-08-09, `blocks.reconcile` raised it back to 14,462 from the tranche sum,
+    and `campus_exceeds_worlds_largest` — which fires on that value — was skipped
+    from then on. The row was the worst in the database and the check that would
+    have said so had been switched off by its own repair.
+
+    A dismissal is different and stays settled: it records a judgement that the
+    figure is right, not an edit that could be reverted.
     """
-    pattern = re.compile(r"resolved `([a-z_]+)`")
-    return set(pattern.findall(project.notes or ""))
+    settled: set[str] = set()
+    for code, what in _DECISION.findall(project.notes or ""):
+        edit = _EDIT.match(what.strip())
+        if edit and not _edit_still_holds(project, edit.group(1), edit.group(2)):
+            continue
+        settled.add(code)
+    return settled
 
 
 # --- Stage 1: the answers that are arithmetic ----------------------------------

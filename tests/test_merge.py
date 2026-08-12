@@ -325,3 +325,40 @@ def test_deleting_the_survivor_clears_its_aliases(session):
     session.flush()
 
     assert session.scalars(select(ProjectAlias)).all() == []
+
+
+def test_the_folded_rows_decisions_are_carried_to_the_survivor(session):
+    """Sources, milestones, obstacles and the identity all move. The record of what
+    somebody *decided* about the campus used to be the one thing left behind.
+
+    It matters beyond sentiment: `audit.settled_codes` reads that prose to know
+    which questions have been answered, so dropping it silently re-opens every one
+    of them — and `logic.record_decision` writes it unprefixed precisely so no
+    later ingest can erase it.
+    """
+    from tracker import audit
+
+    keep = _project(session, "Hyperion", "Meta")
+    dupe = _project(session, "Hyperion Data Center", "Meta Platforms")
+    audit.record(dupe, "campus_exceeds_worlds_largest", "left as it stands", by="operator")
+    session.flush()
+
+    merge_projects(session, keep.id, [dupe.id])
+
+    assert "campus_exceeds_worlds_largest" in audit.settled_codes(keep)
+    assert "carried from a merged row" in keep.notes, "an inherited decision says so"
+
+
+def test_generated_notes_are_not_carried(session):
+    """Only prose. `[tracker]` lines are a function of the current claims and
+    `[source:…]` lines belong to one ingest record — copying either onto the
+    survivor would assert something about the wrong row's citations."""
+    keep = _project(session, "Hyperion", "Meta")
+    dupe = _project(session, "Hyperion Data Center", "Meta Platforms")
+    dupe.notes = "[tracker] blocks total 14462 MW\n[source][abc123] extracted summary: x"
+    session.flush()
+
+    merge_projects(session, keep.id, [dupe.id])
+
+    assert "14462" not in (keep.notes or "")
+    assert "extracted summary" not in (keep.notes or "")

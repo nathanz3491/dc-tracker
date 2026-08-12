@@ -52,6 +52,7 @@ from typing import Any, Final
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from tracker.dedup import looks_like_county
 from tracker.models import Project
 from tracker.normalize import is_blank
 from tracker.tracks import RISK_TRACK, TRACK_MILESTONES, standing
@@ -178,29 +179,15 @@ class Collision:
         along unless somebody says it stopped. Reporting all of them as "the better
         source won" would be a plausible sentence and the wrong one.
         """
-        if self.decided_by == "confirmed":
-            return "the other value has no quote behind it"
-        if self.decided_by == "credibility":
-            return (
-                f"{self.winner_type} (weight {self.winner_weight}) "
-                f"beats {self.loser_type} (weight {self.loser_weight})"
-            )
-        if self.decided_by == "recency":
-            return (
-                f"same credibility; kept the newer reading "
-                f"({_day(self.winner_fetched)} over {_day(self.loser_fetched)})"
-            )
-        if self.decided_by == "largest":
-            return "built capacity only grows, so the largest cited figure wins"
-        if self.decided_by == "earliest":
-            return "first announced means the earliest anybody saw, whatever the source"
-        if self.decided_by == "furthest along":
-            return "the phase furthest along the progression wins"
-        if self.decided_by == "terminal":
-            return "a source saying it stopped overrides one saying it progressed"
-        if self.decided_by == "first seen":
-            return "identity fields are never overwritten once set; churn is worse than staleness"
-        return "identical credibility and date; settled on the source URL so the result is stable"
+        return why_decided(
+            self.decided_by,
+            winner_type=self.winner_type,
+            winner_weight=self.winner_weight,
+            loser_type=self.loser_type,
+            loser_weight=self.loser_weight,
+            winner_fetched=self.winner_fetched,
+            loser_fetched=self.loser_fetched,
+        )
 
     def as_json(self) -> dict[str, Any]:
         return {
@@ -786,6 +773,26 @@ def check_rules(project: Project) -> list[Finding]:
                 f"re-read {source.url}, or confirm the value in `tracker review`",
             )
 
+    # A county or parish name sitting in `city`.
+    #
+    # `city` is FILL_ONLY and identity fields skip the evidence gate, so a wrong
+    # one written at insert is permanent: no recompute, merge or re-extraction has
+    # ever been able to correct it. Hyperion (#10) has carried city="Richland
+    # Parish" since the day it was created. `crawl` now routes these at the
+    # boundary, but that only helps rows read from here on.
+    #
+    # The repair is key-neutral, which is why this one gets an action:
+    # `dedup.locality` already reads a county-suffixed `city` as county
+    # granularity, so moving it does not move `dedup_key` and cannot fork the row.
+    if project.city and looks_like_county(project.city):
+        add(
+            "city_holds_a_county_name",
+            WARNING,
+            f"city is {project.city!r}, which names a county or parish rather than a municipality",
+            ("city", "county"),
+            "move it to `county` — the dedup key already reads it that way, so nothing re-keys",
+        )
+
     return out
 
 
@@ -875,6 +882,83 @@ def check_collisions(project: Project) -> list[Collision]:
             )
         )
     return out
+
+
+def why_decided(
+    decided_by: str,
+    *,
+    winner_type: str = "",
+    winner_weight: int = 0,
+    loser_type: str = "",
+    loser_weight: int = 0,
+    winner_fetched: Any = None,
+    loser_fetched: Any = None,
+) -> str:
+    """A rule name rendered in the reader's terms, and it is not always credibility.
+
+    Only fields on the `prefer_weight` policy are settled by how good the source is
+    and how recent it is. Built capacity takes the largest figure because energised
+    megawatts only go up; the first-announced date takes the earliest because that
+    is what "first" means; the phase takes the furthest along unless somebody says
+    it stopped. Reporting all of them as "the better source won" would be a
+    plausible sentence and the wrong one.
+
+    Taken out of `Collision.why` so `upsert._conflict_notes` can say the same thing
+    in the row's own notes. It used to hardcode "kept higher-weighted value" there,
+    which was **false** whenever two equally-weighted sources disagreed — and that
+    is the common case, because `government_doc` and `company_filing` are both
+    weight 3. Hyperion's notes claimed credibility settled $10B over $50B when the
+    two sources were the same weight and crawl order decided it.
+    """
+    if decided_by == "confirmed":
+        return "the other value has no quote behind it"
+    if decided_by == "credibility":
+        return f"{winner_type} (weight {winner_weight}) beats {loser_type} (weight {loser_weight})"
+    if decided_by == "recency":
+        # Same-day fetches print the same date twice, which reads as a typo and
+        # hides the real answer: the two were crawled minutes apart and the clock
+        # decided a contested figure. Say that instead — it is the case an operator
+        # most needs to distrust, and Hyperion's $10B is exactly it.
+        if _day(winner_fetched) == _day(loser_fetched):
+            return (
+                "same credibility and both read on "
+                f"{_day(winner_fetched)}; settled by which was crawled last, "
+                "which is arbitrary with respect to the truth"
+            )
+        return (
+            f"same credibility; kept the newer reading "
+            f"({_day(winner_fetched)} over {_day(loser_fetched)})"
+        )
+    if decided_by == "largest":
+        return "built capacity only grows, so the largest cited figure wins"
+    if decided_by == "earliest":
+        return "first announced means the earliest anybody saw, whatever the source"
+    if decided_by == "furthest along":
+        return "the phase furthest along the progression wins"
+    if decided_by == "terminal":
+        return "a source saying it stopped overrides one saying it progressed"
+    if decided_by == "first seen":
+        return "identity fields are never overwritten once set; churn is worse than staleness"
+    return "identical credibility and date; settled on the source URL so the result is stable"
+
+
+def decision(policy, winner, rival, claims) -> tuple[str, str]:
+    """The rule that settled a field, and why, from the claims themselves.
+
+    The public pair. Every surface that reports a contested field must ask this
+    rather than re-derive it: the first version of `check_collisions` re-derived the
+    ordering and reported 73 rows as drifted when none had.
+    """
+    code = _decided_by(policy, winner, rival, claims)
+    return code, why_decided(
+        code,
+        winner_type=winner.source_type,
+        winner_weight=winner.weight,
+        loser_type=rival.source_type,
+        loser_weight=rival.weight,
+        winner_fetched=winner.fetched_at,
+        loser_fetched=rival.fetched_at,
+    )
 
 
 def _decided_by(policy, winner, rival, claims) -> str:
@@ -1308,6 +1392,21 @@ def _drop_future_milestones(session: Session, project: Project, _f: Finding) -> 
     return f"removed {len(doomed)} milestone(s) dated in the future"
 
 
+def _move_city_to_county(_s: Session, project: Project, _f: Finding) -> str:
+    """Put a parish name where it belongs, without moving the dedup key.
+
+    Safe precisely because `dedup.locality` already treats a county-suffixed
+    `city` as county granularity — so the row's identity is unchanged and no
+    lookup starts missing. `ck_project_locality` holds because the value lands in
+    `county` rather than being dropped.
+    """
+    was = project.city
+    if not project.county:
+        project.county = was
+    project.city = None
+    return f"city {was!r} -> empty (moved to county {project.county!r})"
+
+
 def _raise_planned_to_built(_s: Session, project: Project, _f: Finding) -> str:
     was, project.mw_planned = project.mw_planned, project.mw_built
     return f"mw_planned {was} -> {project.mw_planned} (plan revised up to what is built)"
@@ -1371,6 +1470,49 @@ def _resolve_finished_obstacles(session: Session, project: Project, _f: Finding)
 #: offered they can only be verified or skipped, which is the honest set of
 #: choices until `capacity_block` lands and the rules are re-expressed per block.
 #: See the plan: those rules are then either per-block or retired.
+def free_answer(project: Project, finding: Finding) -> tuple[str, str] | None:
+    """The action an unattended run may apply without asking, and why.
+
+    Sibling of `audit.free_answer`, and held to the same bar: an answer qualifies
+    only when it is a **read of data already stored**, never a judgement about
+    which of two sourced figures to believe. A tool that guesses at the second is
+    manufacturing facts, which is the failure the whole evidence model exists to
+    prevent.
+
+    Three codes clear it, and between them they are most of the resolvable findings
+    in the database — which is what makes a whole-corpus pass affordable rather
+    than a model call per finding.
+
+    Deliberately not extended further. Every other resolvable code asks which
+    source to trust, and `audit.free_answer`'s own comment makes the same point
+    about its three cases.
+    """
+    if finding.code == "obstacle_on_a_finished_track":
+        # Whether a track's last milestone is reached is read off `event` rows that
+        # already carry their own dates and citations. No opinion enters.
+        return "r", (
+            "a track whose final milestone is reached cannot still be blocked by "
+            "an obstacle to reaching it — the track state is read, not judged"
+        )
+    if finding.code == "milestone_in_the_future":
+        # A date comparison. `tracks.standing` already refuses to count these as
+        # reached; this removes the rows so the two surfaces agree.
+        return "d", (
+            "an event dated after today has not happened yet, which is a comparison "
+            "rather than an opinion about the source"
+        )
+    if finding.code == "city_holds_a_county_name":
+        # A string test — does the name end in County, Parish, Borough — and a
+        # repair that provably cannot fork the row: `dedup.locality` already reads
+        # such a value as county granularity, so `dedup_key` is unchanged. No
+        # source is judged and no identity moves.
+        return "m", (
+            "a name ending in County or Parish is not a municipality, and moving it "
+            "leaves the dedup key untouched because it was already read that way"
+        )
+    return None
+
+
 ACTIONS: Final[dict[str, tuple[Action, ...]]] = {
     # No action: the phase and the milestone disagree because one enum is being
     # asked to describe a campus that is partly live. Neither side is wrong.
@@ -1386,6 +1528,9 @@ ACTIONS: Final[dict[str, tuple[Action, ...]]] = {
     # Clearing a stale date is still honest. Declaring the campus operational
     # because one phase's date passed is not.
     "past_its_own_date": (Action("c", "that date is stale — clear it", _clear_expected_online),),
+    "city_holds_a_county_name": (
+        Action("m", "move it to county — the dedup key does not change", _move_city_to_county),
+    ),
     # No action: "no source says any of it is built" is a gap to fill, not a
     # licence to assert the whole plan is energised.
     "operational_without_built_capacity": (),

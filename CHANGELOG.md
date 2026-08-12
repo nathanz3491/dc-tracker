@@ -12,6 +12,228 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **`tracker clean`** (`tracker/clean.py`, `tests/test_clean.py`). Four tiers —
+  SOURCED, SOUND, COMPLETE, SETTLED — composed from the detectors that already
+  exist, reimplementing none. T1 is the bar worth chasing: the numbers this tool
+  publishes are sums, so an incomplete row makes a total smaller while a row with
+  an implausible figure makes it wrong. `--project N` prints the exact command
+  that fixes each failure; `--plan` orders the worklist closest-first;
+  `--snapshot`/`--since` keep a time series in `data/runs/clean.jsonl`, because
+  the one thing a column cannot be is a time series. About seven seconds over the
+  whole database, which is why nothing is cached and no ledger table exists.
+
+  Two definitional choices carry it. `NOT_APPLICABLE` counts as complete — a
+  12-of-12 bar failed 97% of rows — and 待确认 counts as *backed*, since the gate
+  declaring it could not confirm a value is the gate working. A calibration test
+  says that if a fully-answered row cannot reach T3, the definition is wrong
+  rather than the row.
+
+- **`logic.free_answer`**, mirroring `audit.free_answer`. Three codes qualify —
+  obstacles on a finished track, milestones dated in the future, and a county name
+  in `city` — because each is a *read of stored data* rather than a judgement
+  about which source to trust. On the live database it answered **285 findings
+  with no model and no decision**. `logic resolve` also gained the settled-code
+  skip `audit resolve` has always had, so it stops re-offering every finding
+  every run, and `--again` to see them anyway.
+
+- **`clean-free` and `clean-paid` console workflows**, split because
+  `needs_confirmation` is per-workflow and the free routine must not demand a
+  money confirmation. Each step's `because` records why the order is what it is —
+  duplicates before enrichment, blocks before the rules that gate on them,
+  re-extraction only after every prompt and code fix has landed.
+
+- **Every prompt now knows what a data center is** (`tracker/prompts/_industry.txt`,
+  prepended to all eleven system messages). Reading Hyperion — 59 sources, the
+  most heavily cited row we have — found `mw_planned` at 15,962 MW, `phase` at
+  `operational` on a site that has never been powered, and `investment_usd` at
+  $10B against 5 GW. The prompts were not missing rules: `extract-v1` already said
+  `mw_planned` "is NOT the capacity of a power plant, solar farm or substation
+  built to serve it". Nothing told the model how big a campus can be or what a
+  gigawatt costs, so no rule had anything to bite on.
+
+  Eight sections of durable background: the campus/building/hall hierarchy; IT
+  load versus generating capacity, with the vocabulary that marks which is which;
+  the five other things a dollar figure in these articles is usually about; a
+  plausibility envelope in orders of magnitude; operator versus utility versus EPC
+  versus financier; the lifecycle phrases misread as "running"; how a project is
+  restated upward over years; and what actually obstructs one.
+
+  **Background for judgement, never a source of values** — stated in the block and
+  again in extraction's first rule, because a model answering *from* it would fill
+  capacity with industry averages and clear the evidence gate while doing so.
+  Prepended rather than appended so per-prompt rules come last and win.
+
+  Its bytes are folded into every prompt's SHA-1. `extract-v1@4ea77aad` has to
+  identify the whole system message, and a shared file that could change
+  underneath the hash would reintroduce exactly the failure the stamp exists to
+  prevent. `available()` hides the partial; a missing one degrades to the old
+  behaviour with a warning rather than taking down every command that loads a
+  prompt. New `tests/test_prompts.py` covers all of it.
+
+  Alongside it, the rule each defect actually needed: three things that are never
+  capacity blocks (generation and grid assets, the campus itself, a milestone) and
+  that phase figures are cumulative rather than additive; a definition of
+  `mw_built` that distinguishes energized-and-in-service from built, powered,
+  contracted or leased, and null from 0; `operational` requiring the site to be
+  running; scheduled and expected future events not being milestones; a bar for
+  what counts as an obstacle rather than a topic; and, in the evidence auditor and
+  the contradiction checker, the three patterns behind most real failures —
+  a lifecycle word meaning something earlier, generation quoted as the site's
+  capacity, and a figure the source itself presents as superseded.
+
+### Fixed
+
+- **A repaired figure could be reverted and the check that found it would stay
+  quiet** (`tracker/audit.py`). `settled_codes` answered by finding *code*, but
+  every action in `ACTIONS` writes a project scalar or a block row — and both are
+  caches that `recompute_from_sources` and `recompute_blocks` re-derive from the
+  claim set. So an answered question could come undone while remaining marked as
+  answered.
+
+  Observed on Hyperion (#10), the most heavily cited row we have: a model cleared
+  `mw_planned` 13,620 as uncited on 2026-08-09, `blocks.reconcile` raised it back to
+  14,462 from the tranche sum, and `campus_exceeds_worlds_largest` — which fires on
+  that value — was skipped from then on. The worst row in the database had switched
+  off the check that would have said so, using its own repair.
+
+  A code is now settled only while the edit that settled it survives: the recorded
+  value is parsed back out of the note and compared to the row. A **dismissal** is
+  different and still settles forever — it records a judgement that the figure is
+  right, not an edit that can be reverted. Conservative on anything it cannot
+  parse, since re-opening every unparseable note would bury the real reverts.
+
+  Also widened the decision regex from `[a-z_]+` to `[a-z0-9_-]+`. No code contains
+  a digit today, which is exactly why this was free now and would have been
+  undetectable later: the failure is silent and only in the skip path.
+
+- **`enrich` threw away every article it read** (`tracker/cli.py`). It accepted
+  `cache_dir`, forwarded it to `crawl.run`, and was the one caller of ten that never
+  passed it. A 36-hour `--all` run read ~3,000 articles and cached none of them; the
+  newest file in the cache predated the run by two days. Three later steps read that
+  cache rather than the network — `ingest crawl --stale-prompt`, `backfill blocks`,
+  and `riskcheck.article_for`, which settles nothing without it — so re-extraction
+  and all 443 pending risk confirmations would have had to pay for the network again.
+
+- **`[tracker] conflict …` claimed credibility settled fields that credibility had
+  not** (`tracker/upsert.py`, `tracker/logic.py`). The note read "kept
+  higher-weighted value" unconditionally, which is false whenever two claims carry
+  the same weight — the common case, since `government_doc` and `company_filing` are
+  both 3. Hyperion's notes asserted credibility chose $10B over $50B when both
+  sources were weight 3 and the tiebreak was crawl order. `Collision.why`'s phrasing
+  is now a shared `logic.why_decided`, with `logic.decision()` as the public pair, so
+  the row's own notes and the collision report say the same true thing.
+
+- **A merge left the folded rows' decisions behind** (`tracker/merge.py`). Sources,
+  milestones, obstacles and the identity all move; the record of what a person or a
+  model *decided* did not. Since `audit.settled_codes` reads that prose, folding a
+  row silently re-opened every question it had answered — and Hyperion (#10) holds
+  two model decisions among its 124 note lines. Operator prose is now carried to the
+  survivor and marked `[carried from a merged row]`; generated `[tracker]` and
+  `[source:…]` lines are not, because they assert something about the wrong row's
+  citations.
+
+### Added
+
+- **`ingest crawl --cached-only`** (`tracker/ingest/crawl.py`, `tracker/cli.py`).
+  Reads what is on disk and refuses to fetch the rest, counting them as `not cached`
+  in the run summary. `--stale-prompt` picks URLs by prompt vintage and serves from
+  the cache "by default", but a miss fell through to a fetch — silently — so a
+  re-read became a crawl. On the live database three quarters of the stale URLs have
+  no cached text: 113 cached pages would have come with 1,754 paid fetches. Mirrors
+  `backfill.run`'s `refetch=False` discipline, including reporting the skip so a run
+  that covered a quarter of its worklist does not read as one that covered it.
+
+### Changed
+
+- **Extraction reasons now** (`tracker/llm.py`, `tracker/config.py`,
+  `tracker/infer.py`). Reasoning is ON for extraction at `high` effort and for
+  `tracker infer` at `max`, OFF for the drawer's briefing — a request flag, not a
+  model choice, so all three tiers still run `deepseek-v4-flash`.
+
+  Two effort settings rather than one, because the tiers have opposite cost
+  shapes. Extraction runs once per *article*, so effort there multiplies by the
+  size of the corpus; `infer` runs once per *project* against a whole row, asking
+  for the conclusion the database cannot look up, which makes it the most
+  reasoning-shaped question in the tool and the cheapest place to pay for depth. A
+  single shared number would have to be wrong for one of them.
+
+  `DeepSeekExtractor` takes `effort: str | None` instead of a `thinking` flag
+  beside it, and `thinking` is now a derived property. The two were never
+  independent — an effort is meaningless with reasoning off, and reasoning on
+  without one is a state the API cannot express — so collapsing them makes the
+  invalid combination unconstructable. The effort settings are `Literal` types, so
+  a typo in `.env` fails at config load rather than as an HTTP 400 three hundred
+  articles into a paid crawl.
+
+  Reading an article for twelve fields is not transcription. It is deciding which
+  of three megawatt figures is the data center's rather than the utility's, which
+  of four dollar figures is this site's rather than the programme's, and whether
+  "since breaking ground" describes a building site or a running one. The
+  `_industry.txt` block gives the model what it needs to make those calls;
+  thinking is what lets it make them instead of matching the nearest number. It is
+  also the path where a wrong value gets *stored*, which makes it the last place
+  to economise — and the only accuracy comparison this project has measured runs
+  against economising, since the no-think model inverted a track reading and
+  invented a utility.
+
+  The briefing keeps the role `M2-her` held on MiniMax, unchanged: it reads values
+  already on the page, is labelled as a model's opinion, is never stored and
+  cannot move confidence, so nothing it writes reaches the database and speed is
+  worth more than depth. What improves is that the same behaviour is now a flag
+  rather than a different and less accurate model.
+
+- **`max_completion_tokens` defaults to 32768, up from 4096.** A ceiling, not a
+  reservation — raising it costs nothing unless the model generates more. 4096 was
+  sized for MiniMax, and reasoning is spent from the same budget as the reply,
+  before a character of the answer appears. At 4096 both thinking tiers starve:
+  extraction recovers by paying for a second call that tells the model *not* to
+  deliberate, which suppresses the reasoning it was just given, and `infer` does
+  not recover at all — it logs and returns an empty Analysis, so a starved panel
+  is indistinguishable from a quiet one. 32768 rather than 16384 because `infer`
+  runs at `max` effort, whose whole point is to deliberate at length and whose
+  failure is the silent one; the headroom is free until it is used.
+  `infer.analyse` also stops hardcoding 4096 and follows the setting.
+
+- **The model provider is DeepSeek, not MiniMax** (`tracker/llm.py`,
+  `tracker/config.py`, `.env.example`). `deepseek-v4-flash` on all three tiers,
+  against the single host `https://api.deepseek.com`. Every `TRACKER_MINIMAX_*`
+  setting is renamed to `TRACKER_DEEPSEEK_*` and **the old names are no longer
+  read at all** — deliberately not aliased, because the two providers issue their
+  own keys and silently accepting a stale MiniMax key would turn a config error
+  into an HTTP 401 at ingest time. The 401 handler names the migration as the
+  likely cause.
+
+  Three wire-level differences, two of them reversals of what this code did:
+
+  * the budget parameter is `max_tokens`, not `max_completion_tokens`;
+  * **thinking is a request flag and is actually honoured** —
+    `thinking={"type": "enabled"|"disabled"}` with `reasoning_effort`. MiniMax
+    accepted `thinking`, `reasoning_effort` and `enable_thinking` and ignored all
+    three, which is the only reason the fast tier had to be a *different and less
+    accurate model* (`M2-her`, the sole no-think model in that roster). That
+    workaround is gone: all three tiers now run one model, and only `tracker
+    infer` turns reasoning on. The measured cost of the old default — a briefing
+    that wrote "All tracks complete" over a construction track that had reached
+    nothing — is gone with it;
+  * reasoning may arrive in a `reasoning_content` field rather than inline
+    `<think>` tags. Both are handled, and the field is folded back into the tag
+    shape so `split_thinking` and the stream filter stay the one reader.
+
+  `MODEL_TOKEN_CAP` is kept but empty — the v4 models take 384K, far above
+  anything asked for here — because the hazard it guards (a model answering HTTP
+  400 to the ordinary budget, so no reply at all rather than a shorter one) has
+  happened once and cost a debugging session.
+
+  **The JSON contract stays in code.** DeepSeek does support
+  `response_format={"type": "json_object"}`, unlike MiniMax, but its docs require
+  the literal word `json` in the prompt (ours say `JSON`) and warn the endpoint
+  "has a probability of returning empty content" in that mode. An empty reply is
+  the one failure the parse → repair → validate → retry reader cannot recover
+  from, so the flag is available as `TRACKER_DEEPSEEK_JSON_MODE` and off by
+  default.
+
+### Added
+
 - **The console has an identity mark** (`tracker/webui/static/index.html`,
   `login.html`, `app.js`). A citation bracket with a bar that starts at the source
   and stops where the evidence stops, so the empty half of the bracket states the

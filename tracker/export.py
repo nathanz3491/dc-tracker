@@ -67,7 +67,9 @@ CSV_COLUMNS: tuple[str, ...] = (
 #: safe for consumers, but a reader keying on the tag should still be able to tell.
 #: 4 adds per-field `prov` (tier + the sentence behind the value) and `quotes` on
 #: each source. Both are additive; `basis` is unchanged for readers keying on it.
-JSON_SCHEMA_TAG = "tracker/4"
+#: 5 adds `sources[].id` and `claims_by_field` — every claim any citation made for
+#: a field, in the merge engine's own order, with the winner marked. Also additive.
+JSON_SCHEMA_TAG = "tracker/5"
 
 FORMATS = ("md", "csv", "json", "html")
 
@@ -207,13 +209,101 @@ def _standing_json(project: Project) -> dict[str, Any]:
                 "complete": state.complete,
                 "blockers": list(state.blockers),
                 "blocker_severity": state.blocker_severity,
+                # Which obstacle, not just which kind. Every surface could say a
+                # track was blocked and none could say by what.
+                "blocking_risks": [
+                    {"id": rid, "category": cat, "summary": summary}
+                    for rid, cat, summary in state.blocking_risks
+                ],
                 "next_milestone": state.next_milestone,
             }
             for state in stand.tracks
         ],
         "binding_blocker": binding.track if binding else None,
         "watch_for": stand.watch_for,
+        "timeline": _timeline_json(project, stand),
     }
+
+
+def _timeline_json(project: Project, stand: Any) -> list[dict[str, Any]]:
+    """The milestones actually reached, one row each, restatements folded in.
+
+    Hyperion holds 72 events including eleven `announced`, eight `groundbreaking`
+    and eight `permit_approved` — the same real-world moment recorded once per
+    article, each with its own date and quote. `uq_event_project_type_date` dedups
+    exact matches, so eight groundbreakings means eight distinct *dates* for one
+    milestone. A flat list of all 72 is not a timeline, it is a log.
+
+    So: group by type, take the **earliest confirmed** event as the milestone and
+    count the rest as restatements. Five tracks by at most three rungs caps this at
+    eleven rows. Nothing is deleted — the flat list is still in `events[]` — which
+    is what makes this curation rather than suppression.
+
+    Where two *confirmed* events of one type disagree by more than a year, both
+    dates are shown and neither is chosen. That is the case LouisianAI gets wrong
+    on this very campus, dating the groundbreaking to January 2026 when site work
+    began in December 2024. Same discipline as `sections[].capacity_conflict`.
+    """
+    from tracker.tracks import TRACK_MILESTONES
+
+    by_type: dict[str, list[Any]] = {}
+    for event in project.events:
+        by_type.setdefault(event.event_type, []).append(event)
+
+    out: list[dict[str, Any]] = []
+    for state in stand.tracks:
+        for milestone in TRACK_MILESTONES[state.track]:
+            if milestone not in state.reached:
+                continue
+            if milestone in state.implied:
+                # A deduction is not a citation, so it carries no date, quote or
+                # source — the console already renders implied at half strength.
+                out.append(
+                    {
+                        "track": state.track,
+                        "milestone": milestone,
+                        "implied": True,
+                        "date": None,
+                        "quote": None,
+                        "source_id": None,
+                        "restatements": 0,
+                        "conflicting_dates": [],
+                    }
+                )
+                continue
+
+            group = [e for e in by_type.get(milestone, []) if e.event_date]
+            confirmed = [e for e in group if not e.unconfirmed] or group
+            if not confirmed:
+                continue
+            confirmed.sort(key=lambda e: e.event_date)
+            first = confirmed[0]
+            # The RANGE, not every date in it. Listing all of them put eight dates
+            # under `announced` on Hyperion, which is a wall rather than a warning:
+            # an announcement genuinely is restated over years, and a reader needs
+            # to know the dates disagree, not to read all of them. `events[]` still
+            # carries every one for anybody who wants them.
+            last = confirmed[-1]
+            spread = (
+                [_iso(first.event_date), _iso(last.event_date)]
+                if (last.event_date - first.event_date).days > 365
+                else []
+            )
+            out.append(
+                {
+                    "track": state.track,
+                    "milestone": milestone,
+                    "implied": False,
+                    "date": _iso(first.event_date),
+                    "description": first.description,
+                    "quote": first.quote,
+                    "unconfirmed": first.unconfirmed,
+                    "source_id": first.source_id,
+                    "restatements": len(group) - 1,
+                    "conflicting_dates": spread,
+                }
+            )
+    return out
 
 
 def _provenance_json(project: Project) -> tuple[dict[str, str], dict[str, Any]]:
@@ -266,12 +356,152 @@ def _provenance_json(project: Project) -> tuple[dict[str, str], dict[str, Any]]:
     return basis_out, prov_out
 
 
+def _claims_json(project: Project) -> dict[str, Any]:
+    """Every claim every citation made for a field, with the winner marked.
+
+    `prov` answers "what does this row believe, and on what sentence". This answers
+    the question a reader actually asks when a figure looks wrong: **what else did
+    anybody say, and why did this one win?**
+
+    Hyperion (#10) is the case. It stored $10B for a campus whose current figure is
+    $50B+, and the page showed one number with no way to learn the other existed —
+    both claims are in the database, one just lost. LouisianAI, tracking the same
+    campus, prints a source-linked claim table beside the headline for exactly this
+    reason: the superseded figure stays visible and attributed and non-authoritative.
+
+    Three rules, each of which a re-implementation would get wrong:
+
+    * **The order is the merge engine's own.** `upsert.claims_by_field` sorts by
+      `(confirmed, weight, recency, url)` and resolves `merge_by_publication_date`
+      centrally. Re-sorting here — in Python or in the browser — would let the page
+      disagree with the write path about which claim won, which is the failure
+      `logic.check_collisions` was built to avoid.
+    * **The winner is resolved, never assumed.** `claims[0]` is the winner only for
+      PREFER_WEIGHT fields. `mw_built` takes the largest, `first_announced` the
+      earliest, `phase` the furthest along, and the identity fields the first ever
+      seen. Ask `resolve_field`.
+    * **`decided_by` is only filled when there is a real rival.** Hyperion's $10B,
+      $27B and $50B are three *scopes*, not a disagreement, and labelling that
+      "credibility won" would be a plausible sentence and the wrong one.
+    """
+    from tracker.confidence import values_conflict
+    from tracker.logic import decision
+    from tracker.upsert import (
+        DERIVED_FIELDS,
+        FIELD_POLICY,
+        Policy,
+        claims_by_field,
+        resolve_field,
+    )
+    from tracker.vocab import WRITABLE_FIELDS
+
+    by_url = {s.url: s for s in project.sources}
+    ordered = sorted(project.sources, key=lambda s: s.url)
+    index_of = {s.url: i for i, s in enumerate(ordered)}
+    # Once per project, not once per field: `gaps.provenance` already pays that
+    # cost seventeen times over and this must not add an eighteenth.
+    everything = claims_by_field(list(project.sources))
+
+    out: dict[str, Any] = {}
+    for field in WRITABLE_FIELDS:
+        # `blocker` comes from the risk rows and `notes` is assembled, so neither
+        # has claims to compare. Reporting them here once made two projects look
+        # as though they had drifted from sources that never spoke about them.
+        if field in DERIVED_FIELDS:
+            continue
+        claims = everything.get(field, [])
+        if not claims:
+            continue
+
+        stored = getattr(project, field, None)
+        chosen = resolve_field(field, claims, None)
+        winner_seen = False
+        rendered: list[dict[str, Any]] = []
+        for claim in claims:
+            source = by_url.get(claim.url)
+            is_winner = not winner_seen and _same_value(claim.value, chosen)
+            winner_seen = winner_seen or is_winner
+            rendered.append(
+                {
+                    "value": claim.value,
+                    "source_id": getattr(source, "id", None),
+                    "source_url": claim.url,
+                    "source_index": index_of.get(claim.url),
+                    "source_type": claim.source_type,
+                    "weight": claim.weight,
+                    "confirmed": claim.confirmed,
+                    "unconfirmed_reason": _reason_for(source, field),
+                    # The sentence recorded for THIS field only. Never the source's
+                    # excerpt: that fallback belongs to `prov`, where it is labelled
+                    # `quote_is_exact: false`. Showing a paragraph as one claim's
+                    # sentence is the failure the label exists to prevent, so null
+                    # is the honest answer.
+                    "quote": _field_quote(source, field),
+                    "fetched_at": _iso(claim.fetched_at),
+                    "published_at": _iso(claim.published_at),
+                    "is_winner": is_winner,
+                }
+            )
+
+        envelope: dict[str, Any] = {
+            "policy": FIELD_POLICY.get(field, Policy.PREFER_WEIGHT).value,
+            "claims": rendered,
+            # The row holds something no claim supports. `logic` reports this as
+            # `value_without_evidence`; surfacing it here puts it where a reader
+            # looking at the value can see it.
+            "stored_unsupported": stored is not None and not winner_seen,
+        }
+
+        confirmed = [c for c in claims if c.confirmed] or claims
+        rival = next(
+            (c for c in confirmed[1:] if values_conflict(confirmed[0].value, c.value)), None
+        )
+        if rival is not None:
+            code, why = decision(
+                FIELD_POLICY.get(field, Policy.PREFER_WEIGHT), confirmed[0], rival, confirmed
+            )
+            envelope["decided_by"] = code
+            envelope["why"] = why
+        out[field] = envelope
+    return out
+
+
+def _same_value(a: Any, b: Any) -> bool:
+    """Whether a claim is the one the merge chose, across JSON round-tripping."""
+    if a is None or b is None:
+        return a is b
+    if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+        return abs(float(a) - float(b)) < 1e-9
+    return str(a).strip().lower() == str(b).strip().lower()
+
+
+def _field_quote(source: Any, field: str) -> str | None:
+    if source is None or not getattr(source, "quotes", None):
+        return None
+    try:
+        quotes = json.loads(source.quotes)
+    except (TypeError, ValueError):
+        return None
+    return quotes.get(field) if isinstance(quotes, dict) else None
+
+
+def _reason_for(source: Any, field: str) -> str | None:
+    if source is None or not getattr(source, "unconfirmed_reasons", None):
+        return None
+    try:
+        reasons = json.loads(source.unconfirmed_reasons)
+    except (TypeError, ValueError):
+        return None
+    return reasons.get(field) if isinstance(reasons, dict) else None
+
+
 def to_json_object(project: Project) -> dict[str, Any]:
     """Nested dict per project, preserving the citation structure."""
     basis_map, prov_map = _provenance_json(project)
     return {
         "basis": basis_map,
         "prov": prov_map,
+        "claims_by_field": _claims_json(project),
         "standing": _standing_json(project),
         "id": project.id,
         "name": project.name,
@@ -299,6 +529,12 @@ def to_json_object(project: Project) -> dict[str, Any]:
         "last_verified_at": _iso(project.last_verified_at),
         "sources": [
             {
+                # The row id, so `events[].source_id`, `risks[].source_id`,
+                # `blocks[].source_id` and `sections[].source_ids` can be resolved
+                # to a citation. All four have shipped as DB ids since they existed
+                # and nothing on the page could look one up, which is why a
+                # milestone's own source has never been reachable from it.
+                "id": s.id,
                 "url": s.url,
                 "source_type": s.source_type,
                 "fetched_at": _iso(s.fetched_at),

@@ -887,3 +887,90 @@ def test_the_strongest_evidence_is_offered_first(session):
     pairs = capex.suspected_duplicates(session)
     assert pairs[0].kinds[0] == "tranche"
     assert pairs[-1].kinds[0] == "name"
+
+
+def test_cross_granularity_duplicates_are_found_across_localities(session):
+    """The pairs the locality bucket structurally cannot see.
+
+    `suspected_duplicates` buckets by `(city or county, state)` and compares only
+    within a bucket — which is exactly what a cross-granularity duplicate is not.
+    Hyperion was stored four times, as `richland parish`, `holly ridge`,
+    `richland` and `richmond parish`, so the rows sat in four different buckets
+    and no name or tranche evidence was ever consulted. `tracker duplicates`
+    reported none of them, while the INGEST path had already written "possible
+    duplicate of project #284" into one row's notes: two surfaces disagreeing,
+    not a missing algorithm.
+    """
+    from tracker.capex import duplicate_groups, suspected_duplicates
+    from tracker.models import Project
+
+    rows = [
+        Project(
+            name="Hyperion",
+            company="Meta",
+            city="Richland Parish",
+            county="Richland Parish",
+            state="LA",
+            dedup_key="meta|county:richland|LA",
+        ),
+        Project(
+            name="Hyperion Data Center",
+            company="Meta Platforms",
+            city="Holly Ridge",
+            county="Richland Parish",
+            state="LA",
+            dedup_key="meta|city:holly ridge|LA",
+        ),
+        Project(
+            name="Meta Richland",
+            company="Meta Platforms, Inc.",
+            city="Richland",
+            state="LA",
+            dedup_key="meta|city:richland|LA",
+        ),
+    ]
+    for row in rows:
+        session.add(row)
+    session.flush()
+
+    pairs = suspected_duplicates(session)
+    ids = {(p.a_id, p.b_id) for p in pairs}
+    assert ids, "the group must be findable at all"
+
+    # All three are one campus, so one decision rather than three.
+    groups = duplicate_groups(pairs)
+    assert any(len(g) == 3 for g in groups), groups
+
+    # `identity` outranks a name resemblance: two keys describing one place at
+    # different granularity is structural evidence, not textual.
+    identity = [p for p in pairs if "identity" in p.kinds]
+    assert identity
+    assert identity[0].rank == 0
+    assert "granularity" in identity[0].why
+
+
+def test_the_locality_signals_still_fire(session):
+    """The union must not cost what the original pass found.
+
+    Measured when this was written: the structural pass ALONE finds pairs the
+    locality pass misses and loses 225 of the 230 it finds — it cannot see the
+    same-locality/different-company case, which is the one `capex` needed this
+    for. Abilene was stored four times, once per company attached to it.
+    """
+    from tracker.capex import suspected_duplicates
+    from tracker.models import Project
+
+    for company in ("Crusoe", "Oracle"):
+        session.add(
+            Project(
+                name=f"Stargate Abilene ({company})",
+                company=company,
+                city="Abilene",
+                state="TX",
+                dedup_key=f"{company.lower()}|city:abilene|TX",
+            )
+        )
+    session.flush()
+
+    pairs = suspected_duplicates(session)
+    assert any("name" in p.kinds or "party" in p.kinds for p in pairs), pairs

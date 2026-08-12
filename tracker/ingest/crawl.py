@@ -33,6 +33,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from tracker.config import Settings, get_settings
+from tracker.dedup import looks_like_county
 from tracker.ingest.fetch import Fetcher, FetchResult, cache_path, fetch_all
 from tracker.ingest.records import (
     BlockRecord,
@@ -1124,6 +1125,16 @@ def _events(raw: dict[str, Any], article_text: str, url: str) -> list[EventRecor
                 # A sentence nobody published cannot vouch for a date. The event
                 # survives; the fabrication does not.
                 unconfirmed = "quote_unverified"
+            elif not _event_quote_supports(event_type, recovered.text):
+                # Real sentence, wrong tense. "Peak construction workforce expected
+                # to reach 5,000" is a forecast, and filed as `equipment_install`
+                # with a date that has since passed it made a campus with nothing
+                # installed report its construction track complete.
+                log.warning(
+                    "event quote for %s describes a plan rather than an event; keeping it as 待确认",
+                    event_type,
+                )
+                unconfirmed = "quote_off_target"
             else:
                 quote = recovered.text[:500]
 
@@ -1137,6 +1148,62 @@ def _risk_quote_supports(category: str, quote: str) -> bool:
     """Does this quote contain wording for the category it is filed under?"""
     normalized = _normalize_for_match(quote)
     return any(token in normalized for token in _RISK_EVIDENCE.get(category, ()))
+
+
+#: Wording that makes a sentence a PLAN rather than a record of something done.
+#:
+#: A milestone is something that happened. `tracks.standing` now refuses to count
+#: an event dated in the future, which catches the honest case — but not a
+#: forward-looking sentence given a date already past. Hyperion (#10) recorded
+#: "Peak construction workforce expected to reach 5,000" as `equipment_install`
+#: on 2026-06-01, and because that date had come, the construction track read
+#: `equipment_install, complete` on a campus with nothing installed.
+#:
+#: The list is the one `prompts/_industry.txt` §6 enumerates, so the prompt that
+#: refuses to emit these and the gate that refuses to trust them cite one source.
+_PLANNED_WORDING: Final[tuple[str, ...]] = (
+    "expected to",
+    "is expected",
+    "are expected",
+    "expects to",
+    "scheduled to",
+    "scheduled for",
+    "is scheduled",
+    "targeted for",
+    "targeting",
+    "will begin",
+    "will start",
+    "will be",
+    "plans to",
+    "planned for",
+    "aims to",
+    "set to",
+    "due to begin",
+    "once operational",
+    "when complete",
+    "upon completion",
+    "would be",
+    "could be",
+)
+
+
+def _event_quote_supports(event_type: str, quote: str) -> bool:
+    """Does this quote record something that HAPPENED, not something planned?
+
+    Deliberately narrower than `_risk_quote_supports`: that one asks whether the
+    sentence is about the right *category*, this asks whether it is about the past
+    at all. Checking for milestone-specific vocabulary as well was tempting and
+    wrong — articles describe a groundbreaking in a hundred ways, and a keyword
+    list would reject good citations to catch a failure mode that is really about
+    tense.
+
+    A failing quote demotes the event to 待确认 rather than deleting it, the same
+    as an unverifiable one: an article that mentions a milestone in a forward-looking
+    sentence may still be reporting a real milestone somewhere else, and deletion
+    is the one repair this codebase has learned is not durable.
+    """
+    normalized = _normalize_for_match(quote)
+    return not any(token in normalized for token in _PLANNED_WORDING)
 
 
 #: A block may name at most this many tranches. Beyond it the model is dividing a
@@ -1519,6 +1586,22 @@ def build_records(
         state = kept.get("state") or values.get("state")
         city = kept.get("city") or values.get("city")
         county = kept.get("county") or values.get("county")
+
+        # A county or parish name in the `city` column is not a city.
+        #
+        # Identity fields skip the evidence gate on purpose (see below) — a row
+        # cannot exist without them — and `city` is FILL_ONLY, so once a wrong one
+        # is written no recompute, merge or re-extraction ever corrects it.
+        # Hyperion (#10) has carried city="Richland Parish" since the day it was
+        # created, from a source that has since been re-extracted away.
+        #
+        # Routing it is provably key-neutral: `dedup.locality` already reads a
+        # county-suffixed `city` as county granularity, so `dedup_key` does not
+        # move and no row forks. `ck_project_locality` holds because the value
+        # lands in `county`.
+        if city and looks_like_county(city):
+            county, city = county or city, None
+
         if not company or not state or not (city or county):
             log.warning(
                 "dropping a project from %s: needs company, state and a locality "
@@ -1814,7 +1897,7 @@ def extract_one(
             payload = parse_json_object(reply.text)
         except LLMJsonError as exc:
             last_error = str(exc)
-            # `finish_reason` is not reliable here: MiniMax has reported "stop" on
+            # `finish_reason` is not reliable here: a provider has reported "stop" on
             # a reply that plainly stops mid-sentence inside `<think>`. An unclosed
             # block is the observable fact, so trust that over the label.
             starved = exc.ran_out_thinking
@@ -1997,6 +2080,7 @@ def run(
     dry_run: bool = False,
     force: bool = False,
     cache_dir: Path | None = None,
+    cached_only: bool = False,
     run_id: str | None = None,
 ) -> IngestReport:
     """Fetch, extract and upsert a list of article URLs.
@@ -2004,6 +2088,11 @@ def run(
     `extractor` is injectable and is resolved *before* any fetch, so a missing API
     key fails immediately rather than after paying for forty page loads — and so
     tests can supply a fake without needing a key at all.
+
+    `cached_only` reads what is already on disk and skips the rest, counting them in
+    `report.skipped_uncached`. Without it a re-extraction run quietly becomes a
+    crawl: `--stale-prompt` picks URLs by prompt vintage, and three quarters of
+    those have no cached text.
     """
     import asyncio
 
@@ -2029,6 +2118,17 @@ def run(
         return report
 
     cached, to_fetch = _split_cached(wanted, cache_dir)
+    if cached_only and to_fetch:
+        # The re-extraction case, and the one this flag exists for. `--stale-prompt`
+        # wants the *same* article read by a better prompt, so a cache miss is a URL
+        # to leave alone rather than a page to go and get: re-fetching confounds
+        # "the prompt improved" with "the article changed", and doing it silently
+        # turned a free re-read of 113 cached pages into 1,754 paid fetches inside
+        # what the operator asked to be a cache-only run. Same discipline as
+        # `backfill.run`'s `refetch=False`.
+        log.info("cached-only: leaving %d URL(s) with no cached text", len(to_fetch))
+        report.skipped_uncached += len(to_fetch)
+        to_fetch = []
     fetched = (
         asyncio.run(fetch_all(to_fetch, fetcher=fetcher, escalate=escalate, settings=settings))
         if to_fetch

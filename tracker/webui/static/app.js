@@ -1432,12 +1432,278 @@ function Meter({ value }) {
 //: Severity to a colour token, shared by the inferred obstacles and the recorded ones.
 const SEV_TONE = { blocking: "--danger", material: "--warning", watch: "--muted-foreground" };
 
+/* What this campus's numbers mean next to something.
+ *
+ * Replaced a 3D schematic that extruded `mw_planned / 150` into halls, clamped to
+ * eight, under a caption asserting "8 halls @ ~150 mw · 0 built" — a wrong number
+ * stated twice, from a row whose capacity was 14,462 MW of gas plants and
+ * double-counted phases. Its whole input set is rendered better, from real data, by
+ * the blocks and tracks panels two cards away.
+ *
+ * Every figure here is derived in the page from two payload scalars AND LABELLED
+ * as derived. That is within the rule `dataset.py` states — the browser must not
+ * re-implement a JUDGEMENT — and `h200FromMw` is the existing precedent.
+ *
+ * Deliberately no "×N households" or "×N times the parish's usage", which is the
+ * one LouisianAI idea this codebase should refuse: we hold no consumption
+ * baseline, and inventing one puts an uncited number on a page whose whole premise
+ * is that every fact traces to a source and a sentence. */
+function InContext({ p, data }) {
+  const mw = p.mw_planned;
+  if (mw == null) return null;
+
+  const totals = data.totals || {};
+  const stateTotal = (data.projects || [])
+    .filter((x) => x.state === p.state && x.mw_planned)
+    .reduce((sum, x) => sum + x.mw_planned, 0);
+  const perMw = p.investment_usd && mw ? p.investment_usd / mw : null;
+  const acct = p.accounting;
+
+  const rows = [
+    stateTotal > 0 && {
+      label: `share of tracked ${p.state}`,
+      value: `${Math.round((mw / stateTotal) * 100)}%`,
+      note: `${fmtMw(mw)} of ${fmtMw(stateTotal)} MW — a floor: only projects citing a figure count`,
+    },
+    totals.mw_planned > 0 && {
+      label: "share of everything tracked",
+      value: `${((mw / totals.mw_planned) * 100).toFixed(1)}%`,
+      note: `of ${fmtMw(totals.mw_planned)} MW across the database`,
+    },
+    perMw && {
+      label: "capex per MW",
+      value: `$${(perMw / 1e6).toFixed(1)}M`,
+      note:
+        perMw < 3e6
+          ? "below the $8–15M/MW a build of this size costs — likely a superseded figure"
+          : perMw > 3e7
+            ? "above the $8–15M/MW band — likely a programme total, not this site"
+            : "inside the $8–15M/MW a campus of this size costs to build",
+    },
+    p.h200_equivalent && {
+      label: "compute",
+      value: fmt("h200_equivalent", p.h200_equivalent),
+      note: `H200-equivalent at ${data.kwPerH200} kW each — derived from megawatts, not cited`,
+    },
+    acct?.total_is_floor && {
+      label: "itemised",
+      value: `${Math.round((acct.counted_mw / (acct.total || 1)) * 100)}%`,
+      note: "of the campus total is broken into tranches a quote confirms",
+    },
+  ].filter(Boolean);
+
+  if (!rows.length) return null;
+  return html`
+    <${Card}>
+      <${CardHeader}>
+        <${CardTitle}>In context<//>
+        <${CardDescription}>Each figure computed from two stored values, and labelled as
+          derived rather than cited.<//>
+      <//>
+      <div style=${{ display: "grid", gap: 0 }}>
+        ${rows.map((r, i) => html`
+          <div key=${i} style=${{ display: "grid", gridTemplateColumns: "minmax(0,1fr) auto", gap: 12,
+               alignItems: "baseline", padding: "10px 20px", borderTop: "1px solid var(--border)" }}>
+            <div style=${{ minWidth: 0 }}>
+              <div style=${{ fontSize: 13 }}>${r.label}</div>
+              <p style=${{ margin: "2px 0 0", fontSize: 12, lineHeight: "17px",
+                           color: "var(--muted-foreground)" }}>${r.note}</p>
+            </div>
+            <span class="dc-num" style=${{ fontSize: 16, fontWeight: 500 }}>${r.value}</span>
+          </div>`)}
+      </div>
+    <//>`;
+}
+
+/* The milestones a project actually reached, one row each.
+ *
+ * This replaced a flat list of every stored event. Hyperion has 72 of them —
+ * eleven `announced`, eight `groundbreaking`, eight `permit_approved` — because
+ * each article restates the same moment with its own date, and
+ * `uq_event_project_type_date` only dedups exact matches. 72 rows is a log, not a
+ * timeline, and a reader cannot see the shape of the project through it.
+ *
+ * The grouping is done server-side in `export._timeline_json` (the browser never
+ * re-implements a judgement): earliest confirmed event per milestone, the rest
+ * counted as restatements, and where confirmed dates disagree by more than a year
+ * BOTH ends are shown and neither is chosen. Nothing is deleted — every event is
+ * still in `events[]` behind the toggle — which is what makes this curation
+ * rather than suppression.
+ *
+ * A CSS grid rather than a chart: dates here range from day precision to
+ * year-only, and a horizontal axis would draw false precision on most rows. */
+function Timeline({ p }) {
+  const [all, setAll] = useState(false);
+  const rows = p.standing?.timeline || [];
+  const tracks = Object.fromEntries((p.standing?.tracks || []).map((t) => [t.track, t]));
+
+  if (!rows.length && !p.events.length) {
+    return html`
+      <${Card}>
+        <${CardHeader}><${CardTitle}>Milestones<//><//>
+        <div style=${{ padding: "4px 20px 20px" }}>
+          <${EmptyState} variant="dashed" size="sm" title="No milestones recorded"
+            description="Nothing read so far states one. Silence is not evidence — a milestone appears when a source reports it." />
+        </div>
+      <//>`;
+  }
+
+  let lastTrack = null;
+  return html`
+    <${Card}>
+      <${CardHeader}>
+        <${CardTitle}>${rows.length} milestone${rows.length === 1 ? "" : "s"} reached<//>
+        <${CardDescription}>The earliest cited date for each, grouped by track. A milestone
+          restated across several articles is one milestone; ${p.events.length} events were
+          recorded in total.<//>
+      <//>
+      <div style=${{ display: "grid", gap: 0 }}>
+        ${rows.map((r, i) => {
+          const head = r.track !== lastTrack;
+          lastTrack = r.track;
+          const t = tracks[r.track];
+          return html`
+            <${Frag} key=${i}>
+              ${head && html`
+                <div style=${{ padding: "12px 20px 4px", borderTop: i ? "1px solid var(--border)" : "none",
+                               display: "flex", gap: 10, alignItems: "baseline", flexWrap: "wrap" }}>
+                  <strong style=${{ fontSize: 12, letterSpacing: ".04em", textTransform: "uppercase",
+                                    color: "var(--muted-foreground)" }}>${r.track.replace("_", " ")}</strong>
+                  ${t?.blocking_risks?.length ? html`
+                    <span style=${chip(SEV_TONE[t.blocker_severity] || "--muted-foreground")}
+                          title=${t.blocking_risks.map((b) => `#${b.id} ${b.category}: ${b.summary}`).join("\\n")}>
+                      blocked — ${t.blocking_risks[0].category}
+                      ${t.blocking_risks.length > 1 ? ` +${t.blocking_risks.length - 1}` : ""}
+                    </span>` : null}
+                </div>`}
+              <div style=${{ display: "grid", gridTemplateColumns: "104px minmax(0,1fr)", gap: 14,
+                   alignItems: "baseline", padding: "8px 20px 8px 32px" }}>
+                <span class="dc-num" style=${{ fontSize: 12, color: "var(--muted-foreground)",
+                      opacity: r.implied ? 0.5 : 1 }}>${r.date || "—"}</span>
+                <div style=${{ minWidth: 0 }}>
+                  <span style=${{ fontSize: 14, lineHeight: "20px", opacity: r.implied ? 0.6 : 1 }}>
+                    ${r.milestone.replace(/_/g, " ")}
+                  </span>
+                  ${r.implied && html`
+                    <span style=${{ ...chip("--muted-foreground"), marginLeft: 8 }}
+                          title="deduced from a later milestone, not read anywhere">implied</span>`}
+                  ${r.unconfirmed && html`
+                    <span style=${{ ...chip("--warning"), marginLeft: 8 }}>not cited</span>`}
+                  ${r.restatements > 0 && html`
+                    <span style=${{ marginLeft: 8, fontSize: 11, color: "var(--muted-foreground)" }}>
+                      +${r.restatements} more mention${r.restatements === 1 ? "" : "s"}</span>`}
+                  ${r.conflicting_dates?.length === 2 && html`
+                    <p style=${{ margin: "3px 0 0", fontSize: 12, color: "var(--warning)" }}>
+                      sources date this between ${r.conflicting_dates[0]} and ${r.conflicting_dates[1]} —
+                      shown as the earliest, neither chosen</p>`}
+                  ${r.description && html`
+                    <p style=${{ margin: "2px 0 0", fontSize: 13, lineHeight: "19px" }}>${r.description}</p>`}
+                  ${r.quote && html`
+                    <p style=${{ margin: "3px 0 0", fontSize: 12, lineHeight: "17px", maxWidth: "76ch",
+                                 color: "var(--muted-foreground)", borderLeft: "2px solid var(--primary)",
+                                 paddingLeft: 9 }}>“${r.quote}”</p>`}
+                </div>
+              </div>
+            <//>`;
+        })}
+      </div>
+      <div style=${{ padding: "10px 20px 16px", borderTop: "1px solid var(--border)" }}>
+        <button type="button" onClick=${() => setAll(!all)}
+          style=${{ background: "none", border: "none", padding: 0, cursor: "pointer", font: "inherit",
+                    fontSize: 12, color: "var(--muted-foreground)", textDecoration: "underline",
+                    textUnderlineOffset: 3 }}>
+          ${all ? "hide" : `show every recorded event (${p.events.length})`}
+        </button>
+        ${all && html`
+          <div style=${{ display: "grid", gap: 0, marginTop: 8 }}>
+            ${p.events.map((e, i) => html`
+              <div key=${i} style=${{ display: "grid", gridTemplateColumns: "96px 168px minmax(0,1fr)",
+                   gap: 14, alignItems: "baseline", padding: "6px 0", borderTop: "1px solid var(--border)" }}>
+                <span class="dc-num" style=${{ fontSize: 12, color: "var(--muted-foreground)" }}>${e.event_date}</span>
+                <span style=${chip(e.event_type === "delayed" ? "--danger"
+                  : e.event_type === "expanded" ? "--chart-5" : "--muted-foreground")}>${e.event_type}</span>
+                <span style=${{ fontSize: 13, lineHeight: "19px" }}
+                      title=${e.quote ? `“${e.quote}”` : undefined}>
+                  ${e.description}
+                  ${e.unconfirmed && html`
+                    <span style=${{ ...chip("--warning"), marginLeft: 8 }}>not cited</span>`}
+                </span>
+              </div>`)}
+          </div>`}
+      </div>
+    <//>`;
+}
+
+/* Every claim any citation made for one field, beside the value that won.
+ *
+ * The question a reader actually asks when a figure looks wrong is not "what is
+ * the evidence for this" — `prov` answers that above — but "what else did anybody
+ * say, and why did this one win?". Hyperion stored $10B for a campus whose current
+ * figure is $50B+, and both are in the database; the page simply showed one.
+ *
+ * Collapsed by default. It is the answer to a question most rows never raise, and
+ * a table under all twelve fields would bury the values it is meant to qualify.
+ *
+ * Everything here is decided server-side in `export._claims_json`: the ORDER is the
+ * merge engine's own, the WINNER is resolved through `resolve_field`, and
+ * `decided_by` is only set when a real rival exists. The browser sorts nothing and
+ * decides nothing — three claims at different scopes are not a disagreement, and
+ * saying "credibility won" there would be a plausible sentence and the wrong one. */
+function ClaimTable({ p, field }) {
+  const [open, setOpen] = useState(false);
+  const env = (p.claims_by_field || {})[field];
+  if (!env || env.claims.length < 2) return null;
+
+  const rivals = env.claims.length - 1;
+  return html`
+    <div style=${{ marginTop: 2 }}>
+      <button type="button" onClick=${() => setOpen(!open)}
+        style=${{ background: "none", border: "none", padding: 0, cursor: "pointer",
+                  font: "inherit", fontSize: 12, color: "var(--muted-foreground)",
+                  textDecoration: "underline", textUnderlineOffset: 3 }}>
+        ${open ? "hide" : `${rivals} other claim${rivals === 1 ? "" : "s"}`}
+      </button>
+      ${env.stored_unsupported && html`
+        <span style=${{ ...chip("--danger"), marginLeft: 8 }}>no claim supports the stored value</span>`}
+      ${open && html`
+        <div style=${{ marginTop: 8, display: "grid", gap: 6 }}>
+          ${env.why
+            ? html`<p style=${{ margin: 0, fontSize: 12, color: "var(--muted-foreground)" }}>
+                <strong>why this one:</strong> ${env.why}</p>`
+            : html`<p style=${{ margin: 0, fontSize: 12, color: "var(--muted-foreground)" }}>
+                ${env.claims.length} claims, none in conflict — different scopes rather than a
+                disagreement.</p>`}
+          ${env.claims.map((c, i) => html`
+            <div key=${i} style=${{ display: "grid", gridTemplateColumns: "minmax(0,1fr) auto",
+                 gap: 10, alignItems: "baseline", paddingLeft: 9,
+                 borderLeft: `2px solid var(${c.is_winner ? "--primary" : "--border"})` }}>
+              <div style=${{ minWidth: 0 }}>
+                <span style=${{ fontFamily: "var(--font-mono)", fontSize: 13,
+                                fontWeight: c.is_winner ? 600 : 400 }}>${fmt(field, c.value)}</span>
+                ${c.is_winner && html`<span style=${{ ...chip("--primary"), marginLeft: 8 }}>kept</span>`}
+                ${!c.confirmed && html`
+                  <span style=${{ ...chip("--warning"), marginLeft: 8 }}>
+                    待确认${c.unconfirmed_reason ? ` · ${c.unconfirmed_reason}` : ""}</span>`}
+                ${c.quote && html`
+                  <p style=${{ margin: "3px 0 0", fontSize: 12, lineHeight: "17px",
+                               color: "var(--muted-foreground)", maxWidth: "72ch" }}>“${c.quote}”</p>`}
+              </div>
+              <a href=${c.source_url} target="_blank" rel="noopener noreferrer"
+                 style=${{ fontSize: 11, color: "var(--muted-foreground)", whiteSpace: "nowrap" }}
+                 title=${c.source_url}>
+                ${c.source_type} · w${c.weight}
+              </a>
+            </div>`)}
+        </div>`}
+    </div>`;
+}
+
 function StatsTab({ data, p, populated, open, onQuote, allowWrite }) {
   const worst = open.slice().sort((a, b) => SEV_ORDER.indexOf(b.severity) - SEV_ORDER.indexOf(a.severity))[0];
   const stats = [
-    { label: "Planned capacity", value: p.mw_planned == null ? "—" : p.mw_planned.toLocaleString() + " MW",
+    { label: "IT capacity, planned", value: p.mw_planned == null ? "—" : p.mw_planned.toLocaleString() + " MW",
       hint: p.mw_planned == null ? "no source cited one" : TIER[tierOf(p, "mw_planned")][0] },
-    { label: "Built to date", value: p.mw_built == null ? "—" : p.mw_built.toLocaleString() + " MW",
+    { label: "IT capacity in service", value: p.mw_built == null ? "—" : p.mw_built.toLocaleString() + " MW",
       hint: p.mw_built == null ? "nothing built, or nothing read" : TIER[tierOf(p, "mw_built")][0] },
     { label: "Compute", value: fmt("h200_equivalent", p.h200_equivalent),
       hint: p.h200_equivalent == null ? "no capacity cited, so nothing to convert"
@@ -1473,7 +1739,9 @@ function StatsTab({ data, p, populated, open, onQuote, allowWrite }) {
         <${Card}>
           <${CardHeader}>
             <${CardTitle}>The twelve tracked fields<//>
-            <${CardDescription}>${populated} of 12 populated<//>
+            <${CardDescription}>${populated} of 12 populated. Megawatts here are the data
+              center's own IT load — a utility's generation, transmission or storage figure is a
+              different quantity and is never added to them.<//>
           <//>
           <div style=${{ display: "grid", gap: 0 }}>
             ${TRACKED.map((key) => {
@@ -1506,6 +1774,7 @@ function StatsTab({ data, p, populated, open, onQuote, allowWrite }) {
                       ...(q.exact ? { borderLeft: "2px solid var(--primary)", paddingLeft: 9 } : {}),
                       ...(tier === "missing" ? { opacity: .75 } : {}) }}>
                       ${quoted && q.exact ? `“${q.text}”` : q.text}</p>
+                    <${ClaimTable} p=${p} field=${key} />
                   </div>
                 </div>`;
             })}
@@ -1513,18 +1782,7 @@ function StatsTab({ data, p, populated, open, onQuote, allowWrite }) {
         <//>
 
         <div style=${{ display: "grid", gap: 18 }}>
-          ${window.customElements?.get("dc-campus") && html`
-            <${Card}>
-              <${CardHeader}>
-                <${CardTitle}>Campus schematic<//>
-                <${CardDescription}>A diagram built from this row's own numbers, not a rendering of the
-                  site. Drag to orbit.<//>
-              <//>
-              <div style=${{ height: 280, borderTop: "1px solid var(--border)", background: "var(--muted)",
-                             borderRadius: "0 0 20px 20px", overflow: "hidden" }}>
-                <dc-campus project=${String(p.id)} />
-              </div>
-            <//>`}
+          <${InContext} p=${p} data=${data} />
 
           <${Card}>
             <${CardHeader}>
@@ -1536,7 +1794,11 @@ function StatsTab({ data, p, populated, open, onQuote, allowWrite }) {
             <div style=${{ display: "grid", gap: 0 }}>
               ${p.standing.tracks.map((t) => {
                 const onlyImplied = t.reached.length > 0 && t.reached.every((m) => t.implied.includes(m));
-                const status = t.complete ? (t.blockers.length ? "complete, still obstructed" : "complete")
+                /* `complete` means the ladder is exhausted, NOT that the work is
+                   finished — so it is said as the milestone reached rather than as
+                   a verdict. "construction: complete" beside a campus under
+                   construction is the sentence that made this worth changing. */
+                const status = t.complete ? `reached ${t.status.replace(/_/g, " ")}`
                   : t.blockers.length ? "blocked" : t.reached.length === 0 ? "not started" : "in progress";
                 return html`
                   <div key=${t.track} style=${{ display: "grid", gridTemplateColumns: "minmax(0,1fr) 90px",
@@ -1546,8 +1808,21 @@ function StatsTab({ data, p, populated, open, onQuote, allowWrite }) {
                       <span style=${{ fontFamily: "var(--font-mono)", fontSize: 12,
                         color: t.blockers.length ? "var(--danger)" : t.complete ? "var(--success)" : "var(--muted-foreground)" }}>
                         ${status}${onlyImplied ? " (implied)" : ""} — ${t.next_milestone ? "watch for " + t.next_milestone
-                          : t.blockers.length ? "an open obstacle still sits here" : "nothing outstanding"}
+                          : t.blockers.length ? "nothing further on this ladder" : "nothing outstanding"}
                       </span>
+                      ${/* WHICH obstacle. `blockers` holds bare category names, so
+                            every surface could say a track was obstructed and none
+                            could say by what — leaving a reader to guess which of
+                            twenty-eight recorded risks was meant. */
+                        (t.blocking_risks || []).length > 0 && html`
+                        <span style=${{ fontSize: 12, lineHeight: "17px", color: "var(--danger)" }}>
+                          blocked by #${t.blocking_risks[0].id} (${t.blocking_risks[0].category}):
+                          ${" "}${t.blocking_risks[0].summary}
+                          ${t.blocking_risks.length > 1
+                            ? html`<span style=${{ color: "var(--muted-foreground)" }}>
+                                ${" "}+${t.blocking_risks.length - 1} more</span>`
+                            : null}
+                        </span>`}
                     </div>
                     <div style=${{ display: "flex", gap: 3, justifyContent: "flex-end" }}>
                       ${((data.tracks.find((x) => x.key === t.track) || {}).milestones || []).map((m, i) => html`
@@ -1568,42 +1843,7 @@ function StatsTab({ data, p, populated, open, onQuote, allowWrite }) {
         </div>
       </div>
 
-      <${Card}>
-        <${CardHeader}>
-          <${CardTitle}>${p.events.length} milestone event${p.events.length === 1 ? "" : "s"}<//>
-          <${CardDescription}>Milestones as reported. A cited one carries the article's own
-            sentence — hover it; the rest are the model's reading, marked.<//>
-        <//>
-        <div style=${{ display: "grid", gap: 0 }}>
-          ${p.events.map((e, i) => html`
-            <div key=${i} style=${{ display: "grid", gridTemplateColumns: "96px 168px minmax(0,1fr)", gap: 14,
-                 alignItems: "baseline", padding: "10px 20px", borderTop: "1px solid var(--border)" }}>
-              <span class="dc-num" style=${{ fontSize: 12, color: "var(--muted-foreground)" }}>${e.event_date}</span>
-              <span style=${chip(e.event_type === "delayed" ? "--danger"
-                : e.event_type === "expanded" ? "--chart-5" : "--muted-foreground")}>${e.event_type}</span>
-              <span style=${{ fontSize: 14, lineHeight: "20px" }}
-                    title=${e.quote ? `“${e.quote}”` : undefined}>
-                ${e.description}
-                ${/* The tier, event-sized. `quote` is the verified sentence; its
-                      absence used to be invisible, so every milestone read as
-                      equally established — including a "groundbreaking" whose own
-                      description was an open house. Same vocabulary as everywhere
-                      else: not cited is a fact about the evidence, not a verdict
-                      on the event. */
-                  e.unconfirmed && html`
-                  <span style=${{ ...chip("--warning"), marginLeft: 8 }}
-                        title=${e.unconfirmed === "quote_unverified"
-                          ? "a quote was offered and is not in the article"
-                          : "no quote supports this milestone yet"}>not cited</span>`}
-              </span>
-            </div>`)}
-        </div>
-        ${p.events.length === 0 && html`
-          <div style=${{ padding: "4px 20px 20px" }}>
-            <${EmptyState} variant="dashed" size="sm" title="No milestones recorded"
-              description="Nothing read so far states one. Silence is not evidence — a milestone appears when a source reports it." />
-          </div>`}
-      <//>
+      <${Timeline} p=${p} />
     </div>`;
 }
 

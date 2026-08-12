@@ -77,11 +77,11 @@ def test_project_dotenv_is_read_from_any_directory(tmp_path: Path, monkeypatch):
     env_file = install_root() / ".env"
     existed = env_file.exists()
     original = env_file.read_bytes() if existed else None
-    env_file.write_text("TRACKER_MINIMAX_MODEL=FromProjectDotenv\n", encoding="utf-8")
+    env_file.write_text("TRACKER_DEEPSEEK_MODEL=FromProjectDotenv\n", encoding="utf-8")
     try:
         monkeypatch.chdir(tmp_path)
         get_settings.cache_clear()
-        assert Settings().minimax_model == "FromProjectDotenv"
+        assert Settings().deepseek_model == "FromProjectDotenv"
     finally:
         if original is None:
             env_file.unlink(missing_ok=True)

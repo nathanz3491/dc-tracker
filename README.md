@@ -144,24 +144,23 @@ cp .env.example .env
 ```
 
 ```
-TRACKER_MINIMAX_API_KEY=your-key
+TRACKER_DEEPSEEK_API_KEY=your-key
 ```
 
 `.env` is gitignored, and it is read by **absolute path** — so it applies no
 matter which directory you run `tracker` from. Note the `TRACKER_` prefix: every
-setting this tool reads carries it. `TRACKER_MINIMAX_API_KEY` and
-`MINIMAX_API_KEY` are not the same variable, and only the first is read.
+setting this tool reads carries it. `TRACKER_DEEPSEEK_API_KEY` and
+`DEEPSEEK_API_KEY` are not the same variable, and only the first is read.
 
-If your key came from the China platform (`platform.minimaxi.com`, phone signup)
-rather than the global one (`platform.minimax.io`, email signup), also set:
+Keys come from `platform.deepseek.com` and work against the single host
+`https://api.deepseek.com`. There is nothing else to configure.
 
-```
-TRACKER_MINIMAX_BASE_URL=https://api.minimaxi.com/v1
-```
+> **Moved off MiniMax.** `TRACKER_MINIMAX_*` variables are no longer read by
+> anything. A leftover MiniMax key in `TRACKER_DEEPSEEK_API_KEY` returns HTTP 401,
+> and the error says so rather than leaving you to guess.
 
-The keys are not interchangeable, and the wrong host answers *invalid api key* —
-which reads like a bad key rather than a bad URL. `tracker ingest crawl --check`
-tells you which you have in one cheap call.
+`tracker ingest crawl --check` verifies the key in one cheap call, before you
+spend a run's worth of fetches.
 
 ### One command for the whole loop
 
@@ -278,7 +277,7 @@ ago never appears in them. Search reaches back for it.
 
 ```bash
 tracker search "Meta Richland Parish Louisiana data center megawatts"
-tracker search --from-llm 20            # let MiniMax propose the queries
+tracker search --from-llm 20            # let the model propose the queries
 tracker search --from-llm 20 --print-only   # just show them, search nothing
 tracker sync --search 10                # more searches than the default
 tracker sync --search 0                 # skip searching this run
@@ -521,53 +520,52 @@ so a row is paid for once, and reopening it is free until something about the ro
 actually changes. It is never stored, never becomes a source, and cannot move
 confidence. See `overview.py`.
 
-It is written by `TRACKER_MINIMAX_FAST_MODEL` (default `M2-her`) rather than the
-reasoning model, because this is the one call somebody sits and waits for:
-**46.6s to the first word became 2.7s**, and the briefing went from 231 words to
-about 65.
+It is written by `fast_extractor` — `TRACKER_DEEPSEEK_FAST_MODEL` with **reasoning
+disabled**, and it is now the *only* tier that does not reason. That is
+deliberate, and it is the one place in this tool where speed beats depth: the
+briefing is a reading of values already on the page, it is labelled as a model's
+opinion, it is never stored, it never becomes a source, and it cannot move
+confidence. Nothing it writes reaches the database. Extraction and `infer`, which
+do write, both reason.
 
-The model was chosen by measuring all of them on this prompt, and the ranking is
-not the one the model list implies. Plain `MiniMax-M2` (12.4s) beats every
-`-highspeed` variant — "highspeed" means output tokens per second, and this job
-emits ~70 words after a fixed slab of reasoning, so throughput barely matters.
-`MiniMax-M3` was worse than slow: it spent the whole completion budget thinking
-and returned an empty briefing. Only removing the reasoning moves the number, and
-**`M2-her` is the only MiniMax model that does not think at all.**
+**The latency here is a thinking question, not a model question**, and that took a
+provider migration to be able to act on. Measured across MiniMax's whole roster on
+this prompt, time to the first *visible* word ranged from 12.4s to 46.6s — and
+`MiniMax-M3` was worse than slow, spending the entire completion budget thinking
+and returning an empty briefing. Tokens spent inside `<think>` are invisible, so a
+model that streams instantly and then deliberates is not fast; only removing the
+reasoning moved the number. On MiniMax the only way to remove it was to pick the
+one model that could not think (`M2-her`, 2.7s) — `thinking`, `reasoning_effort`
+and `enable_thinking` were all accepted by that API and all ignored, and an
+assistant prefill of `</think>` did not suppress it either.
 
-Making it usable needed three things, all of which help every model:
+That workaround had a measured cost. `M2-her` is built for dialogue and sometimes
+read the data wrong: on Fairwater — construction track `nothing reached`, every
+other track passed — it wrote *"All tracks complete; construction the last to
+finish"*, inverting the most informative field in the row. It also named a utility
+and a permit process that appear nowhere in the data.
 
-* the prompt asks for an `[[END]]` sentinel — the API's own `stop` parameter is
-  accepted and *ignored*, so it cannot be relied on;
-* `overview.RUNAWAY` cuts the **stream** at that sentinel, or at the point the
-  model starts a second answer. Cutting the stream rather than the finished text
-  is what saves the time: abandoning the generator closes the connection, so the
-  tokens after the answer are never waited for. Left alone, `M2-her` writes
-  756–982 words against a 110-word instruction, repeats itself under headings like
-  "Final answer (last round)", and narrates its own word count;
-* `MODEL_TOKEN_CAP` clamps the completion budget to the 2048 it accepts —
-  otherwise every request is an HTTP 400 and there is no briefing at all.
+DeepSeek honours `thinking: {"type": "disabled"}`, so the fast path is now the
+same `deepseek-v4-flash` as everything else with reasoning switched off at request
+time, and **that accuracy trade is gone** — the role is unchanged, but it is no
+longer paid for with a worse model. Any reasoning that does arrive is still
+stripped as it streams, so it never reaches the page.
 
-**The known cost of this default.** `M2-her` is built for dialogue, and it
-sometimes reads the data wrong in a way `MiniMax-M2` did not. On Fairwater —
-construction track `nothing reached`, every other track passed — it wrote *"All
-tracks complete; construction the last to finish"*, inverting the most informative
-field in the row. It has also named a utility and a permit process that appear
-nowhere in the data, and produced phrases that mean nothing ("Major capex is
-confirmed via gas"). The behaviour is variable: four later runs on that same row
-came back clean.
+One guard survives the move and earns its place:
 
-That trade is deliberate and it is bounded by the panel's own design — the
-briefing is labelled as a model's reading, is never stored, never becomes a
-source, and cannot move confidence, so a wrong one is a wrong *opinion* sitting
-beside correctly cited values rather than a wrong value. Set
-`TRACKER_MINIMAX_FAST_MODEL=MiniMax-M2` to buy the accuracy back for about ten
-seconds a row.
+* the prompt asks for an `[[END]]` sentinel, and `overview.RUNAWAY` cuts the
+  **stream** there, or at the point the model starts a second answer. Cutting the
+  stream rather than the finished text is what saves the time: abandoning the
+  generator closes the connection, so tokens after the answer are never waited
+  for. Left alone, `M2-her` wrote 756–982 words against a 110-word instruction,
+  repeated itself under headings like "Final answer (last round)", and narrated
+  its own word count. "The model stops when asked" is not a property worth
+  assuming of a provider on the strength of not yet having seen it fail.
 
-On every other model the reasoning **cannot be switched off** — `thinking`,
-`reasoning_effort` and `enable_thinking` are all accepted by the API and all
-ignored, and an assistant prefill of `</think>` does not suppress it. Shrinking
-the prompt does not help; the cost is fixed. It is stripped as it streams, so it
-never reaches the page.
+`MODEL_TOKEN_CAP` also survives, empty. It clamped the budget to the 2048 `M2-her`
+accepted — without it every request was an HTTP 400 and there was no briefing at
+all. The v4 models take 384K, far above anything asked for here, so today it is a
+no-op guarding a hazard that has happened once.
 
 The reply is markdown — one sentence, then two or three bullets — rendered to
 React elements by a small parser in `app.js`. Deliberately **not** `innerHTML`:
@@ -1235,6 +1233,14 @@ cache by default, so it is a re-read rather than a re-fetch — the point is to
 find out what a better prompt makes of the *same* article, and re-fetching would
 confound that with the page having changed.
 
+**Pair it with `--cached-only`.** Serving from the cache "by default" only covers
+the URLs that are *in* the cache; a miss used to fall through to a fetch, silently,
+which turns a free re-read into a paid crawl. On the live database three quarters
+of the stale URLs have no cached text, so an operator asking to re-read 113 pages
+would have paid for 1,754 fetches. `--cached-only` refuses the miss and reports it
+as `not cached` in the run summary, so a run that skipped most of its worklist does
+not read as one that covered it. Same discipline as `backfill`'s `refetch=False`.
+
 `--mutants` is the other half: it plants known faults in a throwaway copy and
 counts what gets caught. It exists because this README and `HANDOFF.md` both
 cited *"16 planted mutants, all caught"* as the evidence for `tracker audit`, and
@@ -1673,7 +1679,7 @@ What would show it is still moving — 推进的信号
   ████· 0.75  Announcement of a new xAI debt facility earmarked for Colossus
         Would close the financing gap that gates the full buildout.
 
-Inferred by MiniMax-M3 from this row's 5 recorded obstacle(s), its milestones and
+Inferred by deepseek-v4-flash from this row's 5 recorded obstacle(s), its milestones and
 its gaps. Not stored, not evidence — a judgement drawn from the facts.
 ```
 
@@ -1754,7 +1760,7 @@ directory, which is what lets `tracker init` work from anywhere.
 ```
 
 1685 tests, about two minutes. **A fresh clone with no API key and no network access
-must produce a green run.** Tests that would hit the network or spend MiniMax
+must produce a green run.** Tests that would hit the network or spend DeepSeek
 tokens are marked `network` / `llm` and deselected by default; run them
 explicitly with `-m network` or `-m llm`.
 
@@ -1810,13 +1816,23 @@ The seam for the day a genuine large-load export appears is
 the confidence cap to 2 because the source then actually says "data center"
 rather than us guessing.
 
-### MiniMax has no structured output, so the JSON contract is enforced in code
+### The JSON contract is enforced in code, not by the provider
 
-`response_format` — both `json_object` and `json_schema` — is **silently ignored**
-on the MiniMax M2.x and M3 models. No error, no warning; you simply get
-prose-wrapped JSON as though you had never asked. Anything that claims to enforce
-a schema against these models (including Crawl4AI's `LLMExtractionStrategy`
-`schema=` parameter) is promising something the provider does not do.
+This started as a MiniMax constraint and survived the move to DeepSeek as a
+choice. On MiniMax, `response_format` — both `json_object` and `json_schema` — was
+**silently ignored**: no error, no warning, just prose-wrapped JSON as though you
+had never asked. Anything claiming to enforce a schema against those models
+(including Crawl4AI's `LLMExtractionStrategy` `schema=` parameter) was promising
+something the provider did not do.
+
+DeepSeek genuinely supports `response_format={"type": "json_object"}`, so the
+constraint is gone — but its own docs attach two conditions that make it the wrong
+foundation here: the literal word `json` must appear in the prompt (ours say
+`JSON`), and the endpoint *"has a probability of returning empty content"* in that
+mode. An extraction run that occasionally returns **nothing** is worse than one
+that returns prose-wrapped JSON, because the reader below recovers from the second
+and cannot recover from the first. `TRACKER_DEEPSEEK_JSON_MODE=true` turns it on
+for anyone who wants to measure it; it is off by default.
 
 So `tracker/llm.py` owns the contract: strip `<think>` blocks and code fences,
 brace-scan for the outermost object, repair the malformations these models
@@ -1824,12 +1840,14 @@ actually emit (trailing commas, smart quotes, a dropped `{` on the first object
 inside an array), validate, and allow **exactly one** corrective retry. Cost per
 URL is bounded at two calls.
 
-Three MiniMax details that each cost a debugging session if missed:
-`max_completion_tokens` not `max_tokens`; `role: "system"` not `"developer"`
-(which returns *invalid role* 2013); and the global (`api.minimax.io`) and China
-(`api.minimaxi.com`) platforms are separate with **non-interchangeable keys** —
-the wrong host answers *invalid api key*, which reads like a bad key rather than
-a bad URL. `tracker ingest crawl --check` tells you which you have in one call.
+Three DeepSeek details, two of them the reverse of what this code used to do:
+`max_tokens`, not the `max_completion_tokens` MiniMax wanted; thinking is a
+**request flag** (`thinking={"type": "enabled"|"disabled"}` with
+`reasoning_effort`) and is actually honoured, which is why there is no longer a
+separate no-think model in the roster; and reasoning may return either in its own
+`reasoning_content` field or inline in `<think>` tags, so both shapes are handled.
+One platform, one host — `tracker ingest crawl --check` confirms the key in one
+call.
 
 ### Discovery reuses `ingest_url` rather than adding a queue table
 
@@ -2090,6 +2108,88 @@ independent domains and reach confidence 3 — the score reserved for corroborat
 facts. `county`, `lat` and `lon` are all `FILL_ONLY`, so a value an article really
 stated is never overwritten by a lookup.
 
+### `tracker clean` — one bar, four tiers, and the command that raises a row
+
+Reading one campus by hand found eleven defects across six subsystems. There are
+hundreds of rows, so the fixes are worth nothing unless they are a pipeline, and a
+pipeline needs a definition of done that is computable.
+
+`tracker clean` composes the detectors that already exist — `logic`, `audit`,
+`quality`'s census, `gaps`, `blockcheck`, `Risk.unconfirmed`, the prompt stamp on
+`source.extractor` — and reimplements none of them. The whole free sweep runs in
+about seven seconds over the database, which is why progress is reconstructed from
+the data rather than stored: there is no ledger table and no `clean_tier` column.
+
+```
+T0 SOURCED    something real cites it, and it does not contradict itself
+T1 SOUND      nothing in a total is a lie          <- the bar worth chasing
+T2 COMPLETE   the fields a reader acts on are there, and each is backed
+T3 SETTLED    every open question has been answered
+```
+
+T1 first, because the numbers this tool publishes are sums. An incomplete row makes
+a total *smaller*; a row carrying an implausible figure, an unanswered duplicate, or
+a value decided by crawl order makes it **wrong**, and one wrong row discredits the
+table.
+
+Two definitional choices are load-bearing. `NOT_APPLICABLE` counts as complete —
+`mw_built` on an announced project is correctly null, and a 12-of-12 bar failed 97%
+of rows, which is a target nobody can use. And 待确认 counts as *backed*: the gate
+declaring it could not confirm a value is the gate **working**, so only
+`confirmed_without_quote` fails the condition.
+
+The definition is calibrated rather than asserted: a test says that if a
+fully-answered row cannot score T3, the definition is wrong and `clean.py` changes —
+not the row.
+
+```bash
+tracker clean                        # the scorecard, plus what every value rests on
+tracker clean --project 10           # one row, and the exact command that fixes each failure
+tracker clean --plan --tier 1        # the worklist, closest rows first
+tracker clean --snapshot             # append to data/runs/clean.jsonl
+tracker clean --since 1              # diff the last two runs
+```
+
+The one thing a column cannot be is a time series, which is what `--snapshot` is
+for. Two named console workflows drive it: `clean-free` (no LLM, no network) and
+`clean-paid`. Run the free one first — it removes most of the work for nothing.
+
+### The prompts needed to know what a data center is
+
+Reading one campus closely — Meta's Hyperion, the most heavily sourced row in the
+database at 59 sources — turned up a cluster of failures that looked unrelated and
+were not. `mw_planned` read **15,962 MW**, which would be three times the largest
+campus announced anywhere; `investment_usd` held **$10B** against 5 GW, about a
+fifth of what that costs; `phase` said **operational** for a site that has never
+been powered, evidenced by a sentence about breaking ground.
+
+The prompts were not missing rules. `extract-v1` already said, in as many words,
+that `mw_planned` "is NOT the capacity of a power plant, solar farm or substation
+built to serve it". The gap was that **nothing told the model what a data center
+is dimensionally**, so no rule had anything to bite on: 5,962 MW of gas turbines
+and solar panels read as ordinary tranches of a campus, and a superseded
+announcement read as a current figure.
+
+So `prompts/_industry.txt` is prepended to every prompt's system message. Eight
+sections of durable background — the campus/building/hall hierarchy; IT load
+versus generating capacity and the words that mark which is which; the five other
+things a dollar figure in these articles is usually about; a plausibility envelope
+in orders of magnitude ($8–15M per MW, ~5 GW as the largest campus announced
+anywhere); who the operator is as against the utility, the EPC and the financier;
+the lifecycle phrases that get misread as "running"; how a project gets restated
+upward over years; and what actually obstructs one.
+
+**It is background for judgement, never a source of values**, and that constraint
+is the load-bearing part. It sits in tension with extraction's first rule — never
+draw on knowledge from outside the article — and the tension is resolved
+explicitly in both places, because a model that answered *from* this block would
+fill megawatts with plausible industry averages and pass the evidence gate while
+doing it. There is a test asserting the block still forbids itself.
+
+Prepended, not appended, so the per-prompt rules come last and win where the two
+touch. About 2,700 tokens on every call, which on a stable system prompt is a
+cache hit: 0.00005 CNY.
+
 ### Crawl4AI fetches, it does not extract
 
 The PRD names Crawl4AI as the extraction framework. Here it is an **optional
@@ -2099,8 +2199,8 @@ extra used only for fetching**, and `httpx` is the default:
   your instruction inside its own template, so the bytes sent to the model are
   not the bytes in `prompts/extract-v1.txt`, and the `source.extractor` stamp
   would be unfalsifiable.
-- MiniMax has no schema enforcement (above), so the parse/repair/retry loop has
-  to live somewhere testable.
+- The JSON contract is enforced in code rather than by the provider (above), so
+  the parse/repair/retry loop has to live somewhere testable.
 - Crawl4AI hard-pins a third-party fork of litellm. Keeping it optional keeps
   that out of everyone's dependency graph.
 - The articles this is aimed at are ordinary server-rendered pages. A headless
@@ -2219,7 +2319,7 @@ Each unblocks a stated PRD requirement that the three tables cannot hold:
   nowhere to keep them and the confidence agreement rule has nothing to compare.
   `source.fields` is *derived* from it, so the two can never disagree.
 - **`source.extractor`** — which extractor and which prompt version produced this
-  row (`crawl:extract-v1@3f2a91c4:MiniMax-M2.5:httpx`). Without it, "which prompt
+  row (`crawl:extract-v1@3f2a91c4:deepseek-v4-flash:httpx`). Without it, "which prompt
   version produced this bad row?" is unanswerable and prompt iteration is
   unmeasurable.
 - **`ingest_url` table** — the PRD asks to "mark the source `fetch_error` and
@@ -2336,9 +2436,13 @@ tracker ingest pjm --csv data/raw/pjm_2025q3.csv --iso pjm
   a directory cannot share a name inside one package, and the PRD asks for both
   `tracker/prompts.py` and `tracker/prompts/*.txt`. `tracker.prompts.load_prompt`
   imports identically either way.
-- **Prompt version identity is filename + SHA-1 of the file bytes.** A filename
-  alone starts lying the moment you edit the file, which is exactly what iterating
-  on a prompt means.
+- **Prompt version identity is filename + SHA-1 of the file bytes**, including the
+  shared block's. A filename alone starts lying the moment you edit the file,
+  which is exactly what iterating on a prompt means — and a shared partial that
+  could change underneath the hash would reintroduce that failure through the back
+  door.
+- **One industry block is prepended to all eleven prompts** (`prompts/_industry.txt`).
+  See "The prompts needed to know what a data center is" below.
 - **Prompts template with `string.Template` (`$var`), not `str.format`.** The
   prompt contains a JSON schema block full of literal braces, which `str.format`
   would raise on.
@@ -2379,7 +2483,7 @@ gives a present/missing breakdown the moment the real list is pasted in.
   PJM's and MISO's are taken from their real exports. A wrong guess fails loudly
   via `assert_headers` rather than ingesting nothing, and `--map-override`
   corrects a rename without a code change.
-- The crawl path has been run live against MiniMax, not only fixtures: an initial
+- The crawl path has been run live against a provider, not only fixtures: an initial
   live run surfaced four defects (fixed in `de4821c`), and `tracker enrich` was
   verified live on project #93 (OpenAI Stargate, Abilene).
 - `project.country` is a dead column in v1 (`CHECK country='US'`), kept for

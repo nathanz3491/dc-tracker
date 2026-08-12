@@ -1500,6 +1500,62 @@ def test_cache_avoids_a_second_fetch(session, tmp_path: Path):
     assert len(fetcher.calls) == 1, "the second run must come from cache"
 
 
+def test_cached_only_refuses_to_fetch_a_cache_miss(session, tmp_path: Path):
+    """`--stale-prompt` wants the SAME article read by a better prompt.
+
+    Without this, a re-extraction run silently becomes a crawl: the URLs are chosen
+    by prompt vintage, and on the live database three quarters of them have no
+    cached text — so an operator asking to re-read 113 cached pages would have paid
+    for 1,754 fetches. A cache miss is a URL to leave alone, and the count is
+    reported so a run that skipped most of its worklist does not read as one that
+    covered it.
+    """
+    cache = tmp_path / "cache"
+    fetcher = FakeFetcher({URL: fetched()})
+    report = crawl.run(
+        session,
+        [URL],
+        fetcher=fetcher,
+        extractor=FakeLLM([canned("llm_response_microsoft_wi.json")]),
+        run_id="t1",
+        cache_dir=cache,
+        cached_only=True,
+    )
+
+    assert fetcher.calls == [], "nothing may be fetched"
+    assert report.skipped_uncached == 1
+    assert report.inserted == 0
+
+
+def test_cached_only_still_reads_what_is_cached(session, tmp_path: Path):
+    """The other half: the flag is a fetch ban, not a no-op."""
+    cache = tmp_path / "cache"
+    fetcher = FakeFetcher({URL: fetched()})
+    crawl.run(
+        session,
+        [URL],
+        fetcher=fetcher,
+        extractor=FakeLLM([canned("llm_response_microsoft_wi.json")]),
+        run_id="t1",
+        cache_dir=cache,
+    )
+    assert len(fetcher.calls) == 1
+
+    report = crawl.run(
+        session,
+        [URL],
+        fetcher=fetcher,
+        extractor=FakeLLM([canned("llm_response_microsoft_wi.json")]),
+        run_id="t2",
+        force=True,
+        cache_dir=cache,
+        cached_only=True,
+    )
+    assert len(fetcher.calls) == 1, "still no second fetch"
+    assert report.skipped_uncached == 0
+    assert report.read == 1
+
+
 def test_conflicting_sources_keep_both_and_flag_it(session):
     """A queue row and an article disagreeing on capacity, end to end."""
     from tracker.ingest import pjm
@@ -2180,3 +2236,45 @@ def test_should_escalate_stops_at_the_top_rung():
     assert should_escalate(FetchResult("u", False, status=403, via="curl_cffi")) is True
     assert should_escalate(FetchResult("u", False, status=403, via="crawl4ai")) is False
     assert should_escalate(FetchResult("u", True, markdown="x" * 5000, via="curl_cffi")) is False
+
+
+def test_a_forward_looking_event_quote_is_not_treated_as_a_milestone():
+    """Real sentence, wrong tense — the failure the date filter cannot catch.
+
+    "Peak construction workforce expected to reach 5,000" was filed as
+    `equipment_install` on 2026-06-01. That date has since passed, so
+    `tracks.standing`'s date filter lets it through, and Hyperion's construction
+    track read `equipment_install, complete` with nothing installed.
+    """
+    from tracker.ingest.crawl import _event_quote_supports
+
+    assert not _event_quote_supports(
+        "equipment_install", "Peak construction workforce expected to reach 5,000."
+    )
+    assert not _event_quote_supports("energized", "Partial energisation is expected in 2027.")
+    assert not _event_quote_supports(
+        "energized", "Once operational, this data center will support 1,000 jobs."
+    )
+    # And the sentences that DO record something, which a keyword list for
+    # milestone vocabulary would have rejected.
+    assert _event_quote_supports("groundbreaking", "Meta broke ground in December 2024.")
+    assert _event_quote_supports("site_work", "Site work began at Hyperion in December 2024.")
+    assert _event_quote_supports(
+        "permit_approved", "The LPSC approved construction of three turbines on August 20."
+    )
+
+
+def test_a_county_name_never_lands_in_the_city_column(session, prompt):
+    """`city` is FILL_ONLY and skips the evidence gate, so a wrong one is forever.
+
+    Hyperion has carried city="Richland Parish" since the day it was created,
+    from a source that has since been re-extracted away. Routing it is provably
+    key-neutral — `dedup.locality` already reads a county-suffixed city as county
+    granularity — so no row forks.
+    """
+    from tracker.dedup import dedup_key, locality
+
+    assert locality("Richland Parish", None).kind == "county"
+    assert dedup_key("Meta", "Richland Parish", None, "LA") == dedup_key(
+        "Meta", None, "Richland Parish", "LA"
+    )

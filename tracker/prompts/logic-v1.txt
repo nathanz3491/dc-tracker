@@ -30,6 +30,32 @@ Five rules bound your answer.
    conclude that a value is wrong because you believe something else about the
    site.
 
+   The industry context above is what "general knowledge" means here, and section
+   4 in particular. A pair of values can contradict each other through it as
+   surely as through a date: these are the checks it makes possible, each of
+   which has fired on a real row.
+
+     CAPACITY BEYOND THE ENVELOPE. mw_planned above ~6 GW for one campus is
+     beyond anything announced anywhere, and in practice means several different
+     things were added together. Contradict it against whatever it exceeds — a
+     cited campus figure, or the blocks it was summed from. One row read 15,962
+     MW because gas plants, a solar farm, a repeated milestone and the campus
+     total were all counted as tranches of the campus.
+
+     MONEY AGAINST CAPACITY. Facility capex runs roughly $8-15M per MW, so a
+     multi-GW campus at $10B is about a fifth of what it should cost, and is
+     nearly always a superseded figure. Below ~$3M/MW or above ~$50M/MW, say so
+     and name both values.
+
+     STAGE AGAINST ITSELF. phase = operational with mw_built null or zero, with
+     no energized milestone, or with an expected_online in the future, cannot all
+     hold. So can a phase that is behind the milestones the row itself records.
+
+     GENERATION COUNTED AS THE SITE. A block or capacity whose label names a
+     plant, turbine, solar farm, substation or transmission line is not the data
+     center's capacity (section 2). If one is inside the campus total, that is a
+     contradiction between the total and what it is made of.
+
 5. An empty list is the expected answer. Most rows are consistent. Returning
    nothing is a good outcome and is strongly preferred to a stretched reading;
    a false contradiction costs a person real time to chase down.

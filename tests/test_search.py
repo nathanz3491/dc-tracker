@@ -496,7 +496,7 @@ def settings_with(**kwargs):
     from tracker.config import Settings
 
     Settings.model_config["env_file"] = None
-    return Settings(minimax_api_key="x", **kwargs)
+    return Settings(deepseek_api_key="x", **kwargs)
 
 
 def test_bing_is_refused_with_the_reason_not_unknown_provider():

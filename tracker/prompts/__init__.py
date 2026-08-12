@@ -13,16 +13,35 @@ that produced it.
 The prompt contains a JSON schema block full of literal braces; ``str.format``
 would raise on the first one. This is not a stylistic preference — it is the
 difference between working and not.
+
+**One shared industry block is prepended to every prompt's system message**
+(:data:`SHARED_CONTEXT`). Eleven prompts ask a model to read the same industry,
+and the failures that sent us looking were all the same failure: nothing told it
+what a data center *is* dimensionally, so 15,962 MW of "capacity" — three quarters
+of it gas turbines and solar panels built by a utility — read as ordinary. Rules
+were never the gap; the prompts already said "not the capacity of a power plant".
+The gap was that nothing said how big a campus can be, or what a gigawatt costs,
+so no rule had anything to bite on.
+
+It is prepended rather than appended so the per-prompt rules come last and win on
+a conflict. Its bytes are folded into the version stamp: ``extract-v1@3f2a91c4``
+must identify the whole system message, and a shared file that could change
+underneath it without moving the hash would quietly break the one guarantee the
+stamp exists to make — that a bad row can be traced to the prompt that produced
+it.
 """
 
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 import string
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 #: The prompt files live in this package directory, so they ship with the wheel.
 #:
@@ -38,6 +57,12 @@ _SECTION = re.compile(r"^===\s*([A-Z][A-Z ]*[A-Z]|[A-Z])\s*===\s*$", re.MULTILIN
 SYSTEM_SECTIONS = ("SYSTEM", "SCHEMA", "FIELD NOTES")
 #: The only templated section.
 USER_SECTION = "USER"
+
+#: Shared domain background, prepended to every prompt's system message.
+#:
+#: Underscore-prefixed because it is a partial, not a prompt: it has no sections
+#: and cannot be loaded on its own. :func:`available` hides it for that reason.
+SHARED_CONTEXT = "_industry.txt"
 
 
 class PromptError(ValueError):
@@ -87,7 +112,23 @@ def _split_sections(text: str, path: Path) -> dict[str, str]:
 
 
 def available() -> list[str]:
-    return sorted(p.stem for p in PROMPT_DIR.glob("*.txt"))
+    """Loadable prompt names. Partials (`_industry`) are not among them."""
+    return sorted(p.stem for p in PROMPT_DIR.glob("*.txt") if not p.name.startswith("_"))
+
+
+def _shared_bytes() -> bytes:
+    """The industry block, line-ending-normalized, or empty if it is absent.
+
+    Absence is tolerated rather than fatal. Every prompt is still complete and
+    correct without it — it adds background, not instructions — and a partial that
+    failed to ship should degrade the extraction, not take down every command that
+    loads a prompt.
+    """
+    path = PROMPT_DIR / SHARED_CONTEXT
+    if not path.is_file():
+        log.warning("shared prompt context %s is missing; prompts load without it", SHARED_CONTEXT)
+        return b""
+    return path.read_bytes().replace(b"\r\n", b"\n").strip()
 
 
 @lru_cache(maxsize=8)
@@ -103,20 +144,29 @@ def load_prompt(name_or_path: str = "extract-v1") -> Prompt:
 
     raw = path.read_bytes()
     # Hash the raw bytes so any edit at all changes the stamp, but normalize line
-    # endings first so a CRLF checkout is not a different "version".
+    # endings first so a CRLF checkout is not a different "version". The shared
+    # block is hashed alongside them: the stamp names the whole system message, so
+    # editing `_industry.txt` has to move every prompt's version, exactly as
+    # editing the prompt itself does.
     normalized = raw.replace(b"\r\n", b"\n")
+    shared = _shared_bytes()
     sections = _split_sections(normalized.decode("utf-8"), path)
+    system = "\n\n".join(sections[s] for s in SYSTEM_SECTIONS)
     return Prompt(
         name=path.stem,
         path=path,
-        sha1=hashlib.sha1(normalized, usedforsecurity=False).hexdigest(),
-        system="\n\n".join(sections[s] for s in SYSTEM_SECTIONS),
+        sha1=hashlib.sha1(shared + b"\n" + normalized, usedforsecurity=False).hexdigest(),
+        # Background first, task last. The per-prompt rules are the ones that have
+        # to win where the two touch, and the end of a system message is where a
+        # model is most reliably steered from.
+        system=f"{shared.decode('utf-8')}\n\n{system}" if shared else system,
         user_template=sections[USER_SECTION],
     )
 
 
 __all__ = [
     "PROMPT_DIR",
+    "SHARED_CONTEXT",
     "SYSTEM_SECTIONS",
     "USER_SECTION",
     "Prompt",

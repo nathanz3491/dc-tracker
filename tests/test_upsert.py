@@ -1602,3 +1602,59 @@ def test_a_citation_supporting_only_guesses_does_not_corroborate(session):
     upsert_record(session, rec(sources=[all_guessed]))
     after = session.scalars(select(Project)).one().confidence
     assert after <= one_source, "a citation supporting nothing corroborates nothing"
+
+
+def test_a_recompute_lets_phase_come_back_down(session):
+    """`phase` used to be a one-way ratchet, so a bad value was permanent.
+
+    Hyperion (#10) read `operational` on the strength of a single Instagram post
+    that the evidence gate had already marked 待确认. `resolve` discards unconfirmed
+    claims whenever any confirmed claim exists, so the merge engine returned
+    `construction` from the claims — and the row still said `operational`, because
+    `_resolve_ladder` folded the stored value into the comparison and nothing could
+    ever lower it.
+
+    An incremental upsert still ratchets: there, the guard stops one thin new
+    source dragging a well-established row backwards. A full recompute is not a
+    thin new source.
+    """
+    import json
+
+    from tracker.models import Project, Source
+    from tracker.upsert import recompute_from_sources
+
+    row = Project(
+        name="Ratchet",
+        company="Meta",
+        city="Rayville",
+        state="LA",
+        dedup_key="meta|ratchet",
+        phase="operational",
+    )
+    session.add(row)
+    session.flush()
+    session.add(
+        Source(
+            project=row,
+            url="https://ratchet.test/1",
+            source_type="company_filing",
+            fetched_at=dt.datetime(2026, 1, 1),
+            excerpt="an excerpt",
+            fields="phase",
+            claims=json.dumps({"phase": "construction"}),
+            quotes=json.dumps({"phase": "construction is under way"}),
+        )
+    )
+    session.flush()
+
+    recompute_from_sources(session, row)
+    assert row.phase == "construction"
+
+
+def test_an_ordinary_upsert_still_ratchets_phase(session):
+    """The guard that stops a thin new source walking a live campus backwards."""
+    from tracker.upsert import Policy, _Claim, resolve
+
+    claims = [_Claim("announced", 1, dt.datetime(2026, 1, 1), "general_media", "u")]
+    assert resolve(Policy.PHASE, claims, "operational") == "operational"
+    assert resolve(Policy.PHASE, claims, "operational", ratchet=False) == "announced"

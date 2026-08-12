@@ -237,26 +237,135 @@ def test_the_briefing_uses_the_fast_model_not_the_reasoning_one():
     from tracker.config import Settings
     from tracker.llm import fast_extractor, reasoning_extractor
 
-    settings = Settings(minimax_api_key="test-key")
-    assert fast_extractor(settings).model == settings.minimax_fast_model
-    assert reasoning_extractor(settings).model != settings.minimax_fast_model
+    settings = Settings(deepseek_api_key="test-key")
+    assert fast_extractor(settings).model == settings.deepseek_fast_model
+    assert reasoning_extractor(settings).model == settings.deepseek_reasoning_model
 
 
-def test_the_default_briefing_model_can_actually_be_called():
-    """The default is `M2-her`, which rejects the budget every other model takes.
+def test_the_tiers_differ_by_thinking_not_by_model_name():
+    """What separates the three tiers on DeepSeek, now that it is not the roster.
 
-    Without the clamp this configuration is not merely slow or sloppy — it is an
-    HTTP 400 on every request and a drawer that never shows a briefing at all. The
-    two settings have to agree, and they are declared in different files.
+    On MiniMax the fast tier had to be a *different and less accurate model*,
+    because `thinking` was accepted and ignored and `M2-her` was the only model
+    that did not deliberate. DeepSeek honours the flag, so all three tiers run the
+    same model and the tier is entirely a matter of whether it reasons.
+
+    Extraction reasons: it is the path where a wrong value gets STORED, and
+    deciding which of three megawatt figures belongs to the data center is not
+    transcription. The briefing does not: nothing it writes is stored, and there
+    latency is the feature. If this ever silently inverts, the cheap panel starts
+    costing reasoning tokens and the expensive extraction stops getting any.
     """
     from tracker.config import Settings
-    from tracker.llm import MODEL_TOKEN_CAP, MiniMaxExtractor
+    from tracker.llm import default_extractor, fast_extractor, reasoning_extractor
 
-    settings = Settings(minimax_api_key="test-key")
-    extractor = MiniMaxExtractor(settings, model=settings.minimax_fast_model)
-    cap = MODEL_TOKEN_CAP.get(settings.minimax_fast_model)
-    if cap is not None:
-        assert extractor._budget(overview.MAX_TOKENS) <= cap
+    settings = Settings(deepseek_api_key="test-key")
+    assert default_extractor(settings).thinking is True
+    assert reasoning_extractor(settings).thinking is True
+    assert fast_extractor(settings).thinking is False
+
+
+def test_infer_thinks_harder_than_extraction():
+    """The two reasoning tiers have opposite cost shapes, so they differ in effort.
+
+    Extraction runs once per article, so its effort multiplies by the size of the
+    corpus. `infer` runs once per project against a whole row, which makes it the
+    cheapest place in the tool to pay for depth. A single shared setting would have
+    to be wrong for one of them.
+    """
+    from tracker.config import Settings
+    from tracker.llm import default_extractor, reasoning_extractor
+
+    settings = Settings(deepseek_api_key="test-key")
+    assert reasoning_extractor(settings).effort == "max"
+    assert default_extractor(settings).effort == settings.deepseek_extraction_effort
+    assert default_extractor(settings).effort != "max", (
+        "the high-volume path must not silently inherit the expensive setting"
+    )
+
+
+def test_reasoning_off_and_an_effort_cannot_disagree():
+    """`thinking` is derived from `effort`, so the invalid pair cannot be built.
+
+    Two independent fields would allow "reasoning on, no effort" — which the API
+    cannot express — and would let one be changed without the other.
+    """
+    from tracker.config import Settings
+    from tracker.llm import DeepSeekExtractor
+
+    settings = Settings(deepseek_api_key="test-key")
+    off = DeepSeekExtractor(settings)
+    assert off.thinking is False
+    assert off._payload(system="s", user="u", max_tokens=8, stream=False)["thinking"] == {
+        "type": "disabled"
+    }
+    on = DeepSeekExtractor(settings, effort="max")
+    assert on.thinking is True
+    assert on._payload(system="s", user="u", max_tokens=8, stream=False)["thinking"] == {
+        "type": "enabled",
+        "reasoning_effort": "max",
+    }
+
+
+def test_a_typo_in_the_effort_setting_fails_at_config_time():
+    """Not at request time, three hundred articles into a run.
+
+    `reasoning_effort` is a closed set of three values. An unrecognised one is the
+    kind of mistake that gets made in a .env file and discovered by an HTTP 400 in
+    the middle of a paid crawl.
+    """
+    import pytest as _pytest
+    from pydantic import ValidationError
+
+    from tracker.config import Settings
+
+    with _pytest.raises(ValidationError):
+        Settings(deepseek_api_key="test-key", deepseek_infer_effort="maximum")
+
+
+def test_the_reasoning_tiers_have_room_to_reason():
+    """The budget has to clear the deliberation, or the answer never starts.
+
+    Reasoning is spent from the same completion budget as the reply, before a
+    character of the answer appears. At MiniMax's 4096 this starved: extraction
+    recovers by paying for a second call that tells the model NOT to deliberate,
+    and `infer` does not recover at all — it returns an empty Analysis, which is
+    indistinguishable from having nothing to say.
+    """
+    from tracker.config import Settings
+    from tracker.llm import default_extractor, reasoning_extractor
+
+    settings = Settings(deepseek_api_key="test-key")
+    assert settings.max_completion_tokens >= 8192, (
+        "a thinking tier needs room for the deliberation AND the answer"
+    )
+    for tier in (default_extractor(settings), reasoning_extractor(settings)):
+        assert tier._budget(None) == settings.max_completion_tokens
+
+
+def test_thinking_reaches_the_wire_as_the_documented_shape():
+    """`thinking` is a request flag, and both states have to be sent explicitly.
+
+    Omitting it on the disabled path would leave the provider's default in charge
+    of the one property the drawer's latency depends on.
+    """
+    from tracker.config import Settings
+    from tracker.llm import DeepSeekExtractor
+
+    settings = Settings(deepseek_api_key="test-key")
+    off = DeepSeekExtractor(settings)._payload(system="s", user="u", max_tokens=64, stream=False)
+    # Both states are sent explicitly. Omitting the disabled one would leave the
+    # provider's default in charge of the drawer's latency.
+    assert off["thinking"] == {"type": "disabled"}
+    # max_tokens, not max_completion_tokens: the rename was the whole migration.
+    assert off["max_tokens"] == 64
+    assert "max_completion_tokens" not in off
+    # Off by default, and never on a stream.
+    assert "response_format" not in off
+    streamed = DeepSeekExtractor(settings, effort="max")._payload(
+        system="s", user="u", max_tokens=64, stream=True
+    )
+    assert "response_format" not in streamed
 
 
 def test_the_console_asks_for_the_fast_model():
@@ -298,7 +407,7 @@ def test_the_default_prompt_is_the_short_one(session):
 
 
 class _Runaway:
-    """Answers, then keeps going. Exactly what `M2-her` does on this prompt."""
+    """Answers, then keeps going. Exactly what `M2-her` did on this prompt."""
 
     model = "test-model"
 
@@ -363,14 +472,22 @@ def test_ordinary_prose_is_not_mistaken_for_a_runaway():
         assert cut is None or cut.start() > 0, text
 
 
-def test_a_models_token_ceiling_is_respected(session):
-    """`M2-her` answers HTTP 400 to anything over 2048, so an unclamped budget
-    means no briefing at all rather than a shorter one."""
-    from tracker.config import Settings
-    from tracker.llm import MODEL_TOKEN_CAP, MiniMaxExtractor
+def test_a_models_token_ceiling_is_respected(session, monkeypatch):
+    """A model that rejects the budget the rest accept gets a shorter ask, not a 400.
 
-    settings = Settings(minimax_api_key="test-key")
-    assert MiniMaxExtractor(settings, model="M2-her")._budget(4096) == 2048
-    assert MiniMaxExtractor(settings, model="MiniMax-M2")._budget(4096) == 4096
-    assert MiniMaxExtractor(settings, model="M2-her")._budget(512) == 512, "a smaller ask stands"
-    assert "M2-her" in MODEL_TOKEN_CAP
+    `MODEL_TOKEN_CAP` is empty against the v4 roster — the models take 384K, far
+    above anything asked for here — so the ceiling is injected rather than named.
+    The mechanism is what is under test: MiniMax's `M2-her` answered HTTP 400 to
+    anything over 2048, which meant no briefing at all rather than a shorter one,
+    and a roster that gains such a model again should not have to rediscover that.
+    """
+    from tracker.config import Settings
+    from tracker.llm import MODEL_TOKEN_CAP, DeepSeekExtractor
+
+    monkeypatch.setitem(MODEL_TOKEN_CAP, "tiny-model", 2048)
+    settings = Settings(deepseek_api_key="test-key")
+    assert DeepSeekExtractor(settings, model="tiny-model")._budget(4096) == 2048
+    assert DeepSeekExtractor(settings, model="deepseek-v4-flash")._budget(4096) == 4096
+    assert DeepSeekExtractor(settings, model="tiny-model")._budget(512) == 512, (
+        "a smaller ask stands"
+    )

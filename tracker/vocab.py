@@ -266,6 +266,23 @@ UNCONFIRMED_REASONS: Final[tuple[str, ...]] = (
     #: ceiling, which fires on a programme-wide total quoted in an article about
     #: one campus.
     "out_of_scale",
+    #: Quoted, verified, correct when written, and since restated by the same
+    #: project. Not a defect in the source — the article was right in 2024.
+    #:
+    #: This is the only reason here that records a decision rather than a
+    #: measurement, and it exists because supersession cannot be resolved by any
+    #: merge tiebreak we have. Hyperion (#10) kept $10B over $50B because both
+    #: claims come from `opportunitylouisiana.gov` at weight 3, neither carries a
+    #: `published_at` (they came from a search, not a feed), and the older story
+    #: was crawled second — so `fetched_at` decided it. Publication-date merging
+    #: does not help when both dates are NULL.
+    #:
+    #: Marking the losing claim here is durable in the way an edit to
+    #: `project.investment_usd` is not: `upsert.resolve` discards unconfirmed
+    #: claims outright whenever any confirmed claim exists, so the current figure
+    #: wins on every recompute, forever — and the superseded one stays visible,
+    #: attributed, and labelled, rather than being deleted.
+    "superseded",
 )
 
 # --- the claim envelope ----------------------------------------------------
