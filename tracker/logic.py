@@ -1470,6 +1470,49 @@ def _resolve_finished_obstacles(session: Session, project: Project, _f: Finding)
 #: offered they can only be verified or skipped, which is the honest set of
 #: choices until `capacity_block` lands and the rules are re-expressed per block.
 #: See the plan: those rules are then either per-block or retired.
+def free_answer(project: Project, finding: Finding) -> tuple[str, str] | None:
+    """The action an unattended run may apply without asking, and why.
+
+    Sibling of `audit.free_answer`, and held to the same bar: an answer qualifies
+    only when it is a **read of data already stored**, never a judgement about
+    which of two sourced figures to believe. A tool that guesses at the second is
+    manufacturing facts, which is the failure the whole evidence model exists to
+    prevent.
+
+    Three codes clear it, and between them they are most of the resolvable findings
+    in the database — which is what makes a whole-corpus pass affordable rather
+    than a model call per finding.
+
+    Deliberately not extended further. Every other resolvable code asks which
+    source to trust, and `audit.free_answer`'s own comment makes the same point
+    about its three cases.
+    """
+    if finding.code == "obstacle_on_a_finished_track":
+        # Whether a track's last milestone is reached is read off `event` rows that
+        # already carry their own dates and citations. No opinion enters.
+        return "r", (
+            "a track whose final milestone is reached cannot still be blocked by "
+            "an obstacle to reaching it — the track state is read, not judged"
+        )
+    if finding.code == "milestone_in_the_future":
+        # A date comparison. `tracks.standing` already refuses to count these as
+        # reached; this removes the rows so the two surfaces agree.
+        return "d", (
+            "an event dated after today has not happened yet, which is a comparison "
+            "rather than an opinion about the source"
+        )
+    if finding.code == "city_holds_a_county_name":
+        # A string test — does the name end in County, Parish, Borough — and a
+        # repair that provably cannot fork the row: `dedup.locality` already reads
+        # such a value as county granularity, so `dedup_key` is unchanged. No
+        # source is judged and no identity moves.
+        return "m", (
+            "a name ending in County or Parish is not a municipality, and moving it "
+            "leaves the dedup key untouched because it was already read that way"
+        )
+    return None
+
+
 ACTIONS: Final[dict[str, tuple[Action, ...]]] = {
     # No action: the phase and the milestone disagree because one enum is being
     # asked to describe a campus that is partly live. Neither side is wrong.

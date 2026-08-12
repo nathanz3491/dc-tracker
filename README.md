@@ -2108,6 +2108,52 @@ independent domains and reach confidence 3 — the score reserved for corroborat
 facts. `county`, `lat` and `lon` are all `FILL_ONLY`, so a value an article really
 stated is never overwritten by a lookup.
 
+### `tracker clean` — one bar, four tiers, and the command that raises a row
+
+Reading one campus by hand found eleven defects across six subsystems. There are
+hundreds of rows, so the fixes are worth nothing unless they are a pipeline, and a
+pipeline needs a definition of done that is computable.
+
+`tracker clean` composes the detectors that already exist — `logic`, `audit`,
+`quality`'s census, `gaps`, `blockcheck`, `Risk.unconfirmed`, the prompt stamp on
+`source.extractor` — and reimplements none of them. The whole free sweep runs in
+about seven seconds over the database, which is why progress is reconstructed from
+the data rather than stored: there is no ledger table and no `clean_tier` column.
+
+```
+T0 SOURCED    something real cites it, and it does not contradict itself
+T1 SOUND      nothing in a total is a lie          <- the bar worth chasing
+T2 COMPLETE   the fields a reader acts on are there, and each is backed
+T3 SETTLED    every open question has been answered
+```
+
+T1 first, because the numbers this tool publishes are sums. An incomplete row makes
+a total *smaller*; a row carrying an implausible figure, an unanswered duplicate, or
+a value decided by crawl order makes it **wrong**, and one wrong row discredits the
+table.
+
+Two definitional choices are load-bearing. `NOT_APPLICABLE` counts as complete —
+`mw_built` on an announced project is correctly null, and a 12-of-12 bar failed 97%
+of rows, which is a target nobody can use. And 待确认 counts as *backed*: the gate
+declaring it could not confirm a value is the gate **working**, so only
+`confirmed_without_quote` fails the condition.
+
+The definition is calibrated rather than asserted: a test says that if a
+fully-answered row cannot score T3, the definition is wrong and `clean.py` changes —
+not the row.
+
+```bash
+tracker clean                        # the scorecard, plus what every value rests on
+tracker clean --project 10           # one row, and the exact command that fixes each failure
+tracker clean --plan --tier 1        # the worklist, closest rows first
+tracker clean --snapshot             # append to data/runs/clean.jsonl
+tracker clean --since 1              # diff the last two runs
+```
+
+The one thing a column cannot be is a time series, which is what `--snapshot` is
+for. Two named console workflows drive it: `clean-free` (no LLM, no network) and
+`clean-paid`. Run the free one first — it removes most of the work for nothing.
+
 ### The prompts needed to know what a data center is
 
 Reading one campus closely — Meta's Hyperion, the most heavily sourced row in the

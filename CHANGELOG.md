@@ -12,6 +12,36 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **`tracker clean`** (`tracker/clean.py`, `tests/test_clean.py`). Four tiers —
+  SOURCED, SOUND, COMPLETE, SETTLED — composed from the detectors that already
+  exist, reimplementing none. T1 is the bar worth chasing: the numbers this tool
+  publishes are sums, so an incomplete row makes a total smaller while a row with
+  an implausible figure makes it wrong. `--project N` prints the exact command
+  that fixes each failure; `--plan` orders the worklist closest-first;
+  `--snapshot`/`--since` keep a time series in `data/runs/clean.jsonl`, because
+  the one thing a column cannot be is a time series. About seven seconds over the
+  whole database, which is why nothing is cached and no ledger table exists.
+
+  Two definitional choices carry it. `NOT_APPLICABLE` counts as complete — a
+  12-of-12 bar failed 97% of rows — and 待确认 counts as *backed*, since the gate
+  declaring it could not confirm a value is the gate working. A calibration test
+  says that if a fully-answered row cannot reach T3, the definition is wrong
+  rather than the row.
+
+- **`logic.free_answer`**, mirroring `audit.free_answer`. Three codes qualify —
+  obstacles on a finished track, milestones dated in the future, and a county name
+  in `city` — because each is a *read of stored data* rather than a judgement
+  about which source to trust. On the live database it answered **285 findings
+  with no model and no decision**. `logic resolve` also gained the settled-code
+  skip `audit resolve` has always had, so it stops re-offering every finding
+  every run, and `--again` to see them anyway.
+
+- **`clean-free` and `clean-paid` console workflows**, split because
+  `needs_confirmation` is per-workflow and the free routine must not demand a
+  money confirmation. Each step's `because` records why the order is what it is —
+  duplicates before enrichment, blocks before the rules that gate on them,
+  re-extraction only after every prompt and code fix has landed.
+
 - **Every prompt now knows what a data center is** (`tracker/prompts/_industry.txt`,
   prepended to all eleven system messages). Reading Hyperion — 59 sources, the
   most heavily cited row we have — found `mw_planned` at 15,962 MW, `phase` at

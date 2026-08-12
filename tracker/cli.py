@@ -3739,6 +3739,10 @@ def logic_resolve(
         typer.Option("--code", help="Work through one kind of finding only.", show_default=False),
     ] = None,
     limit: Annotated[int, typer.Option("--limit", help="Findings to offer.")] = 30,
+    again: Annotated[
+        bool,
+        typer.Option("--again", help="Re-offer findings already answered on their row."),
+    ] = False,
 ) -> None:
     """Settle the collisions that can be settled, by re-running the merge policy.
 
@@ -3824,6 +3828,30 @@ def logic_resolve(
         repairs = logic_mod.resolve_drift(session, apply=writing)
         report = logic_mod.review(session)
         findings = [f for f in report.findings if not code or f.code == code]
+
+        # Drop what has already been answered on this row. `audit resolve` has
+        # skipped settled findings since it was written; `logic resolve` did not,
+        # so it re-offered all 1,272 every run — including 384 of one code — and a
+        # person or a model had to decline the same question every time. That is
+        # also what makes "open findings" a number that can fall.
+        if not again:
+            from tracker.audit import settled_codes
+
+            settled: dict[int, set[str]] = {}
+            kept = []
+            for finding in findings:
+                if finding.project_id not in settled:
+                    row = session.get(Project, finding.project_id)
+                    settled[finding.project_id] = settled_codes(row) if row else set()
+                if finding.code not in settled[finding.project_id]:
+                    kept.append(finding)
+            skipped = len(findings) - len(kept)
+            findings = kept
+            if skipped and not json_mode():
+                console.print(
+                    f"[dim]skipping {skipped} finding(s) already answered on their row; "
+                    "--again to see them[/dim]"
+                )
         # Findings something can be done about, first. The list was ordered by
         # project id, so `--limit 30` handed a person — or a model — thirty
         # questions whose only answers were "verify" and "skip", and the ones with
@@ -3853,6 +3881,37 @@ def logic_resolve(
                 console.print(f"  {name}: {escape(str(was)[:36])} -> {escape(str(now)[:36])}")
         if repairs:
             console.print()
+
+        # The findings a comparison answers, applied without asking anybody.
+        #
+        # Held to `audit.free_answer`'s bar: a read of data already stored, never a
+        # judgement about which of two sourced figures to believe. Two codes clear
+        # it and between them they were 448 of 536 resolvable findings — so this is
+        # most of what makes a whole-database pass affordable instead of one model
+        # call per finding.
+        if writing:
+            answered = 0
+            for finding in list(findings):
+                choice = logic_mod.free_answer(session.get(Project, finding.project_id), finding)
+                if choice is None:
+                    continue
+                key, why = choice
+                row = session.get(Project, finding.project_id)
+                action = next(
+                    (a for a in logic_mod.ACTIONS.get(finding.code, ()) if a.key == key), None
+                )
+                if action is None or row is None:
+                    continue
+                what = action.apply(session, row, finding)
+                logic_mod.record_decision(row, finding.code, what, by="rule", detail=why)
+                findings.remove(finding)
+                answered += 1
+            if answered:
+                session.flush()
+                console.print(
+                    f"[green]{answered}[/green] finding(s) answered by comparison — "
+                    "no model, no decision\n"
+                )
 
         if not findings:
             console.print("[green]nothing left to decide[/green]")
