@@ -1,6 +1,99 @@
 # Handoff
 
-## Yesterday (state at start of 2026-08-10)
+## Yesterday (state at start of 2026-08-13)
+
+The last handoff entry (`4e485f5`, committed 2026-08-11 05:22) reported "no
+work done this day" — true at the moment it ran, checked against `git log`
+on this branch and four others. The day continued anyway: fourteen more
+commits landed between 10:27 that same morning and 12:20 the next day
+(2026-08-12), none recorded in any handoff until this run. Two threads:
+
+1. **A logo/favicon commit and a provider migration** (10:27–13:53,
+   2026-08-11): `8730a0d` replaced a placeholder favicon with an inline
+   citation-bracket mark; `7ec24d6` merged it in; then `f1f6b64` switched
+   every model call from MiniMax to DeepSeek (MiniMax silently ignored
+   `thinking`/`reasoning_effort`, so the drawer's briefing had been running
+   on the one model in the roster that couldn't deliberate, and it
+   measurably read rows wrong); `06b575a` prepended a new
+   `prompts/_industry.txt` background block to all eleven prompts, giving
+   the model dimensional grounding ("how big is a data center") that no
+   per-prompt rule had ever supplied; `383faab` turned reasoning on for
+   extraction and `tracker infer` (off for the drawer's briefing); `80e645c`
+   split one shared effort knob into `TRACKER_DEEPSEEK_EXTRACTION_EFFORT`
+   and `TRACKER_DEEPSEEK_INFER_EFFORT` so `infer` (one call per project) can
+   run at `max` without extraction (one call per article) paying `max`
+   thousands of times over.
+2. **A teammate's audit of Hyperion (#10), our best-sourced row (61
+   sources), and the whole response to it** (23:35 2026-08-11 through 12:20
+   2026-08-12, six commits merged as `33ac124`): `b346054` closed the gap
+   that let a settled audit finding stay "settled" after a cache rebuild
+   silently reverted the repair; `a33bdfe` shipped `tracker clean` — four
+   tiers (SOURCED/SOUND/COMPLETE/SETTLED) composed from existing detectors,
+   calibrated against a reference row rather than asserted, snapshotted to
+   `data/runs/clean.jsonl`; `4e19ded` stopped a utility's gas plants and
+   solar farms from being counted as campus capacity, and stopped
+   `reconcile` overwriting a cited figure with a tranche sum that doesn't
+   partition the campus; `f5423c1` fixed the other ten Hyperion defects
+   (future milestones read as reached, a parish stored in `city`,
+   cross-granularity duplicates invisible to the bucket-by-locality scan,
+   no way to mark a superseded claim); `957bc2b` rebuilt the drawer's claim
+   table, timeline and track cards around real provenance and deleted a 3D
+   campus schematic that drew a wrong number from bad data; `7e544b9`
+   shipped `logic.free_answer` (285 findings answered by comparison alone,
+   no model call) and two console workflows split by whether they need a
+   money confirmation.
+
+Net effect on Hyperion, verified live: `mw_planned` 14,462 → 5,000 MW,
+`phase` operational → construction, `city` "Richland Parish" → null,
+`power` energized/complete → blocked (naming the risk), 72 events → 8
+milestones. Corpus-wide `quote_backed` share 0.645 → 0.739.
+
+CHANGELOG.md and README.md were updated inside these commits themselves
+(the clean-tier section, the DeepSeek provider notes, the claim-table and
+`tracker clean` docs) — this run found no drift needing a separate edit.
+`docs/architecture.md` still needs none: it describes the CLI/database/console
+split at a level none of these fourteen commits changed. No AGENTS.md
+exists, still correctly so — one CLI/data-pipeline codebase, no distinct
+agent roles in the software itself (the commits' `Co-Authored-By: Claude
+Opus 5` trailers describe who wrote the code, not a runtime agent
+architecture).
+
+## Today (2026-08-13 run)
+
+No new commits landed during this run's window — a housekeeping pass,
+accounting for the fourteen-commit stretch above and re-verifying the
+suite: 1,931 tests green (`.venv` pytest, exit 0), up from 1,884 recorded
+2026-08-10 — and ruff clean.
+
+**Found, not caused, by this run: the live database lost 889 of 1,189
+projects on 2026-08-12.** `7e544b9`'s commit message notes the project
+count "went from 1,189 to 300... for reasons outside this work" without
+saying what the reason was; nothing in any of the fourteen commits touches
+row counts, and no script in `tracker/` or `scripts/` deletes from
+`project`. The evidence is a backup file, `data/tracker.backup-before-purge-20260812.db`
+(1,189 rows, written 10:41) sitting two minutes before `data/tracker.db`
+(300 rows, written 10:43) — a deliberate, backed-up operation, run by
+hand, between `a33bdfe`'s commit (10:40) and `4e19ded`'s (10:47), with no
+commit, script, or doc recording what it purged or why. Every historical
+count in this file above that point (1,189 projects, 27 audit findings,
+118/305 obstacles, etc.) describes a database that no longer exists in
+this form. See Tomorrow — this needs a person, not a repair.
+
+Two pieces of untracked material found sitting in the working tree, from
+the same Hyperion review, neither touched:
+
+- **`work/`** (new since 2026-08-12): a teammate's whiteboard write-up
+  (`extraction-pipeline-problem-and-approach.md`) reconciling a proposed
+  "one central LLM with search/web-fetch harness" architecture against what
+  the code already does, plus four `.pptx` review decks and two `.pdf`
+  diagrams built from it. One deck (`~$Hyperion-Tracker-Review-FINAL.pptx`)
+  carries a live PowerPoint lock file, meaning it may still be open/being
+  edited elsewhere. Review material, not project output — left uncommitted
+  pending a person's call on whether any of it belongs in `docs/`.
+- **The untracked reference PDF in `docs/`** — unchanged since 2026-08-06,
+  now eight days carried (see Tomorrow).
+
+## Older context (state at start of 2026-08-10)
 
 The prior handoff (`218f453`, committed 2026-08-09 05:37) accounted for
 `5908c68` (the milestone evidence gate, `built_capacity_uncited_in_blocks`,
@@ -614,6 +707,15 @@ branch, not this branch's work, left alone.
 
 ## Tomorrow
 
+- **Top priority: find out who ran the 2026-08-12 purge and why, and whether
+  889 of 1,189 projects were meant to go.** `data/tracker.backup-before-purge-20260812.db`
+  is the only record of it — no commit, script, or doc names the criteria.
+  Until someone confirms it was intentional (e.g. scoping to a reviewed
+  subset) or restores from the backup, every count below sourced from
+  before 08-12 10:41 describes a database that no longer matches
+  `data/tracker.db`. Re-run `tracker clean`, `duplicates`, `audit`,
+  `risks`, `logic check`, and `blocks` fresh once that's settled — the
+  numbers below are not worth trusting until then.
 - The evidence gate checks only that a quote exists and is verbatim, not
   that it actually supports the *event_type* it's filed under — a verified
   "Open house event" sentence can still sit beside a `groundbreaking` chip.
@@ -692,9 +794,21 @@ branch, not this branch's work, left alone.
   moved this much since 08-09.
 - **An untracked 2 MB PDF still sits in `docs/`**
   (`docs/能源科技AI系列报告（三）：北美AI电力新趋势PPT+ED (1).pdf`, added
-  2026-08-06 14:52, unchanged since — four days now). Still reference
+  2026-08-06 14:52, unchanged since — eight days now). Still reference
   material, not project output; still needs a human call on whether it
   belongs in the repo, `.gitignore`, or somewhere else entirely.
+- **A new untracked `work/` directory** (four `.pptx` decks, two `.pdf`
+  diagrams, one planning `.md`, added 2026-08-12) needs the same call as
+  the PDF above — plus one thing the PDF doesn't have: a live PowerPoint
+  lock file (`~$Hyperion-Tracker-Review-FINAL.pptx`), meaning a deck may
+  still be open for editing elsewhere. Don't touch until confirmed closed.
+- **Every prompt's stamp moved** when `_industry.txt` was prepended
+  (`06b575a`), so `tracker clean`'s `vintage_current` check fails on every
+  row by construction — nothing has been read by the current gate yet.
+  An `ingest crawl --stale-prompt` pass (as run 2026-08-09 for the claim
+  envelope) would re-read stale rows against the new prompts; worth doing
+  once the purge above is resolved, since re-extracting a database that
+  might still be missing 889 rows would need repeating.
 - No AGENTS.md exists for this project: still a single CLI/data-pipeline
   codebase with no distinct agent roles to document. `docs/architecture.md`
   stays high-level by design and didn't need updates today (see Today).
