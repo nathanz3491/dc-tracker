@@ -52,6 +52,7 @@ from typing import Any, Final
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from tracker.dedup import looks_like_county
 from tracker.models import Project
 from tracker.normalize import is_blank
 from tracker.tracks import RISK_TRACK, TRACK_MILESTONES, standing
@@ -772,6 +773,26 @@ def check_rules(project: Project) -> list[Finding]:
                 f"re-read {source.url}, or confirm the value in `tracker review`",
             )
 
+    # A county or parish name sitting in `city`.
+    #
+    # `city` is FILL_ONLY and identity fields skip the evidence gate, so a wrong
+    # one written at insert is permanent: no recompute, merge or re-extraction has
+    # ever been able to correct it. Hyperion (#10) has carried city="Richland
+    # Parish" since the day it was created. `crawl` now routes these at the
+    # boundary, but that only helps rows read from here on.
+    #
+    # The repair is key-neutral, which is why this one gets an action:
+    # `dedup.locality` already reads a county-suffixed `city` as county
+    # granularity, so moving it does not move `dedup_key` and cannot fork the row.
+    if project.city and looks_like_county(project.city):
+        add(
+            "city_holds_a_county_name",
+            WARNING,
+            f"city is {project.city!r}, which names a county or parish rather than a municipality",
+            ("city", "county"),
+            "move it to `county` — the dedup key already reads it that way, so nothing re-keys",
+        )
+
     return out
 
 
@@ -1361,6 +1382,21 @@ def _drop_future_milestones(session: Session, project: Project, _f: Finding) -> 
     return f"removed {len(doomed)} milestone(s) dated in the future"
 
 
+def _move_city_to_county(_s: Session, project: Project, _f: Finding) -> str:
+    """Put a parish name where it belongs, without moving the dedup key.
+
+    Safe precisely because `dedup.locality` already treats a county-suffixed
+    `city` as county granularity — so the row's identity is unchanged and no
+    lookup starts missing. `ck_project_locality` holds because the value lands in
+    `county` rather than being dropped.
+    """
+    was = project.city
+    if not project.county:
+        project.county = was
+    project.city = None
+    return f"city {was!r} -> empty (moved to county {project.county!r})"
+
+
 def _raise_planned_to_built(_s: Session, project: Project, _f: Finding) -> str:
     was, project.mw_planned = project.mw_planned, project.mw_built
     return f"mw_planned {was} -> {project.mw_planned} (plan revised up to what is built)"
@@ -1439,6 +1475,9 @@ ACTIONS: Final[dict[str, tuple[Action, ...]]] = {
     # Clearing a stale date is still honest. Declaring the campus operational
     # because one phase's date passed is not.
     "past_its_own_date": (Action("c", "that date is stale — clear it", _clear_expected_online),),
+    "city_holds_a_county_name": (
+        Action("m", "move it to county — the dedup key does not change", _move_city_to_county),
+    ),
     # No action: "no source says any of it is built" is a gap to fill, not a
     # licence to assert the whole plan is energised.
     "operational_without_built_capacity": (),

@@ -322,3 +322,62 @@ def test_implication_is_not_circular():
 
     for trigger, implied in IMPLIED_BY.items():
         assert trigger not in implied, f"{trigger} implies itself"
+
+
+def test_a_milestone_dated_in_the_future_has_not_been_reached():
+    """Hyperion read `power: energized, complete` on a campus never powered.
+
+    Two events did it: "Partial energisation expected" (2027) and "Full Phase 1
+    expected online" (2028). Both are plans. Nothing filtered by date, so every
+    forward-looking line in an article counted as history.
+    """
+    import datetime as dt
+    from types import SimpleNamespace as NS
+
+    from tracker.tracks import standing
+
+    events = [
+        NS(event_type="interconnection_agreement", event_date=dt.date(2025, 8, 20)),
+        NS(event_type="energized", event_date=dt.date(2028, 1, 1)),
+    ]
+    now = standing(1, events, [], as_of=dt.date(2026, 8, 12))
+    power = now.track("power")
+    assert power.status == "interconnection_agreement"
+    assert power.complete is False
+
+    # And asking where it stood later gives the other answer, which is what makes
+    # this a filter rather than a rule about 2026.
+    later = standing(1, events, [], as_of=dt.date(2028, 6, 1))
+    assert later.track("power").status == "energized"
+
+
+def test_an_undated_milestone_still_counts():
+    """A milestone somebody recorded without a date is a different problem from
+    one scheduled for next year, and dropping it would shorten a track silently."""
+    import datetime as dt
+    from types import SimpleNamespace as NS
+
+    from tracker.tracks import standing
+
+    got = standing(1, [NS(event_type="site_work", event_date=None)], [], as_of=dt.date(2026, 8, 12))
+    assert "site_work" in got.track("construction").reached
+
+
+def test_an_obstructed_track_names_the_obstacle():
+    """ "permits — still obstructed" is unusable if a reader must then go and find
+    which of twenty-eight recorded risks is meant."""
+    import datetime as dt
+    from types import SimpleNamespace as NS
+
+    from tracker.tracks import standing
+
+    risks = [
+        NS(
+            id=329, category="permitting", severity="material", status="open", summary="rushed vote"
+        ),
+        NS(id=4, category="water", severity="watch", status="resolved", summary="settled"),
+    ]
+    got = standing(1, [], risks, as_of=dt.date(2026, 8, 12))
+    permits = got.track("permits")
+    assert permits.blocking_risks == ((329, "permitting", "rushed vote"),)
+    assert got.track("commercial").blocking_risks == (), "a resolved risk blocks nothing"

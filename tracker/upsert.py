@@ -164,6 +164,28 @@ def claim_value(raw: Any) -> Any:
     return raw
 
 
+#: Unconfirmed reasons that record a DECISION about a claim rather than a
+#: measurement of it, and so must outlive a re-read of the same article.
+#:
+#: Everything else in `vocab.UNCONFIRMED_REASONS` is re-derived from the page
+#: every time it is read — whether a quote was offered, whether it is really in the
+#: text, whether it states this value. `superseded` is not: the article has not
+#: changed, the world has. Re-crawling the page that reported $10B would otherwise
+#: clear the mark and hand the merge straight back to crawl order.
+DECIDED_REASONS: frozenset[str] = frozenset({"superseded"})
+
+
+def _carried_reasons(row: Source, claims: dict[str, Any]) -> dict[str, str]:
+    """Decisions already recorded on this source row, for fields it still claims."""
+    try:
+        existing = json.loads(row.unconfirmed_reasons or "{}")
+    except (TypeError, ValueError):
+        return {}
+    if not isinstance(existing, dict):
+        return {}
+    return {k: v for k, v in existing.items() if v in DECIDED_REASONS and k in claims}
+
+
 def _weight(source_type: str) -> int:
     return conf.SOURCE_WEIGHTS.get(source_type, 1)
 
@@ -324,9 +346,7 @@ def resolve_field(field_name: str, claims: list[_Claim], existing: Any) -> Any:
     return _resolve(field_name, claims, existing)
 
 
-def _resolve(
-    field_name: str, claims: list[_Claim], existing: Any, *, ratchet: bool = True
-) -> Any:
+def _resolve(field_name: str, claims: list[_Claim], existing: Any, *, ratchet: bool = True) -> Any:
     """Apply the *field's* policy to choose one value. Thin wrapper over `resolve`."""
     return resolve(
         FIELD_POLICY.get(field_name, Policy.PREFER_WEIGHT), claims, existing, ratchet=ratchet
@@ -717,9 +737,20 @@ def upsert_record(session: Session, rec: IngestRecord, *, force_new: bool = Fals
         # the value it explains. Sorted for the same byte-identical re-ingest
         # reason as `claims`.
         why = {k: v for k, v in dict(sr.unconfirmed_reasons).items() if k in claims}
+        # `superseded` is an operator's decision about this claim, not a
+        # measurement of it, so it survives a re-crawl of the same URL. Everything
+        # else here is re-derived from the article and rightly overwritten — but
+        # re-reading the page that said $10B would otherwise silently un-supersede
+        # the figure and hand the merge back to crawl order.
+        carried = _carried_reasons(row, claims)
+        why = {**carried, **{k: v for k, v in why.items() if k not in carried}}
         row.unconfirmed_reasons = (
             json.dumps(why, sort_keys=True, ensure_ascii=False) if why else None
         )
+        if carried:
+            row.unconfirmed_fields = derive_fields(
+                {k: v for k, v in claims.items() if k in sr.unconfirmed or k in carried}
+            )
         # Sorted so a re-ingest of the same article writes byte-identical JSON and
         # the idempotence test keeps holding, exactly as `claims` above.
         row.quotes = (

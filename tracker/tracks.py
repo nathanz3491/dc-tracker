@@ -36,6 +36,7 @@ the evidence.
 
 from __future__ import annotations
 
+import datetime as dt
 from dataclasses import dataclass
 from typing import Final
 
@@ -147,6 +148,13 @@ class TrackState:
     reached: tuple[str, ...] = ()
     blockers: tuple[str, ...] = ()
     blocker_severity: str | None = None
+    #: The open obstacles behind `blockers`, as (risk id, category, summary).
+    #:
+    #: `blockers` holds bare category names, which is why every surface could say a
+    #: track was obstructed and none could say by WHAT. A reader looking at
+    #: "permits — still obstructed" has to go and find which of twenty-eight
+    #: recorded risks is meant; this carries the answer with the finding.
+    blocking_risks: tuple[tuple[int, str, str], ...] = ()
     #: Of `reached`, the milestones nothing was read for — deduced from a later
     #: milestone on another track (see :data:`IMPLIED_BY`). Kept distinct because a
     #: deduction is not a citation, and an operator checking the row should be able
@@ -244,13 +252,45 @@ class ProjectStanding:
         return reached[-1].track if reached else None
 
 
-def standing(project_id: int, events, risks) -> ProjectStanding:
+def standing(project_id: int, events, risks, *, as_of: dt.date | None = None) -> ProjectStanding:
     """Derive every track for one project from its events and open risks.
 
     `events` and `risks` are any iterables of rows carrying `event_type`, and
     `category`/`severity`/`status` respectively. Kept structural rather than
     ORM-typed so this module stays importable and testable without a database.
+
+    **A milestone dated in the future has not been reached.** `as_of` defaults to
+    today and filters `events` on `event_date`; pass an explicit date to ask where
+    a project stood then. Without this filter every forward-looking line in an
+    article counted as history, and the effect was not subtle: Hyperion (#10)
+    reported `power: energized, complete` on the strength of two events reading
+    "Partial energisation **expected**" (2027) and "Full Phase 1 **expected**
+    online" (2028), on a campus that has never drawn power. An undated event is
+    kept — it is a milestone somebody recorded without saying when, which is a
+    different problem from one scheduled for next year.
     """
+    if as_of is None:
+        as_of = dt.date.today()
+
+    def reached_by(event) -> bool:
+        when = getattr(event, "event_date", None)
+        if when is None:
+            return True
+        if isinstance(when, str):
+            # This module is deliberately structural rather than ORM-typed — its
+            # docstring says so — and callers do pass ISO strings. An unparseable
+            # one counts as reached: refusing to place a milestone because its date
+            # is malformed would silently shorten a track, which is the same class
+            # of quiet wrongness this filter exists to remove.
+            try:
+                when = dt.date.fromisoformat(when[:10])
+            except ValueError:
+                return True
+        if isinstance(when, dt.datetime):
+            when = when.date()
+        return when <= as_of
+
+    events = [e for e in events if reached_by(e)]
     observed = {getattr(e, "event_type", None) for e in events}
 
     # Close over the implications: a project that installed equipment controls its
@@ -263,6 +303,7 @@ def standing(project_id: int, events, risks) -> ProjectStanding:
     reached_types = observed | implied
 
     by_track: dict[str, list] = {t: [] for t in TRACKS}
+    named: dict[str, list[tuple[int, str, str]]] = {t: [] for t in TRACKS}
     severity: dict[str, str] = {}
     for risk in risks:
         # A resolved obstacle is history, not a blocker.
@@ -272,6 +313,13 @@ def standing(project_id: int, events, risks) -> ProjectStanding:
         if track is None:
             continue
         by_track[track].append(risk.category)
+        named[track].append(
+            (
+                getattr(risk, "id", 0) or 0,
+                risk.category,
+                (getattr(risk, "summary", "") or "").strip(),
+            )
+        )
         current = severity.get(track)
         this = getattr(risk, "severity", None) or "watch"
         if current is None or severity_rank(this) > severity_rank(current):
@@ -286,6 +334,7 @@ def standing(project_id: int, events, risks) -> ProjectStanding:
                 reached=tuple(m for m in ladder if m in reached_types),
                 blockers=tuple(dict.fromkeys(by_track[name])),
                 blocker_severity=severity.get(name),
+                blocking_risks=tuple(named[name]),
                 implied=frozenset(m for m in ladder if m in implied),
             )
         )

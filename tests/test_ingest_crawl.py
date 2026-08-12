@@ -2236,3 +2236,45 @@ def test_should_escalate_stops_at_the_top_rung():
     assert should_escalate(FetchResult("u", False, status=403, via="curl_cffi")) is True
     assert should_escalate(FetchResult("u", False, status=403, via="crawl4ai")) is False
     assert should_escalate(FetchResult("u", True, markdown="x" * 5000, via="curl_cffi")) is False
+
+
+def test_a_forward_looking_event_quote_is_not_treated_as_a_milestone():
+    """Real sentence, wrong tense — the failure the date filter cannot catch.
+
+    "Peak construction workforce expected to reach 5,000" was filed as
+    `equipment_install` on 2026-06-01. That date has since passed, so
+    `tracks.standing`'s date filter lets it through, and Hyperion's construction
+    track read `equipment_install, complete` with nothing installed.
+    """
+    from tracker.ingest.crawl import _event_quote_supports
+
+    assert not _event_quote_supports(
+        "equipment_install", "Peak construction workforce expected to reach 5,000."
+    )
+    assert not _event_quote_supports("energized", "Partial energisation is expected in 2027.")
+    assert not _event_quote_supports(
+        "energized", "Once operational, this data center will support 1,000 jobs."
+    )
+    # And the sentences that DO record something, which a keyword list for
+    # milestone vocabulary would have rejected.
+    assert _event_quote_supports("groundbreaking", "Meta broke ground in December 2024.")
+    assert _event_quote_supports("site_work", "Site work began at Hyperion in December 2024.")
+    assert _event_quote_supports(
+        "permit_approved", "The LPSC approved construction of three turbines on August 20."
+    )
+
+
+def test_a_county_name_never_lands_in_the_city_column(session, prompt):
+    """`city` is FILL_ONLY and skips the evidence gate, so a wrong one is forever.
+
+    Hyperion has carried city="Richland Parish" since the day it was created,
+    from a source that has since been re-extracted away. Routing it is provably
+    key-neutral — `dedup.locality` already reads a county-suffixed city as county
+    granularity — so no row forks.
+    """
+    from tracker.dedup import dedup_key, locality
+
+    assert locality("Richland Parish", None).kind == "county"
+    assert dedup_key("Meta", "Richland Parish", None, "LA") == dedup_key(
+        "Meta", None, "Richland Parish", "LA"
+    )

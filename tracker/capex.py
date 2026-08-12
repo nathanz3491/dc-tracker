@@ -642,7 +642,11 @@ def suspect_attributions(session: Session) -> list[tuple[int, str, str]]:
 #: * a **party** in common means one company string names the other's operator,
 #:   which is how one campus becomes four rows;
 #: * a **name** token in common is the weakest — it is a word, and words recur.
-EVIDENCE_ORDER: tuple[str, ...] = ("tranche", "party", "name")
+#: Duplicate signals, strongest first. `identity` leads because it is the one
+#: signal that is *structural* rather than textual: two rows whose dedup keys
+#: describe the same place at different granularity are the same place, and no
+#: amount of name resemblance is that solid.
+EVIDENCE_ORDER: tuple[str, ...] = ("identity", "tranche", "party", "name")
 
 
 @dataclass(frozen=True)
@@ -672,11 +676,17 @@ class DuplicatePair:
     shared_parties: tuple[str, ...] = ()
     #: Name words that survive the generic and locality filters.
     shared_tokens: tuple[str, ...] = ()
+    #: Dedup keys the two rows share once each is expanded to every granularity it
+    #: could be written at, or the reason a cross-granularity match was declared.
+    #: This is the signal the locality bucketing structurally cannot see, because
+    #: the two rows are in different buckets by construction.
+    shared_keys: tuple[str, ...] = ()
 
     @property
     def kinds(self) -> tuple[str, ...]:
         """Which signals raised this pair, strongest first."""
         got = {
+            "identity": bool(self.shared_keys),
             "tranche": bool(self.shared_blocks),
             "party": bool(self.shared_parties),
             "name": bool(self.shared_tokens),
@@ -701,6 +711,8 @@ class DuplicatePair:
             )
         if self.shared_parties:
             parts.append(f"both name {', '.join(self.shared_parties[:3])}")
+        if self.shared_keys:
+            parts.insert(0, f"same place at different granularity ({self.shared_keys[0]})")
         if self.shared_tokens:
             parts.append(f"both names carry {', '.join(sorted(self.shared_tokens)[:3])}")
         return "; ".join(parts) or "same locality"
@@ -714,6 +726,7 @@ class DuplicatePair:
             "locality": f"{self.locality}, {self.state}",
             "b_mw": self.b_mw,
             "evidence": list(self.kinds),
+            "shared_keys": list(self.shared_keys),
             "why": self.why,
         }
 
@@ -828,6 +841,68 @@ def suspected_duplicates(session: Session, *, include_parked: bool = False) -> l
                         shared_tokens=tokens,
                     )
                 )
+    # --- The pairs the locality bucket structurally cannot see -----------------
+    #
+    # Everything above compares rows *within* one `(city or county, state)` bucket.
+    # That is exactly what a cross-granularity duplicate is not: Hyperion is stored
+    # four times as `richland parish`, `holly ridge`, `richland` and `richmond
+    # parish`, so the four rows sit in four buckets and no amount of name or
+    # tranche evidence is ever consulted. `tracker duplicates` found none of them.
+    #
+    # `dedup.all_keys` and `is_cross_granularity_match` already answer this, and
+    # `upsert._find_duplicate_candidate` already calls them at ingest time — it
+    # wrote "possible duplicate of project #284" into row #10's notes. The read
+    # path simply never asked. So this is a second pass, unioned rather than
+    # substituted: measured against the live database the structural pass alone
+    # finds 259 pairs but LOSES 225 of the 230 the locality pass finds, because it
+    # cannot see the same-locality/different-company case that made `capex` need
+    # this in the first place.
+    from tracker.dedup import all_keys, is_cross_granularity_match
+
+    seen = {canonical(p.a_id, p.b_id) for p in pairs}
+    expanded = {p.id: set(all_keys(p.company, p.city, p.county, p.state)) for p in projects}
+    by_company: dict[tuple[str, str], list[Project]] = {}
+    for project in projects:
+        # Bucketed on the company/state prefix of the key rather than on locality,
+        # which is the whole point — locality is the axis that disagrees.
+        stem = next(iter(expanded[project.id]), "").split("|")[0]
+        if stem:
+            by_company.setdefault((stem, project.state), []).append(project)
+
+    for group in by_company.values():
+        for i, a in enumerate(group):
+            for b in group[i + 1 :]:
+                key = canonical(a.id, b.id)
+                if key in seen or key in parked:
+                    continue
+                overlap = tuple(sorted(expanded[a.id] & expanded[b.id]))
+                # Both take *keys*. A row knowing only its city and one knowing
+                # only its county never share a key, so the granularity test is
+                # the only thing that connects them — it is what pairs #10
+                # (`county:richland`) with #929 (`city:richland`).
+                cross = any(
+                    is_cross_granularity_match(one, other)
+                    for one in expanded[a.id]
+                    for other in expanded[b.id]
+                )
+                if not overlap and not cross:
+                    continue
+                seen.add(key)
+                pairs.append(
+                    DuplicatePair(
+                        a_id=a.id,
+                        a_company=a.company,
+                        a_name=a.name,
+                        b_id=b.id,
+                        b_company=b.company,
+                        b_name=b.name,
+                        locality=a.city or a.county or "",
+                        state=a.state,
+                        b_mw=float(b.mw_planned or 0.0),
+                        shared_keys=overlap or ("city and county granularity differ",),
+                    )
+                )
+
     # Strongest evidence first, so the pair most worth merging is the one on
     # screen. `looks_like_the_same_site` decided the same things in the same order
     # and threw the reason away; nothing is detected differently here.
