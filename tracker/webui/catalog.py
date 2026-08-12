@@ -136,7 +136,18 @@ GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ),
     (
         "Inspect",
-        ("list", "show", "risks", "exposure", "capex", "stats", "gaps", "queue", "blocks"),
+        (
+            "list",
+            "show",
+            "risks",
+            "exposure",
+            "capex",
+            "stats",
+            "gaps",
+            "clean",
+            "queue",
+            "blocks",
+        ),
     ),
     ("Judge", ("review", "verify", "infer", "logic check", "audit", "audit check")),
     (

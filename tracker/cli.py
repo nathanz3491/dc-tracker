@@ -2968,6 +2968,7 @@ def stats() -> None:
                     "mw_planned_cited_sum": mw,
                     "mw_planned_cited_projects": with_mw,
                     "investment_usd_cited_sum": investment,
+                    "evidence": _clean_census(session),
                     "by": grouped,
                 }
             )
@@ -2982,6 +2983,24 @@ def stats() -> None:
             "[dim]sums cover only projects where the figure is cited; "
             "they are a floor, not a total.[/dim]"
         )
+
+        # What those figures rest on. Printed here because `stats` is the command
+        # in the `report` workflow, and a headline capacity means something
+        # different when a third of the values behind it carry no sentence. The
+        # census is the campaign's primary metric and had no CLI surface at all —
+        # it was reachable only from `scripts/measure_extraction.py`.
+        from tracker import quality as quality_mod
+
+        census = quality_mod.evidence_census(session)
+        if census.total:
+            backed = census.share(quality_mod.QUOTE_BACKED)
+            tone = "green" if backed >= 0.75 else "yellow" if backed >= 0.5 else "red"
+            console.print(
+                f"evidence: [{tone}]{backed:.0%}[/{tone}] of {census.total} stored values "
+                f"carry a quote"
+                + (f", [red]{census.defects} with none[/red]" if census.defects else "")
+            )
+            console.print("[dim]per-row detail and what would fix it: tracker clean[/dim]")
 
         for label, column in (
             ("phase", Project.phase),
@@ -5007,6 +5026,330 @@ def gaps() -> None:
             console.print("\n[bold]most missing rows[/bold] (measurable fields only)")
             for gap in headroom:
                 console.print(f"  {gap.field:16} {gap.missing} of {gap.applicable} to fill")
+
+
+#: Where `clean --snapshot` accumulates. A file rather than a table: the numbers
+#: are a pure function of the rows, so storing them per project would drift the
+#: moment a source changed — but a *time series* is the one thing a column cannot
+#: be, and "did the campaign work" is only answerable by comparing two runs.
+CLEAN_LOG = "clean.jsonl"
+
+
+def _clean_log_path() -> Path:
+    return _db_path().parent / "runs" / CLEAN_LOG
+
+
+def _clean_census(session) -> dict:
+    """The evidence census, in the shape both the payload and a snapshot carry.
+
+    This is the campaign's headline number, so it goes in every `clean` payload and
+    not only into a snapshot. `quote_backed` versus `flagged_unconfirmed` is the
+    split that matters: the second is the gate *working* — a value it refused to
+    confirm and said so — and lumping the two together reported hundreds of
+    successes as failures.
+    """
+    from tracker import quality
+
+    census = quality.evidence_census(session)
+    return {
+        "total": census.total,
+        "buckets": census.buckets,
+        "defects": census.defects,
+        "defects_by_vintage": census.defects_by_vintage,
+        "quote_backed_share": round(census.share(quality.QUOTE_BACKED), 4),
+    }
+
+
+def _write_clean_snapshot(session, sweep, census: dict) -> Path:
+    """Append one line: the tier histogram, the census, and what produced them.
+
+    The provenance fields are not decoration. A snapshot whose numbers moved is
+    only interpretable if you know whether the *prompt* moved too, so the stamp and
+    the schema version travel with the counts.
+    """
+    from tracker.models import utcnow
+    from tracker.prompts import load_prompt
+
+    line = {
+        "at": utcnow().isoformat(timespec="seconds"),
+        "prompt": load_prompt("extract-v1").stamp,
+        "schema_version": schema_version(session.get_bind()),
+        **sweep.as_json(),
+        "census": census,
+    }
+    path = _clean_log_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(line, ensure_ascii=False, sort_keys=True) + "\n")
+    return path
+
+
+def _read_clean_snapshots() -> list[dict]:
+    path = _clean_log_path()
+    if not path.is_file():
+        return []
+    out = []
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        if raw.strip():
+            try:
+                out.append(json.loads(raw))
+            except json.JSONDecodeError:
+                # A half-written line from a killed run. Say so and keep the rest:
+                # the file is append-only history, so one bad line must not make
+                # the whole series unreadable.
+                err.print(f"[yellow]skipping an unreadable line in {path}[/yellow]")
+    return out
+
+
+def _diff_clean_snapshots(back: int) -> dict:
+    """This run against the one `back` snapshots ago. Empty when there is no pair."""
+    history = _read_clean_snapshots()
+    if len(history) <= back:
+        return {"available": len(history), "note": f"need {back + 1} snapshots to diff"}
+    now, before = history[-1], history[-1 - back]
+    moved = {}
+    for key in sorted(set(now.get("failures", {})) | set(before.get("failures", {}))):
+        was = before.get("failures", {}).get(key, 0)
+        is_now = now.get("failures", {}).get(key, 0)
+        if was != is_now:
+            moved[key] = {"was": was, "now": is_now, "delta": is_now - was}
+    return {
+        "from": before.get("at"),
+        "to": now.get("at"),
+        "prompt_changed": before.get("prompt") != now.get("prompt"),
+        "at_or_above": {
+            tier: {
+                "was": before.get("at_or_above", {}).get(tier, 0),
+                "now": now.get("at_or_above", {}).get(tier, 0),
+            }
+            for tier in sorted(now.get("at_or_above", {}))
+        },
+        "failures": moved,
+    }
+
+
+def _render_clean_card(got) -> None:
+    colour = {3: "green", 2: "green", 1: "yellow", 0: "yellow"}.get(got.tier, "red")
+    console.print(
+        f"\n[bold]#{got.project_id} {got.name}[/bold] — "
+        f"[{colour}]T{got.tier} {got.label}[/{colour}]"
+    )
+    table = Table(header_style="bold", box=TABLE_BOX, title_justify="left")
+    table.add_column("")
+    table.add_column("condition")
+    table.add_column("why / what is left", style="dim")
+    for level, label, keys in clean_mod_tiers():
+        for key in keys:
+            cond = got.by_key.get(key)
+            if cond is None:
+                continue
+            mark = "[green]ok[/green]" if cond.ok else "[red]no[/red]"
+            table.add_row(mark, f"T{level} {key}", cond.detail or f"[dim]{label}[/dim]")
+    console.print(table)
+
+    if got.blocking:
+        console.print(f"\n[bold]to reach T{got.tier + 1}[/bold]")
+        for cond in got.blocking:
+            remedy = cond.remedy(got.project_id)
+            console.print(f"  {cond.key:20} [cyan]{remedy}[/cyan]" if remedy else f"  {cond.key}")
+    else:
+        console.print("\n[green]nothing outstanding[/green] — this row is the reference shape")
+
+
+def clean_mod_tiers():
+    from tracker.clean import TIERS
+
+    return TIERS
+
+
+def _render_clean_sweep(sweep, *, total: int, census: dict | None = None) -> None:
+    table = Table(header_style="bold", box=TABLE_BOX, title="rows by tier", title_justify="left")
+    table.add_column("tier")
+    table.add_column("rows", justify="right")
+    table.add_column("at or above", justify="right")
+    table.add_column("meaning", style="dim")
+    unsourced = sweep.histogram.get(-1, 0)
+    if unsourced:
+        table.add_row("—", str(unsourced), "", "not even sourced")
+    for level, label, _keys in clean_mod_tiers():
+        table.add_row(
+            f"T{level} {label}",
+            str(sweep.histogram.get(level, 0)),
+            str(sweep.at_or_above(level)),
+            _TIER_MEANING.get(level, ""),
+        )
+    console.print(table)
+
+    if census and census.get("total"):
+        from tracker import quality
+
+        buckets = census["buckets"]
+        console.print(
+            f"\n[bold]what the {census['total']} stored values rest on[/bold] — "
+            f"{census['quote_backed_share']:.1%} carry a sentence"
+        )
+        for bucket in quality.BUCKETS:
+            count = buckets.get(bucket, 0)
+            if not count:
+                continue
+            # 待确认 is the gate working, not a defect. Only the third bucket is a
+            # value presented as established with nothing behind it.
+            tone = (
+                "red"
+                if bucket == quality.SILENT_DEFECT
+                else "green"
+                if bucket == quality.QUOTE_BACKED
+                else "dim"
+            )
+            console.print(f"  [{tone}]{bucket:24}[/{tone}] {count:5}")
+        if census["defects_by_vintage"]:
+            console.print(f"  [dim]defects by prompt: {census['defects_by_vintage']}[/dim]")
+
+    if sweep.failures:
+        console.print("\n[bold]what is failing, most rows first[/bold]")
+        for key, count in sorted(sweep.failures.items(), key=lambda kv: (-kv[1], kv[0])):
+            share = f"{count / total:.0%}" if total else "—"
+            console.print(f"  {key:22} {count:5}  [dim]{share} of rows[/dim]")
+        console.print(
+            "\n[dim]one row's detail:[/dim] tracker clean --project N"
+            "   [dim]the worklist:[/dim] tracker clean --plan --tier 1"
+        )
+
+
+_TIER_MEANING = {
+    0: "cited, and not self-contradictory",
+    1: "nothing in a total is a lie",
+    2: "the fields a reader acts on are present and backed",
+    3: "every open question answered",
+}
+
+
+def _render_clean_plan(rows, *, tier: int, short: int, total: int) -> None:
+    if not rows:
+        console.print(f"[green]every row is at T{tier} or above[/green]")
+        return
+    console.print(
+        f"[bold]{len(rows)} row(s)[/bold] short of T{tier}, closest first "
+        f"[dim]({short} of {total} already there)[/dim]\n"
+    )
+    for got in rows:
+        console.print(f"[bold]#{got.project_id}[/bold] {got.name} [dim]T{got.tier}[/dim]")
+        for cond in got.blocking:
+            remedy = cond.remedy(got.project_id)
+            detail = f" [dim]— {cond.detail}[/dim]" if cond.detail else ""
+            console.print(f"    [cyan]{remedy}[/cyan]{detail}" if remedy else f"    {cond.key}")
+
+
+def _render_clean_diff(diff: dict) -> None:
+    if "note" in diff:
+        console.print(f"\n[yellow]{diff['note']}[/yellow]")
+        return
+    console.print(f"\n[bold]since {diff['from']}[/bold]")
+    if diff.get("prompt_changed"):
+        console.print("  [yellow]the prompt changed between these runs[/yellow]")
+    for tier, pair in diff["at_or_above"].items():
+        delta = pair["now"] - pair["was"]
+        arrow = "[green]+[/green]" if delta > 0 else "[red]-[/red]" if delta < 0 else " "
+        console.print(f"  at or above T{tier}: {pair['was']} -> {pair['now']} {arrow}{abs(delta)}")
+    for key, moved in diff["failures"].items():
+        colour = "green" if moved["delta"] < 0 else "red"
+        console.print(f"  {key:22} {moved['was']} -> [{colour}]{moved['now']}[/{colour}]")
+
+
+@app.command()
+def clean(
+    project_id: Annotated[
+        int | None,
+        typer.Option("--project", help="One row's card, with the command that fixes each failure."),
+    ] = None,
+    plan: Annotated[
+        bool,
+        typer.Option("--plan", help="Print the ordered worklist as runnable command lines."),
+    ] = False,
+    tier: Annotated[
+        int, typer.Option("--tier", help="With --plan: the tier to bring rows up to.")
+    ] = 1,
+    limit: Annotated[int, typer.Option("--limit", help="With --plan: how many rows to list.")] = 40,
+    snapshot: Annotated[
+        bool,
+        typer.Option("--snapshot", help="Append this run's numbers to data/runs/clean.jsonl."),
+    ] = False,
+    since: Annotated[
+        int | None,
+        typer.Option("--since", help="Diff against the snapshot N runs back (1 = the last one)."),
+    ] = None,
+) -> None:
+    """How trustworthy each row is, on four tiers, and what would raise it.
+
+    Composes the detectors that already exist — nothing here is a new opinion about
+    the data. Read-only and free: no LLM, no network, no write lock, so it runs
+    while an ingest holds the database.
+
+        T0 SOURCED    something real cites it, and it does not contradict itself
+        T1 SOUND      nothing in a total is a lie          <- the bar worth chasing
+        T2 COMPLETE   the fields a reader acts on are there, and each is backed
+        T3 SETTLED    every open question has been answered
+
+    T1 first, because the numbers this tool publishes are sums: an incomplete row
+    makes a total smaller, but an implausible figure or an unanswered duplicate
+    makes it wrong.
+    """
+    from tracker import clean as clean_mod
+
+    engine = _read_engine()
+    with session_scope(engine, commit=False) as session:
+        if project_id is not None:
+            project = session.get(Project, project_id)
+            if project is None:
+                _fail(f"project #{project_id} does not exist")
+                return
+            got = clean_mod.card(session, project)
+            if json_mode():
+                emit(got.as_json())
+                return
+            _render_clean_card(got)
+            return
+
+        total = session.scalar(select(func.count()).select_from(Project)) or 0
+        if not total:
+            if json_mode():
+                emit({"projects": 0, "histogram": {}, "failures": {}})
+                return
+            console.print("[yellow]database is empty[/yellow] — run `tracker sync` first")
+            return
+
+        sweep = clean_mod.scan(session)
+
+        if plan:
+            rows = clean_mod.worklist(sweep, tier=tier, limit=limit)
+            if json_mode():
+                emit(
+                    {
+                        "tier": tier,
+                        "rows": [
+                            {**c.as_json(), "next": [b.key for b in c.blocking]} for c in rows
+                        ],
+                    }
+                )
+                return
+            _render_clean_plan(rows, tier=tier, short=sweep.at_or_above(tier), total=total)
+            return
+
+        census = _clean_census(session)
+        payload = {**sweep.as_json(), "census": census}
+        if snapshot:
+            payload["snapshot"] = str(_write_clean_snapshot(session, sweep, census))
+        if since is not None:
+            payload["since"] = _diff_clean_snapshots(since)
+
+        if json_mode():
+            emit(payload)
+            return
+        _render_clean_sweep(sweep, total=total, census=census)
+        if snapshot:
+            console.print(f"\n[dim]recorded in {payload['snapshot']}[/dim]")
+        if since is not None:
+            _render_clean_diff(payload["since"])
 
 
 @app.command()
