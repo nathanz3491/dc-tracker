@@ -263,7 +263,17 @@ def group_blocks(project_id: int, blocks: list[Any]) -> list[Group]:
 
     Singletons are not reported: this asks which blocks are the *same*, and one
     block is not a question.
+
+    **Generation is excluded before anything is grouped.** A utility's gas units
+    and a data center's halls are different things measured in different megawatts,
+    and every sum in `blocks.rollup` and `blocks.account` already splits them —
+    this is the same split, one level down. Without it Hyperion (#10) offers a
+    merge of two Entergy combined-cycle units on the strength of both being
+    numbered 1, and accepting it would fold a power station into a campus.
     """
+    from tracker.blocks import is_generation
+
+    blocks = [b for b in blocks if not is_generation(b.label, getattr(b, "parent", None))]
     members = [Member.of(b) for b in blocks]
     claims = {m.block_id: families(m) for m in members}
 

@@ -16,7 +16,7 @@ import threading
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 from urllib.parse import parse_qs, urlsplit
 
 from tracker import __version__
@@ -279,6 +279,10 @@ class Handler(BaseHTTPRequestHandler):
     def _route_get(self, route: str, query: dict[str, list[str]]) -> None:
         if route in {"/", "/index.html"}:
             return self._page()
+        if route in {"/dev", "/dev/"}:
+            return self._page(dev=True)
+        if route == "/api":
+            return self._api_index()
         if route.startswith("/static/"):
             return self._static(route[len("/static/") :], query)
         if route == "/api/dataset":
@@ -309,6 +313,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(record) if record else self._error(404, f"no run {rest!r}")
         if route == "/api/discover":
             return self._discover()
+        if route == "/api/landing":
+            return self._landing()
         if route == "/api/health":
             return self._json({"ok": True, "version": __version__})
         self._error(404, f"no route {route!r}")
@@ -383,7 +389,20 @@ class Handler(BaseHTTPRequestHandler):
         log.info("console: signed in from %s", client)
         self._json({"ok": True}, extra=self._set_session_cookie(token))
 
-    def _page(self) -> None:
+    def _page(self, *, dev: bool = False) -> None:
+        """The console shell. Two faces, one bundle.
+
+        `/` reads the dataset; `/dev` runs commands. The difference is one flag on
+        `window.DC_MODE`, which the front end reads to pick its view set — rather
+        than a second bundle, because `assets.bundle_css` exists precisely because
+        a chain of imports costs a serial round-trip each, and the reading console
+        is the one that must not pay for them.
+
+        The flag is a *display* choice and nothing more. What the dev console can
+        actually do is still governed by `allow_write` on the server, so
+        `serve --no-run` renders `/dev` with every button inert. A page cannot
+        grant itself a capability by asking for a different shell.
+        """
         index = assets.STATIC_ROOT / "index.html"
         if not index.is_file():
             return self._error(
@@ -394,6 +413,10 @@ class Handler(BaseHTTPRequestHandler):
         # Stamped on the way out, so every asset URL carries its file's version.
         # The page itself is `no-store`, so the tokens are never stale.
         html = assets.stamp(index.read_text(encoding="utf-8"))
+        html = html.replace(
+            '<div id="root"></div>',
+            f'<script>window.DC_MODE="{"dev" if dev else "read"}"</script>\n<div id="root"></div>',
+        )
         self._send(200, html.encode("utf-8"), "text/html; charset=utf-8")
 
     def _static(self, relative: str, query: dict[str, list[str]] | None = None) -> None:
@@ -451,6 +474,139 @@ class Handler(BaseHTTPRequestHandler):
 
         with self.console.read_session() as session:
             self._json(funnel.survey(session).as_json())
+
+    #: Every route, what it answers, and what it costs. Hand-written on purpose,
+    #: for the reason `catalog.GROUPS` is: a derived list describes the code, and
+    #: what a caller needs is what the route is *for*. A test asserts that every
+    #: route the handler dispatches appears here, so it cannot silently rot.
+    API: ClassVar[dict[str, dict[str, Any]]] = {
+        "GET /api": {"answers": "this index", "reads": None},
+        "GET /api/health": {"answers": "liveness and version", "reads": None},
+        "GET /api/dataset": {
+            "answers": "every project with its claims, plus capex, gaps, queue and totals",
+            "reads": "the whole database",
+            "note": "the console refetches this after every run; ~1 MB",
+        },
+        "GET /api/landing": {
+            "answers": "evidence census, clean tiers, and what is waiting on a person",
+            "reads": "quality.evidence_census + clean.scan + sources.survey",
+            "note": "~2.5s. Its own route so /api/dataset stays fast.",
+        },
+        "GET /api/discover": {
+            "answers": "per-feed funnel: queued, read, no_project, cited, dated",
+            "reads": "ingest_url",
+        },
+        "GET /api/commands": {
+            "answers": "every command, its flags and their types, plus the workflows",
+            "reads": None,
+            "note": "the palette is built from this; a flag added to the CLI appears here",
+        },
+        "GET /api/runs": {"answers": "run history and the current run", "reads": "data/runs"},
+        "GET /api/run/<id>": {"answers": "one run's log", "reads": "data/runs"},
+        "GET /api/run/<id>/stream": {"answers": "that log as it is written", "reads": "data/runs"},
+        "POST /api/run": {
+            "answers": "starts a command; returns its run id",
+            "writes": True,
+            "note": "refused unless the server was started with --run. "
+            "Body: {cmd, flags} or {workflow} or {line}. Validated against the catalog.",
+        },
+        "POST /api/workflow": {
+            "answers": "starts a named routine; returns its run id",
+            "writes": True,
+            "note": "each step validated against the catalog, so a blocked command "
+            "cannot be reached by putting it in a sequence",
+        },
+        "POST /api/run/cancel": {"answers": "cancels the running command", "writes": True},
+        "POST /api/queue/drop": {"answers": "drops queued URLs", "writes": True},
+        "POST /api/infer": {"answers": "one project's inferred analysis", "writes": True},
+        "POST /api/overview": {"answers": "one project's AI reading", "writes": True},
+        "POST /api/overview/stream": {
+            "answers": "that reading as it is generated",
+            "writes": True,
+        },
+        "POST /api/capex/overview/stream": {
+            "answers": "an AI reading of one capex position, streamed",
+            "writes": True,
+        },
+        "POST /api/login": {"answers": "exchanges the password for a session cookie"},
+        "POST /api/logout": {"answers": "clears it"},
+    }
+
+    def _api_index(self) -> None:
+        """The route map, so a caller does not have to read `_route_get`.
+
+        Written for an agent as much as for a person: the console is driven from a
+        terminal as often as from a browser, and "what can I ask this server?" had
+        no answer short of reading the source.
+        """
+        self._json(
+            {
+                "service": "dc-tracker console",
+                "version": __version__,
+                "consoles": {
+                    "/": "read the dataset — overview, projects, map, capex",
+                    "/dev": "run things — pipeline, commands, help",
+                },
+                "allow_write": self.console.allow_write,
+                "routes": self.API,
+            }
+        )
+
+    def _landing(self) -> None:
+        """What the landing page needs to answer "can I trust these numbers?".
+
+        Named `_landing`, not `_overview`: `/api/overview` is already the POST that
+        writes a project's AI reading, and a second `_overview` silently shadowed
+        it — Python keeps the last definition, so the *write* path was the one that
+        survived and every GET arrived at a handler expecting a body.
+
+        **Its own route, and that is not a style choice.** Measured on the live
+        database: `quality.evidence_census` 1.0s, `clean.scan` 2.5s,
+        `sources.survey` 0.24s. `/api/dataset` is refetched on every redraw and
+        after every run, so putting a 3.8-second scan in it would make the whole
+        console slower to answer a question only one view asks. Here it is fetched
+        once, when the Overview opens, and the page renders its cheap bands from
+        the dataset it already has while this arrives.
+
+        Nothing is computed here. The census, the tier sweep and the attention list
+        are the same functions the CLI calls, for the reason
+        `docs/architecture.md` states: the console makes no judgements of its own.
+        """
+        from tracker import clean, quality, sources
+
+        with self.console.read_session() as session:
+            census = quality.evidence_census(session)
+            sweep = clean.scan(session)
+            survey = sources.survey(session)
+
+        top = survey.ranked(by="decisive")[:8]
+        self._json(
+            {
+                "evidence": {
+                    "total": census.total,
+                    "buckets": dict(census.buckets),
+                    # Pre-divided, so the page cannot disagree with `tracker stats`
+                    # about what "quote-backed" means.
+                    "quote_backed": census.buckets.get(quality.QUOTE_BACKED, 0),
+                    "quote_backed_share": round(census.share(quality.QUOTE_BACKED), 4),
+                    "defects": census.defects,
+                    "by_field": census.by_field,
+                },
+                "tiers": sweep.as_json(),
+                # Ordered, because the tier bar is a *sequence* and a dict of
+                # counts does not carry the order. -1 is a real rung — "not even
+                # sourced" — and is deliberately not folded into 0.
+                "tier_names": [[-1, "UNSOURCED"], *[[n, name] for n, name, _ in clean.TIERS]],
+                "attention": clean.attention(sweep, limit=8),
+                "sources": {
+                    "publishers": len(survey.hosts),
+                    "citations": survey.sources_read,
+                    "decisions": survey.decisions,
+                    "contested": survey.contested,
+                    "top": [h.as_json() for h in top],
+                },
+            }
+        )
 
     def _start_run(self, body: dict[str, Any]) -> None:
         if not self.console.allow_write:

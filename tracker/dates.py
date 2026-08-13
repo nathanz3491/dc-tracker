@@ -70,8 +70,10 @@ class DateReport:
     unanswered: int = 0
     #: Fetches that failed outright.
     failed: int = 0
-    #: Rows written. Zero unless `apply`.
+    #: Rows written on `ingest_url`. Zero unless `apply`.
     written: int = 0
+    #: Citations the date was copied onto. See `_propagate`.
+    citations: int = 0
     #: Still undated and not fetched — either `--refetch` was off, or the run hit
     #: `--limit`. What is left for the next pass.
     remaining: int = 0
@@ -90,6 +92,7 @@ class DateReport:
             ("fetched, no date stated", self.unanswered),
             ("fetch failed", self.failed),
             ("rows written", self.written),
+            ("citations dated", self.citations),
         ]
 
 
@@ -138,6 +141,48 @@ def _store(session: Session, url: str, when: dt.datetime, *, apply: bool) -> boo
     return True
 
 
+def _propagate(session: Session, found: dict[str, dt.datetime], *, apply: bool) -> int:
+    """Copy each URL's publication date onto the citations that quote it.
+
+    **Without this the whole module changes nothing.** `upsert.claims_by_field`
+    breaks a merge tie on `source.published_at`, not on `ingest_url.published_at` —
+    the queue table is where the date is *learned* and the citation is where it is
+    *read*. `upsert_record` bridges the two, but only for a URL it is ingesting, so
+    a date discovered after a citation was written never reaches it. Filling one
+    column and calling the tiebreak fixed would be the most expensive kind of
+    no-op: 1,600 page requests spent on a value nothing consults.
+
+    Only ever fills, never overwrites — the same rule `upsert_record` follows. A
+    date already on a citation came from the publisher when the article was read,
+    and a later pass has no better claim to it.
+
+    `found` is what *this* run resolved, and it is what makes the preview honest:
+    without `apply` nothing has been written to `ingest_url` yet, so a join alone
+    would report zero citations for every date the run just discovered — a preview
+    of the wrong thing.
+    """
+    dates: dict[str, dt.datetime] = dict(
+        session.execute(
+            select(IngestUrl.url, IngestUrl.published_at).where(
+                IngestUrl.published_at.is_not(None)
+            )
+        ).all()
+    )
+    dates.update({url: when for url, when in found.items() if url not in dates})
+
+    rows = [
+        row
+        for row in session.scalars(select(Source).where(Source.published_at.is_(None))).all()
+        if row.url in dates
+    ]
+    if not apply:
+        return len(rows)
+    for row in rows:
+        row.published_at = dates[row.url]
+    session.flush()
+    return len(rows)
+
+
 def run(
     session: Session,
     *,
@@ -166,6 +211,8 @@ def run(
 
     pending = undated_urls(session, everything=everything)
     report.undated = len(pending)
+    #: What this run resolved, so `_propagate` can report honestly under --dry-run.
+    found: dict[str, dt.datetime] = {}
 
     # Rung 1: the URL path. Free, so it runs over everything before anything is
     # requested, and it shrinks the fetch list for rung 2.
@@ -176,6 +223,7 @@ def run(
             still_undated.append(url)
             continue
         report.from_url += 1
+        found[url] = when
         if _store(session, url, when, apply=apply):
             report.written += 1
         if len(report.examples) < 10:
@@ -186,6 +234,7 @@ def run(
 
     if not refetch or not still_undated:
         report.remaining = len(still_undated)
+        report.citations = _propagate(session, found, apply=apply)
         return report
 
     if limit:
@@ -208,6 +257,7 @@ def run(
             report.unanswered += 1
             continue
         report.from_page += 1
+        found[result.url] = result.published_at
         if _store(session, result.url, result.published_at, apply=apply):
             report.written += 1
         if len(report.examples) < 10:
@@ -215,6 +265,7 @@ def run(
 
     if apply:
         session.flush()
+    report.citations = _propagate(session, found, apply=apply)
     return report
 
 

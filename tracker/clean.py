@@ -80,6 +80,29 @@ REMEDIES: Final[dict[str, str]] = {
 }
 
 
+#: What each condition means in a phrase, for a reader who has not read this file.
+#:
+#: Beside `REMEDIES` and for the same reason it gives: a scorecard naming a failure
+#: an operator cannot act on is a complaint. A bare key like `vintage_current` is
+#: the same problem one step earlier — it names the failure in this module's
+#: vocabulary rather than in the reader's. Every phrase says what is *wrong*, not
+#: what the condition tests, so it reads correctly in a list of things to fix.
+CONDITION_LABELS: Final[dict[str, str]] = {
+    "has_source": "no citation at all",
+    "no_silent_defect": "a value presented as fact with no sentence behind it",
+    "no_errors": "a contradiction the row fails on",
+    "audit_clear": "a figure that cannot be true",
+    "no_inversions": "a value that has drifted from its own sources",
+    "duplicates_answered": "a possible duplicate nobody has ruled on",
+    "fields_present": "tracked fields still empty",
+    "values_backed": "a stored value with no quote",
+    "warnings_settled": "an open logic warning",
+    "blocks_settled": "tranches that may be one thing counted twice",
+    "risks_confirmed": "an obstacle with no usable quote",
+    "vintage_current": "last read by a superseded prompt",
+}
+
+
 @dataclass(frozen=True)
 class Condition:
     """One question about one row, and the answer with its reason."""
@@ -177,6 +200,38 @@ class Sweep:
             "failures": dict(sorted(self.failures.items())),
             "at_or_above": {str(t): self.at_or_above(t) for t, _n, _k in TIERS},
         }
+
+
+def attention(sweep: Sweep, *, limit: int | None = None) -> list[dict[str, Any]]:
+    """What is keeping rows out of the next tier, worst first.
+
+    One entry per failing condition: how many projects fail it, the phrase that
+    says what is wrong, the tier it gates, and the command that answers it.
+
+    Here rather than in the console for the reason `docs/architecture.md` gives —
+    the console makes no judgements of its own — and here rather than in
+    `webui/dataset.py` because the CLI wants the same list.
+    """
+    tier_of = {key: (level, label) for level, label, keys in TIERS for key in keys}
+    out = [
+        {
+            "condition": key,
+            "label": CONDITION_LABELS.get(key, key),
+            "projects": count,
+            "tier": tier_of.get(key, (None, ""))[0],
+            "tier_name": tier_of.get(key, (None, ""))[1],
+            # `{id}` becomes `<id>` rather than being left as-is. The count spans
+            # projects, so there is no single id to interpolate — but printing the
+            # raw template reads as a bug that failed to substitute, where `<id>`
+            # reads as the placeholder it is. `CleanCard.remedy` fills a real one
+            # in per row, which is where an id exists.
+            "remedy": REMEDIES.get(key, "").replace("{id}", "<id>"),
+        }
+        for key, count in sweep.failures.items()
+        if count
+    ]
+    out.sort(key=lambda item: (-item["projects"], item["condition"]))
+    return out[:limit] if limit else out
 
 
 def _current_stamp() -> str:
@@ -346,11 +401,13 @@ def worklist(sweep: Sweep, *, tier: int, limit: int | None = None) -> list[Clean
 
 
 __all__ = [
+    "CONDITION_LABELS",
     "REMEDIES",
     "TIERS",
     "CleanCard",
     "Condition",
     "Sweep",
+    "attention",
     "card",
     "scan",
     "worklist",

@@ -253,3 +253,48 @@ def test_the_report_adds_up(session, apply):
     assert report.dated == report.from_url + report.from_page == 2
     assert report.fetched == report.from_page + report.unanswered + report.failed
     assert report.written == (2 if apply else 0)
+
+
+# --- the date has to reach where the merge reads it -------------------------
+
+
+def test_the_date_is_copied_onto_the_citations_that_quote_the_url(session):
+    """Without this the whole command changes nothing.
+
+    `upsert.claims_by_field` breaks its tie on `source.published_at`. The queue
+    table is where a date is *learned*; the citation is where it is *read*.
+    `upsert_record` bridges the two, but only for a URL it is ingesting — so a date
+    discovered afterwards never arrived, and 1,600 page requests would have filled
+    a column nothing consults.
+    """
+    cited(session, "https://x.test/2026/07/13/slug")
+    assert session.scalar(select(Source)).published_at is None
+
+    report = dates.run(session, apply=True)
+
+    assert report.citations == 1
+    assert session.scalar(select(Source)).published_at == dt.datetime(2026, 7, 13)
+
+
+def test_a_citation_that_already_has_a_date_keeps_it(session):
+    """Fill-only, the same rule `upsert_record` follows.
+
+    A date already on a citation came from the publisher when the article was read.
+    A later pass has no better claim to it.
+    """
+    cited(session, "https://x.test/2026/07/13/slug")
+    source = session.scalar(select(Source))
+    source.published_at = dt.datetime(2019, 3, 3)
+    session.flush()
+
+    report = dates.run(session, apply=True)
+
+    assert report.citations == 0
+    assert session.scalar(select(Source)).published_at == dt.datetime(2019, 3, 3)
+
+
+def test_a_preview_copies_nothing(session):
+    cited(session, "https://x.test/2026/07/13/slug")
+    report = dates.run(session, apply=False)
+    assert report.citations == 1
+    assert session.scalar(select(Source)).published_at is None

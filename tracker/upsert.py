@@ -645,13 +645,30 @@ def _snapshot(project: Project) -> tuple:
     return tuple(getattr(project, f) for f in (*WRITABLE_FIELDS, "confidence", "dedup_key"))
 
 
-def upsert_record(session: Session, rec: IngestRecord, *, force_new: bool = False) -> UpsertResult:
+def upsert_record(
+    session: Session,
+    rec: IngestRecord,
+    *,
+    force_new: bool = False,
+    existing_only: bool = False,
+) -> UpsertResult:
     """Insert or update one project and its citations.
 
     Args:
         force_new: bypass cross-granularity duplicate detection and insert a
             fresh project even when a candidate match exists. The operator's
             escape hatch for two genuinely separate campuses in one locality.
+        existing_only: refuse to create a project. When nothing matches and no
+            merge alias routes the record, nothing is written and the result comes
+            back as `refused`.
+
+            The guard a **re-read** needs, and the exact opposite of `force_new`.
+            Re-reading Hyperion's own articles with today's instructions also
+            yields "Project Everest" and "Richland Parish Units 1-4" — real names
+            in those articles, and neither one a campus this database has decided
+            to track. A repair pass that quietly adds rows is no longer a repair;
+            it is an ingest with no worklist and no review. What it refuses is
+            *reported*, so those names remain candidates to add deliberately.
     """
     payload = dict(rec.project)
     key = dedup_key(
@@ -676,6 +693,13 @@ def upsert_record(session: Session, rec: IngestRecord, *, force_new: bool = Fals
             if project is not None:
                 routed_from = key
                 log.info("routing %s to project #%d per project_alias", key, project.id)
+
+    if project is None and existing_only:
+        # Nothing written at all — not a source row, not an event, not a risk.
+        # Refusing after the citations were written would leave orphaned evidence
+        # for a project that does not exist.
+        log.info("existing_only: no project matches %s; refused", key)
+        return UpsertResult(project_id=0, action="refused")
 
     if project is None:
         project = Project(
@@ -846,7 +870,27 @@ def upsert_record(session: Session, rec: IngestRecord, *, force_new: bool = Fals
     derived.extend(f"{NOTE_PREFIX} {line}" for line in block_notes)
     project.notes = _merge_notes(project.notes, derived, contributed, tag=tag)
 
-    # --- Confidence ---------------------------------------------------------
+    # --- Events -------------------------------------------------------------
+    events_written = _upsert_events(session, project, rec)
+
+    # --- Risks, and the blocker derived from them ---------------------------
+    # After the sources exist, so a risk can cite one; before the change check, so
+    # a newly-derived blocker counts as a change.
+    risks_written = _upsert_risks(session, project, rec)
+    # After the risks exist, so a measured slip can attach to the obstacle that
+    # best explains it; before the blocker is derived, since neither depends on
+    # the other but the ordering should read in the direction the data flows.
+    events_written += _record_slippage(session, project, expected_online_before)
+    project.blocker = _derive_blocker(session, project)
+
+    # --- Confidence, LAST ----------------------------------------------------
+    # **After the blocker, and that ordering is load-bearing.** `blocker` is one of
+    # the twelve tracked fields, so it is part of the `populated` count scoring
+    # reads — and computing confidence first scored the row against the blocker it
+    # arrived with rather than the one it leaves with. Harmless while nothing
+    # re-derived the whole table; `tracker backfill derive` exposed it on the first
+    # run, as a second pass that moved a project from 2 to 1 having cleared its
+    # blocker on the first.
     views = [conf.SourceView.from_row(s) for s in project.sources]
     populated = sum(1 for f in TRACKED_FIELDS if getattr(project, f, None) is not None)
     score = conf.compute(
@@ -861,19 +905,6 @@ def upsert_record(session: Session, rec: IngestRecord, *, force_new: bool = Fals
         # An unresolved identity question is itself a reason to distrust the row.
         value = min(value, 1)
     project.confidence = value
-
-    # --- Events -------------------------------------------------------------
-    events_written = _upsert_events(session, project, rec)
-
-    # --- Risks, and the blocker derived from them ---------------------------
-    # After the sources exist, so a risk can cite one; before the change check, so
-    # a newly-derived blocker counts as a change.
-    risks_written = _upsert_risks(session, project, rec)
-    # After the risks exist, so a measured slip can attach to the obstacle that
-    # best explains it; before the blocker is derived, since neither depends on
-    # the other but the ordering should read in the direction the data flows.
-    events_written += _record_slippage(session, project, expected_online_before)
-    project.blocker = _derive_blocker(session, project)
 
     # --- Did anything actually change? -------------------------------------
     if action == "update":
@@ -1112,24 +1143,103 @@ def _record_slippage(session: Session, project: Project, previous: _dt.date | No
     return written
 
 
+def choose_blocker(open_risks: list[Risk]) -> Risk | None:
+    """The obstacle that speaks for a project, from its open ones.
+
+    One function, because two surfaces need the answer and a second copy of the
+    rule would eventually name a different risk than the one the column holds:
+    `_derive_blocker` writes the summary, and `blocker_rationale` explains the
+    choice. An explanation that can disagree with the value it explains is worse
+    than none.
+
+    Ties break on the lowest id — `max` keeps the first maximum, and the list is
+    sorted by id first — so the value is stable across runs rather than depending
+    on which row the database happened to return first. Stable is not the same as
+    meaningful, which is why the rationale says so out loud.
+    """
+    if not open_risks:
+        return None
+    return max(sorted(open_risks, key=lambda r: r.id or 0), key=risk_precedence)
+
+
+def _open_risks(session: Session, project: Project) -> list[Risk]:
+    return list(
+        session.scalars(
+            select(Risk)
+            .where(Risk.project_id == project.id, Risk.status == OPEN_RISK_STATUS)
+            .order_by(Risk.id.asc())
+        ).all()
+    )
+
+
 def _derive_blocker(session: Session, project: Project) -> str | None:
     """`project.blocker` = the most severe open risk's summary, else NULL.
 
     Derived rather than merged, which is what finally lets an obstacle be *cleared*:
     the old column went through `_resolve`, and that returns the existing value when
     a field has no claims, so a blocker could be replaced but never set back to NULL.
-
-    Ties break on the lowest id, so the value is stable across runs rather than
-    depending on which row the database happened to return first.
     """
-    open_risks = session.scalars(
-        select(Risk)
-        .where(Risk.project_id == project.id, Risk.status == OPEN_RISK_STATUS)
-        .order_by(Risk.id.asc())
-    ).all()
-    if not open_risks:
+    chosen = choose_blocker(_open_risks(session, project))
+    return chosen.summary if chosen else None
+
+
+def blocker_rationale(project: Project, risks: list[Risk] | None = None) -> dict[str, Any] | None:
+    """Why *this* obstacle out of the project's open ones. None when there are none.
+
+    Hyperion (#10) carries twenty-seven open obstacles and shows one sentence. A
+    reader has no way to tell whether that sentence is the worst of them, the
+    newest, or the first row the database returned — and the answer changes what
+    they do with it.
+
+    Computed on the server for the reason every judgement is: the console makes
+    none of its own, and a second copy of this rule in the browser would drift from
+    the one that picked the value. It shares `choose_blocker` with the write path,
+    so it cannot name a different risk than the column holds.
+
+    Takes the risks rather than a session, so a read path with the rows already
+    loaded does not go back to the database for them.
+    """
+    open_risks = [
+        r
+        for r in (project.risks if risks is None else risks)
+        if r.status == OPEN_RISK_STATUS
+    ]
+    chosen = choose_blocker(open_risks)
+    if chosen is None:
         return None
-    return max(open_risks, key=risk_precedence).summary
+
+    top = risk_precedence(chosen)
+    tied = [r for r in open_risks if risk_precedence(r) == top]
+    confirmed = not chosen.unconfirmed
+    # How many the *first* half of the rule eliminated — the ones with no verified
+    # sentence behind them. Said separately from severity because it is the step a
+    # reader is least likely to guess.
+    unquoted = sum(1 for r in open_risks if r.unconfirmed)
+
+    if len(open_risks) == 1:
+        why = "the only open obstacle recorded on this project"
+    else:
+        why = f"the most severe of {len(open_risks)} open obstacles"
+        if confirmed and unquoted:
+            why += f", and one of the {len(open_risks) - unquoted} a verified sentence backs"
+        if len(tied) > 1:
+            why += (
+                f" — {len(tied)} rank equally, and this one is shown because it has the "
+                f"lowest row id, which is arbitrary"
+            )
+    return {
+        "risk_id": chosen.id,
+        "category": chosen.category,
+        "severity": chosen.severity,
+        "summary": chosen.summary,
+        "confirmed": confirmed,
+        "considered": len(open_risks),
+        "tied": len(tied),
+        # Named plainly, because an arbitrary choice presented as a judgement is
+        # the failure this whole function exists to prevent.
+        "arbitrary": len(tied) > 1,
+        "why": why,
+    }
 
 
 #: Date columns whose stated precision is cached on the project.
@@ -1275,6 +1385,16 @@ def recompute_from_sources(session: Session, project: Project) -> list[str]:
         project.notes, derived, [], tag=None, preserve_derived=_INGEST_ONLY_NOTES
     )
 
+    # **Blocker before confidence.** `blocker` is one of the twelve tracked fields,
+    # so it is part of the `populated` count that scoring reads — and deriving it
+    # afterwards meant confidence was computed against the blocker the row arrived
+    # with rather than the one it leaves with. Harmless while nothing re-derived
+    # the whole table; `tracker backfill derive` made it visible immediately, as a
+    # second pass that moved #79 from 2 to 1 having cleared its blocker on the
+    # first. A derivation that is not a pure function of what is stored is the one
+    # thing this path cannot be.
+    project.blocker = _derive_blocker(session, project)
+
     views = [conf.SourceView.from_row(s) for s in project.sources]
     populated = sum(1 for f in TRACKED_FIELDS if getattr(project, f, None) is not None)
     project.confidence = conf.compute(
@@ -1282,7 +1402,6 @@ def recompute_from_sources(session: Session, project: Project) -> list[str]:
         operator_verified=project.last_verified_at is not None,
         populated_tracked_fields=populated,
     ).value
-    project.blocker = _derive_blocker(session, project)
     session.flush()
     return conflict_fields
 
@@ -1355,6 +1474,8 @@ __all__ = [
     "UpsertResult",
     "apply_date_precision",
     "apply_h200_equivalent",
+    "blocker_rationale",
+    "choose_blocker",
     "claim_value",
     "claims_by_field",
     "derive_fields",

@@ -324,3 +324,51 @@ def test_an_unconfirmed_capacity_is_carried_but_flagged():
     (sec,) = sections(1, [Blk(id=1, label="Building 1", mw=350.0, unconfirmed_fields="mw")])
     assert sec.capacity == 350.0
     assert sec.capacity_confirmed is False
+
+
+# --- generation is not a tranche of the campus ------------------------------
+
+
+def test_two_gas_units_are_never_offered_as_one_tranche():
+    """Hyperion (#10) holds Entergy's plant beside its own halls.
+
+    Both are numbered, so the grouping saw "same phase 1" and proposed a merge —
+    of two combined-cycle units. Accepting it would fold a power station into a
+    data centre, and every sum in `blocks` already keeps the two apart.
+    """
+    assert (
+        group_blocks(
+            10,
+            [
+                Blk(id=1, label="Gas Plant Unit 1", mw=1131.0),
+                Blk(id=2, label="Generating Facility Unit 1", mw=1131.0),
+            ],
+        )
+        == []
+    )
+
+
+def test_the_campus_still_groups_around_the_generation():
+    """Excluding generation must not cost the halls their grouping."""
+    groups = group_blocks(
+        10,
+        [
+            Blk(id=1, label="Building 1", mw=200.0),
+            Blk(id=2, label="Franklin Farms Solar", mw=1500.0),
+            Blk(id=3, label="Facility 1", mw=200.0),
+        ],
+    )
+    assert [g.family for g in groups] == ["structure-1"]
+    assert {m.label for m in groups[0].members} == {"Building 1", "Facility 1"}
+
+
+def test_a_generating_asset_is_still_its_own_section():
+    """Moved, never dropped — gas built *for* this campus is a fact worth keeping.
+
+    It simply belongs under power rather than under capacity, which is a split the
+    console makes with the same predicate.
+    """
+    from tracker.blockcheck import sections
+
+    labels = {s.label for s in sections(10, [Blk(id=1, label="Franklin Farms Gas Plants", mw=2262.0)])}
+    assert labels == {"Franklin Farms Gas Plants"}

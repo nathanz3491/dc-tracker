@@ -437,15 +437,26 @@ function LogPane({ lines, innerRef }) {
     </div>`;
 }
 
+/* The figure caption and heading every view opens with.
+ *
+ * **The explanatory paragraph now folds, and is closed by default.** It is
+ * genuinely useful the first time and furniture every time after, and seven views
+ * each opening with one is a large part of why the console reads as crowded. The
+ * caption and the heading always stay: those are how you know where you are. */
 function Eyebrow({ figure, title, children }) {
+  const [open, setOpen] = useState(false);
   return html`
     <div style=${{ display: "flex", flexDirection: "column", gap: 5 }}>
       <span style=${{ fontFamily: "var(--font-mono)", fontSize: 12, textTransform: "uppercase",
                       letterSpacing: "0.16em", color: "var(--muted-foreground)" }}>${figure}</span>
       <h1 style=${{ margin: 0, fontFamily: "var(--font-display)", fontSize: 30, fontWeight: 500,
                     letterSpacing: "-0.02em", lineHeight: 1.15 }}>${title}</h1>
-      ${children && html`<p class="dc-intro" style=${{ margin: "2px 0 0", fontSize: 14, lineHeight: "22px",
+      ${children && open && html`
+        <p class="dc-intro" style=${{ margin: "2px 0 0", fontSize: 14, lineHeight: "22px",
                                       color: "var(--muted-foreground)", maxWidth: "78ch" }}>${children}</p>`}
+      ${children && html`
+        <button type="button" class="dc-intro-toggle" aria-expanded=${open}
+                onClick=${() => setOpen(!open)}>${open ? "less" : "what is this?"}</button>`}
     </div>`;
 }
 
@@ -741,6 +752,8 @@ function ProjectsView({ data, onOpen, openId }) {
   // default on a phone; search stays out, because it is the one control that
   // gets used constantly.
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const [showKey, setShowKey] = useState(false);
+  const [showCoverage, setShowCoverage] = useState(false);
   const activeFilters = Object.entries(f).filter(([k, v]) => k !== "q" && v !== "" && v !== false).length;
 
   const rows = useMemo(() => {
@@ -794,24 +807,27 @@ function ProjectsView({ data, onOpen, openId }) {
       <//>
 
       <${Card}>
-        ${narrow && html`
-          <div style=${{ display: "grid", gap: 10, padding: "14px 16px" }}>
-            <${Input} size="sm" placeholder="name, city, operator…" value=${f.q}
-                      onChange=${(e) => set("q")(e.target.value)} />
-            <div style=${{ display: "flex", gap: 10, alignItems: "center" }}>
-              <${Button} size="sm" variant="outline" style=${{ flex: 1 }}
-                onClick=${() => setFiltersOpen((o) => !o)}>
-                ${filtersOpen ? "Hide filters" : `Filters${activeFilters ? ` (${activeFilters})` : ""}`}
-              <//>
-              ${!clean && html`<${Button} size="sm" variant="ghost"
-                onClick=${() => setF(BLANK_FILTERS)}>Clear<//>`}
-            </div>
-          </div>`}
-        <div style=${{ display: narrow && !filtersOpen ? "none" : "grid",
+        ${/* Search stays out of the fold at every width: it is the one control
+             that gets used constantly, and six stacked selects is 558px of card
+             before any data. The count on the button is what makes a collapsed
+             filter honest — a hidden active filter is how a table lies. */ ""}
+        <div style=${{ display: "grid", gap: 10, padding: "14px 16px" }}>
+          <${Input} size="sm" placeholder="name, city, operator…" value=${f.q}
+                    onChange=${(e) => set("q")(e.target.value)} />
+          <div style=${{ display: "flex", gap: 10, alignItems: "center" }}>
+            <${Button} size="sm" variant="outline" style=${{ flex: narrow ? 1 : "none" }}
+              onClick=${() => setFiltersOpen((o) => !o)}>
+              ${filtersOpen ? "Hide filters" : `Filters${activeFilters ? ` (${activeFilters})` : ""}`}
+            <//>
+            ${!clean && html`<${Button} size="sm" variant="ghost"
+              onClick=${() => setF(BLANK_FILTERS)}>Clear<//>`}
+          </div>
+        </div>
+        <div style=${{ display: filtersOpen ? "grid" : "none",
                        gridTemplateColumns: "repeat(auto-fit, minmax(148px, 1fr))",
                        gap: "12px 14px", padding: "16px 20px" }}>
-          ${field("f-q", "search", html`<${Input} id="f-q" size="sm" placeholder="name, city, operator…"
-             value=${f.q} onChange=${(e) => set("q")(e.target.value)} />`)}
+          ${/* No search field here — it is above the fold now, and two inputs
+               bound to the same state is a bug waiting to be reported. */ ""}
           ${field("f-state", "state", html`<${Select} id="f-state" size="sm" value=${f.state}
              onChange=${(e) => set("state")(e.target.value)}>
                <option value="">any</option>${options(states)}<//>`)}
@@ -831,7 +847,7 @@ function ProjectsView({ data, onOpen, openId }) {
              onChange=${(e) => set("severity")(e.target.value)}>
                <option value="">any</option>${options(data.riskSeverities)}<//>`)}
         </div>
-        <div style=${{ display: narrow && !filtersOpen ? "none" : "flex", flexWrap: "wrap",
+        <div style=${{ display: filtersOpen ? "flex" : "none", flexWrap: "wrap",
                        alignItems: "center", gap: 16, padding: "0 20px 18px" }}>
           <${Switch} size="sm" label="Quoted only" checked=${f.quoted} onCheckedChange=${(v) => set("quoted")(!!v)} />
           <${Switch} size="sm"
@@ -843,19 +859,28 @@ function ProjectsView({ data, onOpen, openId }) {
         </div>
       <//>
 
-      ${/* Real percentages, straight from gaps.measure(), against the denominators
-           it chose. Deliberately shows the weak end as well as the strong one: a
-           coverage strip that only reported its best numbers would be the exact
-           thing gaps.py exists to avoid. */ ""}
-      <${CoverageStrip} data=${data} />
-
+      ${/* Both the coverage strip and the seven-swatch provenance key now fold.
+           They were permanent furniture above the table: six percentages and
+           seven labelled swatches to read before the first row, every visit,
+           forever. The key is still one click away and the strip is still
+           honest about its weak end — see gaps.py — but neither is the answer
+           anyone opened this view for. */ ""}
       <div style=${{ display: "flex", flexWrap: "wrap", alignItems: "baseline",
                      justifyContent: "space-between", gap: "10px 18px" }}>
         <span style=${{ fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--muted-foreground)" }}>
           ${rows.length} of ${data.projects.length} projects · sorted by ${sort.key} ${sort.dir}
         </span>
-        <div class="dc-legend" style=${{ display: "flex", flexWrap: "wrap", gap: "6px 16px", fontSize: 12,
-                       color: "var(--muted-foreground)" }}>
+        <div style=${{ display: "flex", gap: 16 }}>
+          <button type="button" class="dc-intro-toggle" aria-expanded=${showKey}
+                  onClick=${() => setShowKey(!showKey)}>what do the underlines mean?</button>
+          <button type="button" class="dc-intro-toggle" aria-expanded=${showCoverage}
+                  onClick=${() => setShowCoverage(!showCoverage)}>coverage</button>
+        </div>
+      </div>
+
+      ${showKey && html`
+        <div class="dc-legend" style=${{ display: "flex", flexWrap: "wrap", gap: "6px 16px",
+                                          fontSize: 12, color: "var(--muted-foreground)" }}>
           ${["reported", "derived", "unconfirmed", "inferred", "defaulted", "missing", "na"].map((t) => html`
             <span key=${t} style=${{ display: "inline-flex", alignItems: "center", gap: 6 }}>
               ${/* cursor:default — the swatch is a key, not something to hover for a quote */ ""}
@@ -863,8 +888,9 @@ function ProjectsView({ data, onOpen, openId }) {
                 ${t === "missing" ? "—" : "abc"}</span>
               ${TIER[t][0]}
             </span>`)}
-        </div>
-      </div>
+        </div>`}
+
+      ${showCoverage && html`<${CoverageStrip} data=${data} />`}
 
       ${narrow
         ? html`
@@ -971,13 +997,17 @@ function Drawer({ data, project, onClose }) {
   const p = project;
   const open = p.risks.filter((r) => r.status === "open");
   const populated = TRACKED.filter((k) => p[k] != null).length;
+  // Campus tranches only — the utility's plant is counted separately, and the
+  // count on the tab is the campus's. A site whose only tranches are its serving
+  // power still gets the tab, because that is a fact worth reading.
   const blocks = p.blocks || [];
+  const serving = p.serving || [];
   // Only offered when there are blocks. An empty tab on 88% of the database would
   // read as "this campus has one tranche", which is the opposite of what a missing
   // backfill means.
   const tabs = [
     ["stats", "Stats", ""],
-    ...(blocks.length ? [["blocks", "Blocks", ` ${blocks.length}`]] : []),
+    ...(blocks.length || serving.length ? [["blocks", "Blocks", ` ${blocks.length}`]] : []),
     ["risks", "Risks", ` ${open.length}`],
     ["sources", "Sources", ` ${p.sources.length}`],
   ];
@@ -1017,7 +1047,7 @@ function Drawer({ data, project, onClose }) {
 
         <div class="dc-drawer-body" style=${{ flex: 1, overflowY: "auto", padding: "20px 24px 56px" }}>
           ${tab === "stats" && html`<${StatsTab} data=${data} p=${p} populated=${populated}
-                                                 open=${open} onQuote=${showQuote}
+                                                 open=${open} onQuote=${showQuote} onTab=${setTab}
                                                  allowWrite=${data.allow_write} />`}
           ${tab === "blocks" && html`<${BlocksTab} p=${p} />`}
           ${tab === "risks" && html`<${RisksTab} data=${data} p=${p} />`}
@@ -1698,7 +1728,34 @@ function ClaimTable({ p, field }) {
     </div>`;
 }
 
-function StatsTab({ data, p, populated, open, onQuote, allowWrite }) {
+/* Why this obstacle and not the other twenty-six.
+ *
+ * `blocker` is one sentence chosen out of every open obstacle a project carries,
+ * and until now the page showed the winner and never said the others had been
+ * considered — so a reader could not tell whether it was the worst, the newest, or
+ * simply the first row the database returned.
+ *
+ * The sentence comes from `upsert.blocker_rationale`, which shares `choose_blocker`
+ * with the write path. The page does not re-derive it: an explanation free to name
+ * a different risk than the column holds is worse than no explanation.
+ *
+ * When the choice was arbitrary — several obstacles ranking equally, settled on
+ * the lowest row id — it says so. That is the case a reader most needs to know
+ * about, and it is the one a confident-sounding sentence would hide. */
+function BlockerWhy({ why, onTab }) {
+  if (!why) return null;
+  return html`
+    <div style=${{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap",
+                   fontSize: 12, lineHeight: "18px",
+                   color: why.arbitrary ? "var(--warning)" : "var(--muted-foreground)" }}>
+      <span>Chosen because it is ${why.why}.</span>
+      ${why.considered > 1 && html`
+        <button type="button" class="dc-linkish" onClick=${() => onTab && onTab("risks")}
+          >see all ${why.considered}</button>`}
+    </div>`;
+}
+
+function StatsTab({ data, p, populated, open, onQuote, allowWrite, onTab }) {
   const worst = open.slice().sort((a, b) => SEV_ORDER.indexOf(b.severity) - SEV_ORDER.indexOf(a.severity))[0];
   const stats = [
     { label: "IT capacity, planned", value: p.mw_planned == null ? "—" : p.mw_planned.toLocaleString() + " MW",
@@ -1774,6 +1831,7 @@ function StatsTab({ data, p, populated, open, onQuote, allowWrite }) {
                       ...(q.exact ? { borderLeft: "2px solid var(--primary)", paddingLeft: 9 } : {}),
                       ...(tier === "missing" ? { opacity: .75 } : {}) }}>
                       ${quoted && q.exact ? `“${q.text}”` : q.text}</p>
+                    ${key === "blocker" && html`<${BlockerWhy} why=${p.blocker_rationale} onTab=${onTab} />`}
                     <${ClaimTable} p=${p} field=${key} />
                   </div>
                 </div>`;
@@ -1896,9 +1954,59 @@ function ReconRow({ label, mw, note, strong, tone }) {
     </div>`;
 }
 
+/* The utility's plant, folded away under the campus it serves.
+ *
+ * Kept on the page rather than dropped: Entergy building 2,262 MW of gas *for
+ * Hyperion* is one of the most important facts about that campus. It is simply
+ * not the campus's capacity — a plant's nameplate output and a data center's IT
+ * load are different quantities, and generation to serve a site normally runs
+ * larger than the load it serves. So it gets its own heading saying whose it is,
+ * and it is never added to the numbers above.
+ *
+ * The split is made in `webui/dataset.py` with the same predicate the sums use.
+ * The page does not decide what counts as generation. */
+function ServingInfrastructure({ rows, mw }) {
+  const [open, setOpen] = useState(false);
+  if (!rows.length) return null;
+  return html`
+    <${Card}>
+      <button type="button" class="dc-disclose" aria-expanded=${open}
+              onClick=${() => setOpen(!open)}>
+        <span style=${{ display: "grid", gap: 3 }}>
+          <span style=${{ fontSize: 14, fontWeight: 500 }}>
+            Power serving this campus <span class="dc-num">${fmtMw(mw)} MW</span></span>
+          <span style=${{ fontSize: 12, color: "var(--muted-foreground)" }}>
+            ${rows.length} generation or grid asset${rows.length === 1 ? "" : "s"} — the utility's,
+            measured as generating output. Never added to the campus figures above.</span>
+        </span>
+        <span style=${{ fontSize: 12, color: "var(--muted-foreground)" }}>${open ? "hide" : "show"}</span>
+      </button>
+      ${open && html`
+        <div style=${{ padding: "0 16px 12px" }}>
+          ${rows.map((sec, i) => html`
+            <div key=${i} class="dc-blockrow"
+                 style=${{ padding: "9px 4px", borderTop: "1px solid var(--border)" }}>
+              <span style=${{ fontSize: 13 }}>${sec.parent ? sec.parent + " · " : ""}${sec.label}</span>
+              <span class="dc-num" style=${{ fontSize: 13, textAlign: "right" }}>
+                ${sec.capacity == null ? "—" : fmtMw(sec.capacity) + " MW"}</span>
+              <span style=${{ fontSize: 12, color: "var(--muted-foreground)", gridColumn: "3 / -1" }}>
+                ${blockState(sec.status).label}</span>
+            </div>`)}
+        </div>`}
+    <//>`;
+}
+
 function BlocksTab({ p }) {
   const blocks = p.blocks || [];
+  const serving = p.serving || [];
   const acct = p.accounting;
+  // Read off the reconciliation rather than summed here. The backend already puts
+  // every megawatt of this campus on exactly one line, and a second sum in the page
+  // is how the top of this panel once came to say 132 MW while the bottom said
+  // 36,126.
+  const servingMw = ((acct && acct.residuals) || [])
+    .filter((r) => r.reason === "generation")
+    .reduce((sum, r) => sum + r.mw, 0);
   const uncited = blocks.filter((b) => !b.mw_counted && b.mw != null);
   const customers = [...new Set(blocks.map((b) => b.customer).filter(Boolean))];
 
@@ -2153,14 +2261,20 @@ function BlocksTab({ p }) {
                   : r.reason === "unconfirmed" ? "Stated, unconfirmed"
                   : r.reason === "unplaceable" ? "Not tied to a facility"
                   : r.reason === "out_of_scale" ? "Out of scale, excluded"
+                  : r.reason === "generation" ? "Power serving the campus"
                   : "Counted twice over"}
                 mw=${(r.reason === "overlap" ? "−" : "") + fmtMw(r.mw)} note=${r.note}
-                tone=${r.reason === "out_of_scale" ? "--danger" : "--warning"} />`)}
+                tone=${r.reason === "out_of_scale" ? "--danger"
+                  /* Generation is not a defect and takes no warning colour: the
+                     line is the arithmetic working, not a fault to chase. */
+                  : r.reason === "generation" ? "--muted-foreground" : "--warning"} />`)}
             <${ReconRow} strong label=${acct.total_is_floor ? "Accounted for (at least)" : "Accounted for"}
               mw=${fmtMw(acct.total)}
               note=${acct.total_is_floor ? "no source states a campus figure — this is the sum of the parts" : ""} />
           </div>`}
       </div>
+
+      <${ServingInfrastructure} rows=${serving} mw=${servingMw} />
 
       ${rejected.length > 0 && html`
         <p style=${{ margin: 0, fontSize: 12, lineHeight: "19px", color: "var(--muted-foreground)" }}>
@@ -2505,11 +2619,7 @@ function QueueView({ data, onRan, allowWrite, busy }) {
   return html`
     <div class="dc-view dc-rise" style=${{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 16,
                      padding: "22px 26px 60px" }}>
-      <${Eyebrow} figure="fig. 04 — queue" title="Articles found, not yet read">
-        Nothing here has cost anything yet. ${html`<b>Crawl</b>`} reads one article for one LLM call.
-        Start with the ones tagged ${html`<b>deepens</b>`} — they add detail to a project we already
-        track. The list over-collects on purpose: a tighter filter starts dropping real projects.
-      <//>
+      
 
       <${Card}>
         <div style=${{ padding: "16px 20px 8px" }}>
@@ -2578,12 +2688,7 @@ function GapsView({ data }) {
   return html`
     <div class="dc-view dc-rise" style=${{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 16,
                      padding: "22px 26px 60px" }}>
-      <${Eyebrow} figure="fig. 05 — coverage" title="What is missing, and what only looks missing">
-        Each field is scored against the projects where it could apply, not against all
-        ${" "}${data.projects.length}. Built capacity is empty on a project that has not broken ground —
-        that is the right answer, not a hole. Fields where an empty value tells you nothing show
-        ${" "}${html`<b>n/a</b>`} instead of a bad score.
-      <//>
+      
 
       <${Card}>
         <div style=${{ display: "grid", gap: 0 }}>
@@ -3898,7 +4003,7 @@ function CommandsView({ data, onRan }) {
   return html`
     <div class="dc-view dc-rise" style=${{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 16,
                      padding: "22px 26px 60px" }}>
-      <${Eyebrow} figure="fig. 06 — commands" title="Run things">
+      <${Eyebrow} figure="fig. 05 — commands" title="Run things">
         Start with a ${html`<b>routine</b>`} — a named sequence that does the steps in the order they
         want doing. The individual commands are below it, read from the CLI itself so they cannot fall
         behind. ${html`<b>llm</b>`} means it spends money; ${html`<b>destructive</b>`} means it deletes
@@ -4058,10 +4163,7 @@ function RunsView({ watchId }) {
   return html`
     <div class="dc-view dc-rise" style=${{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 16,
                      padding: "22px 26px 60px" }}>
-      <${Eyebrow} figure="fig. 07 — runs" title="What has been run, and what it printed">
-        The same output the terminal would show, colour and all, kept as one file per run. Wide tables
-        scroll sideways so their columns stay lined up — switch ${html`<b>wrap</b>`} on for long messages.
-      <//>
+      
 
       <div style=${{ display: "flex", flexWrap: "wrap", gap: 16, alignItems: "flex-start" }}>
         <div style=${{ flex: "1 1 280px", maxWidth: 380, display: "grid", gap: 9 }}>
@@ -4103,15 +4205,208 @@ function RunsView({ watchId }) {
 
 /* ---- Root ---------------------------------------------------------------- */
 
-const VIEWS = [
-  ["projects", "Projects"], ["map", "Map"], ["capex", "Capex"], ["queue", "Queue"],
-  ["gaps", "Coverage"], ["commands", "Commands"], ["runs", "Runs"], ["help", "Help"],
+/* ---- Overview -------------------------------------------------------------
+ *
+ * The landing page, and the one view that answers a question rather than listing
+ * rows. Three bands in decreasing order of importance — trust, portfolio,
+ * pipeline — because the old landing page gave a filter card, a coverage strip
+ * and eighteen columns equal weight, and nothing on it read as the answer.
+ *
+ * **Two data sources, deliberately.** The portfolio band draws on `/api/dataset`,
+ * already in hand, so it paints on the first frame. The trust band needs an
+ * evidence census and a tier sweep — 2.5 seconds together, measured — so it comes
+ * from `/api/overview` behind a skeleton. Blocking the page on it would trade the
+ * problem we are fixing for a slower one.
+ */
+
+const ATTENTION_TONE = { 0: "critical", 1: "serious", 2: "warning", 3: "muted" };
+
+/* The tier mix as one stacked bar. Sequential, one hue, because the tiers are
+ * ORDERED — UNSOURCED through SETTLED — and ordered data takes a ramp rather than
+ * a palette.
+ *
+ * The counts sit on the same line as the bar rather than in a legend beneath it.
+ * A bar with no labels plus a legend that names every segment is one fact told
+ * twice, and it was eight of the thirty-seven numbers this page used to show. */
+function TrustBar({ histogram, names }) {
+  const rows = names
+    .map(([level, name], i) => ({ level, name, n: histogram[String(level)] || 0, step: i + 1 }))
+    .filter((r) => r.n);
+  const total = rows.reduce((sum, r) => sum + r.n, 0);
+  if (!total) return null;
+  const label = rows.map((r) => `${r.n} ${r.name.toLowerCase()}`).join(", ");
+  return html`
+    <div style=${{ display: "grid", gap: 8 }}>
+      <div class="dc-trustbar" role="img" aria-label=${label}>
+        ${rows.map((r) => html`
+          <span key=${r.level} title=${`${r.n} ${r.name.toLowerCase()}`}
+                style=${{ width: `${(r.n / total) * 100}%`,
+                          background: `var(--dc-trust-${r.step})` }} />`)}
+      </div>
+      <span style=${{ fontSize: 12, color: "var(--muted-foreground)" }}>${label}</span>
+    </div>`;
+}
+
+function OverviewView({ data }) {
+  const [trust, setTrust] = useState(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    api("/api/landing")
+      .then((payload) => { if (!cancelled) setTrust(payload); })
+      .catch(() => { if (!cancelled) setFailed(true); });
+    return () => { cancelled = true; };
+  }, []);
+
+  const t = data.totals;
+  const share = trust?.evidence?.quote_backed_share ?? 0;
+
+  return html`
+    <div class="dc-view dc-rise" style=${{ display: "grid", gap: 30, padding: "26px 26px 60px",
+                                            maxWidth: 760 }}>
+      <${Eyebrow} figure="fig. 00 — overview" title="Can these numbers be quoted?">
+        Every figure in this console traces to a sentence somebody published. This page says
+        how much of the dataset does, and what is standing on nothing.
+      <//>
+
+      ${failed && html`
+        <${Alert} tone="warning" title="The trust figures did not load">
+          The capacity and investment totals below are unaffected.
+        <//>`}
+      ${!trust && !failed && html`
+        <div style=${{ display: "grid", gap: 12 }}>
+          <${Skeleton} style=${{ height: 58, width: 300 }} />
+          <${Skeleton} style=${{ height: 26 }} />
+        </div>`}
+
+      ${trust && html`
+        <div style=${{ display: "grid", gap: 26 }}>
+          ${/* One number, and the sentence that says what it is of. */ ""}
+          <div>
+            <div style=${{ display: "flex", alignItems: "baseline", gap: 14, flexWrap: "wrap" }}>
+              <span style=${{ fontFamily: "var(--font-display)", fontSize: 62, fontWeight: 500,
+                              lineHeight: 1, letterSpacing: "-0.03em" }}>
+                ${(share * 100).toFixed(1)}%
+              </span>
+              <span style=${{ fontSize: 16, color: "var(--muted-foreground)", maxWidth: "34ch" }}>
+                of ${trust.evidence.total.toLocaleString()} stored values carry a verbatim quote
+              </span>
+            </div>
+            ${trust.evidence.defects > 0 && html`
+              <div style=${{ marginTop: 12, fontSize: 13, color: "var(--destructive)" }}>
+                ${trust.evidence.defects} stated as fact with nothing behind them
+              </div>`}
+          </div>
+
+          <${TrustBar} histogram=${trust.tiers.histogram} names=${trust.tier_names} />
+
+          ${/* Three, not five, and no command column. The commands only run in the
+               developer console now, and a command you cannot run — truncated to
+               "tracker ingest crawl --stale-pro…" at that — is furniture. */ ""}
+          ${trust.attention.length > 0 && html`
+            <div style=${{ display: "grid", gap: 9 }}>
+              <span style=${{ fontSize: 12, textTransform: "uppercase", letterSpacing: "0.08em",
+                              color: "var(--muted-foreground)" }}>Waiting on a person</span>
+              ${trust.attention.slice(0, 3).map((a) => html`
+                <div key=${a.condition}
+                     style=${{ display: "flex", gap: 12, alignItems: "baseline", fontSize: 14 }}>
+                  <b style=${{ fontVariantNumeric: "tabular-nums", minWidth: 42,
+                               textAlign: "right" }}>${a.projects}</b>
+                  <span>${a.label}</span>
+                </div>`)}
+            </div>`}
+        </div>`}
+
+      ${/* The two portfolio figures worth quoting, as a sentence rather than as
+           cards. The header strip already gives projects, states and citations. */ ""}
+      <div style=${{ fontSize: 14, color: "var(--muted-foreground)", lineHeight: "24px",
+                     borderTop: "1px solid var(--border)", paddingTop: 18 }}>
+        <b style=${{ color: "var(--foreground)" }}>${fmtMw(t.mw_planned)} MW</b> planned and
+        <b style=${{ color: "var(--foreground)" }}> ${fmtUSD(t.investment_usd)}</b> announced —
+        both floors, counting only the ${t.mw_cited_projects} projects that cite a figure.
+      </div>
+    </div>`;
+}
+
+/* Two consoles, one server, and the split is the whole point.
+ *
+ * `/` is for reading the dataset: four views, and nothing on any of them changes
+ * anything. `/dev` is where work happens — the queue, the runs, the command
+ * palette, the help that explains them. Those were tabs sitting beside Projects
+ * and Map, which put the machinery on the same footing as the data and made the
+ * reading console answer to the operator's needs rather than the reader's.
+ *
+ * The page says which it is through `window.DC_MODE`, set by whichever shell the
+ * server served. One bundle serves both: `assets.bundle_css` exists because a
+ * chain of imports costs a serial round-trip each, and splitting this file would
+ * reintroduce exactly that on the page we most want to be fast. */
+const DEV = window.DC_MODE === "dev";
+
+const USER_VIEWS = [
+  ["overview", "Overview"], ["projects", "Projects"], ["map", "Map"], ["capex", "Capex"],
 ];
+const DEV_VIEWS = [
+  ["pipeline", "Pipeline"], ["commands", "Commands"], ["help", "Help"],
+];
+const VIEWS = DEV ? DEV_VIEWS : USER_VIEWS;
+
+/* Old view keys that are now sections of Pipeline. */
+const FOLDED_INTO_PIPELINE = { queue: "queue", gaps: "gaps", runs: "runs" };
+
+/* Queue, Coverage and Runs, stacked, with the section you arrived for opened.
+ *
+ * Sections rather than nested tabs: a tab strip inside a tab strip is how you get
+ * two levels of "where am I", and these three are short enough to read in one
+ * scroll. */
+function PipelineView({ data, section, allowWrite, busy, onRan, watchId }) {
+  /* Everything closed unless you were sent to a section.
+   *
+   * Opening one by default made this the tallest view in the console by a wide
+   * margin — 25,614px, because the queue section carries a full table. A
+   * disclosure whose default state is "open" is not a disclosure; it is the same
+   * page with a chevron on it. */
+  const [open, setOpen] = useState(section || null);
+  useEffect(() => { if (section) setOpen(section); }, [section]);
+  const panels = [
+    ["queue", "Queue", "What discovery found and what it costs to read"],
+    ["gaps", "Coverage", "Which fields are thin, measured only where they can be set"],
+    ["runs", "Runs", "What each run did, and what it spent"],
+  ];
+  return html`
+    <div class="dc-view dc-rise" style=${{ display: "grid", gap: 14, padding: "22px 26px 60px" }}>
+      <${Eyebrow} figure="fig. 04 — pipeline" title="What the machine found, missed and spent">
+        Three readings of one subject. Open the one you came for; the others stay out of the way.
+      <//>
+      ${panels.map(([key, title, blurb]) => html`
+        <${Card} key=${key}>
+          <button type="button" class="dc-disclose" aria-expanded=${open === key}
+                  onClick=${() => setOpen(open === key ? null : key)}>
+            <span style=${{ display: "grid", gap: 2, textAlign: "left" }}>
+              <b style=${{ fontSize: 15 }}>${title}</b>
+              <span style=${{ fontSize: 12, color: "var(--muted-foreground)" }}>${blurb}</span>
+            </span>
+            <i data-lucide=${open === key ? "chevron-up" : "chevron-down"}
+               style=${{ width: 16, height: 16, flex: "none" }} />
+          </button>
+          ${open === key && html`
+            <div style=${{ borderTop: "1px solid var(--border)" }}>
+              ${key === "queue" && html`
+                <${QueueView} data=${data} allowWrite=${allowWrite} busy=${busy} onRan=${onRan} />`}
+              ${key === "gaps" && html`<${GapsView} data=${data} />`}
+              ${key === "runs" && html`<${RunsView} watchId=${watchId} />`}
+            </div>`}
+        <//>`)}
+    </div>`;
+}
 
 function App() {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
-  const [view, setView] = useState("projects");
+  const [view, setView] = useState(DEV ? "pipeline" : "overview");
+  /* Which Pipeline section to open on arrival. `goto` sets it, so a run finishing
+   * still lands you on Runs even though Runs is no longer a tab. */
+  const [pipelineSection, setPipelineSection] = useState(null);
   const [openId, setOpenId] = useState(null);
   const [dark, setDark] = useState(false);
   const [watchRun, setWatchRun] = useState(null);
@@ -4137,6 +4432,15 @@ function App() {
     // data, and dropping the code here left it unable to tell.
     status: e.status,
   })), []);
+  /* One way to change view, because three of the old eight are now sections.
+   * Anything still asking for "runs" — the run-finished redirect, a bookmark —
+   * gets Pipeline with that section open rather than a blank page. */
+  const goto = useCallback((key) => {
+    const section = FOLDED_INTO_PIPELINE[key];
+    setPipelineSection(section || null);
+    setView(section ? "pipeline" : key);
+  }, []);
+
   useEffect(() => { load(); }, [load]);
   useEffect(() => { document.documentElement.classList.toggle("dark", dark); }, [dark]);
 
@@ -4266,7 +4570,7 @@ function App() {
           <div class="dc-seg">
             ${VIEWS.map(([key, label]) => html`
               <button key=${key} type="button" class="dc-seg-btn" aria-pressed=${view === key}
-                      onClick=${() => { setView(key); setOpenId(null); }}>${label}</button>`)}
+                      onClick=${() => { goto(key); setOpenId(null); }}>${label}</button>`)}
           </div>
 
           <span style=${{ flex: "1 1 40px" }} />
@@ -4285,19 +4589,19 @@ function App() {
           </div>
         </header>
 
+        ${view === "overview" && html`<${OverviewView} data=${data} />`}
         ${view === "projects" && html`<${ProjectsView} data=${data} openId=${openId} onOpen=${setOpenId} />`}
         ${view === "map" && html`<${MapView} data=${data} openId=${openId} onOpen=${setOpenId} />`}
         ${view === "capex" && html`
           <${CapexView} data=${data} allowWrite=${data.allow_write} busy=${!!running}
             onOpen=${setOpenId}
-            onRan=${(id) => { setWatchRun(id); setView("runs"); }} />`}
-        ${view === "queue" && html`
-          <${QueueView} data=${data} allowWrite=${data.allow_write} busy=${!!running}
-            onRan=${(id) => { setWatchRun(id); setView("runs"); }} />`}
-        ${view === "gaps" && html`<${GapsView} data=${data} />`}
+            onRan=${(id) => { setWatchRun(id); goto("runs"); }} />`}
+        ${view === "pipeline" && html`
+          <${PipelineView} data=${data} section=${pipelineSection} allowWrite=${data.allow_write}
+            busy=${!!running} watchId=${watchRun}
+            onRan=${(id) => { setWatchRun(id); goto("runs"); }} />`}
         ${view === "commands" && html`<${CommandsView} data=${data}
-          onRan=${(id) => { setWatchRun(id); setView("runs"); }} />`}
-        ${view === "runs" && html`<${RunsView} watchId=${watchRun} />`}
+          onRan=${(id) => { setWatchRun(id); goto("runs"); }} />`}
         ${view === "help" && html`<${HelpView} data=${data} />`}
       </div>
 

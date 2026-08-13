@@ -19,6 +19,7 @@ import sys
 import threading
 import time
 from http.client import HTTPConnection
+from pathlib import Path
 
 import pytest
 
@@ -26,6 +27,7 @@ from tracker.db import init_db, session_scope
 from tracker.ingest.records import IngestRecord, RiskRecord, SourceRecord
 from tracker.upsert import upsert_record
 from tracker.webui import assets, catalog
+from tracker.webui import server as server_module
 from tracker.webui.runner import Busy, Runner
 from tracker.webui.server import Console, Handler
 
@@ -247,6 +249,56 @@ def test_a_programme_total_says_so_rather_than_just_being_amber(tmp_path):
     assert because["expected_online"]["note"] != because[SCALE_NOTE_FIELD]["note"]
 
 
+def test_the_utilitys_plant_is_filed_apart_from_the_campus(tmp_path):
+    """Hyperion (#10) showed Entergy's gas and solar among its own halls.
+
+    Every sum already excluded them — a plant's nameplate output and a data
+    center's IT load are different quantities — so the tranche list said one thing
+    while the arithmetic below it said another, and the console's "delivering"
+    figure was adding running gas units into the campus.
+
+    Moved, not dropped: gas built *for* this campus is one of the most important
+    facts about it. It belongs under power rather than under capacity.
+    """
+    from tracker.ingest.records import BlockRecord
+    from tracker.webui.dataset import build
+
+    path = tmp_path / "generation.db"
+    engine, _ = init_db(path)
+    with session_scope(engine) as session:
+        upsert_record(
+            session,
+            IngestRecord(
+                project={"company": "Meta", "name": "Hyperion", "city": "Richland", "state": "LA"},
+                sources=[
+                    SourceRecord(
+                        url="https://example.test/hyperion",
+                        source_type="trade_press",
+                        fetched_at=T0,
+                        excerpt="Building 1 is 200 MW; Entergy is building 2,262 MW of gas.",
+                        claims={"name": "Hyperion", "company": "Meta", "state": "LA"},
+                        blocks=[
+                            BlockRecord(label="Building 1", mw=200.0, status="under_construction"),
+                            BlockRecord(
+                                label="Franklin Farms Gas Plants", mw=2262.0, status="permitting"
+                            ),
+                        ],
+                    )
+                ],
+            ),
+        )
+    with session_scope(engine, commit=False) as session:
+        payload = build(session, db_path=str(path), schema_version=7)
+
+    project = payload["projects"][0]
+    assert [b["label"] for b in project["blocks"]] == ["Building 1"]
+    assert [s["label"] for s in project["serving"]] == ["Franklin Farms Gas Plants"]
+    assert [s["label"] for s in project["sections"]] == ["Building 1"]
+    # And it is still accounted for by name, rather than vanishing from the sums.
+    reasons = {r["reason"] for r in project["accounting"]["residuals"]}
+    assert "generation" in reasons
+
+
 def test_a_merely_unquoted_value_claims_no_reason(server):
     """The common case must not borrow the rarer one's explanation."""
     address, _ = server
@@ -264,9 +316,114 @@ def test_reading_the_dataset_does_not_write(server, seeded_db, logical_snapshot)
     """
     address, _ = server
     before = logical_snapshot(seeded_db)
-    for path in ("/api/dataset", "/api/commands", "/api/runs", "/api/health"):
+    for path in (
+        "/api/dataset",
+        "/api/commands",
+        "/api/runs",
+        "/api/health",
+        "/api/discover",
+        "/api/landing",
+    ):
         assert request(address, path)[0] == 200
     assert logical_snapshot(seeded_db) == before
+
+
+def test_the_landing_route_answers_the_trust_question(server):
+    """What the Overview leads with, and the shape it reads.
+
+    Its own route rather than a field on `/api/dataset`: the census and the tier
+    sweep take about 2.5 seconds together on the live database, and `/api/dataset`
+    is refetched after every run.
+    """
+    address, _ = server
+    status, data = request(address, "/api/landing")
+    assert status == 200
+
+    assert 0.0 <= data["evidence"]["quote_backed_share"] <= 1.0
+    assert data["evidence"]["total"] >= 0
+    # The tier ladder is ordered and carries -1 — "not even sourced" is a rung,
+    # not a rounding of 0 — because the bar draws them in sequence.
+    levels = [level for level, _name in data["tier_names"]]
+    assert levels == sorted(levels)
+    assert levels[0] == -1
+    for row in data["attention"]:
+        assert row["label"] and row["remedy"], "a failure with no remedy is a complaint"
+        # `{id}` would read as a substitution that failed; the count spans
+        # projects, so there is no single id to fill in.
+        assert "{id}" not in row["remedy"]
+
+
+def test_two_consoles_one_bundle(server):
+    """`/` reads the dataset, `/dev` runs things, and the page says which it is."""
+    address, _ = server
+    read_status, read_body = request(address, "/")
+    dev_status, dev_body = request(address, "/dev")
+    assert (read_status, dev_status) == (200, 200)
+    assert 'window.DC_MODE="read"' in read_body
+    assert 'window.DC_MODE="dev"' in dev_body
+    # One bundle: the shells differ by a flag, not by which script they load.
+    assert "/static/app.js" in read_body and "/static/app.js" in dev_body
+
+
+def test_the_dev_shell_grants_no_capability_of_its_own(seeded_db):
+    """Asking for `/dev` is a display choice, not a privilege escalation.
+
+    What the dev console can do is governed by `allow_write` on the server, so a
+    read-only console serves the page and refuses the run.
+    """
+    from http.server import ThreadingHTTPServer
+
+    console = Console(seeded_db, allow_write=False)
+    handler = type("Bound", (Handler,), {"console": console})
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    httpd.daemon_threads = True
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        address = httpd.server_address
+        assert request(address, "/dev")[0] == 200
+        status, _ = request(address, "/api/run", method="POST", body={"cmd": "stats", "flags": {}})
+        assert status == 403
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_the_api_index_lists_every_route_the_handler_serves(server):
+    """The index is hand-written, so a new route must be added to it deliberately.
+
+    Written for whoever drives this from a terminal rather than a browser — an
+    agent included — because "what can I ask this server?" had no answer short of
+    reading `_route_get`. Hand-written for the reason `catalog.GROUPS` is: a
+    derived list describes the code, and a caller needs to know what a route is
+    *for*. This test is what stops it rotting.
+    """
+    import re
+
+    address, _ = server
+    status, data = request(address, "/api")
+    assert status == 200
+    assert data["consoles"].keys() == {"/", "/dev"}
+
+    documented = {route.split(" ", 1)[1] for route in data["routes"]}
+    source = (Path(server_module.__file__)).read_text(encoding="utf-8")
+    dispatched = set(re.findall(r'route == "(/api/[a-z/]*)"', source))
+    dispatched |= set(re.findall(r'parsed\.path == "(/api/[a-z/]*)"', source))
+    missing = dispatched - documented
+    assert not missing, f"routes the handler serves but /api does not document: {missing}"
+
+
+def test_the_landing_route_does_not_collide_with_the_ai_overview(server):
+    """`/api/overview` is the POST that writes a project's AI reading.
+
+    A second handler named `_overview` silently shadowed it — Python keeps the
+    last definition — so every GET arrived at a handler expecting a body. The two
+    live at different paths now, and this is what says so.
+    """
+    address, _ = server
+    assert request(address, "/api/landing")[0] == 200
+    # GET on the AI overview path is not a route at all.
+    assert request(address, "/api/overview")[0] == 404
 
 
 def test_the_page_references_no_external_host(server):

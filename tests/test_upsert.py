@@ -1157,6 +1157,92 @@ def test_the_blocker_is_the_most_severe_open_risk(session):
     assert session.scalar(select(Project)).blocker == "Rezoning refused."
 
 
+def test_existing_only_refuses_to_create_a_project(session):
+    """The guard a re-read needs, and the exact opposite of `force_new`.
+
+    Re-reading Hyperion's own articles with today's instructions also yields
+    "Project Everest" — a real name in those articles, and not a campus this
+    database has decided to track. A repair pass that quietly adds rows is no
+    longer a repair; it is an ingest with no worklist and no review.
+    """
+    result = upsert_record(session, rec(company="Meta", name="Everest"), existing_only=True)
+
+    assert result.action == "refused"
+    assert result.project_id == 0
+    # Nothing at all was written — not the project, and not its citations either.
+    assert session.scalar(select(func.count()).select_from(Project)) == 0
+    assert session.scalar(select(func.count()).select_from(Source)) == 0
+
+
+def test_existing_only_still_updates_a_project_that_exists(session):
+    """Refusing to create is not refusing to work."""
+    upsert_record(session, rec())
+    result = upsert_record(session, rec(sources=[manual_source(mw_planned=250.0)]), existing_only=True)
+
+    assert result.action in {"update", "unchanged"}
+    assert session.scalar(select(Project)).mw_planned == 250.0
+
+
+def test_the_rationale_names_the_risk_the_column_actually_holds(session):
+    """The explanation and the choice share `choose_blocker`, so they cannot part.
+
+    An explanation free to name a different obstacle than the one on the row would
+    be worse than none: a reader would act on the wrong sentence and have no way to
+    tell.
+    """
+    from tracker.upsert import blocker_rationale
+
+    upsert_record(
+        session,
+        rec(
+            risks=[
+                risk(category="water", severity="watch", summary="Draw questioned."),
+                risk(category="permitting", severity="blocking", summary="Rezoning refused."),
+            ]
+        ),
+    )
+    project = session.scalar(select(Project))
+    why = blocker_rationale(project)
+
+    assert why["summary"] == project.blocker
+    assert why["category"] == "permitting"
+    assert why["considered"] == 2
+    assert why["arbitrary"] is False
+    assert "most severe of 2 open obstacles" in why["why"]
+
+
+def test_the_rationale_admits_when_the_choice_was_arbitrary(session):
+    """Two obstacles ranking equally are settled on the lowest row id.
+
+    Stable across runs, which is what it was for — and meaningless as a reason,
+    which is what the reader has to be told. A confident sentence here would hide
+    exactly the case worth knowing about.
+    """
+    from tracker.upsert import blocker_rationale
+
+    upsert_record(
+        session,
+        rec(
+            risks=[
+                risk(category="permitting", severity="blocking", summary="Rezoning refused."),
+                risk(category="water", severity="blocking", summary="Aquifer draw refused."),
+            ]
+        ),
+    )
+    why = blocker_rationale(session.scalar(select(Project)))
+
+    assert why["tied"] == 2
+    assert why["arbitrary"] is True
+    assert "lowest row id" in why["why"]
+
+
+def test_there_is_no_rationale_without_an_obstacle(session):
+    from tracker.upsert import blocker_rationale
+
+    upsert_record(session, rec())
+    assert blocker_rationale(session.scalar(select(Project))) is None
+
+
 def test_an_unconfirmed_risk_is_stored_with_its_reason(session):
     result = upsert_record(session, rec(risks=[risk(unconfirmed="no_quote")]))
     assert result.risks_written == 1

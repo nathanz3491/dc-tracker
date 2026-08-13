@@ -41,6 +41,8 @@ LLM_COMMANDS: frozenset[str] = frozenset(
         # the row does not hold the answer.
         "audit resolve",
         "risks confirm",
+        # One to two calls per contested field, on the reasoning tier.
+        "logic conflicts",
     }
 )
 
@@ -163,6 +165,7 @@ GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "merge",
             "logic resolve",
             "audit resolve",
+            "logic conflicts",
             "risks confirm",
             "queue check",
             "queue prune",

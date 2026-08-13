@@ -234,6 +234,11 @@ class IngestReport:
     #: reported for the same reason: a re-extraction run that silently skipped
     #: three quarters of its worklist reads as a run that covered it.
     skipped_uncached: int = 0
+    #: Projects `--existing-only` declined to create. A saving on a re-read and a
+    #: *finding* on any other run: an article naming a campus this database does
+    #: not track is a candidate to add deliberately, so the number is reported
+    #: rather than left to be inferred from a flat project count.
+    refused_new: int = 0
     events: int = 0
     risks: int = 0
     #: What the run actually spent. `ExtractionOutcome` has carried these per URL
@@ -260,7 +265,14 @@ class IngestReport:
         return self.inserted + self.updated
 
     def as_rows(self) -> list[tuple[str, int]]:
-        """(label, count) pairs in a stable order for table rendering."""
+        """(label, count) pairs in a stable order for table rendering.
+
+        `new projects refused` appears only when there are some. Every other line
+        is worth showing at zero — "0 fetch errors" is a result — but only
+        `ingest crawl` has `--existing-only`, so on the other paths it is a row
+        that can never be anything but zero, widening every report to say nothing.
+        """
+        refused = [("new projects refused", self.refused_new)] if self.refused_new else []
         return [
             ("read", self.read),
             ("filtered out", self.filtered),
@@ -276,6 +288,7 @@ class IngestReport:
             ("parse errors", self.parse_error),
             ("not an article", self.thin_content),
             ("not cached", self.skipped_uncached),
+            *refused,
         ]
 
 
