@@ -1,6 +1,98 @@
 # Handoff
 
-## Yesterday (state at start of 2026-08-13)
+## Yesterday (state at start of 2026-08-14)
+
+The last handoff (`4d97d15`, committed 2026-08-13 05:29) reported "no new
+commits landed during this run's window" — true at that moment, checked
+against `git log`. The day continued anyway: seven more commits landed
+between 13:08 and 23:37 that same day (2026-08-13), none recorded until this
+run. Two threads, both closing out the 2026-08-12 review's backlog:
+
+1. **Source governance, both halves** (13:08–14:55). `62f0093` measured the
+   review's eight proposed fixes against the live database and found four
+   premises didn't match the code: the extractor already reads full
+   articles (median 7,368 of a 24,000-char limit), `phase` is model-judged
+   and quote-gated rather than keyword-matched, `source_type` is a
+   deterministic host classifier, and subdividing `government_doc` can't
+   fix the Hyperion $10B defect because both conflicting sources are the
+   same publisher — what actually separates them is a publication date.
+   `dc35a52`/`bc221c6` built that: dates read from raw HTML before
+   conversion discards them (JSON-LD → `article:published_time` → `<time>`
+   → URL path), `tracker backfill dates` for the 2,432 citations stored
+   before the reader existed (11.8% → 67.6% coverage), `tracker sources`
+   ranking publishers by contested wins earned rather than a hand-set 1–10
+   weight (Data Center Frontier and DataCenterDynamics, weight 2,
+   out-decide almost every weight-3 host), `tracker feeds` proposing new
+   feeds from robots.txt/sitemaps, and a per-run ledger at
+   `data/runs/ingest.jsonl`. `merge_by_publication_date` stays off —
+   capturing dates and moving stored values are separate decisions.
+   `4bfe11b`/`b444117` did the converging half: `tracker feeds` also
+   proposes which feeds to *retire*, on whether a feed's queued URLs ever
+   backed a stored value rather than on volume — the obvious "found most,
+   used least" metric would have flagged DataCenterDynamics, which
+   `seed/feeds.toml` keeps on purpose. Bounded honestly: 90% of wasted calls
+   come from URLs no feed found, so this reaches about a tenth of the 49%.
+2. **The repair pass that reaches rows already stored** (23:36–23:37).
+   `66fc81c`/`9f86dae` shipped `tracker backfill derive` — a value is a
+   function of its citations, but the function was only ever *applied* at
+   ingest, so six months of merge/evidence-gate/block-rollup fixes never
+   reached a stored project (`enrich` only adds sources; `init` stops after
+   the row it just wrote). Re-derives 322 values across 213 of 300 live
+   projects — 81 of them blockers resolved but never cleared — and a
+   second run moves nothing, which is the test. It found a real bug within
+   a minute: confidence was scored against the pre-derivation blocker,
+   since `blocker` counts toward the tracked-field total and was derived
+   after the score; now computed last. Also landed: generation MW filed
+   apart from campus capacity (a utility's gas/solar was inflating
+   Hyperion's delivered number), `blocker` explaining its own choice via
+   the function that writes it, the date tiebreak measured and
+   deliberately left off (it would fix 65 values and get 22 of 40 numeric
+   ones wrong — a date can't see scope), and `tracker logic conflicts` —
+   the one path where a model compares contradicting sentences instead of
+   sorting them by crawl order (492 fields qualify; refusing is a
+   first-class answer; `--apply` marks losing claims `superseded`, never
+   assigns a value the citations don't state). The two-console split rode
+   along in the same commit (shared `app.js`/CHANGELOG/README lines).
+
+Unresolved, carried in unchanged: **the live database still shows 300
+projects**, down from 1,189 on 2026-08-12, still with no commit, script or
+note explaining it — only the backup file as evidence. None of the seven
+commits above touch project counts. `work/` (the teammate's Hyperion review
+material) and the untracked reference PDF in `docs/` are both unchanged
+since the last run.
+
+## Today (2026-08-14 run)
+
+No new commits landed during this run's window. Housekeeping only:
+
+- Verified the suite green after the backfill pass: `.venv` pytest exit 0
+  (2,103 collected in this run, in the same range as the 2,073 the commits
+  themselves reported), ruff clean.
+- CHANGELOG.md and README.md were updated inside the seven commits
+  themselves (backfill derive, logic conflicts, dates, sources, feeds) —
+  this run found no drift needing a separate edit. `docs/architecture.md`
+  still needs none: it describes the CLI/database/console split at a level
+  none of this touched. No AGENTS.md exists, still correctly so.
+- The live-database purge (1,189 → 300 projects, first flagged in
+  yesterday's handoff) is now two days unresolved, unaffected by anything
+  in this run — see Tomorrow.
+- `work/` and the untracked reference PDF in `docs/` are unchanged since
+  the last run; see Tomorrow for updated day counts.
+
+## Older context (state at start of 2026-08-13)
+
+The prior handoff (`4d97d15`, committed 2026-08-13 05:29) closed out
+fourteen unrecorded commits from 2026-08-11–12 — a favicon/logo fix, the
+MiniMax-to-DeepSeek provider migration, an industry-context prompt block,
+split reasoning-effort knobs, and the six-commit Hyperion audit response
+(`tracker clean`, the gas-plant/reconcile fix, ten more Hyperion defects, a
+drawer rebuild, `logic.free_answer`) — and flagged the live-database purge
+(1,189 → 300 projects) as needing a person rather than a repair. That run's
+own window saw no new commits. The day continued anyway: seven more commits
+landed 13:08–23:37 the same day — accounted for above, under this run's
+"Yesterday."
+
+## Older context, continued (2026-08-13, catching up 08-11–12)
 
 The last handoff entry (`4e485f5`, committed 2026-08-11 05:22) reported "no
 work done this day" — true at the moment it ran, checked against `git log`
@@ -58,9 +150,9 @@ agent roles in the software itself (the commits' `Co-Authored-By: Claude
 Opus 5` trailers describe who wrote the code, not a runtime agent
 architecture).
 
-## Today (2026-08-13 run)
+## Older context, continued (2026-08-13 run: housekeeping and the purge finding)
 
-No new commits landed during this run's window — a housekeeping pass,
+No new commits landed during that run's window — a housekeeping pass,
 accounting for the fourteen-commit stretch above and re-verifying the
 suite: 1,931 tests green (`.venv` pytest, exit 0), up from 1,884 recorded
 2026-08-10 — and ruff clean.
@@ -707,15 +799,36 @@ branch, not this branch's work, left alone.
 
 ## Tomorrow
 
-- **Top priority: find out who ran the 2026-08-12 purge and why, and whether
-  889 of 1,189 projects were meant to go.** `data/tracker.backup-before-purge-20260812.db`
-  is the only record of it — no commit, script, or doc names the criteria.
-  Until someone confirms it was intentional (e.g. scoping to a reviewed
-  subset) or restores from the backup, every count below sourced from
-  before 08-12 10:41 describes a database that no longer matches
-  `data/tracker.db`. Re-run `tracker clean`, `duplicates`, `audit`,
-  `risks`, `logic check`, and `blocks` fresh once that's settled — the
-  numbers below are not worth trusting until then.
+- **Top priority, now two days old: find out who ran the 2026-08-12 purge
+  and why, and whether 889 of 1,189 projects were meant to go.**
+  `data/tracker.backup-before-purge-20260812.db` is still the only record
+  of it — no commit, script, or doc names the criteria, and nothing landed
+  2026-08-13 touches project counts either. This now also caps how far to
+  trust 2026-08-13's own new work: `tracker backfill derive`'s 322 values
+  across 213/300 projects, `tracker backfill dates`'s 67.6% coverage, and
+  `tracker sources`'/`tracker feeds`'s rankings all measured the same
+  300-row database. Until someone confirms the purge was intentional or
+  restores from the backup, re-run `tracker clean`, `duplicates`, `audit`,
+  `risks`, `logic check`, `blocks`, `sources`, and `feeds` fresh once
+  that's settled — none of these numbers are worth trusting until then.
+- **`tracker logic conflicts` has never run against a real DeepSeek key**
+  (492 fields qualify live) — tested only against injected fakes. Worth a
+  real `--apply` pass once the purge above is settled, since it's the
+  intended fix for the crawl-order tiebreak problem (`published_at` /
+  `merge_by_publication_date`, now measured and deliberately still off:
+  flipping it fixes 65 values and gets 22 of 40 numeric ones wrong, because
+  a date can't see scope).
+- **`tracker feeds --no-probe` names one real retirement candidate**:
+  `applied-digital-newsroom` (44 queued, 17 read, 17 none, zero cited in
+  ten calls). It only proposes — `queue --drop --feed` and the
+  `seed/feeds.toml` edit still need a person. DataCenterDynamics stays on
+  purpose despite topping any queued-vs-cited ranking; the config
+  explains why.
+- **`tracker backfill derive` cleared 81 stale blockers live on
+  2026-08-13.** The "27 audit findings unsettled" and "118 of 305 obstacles
+  待确认" counts below predate that and are now doubly stale (purge, then
+  backfill) — re-run `audit`/`risks`/`clean` together, not separately,
+  once the purge above is resolved.
 - The evidence gate checks only that a quote exists and is verbatim, not
   that it actually supports the *event_type* it's filed under — a verified
   "Open house event" sentence can still sit beside a `groundbreaking` chip.
@@ -783,9 +896,9 @@ branch, not this branch's work, left alone.
   still untriaged.
 - Review `docs/feedback-2026-08-03.md`, now seven days old and untouched.
 - The 20 utility/contractor EDGAR companies in `seed/edgar-companies.toml`
-  are still wired up but unrun — eighth day carried.
+  are still wired up but unrun — ninth day carried.
 - The 30-required-projects gap, unverified ERCOT/CAISO column names, and the
-  two unconfigured Google CSE keys are still open — eighth day carried.
+  two unconfigured Google CSE keys are still open — ninth day carried.
 - `tracker cloudflare --name`/`TRACKER_TUNNEL_HOSTNAME` still need a real
   run against a named tunnel with DNS actually pointed at it.
 - `tracker audit`, the evidence-quote gate, and `quality`/the claim envelope
@@ -794,14 +907,15 @@ branch, not this branch's work, left alone.
   moved this much since 08-09.
 - **An untracked 2 MB PDF still sits in `docs/`**
   (`docs/能源科技AI系列报告（三）：北美AI电力新趋势PPT+ED (1).pdf`, added
-  2026-08-06 14:52, unchanged since — eight days now). Still reference
+  2026-08-06 14:52, unchanged since — nine days now). Still reference
   material, not project output; still needs a human call on whether it
   belongs in the repo, `.gitignore`, or somewhere else entirely.
-- **A new untracked `work/` directory** (four `.pptx` decks, two `.pdf`
+- **The untracked `work/` directory** (four `.pptx` decks, two `.pdf`
   diagrams, one planning `.md`, added 2026-08-12) needs the same call as
   the PDF above — plus one thing the PDF doesn't have: a live PowerPoint
-  lock file (`~$Hyperion-Tracker-Review-FINAL.pptx`), meaning a deck may
-  still be open for editing elsewhere. Don't touch until confirmed closed.
+  lock file (`~$Hyperion-Tracker-Review-FINAL.pptx`), still present as of
+  2026-08-14 (two days unchanged), meaning a deck may still be open for
+  editing elsewhere. Don't touch until confirmed closed.
 - **Every prompt's stamp moved** when `_industry.txt` was prepended
   (`06b575a`), so `tracker clean`'s `vintage_current` check fails on every
   row by construction — nothing has been read by the current gate yet.
