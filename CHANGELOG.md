@@ -104,6 +104,32 @@ initial build of the v1 PRD.
   EDGAR is reached by `ingest edgar` and not by polling. Proposes TOML, never
   writes.
 
+- **`tracker feeds` now proposes retirements too**, so one command does both
+  halves of the rolling loop: widen where the record says a publisher is worth
+  reading, converge where it says one is not. `--no-probe` skips the network half.
+
+  **The obvious metric is wrong and the codebase already contains the
+  counter-example.** "Found the most, used the least" makes three unlike things
+  identical: `applied-digital-newsroom` (17 calls, 17 misses, nothing stored),
+  `datacenterdynamics` (39 queued, 12 fetch failures, nothing read) and
+  `utilitydive-archive` (73 queued, never read once). Only the first is a
+  candidate — the second is behind Cloudflare and kept deliberately, with ten
+  lines in `seed/feeds.toml` explaining that its headlines still say which
+  projects exist, and a queued-versus-cited ratio puts it top of the kill list.
+  So the split is on what happened *after* the fetch: `read == 0` is never a
+  verdict, and `waste` already divides by `read` rather than by volume.
+
+  A feed is proposed only after ten calls with no citation ever; anything that
+  cites at all is reported as low-yield and never proposed. The reason quotes the
+  queued count, not the calls already spent — those are sunk, and what retirement
+  buys is not making the next ones. It prints the `queue --drop --feed` line and
+  **does not edit `feeds.toml`**, which is mostly hand-written justification
+  including the comment that prevents exactly this mistake.
+
+  Every run prints the bound: **2,148 of 2,381 wasted calls came from URLs no feed
+  found**, so feed retirement addresses about a tenth of the 49%. Without that
+  line the report reads as though pruning feeds fixes it.
+
 - **`tracker queue stats`** (`tracker/funnel.py`, `tests/test_funnel.py`) and
   **`/api/discover`**. Stage 1's funnel per feed, derived from `ingest_url` so
   there is no counter to drift. The headline: **2,381 of 4,854 URLs that reached an

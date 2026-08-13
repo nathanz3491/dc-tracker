@@ -4856,6 +4856,71 @@ def _print_resolution_summary(resolutions: list, rescored: int) -> None:
     )
 
 
+def _print_feed_verdicts(verdicts: list, report, funnel_mod) -> None:
+    """The retire half of `tracker feeds`.
+
+    Prints the three not-a-verdict classes as well as the proposals, because the
+    whole point of the split is that they are indistinguishable from volume alone
+    and an operator who only sees "retire" will not know that.
+    """
+    if json_mode():
+        emit(
+            {
+                "verdicts": [v.as_json() for v in verdicts],
+                "waste_from_feeds": report.no_project - funnel_mod.no_feed_share(report)[0],
+                "waste_total": report.no_project,
+            }
+        )
+        return
+
+    retire = [v for v in verdicts if v.verdict == "retire"]
+    thin = [v for v in verdicts if v.verdict == "low yield"]
+    blocked = [v for v in verdicts if v.verdict == "cannot read"]
+    unjudged = [v for v in verdicts if v.verdict in {"too few to judge", "not read yet"}]
+
+    if retire:
+        console.rule("[bold]worth retiring[/bold]", align="left")
+        for v in retire:
+            console.print(f"  [yellow]{v.feed}[/yellow] — {v.why}")
+            console.print(f"    [dim]tracker queue --drop --feed {v.feed}[/dim]")
+        console.print(
+            "\n[dim]Then comment the entry out of seed/feeds.toml, with a line saying "
+            "why. Nothing here edits that file.[/dim]"
+        )
+    else:
+        console.print(
+            "[green]nothing worth retiring[/green] — no feed has been read "
+            "enough times to judge and cited nothing"
+        )
+
+    if thin:
+        console.print(
+            "\n[bold]earning their keep thinly[/bold] [dim](reported, not proposed)[/dim]"
+        )
+        for v in thin:
+            console.print(f"  {v.feed} — {v.why}")
+
+    if blocked:
+        console.print("\n[bold]cannot be read, which is not the same as worthless[/bold]")
+        for v in blocked:
+            console.print(f"  {v.feed} — [dim]{v.why}[/dim]")
+
+    if unjudged:
+        console.print(
+            f"\n[dim]{len(unjudged)} feed(s) have not been read enough to judge. "
+            f"They are not evidence of anything yet.[/dim]"
+        )
+
+    # The number that says how much any of this can achieve.
+    no_feed, total = funnel_mod.no_feed_share(report)
+    if total:
+        console.print(
+            f"\n[dim]Scope: {no_feed} of {total} wasted call(s) came from URLs no feed "
+            f"found — search and archive sweeps. Retiring feeds addresses the other "
+            f"{100 * (total - no_feed) / total:.0f}%.[/dim]"
+        )
+
+
 @app.command("feeds")
 def feeds_cmd(
     hosts: Annotated[
@@ -4866,25 +4931,54 @@ def feeds_cmd(
     min_decisive: Annotated[
         int, typer.Option("--min-decisive", help="Values a host must already decide to qualify.")
     ] = 2,
+    no_probe: Annotated[
+        bool,
+        typer.Option("--no-probe", help="Skip the network half. Only report what to retire."),
+    ] = False,
+    min_read: Annotated[
+        int,
+        typer.Option("--min-read", help="Calls a feed must have cost before it can be judged."),
+    ] = 0,
 ) -> None:
-    """Find feeds for publishers we already rely on but never configured.
+    """Feeds worth adding, and feeds worth retiring. Free, no LLM, writes nothing.
 
-    Free, no LLM, writes nothing. Candidates come from the record — hosts whose
-    claims decide stored values, that `seed/feeds.toml` does not list — rather than
-    from a model, because the database already knows which outlets are worth
-    reading and a model would only guess at it.
+    Both halves of the rolling loop in one place: widen where the record says a
+    publisher is worth reading, converge where it says one is not.
 
-    Three rungs per host: `robots.txt` `Sitemap:` lines, then well-known paths
-    like `/feed` and `/rss.xml`, then the homepage's `<link rel="alternate">`.
-    Every hit is parsed and run through the real filter, so the report says how
-    many entries would have been *queued* rather than that a URL responded.
+    **Retiring** reads the database only. A feed is proposed for retirement when it
+    has been read enough times to judge and has never once backed a stored value.
+    It is deliberately *not* proposed on volume: a feed we cannot read looks
+    identical to one that says nothing, and `datacenterdynamics` — kept on purpose,
+    with ten lines in `seed/feeds.toml` explaining why — would head the kill list
+    under a queued-versus-cited ratio.
 
-    Prints TOML to paste. Adding a feed adds a corpus, and the filter is the only
-    thing between a bad one and paid extraction, so the decision stays with you.
+    **Adding** costs requests. Candidates come from the record — hosts whose claims
+    decide stored values, that `feeds.toml` does not list — rather than from a
+    model, because the database already knows which outlets are worth reading.
+    Three rungs per host: `robots.txt` `Sitemap:` lines, then well-known paths like
+    `/feed` and `/rss.xml`, then the homepage's `<link rel="alternate">`. Every hit
+    is parsed and run through the real filter, so the report says how many entries
+    would have been *queued* rather than that a URL responded.
+
+    Prints what to paste and what to comment out, and edits nothing.
+    `seed/feeds.toml` is mostly hand-written justification — including the comment
+    that stops someone deleting a blocked-but-valuable feed — and a command that
+    rewrote it would strip exactly the reasoning that prevents the mistake.
     """
+    from tracker import funnel as funnel_mod
     from tracker.ingest import probe as probe_mod
 
     engine = _read_engine()
+
+    # The free half first, and only when the caller did not name hosts explicitly —
+    # `tracker feeds some.host` is a question about that host, not a review.
+    if not hosts:
+        with session_scope(engine, commit=False) as session:
+            report = funnel_mod.survey(session)
+        verdicts = funnel_mod.verdicts(report, min_read=min_read or funnel_mod.MIN_READ_TO_JUDGE)
+        _print_feed_verdicts(verdicts, report, funnel_mod)
+        if no_probe:
+            return
     with session_scope(engine, commit=False) as session:
         if not hosts:
             picks = probe_mod.candidates(session, limit=limit, min_decisive=min_decisive)

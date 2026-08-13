@@ -131,6 +131,133 @@ class Funnel:
         }
 
 
+#: Calls a feed must have cost before its record is evidence of anything. Ten is
+#: not statistical, it is just enough that "never once" stops being luck: a feed
+#: read twice and citing nothing is indistinguishable from a feed read twice on
+#: two quiet days.
+MIN_READ_TO_JUDGE = 10
+
+#: Below this share of reads producing a citation, a feed is earning its keep
+#: thinly enough to be worth a look. Reported, never proposed — a feed that cites
+#: something is contributing, and the threshold is a prompt to check rather than a
+#: verdict.
+LOW_YIELD = 0.15
+
+
+@dataclass
+class Verdict:
+    """What to do about one feed, and the sentence that justifies it."""
+
+    feed: str
+    verdict: str
+    why: str
+    stat: FeedStat
+
+    def as_json(self) -> dict[str, Any]:
+        return {"feed": self.feed, "verdict": self.verdict, "why": self.why, **self.stat.as_json()}
+
+
+def verdicts(report: Funnel, *, min_read: int = MIN_READ_TO_JUDGE) -> list[Verdict]:
+    """Classify every feed. Only `retire` is a proposal.
+
+    **Three different things look identical as "found a lot, cited nothing", and
+    they need opposite responses.** Measured on the live database:
+
+        applied-digital-newsroom   44 queued, 17 read, 17 none, 0 failed
+        datacenterdynamics         39 queued,  1 read,  0 none, 12 failed
+        utilitydive-archive        73 queued,  0 read,  0 none,  0 failed
+
+    The first was read seventeen times and described no project once — retire it.
+    The second cannot be read at all: its article pages sit behind Cloudflare, and
+    `seed/feeds.toml` carries ten lines explaining why it stays anyway, because the
+    headlines still say which projects exist. The third has never been read, so
+    there is no evidence to judge it on and retiring it would be deciding on a
+    sample of nothing.
+
+    A queued-versus-cited ratio ranks all three the same and puts the one the
+    config deliberately keeps at the top of the kill list. So the split is on
+    **what happened after the fetch**, not on volume.
+    """
+    out: list[Verdict] = []
+    for stat in report.feeds:
+        if stat.feed == "(no feed)":
+            # Search, archive sweeps and enrich. Real, and much larger than every
+            # feed combined, but no feed list controls it — see `no_feed_share`.
+            continue
+        if stat.read == 0:
+            if stat.failed:
+                out.append(
+                    Verdict(
+                        stat.feed,
+                        "cannot read",
+                        f"{stat.failed} fetch failure(s), nothing read — a blocked feed, "
+                        f"not a worthless one",
+                        stat,
+                    )
+                )
+            else:
+                out.append(
+                    Verdict(stat.feed, "not read yet", f"{stat.queued} queued, none read", stat)
+                )
+        elif stat.read < min_read:
+            out.append(
+                Verdict(stat.feed, "too few to judge", f"{stat.read} read, needs {min_read}", stat)
+            )
+        elif stat.cited == 0:
+            # The queued count is the part that matters. Calls already made are
+            # spent; what retiring a feed actually buys is not making the next
+            # ones, so the proposal quotes the forward saving rather than the sunk
+            # one.
+            ahead = (
+                f", and {stat.pending} more queued" if stat.pending else ", with none left queued"
+            )
+            out.append(
+                Verdict(
+                    stat.feed,
+                    "retire",
+                    f"{stat.read} call(s), {stat.no_project} found no project, "
+                    f"not one backs a stored value{ahead}",
+                    stat,
+                )
+            )
+        elif stat.cited / stat.read < LOW_YIELD:
+            out.append(
+                Verdict(
+                    stat.feed,
+                    "low yield",
+                    f"{stat.cited} citation(s) from {stat.read} call(s)",
+                    stat,
+                )
+            )
+        else:
+            out.append(
+                Verdict(
+                    stat.feed, "keep", f"{stat.cited} citation(s) from {stat.read} call(s)", stat
+                )
+            )
+    order = {
+        "retire": 0,
+        "low yield": 1,
+        "cannot read": 2,
+        "too few to judge": 3,
+        "not read yet": 4,
+    }
+    return sorted(out, key=lambda v: (order.get(v.verdict, 9), -v.stat.read, v.feed))
+
+
+def no_feed_share(report: Funnel) -> tuple[int, int]:
+    """(wasted calls with no feed, wasted calls in total).
+
+    Printed beside any retirement proposal, because it is the number that says how
+    much retiring feeds can possibly achieve. On the live database 2,148 of the
+    2,381 wasted calls came from URLs no feed found — search and archive sweeps —
+    so the whole feed list accounts for about a tenth of the problem. Without this
+    line the report reads as if pruning feeds fixes the 49%.
+    """
+    no_feed = next((f.no_project for f in report.feeds if f.feed == "(no feed)"), 0)
+    return no_feed, report.no_project
+
+
 def fetch_failures(session: Session, *, limit: int = 8) -> list[tuple[str, int]]:
     """Why fetches fail, commonest first — the silent-timeout audit.
 
@@ -210,4 +337,15 @@ def survey(session: Session) -> Funnel:
     return out
 
 
-__all__ = ["REACHED_THE_MODEL", "FeedStat", "Funnel", "fetch_failures", "survey"]
+__all__ = [
+    "LOW_YIELD",
+    "MIN_READ_TO_JUDGE",
+    "REACHED_THE_MODEL",
+    "FeedStat",
+    "Funnel",
+    "Verdict",
+    "fetch_failures",
+    "no_feed_share",
+    "survey",
+    "verdicts",
+]
