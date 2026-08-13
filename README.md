@@ -1543,12 +1543,47 @@ rung exists for — not the swallowed timeouts that were suspected.
 Everything is derived from `ingest_url` on each run, so there is no counter to
 drift. `/api/discover` serves the same payload to the console.
 
-### Finding feeds worth adding
+### Feeds worth adding, and feeds worth retiring
 
 ```bash
-tracker feeds                        # publishers the record says we rely on
-tracker feeds datacenterfrontier.com # or probe one by name
+tracker feeds                        # both halves
+tracker feeds --no-probe             # retire only, free, no network
+tracker feeds datacenterfrontier.com # or probe one host by name
 ```
+
+**Retiring is where the naive metric goes wrong**, and it is worth stating why.
+"Found the most, used the least" sounds like the right rule and is not — three
+different situations produce an identical zero:
+
+```
+feed                       queued  read  none failed cited
+applied-digital-newsroom       44    17    17      0     0   read it, said nothing
+datacenterdynamics             39     1     0     12     0   couldn't read it
+utilitydive-archive            73     0     0      0     0   never read it
+```
+
+Only the first is a candidate. The second is behind Cloudflare and is kept on
+purpose — `seed/feeds.toml` carries ten lines saying so, because the headlines
+still tell you which projects exist. The third has never been read, so retiring
+it would be deciding on a sample of nothing. A queued-versus-cited ratio ranks
+all three the same and puts the deliberately-kept one at the top of the kill
+list, so the split is on **what happened after the fetch**, not on volume.
+
+A feed is proposed only when it has been read at least ten times and has never
+once backed a stored value. A feed that cites anything is reported as low-yield
+and never proposed — a citation is a contribution, however thin. The proposal
+quotes the *queued* count rather than the calls already made, because calls
+already made are sunk and what retiring buys is not making the next ones.
+
+It prints the `tracker queue --drop --feed X` line and stops. **It does not edit
+`seed/feeds.toml`** — that file is mostly hand-written justification, including
+the comment that stops someone deleting DataCenterDynamics, and a command that
+rewrote it would strip the reasoning that prevents the mistake.
+
+One number is printed with every run, because it bounds the whole exercise:
+**2,148 of 2,381 wasted calls came from URLs no feed found** — search and archive
+sweeps. Retiring feeds can address the other 10%. If you want the 49% down, the
+filter and the search templates are where the volume is.
 
 `seed/feeds.toml` is hand-maintained, which is the wrong way round: the database
 already knows which publishers decide stored values. Candidates are the hosts

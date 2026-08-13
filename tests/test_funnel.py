@@ -164,3 +164,101 @@ def test_an_empty_database_reports_zero_rather_than_dividing(session):
     assert report.total_urls == 0
     assert report.waste == 0.0
     assert report.as_json()["feeds"] == []
+
+
+# --- what to retire ---------------------------------------------------------
+#
+# The whole design turns on one thing: three different situations look identical
+# as "found a lot, cited nothing", and they need opposite responses.
+
+
+def verdict_for(session, feed):
+    return next(v for v in funnel.verdicts(funnel.survey(session)) if v.feed == feed)
+
+
+def test_a_feed_read_often_and_never_cited_is_retired(session):
+    """applied-digital-newsroom: 17 calls, 17 misses, nothing stored."""
+    for n in range(12):
+        url(session, f"https://x.test/{n}", feed="noisy", status="no_project")
+    assert verdict_for(session, "noisy").verdict == "retire"
+
+
+def test_a_feed_we_cannot_read_is_protected(session):
+    """The trap.
+
+    `datacenterdynamics` queues 39 URLs and cites none, because its article pages
+    sit behind Cloudflare and every fetch 403s. `seed/feeds.toml` carries ten
+    lines explaining why it stays anyway — the headlines still say which projects
+    exist. A queued-versus-cited ratio puts it top of the kill list.
+    """
+    for n in range(30):
+        url(session, f"https://x.test/{n}", feed="blocked", status="fetch_error")
+    assert verdict_for(session, "blocked").verdict == "cannot read"
+
+
+def test_a_feed_never_read_is_not_judged(session):
+    """73 queued and zero read is a sample of nothing, not a verdict."""
+    for n in range(40):
+        url(session, f"https://x.test/{n}", feed="untried", status="discovered")
+    assert verdict_for(session, "untried").verdict == "not read yet"
+
+
+def test_volume_alone_does_not_decide(session):
+    """The three cases above, side by side, ranked the way volume would rank them.
+
+    All three cite nothing. Only one is a proposal.
+    """
+    for n in range(12):
+        url(session, f"https://a.test/{n}", feed="noisy", status="no_project")
+    for n in range(30):
+        url(session, f"https://b.test/{n}", feed="blocked", status="fetch_error")
+    for n in range(40):
+        url(session, f"https://c.test/{n}", feed="untried", status="discovered")
+
+    got = {v.feed: v.verdict for v in funnel.verdicts(funnel.survey(session))}
+    assert got == {"noisy": "retire", "blocked": "cannot read", "untried": "not read yet"}
+    # And the one with the *least* volume is the only one retired.
+    assert next(iter(funnel.verdicts(funnel.survey(session)))).feed == "noisy"
+
+
+def test_a_small_sample_is_not_enough_to_retire(session):
+    for n in range(3):
+        url(session, f"https://x.test/{n}", feed="quiet", status="no_project")
+    assert verdict_for(session, "quiet").verdict == "too few to judge"
+
+
+def test_a_feed_that_cites_anything_is_never_retired(session):
+    """A citation is a contribution, however thin. Low yield is reported only."""
+    for n in range(20):
+        url(session, f"https://x.test/{n}", feed="thin", status="no_project")
+    url(session, "https://x.test/kept", feed="thin", status="ok")
+    cite(session, "https://x.test/kept")
+    assert verdict_for(session, "thin").verdict == "low yield"
+
+
+def test_a_productive_feed_is_kept(session):
+    for n in range(12):
+        url(session, f"https://x.test/{n}", feed="good", status="ok")
+        cite(session, f"https://x.test/{n}")
+    assert verdict_for(session, "good").verdict == "keep"
+
+
+def test_the_retire_reason_quotes_the_forward_saving(session):
+    """Calls already made are sunk; what retiring buys is not making the next ones."""
+    for n in range(12):
+        url(session, f"https://x.test/{n}", feed="noisy", status="no_project")
+    for n in range(5):
+        url(session, f"https://x.test/pending-{n}", feed="noisy", status="discovered")
+    assert "5 more queued" in verdict_for(session, "noisy").why
+
+
+def test_urls_from_no_feed_are_never_a_verdict(session):
+    """There is no feed to retire, and they are 90% of the waste."""
+    url(session, "https://x.test/1", feed=None, status="no_project")
+    assert funnel.verdicts(funnel.survey(session)) == []
+
+
+def test_no_feed_share_reports_what_retirement_cannot_reach(session):
+    url(session, "https://x.test/1", feed=None, status="no_project")
+    url(session, "https://y.test/1", feed="a-feed", status="no_project")
+    assert funnel.no_feed_share(funnel.survey(session)) == (1, 2)
