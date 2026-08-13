@@ -459,8 +459,78 @@ Positions are city centres, not sites.
 tracker serve
 ```
 
-Opens `http://127.0.0.1:8765/`. Eight views — Projects, Map, Capex, Queue,
-Coverage, Commands, Runs, Help — reading the database on every request, so it
+### Two consoles: one to read, one to work
+
+| | | |
+|---|---|---|
+| **`/`** | Overview · Projects · Map · Capex | reading the dataset. Nothing on it changes anything. |
+| **`/dev`** | Pipeline · Commands · Help | the queue, the runs, the command palette. |
+
+They were one console with eight tabs, which put the machinery on the same
+footing as the data — three of the eight top-level choices were about running the
+tool rather than about what it found. Now the reading console answers to the
+reader and the developer console answers to whoever is fixing something.
+
+One bundle serves both; the server sets `window.DC_MODE` on the shell and the
+front end picks its view set. That is a *display* choice and nothing more: what
+`/dev` can actually do is still governed by `allow_write`, so `serve --no-run`
+renders it with every button inert. A page cannot grant itself a capability by
+asking for a different URL, and a test says so.
+
+**The landing page answers one question.** It used to open on the projects
+table — figure caption, six-field filter card, coverage strip and eighteen
+columns, all at equal weight, before you had read a number. Overview is now one
+screen: the share of stored values carrying a verbatim quote, how many are stated
+as fact with nothing behind them, the tier mix as one bar, the three things
+waiting on a person, and the two portfolio figures worth quoting. It went through
+one round at 1,221px and 37 numbers before landing at **619px and 14** — the first
+cut kept a legend that repeated the bar it sat under, and a command column
+truncated to `tracker ingest crawl --stale-pro…`, which is furniture in a console
+that cannot run it.
+
+The trust figures arrive separately, behind a skeleton, from `/api/landing`: its
+census and tier sweep take about 2.5 seconds and `/api/dataset` is refetched after
+every run, so putting the scan there would have slowed the whole console to answer
+a question one view asks.
+
+**Everything explanatory folds.** Each view opened with a paragraph that is useful
+once and furniture thereafter — the caption and heading stay, the prose sits behind
+"what is this?". On Projects the coverage strip and the seven-swatch provenance key
+fold too; both were permanent furniture above the table. The filter card collapses
+at every width, with a count on the button so a hidden active filter cannot
+mislead you.
+
+### Driving the console from outside a browser
+
+```bash
+curl -s localhost:8765/api | python -m json.tool
+```
+
+`GET /api` is a hand-written index of every route: what it answers, what it
+reads, whether it writes, and what it costs. It exists because this console is
+driven from a terminal about as often as from a browser, and "what can I ask this
+server?" previously had no answer short of reading `_route_get`.
+
+Hand-written for the same reason `catalog.GROUPS` is — a derived list describes
+the code, and a caller needs to know what a route is *for*. A test compares it
+against the routes the handler actually dispatches and fails if one is
+undocumented, which is what stops it rotting; it caught six on the first run.
+
+The three worth knowing:
+
+| route | answers | cost |
+|---|---|---|
+| `GET /api/dataset` | every project with its claims, plus capex, gaps, queue, totals | ~1 MB, refetched after each run |
+| `GET /api/landing` | evidence census, clean tiers, what is waiting on a person | ~2.5s |
+| `POST /api/run` | starts a command, returns a run id | needs `--run` |
+
+`POST /api/run` takes `{cmd, flags}`, `{workflow}` or `{line}`, and validates all
+three against the same catalog the palette is built from — so a blocked command
+cannot be reached by putting it in a routine, and no request is ever spliced into
+a shell.
+
+Opens `http://127.0.0.1:8765/`. Seven views — **Overview**, Projects, Map, Capex,
+Pipeline, Commands, Help — reading the database on every request, so it
 reflects what a run just did without re-exporting anything. A run started from the
 page refetches the dataset when it finishes, so a crawl that adds a project or a
 merge that removes three is visible without a reload.
@@ -499,6 +569,8 @@ particular order:
 | Catch up on the news | `sync` → `ingest geo` → `logic check` |
 | Deepen what we already have | `enrich` → `ingest geo` → `gaps` |
 | Tidy the database | `duplicates` → `logic check` → `stats` |
+| Raise rows to T1, free | `duplicates` → `backfill blocks` → `backfill derive` → `logic resolve --auto` → `blocks` → `clean` |
+| Raise rows to T3, with a model | `audit resolve` → `risks confirm` → `logic resolve --llm` → `logic conflicts` → `clean` |
 | Prepare a report | `stats` → `capex` → `verify` |
 
 The order carries reasons the page now states: geography is a free lookup, so
@@ -508,7 +580,7 @@ was about to fix. Each runs as **one job with one log and one entry in the
 history** — not chained by the browser, where a closed tab would abandon the
 sequence halfway. It stops at the first real failure, except for steps like
 `duplicates` that exit non-zero when they *find* something, which is an answer
-rather than a breakage. Adding a fifth routine is eight lines in
+rather than a breakage. Adding a seventh routine is eight lines in
 `webui/workflows.py`; a node editor would have been a builder nobody asked for.
 
 **The AI overview** in each project drawer is the one thing in the console that
@@ -1064,6 +1136,8 @@ tracker logic check --audit 20         # audit the evidence behind 20 rows' valu
 tracker logic resolve                  # work through them, one at a time
 tracker logic resolve --code built_exceeds_planned   # one kind at a time
 tracker logic resolve --auto           # only the repairs needing no decision
+tracker logic conflicts                # let a model read every source for one field
+tracker logic conflicts 10 --field investment_usd --apply
 ```
 
 Every other check asks whether a value is *supported*. This one asks whether the
@@ -1180,10 +1254,49 @@ answer, because somebody triaging forty rows will stop partway.
 With no terminal (the console runs commands without a keyboard) it does the
 automatic repairs, reports what needs a person, and stops.
 
+**`logic conflicts` is the one place a model compares two contradicting
+sentences.** Everything else was extracted from one article in isolation, and the
+disagreements between articles are settled by a sort — quote-backed first, then
+source weight, then date. That is the right default and it cannot tell a
+*superseded* figure from a rival one. Hyperion held Meta's 2024 $10B over its 2026
+$50B because both sources are weight 3, both are quote-backed, and crawl order
+decided it.
+
+So this shows one model every quote-backed claim about **one field**: the value,
+the verbatim sentence, the publisher, and when they published. 492 fields on the
+live database qualify — a field is only contested when two or more *quote-backed*
+claims genuinely disagree.
+
+Four properties, and three of them are refusals to do the obvious thing:
+
+- **It cannot type a value.** The options are figures publishers actually printed,
+  already stored with their quotes. The model returns one key from a closed list,
+  so a sentence nobody published has no route into the database at all.
+- **Refusing is a real answer.** Two credible publishers stating two figures with
+  nothing to separate them is not a coin toss. A refusal writes nothing and the
+  disagreement stays disclosed in the row's notes, with both citations intact.
+- **Two calls per field, hard.** One to decide, one adversarial call whose whole
+  job is to knock the answer down. If it succeeds the field becomes a refusal
+  carrying the objection — a third call arguing with itself is unbounded spend.
+- **`--apply` never assigns the field.** It marks the losing claims `superseded`
+  on their own citations and re-derives the row, so a value still equals what its
+  citations imply, and the 2024 article still says what it said in 2024.
+
+Identity fields are excluded before a call is made: "Hyperion" against "Richland
+Parish Data Center" is two names for one campus, `FILL_ONLY` says churn there is
+worse than staleness, and ruling against a claim would not even move the value.
+That is 174 of 666 candidates removed for free.
+
+Run `tracker backfill dates` first. Both the tiebreak and this model reason from
+publication dates, and a claim with none is shown as *"publication date unknown;
+crawled 2026-08-10"* rather than as a date — a model handed a bare date would
+conclude the article we read second is the later one, which is the mistake the
+whole change exists to stop.
+
 `logic check` is in `LLM_COMMANDS` even though its default run is free, because
 `--read 50` spends fifty calls and the console's gate gates command names, never
-flags. `logic resolve` is gated too: it is the only command that rewrites fields
-in bulk.
+flags. `logic resolve` and `logic conflicts` are gated too: one rewrites fields in
+bulk, the other spends up to two calls per contested field.
 
 ### What the stored data actually rests on
 
@@ -1437,13 +1550,32 @@ no date. `--limit` bounds the fetching, not the run — capping the free pass th
 TRACKER_MERGE_BY_PUBLICATION_DATE=1 python scripts/measure_extraction.py
 ```
 
-**The tiebreak is off by default**, and the reason is worth stating rather than
-treating as caution. Turning it on takes the six inversions to zero, but they are
-not uniformly improvements: #116 would move from 120 MW to 40 MW, because the
-smaller figure was published a day later. Publication order is the more
-*defensible* rule; it is not the rule that always yields the larger number. Run
-the line above to see what it would change before deciding, and note that the
-flag changes the policy — stored values move as each row is next written.
+**The tiebreak is off by default, and stays off — that is a measurement, not
+caution.** The backfill has run: 1,011 pages gave up a date, and citation coverage
+went from **11.8% to 67.6%**. With the column filled, **65** values are settled by
+crawl order against publication order. Flipping the flag fixes all 65 and gets
+plenty of them wrong — of the 40 numeric ones it raises 18 figures and lowers 22:
+
+| | keeps | would take |
+|---|---|---|
+| #10 `investment_usd` | $10B (2024-12-04) | **$50B** (2026-07-13) — the reference case, fixed |
+| #1 `mw_planned` | 450 (2025-10) | **2,000** (2026-07) |
+| #20 `mw_planned` | 100 (2016) | **545** (2026) |
+| #78 `customer` | **Meta** (2022-04) | Facebook (2022-10) — the older name, restored |
+| #389 `investment_usd` | **$86.5M** (2025-10) | $40B (2026-03) — a programme total for a site |
+| #63 `mw_planned` | **120** (2026-03-16) | 6 (2026-03-17) — one day later |
+| #164 `mw_planned` | **200** (2022) | 50 (2024) |
+
+The failure a date cannot see is a later article about a different **scope**: one
+building of a campus, one phase of a programme, is newer without being a
+restatement of the whole. Publication order is the more *defensible* rule and it is
+still the wrong lever on its own.
+
+So the dates earn their crawl somewhere else — `tracker logic conflicts` shows
+them to a model that reads the sentences rather than ranking them by date, which
+is the distinction the sort cannot make. Run the line above to see the current
+list before deciding; the flag changes the policy, so stored values move as each
+row is next written.
 
 The same fact fixes a second bug. The prompt's `ARTICLE_DATE` was always
 `unknown`: `extract_one`'s `published_date` parameter existed, the prompt
@@ -2437,6 +2569,30 @@ Each `source` row records what *it* asserts in `source.claims`. After the source
 are written, every project field is derived afresh from all of them by a declared
 policy in `upsert.FIELD_POLICY`. This buys three properties the PRD asks for and
 that incremental merging does not give you:
+
+> **The catch, and `tracker backfill derive`.** The derivation is only *applied*
+> when something writes to the row. Improving the merge policy, the evidence gate
+> or the block rollup therefore does not improve a project that is already stored
+> — and `enrich`, the command usually reached for, only ever *adds* a source; it
+> cannot correct a row it did not create. `tracker init` recomputes confidence,
+> accelerators and blocks and stops there.
+>
+> ```bash
+> tracker backfill derive --dry-run     # what would move, and which fields
+> tracker backfill derive               # move it
+> ```
+>
+> No LLM, no network, no migration. On the live database its first run moves 322
+> values across 213 of 300 projects — 205 note blocks, **81 blockers**, 16 phases,
+> 9 capacities. The blockers are the finding: `blocker` is derived from the risk
+> rows and nothing re-derived it after a risk was resolved, so rows carried
+> obstacles that had been cleared, and some whose obstacles were *all* resolved
+> still showed one.
+>
+> **Running it twice changes nothing**, and that is the test: if a second pass
+> keeps moving rows then the derivation is not a pure function of what is stored,
+> and every number in the database is whichever pass ran last.
+
 
 - **Idempotence.** Re-ingesting the same input recomputes the same values, so
   `updated_at` genuinely does not move. `test_reingest_is_idempotent` is the

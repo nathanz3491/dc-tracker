@@ -92,7 +92,7 @@ export function HelpView({ data }) {
                                            gap: 16, padding: "22px 26px 60px" }}>
       <div style=${{ display: "flex", flexDirection: "column", gap: 5 }}>
         <span style=${{ fontFamily: "var(--font-mono)", fontSize: 12, textTransform: "uppercase",
-                        letterSpacing: "0.16em", color: "var(--muted-foreground)" }}>fig. 08 — help</span>
+                        letterSpacing: "0.16em", color: "var(--muted-foreground)" }}>fig. 06 — help</span>
         <h1 style=${{ margin: 0, fontFamily: "var(--font-display)", fontSize: 30, fontWeight: 500,
                       letterSpacing: "-0.02em", lineHeight: 1.15 }}>Three things worth knowing</h1>
         <p style=${{ margin: "2px 0 0", fontSize: 14, lineHeight: "22px",

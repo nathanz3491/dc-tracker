@@ -273,13 +273,31 @@ class Settings(BaseSettings):
     #: the crawler fetched it (`source.published_at`, migration 0014).
     #:
     #: Off by default because it moves stored values, and it has to be measured
-    #: before it is trusted. `scripts/measure_extraction.py` reports what it would
-    #: change; on the live database that is six values, and they are not uniformly
-    #: improvements — Hyperion correctly stops holding Meta's superseded $10B, but
-    #: #116 would move from 120 MW to 40 MW because the smaller figure was
-    #: published a day later. Publication order is the more *defensible* rule, not
-    #: the one that always yields the larger number, and turning it on is a
-    #: judgement somebody should make with the report in front of them.
+    #: before it is trusted. `scripts/measure_extraction.py` section 3 reports what
+    #: it would change.
+    #:
+    #: **Measured after `tracker backfill dates` filled the column — 11.8% to 67.6%
+    #: of citations — and the answer was still no.** 65 observable inversions, 40 of
+    #: them numeric, and flipping would raise 18 figures and lower 22. It does not
+    #: point one way:
+    #:
+    #:   right    #10 investment  $10B -> $50B   the reference case, fixed
+    #:            #1  mw_planned   450 -> 2,000
+    #:            #20 mw_planned   100 -> 545    a 2016 figure against a 2026 one
+    #:   wrong    #78 customer   'Meta' -> 'Facebook'   the OLDER name, restored
+    #:            #389 investment $86.5M -> $40B  a programme total for a site figure
+    #:            #63 mw_planned   120 -> 6      published one day later
+    #:            #164 mw_planned  200 -> 50
+    #:
+    #: The failure a date cannot see is the one `logic conflicts` exists for: a
+    #: later article about a different *scope* — one building of a campus, one phase
+    #: of a programme — is newer without being a restatement of the whole.
+    #: Publication order remains the more *defensible* rule and is still the wrong
+    #: lever on its own.
+    #:
+    #: The dates are not wasted; they are the input `logic conflicts` shows to a
+    #: model that reads the sentences rather than ranking them by date. Leave this
+    #: off until that has run, then measure again.
     merge_by_publication_date: bool = False
 
     def resolve_db(self, override: Path | None = None) -> Path:

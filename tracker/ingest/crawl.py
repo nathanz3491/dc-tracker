@@ -2095,6 +2095,7 @@ def run(
     force: bool = False,
     cache_dir: Path | None = None,
     cached_only: bool = False,
+    existing_only: bool = False,
     run_id: str | None = None,
 ) -> IngestReport:
     """Fetch, extract and upsert a list of article URLs.
@@ -2107,6 +2108,12 @@ def run(
     `report.skipped_uncached`. Without it a re-extraction run quietly becomes a
     crawl: `--stale-prompt` picks URLs by prompt vintage, and three quarters of
     those have no cached text.
+
+    `existing_only` refuses to create projects, counting them in
+    `report.refused_new`. The guard a **re-read** needs: re-reading an article the
+    database already cites also yields whatever else that article names, and a
+    repair pass that quietly adds campuses is an ingest with no worklist and no
+    review.
     """
     import asyncio
 
@@ -2199,7 +2206,14 @@ def run(
             report.completion_tokens += outcome.completion_tokens
 
         for record in outcome.records:
-            upsert = upsert_record(session, record)
+            upsert = upsert_record(session, record, existing_only=existing_only)
+            if upsert.action == "refused":
+                # Named, not merely counted: a refused campus is a candidate to
+                # add deliberately later, and a run that reported only a number
+                # would leave nothing to act on.
+                report.refused_new += 1
+                log.info("refused a new project from %s: %s", result.url, record.project.get("name"))
+                continue
             report.bump(upsert.action)
             report.events += upsert.events_written
             report.risks += upsert.risks_written

@@ -912,6 +912,13 @@ def ingest_crawl(
             help="Read only articles already cached; never fetch. Pair with --stale-prompt.",
         ),
     ] = False,
+    existing_only: Annotated[
+        bool,
+        typer.Option(
+            "--existing-only",
+            help="Never create a project. Refusals are reported. Pair with --stale-prompt.",
+        ),
+    ] = False,
 ) -> None:
     """Extract projects from news articles with an LLM.
 
@@ -927,6 +934,12 @@ def ingest_crawl(
     read as established ever since. Served from the article cache by default,
     which makes it a re-read rather than a re-fetch: `--no-cache` would confound
     "the prompt improved" with "the page changed".
+
+    **Pair a re-read with `--existing-only`.** An article this database already
+    cites also names other things — re-reading Hyperion's coverage yields "Project
+    Everest" and a parish's generating units — and a repair pass that quietly adds
+    campuses is an ingest with no worklist and no review. The refusals are counted
+    and logged, so a genuinely new campus can be added deliberately afterwards.
     """
     from tracker.ingest import crawl
     from tracker.llm import DeepSeekExtractor, MissingApiKey
@@ -1067,6 +1080,7 @@ def ingest_crawl(
             force=force,
             cache_dir=cache_dir,
             cached_only=cached_only,
+            existing_only=existing_only,
         )
 
     from tracker import runlog
@@ -1467,14 +1481,24 @@ def _print_blocks(project: Project) -> None:
     A capacity no quote confirmed is marked 待确认 *and* stated to be outside the
     campus total, because those are two different facts and a reader who sees only
     the first will assume the number is in `MW planned`.
+
+    **The utility's plant is listed separately, under the campus.** Every sum here
+    already excludes generation — a plant's nameplate output and a data center's IT
+    load are different quantities — so listing an Entergy gas unit among the halls
+    put six of Hyperion's eighteen rows in the wrong table while the arithmetic
+    beneath them said otherwise. Split, not dropped: gas being built *for* this
+    campus is one of the most important facts about it.
     """
-    blocks = list(getattr(project, "blocks", ()) or ())
-    if not blocks:
+    all_blocks = list(getattr(project, "blocks", ()) or ())
+    if not all_blocks:
         return
 
     from tracker import blocks as blocks_mod
 
-    got = blocks_mod.rollup(blocks)
+    serving = [b for b in all_blocks if blocks_mod.is_generation(b.label, b.parent)]
+    blocks = [b for b in all_blocks if b not in serving]
+
+    got = blocks_mod.rollup(all_blocks)
     table = Table(
         title=f"capacity blocks ({len(blocks)})",
         header_style="bold",
@@ -1536,6 +1560,26 @@ def _print_blocks(project: Project) -> None:
 
     console.print()
     console.print(table)
+
+    if serving:
+        power = Table(
+            title=f"power serving this campus ({len(serving)})",
+            header_style="bold",
+            box=TABLE_BOX,
+            title_justify="left",
+            caption="the utility's, measured as generating output — never added to the campus above",
+            caption_justify="left",
+        )
+        power.add_column("asset")
+        power.add_column("MW", justify="right")
+        power.add_column("status")
+        for block in sorted(serving, key=lambda b: b.block_key):
+            label = escape(block.label)
+            if block.parent:
+                label = f"{escape(block.parent)} / {label}"
+            power.add_row(label, _fmt_mw(block.mw), block.status)
+        console.print()
+        console.print(power)
 
     for note in blocks_mod.reconcile_notes(got):
         console.print(f"  [dim]{escape(note)}[/dim]")
@@ -1714,6 +1758,19 @@ def show(project_id: Annotated[int, typer.Argument(help="Project id.")]) -> None
 
         score = compute_for_project(project, project.sources)
         console.print(f"\n[dim]why confidence {score.value}:[/dim] {'; '.join(score.reasons)}")
+
+        # Why *this* obstacle out of the open ones. Twenty-seven of them on
+        # Hyperion, one sentence on the row, and until now nothing said the other
+        # twenty-six had been considered at all.
+        from tracker.upsert import blocker_rationale
+
+        rationale = blocker_rationale(project)
+        if rationale:
+            tone = "yellow" if rationale["arbitrary"] else "dim"
+            console.print(
+                f"[dim]why this blocker:[/dim] [{tone}]{escape(rationale['why'])}[/{tone}]"
+                f" [dim](risk #{rationale['risk_id']}, {rationale['category']})[/dim]"
+            )
 
         _print_standing(project)
         # Above the sources on purpose: on a partly-built campus this table is the
@@ -3857,6 +3914,152 @@ def logic_check(
     )
 
 
+@logic_app.command("conflicts")
+def logic_conflicts(
+    project_ids: Annotated[
+        list[int] | None,
+        typer.Argument(help="Only these projects. Default: every project.", show_default=False),
+    ] = None,
+    field: Annotated[
+        str | None,
+        typer.Option("--field", help="Settle one field only, e.g. investment_usd."),
+    ] = None,
+    limit: Annotated[int, typer.Option("--limit", help="Fields to settle. 0 for all.")] = 20,
+    apply: Annotated[
+        bool, typer.Option("--apply", help="Write. Without it, proposes and writes nothing.")
+    ] = False,
+    yes: Annotated[bool, typer.Option("--yes", help="Skip the confirmation for a large run.")] = (
+        False
+    ),
+) -> None:
+    """Let one model read every source about a contested field and settle it.
+
+    **Costs one to two LLM calls per contested field.** Reasoning tier, because
+    this is the hardest question the tool asks.
+
+    Every other value in this database was extracted from one article in
+    isolation, and the disagreements between articles are then settled by a sort:
+    quote-backed first, then source weight, then date. That is the right default
+    and it cannot tell a superseded figure from a rival one. Hyperion (#10) held
+    Meta's 2024 $10B over its 2026 $50B because both come from the same publisher
+    at the same weight, and crawl order decided it.
+
+    So this is the one path where a model compares two contradicting sentences.
+    It sees every quote-backed claim about one field at once — the value, the
+    verbatim sentence, the publisher, and when they published — and answers with
+    one key from a closed list.
+
+    **It cannot type a value.** The options are figures publishers actually
+    printed, already stored with their quotes; the model picks among them. A
+    sentence nobody published has nowhere to enter by this path.
+
+    **Refusing is a real answer.** Two credible publishers stating two figures
+    with nothing to separate them is refused, not guessed at, and the
+    disagreement stays disclosed in the row's notes. A second, adversarial call
+    tries to knock every answer down before it is kept.
+
+    **What `--apply` writes is not the field.** It marks the losing claims
+    `superseded` on their own citations and re-derives the row, so the value still
+    equals what its citations imply. Run `tracker backfill dates` first — the
+    tiebreak, and this model, both reason from publication dates.
+    """
+    from typing import Any as _Any
+
+    from tracker import conflicts as conflicts_mod
+
+    engine, _ = init_db(_db_path()) if apply else (_read_engine(), None)
+
+    with session_scope(engine, commit=False) as session:
+        query = select(Project).order_by(Project.id.asc())
+        if project_ids:
+            query = query.where(Project.id.in_(project_ids))
+        found: list[tuple[int, _Any]] = []
+        for project in session.scalars(query).all():
+            for dispute in conflicts_mod.disputes(project):
+                if field and dispute.field != field:
+                    continue
+                found.append((project.id, dispute))
+
+    chosen = found[:limit] if limit else found
+    _print_report_rows(
+        [
+            ("contested fields", len(found)),
+            ("will settle now", len(chosen)),
+            ("LLM calls at most", len(chosen) * conflicts_mod.MAX_CALLS_PER_FIELD),
+        ],
+        title="logic conflicts",
+    )
+    if not chosen:
+        console.print(
+            "[green]nothing contested[/green] [dim]— no field has two quote-backed claims "
+            "that genuinely disagree.[/dim]"
+        )
+        return
+
+    if len(chosen) > 20 and not yes and not json_mode():
+        console.print(
+            f"\n[yellow]up to {len(chosen) * conflicts_mod.MAX_CALLS_PER_FIELD} LLM calls."
+            "[/yellow] [dim]Re-run with --yes, or use --limit to go in tranches.[/dim]"
+        )
+        raise typer.Exit(1)
+
+    from tracker.llm import MissingApiKey, reasoning_extractor
+
+    try:
+        extractor = reasoning_extractor(get_settings())
+    except MissingApiKey as exc:
+        _fail(str(exc))
+        return
+
+    if apply:
+        try:
+            release_lock = acquire_write_lock(_db_path(), command="logic conflicts")
+        except AlreadyRunning as exc:
+            _fail(str(exc))
+            raise
+        atexit.register(release_lock)
+
+    report = conflicts_mod.SolveReport(disputes=len(chosen))
+    console.rule("[bold]settle[/bold]", align="left")
+    with _explain_db_locks(), session_scope(engine, commit=apply) as session:
+        for project_id, dispute in chosen:
+            outcome = conflicts_mod.solve(dispute, extractor=extractor)
+            report.calls += outcome.calls
+            report.outcomes.append(outcome)
+            if outcome.verdict == "resolved":
+                report.resolved += 1
+                if apply:
+                    project = session.get(Project, project_id)
+                    report.written += conflicts_mod.apply_outcome(session, project, outcome)
+                    # Per field, so a run that dies partway keeps what it settled.
+                    session.commit()
+            elif outcome.verdict == "refused":
+                report.refused += 1
+            else:
+                report.errors += 1
+            console.print(f"  {escape(outcome.render())}")
+
+    if json_mode():
+        emit({"rows": dict(report.as_rows()), "outcomes": [o.render() for o in report.outcomes]})
+        return
+
+    _print_report_rows(
+        report.as_rows(),
+        title="logic conflicts" + ("" if apply else " (proposal)"),
+        warn={"errors"},
+    )
+    if not apply and report.resolved:
+        console.print(
+            f"\n[yellow]Nothing written.[/yellow] [dim]--apply supersedes the losing claims "
+            f"on {report.resolved} field(s) and re-derives the rows.[/dim]"
+        )
+    if report.refused:
+        console.print(
+            f"[dim]{report.refused} refused. That is a recorded answer, not a failure — the "
+            f"disagreement stays in the row's notes with both citations intact.[/dim]"
+        )
+
+
 @logic_app.command("resolve")
 def logic_resolve(
     auto_only: Annotated[
@@ -5142,9 +5345,69 @@ def _backfill_dates(*, limit: int, refetch: bool, apply: bool, yes: bool, everyt
         )
 
 
+def _backfill_derive(*, project_id: int | None, dry_run: bool) -> None:
+    """`tracker backfill derive`. No LLM, no network, no migration.
+
+    The command to run after any change to how something is derived. Every value
+    on a project is a function of its citations, but the function is only applied
+    when something writes to the row — so improving the merge policy, the block
+    rollup or the evidence gate reaches stored projects only through this.
+
+    Kept out of `backfill()` proper for the same reason `dates` is: it shares
+    nothing with re-reading articles. It spends neither calls nor requests, needs
+    no extractor, and writes every column rather than one.
+    """
+    from tracker import derive as derive_mod
+
+    engine, _ = init_db(_db_path())
+
+    if not dry_run:
+        try:
+            release_lock = acquire_write_lock(_db_path(), command="backfill derive")
+        except AlreadyRunning as exc:
+            _fail(str(exc))
+            raise
+        atexit.register(release_lock)
+
+    # `--dry-run` is a transaction that is never committed, deliberately not a
+    # second code path: a preview computed differently from the write is a preview
+    # of something else.
+    with _explain_db_locks(), session_scope(engine, commit=not dry_run) as session:
+        report = derive_mod.run(session, project_id=project_id)
+        by_field = report.by_field
+        lines = [change.render() for change in report.changes]
+        conflicts = dict(report.conflicts)
+        rows = report.as_rows()
+
+    if json_mode():
+        emit({"rows": dict(rows), "by_field": by_field, "changes": lines})
+        return
+
+    _print_report_rows(rows, title="backfill derive" + (" (dry run)" if dry_run else ""))
+    for name, count in by_field.items():
+        console.print(f"  [dim]{name:<20} {count}[/dim]")
+    for line in lines[:30]:
+        console.print(f"  [dim]{escape(line)}[/dim]")
+    if len(lines) > 30:
+        console.print(f"  [dim]… and {len(lines) - 30} more[/dim]")
+    if conflicts:
+        console.print(
+            f"\n[dim]{len(conflicts)} project(s) still hold fields their sources disagree "
+            f"about. Both values keep their own citation; `tracker logic check` lists "
+            f"them.[/dim]"
+        )
+    if dry_run:
+        console.print("\n[yellow]dry run[/yellow] [dim]— nothing written.[/dim]")
+    elif not (report.changed or report.blocks_touched):
+        console.print(
+            "\n[green]nothing moved[/green] [dim]— every row already matches what its "
+            "citations imply.[/dim]"
+        )
+
+
 @app.command("backfill")
 def backfill(
-    what: Annotated[str, typer.Argument(help="`blocks` or `dates`.")] = "blocks",
+    what: Annotated[str, typer.Argument(help="`blocks`, `dates` or `derive`.")] = "blocks",
     limit: Annotated[
         int, typer.Option("--limit", help="Articles to read. 0 reads every one selected.")
     ] = 25,
@@ -5178,11 +5441,21 @@ def backfill(
         ),
     ] = False,
 ) -> None:
-    """Re-read stored articles to fill in capacity blocks.
+    """Bring stored rows up to date. Three jobs, one family.
 
-    Migration 0009 created the block table and wrote no rows, because turning an
-    article into blocks needs the article text rather than the schema. Every project
-    ingested before it therefore has no blocks until this runs.
+    * `derive` — re-derive every project from the citations it already holds. No
+      LLM, no network, no migration. **Run this after any change to how something
+      is derived**, because a value is a function of its sources and the function
+      is only applied when something writes to the row.
+    * `dates` — fill in when each article was actually published, so a merge tie
+      is broken by publication order rather than by crawl order.
+    * `blocks` — re-read stored articles to fill in capacity blocks. The default,
+      and the only one that spends anything.
+
+    **`blocks`, in detail.** Migration 0009 created the block table and wrote no
+    rows, because turning an article into blocks needs the article text rather
+    than the schema; every project ingested before it has no blocks until this
+    runs.
 
     Deliberately not `ingest crawl --force`: that re-extracts every field with a
     model that behaves differently than it did at ingest time, churning rows and
@@ -5197,6 +5470,20 @@ def backfill(
     from tracker import backfill as backfill_mod
     from tracker.llm import MissingApiKey, default_extractor
 
+    if what == "derive":
+        # Dispatched first, and before any extractor is constructed: this half
+        # costs nothing at all, and asking for an API key to run it would be a lie
+        # about what it does.
+        for flag, name in (
+            (refetch, "--refetch"),
+            (force, "--force"),
+            (apply, "--apply"),
+            (all_urls, "--all"),
+        ):
+            if flag:
+                _fail(f"{name} applies to `backfill blocks` or `dates`, not to `derive`.")
+        _backfill_derive(project_id=project_id, dry_run=dry_run)
+        return
     if what == "dates":
         # Dispatched before anything blocks-specific runs: this half costs no LLM
         # calls, needs no API key, and writes one column.
@@ -5206,7 +5493,7 @@ def backfill(
         _backfill_dates(limit=limit, refetch=refetch, apply=apply, yes=yes, everything=all_urls)
         return
     if what != "blocks":
-        _fail(f"nothing to backfill called {what!r}. Expected `blocks` or `dates`.")
+        _fail(f"nothing to backfill called {what!r}. Expected `blocks`, `dates` or `derive`.")
 
     settings = get_settings()
     cache_dir = install_root() / ".cache" / "articles"

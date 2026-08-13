@@ -12,6 +12,160 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **`tracker backfill derive` — the free repair pass** (`tracker/derive.py`).
+
+  Every value on a project is a function of its citations, and the function is
+  only *applied* when something writes to the row. So six months of fixes to the
+  merge policy, the evidence gate and the block rollup never reached a stored
+  project: `enrich`, the command actually reached for, only ever *adds* a source.
+  `tracker init` recomputes confidence, accelerators and blocks and stops there.
+
+  No LLM, no network, no migration — it re-reads `source.claims`, already on disk,
+  and rewrites what they imply. On the live database it moves **322 values across
+  213 of 300 projects**: 205 note blocks, **81 blockers**, 16 phases, 9 capacities,
+  5 cities and 5 accelerator counts.
+
+  The 81 blockers are the finding. `blocker` is derived from the risk rows and
+  nothing re-derived it after a risk was resolved, so projects carried an obstacle
+  that had been cleared — and several rows whose obstacles are *all* resolved were
+  still showing one. Those go to empty, which the old free-text column could never
+  do and the derived one had never actually been asked to. 76 of 300 rows now name
+  a blocker.
+
+  It also found a real ordering bug on its first run — see *Fixed* below. That is
+  the command working: a repair pass whose second run is not a no-op is telling you
+  the derivation is wrong, and it told us within a minute of existing.
+
+  Running it twice changes nothing, and that is the test. `--dry-run` is a
+  transaction that is never committed rather than a second code path, so the
+  preview cannot be a preview of something else.
+
+- **`tracker logic conflicts` — one model, every source, one contested field**
+  (`tracker/conflicts.py`, `prompts/resolve-v1.txt`, `resolve-check-v1.txt`).
+
+  Every other value here was extracted from one article *in isolation*, and the
+  disagreements between articles are then settled by a sort. That cannot tell a
+  superseded figure from a rival one: Hyperion held Meta's 2024 $10B over its 2026
+  $50B because both come from weight-3 sources, both are quote-backed, and crawl
+  order decided it.
+
+  This is the one path where a model compares two contradicting sentences. It sees
+  every quote-backed claim about one field at once — value, verbatim quote,
+  publisher, and *when they published*. 492 fields on the live database qualify.
+
+  Four rules it is built around, three of them departures from the obvious design.
+  **It cannot type a value**: the options are figures publishers actually printed,
+  already stored with their quotes, so a fabricated sentence has nowhere to enter.
+  **Refusing is a first-class answer** — the flowchart this came from has no box
+  for it, and two credible publishers with nothing to separate them is not a coin
+  toss. **Two calls per field, hard**: one to decide, one adversarial call to knock
+  it down, because a "go round again" arrow with no limit is unbounded spend. And
+  **`--apply` never assigns the field** — it marks the losing claims `superseded`
+  on their own citations and re-derives, so the row still equals what its citations
+  imply and the 2024 article still says what it said.
+
+  Identity fields are excluded outright: "Hyperion" against "Richland Parish Data
+  Center" is two names for one campus, `FILL_ONLY` says churn there is worse than
+  staleness, and ruling against a claim would not even move the value. That is 174
+  of 666 candidates removed before a call is made.
+
+- **`upsert.blocker_rationale` — why *this* obstacle out of twenty-seven.**
+
+  `blocker` is one sentence chosen from every open risk a project carries, and the
+  console showed the winner without ever saying the others were considered. It
+  shares `choose_blocker` with the write path, so the explanation cannot name a
+  different risk than the column holds — and when several ranked equally and the
+  tie fell to the lowest row id, it says the choice was **arbitrary**, which is the
+  case a confident-sounding sentence would hide. Shown in the drawer under
+  `blocker` and printed by `tracker show`.
+
+- **`upsert_record(..., existing_only=True)`, and `ingest crawl --existing-only`.**
+
+  The guard a re-read needs, and the exact opposite of `force_new`. Re-reading
+  Hyperion's own coverage also yields "Project Everest" — a real name in those
+  articles and not a campus this database decided to track. When nothing matches
+  and no merge alias routes the record, nothing at all is written, and the refusal
+  is counted and logged so a genuinely new campus can be added deliberately.
+
+- **`scripts/measure_reextraction.py`** — whether re-reading everything with
+  today's instructions is worth ~2,000 calls, answered by re-reading 40 cached
+  articles first. It reports values gained, lost and changed, and separately
+  whether more values *lost* their quote than gained one — which is the outcome a
+  bare "changes" count would dress up as progress.
+
+- **Two consoles: `/` to read, `/dev` to work.** The eight tabs put the machinery
+  on the same footing as the data — three of the eight top-level choices were
+  about running the tool rather than about what it found. `/` now carries
+  Overview, Projects, Map and Capex and nothing on it changes anything; `/dev`
+  carries Pipeline, Commands and Help.
+
+  One bundle serves both. The server sets `window.DC_MODE` on the shell and the
+  front end picks its view set — splitting the file would reintroduce the serial
+  round-trip per import that `assets.bundle_css` exists to remove, on the page we
+  most want fast. The mode is a *display* choice: what `/dev` can do is still
+  governed by `allow_write`, so `serve --no-run` renders it inert, and a test
+  asserts that asking for `/dev` grants nothing.
+
+- **`GET /api`** — a hand-written index of every route: what it answers, what it
+  reads, whether it writes, what it costs. The console is driven from a terminal
+  about as often as from a browser and "what can I ask this server?" had no answer
+  short of reading `_route_get`. Hand-written for the reason `catalog.GROUPS` is,
+  and a test compares it against the routes the handler actually dispatches — it
+  caught six undocumented ones the first time it ran.
+
+- **An Overview landing page for the console, and seven views instead of eight**
+  (`webui/static/app.js`, `app.css`, `server.py`, `clean.attention`).
+
+  The console landed on the projects table: caption, six-field filter card,
+  coverage strip and eighteen columns at equal weight, before a number. Overview
+  leads with what the dataset is *for* — 73.9% of 1,454 stored values carry a
+  verbatim quote, 3 are presented as established with nothing behind them — then
+  the tier mix as one bar, then what is holding rows back with the command that
+  answers each. Portfolio second, pipeline reduced to a line.
+
+  Split across two requests on purpose: the portfolio band paints from the dataset
+  already in hand while the trust band arrives behind a skeleton from
+  `/api/landing`, whose census and tier sweep cost ~2.5s. `/api/dataset` is
+  refetched after every run, so putting the scan there would have slowed the whole
+  console to answer one view's question.
+
+  Queue, Coverage and Runs became sections of `Pipeline`; `goto` keeps their old
+  keys working for the run-finished redirect. `Eyebrow` prose and the projects
+  filter card now fold by default at every width.
+
+  `clean.CONDITION_LABELS` and `clean.attention` are new, beside `REMEDIES` and by
+  its logic: a scorecard naming a failure an operator cannot act on is a
+  complaint, and `vintage_current` names it in this module's vocabulary rather
+  than the reader's.
+
+  Two defects found by looking rather than by reasoning. `_overview` silently
+  shadowed the existing AI-overview POST handler — Python keeps the last
+  definition, so every GET reached a handler expecting a body; the route is
+  `/api/landing` now and a test asserts the two cannot collide again. And the
+  first trust ramp ran the full lightness range, putting UNSOURCED — the worst
+  tier, the one you most need to see — at 1.48:1 against the surface, where it
+  read as a gap in the bar rather than a segment. Both ends are compressed now;
+  the minimum is 1.81 light, 2.12 dark.
+
+- **Validated chart colour, and a finding about the set we ship.** Meridian's
+  `--chart-1..5` fails the palette validator in both modes: light has an adjacent
+  pair at ΔE 2.7 under deuteranopia and **7.8 with normal colour vision** — below
+  the 15 floor, so full-colour readers cannot separate it either, and secondary
+  encoding does not excuse that one — plus two of five under the chroma floor.
+  Dark is worse: all five outside the L 0.48–0.67 band. It must not carry adjacent
+  categorical series.
+
+  The console's own rule — *colour means trust, never category* — points at the
+  answer: the clean tiers are **ordered**, so they take one hue in five steps
+  (`--dc-trust-1..5`), and phase and customer are magnitude with a single accent.
+  Dark is re-stepped against the dark surface rather than flipped, and the dark
+  band is *darker* than light's, which is the opposite of the intuitive answer.
+
+  If a categorical set is ever genuinely needed, these pass all six checks —
+  light on `#faf6ef`: `#a86112 #1f5fd8 #b02246 #6d3fc4 #4f6b12`; dark on
+  `#1b1410`: `#c47a1e #4a7fe8 #d24a63 #8f6ae0 #7a9426`. Tritan lands at 6.0–6.4,
+  inside the floor band, so direct labels and a 2px gap are mandatory with them.
+
 - **`tracker sources`** (`tracker/sources.py`, `tests/test_sources.py`). Which
   publishers actually decide a stored value, derived rather than asserted. The
   meeting asked for a hand-ranked 1–10 weight per host; that is `source_type`'s
@@ -230,6 +384,69 @@ initial build of the v1 PRD.
   capacity, and a figure the source itself presents as superseded.
 
 ### Fixed
+
+- **Confidence was scored against the blocker a row arrived with, not the one it
+  left with** (`tracker/upsert.py`). `blocker` is one of the twelve tracked
+  fields, so it counts toward the `populated` figure scoring reads — and it was
+  derived *after* the score in both `upsert_record` and `recompute_from_sources`.
+
+  Invisible while nothing re-derived the whole table, and `backfill derive` found
+  it on its first live run: a second pass moved #79 from confidence 2 to 1, having
+  cleared its resolved blocker on the first. The derivation was not a pure function
+  of what is stored, which is the one thing this path cannot be. Confidence is now
+  computed last in both functions, with a test that clears a risk and asserts the
+  second pass moves nothing.
+
+- **A utility's gas plant was filed as a tranche of the campus it serves**
+  (`webui/dataset.py`, `blockcheck.py`, `cli._print_blocks`, `app.js`).
+
+  `blocks.is_generation` has kept generation out of every *sum* since it was
+  written, so the figures were right — and the tranche list, the section table and
+  the console's "delivering" headline all still counted Entergy's running gas units
+  as Hyperion's own capacity. One name, two numbers, on the same screen.
+
+  Split now, never dropped: Entergy building 2,262 MW *for this campus* is one of
+  the most important facts about it, so it moves under power rather than out of the
+  page. `blockcheck.scan` skips generation before grouping, which stops it
+  proposing a merge of two combined-cycle units. And the reconciliation's
+  `generation` line — which had no label in the browser and rendered as "Counted
+  twice over" — now says what it is, in a colour that does not imply a defect.
+
+  Measured on #10: **3 rows and 5,962 MW** move out of its 18 tranches, and the
+  section table the drawer draws goes from 15 rows to 12. The plan called this six
+  rows on the strength of the megawatt figure; the other three carry no capacity
+  and name no generation word — `Waterford 5` and `Richland Parish Units 1-4` are
+  almost certainly the utility's too, and recognising them would need a rule about
+  plant *names*, which is a site list wearing a predicate's clothes. They stay
+  where they are, and that is written down rather than quietly rounded off.
+
+- **Publication dates filled, and the tiebreak measured and left off**
+  (`tracker/config.py`). `tracker backfill dates` was built last change and never
+  run. It has now run: the free URL-path rung dated 159 URLs, and the publisher
+  rung asked 1,772 pages and got a date out of 1,083 of them. **Citation coverage
+  went from 11.8% to 67.6%.**
+
+  **And the measurement said not to flip the tiebreak**, which is the opposite of
+  what was expected. 65 values are now visibly settled by crawl order; flipping
+  fixes all 65 and gets many of them wrong — of the 40 numeric ones it raises 18
+  figures and lowers 22. It fixes the reference case (#10 finally takes Meta's 2026
+  $50B over its 2024 $10B) and it also restores #78's customer from "Meta" to the
+  older "Facebook", and replaces #389's $86.5M site figure with a $40B programme
+  total.
+
+  The failure a date cannot see is a later article about a different *scope*: one
+  building of a campus, one phase of a programme, is newer without being a
+  restatement of the whole. So the dates stay, the flag stays off, and the thing
+  that reads them is `logic conflicts`, which reads the sentences instead of
+  ranking them.
+
+- **A publication date could be discovered and never reach the merge that reads
+  it** (`tracker/dates.py`). `backfill dates` filled `ingest_url.published_at`, and
+  `claims_by_field` breaks its tie on `source.published_at`. `upsert_record`
+  bridges the two, but only for a URL it is ingesting — so a date learned *after* a
+  citation was written never arrived. 1,600 page requests spent on a column nothing
+  consults would have been the most expensive kind of no-op. The date is now copied
+  onto the citations that quote the URL, fill-only, in the same run.
 
 - **A repaired figure could be reverted and the check that found it would stay
   quiet** (`tracker/audit.py`). `settled_codes` answered by finding *code*, but

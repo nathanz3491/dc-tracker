@@ -28,6 +28,7 @@ from tracker.gaps import measure as measure_gaps
 from tracker.gaps import worst as worst_gaps
 from tracker.models import IngestUrl
 from tracker.tracks import RISK_TRACK, TRACK_LABELS, TRACK_MILESTONES, TRACKS
+from tracker.upsert import blocker_rationale
 from tracker.vocab import (
     EVENT_TYPES,
     PHASES,
@@ -355,6 +356,42 @@ def _risk_exposure(projects: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(buckets.values(), key=lambda e: (-e["mw"], -e["projects"], e["category"]))
 
 
+def _split_serving(payload: dict[str, Any]) -> None:
+    """Move the utility's plant out of the campus list, into its own.
+
+    Hyperion (#10) records 5,962 MW of Entergy gas units, a solar farm and a
+    nuclear uprate as tranches of the campus — including a reactor 250 miles away.
+    Every *sum* has excluded them since `blocks.is_generation` was written, so the
+    figures are right; the tranche list is where they are still filed wrongly, and
+    a reader looking at eighteen rows has no way to tell six of them are a
+    different quantity.
+
+    They are moved rather than dropped. Entergy building 2,262 MW of gas *for this
+    campus* is one of the most important facts about it — it belongs under power,
+    not under capacity, and deleting it would lose the fact to fix the filing.
+
+    Split with the predicate the sums use, on each row's own label. Never a second
+    copy of that word list: a display that disagreed with the arithmetic about what
+    counts as generation would put a plant in one place and its megawatts in
+    another — which is what the console does today, adding Entergy's running gas
+    units into the campus's "delivering" figure while the reconciliation three rows
+    below correctly excludes them.
+
+    Both lists are split, not just one. `blocks` is what the tab counts and what it
+    sums into the bar; `sections` is what it draws as rows. Splitting either alone
+    leaves the two disagreeing.
+    """
+    from tracker import blocks as blocks_mod
+
+    def generation(row: dict[str, Any]) -> bool:
+        return blocks_mod.is_generation(row.get("label"), row.get("parent"))
+
+    for key, moved_to in (("blocks", "serving_blocks"), ("sections", "serving")):
+        rows = payload.get(key) or []
+        payload[key] = [r for r in rows if not generation(r)]
+        payload[moved_to] = [r for r in rows if generation(r)]
+
+
 def _kw_per_h200() -> float:
     from tracker.compute import kw_per_h200
 
@@ -371,6 +408,11 @@ def build(session: Session, *, db_path: str, schema_version: int) -> dict[str, A
         payload["nulls"] = _nulls(project)
         payload["unconfirmed_because"] = _unconfirmed_because(project)
         payload["filled"] = sum(1 for f in TRACKED_FIELDS if getattr(project, f, None) is not None)
+        # Why this obstacle and not the other twenty-six. Computed by the module
+        # that picked it, so the explanation cannot name a different risk than the
+        # column holds.
+        payload["blocker_rationale"] = blocker_rationale(project)
+        _split_serving(payload)
         projects.append(payload)
 
     citations = sum(len(p["sources"]) for p in projects)

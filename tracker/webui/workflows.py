@@ -10,8 +10,8 @@ reports contradictions that the run was about to fix.
 So the sequences are here, named, with the reason each step follows the last.
 
 **Not a node editor.** A general graph would need branching, per-node arguments
-and a way to save one, and the four routines below cover what this database
-actually needs doing. A fifth is eight lines in this file, which is cheaper than
+and a way to save one, and the six routines below cover what this database
+actually needs doing. A seventh is eight lines in this file, which is cheaper than
 a builder nobody asked for.
 
 **One run, not several.** A workflow occupies the same single slot a command
@@ -201,12 +201,22 @@ WORKFLOWS: tuple[Workflow, ...] = (
                 ),
             ),
             Step(
+                "backfill",
+                {"what": "derive"},
+                because=(
+                    "Now that the blocks are written, re-derive every row from the "
+                    "citations it holds. Nothing else reaches a stored project's own "
+                    "fields — a value is a function of its sources, and the function is "
+                    "only applied when something writes to the row."
+                ),
+            ),
+            Step(
                 "logic resolve",
                 {"--auto": True, "--apply": True},
                 because=(
-                    "Re-derives every row that has drifted from its own sources, and "
-                    "answers the findings a date comparison settles. This is where a "
-                    "stuck `phase` comes back down and a bad campus total is recomputed."
+                    "What re-deriving cannot answer: the findings a date comparison "
+                    "settles. The step above has already put back every row that had "
+                    "merely drifted, so this one only sees real questions."
                 ),
             ),
             Step(
@@ -255,6 +265,16 @@ WORKFLOWS: tuple[Workflow, ...] = (
                 "logic resolve",
                 {"--llm": True, "--limit": 40},
                 because="Whatever the free rung could not answer, one call each.",
+            ),
+            Step(
+                "logic conflicts",
+                {"--limit": 20, "--apply": True, "--yes": True},
+                because=(
+                    "Last, because it is the only step that reads several sources "
+                    "against each other, and everything above removes work from it. "
+                    "Contested fields only, and it refuses rather than guessing when "
+                    "two quote-backed figures cannot be separated."
+                ),
             ),
             Step(
                 "clean",

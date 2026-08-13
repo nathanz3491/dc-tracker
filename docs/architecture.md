@@ -37,6 +37,37 @@ So the whole thing is a loop, and both ends of the loop are the CLI.
    └──────────────┘
 ```
 
+The console has **two faces on one server**, and the split is about who is
+looking:
+
+```
+   /                                    /dev
+   ┌────────────────────────────┐       ┌────────────────────────────┐
+   │ Overview · Projects        │       │ Pipeline · Commands · Help │
+   │ Map · Capex                │       │                            │
+   │                            │       │ the queue, the runs,       │
+   │ reads the dataset.         │       │ the command palette.       │
+   │ nothing here changes       │       │ this is where work         │
+   │ anything.                  │       │ happens.                   │
+   └────────────────────────────┘       └────────────────────────────┘
+              │                                      │
+              └──────────────┬───────────────────────┘
+                             ▼
+                   one bundle, one server
+                   window.DC_MODE picks the view set
+```
+
+**The mode is a display choice, not a permission.** What `/dev` can do is still
+governed by `allow_write` on the server — `serve --no-run` serves the page with
+every button inert. A page cannot grant itself a capability by asking for a
+different URL, which is the same reasoning as "the gate is checked on the command
+name, never on its flags".
+
+Why the reading console exists separately at all: it used to carry eight tabs,
+three of which were about running the tool rather than about what it found. That
+made the machinery compete with the data for the reader's attention, and the
+landing page — a filter card and eighteen columns — answered no question at all.
+
 The split is enforced, not merely intended:
 
 - The **CLI** owns everything that changes data — fetching, calling the model,
@@ -185,7 +216,27 @@ both were written correctly, but because **only one of them is doing the work**.
 | Confidence 0–3 | backend |
 | Field coverage, and which denominator is honest | backend |
 | Capacity behind each category of obstacle | backend |
+| Which tranches are the utility's plant, not the campus | backend |
+| Why *this* obstacle is the project's blocker | backend |
 | Sorting, filtering, expand/collapse | browser (pure display, no judgement) |
+
+The last two are recent and both are the same rule applied twice.
+
+**Serving infrastructure.** `blocks.is_generation` has kept a utility's gas and
+solar out of every *sum* since it was written. The tranche list did not know that,
+so the page showed Entergy's running gas units among Hyperion's data halls and
+added them into its "delivering" figure — while the reconciliation three rows
+below correctly excluded them. One name, two numbers. The split is made in
+`webui/dataset.py` with the same predicate the arithmetic uses; the page draws two
+lists and decides nothing.
+
+**The blocker's rationale.** `blocker` is one sentence chosen from twenty-seven
+open obstacles, and the page had no way to say the other twenty-six were
+considered. `upsert.blocker_rationale` shares `choose_blocker` with the write
+path, so the explanation cannot name a different risk than the column holds — and
+when several ranked equally and the tie fell to the lowest row id, it says the
+choice was arbitrary. A browser-side copy of that rule would drift from the one
+that picked the value, which is the whole objection this section opens with.
 
 ---
 

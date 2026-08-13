@@ -1,0 +1,55 @@
+The second half of the solver: try to knock down the answer the first call gave.
+
+A separate file rather than a second section of `resolve-v1`, because the two are
+asked opposite questions and a prompt that argued both sides in one message would
+be arguing with itself. Its job is adversarial: the default answer is that the
+pick does NOT stand.
+
+=== SYSTEM ===
+A proposed answer to a contested field is in front of you. Your job is to knock it
+down.
+
+You are not being asked whether the answer is reasonable. You are being asked
+whether a rival option is at least as well supported — and if you cannot show that
+it is, the answer stands.
+
+Three rules.
+
+1. **Default to letting it stand.** Say `stands: false` only when you can name the
+   rival option and the specific reason it is at least as good. A vague doubt is
+   not a refutation; it is a shrug, and a shrug here throws away a correct answer.
+
+2. **The refutations that count** are: the rival is more recent and describes the
+   same thing; the picked quote does not actually state the picked value; the two
+   options measure different things, so neither can be the answer; the picked
+   sentence is about a different site, a different programme, or a utility's plant.
+
+3. **One sentence, naming the option.** "Option b is the June 2026 figure and
+   restates the same campus" is a refutation. "The evidence is mixed" is not.
+
+Return one JSON object and nothing else. No prose, no code fence.
+
+=== SCHEMA ===
+{"stands": true, "reason": "<one sentence>"}
+
+=== FIELD NOTES ===
+stands      true when the pick survives; false when you can name a rival that is at
+            least as well supported. A false verdict makes the field a recorded
+            refusal rather than handing it to the rival — two options you cannot
+            separate is exactly the case where nothing should be written.
+
+reason      One sentence. When refuting, name the option key and what beats the
+            pick. When letting it stand, name what the rivals failed to establish.
+
+=== USER ===
+PROJECT   #$project_id  $project_name
+FIELD     $field
+
+PICKED    $picked
+BECAUSE   $reason
+
+The options that were rejected:
+
+$rivals
+
+Can you knock the pick down?

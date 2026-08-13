@@ -1376,6 +1376,51 @@ def test_run_persists_project_source_and_events(session):
     assert set(json.loads(source.claims)) == set(source.fields.split(","))
 
 
+def test_existing_only_reads_the_article_and_creates_nothing(session):
+    """The guard a re-read needs.
+
+    Re-reading coverage the database already cites also yields whatever else those
+    articles name — "Project Everest", a parish's generating units — and a repair
+    pass that quietly adds campuses is an ingest with no worklist and no review.
+    The refusal is counted, so a genuinely new campus can be added deliberately.
+    """
+    llm = FakeLLM([canned("llm_response_microsoft_wi.json")])
+    report = crawl.run(
+        session,
+        [URL],
+        fetcher=FakeFetcher({URL: fetched()}),
+        extractor=llm,
+        existing_only=True,
+        run_id="guard",
+    )
+    assert report.refused_new == 1
+    assert report.written == 0
+    assert session.scalar(select(Project)) is None
+    # And nothing half-written: a citation for a project that does not exist would
+    # be orphaned evidence.
+    assert session.scalar(select(Source)) is None
+
+
+def test_existing_only_still_deepens_a_project_that_exists(session):
+    """Refusing to create is not refusing to work."""
+    llm = FakeLLM([canned("llm_response_microsoft_wi.json"), canned("llm_response_microsoft_wi.json")])
+    crawl.run(session, [URL], fetcher=FakeFetcher({URL: fetched()}), extractor=llm, run_id="a")
+    report = crawl.run(
+        session,
+        [URL],
+        fetcher=FakeFetcher({URL: fetched()}),
+        extractor=llm,
+        existing_only=True,
+        force=True,
+        run_id="b",
+    )
+    assert report.refused_new == 0
+    # `unchanged` rather than `updated`: the same article read twice recomputes the
+    # same values, which is the idempotence the whole write path is built on.
+    assert report.unchanged == 1
+    assert session.scalar(select(Project)).name == "Fairwater"
+
+
 def test_run_needs_no_api_key(session):
     """A fresh clone with no key must still run the suite."""
     llm = FakeLLM([canned("llm_response_microsoft_wi.json")])
