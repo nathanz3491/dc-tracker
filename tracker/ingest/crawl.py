@@ -160,6 +160,9 @@ class ExtractionOutcome:
     content_sha1: str | None = None
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    #: Carried through from the fetch so `record_url` can persist it. None for a
+    #: cache hit, which serves text with the metadata already stripped out.
+    published_at: dt.datetime | None = None
 
 
 def classify_source_type(url: str, *, operator_hosts: frozenset[str] | None = None) -> str:
@@ -1830,6 +1833,9 @@ def extract_one(
         attempts=result.attempts,
         http_status=result.status,
         content_sha1=result.sha1 if result.markdown else None,
+        # Set before any early return, so a page refused as thin still records the
+        # date it stated. The refusal is about prose, not about metadata.
+        published_at=result.published_at,
     )
 
     # Before the call, not after: a page with nothing to quote cannot produce a
@@ -1940,6 +1946,14 @@ def record_url(session: Session, run_id: str, outcome: ExtractionOutcome) -> Non
     row.error = (outcome.error or None) and outcome.error[:1000]
     row.content_sha1 = outcome.content_sha1
     row.last_tried_at = now
+    # Filled, never overwritten, and never cleared. `upsert` applies the same rule
+    # one table over, for the same reason: the date a publisher put on an article
+    # does not change, so a later reading of it has nothing to add. The guard on
+    # None is what makes a cache hit harmless — cached bodies are text with the
+    # metadata already stripped, so they always report None, and without this a
+    # re-extraction run would erase every date the original fetch found.
+    if row.published_at is None and outcome.published_at is not None:
+        row.published_at = outcome.published_at
     session.flush()
 
 
@@ -2173,6 +2187,16 @@ def run(
             log.error("LLM error for %s: %s", result.url, outcome.error)
         elif outcome.status == "thin_content":
             report.thin_content += 1
+
+        # Counted for every outcome, including the failures: a reply that ran out
+        # of budget mid-reasoning is the most expensive kind there is, and leaving
+        # it out of the total would understate exactly the runs worth looking at.
+        # `thin_content` is refused before the call and reports zero, which is what
+        # makes the saving visible rather than merely claimed.
+        if outcome.prompt_tokens or outcome.completion_tokens:
+            report.llm_calls += 1
+            report.prompt_tokens += outcome.prompt_tokens
+            report.completion_tokens += outcome.completion_tokens
 
         for record in outcome.records:
             upsert = upsert_record(session, record)

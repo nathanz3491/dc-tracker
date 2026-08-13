@@ -307,6 +307,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._stream(rest[: -len("/stream")])
             record = runs.read_log(self.console.db_path, rest)
             return self._json(record) if record else self._error(404, f"no run {rest!r}")
+        if route == "/api/discover":
+            return self._discover()
         if route == "/api/health":
             return self._json({"ok": True, "version": __version__})
         self._error(404, f"no route {route!r}")
@@ -433,6 +435,22 @@ class Handler(BaseHTTPRequestHandler):
         payload["allow_write"] = self.console.allow_write
         payload["password_protected"] = self.console.gate.required
         self._json(payload)
+
+    def _discover(self) -> None:
+        """Stage 1's funnel: what each feed cost and what it returned.
+
+        Its own route rather than a field on `/api/dataset`, because the dataset
+        payload is fetched on every redraw and this is a grouped scan of
+        `ingest_url` — 6,695 rows today and the fastest-growing table here. The
+        panel that reads it is opened deliberately, so it can pay for itself.
+
+        Read-only, like every GET: the console's only route to changing anything
+        is to start the CLI.
+        """
+        from tracker import funnel
+
+        with self.console.read_session() as session:
+            self._json(funnel.survey(session).as_json())
 
     def _start_run(self, body: dict[str, Any]) -> None:
         if not self.console.allow_write:

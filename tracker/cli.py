@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Annotated
 from urllib.parse import urlsplit
@@ -1053,6 +1054,7 @@ def ingest_crawl(
         return
     console.print(f"[dim]crawling {len(url_list)} URL(s) from {source_label}[/dim]")
 
+    started = time.monotonic()
     with session_scope(engine) as session:
         report = crawl.run(
             session,
@@ -1067,7 +1069,24 @@ def ingest_crawl(
             cached_only=cached_only,
         )
 
+    from tracker import runlog
+
+    if not dry_run:
+        runlog.record_ingest(
+            _db_path(),
+            command="ingest crawl",
+            report=report,
+            seconds=time.monotonic() - started,
+            model=getattr(settings, "minimax_model", None),
+        )
+
     _print_report(report, title=f"ingest crawl: {source_label}{' (dry run)' if dry_run else ''}")
+    if report.llm_calls:
+        console.print(
+            f"[dim]{report.llm_calls} model call(s), {report.tokens:,} tokens "
+            f"({report.prompt_tokens:,} in, {report.completion_tokens:,} out). "
+            f"Logged to data/runs/{runlog.LOG_NAME}.[/dim]"
+        )
 
 
 @ingest_app.command("pjm")
@@ -3046,6 +3065,123 @@ def stats() -> None:
             )
 
 
+@app.command("sources")
+def sources_cmd(
+    by: Annotated[
+        str,
+        typer.Option(
+            "--by",
+            help="Order: decisive (how much we use it), contested (quality), yield (per citation).",
+        ),
+    ] = "decisive",
+    limit: Annotated[int, typer.Option("--limit", help="Publishers to show.")] = 25,
+    min_cited: Annotated[
+        int | None,
+        typer.Option(
+            "--min-cited",
+            help="Citations required before a per-citation ordering ranks a host.",
+            show_default=False,
+        ),
+    ] = None,
+) -> None:
+    """Which publishers actually decide a stored value. Free, read-only, no LLM.
+
+    Ranks nothing by hand. `SOURCE_WEIGHTS` gives six *types* a weight from 1 to 3
+    and nothing can check it; this counts what each publisher's claims did, which
+    re-runs to the same answer or the database moved.
+
+    `decisive` is a value this host's claim won. `contested` is the subset where a
+    rival asserted something different — the only column that is evidence of
+    anything, because an unopposed win just means nobody else spoke. Identity
+    fields are excluded: `name` and `company` are FILL_ONLY, so winning one
+    records crawl order.
+    """
+    from tracker import sources as sources_mod
+
+    engine = _read_engine()
+    with session_scope(engine, commit=False) as session:
+        survey = sources_mod.survey(session)
+
+    if not survey.hosts:
+        if json_mode():
+            emit(survey.as_json())
+            return
+        console.print("[yellow]no citations yet[/yellow] — run `tracker sync` first")
+        return
+
+    try:
+        ranked = survey.ranked(by=by, min_cited=min_cited)
+    except ValueError as exc:
+        _fail(str(exc))
+
+    if json_mode():
+        # The full ranking, not the display slice: a consumer asked for the data.
+        emit({**survey.as_json(), "ordered_by": by, "hosts": [h.as_json() for h in ranked]})
+        return
+
+    console.print(
+        f"[bold]{len(survey.hosts)}[/bold] publisher(s) across "
+        f"{survey.sources_read} citation(s) on {survey.projects_read} project(s); "
+        f"[bold]{survey.decisions}[/bold] value(s) decided, "
+        f"[bold]{survey.contested}[/bold] against a disagreeing rival"
+    )
+    if survey.skipped:
+        console.print(
+            f"[dim]{survey.skipped} row(s) excluded as reference data or placeholders — "
+            f"they publish nothing to rank.[/dim]"
+        )
+
+    table = Table(header_style="bold", box=TABLE_BOX)
+    table.add_column("publisher")
+    table.add_column("cited", justify="right")
+    table.add_column("decided", justify="right")
+    table.add_column("contested", justify="right")
+    table.add_column("inert", justify="right")
+    table.add_column("per cite", justify="right")
+    table.add_column("weight", justify="right")
+    table.add_column("wins most")
+    for host in ranked[:limit]:
+        best = host.fields.most_common(1)
+        table.add_row(
+            host.host,
+            str(host.cited),
+            str(host.decisive),
+            str(host.contested),
+            f"[yellow]{host.inert}[/yellow]" if host.inert else "0",
+            f"{host.yield_per_citation:.2f}",
+            str(host.type_weight),
+            f"{best[0][0]} ({best[0][1]})" if best else "—",
+        )
+    console.print(table)
+
+    if by != "decisive":
+        floor = survey.MIN_CITED_FOR_RATIO if min_cited is None else min_cited
+        hidden = len(survey.hosts) - len([h for h in survey.hosts if h.cited >= floor])
+        if hidden:
+            console.print(
+                f"[dim]{hidden} host(s) below {floor} citation(s) are not ranked under "
+                f"--by {by}: one citation on a single-source project wins every field "
+                f"unopposed and outscores any real outlet.[/dim]"
+            )
+
+    # The divergence this report exists to surface. A hand-set weight that the
+    # observed record contradicts is the finding, not a rounding error.
+    proven = [h for h in survey.hosts if h.cited >= survey.MIN_CITED_FOR_RATIO]
+    under = [h for h in proven if h.type_weight <= 2 and h.decisive >= 40]
+    if under:
+        console.print(
+            "[yellow]Weight disagrees with the record[/yellow] for "
+            + ", ".join(
+                f"{h.host} (weight {h.type_weight}, decided {h.decisive})" for h in under[:4]
+            )
+            + " — heavier than their `source_type` says."
+        )
+    console.print(
+        "[dim]Nothing here changes a weight. `SOURCE_WEIGHTS` is edited by hand in "
+        "tracker/confidence.py; this is the evidence for doing so.[/dim]"
+    )
+
+
 @ingest_app.command("edgar")
 def ingest_edgar(
     per_company: Annotated[
@@ -4720,9 +4856,201 @@ def _print_resolution_summary(resolutions: list, rescored: int) -> None:
     )
 
 
+@app.command("feeds")
+def feeds_cmd(
+    hosts: Annotated[
+        list[str] | None,
+        typer.Argument(help="Probe these hosts instead of the ones the record suggests."),
+    ] = None,
+    limit: Annotated[int, typer.Option("--limit", help="Publishers to probe.")] = 15,
+    min_decisive: Annotated[
+        int, typer.Option("--min-decisive", help="Values a host must already decide to qualify.")
+    ] = 2,
+) -> None:
+    """Find feeds for publishers we already rely on but never configured.
+
+    Free, no LLM, writes nothing. Candidates come from the record — hosts whose
+    claims decide stored values, that `seed/feeds.toml` does not list — rather than
+    from a model, because the database already knows which outlets are worth
+    reading and a model would only guess at it.
+
+    Three rungs per host: `robots.txt` `Sitemap:` lines, then well-known paths
+    like `/feed` and `/rss.xml`, then the homepage's `<link rel="alternate">`.
+    Every hit is parsed and run through the real filter, so the report says how
+    many entries would have been *queued* rather than that a URL responded.
+
+    Prints TOML to paste. Adding a feed adds a corpus, and the filter is the only
+    thing between a bad one and paid extraction, so the decision stays with you.
+    """
+    from tracker.ingest import probe as probe_mod
+
+    engine = _read_engine()
+    with session_scope(engine, commit=False) as session:
+        if not hosts:
+            picks = probe_mod.candidates(session, limit=limit, min_decisive=min_decisive)
+            if not picks:
+                console.print(
+                    "[green]nothing to propose[/green] — every publisher deciding "
+                    f"{min_decisive}+ values is already in seed/feeds.toml."
+                )
+                return
+            console.print(
+                f"[dim]probing {len(picks)} publisher(s) that decide values but are not "
+                f"configured[/dim]"
+            )
+        results = probe_mod.run(
+            session, hosts=list(hosts) if hosts else None, limit=limit, min_decisive=min_decisive
+        )
+
+    found = [r for r in results if r.hits]
+    if json_mode():
+        emit(
+            {
+                "probed": len(results),
+                "found": len(found),
+                "hosts": [
+                    {
+                        "host": r.host,
+                        "cited": r.cited,
+                        "decisive": r.decisive,
+                        "requests": r.tried,
+                        "feeds": [
+                            {
+                                "url": h.url,
+                                "entries": h.entries,
+                                "would_queue": h.would_queue,
+                                "found_via": h.found_via,
+                            }
+                            for h in r.hits
+                        ],
+                    }
+                    for r in results
+                ],
+            }
+        )
+        return
+
+    table = Table(header_style="bold", box=TABLE_BOX)
+    table.add_column("publisher")
+    table.add_column("decides", justify="right")
+    table.add_column("feed found")
+    table.add_column("entries", justify="right")
+    table.add_column("would queue", justify="right")
+    for result in results:
+        hit = result.best
+        if hit is None:
+            table.add_row(
+                result.host, str(result.decisive), f"[dim]{result.note or '—'}[/dim]", "", ""
+            )
+            continue
+        table.add_row(
+            result.host,
+            str(result.decisive),
+            hit.url[:58],
+            str(hit.entries),
+            f"{hit.would_queue} ({hit.hit_rate:.0%})",
+        )
+    console.print(table)
+
+    worth = [r for r in found if r.best and r.best.would_queue]
+    if not worth:
+        console.print(
+            "\n[yellow]Nothing worth adding.[/yellow] [dim]A feed that parses but "
+            "matches no entry is not a find — the filter is what decides.[/dim]"
+        )
+        return
+
+    console.rule("[bold]paste into seed/feeds.toml[/bold]", align="left")
+    for result in worth:
+        console.print(escape(result.as_toml()))
+    console.print(
+        "[dim]Nothing was written. Check the hit rate first: a low one means the feed "
+        "carries mostly other coverage, and every queued entry costs an LLM call.[/dim]"
+    )
+
+
+def _backfill_dates(*, limit: int, refetch: bool, apply: bool, yes: bool, everything: bool) -> None:
+    """`tracker backfill dates`. No LLM, no API key, one column.
+
+    Kept out of `backfill()` proper because the two halves share almost nothing:
+    this one spends requests rather than calls, needs no extractor, and writes
+    `ingest_url.published_at` instead of `source.blocks`.
+    """
+    from tracker import dates as dates_mod
+    from tracker.ingest.fetch import escalation_ladder
+
+    settings = get_settings()
+    engine, _ = init_db(_db_path())
+
+    if refetch and not yes and not json_mode():
+        from tracker.ingest.fetch import date_from_url
+
+        with session_scope(engine, commit=False) as session:
+            pending = dates_mod.undated_urls(session, everything=everything)
+        # The free rung shrinks the fetch list, so quote what would actually be
+        # requested rather than the whole backlog.
+        would_fetch = sum(1 for url in pending if date_from_url(url) is None)
+        if limit:
+            would_fetch = min(would_fetch, limit)
+        if would_fetch > 200:
+            console.print(
+                f"[yellow]{would_fetch} page(s) would be requested[/yellow] across "
+                f"third-party hosts. [dim]Re-run with --yes, or --limit to go in "
+                f"tranches.[/dim]"
+            )
+            raise typer.Exit(1)
+
+    if apply:
+        try:
+            release_lock = acquire_write_lock(_db_path(), command="backfill dates")
+        except AlreadyRunning as exc:
+            _fail(str(exc))
+            raise
+        atexit.register(release_lock)
+
+    escalate = escalation_ladder(settings, browser=False) if refetch else None
+    with _explain_db_locks(), session_scope(engine, commit=apply) as session:
+        report = dates_mod.run(
+            session,
+            limit=limit or None,
+            refetch=refetch,
+            apply=apply,
+            everything=everything,
+            settings=settings,
+            escalate=escalate,
+        )
+
+    if json_mode():
+        emit({"rows": dict(report.as_rows()), "remaining": report.remaining})
+        return
+
+    _print_report_rows(report.as_rows(), title="backfill dates" + ("" if apply else " (preview)"))
+    for url, when, via in report.examples[:8]:
+        console.print(f"  [dim]{when:%Y-%m-%d}  {via:<9} {escape(url[:78])}[/dim]")
+
+    if not apply and report.dated:
+        console.print(
+            f"\n[yellow]Nothing written.[/yellow] [dim]--apply writes the "
+            f"{report.dated} date(s) above.[/dim]"
+        )
+    if not refetch and report.remaining:
+        console.print(
+            f"[dim]{report.remaining} URL(s) carry no date in the path. --refetch asks "
+            f"the publisher — one request each, no LLM, --limit to go in tranches.[/dim]"
+        )
+    elif report.remaining:
+        console.print(f"[dim]{report.remaining} more beyond --limit. Run it again.[/dim]")
+    if report.written:
+        console.print(
+            "\n[dim]The merge tiebreak still ranks on `fetched_at` until "
+            "TRACKER_MERGE_BY_PUBLICATION_DATE=1. Measure first: "
+            "`python scripts/measure_extraction.py`.[/dim]"
+        )
+
+
 @app.command("backfill")
 def backfill(
-    what: Annotated[str, typer.Argument(help="Only `blocks` for now.")] = "blocks",
+    what: Annotated[str, typer.Argument(help="`blocks` or `dates`.")] = "blocks",
     limit: Annotated[
         int, typer.Option("--limit", help="Articles to read. 0 reads every one selected.")
     ] = 25,
@@ -4741,6 +5069,19 @@ def backfill(
     ] = False,
     yes: Annotated[
         bool, typer.Option("--yes", help="Skip the confirmation for a large run.")
+    ] = False,
+    apply: Annotated[
+        bool,
+        typer.Option(
+            "--apply", help="`dates` only: write. Without it, reports and writes nothing."
+        ),
+    ] = False,
+    all_urls: Annotated[
+        bool,
+        typer.Option(
+            "--all",
+            help="`dates` only: include URLs no citation and no queue entry uses.",
+        ),
     ] = False,
 ) -> None:
     """Re-read stored articles to fill in capacity blocks.
@@ -4762,8 +5103,16 @@ def backfill(
     from tracker import backfill as backfill_mod
     from tracker.llm import MissingApiKey, default_extractor
 
+    if what == "dates":
+        # Dispatched before anything blocks-specific runs: this half costs no LLM
+        # calls, needs no API key, and writes one column.
+        for flag, name in ((project_id is not None, "--project"), (force, "--force")):
+            if flag:
+                _fail(f"{name} applies to `backfill blocks`, not to `dates`.")
+        _backfill_dates(limit=limit, refetch=refetch, apply=apply, yes=yes, everything=all_urls)
+        return
     if what != "blocks":
-        _fail(f"nothing to backfill called {what!r}. Only `blocks` exists.")
+        _fail(f"nothing to backfill called {what!r}. Expected `blocks` or `dates`.")
 
     settings = get_settings()
     cache_dir = install_root() / ".cache" / "articles"
@@ -6192,6 +6541,86 @@ def queue_check(
         console.print(f"\n[green]dropped {removed} dead URL(s)[/green]")
     elif dead:
         console.print("\n[dim]remove them with:[/dim] tracker queue check --drop")
+
+
+@queue_app.command("stats")
+def queue_stats(
+    limit: Annotated[int, typer.Option("--limit", help="Feeds to show.")] = 20,
+) -> None:
+    """What each feed costs and what it returns. Free, read-only, no LLM.
+
+    The number this exists for: **49% of URLs that reach an LLM call produce no
+    project at all.** The discovery filter is two tiers of keywords over a headline
+    and a URL path, so it cannot tell an article *about* a project from one that
+    mentions the industry, and half the extraction budget goes on the difference.
+
+    Read per feed it becomes actionable rather than depressing. A `topic_implied`
+    newsroom that covers a wider beat than the flag assumes shows up as a column of
+    `none`, and a feed at 100% waste over a real number of calls is one to
+    reconsider or mark `discovery-only`.
+
+    Derived from `ingest_url` on every run, so there is no counter to drift.
+    """
+    from tracker import funnel as funnel_mod
+
+    engine = _read_engine()
+    with session_scope(engine, commit=False) as session:
+        report = funnel_mod.survey(session)
+        failures = funnel_mod.fetch_failures(session)
+
+    if json_mode():
+        emit({**report.as_json(), "fetch_failures": dict(failures)})
+        return
+    if not report.total_urls:
+        console.print("[yellow]nothing discovered yet[/yellow] — run `tracker discover` first")
+        return
+
+    tone = "red" if report.waste >= 0.4 else "yellow" if report.waste >= 0.2 else "green"
+    console.print(
+        f"[bold]{report.total_urls}[/bold] URL(s) discovered; "
+        f"[bold]{report.reached_model}[/bold] reached an LLM call, of which "
+        f"[{tone}]{report.no_project}[/{tone}] ({report.waste:.0%}) produced no project"
+    )
+    console.print(
+        f"[dim]{report.dated} of {report.total_urls} carry a publication date — "
+        f"what the merge tiebreak ranks on. `tracker backfill dates` fills more.[/dim]"
+    )
+
+    table = Table(header_style="bold", box=TABLE_BOX)
+    table.add_column("feed")
+    table.add_column("queued", justify="right")
+    table.add_column("read", justify="right")
+    table.add_column("none", justify="right")
+    table.add_column("waste", justify="right")
+    table.add_column("cited", justify="right")
+    table.add_column("dated", justify="right")
+    for stat in report.ranked()[:limit]:
+        if not stat.read:
+            continue
+        colour = "red" if stat.waste >= 0.8 else "yellow" if stat.waste >= 0.5 else ""
+        waste = f"{stat.waste:.0%}"
+        table.add_row(
+            stat.feed,
+            str(stat.queued),
+            str(stat.read),
+            str(stat.no_project),
+            f"[{colour}]{waste}[/{colour}]" if colour else waste,
+            str(stat.cited),
+            str(stat.dated),
+        )
+    console.print(table)
+    console.print(
+        "[dim]`none` is an article the model read and found no project in — the cost "
+        "of a keyword filter. `cited` is URLs that back a stored value today.[/dim]"
+    )
+
+    if failures:
+        # The silent-timeout audit. A timeout means raise the timeout, a 403 means
+        # escalate the fetcher, a 404 means the URL is gone — three different
+        # remedies that a single `fetch_error` count cannot tell apart.
+        console.print("\n[bold]why fetches failed[/bold]")
+        for error, count in failures:
+            console.print(f"  {count:>5}  [dim]{escape(error)}[/dim]")
 
 
 @queue_app.command("prune")

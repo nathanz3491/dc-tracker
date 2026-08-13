@@ -12,6 +12,128 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **`tracker sources`** (`tracker/sources.py`, `tests/test_sources.py`). Which
+  publishers actually decide a stored value, derived rather than asserted. The
+  meeting asked for a hand-ranked 1–10 weight per host; that is `source_type`'s
+  mistake at higher resolution — ten unverifiable numbers per publisher instead of
+  three per category — so this counts what each host's claims *did* instead.
+  `decided` is a value it won; **`contested` is the subset where a rival asserted
+  something different, and is the only column that is evidence of anything.**
+
+  Three things it learned the hard way. Ranking by decided-per-citation put eight
+  `.gov` pages cited once apiece above every trade outlet, because an unopposed win
+  on a single-source project is free — per-citation orderings now need five
+  citations. Identity fields are excluded: `name`/`company`/`city`/`state` are
+  `FILL_ONLY`, so a win there records crawl order, and counting them made `inert`
+  come out as 0 across all 2,758 rows. And Census geography is not a publisher —
+  ranking it produced `www2.census.gov: 184 cited, 184 inert, 0 decided`.
+
+  Attribution asks `upsert.resolve_field`, not `claims[0]`: `mw_built` takes the
+  MAX, `first_announced` the MIN and `phase` the furthest rung, so on four of the
+  twelve fields the strongest source routinely loses. `scripts/measure_stages123.py`
+  now calls the same function, which is what makes the two agree structurally
+  instead of coincidentally — its own first version had the `claims[0]` bug and
+  over-counted Hyperion at 8 decisive citations where the correct answer is 7.
+
+  The finding: **Data Center Frontier and DataCenterDynamics are weight 2 and
+  out-decide almost every weight-3 host.** Nothing here changes a weight.
+
+- **Publication dates read from the page** (`fetch.published_date`,
+  `fetch.date_from_url`, `fetch.parse_timestamp`). `published_at` was set for only
+  **326 of 2,758 citations (11.8%)** because a feed was the only thing that ever
+  supplied one, which left `upsert`'s recency tiebreak falling back to `fetched_at`
+  — crawl order — on the rest. Measured properly, **506 stored values** have a
+  same-weight rival that disagrees, not the six the old harness could see.
+
+  The reference case is why this is fixed at the source rather than by refining
+  authority: Hyperion's $10B and $50B are **the same publisher**
+  (`opportunitylouisiana.gov`), both quote-backed, both weight 3, so no
+  source-type subdivision can separate them. $50B published 2026-07-13, $10B
+  published 2024-12-04, and $10B won on eighteen hours of crawl order.
+
+  Read on the raw HTML **before** `html_to_text` discards it — the ordering is the
+  point, since the article cache stores converted text and none of its 585 files
+  contains `datePublished`, `article:published_time`, `<time` or a JSON-LD block.
+  A ladder: JSON-LD, then `article:published_time`/`og:published_time` in either
+  attribute order, then `<time datetime>`, then the URL path. 7 of 10 sampled live
+  pages answer, both sides of the reference case resolve, and the free offline URL
+  rung alone dates 175 more citations (11.8% → 18.2%; #10 from 6 to 15).
+
+  **Returns `None` rather than guessing**, and refuses a date before 2000 or more
+  than two days ahead — a copyright year and a scheduled-content placeholder being
+  what that selector actually catches. `record_url` fills and never overwrites,
+  which is load-bearing rather than tidy: a cached body reports no date by
+  construction, so without the guard a re-extraction pass would erase every date
+  the original fetch found. `discover._parse_date` now delegates to
+  `fetch.parse_timestamp`, so a feed date and a page date cannot land in the same
+  column under two conventions.
+
+- **`tracker backfill dates`** (`tracker/dates.py`, `tests/test_dates.py`). The
+  fetch-time capture above fixes every article read from now on and none of the
+  2,432 already stored, because those were fetched by a version that discarded the
+  metadata before caching. Two rungs, cheapest first: the URL path (free, offline,
+  422 rows on the live database) then one GET each, no LLM.
+
+  **It only considers URLs where a date changes something.** Two things read the
+  column — `upsert._published_at`, for a URL backing a citation, and
+  `crawl.published_dates`, for one still queued. Of 5,552 undated rows only 1,778
+  are either; the remaining 3,774 are `no_project`, `fetch_error` and orphans, so
+  the default scope cuts the crawl by 68%. `--all` widens it anyway.
+
+  Report-only until `--apply`, and it does **not** go through `crawl.run`: that
+  path consults `_split_cached` first, so a backfill routed through it would read
+  the local text file, find no metadata, and conclude the publisher states no date.
+  `--limit` bounds the fetching rather than the run — capping the free pass the way
+  `backfill blocks` caps LLM calls throttled it to 25 of 5,552 rows and reported 5
+  dated where the true answer is 422.
+
+- **`tracker feeds`** (`tracker/ingest/probe.py`, `tests/test_probe.py`). Finds
+  feeds for publishers the record already says are worth reading. Candidates come
+  from `tracker sources` — hosts that decide values and are not in `feeds.toml` —
+  rather than from a model, because the answer is in the database.
+
+  Three rungs: `robots.txt` `Sitemap:` lines, well-known paths, then the homepage's
+  `<link rel="alternate">`. A `<sitemapindex>` is followed one level, which is what
+  makes it work at all: `datacenterfrontier.com/sitemap.xml` is an index, parses to
+  zero entries, and reads as "not a feed" — following it rediscovers
+  `sitemap/Article.xml`, the entry `feeds.toml` already carries for that reason.
+
+  **Every hit is parsed and run through the real filter**, so the report says how
+  many entries would have been *queued*, not that a URL responded. That is what
+  keeps it honest: `sec.gov` decides 179 values and its sitemap queues 0%, because
+  EDGAR is reached by `ingest edgar` and not by polling. Proposes TOML, never
+  writes.
+
+- **`tracker queue stats`** (`tracker/funnel.py`, `tests/test_funnel.py`) and
+  **`/api/discover`**. Stage 1's funnel per feed, derived from `ingest_url` so
+  there is no counter to drift. The headline: **2,381 of 4,854 URLs that reached an
+  LLM call produced no project — 49%.** Per feed it is actionable rather than
+  depressing — `applied-digital-newsroom` is 17 calls and 17 misses, which is the
+  banner-card problem `MIN_PROSE_CHARS` documents, and `cologix-newsroom` is 83%.
+
+- **A per-run ledger** (`tracker/runlog.py`, `tests/test_runlog.py`) at
+  `data/runs/ingest.jsonl`, following the `clean.jsonl` precedent. `IngestReport`
+  gained `llm_calls`/`prompt_tokens`/`completion_tokens`; `ExtractionOutcome` had
+  carried the token counts per URL since it was written and nothing ever summed
+  them, so "what did that run cost" had no answer short of the provider's
+  dashboard. Best-effort by design — a ledger that can fail a paid crawl is worse
+  than no ledger.
+
+  **The silent-timeout audit came back negative**, which is worth recording. The
+  2026-08-12 review warned about a default timeout swallowing a run unreported; of
+  1,081 fetch failures, 625 are HTTP 403 and 198 are 429 — deliberate blocks, which
+  is what the `curl_cffi` rung already exists for — plus ~23 TLS failures and a
+  handful of 5xx. `tracker queue stats` prints the breakdown, because a timeout, a
+  403 and a 404 have three different remedies that one `fetch_error` count cannot
+  tell apart.
+
+- **`scripts/measure_stages123.py`** — sizes the stage 1–3 populations
+  `measure_extraction.py` cannot see: the 506 crawl-order decisions, 21 generation
+  blocks carrying 15,091 MW, 155 block-key forks, the 58% of the event table that
+  is one milestone retold, and per-project citation yield. Reads only, spends
+  nothing, `--root`/`--db` to point at an install. Findings written up in
+  `docs/review-stages-1-3.md`.
+
 - **`tracker clean`** (`tracker/clean.py`, `tests/test_clean.py`). Four tiers —
   SOURCED, SOUND, COMPLETE, SETTLED — composed from the detectors that already
   exist, reimplementing none. T1 is the bar worth chasing: the numbers this tool

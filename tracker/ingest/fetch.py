@@ -23,7 +23,8 @@ import re
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
+from email.utils import parsedate_to_datetime
 from html import unescape
 from pathlib import Path
 from typing import Final, Protocol
@@ -60,6 +61,10 @@ class FetchResult:
     fetched_at: datetime | None = None
     via: str = "httpx"
     attempts: int = 1
+    #: When the publisher says it published this, read out of the page's own
+    #: metadata by :func:`published_date`. None when the page states none —
+    #: never a guess, because this feeds a merge tiebreak.
+    published_at: datetime | None = None
 
     @property
     def sha1(self) -> str:
@@ -72,6 +77,172 @@ class FetchResult:
 
 class Fetcher(Protocol):
     async def fetch(self, url: str) -> FetchResult: ...
+
+
+# --- Publication date -------------------------------------------------------
+#
+# Read here, in the fetcher, because it is the only place the raw HTML exists.
+# `html_to_text` strips every tag a few lines later and the article cache stores
+# its output, so by the time anything downstream sees the page the metadata is
+# gone: measured across 585 cached articles, zero contain `datePublished`,
+# `article:published_time`, `<time` or a JSON-LD block.
+#
+# What it buys: `upsert` ranks competing claims on `(confirmed, weight, recency)`
+# and `recency` falls back to `fetched_at` — crawl order — whenever a date is
+# missing, which it is for 88% of citations. Hyperion (#10) holds Meta's
+# superseded $10B for exactly that reason: two `government_doc` pages from the
+# SAME publisher (opportunitylouisiana.gov), both quote-backed, so no authority
+# rule can separate them. $50B was published 2026-07-13 and $10B on 2024-12-04,
+# but $10B was crawled eighteen hours later and won.
+#
+# Sampled on ten live Hyperion URLs: 7 carry a machine-readable date (5 JSON-LD,
+# 2 `<time>`).
+
+#: Earliest date treated as real. A `<time>` element or a stray meta tag often
+#: carries a template default or a copyright year; nothing in this dataset was
+#: published before the modern data centre industry existed, so anything below
+#: this is evidence the selector matched furniture rather than a byline.
+_PLAUSIBLE_FROM: Final = datetime(2000, 1, 1)
+
+#: How far ahead of now a date may sit and still be believed. Not zero: a
+#: publisher in UTC+13 legitimately stamps "tomorrow" by our clock, and some
+#: newsrooms post-date a release by a day. Beyond that it is a scheduled-content
+#: placeholder, not a publication date.
+_PLAUSIBLE_AHEAD_DAYS: Final = 2
+
+#: JSON-LD. Matched with a regex rather than parsed, for the same reason
+#: `html_to_text` is a regex pass: the blocks are frequently invalid JSON, are
+#: often nested inside an `@graph`, and there is nothing to gain from a parser
+#: that refuses the whole document over a trailing comma.
+#: Case-insensitive on the key: schema.org says `datePublished`, and real pages
+#: emit `datepublished` and `DatePublished` too.
+_LD_DATE = re.compile(r'"datepublished"\s*:\s*"([^"]{4,40})"', re.IGNORECASE)
+
+#: OpenGraph and friends, in both attribute orders — `content` may precede or
+#: follow the name, and real pages do both.
+_META_NAMES = r"(?:article:published_time|og:published_time|publish[-_]date|pubdate|date)"
+_META_DATE = (
+    re.compile(
+        rf'<meta[^>]+(?:property|name)\s*=\s*["\']{_META_NAMES}["\'][^>]*?'
+        rf'content\s*=\s*["\']([^"\']{{4,40}})["\']',
+        re.IGNORECASE,
+    ),
+    re.compile(
+        rf'<meta[^>]+content\s*=\s*["\']([^"\']{{4,40}})["\'][^>]*?'
+        rf'(?:property|name)\s*=\s*["\']{_META_NAMES}["\']',
+        re.IGNORECASE,
+    ),
+)
+
+#: A date in the URL path: `/2026/07/13/slug` or `/20260713-slug`. Anchored on a
+#: separator at both ends so a bare run of digits — an article id, a product
+#: number — cannot be read as a date.
+_URL_DATE = (
+    re.compile(r"/(20[12]\d)/(0[1-9]|1[0-2])/(0[1-9]|[12]\d|3[01])(?=[/\-_]|$)"),
+    re.compile(r"/(20[12]\d)-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])(?=[/\-_]|$)"),
+    re.compile(r"/(20[12]\d)(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])(?=[/\-_]|$)"),
+)
+
+#: A `<time datetime="...">` element. Last rung: the tag marks *a* date, not
+#: necessarily the publication date — it is also used for event dates and comment
+#: timestamps — so it only answers when nothing more explicit did.
+_TIME_DATE = re.compile(r'<time[^>]+datetime\s*=\s*["\']([^"\']{4,40})["\']', re.IGNORECASE)
+
+
+def parse_timestamp(raw: str) -> datetime | None:
+    """A date from a feed or a page, as naive UTC, or None.
+
+    Naive UTC with `microsecond=0`, matching `models.utcnow` and every other
+    timestamp in the schema — mixing aware and naive values gives SQLite a
+    silently unorderable column, and this one is sorted on.
+
+    Handles RFC 2822 (RSS), ISO 8601 (Atom, JSON-LD, OpenGraph) and a bare
+    `YYYY-MM-DD`. `discover._parse_date` delegates here so a feed date and a page
+    date cannot end up in two different conventions in the same column.
+    """
+    raw = (raw or "").strip()
+    if not raw:
+        return None
+    parsed: datetime | None = None
+    # RFC 2822 first only when it looks like it: `parsedate_to_datetime` accepts
+    # some ISO strings and mangles them.
+    if "," in raw or raw.endswith(("GMT", "UTC")):
+        try:
+            parsed = parsedate_to_datetime(raw)
+        except (TypeError, ValueError):
+            parsed = None
+    if parsed is None:
+        try:
+            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            try:
+                parsed = parsedate_to_datetime(raw)
+            except (TypeError, ValueError):
+                return None
+    if parsed is None:
+        return None
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(UTC).replace(tzinfo=None)
+    return parsed.replace(microsecond=0)
+
+
+def date_from_url(url: str) -> datetime | None:
+    """A publication date embedded in the URL path, or None.
+
+    `…/2026/07/13/slug` and `…/20260713-slug`. Free, offline, and deterministic,
+    which is why it is worth having even though it only reaches part of the corpus:
+    measured over the live database it dates 175 citations that nothing else does,
+    taking coverage from 11.8% to 18.2%.
+
+    A dated path is a publisher's own filing convention, not an inference — CMSes
+    put it there — so this is not the guess the module docstring rules out. It is
+    still the *weakest* rung, because a URL can be re-slugged; it answers only when
+    the page's own metadata did not.
+    """
+    for pattern in _URL_DATE:
+        match = pattern.search(urlsplit(url or "").path)
+        if match is None:
+            continue
+        year, month, day = match.groups()
+        try:
+            return datetime(int(year), int(month), int(day))
+        except ValueError:
+            continue  # 2026/02/31 — a slug that only looks like a date
+    return None
+
+
+def published_date(html: str, url: str | None = None) -> datetime | None:
+    """The publication date the page states, or None.
+
+    Cheapest and most explicit rung first, matching the escalation ladder the
+    fetchers themselves use, and falling back to the URL path last. **Returns None
+    rather than guessing.** A fabricated timestamp here is worse than no timestamp:
+    `upsert._published_at` already refuses to invent one on the same grounds,
+    because a wrong date does not degrade the merge tiebreak, it inverts it.
+    """
+    if not html:
+        return date_from_url(url) if url else None
+    ceiling = utcnow() + timedelta(days=_PLAUSIBLE_AHEAD_DAYS)
+
+    candidates = (
+        (_LD_DATE.search(html), "json-ld"),
+        *((pattern.search(html), "meta") for pattern in _META_DATE),
+        (_TIME_DATE.search(html), "time"),
+    )
+    for match, where in candidates:
+        if match is None:
+            continue
+        when = parse_timestamp(unescape(match.group(1)))
+        if when is None:
+            continue
+        if not (_PLAUSIBLE_FROM <= when <= ceiling):
+            # Worth a line: a page whose only date is out of range is usually a
+            # template default, and silently returning None makes that look like
+            # a page that carries no date at all.
+            log.debug("ignoring implausible %s date %s", where, when)
+            continue
+        return when
+    return date_from_url(url) if url else None
 
 
 # --- HTML -> text -----------------------------------------------------------
@@ -158,6 +329,8 @@ class HttpxFetcher:
                 via="httpx",
             )
 
+        # The date is read from the raw HTML, before `html_to_text` discards it.
+        published = published_date(response.text, url)
         text = html_to_text(response.text)
         return FetchResult(
             url,
@@ -166,6 +339,7 @@ class HttpxFetcher:
             status=response.status_code,
             fetched_at=utcnow(),
             via="httpx",
+            published_at=published,
         )
 
 
@@ -269,7 +443,10 @@ class CurlCffiFetcher:
                 via=self.VIA,
             )
 
-        text = html_to_text(_decode(response))
+        # Decode once: `_decode` is not free, and reading the date from a
+        # differently-decoded copy could disagree with the text the gate checks.
+        raw = _decode(response)
+        text = html_to_text(raw)
         return FetchResult(
             url,
             bool(text.strip()),
@@ -277,6 +454,7 @@ class CurlCffiFetcher:
             status=status,
             fetched_at=utcnow(),
             via=self.VIA,
+            published_at=published_date(raw, url),
         )
 
 
