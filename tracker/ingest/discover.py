@@ -29,7 +29,6 @@ import re
 import tomllib
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
-from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -38,7 +37,14 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from tracker.config import Settings, get_settings, install_root
-from tracker.ingest.fetch import MIN_USEFUL_CHARS, Fetcher, FetchResult, cache_path, html_to_text
+from tracker.ingest.fetch import (
+    MIN_USEFUL_CHARS,
+    Fetcher,
+    FetchResult,
+    cache_path,
+    html_to_text,
+    parse_timestamp,
+)
 from tracker.models import IngestUrl, utcnow
 from tracker.normalize import norm_text
 from tracker.vocab import PENDING_URL_STATUS
@@ -262,23 +268,14 @@ def _text(element: ET.Element | None) -> str:
 
 
 def _parse_date(raw: str) -> dt.datetime | None:
-    """Feed dates arrive in RFC 2822 (RSS) or ISO 8601 (Atom)."""
-    raw = raw.strip()
-    if not raw:
-        return None
-    try:
-        parsed = parsedate_to_datetime(raw)
-    except (TypeError, ValueError):
-        parsed = None
-    if parsed is None:
-        try:
-            parsed = dt.datetime.fromisoformat(raw.replace("Z", "+00:00"))
-        except ValueError:
-            return None
-    # Naive UTC, matching every other timestamp in the schema.
-    if parsed.tzinfo is not None:
-        parsed = parsed.astimezone(dt.UTC).replace(tzinfo=None)
-    return parsed.replace(microsecond=0)
+    """Feed dates arrive in RFC 2822 (RSS) or ISO 8601 (Atom).
+
+    Delegates to `fetch.parse_timestamp`, which handles the same formats plus the
+    ones page metadata uses. One definition, because a feed date and a date read
+    out of the article's own HTML land in the *same* column and get sorted against
+    each other — two conventions there would be a silently unorderable tiebreak.
+    """
+    return parse_timestamp(raw)
 
 
 def parse_feed(xml: str, feed: FeedSpec, *, cap: int | None = None) -> list[Candidate]:

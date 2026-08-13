@@ -236,6 +236,16 @@ class IngestReport:
     skipped_uncached: int = 0
     events: int = 0
     risks: int = 0
+    #: What the run actually spent. `ExtractionOutcome` has carried these per URL
+    #: since it was written and nothing ever added them up, so "how much did that
+    #: cost" had no answer short of the provider's dashboard.
+    llm_calls: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+
+    @property
+    def tokens(self) -> int:
+        return self.prompt_tokens + self.completion_tokens
 
     def bump(self, action: str) -> None:
         if action == "insert":

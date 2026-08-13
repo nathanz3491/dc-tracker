@@ -1363,6 +1363,76 @@ The date was already being collected — `discover` writes it to
 it, because there was no column on `source` to carry it to. Migration `0014` adds
 one and backfills it by URL (241 of 553 sources).
 
+**But only a feed supplies a date, so the tiebreak was starved.** On the live
+database `published_at` is set for **326 of 2,758 citations (11.8%)**, and the six
+inversions above are a floor of a floor: the measurement can only see a pair where
+*both* sides carry a date. Counting every stored value whose rivals tied on
+credibility and disagreed gives **506**, of which 439 are invisible today.
+
+The reference case is the argument for fixing it at the source rather than
+refining authority. Hyperion's $10B and $50B come from **the same publisher**:
+
+| source | value | type | published | fetched |
+|---|---|---|---|---|
+| 661 | **$50B** | government_doc | **2026-07-13** | 2026-08-09 11:39 |
+| 1116 | $10B | government_doc | **2024-12-04** | 2026-08-10 05:35 |
+
+Both `opportunitylouisiana.gov`, both quote-backed, both weight 3. No
+source-type refinement can separate them — sub-dividing `government_doc` leaves
+them in the same bucket however fine the categories get. Eighteen hours of crawl
+order picks the stale one; publication order picks correctly by nineteen months.
+
+So the fetcher now reads the date out of the page itself, in
+`fetch.published_date`, on the raw HTML **before** `html_to_text` discards it.
+That ordering is the whole trick: the article cache stores converted text, and
+none of its 585 files contains `datePublished`, `article:published_time`, `<time`
+or a JSON-LD block — the metadata was already gone, so no backfill over the cache
+could ever have recovered a date.
+
+A ladder, cheapest and most explicit first, mirroring the fetcher's own:
+
+| rung | reaches |
+|---|---|
+| JSON-LD `datePublished` | 5 of 10 sampled live pages |
+| `article:published_time` / `og:published_time`, either attribute order | — |
+| `<time datetime="…">` | 2 of 10 |
+| the URL path — `/2026/07/13/slug` | 175 citations nothing else dates |
+
+7 of 10 sampled pages carry a machine-readable date, and both sides of the
+reference case resolve. The URL rung is free and offline and takes coverage to
+**18.2%** on its own (project #10 from 6 dated citations to 15).
+
+**It returns `None` rather than guessing**, and refuses a date before 2000 or more
+than two days ahead — a copyright year and a scheduled-content placeholder are
+the two things that selector routinely catches. `upsert._published_at` already
+refused to invent a date for the same reason: a wrong timestamp does not degrade
+this tiebreak, it inverts it.
+
+`record_url` fills the column and never overwrites it. That guard is load-bearing
+rather than tidy: a cached body reports no date by construction, so without it a
+re-extraction pass over the cache would erase every date the original fetch found.
+
+**Articles already stored need a backfill**, since they were fetched by a version
+that discarded the metadata:
+
+```bash
+tracker backfill dates                      # what the URL paths alone would date
+tracker backfill dates --apply              # write those
+tracker backfill dates --refetch --apply    # ask the publishers too
+```
+
+It only considers URLs where a date changes something. Two things read the column
+— `upsert._published_at` for a URL backing a citation, and `crawl.published_dates`
+for one still queued — and of 5,552 undated rows only **1,778** are either. The
+other 3,774 are `no_project`, `fetch_error` and orphans, so the default scope cuts
+the crawl by 68%; `--all` widens it.
+
+Report-only until `--apply`. It deliberately does **not** go through `crawl.run`:
+that path consults `_split_cached` first, so a backfill routed through it would
+read the local text file, find no metadata in it, and conclude the publisher states
+no date. `--limit` bounds the fetching, not the run — capping the free pass the way
+`backfill blocks` caps LLM calls throttled it to 25 of 5,552 rows.
+
 ```bash
 TRACKER_MERGE_BY_PUBLICATION_DATE=1 python scripts/measure_extraction.py
 ```
@@ -1381,6 +1451,123 @@ interpolated it, and no caller ever passed it. RULE 5 resolves relative timing
 against it, so with the date unknown every "next year" was correctly forced to
 null. Nothing was fabricated — the cost was silent, in schedule fields never
 extracted for want of a value already in the database.
+
+### Which publishers are actually worth crawling
+
+```bash
+tracker sources                      # by how much we use it
+tracker sources --by contested       # by wins against a disagreeing rival
+tracker sources --by yield           # decided per citation
+```
+
+`SOURCE_WEIGHTS` gives six *source types* a weight from 1 to 3, by hand, and
+`docs/plan-claim-envelope.md` names it as the cautionary example of a field
+nothing can verify. The obvious next step — hand-rank every publisher 1 to 10 —
+is the same mistake at higher resolution: ten asserted numbers per host instead of
+three per category, still with nothing to check them against.
+
+So this ranks nothing. It counts what each publisher's claims actually **did**,
+which re-runs to the same answer unless the database moved:
+
+```
+publisher                 cited  decided  contested  inert  per cite  weight
+datacenterfrontier.com      267      240        116      5      0.90       2
+sec.gov                     133      179         87      1      1.35       3
+datacenterdynamics.com      170      163        105      0      0.96       2
+yahoo.com                    49       20         11      0      0.41       1
+```
+
+`decided` is a value this host's claim won. **`contested` is the subset where a
+rival asserted something different, and it is the only column that is evidence of
+anything** — an unopposed win just means nobody else spoke, which a single-source
+project gives away for free. The first version of this report ranked by
+decided-per-citation and put eight `.gov` pages cited once apiece above every
+trade outlet in the database, purely because each had no rival. Per-citation
+orderings now need five citations before they rank a host.
+
+Three details carry it:
+
+* **Identity fields are excluded.** `name`, `company`, `city` and `state` are
+  `FILL_ONLY` — the first source to arrive sets them and nothing can displace one —
+  so a "win" there records crawl order. Counting them also made every citation
+  look like a participant: `inert` came out as 0 across all 2,758 rows.
+* **The winner is whoever the *policy* picked, not the head of the sorted list.**
+  `mw_built` takes the MAX, `first_announced` the MIN, `phase` the furthest rung,
+  so on four of the twelve fields the strongest source routinely loses to a weaker
+  one. It asks `upsert.resolve_field` — the same function the write path asks —
+  rather than re-deriving the order, which is what `logic check` learned the hard
+  way when a hand-rolled copy reported 73 rows as changed and nothing had changed.
+* **Reference data is not a publisher.** Census geography is cited like a source
+  but publishes nothing, and ranking it produced `www2.census.gov: 184 cited, 184
+  inert, 0 decided` — the worst outlet in the database, for a lookup table.
+
+`cited == decided_sources + contributing + inert` holds by construction and is
+asserted in the tests, so a row that does not add up is a bug here rather than a
+judgement call.
+
+The finding it exists to surface is already visible above: **Data Center Frontier
+and DataCenterDynamics are `trade_press`, weight 2, and out-decide almost every
+weight-3 host in the database.** Nothing here changes a weight —
+`SOURCE_WEIGHTS` is still edited by hand in `tracker/confidence.py`. This is the
+evidence for doing so, and `--json` is the machine-readable form.
+
+### What discovery costs, per feed
+
+```bash
+tracker queue stats
+```
+
+The number it exists for: **2,381 of 4,854 URLs that reached an LLM call produced
+no project at all — 49%.** The filter is two tiers of keywords over a headline and
+a URL path, so it cannot tell an article *about* a project from one that mentions
+the industry, and half the extraction budget goes on the difference.
+
+```
+feed                       queued  read  none  waste  cited  dated
+applied-digital-newsroom       44    17    17   100%      0      0
+cologix-newsroom               66    54    45    83%     12     66
+datacenterknowledge            34    23    16    70%     11     34
+```
+
+Per feed it becomes actionable. `applied-digital-newsroom` is 17 calls and 17
+misses — the site-wide banner card that `MIN_PROSE_CHARS` was measured against.
+A `topic_implied` newsroom that covers a wider beat than the flag assumes shows up
+as a column of `none`.
+
+It also prints why fetches failed, because a timeout, a 403 and a 404 have three
+different remedies and one `fetch_error` count cannot tell them apart. That audit
+has already earned its place by coming back **negative**: of 1,081 failures, 625
+are HTTP 403 and 198 are 429 — deliberate blocks, which is what the `curl_cffi`
+rung exists for — not the swallowed timeouts that were suspected.
+
+Everything is derived from `ingest_url` on each run, so there is no counter to
+drift. `/api/discover` serves the same payload to the console.
+
+### Finding feeds worth adding
+
+```bash
+tracker feeds                        # publishers the record says we rely on
+tracker feeds datacenterfrontier.com # or probe one by name
+```
+
+`seed/feeds.toml` is hand-maintained, which is the wrong way round: the database
+already knows which publishers decide stored values. Candidates are the hosts
+`tracker sources` ranks highest that the config does not list. No LLM — the answer
+is in the data, and `docs/plan-scale-with-sources.md` already measured what asking
+a model to do a deterministic job costs.
+
+Three rungs per host: `robots.txt` `Sitemap:` lines, then `/feed`, `/rss.xml` and
+friends, then the homepage's `<link rel="alternate">`. A `<sitemapindex>` is
+followed one level, and that detail is what makes it work — `/sitemap.xml` on Data
+Center Frontier is an index, parses to zero entries and reads as "not a feed";
+following it lands on `sitemap/Article.xml`, which is exactly the entry
+`feeds.toml` already carries.
+
+**Every hit is parsed and run through the real filter**, so the report says how
+many entries would have been *queued* rather than that a URL answered. That is
+what stops a bad add: `sec.gov` decides 179 values and its sitemap queues 0%,
+because EDGAR is reached by `ingest edgar` and never by polling a feed. It prints
+TOML to paste and writes nothing.
 
 ### Seeing where the data is thin
 

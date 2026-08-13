@@ -1640,6 +1640,140 @@ def test_should_escalate(result, expected):
     assert should_escalate(result) is expected
 
 
+# --- Publication date -------------------------------------------------------
+#
+# Why this matters more than it looks: `upsert` breaks a merge tie on recency,
+# and with no date that falls back to `fetched_at` — crawl order. Hyperion (#10)
+# holds Meta's superseded $10B because two pages from the SAME publisher tied on
+# authority and the stale one was crawled eighteen hours later.
+
+
+@pytest.mark.parametrize(
+    ("html", "expected"),
+    [
+        # JSON-LD, the most common rung: 5 of 10 live Hyperion pages.
+        (
+            '<script type="application/ld+json">{"datePublished":"2026-07-13T11:29:37+00:00"}</script>',
+            dt.datetime(2026, 7, 13, 11, 29, 37),
+        ),
+        # Capitalised variant real sites emit.
+        ('{"DatePublished": "2026-07-13"}', dt.datetime(2026, 7, 13)),
+        (
+            '<meta property="article:published_time" content="2026-07-13T11:17:24Z">',
+            dt.datetime(2026, 7, 13, 11, 17, 24),
+        ),
+        # Attribute order reversed — real pages do both, so both are matched.
+        (
+            '<meta content="2026-07-13T11:17:24Z" property="article:published_time">',
+            dt.datetime(2026, 7, 13, 11, 17, 24),
+        ),
+        ('<time datetime="2024-12-04">Dec 4</time>', dt.datetime(2024, 12, 4)),
+        # Timezone folded to naive UTC, matching every other column in the schema.
+        ('{"datePublished":"2026-07-14T08:26:00+08:00"}', dt.datetime(2026, 7, 14, 0, 26)),
+    ],
+)
+def test_published_date_reads_the_page_metadata(html, expected):
+    from tracker.ingest.fetch import published_date
+
+    assert published_date(html) == expected
+
+
+@pytest.mark.parametrize(
+    "html",
+    [
+        "",
+        "<html><body><p>No date anywhere in this article.</p></body></html>",
+        # A copyright year is not a publication date.
+        '<time datetime="1998-01-01">1998</time>',
+        # Scheduled content far in the future is a placeholder, not a date.
+        '{"datePublished":"2099-01-01T00:00:00Z"}',
+        # Unparseable.
+        '<meta property="article:published_time" content="last Tuesday">',
+    ],
+)
+def test_published_date_returns_none_rather_than_guessing(html):
+    """The house rule: a fabricated timestamp inverts the tiebreak it feeds.
+
+    `upsert._published_at` refuses to invent one for the same reason, so this
+    must too — returning *something* here would be worse than returning nothing.
+    """
+    from tracker.ingest.fetch import published_date
+
+    assert published_date(html) is None
+
+
+def test_the_explicit_rungs_beat_the_url():
+    """A dated URL is the fallback, not the answer, when the page states one."""
+    from tracker.ingest.fetch import published_date
+
+    html = '<meta property="article:published_time" content="2026-07-13T00:00:00Z">'
+    got = published_date(html, "https://x.test/2020/01/02/slug")
+    assert got == dt.datetime(2026, 7, 13)
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("https://www.cnbc.com/2026/07/13/meta-louisiana", dt.datetime(2026, 7, 13)),
+        ("https://www.wwno.org/economy/2026-07-14/meta-is-investing", dt.datetime(2026, 7, 14)),
+        ("https://x.test/news/20260713-something", dt.datetime(2026, 7, 13)),
+        # Not a date: an article id, a product number, an impossible day.
+        ("https://x.test/article/1234567", None),
+        ("https://x.test/2026/13/01/slug", None),
+        ("https://x.test/2026/02/31/slug", None),
+        ("https://x.test/", None),
+    ],
+)
+def test_date_from_url(url, expected):
+    """Free, offline, deterministic — 175 citations the HTML pass cannot reach."""
+    from tracker.ingest.fetch import date_from_url
+
+    assert date_from_url(url) == expected
+
+
+def test_a_cache_hit_never_clears_a_date_already_recorded(session):
+    """The regression this guard exists for.
+
+    Cached bodies are text with the metadata already stripped, so they always
+    report `published_at=None`. Without the None check in `record_url`, a
+    re-extraction run over the cache would erase every date the original fetch
+    found — turning the fix into a silent regression on the second run.
+    """
+    from tracker.ingest.fetch import FetchResult as FR
+
+    crawl.record_url(
+        session,
+        "run-1",
+        crawl.ExtractionOutcome(
+            url="https://x.test/a", status="ok", published_at=dt.datetime(2026, 7, 13)
+        ),
+    )
+    row = session.scalar(select(IngestUrl).where(IngestUrl.url == "https://x.test/a"))
+    assert row.published_at == dt.datetime(2026, 7, 13)
+
+    # Second pass, served from cache: no metadata, so no date.
+    assert FR("https://x.test/a", True, markdown="text", via="cache").published_at is None
+    crawl.record_url(
+        session,
+        "run-2",
+        crawl.ExtractionOutcome(url="https://x.test/a", status="ok", published_at=None),
+    )
+    row = session.scalar(select(IngestUrl).where(IngestUrl.url == "https://x.test/a"))
+    assert row.published_at == dt.datetime(2026, 7, 13), "a cache hit erased the date"
+
+
+def test_a_later_reading_does_not_move_the_date(session):
+    """Filled, never overwritten: a publisher's date does not change."""
+    for run, when in (("run-1", dt.datetime(2026, 7, 13)), ("run-2", dt.datetime(2024, 1, 1))):
+        crawl.record_url(
+            session,
+            run,
+            crawl.ExtractionOutcome(url="https://x.test/b", status="ok", published_at=when),
+        )
+    row = session.scalar(select(IngestUrl).where(IngestUrl.url == "https://x.test/b"))
+    assert row.published_at == dt.datetime(2026, 7, 13)
+
+
 # --- escalation lifecycle ----------------------------------------------------
 
 
