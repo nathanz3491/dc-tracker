@@ -1,5 +1,60 @@
 # Handoff
 
+## Yesterday (state at start of 2026-08-15)
+
+The 2026-08-14 run (`f078818`) closed out seven unrecorded 2026-08-13 commits —
+source governance and the repair pass — and found nothing new landed in its own
+window: housekeeping only, suite verified green. Carried in unresolved: the
+2026-08-12 live-database purge (1,189 → 300 projects, still unexplained, two days
+old at that point), `tracker logic conflicts` never run against a real key,
+`work/` (a teammate's Hyperion review material, its PowerPoint lock file still
+present) and the untracked reference PDF in `docs/`, both unchanged since
+2026-08-12 and 2026-08-06 respectively.
+
+Sitting in the working tree, uncommitted and unmentioned in any prior handoff:
+`tracker enrich` had gained a fourth stage. `tracker/conflicts.py` — shipped
+2026-08-13 as the standalone `tracker logic conflicts` command, one model
+comparing every quote-backed claim about a contested field — was now also wired
+directly into the end of `enrich`'s own loop (`tracker/ingest/enrich.py`,
+`tracker/cli.py`), a `--skip-settle` flag, five new tests
+(`tests/test_enrich.py`), and a `deepseek_reasoning_model` default change
+(`tracker/config.py`, `.env.example`). Not yet in CHANGELOG.md or README.md.
+
+## Today (2026-08-15 run)
+
+- **Found and committed the settle-step work described above.** `enrich`'s last
+  stage now sends every field still contested on a project — not only ones this
+  run's own harvesting touched — through `conflicts.disputes`/`solve`, the same
+  logic `tracker logic conflicts` exposes standalone, and applies a resolution
+  the same way `--apply` does: losing claims marked `superseded`, the row
+  re-derived, never a value the citations don't state. `--skip-settle` opts out;
+  `--dry-run` covers it like every other stage; a missing reasoning-model API key
+  degrades to a skipped stage (recorded in `report.skipped`) rather than losing
+  the articles the run already paid to fetch and read. `deepseek_reasoning_model`'s
+  default moved to `deepseek-v4-pro` (was `deepseek-v4-flash`) alongside it —
+  `infer` and this new step are both low-volume, one call per project or per
+  contested field, so the heavier model is affordable there specifically, unlike
+  on the extraction path that reads every article.
+- Verified the suite green before committing: full `.venv` pytest run completed
+  with no failures (exit 0), including the five new tests in `test_enrich.py`
+  covering the settle step itself, a refusal, `--dry-run`, `--skip-settle`, and
+  that a settled field is never asked about twice. Ruff clean.
+- **Added the CHANGELOG.md and README.md entries this work hadn't gotten yet.**
+  Every other feature commit in this project's history lands its docs in the
+  same change; this one, sitting uncommitted, hadn't — housekeeping this run
+  closed that gap rather than leaving it for the commit that finally lands the
+  code. No `docs/architecture.md` change needed: it describes the CLI/database/
+  console split at a level this doesn't move. No AGENTS.md exists, still
+  correctly so — one CLI/data-pipeline codebase, no distinct agent roles.
+- **Did not re-run the live-database measurement commands** (`audit`, `risks`,
+  `duplicates`, `blocks`, `logic check`, `sources`, `feeds`) the Tomorrow list
+  below depends on — this run's scope was accounting for and committing the
+  settle-step work sitting in the tree, not re-measuring the database. Treat
+  every count below carried from 2026-08-14 as still that old.
+- `work/` and the untracked reference PDF in `docs/` are unchanged since the
+  last run; the PowerPoint lock file in `work/` is still present. The
+  2026-08-12 purge remains unresolved, now three days old — see Tomorrow.
+
 ## Yesterday (state at start of 2026-08-14)
 
 The last handoff (`4d97d15`, committed 2026-08-13 05:29) reported "no new
@@ -799,7 +854,7 @@ branch, not this branch's work, left alone.
 
 ## Tomorrow
 
-- **Top priority, now two days old: find out who ran the 2026-08-12 purge
+- **Top priority, now three days old: find out who ran the 2026-08-12 purge
   and why, and whether 889 of 1,189 projects were meant to go.**
   `data/tracker.backup-before-purge-20260812.db` is still the only record
   of it — no commit, script, or doc names the criteria, and nothing landed
@@ -812,12 +867,16 @@ branch, not this branch's work, left alone.
   `risks`, `logic check`, `blocks`, `sources`, and `feeds` fresh once
   that's settled — none of these numbers are worth trusting until then.
 - **`tracker logic conflicts` has never run against a real DeepSeek key**
-  (492 fields qualify live) — tested only against injected fakes. Worth a
-  real `--apply` pass once the purge above is settled, since it's the
-  intended fix for the crawl-order tiebreak problem (`published_at` /
-  `merge_by_publication_date`, now measured and deliberately still off:
-  flipping it fixes 65 values and gets 22 of 40 numeric ones wrong, because
-  a date can't see scope).
+  (492 fields qualify live) — tested only against injected fakes. Now higher
+  stakes than when this was first flagged: as of 2026-08-15 the same
+  `conflicts.disputes`/`solve` machinery also runs unattended as `enrich`'s new
+  settle stage (see Yesterday/Today above), so the first real-key run will
+  happen inside a batch `enrich --all` unless someone runs `tracker logic
+  conflicts` deliberately first. Worth doing once the purge above is settled,
+  since it's the intended fix for the crawl-order tiebreak problem
+  (`published_at` / `merge_by_publication_date`, now measured and deliberately
+  still off: flipping it fixes 65 values and gets 22 of 40 numeric ones wrong,
+  because a date can't see scope).
 - **`tracker feeds --no-probe` names one real retirement candidate**:
   `applied-digital-newsroom` (44 queued, 17 read, 17 none, zero cited in
   ten calls). It only proposes — `queue --drop --feed` and the
@@ -907,14 +966,14 @@ branch, not this branch's work, left alone.
   moved this much since 08-09.
 - **An untracked 2 MB PDF still sits in `docs/`**
   (`docs/能源科技AI系列报告（三）：北美AI电力新趋势PPT+ED (1).pdf`, added
-  2026-08-06 14:52, unchanged since — nine days now). Still reference
+  2026-08-06 14:52, unchanged since — ten days now). Still reference
   material, not project output; still needs a human call on whether it
   belongs in the repo, `.gitignore`, or somewhere else entirely.
 - **The untracked `work/` directory** (four `.pptx` decks, two `.pdf`
   diagrams, one planning `.md`, added 2026-08-12) needs the same call as
   the PDF above — plus one thing the PDF doesn't have: a live PowerPoint
   lock file (`~$Hyperion-Tracker-Review-FINAL.pptx`), still present as of
-  2026-08-14 (two days unchanged), meaning a deck may still be open for
+  2026-08-15 (three days unchanged), meaning a deck may still be open for
   editing elsewhere. Don't touch until confirmed closed.
 - **Every prompt's stamp moved** when `_industry.txt` was prepended
   (`06b575a`), so `tracker clean`'s `vintage_current` check fails on every

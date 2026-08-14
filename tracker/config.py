@@ -73,16 +73,21 @@ class Settings(BaseSettings):
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model: str = "deepseek-v4-flash"
 
-    #: Model used for *reasoning* rather than extraction — `tracker infer`.
+    #: Model used for *judgement* rather than extraction — `tracker infer` and
+    #: `tracker logic conflicts`.
     #:
-    #: Still a separate setting, but on DeepSeek the two jobs no longer need two
-    #: *models*: `deepseek-v4-flash` and `deepseek-v4-pro` are one family, and the
-    #: depth dial is the `thinking` parameter, not the model name (see
-    #: :data:`deepseek_infer_effort` and `tracker.llm`). The setting is kept so
-    #: an operator who wants the heavier model for judgement calls can say
-    #: `TRACKER_DEEPSEEK_REASONING_MODEL=deepseek-v4-pro` without touching the
-    #: high-volume extraction path, which is where the token bill is.
-    deepseek_reasoning_model: str = "deepseek-v4-flash"
+    #: **The heavier model, and the split is the point.** These are the two places
+    #: the tool asks a question it cannot look up: which obstacle actually binds,
+    #: and which of five quote-backed figures a project holds today. Both are one
+    #: call per *project* or per *contested field* — hundreds, not thousands — so
+    #: depth is affordable here in a way it is not on `deepseek_model`, which reads
+    #: every article and is where the token bill lives.
+    #:
+    #: On DeepSeek the depth dial is also the `thinking` parameter rather than the
+    #: model name (see :data:`deepseek_infer_effort` and `tracker.llm`), so this is
+    #: the second of two levers, not the only one. Set it back to
+    #: `deepseek-v4-flash` if the bill bites; the answers get shallower, not wrong.
+    deepseek_reasoning_model: str = "deepseek-v4-pro"
 
     #: How hard each reasoning tier thinks. Two settings, because the two tiers
     #: have opposite cost shapes and the same number cannot serve both.

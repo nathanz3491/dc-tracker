@@ -424,6 +424,16 @@ read. The configured Serper key is what lifts that ceiling: measured on Hyperion
 (#10), queue and retry harvested 0 and search harvested 42 URLs, 25 of them
 references mined from the campus's Wikipedia article.
 
+**A last stage settles what harvesting just put into dispute.** Adding sources is
+what *creates* contested fields, and until now the run ended by handing that to a
+sort — quote-backed first, then source weight, then date — the same default
+`tracker logic conflicts` exists to override. So the run's final step sends every
+still-contested field (not only what this run added) to the reasoning model:
+`--skip-settle` turns it off, `--dry-run` covers it like everything else, and a
+missing reasoning-model API key degrades to a skip rather than losing the articles
+this run already paid to read. Settlements and refusals both print, because a
+refusal is the answer on a field two publishers genuinely disagree about.
+
 ### The whole dataset as one page
 
 ```bash
@@ -1297,6 +1307,16 @@ whole change exists to stop.
 `--read 50` spends fifty calls and the console's gate gates command names, never
 flags. `logic resolve` and `logic conflicts` are gated too: one rewrites fields in
 bulk, the other spends up to two calls per contested field.
+
+**`tracker enrich` now calls this machinery itself**, as its last stage — see
+*Completing one project, cost no object* above. `logic conflicts` still exists
+standalone for the same reason `logic resolve --auto` exists alongside `enrich`'s
+own repairs: a bulk pass over the whole database on demand, not tied to any one
+project's run. The default `deepseek_reasoning_model` moved to `deepseek-v4-pro`
+(from `deepseek-v4-flash`) alongside this change — `infer` and `conflicts` are
+both one call per project or per contested field, hundreds rather than the
+thousands extraction pays for, so the heavier model is affordable exactly where
+these two calls happen.
 
 ### What the stored data actually rests on
 

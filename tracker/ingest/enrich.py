@@ -43,6 +43,8 @@ from sqlalchemy.orm import Session
 
 from tracker.config import Settings, get_settings
 from tracker.gaps import FILLED, NOT_APPLICABLE, FieldState, for_project
+from tracker.llm import MissingApiKey
+from tracker.llm import reasoning_extractor as _reasoning_extractor
 from tracker.models import IngestUrl, Project, Source
 from tracker.vocab import TRACKED_FIELDS
 
@@ -128,6 +130,14 @@ class EnrichReport:
     confidence_after: int = 0
     stopped_because: str = ""
     skipped: list[tuple[str, str]] = dc_field(default_factory=list)
+    #: What the settle step decided, one line each.
+    settled: list[str] = dc_field(default_factory=list)
+    #: Fields it looked at and refused, with the reason. Reported as loudly as the
+    #: settlements: a refusal is the *answer* on a field two publishers genuinely
+    #: disagree about, and burying it would leave an operator thinking the step had
+    #: nothing to say about a value it deliberately declined to move.
+    refused: list[str] = dc_field(default_factory=list)
+    settle_calls: int = 0
 
     @property
     def articles_read(self) -> int:
@@ -448,6 +458,60 @@ def harvest_refresh(session: Session, project_id: int) -> Harvest:
     return Harvest("refresh", urls, note=f"{len(urls)} existing citation(s)")
 
 
+def _settle(
+    session: Session,
+    project: Project,
+    report: EnrichReport,
+    *,
+    extractor: object,
+    dry_run: bool,
+) -> None:
+    """Put this project's contested fields to a model, and record the answers.
+
+    **Why here.** Harvesting sources is what *creates* disagreement — two
+    publishers, two figures, both quoted — and until now the run ended by handing
+    that to a sort: quote-backed first, then source weight, then date. A sort
+    cannot tell a superseded figure from a rival one. This is the moment the
+    question arises, the claims are in hand, and the operator is already paying
+    for calls.
+
+    **It settles everything still contested, not only what this run added**, and
+    that is deliberate. `enrich` exists to leave one row finished; a version that
+    settled only its own additions would walk past a disagreement the project has
+    carried for months and report success.
+
+    **It does not re-ask a settled field, and needs no bookkeeping to avoid it.**
+    Applying an answer marks the losing claims `superseded`, which demotes them out
+    of `confirmed` — and a dispute requires two *quote-backed* claims. So a settled
+    field stops being contested, and the next run does not see it. The one case
+    that recurs is a refusal, which writes nothing by design; asking again is the
+    right behaviour there, because the sources have usually changed by then.
+
+    **It writes**, unlike `tracker logic conflicts`, which proposes. That is the
+    command's nature rather than an inconsistency: `enrich` exists to change the
+    row, and a proposal produced mid-run with nothing to surface it is worse than
+    not asking. `--dry-run` suppresses the write with everything else.
+
+    Bounded by construction: at most seven tracked fields can be contested once
+    identity is excluded, so at most fourteen calls for one project.
+    """
+    from tracker import conflicts
+
+    for dispute in conflicts.disputes(project):
+        outcome = conflicts.solve(dispute, extractor=extractor)
+        report.settle_calls += outcome.calls
+        if outcome.verdict == "resolved" and outcome.chosen is not None:
+            report.settled.append(
+                f"{dispute.field}: {dispute.stored} -> {outcome.chosen.value} — {outcome.reason}"
+            )
+            if not dry_run:
+                conflicts.apply_outcome(session, project, outcome)
+        elif outcome.verdict == "refused":
+            report.refused.append(f"{dispute.field}: {outcome.reason}")
+        else:
+            log.warning("settle failed on #%d %s: %s", project.id, dispute.field, outcome.reason)
+
+
 def run(
     session: Session,
     project_id: int,
@@ -463,6 +527,8 @@ def run(
     max_articles: int = MAX_ARTICLES_PER_ROUND,
     skip_search: bool = False,
     skip_archive: bool = False,
+    skip_settle: bool = False,
+    settle_extractor: Extractor | None = None,
     dry_run: bool = False,
     sweep: ArchiveSweep | None = None,
     target_fields: int | None = None,
@@ -473,6 +539,14 @@ def run(
     leaving the rest of a shared budget for the next project. The PRD's bar is 9;
     pushing a project from 9 to 10 costs the same call as pushing another from 6
     to 7, and the second is worth more.
+
+    **A last stage settles what the sources disagree about.** Adding sources is
+    what creates contested fields — two publishers, two figures, both quoted — and
+    until now the run ended by handing that disagreement to a sort: quote-backed
+    first, then source weight, then date. That cannot tell a superseded figure
+    from a rival one. So every still-contested field goes to a model that reads
+    all the claims about it at once, with their publication dates, and either
+    picks one with a reason or refuses. `skip_settle` turns it off.
     """
     from tracker.ingest import crawl
 
@@ -595,6 +669,29 @@ def run(
 
     project = session.get(Project, project_id)
     assert project is not None
+
+    # Last, and only on what the harvest put into dispute. After the rounds so it
+    # sees every claim they added; before `report.after` so a settled value is the
+    # one reported, rather than the one the sort had picked a moment earlier.
+    if not skip_settle:
+        try:
+            _settle(
+                session,
+                project,
+                report,
+                # The JUDGEMENT tier, deliberately not the `extractor` above: that
+                # one reads articles and is the high-volume path. This is one call
+                # per contested field and is where the heavier model earns its cost.
+                extractor=settle_extractor or _reasoning_extractor(settings),
+                dry_run=dry_run,
+            )
+        except MissingApiKey:
+            # The harvest is done and written. Losing it because the judgement tier
+            # has no key would throw away every article this run paid to read.
+            report.skipped.append(("settle", "no API key for the reasoning model"))
+        project = session.get(Project, project_id)
+        assert project is not None
+
     report.after = for_project(project)
     report.sources_after = len(project_urls(session, project_id))
     report.confidence_after = project.confidence or 0
@@ -673,6 +770,7 @@ def run_many(
     max_articles_per_round: int = MAX_ARTICLES_PER_ROUND,
     max_rounds: int = MAX_ROUNDS,
     skip_archive: bool = False,
+    skip_settle: bool = False,
     dry_run: bool = False,
     **kwargs,
 ) -> BatchReport:
@@ -733,6 +831,7 @@ def run_many(
             max_articles=min(per_project, remaining),
             max_rounds=max_rounds,
             skip_archive=skip_archive,
+            skip_settle=skip_settle,
             dry_run=dry_run,
             sweep=sweep,
             target_fields=target_fields,

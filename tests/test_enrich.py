@@ -952,3 +952,150 @@ def test_the_archive_is_still_swept_when_a_project_needs_it(session, monkeypatch
         skip_archive=False,
     )
     assert swept == [True]
+
+
+# --- the settle step: what the harvest disagreed about ----------------------
+
+
+class SettleLLM:
+    """The judgement tier, answering from a queue. Records what it was asked."""
+
+    def __init__(self, *replies: str) -> None:
+        self._replies = list(replies)
+        self.calls = 0
+
+    def complete(self, *, system, user, max_tokens=None):
+        self.calls += 1
+        return LLMReply(text=self._replies.pop(0) if self._replies else "{}", finish_reason="stop")
+
+
+def _contested(session):
+    """A project whose two citations quote different capacities."""
+    from tracker.ingest.records import IngestRecord, SourceRecord
+    from tracker.upsert import upsert_record
+
+    def cite(url, source_type, mw, when):
+        return SourceRecord(
+            url=url,
+            source_type=source_type,
+            excerpt="e",
+            claims={"mw_planned": mw},
+            quotes={"mw_planned": f"the campus will draw {mw} megawatts"},
+            fetched_at=when,
+        )
+
+    result = upsert_record(
+        session,
+        IngestRecord(
+            project={
+                "company": "STACK Infrastructure",
+                "name": "Hillsboro",
+                "city": "Hillsboro",
+                "state": "OR",
+            },
+            sources=[
+                cite("https://a.test/x", "company_filing", 230.0, NOW),
+                cite("https://b.test/y", "government_doc", 90.0, NOW + dt.timedelta(days=1)),
+            ],
+        ),
+    )
+    session.flush()
+    return session.get(Project, result.project_id)
+
+
+def _key_for(project, field, value):
+    """The option key carrying `value`, so a test never hardcodes the sort order."""
+    from tracker import conflicts
+
+    dispute = next(d for d in conflicts.disputes(project) if d.field == field)
+    return next(o.key for o in dispute.options if o.value == value)
+
+
+def test_the_settle_step_decides_what_the_harvest_put_in_dispute(session):
+    """Adding sources is what CREATES contested fields, so this is where the
+    question arises and the cheapest moment to ask it.
+
+    The stored 90 MW is the later-CRAWLED figure winning a tie on two weight-3
+    sources — the exact failure the solver exists for.
+    """
+    project = _contested(session)
+    assert project.mw_planned == 90.0
+
+    settle = SettleLLM(
+        json.dumps({
+            "pick": _key_for(project, "mw_planned", 230.0),
+            "confidence": 0.9,
+            "reason": "the filing states the buildout",
+        }),
+        json.dumps({"stands": True, "reason": "nothing rivals it"}),
+    )
+    report = run(session, project.id, settle_extractor=settle, target_fields=0)
+
+    assert report.settle_calls == 2
+    assert any("mw_planned" in line for line in report.settled)
+    assert project.mw_planned == 230.0
+
+
+def test_skip_settle_asks_nothing(session):
+    project = _contested(session)
+    settle = SettleLLM()
+    report = run(session, project.id, settle_extractor=settle, skip_settle=True, target_fields=0)
+
+    assert settle.calls == 0
+    assert report.settled == [] and report.settle_calls == 0
+
+
+def test_a_refusal_is_reported_and_writes_nothing(session):
+    """A field two publishers genuinely disagree about is a finding, not a silence."""
+    project = _contested(session)
+    settle = SettleLLM(json.dumps({"pick": "r", "confidence": 0.9, "reason": "different scopes"}))
+    report = run(session, project.id, settle_extractor=settle, target_fields=0)
+
+    assert report.settled == []
+    assert any("different scopes" in line for line in report.refused)
+    assert project.mw_planned == 90.0
+
+
+def test_a_settled_field_is_never_asked_about_twice(session):
+    """And it needs no bookkeeping to achieve that.
+
+    Applying an answer marks the losing claims `superseded`, which demotes them out
+    of `confirmed` — and a dispute requires two QUOTE-BACKED claims. So the field
+    stops being contested and the next run simply does not see it.
+    """
+    project = _contested(session)
+    first = run(
+        session,
+        project.id,
+        settle_extractor=SettleLLM(
+            json.dumps({
+                "pick": _key_for(project, "mw_planned", 230.0),
+                "confidence": 0.9,
+                "reason": "the filing",
+            }),
+            json.dumps({"stands": True, "reason": "stands"}),
+        ),
+        target_fields=0,
+    )
+    assert first.settle_calls == 2
+
+    again = SettleLLM()
+    second = run(session, project.id, settle_extractor=again, target_fields=0)
+    assert again.calls == 0
+    assert second.settled == []
+
+
+def test_a_dry_run_asks_but_never_writes(session):
+    project = _contested(session)
+    settle = SettleLLM(
+        json.dumps({
+            "pick": _key_for(project, "mw_planned", 230.0),
+            "confidence": 0.9,
+            "reason": "the filing",
+        }),
+        json.dumps({"stands": True, "reason": "stands"}),
+    )
+    report = run(session, project.id, settle_extractor=settle, dry_run=True, target_fields=0)
+
+    assert any("mw_planned" in line for line in report.settled)
+    assert project.mw_planned == 90.0

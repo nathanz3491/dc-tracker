@@ -12,6 +12,25 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **`tracker enrich` settles what it just put into dispute** (`tracker/ingest/enrich.py`,
+  `tracker/cli.py`, `.env.example`). Harvesting sources is what *creates*
+  contested fields, and until now a run ended by handing that disagreement to a
+  sort — quote-backed first, then source weight, then date — which cannot tell a
+  superseded figure from a rival one. A new last stage sends every still-contested
+  field (not only what the run itself added) through `conflicts.disputes`/`solve`,
+  the same machinery `tracker logic conflicts` exposes standalone, and applies a
+  resolution the same way. `--skip-settle` turns it off; `--dry-run` covers it like
+  everything else; a missing reasoning-model API key degrades to a skipped stage
+  rather than losing the articles the run already paid to read. Settlements and
+  refusals both print — a refusal is the answer on a field two publishers
+  genuinely disagree about, not silence.
+
+  `deepseek_reasoning_model` defaults to `deepseek-v4-pro` (was
+  `deepseek-v4-flash`) as part of this change: `infer` and this new settle step
+  are both one call per project or per contested field, hundreds rather than the
+  thousands extraction pays for, so the heavier model is affordable exactly where
+  these two calls happen.
+
 - **`tracker backfill derive` — the free repair pass** (`tracker/derive.py`).
 
   Every value on a project is a function of its citations, and the function is

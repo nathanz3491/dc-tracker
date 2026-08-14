@@ -3448,6 +3448,13 @@ def enrich(
     skip_archive: Annotated[
         bool, typer.Option("--skip-archive", help="Do not sweep the sitemap archives.")
     ] = False,
+    skip_settle: Annotated[
+        bool,
+        typer.Option(
+            "--skip-settle",
+            help="Do not put the disagreements this run created to a model.",
+        ),
+    ] = False,
     browser: Annotated[
         bool,
         typer.Option(
@@ -3580,6 +3587,7 @@ def enrich(
                 escalate=escalate,
                 skip_search=skip_search,
                 skip_archive=skip_archive,
+                skip_settle=skip_settle,
                 dry_run=dry_run,
             )
     except LookupError as exc:
@@ -3727,6 +3735,20 @@ def _render_enrich(report, *, dry_run: bool) -> None:
         f"confidence {report.confidence_before} -> {report.confidence_after}, "
         f"{report.articles_read} article(s) read"
     )
+
+    # The settle step, and the refusals as loudly as the decisions. A field two
+    # publishers genuinely disagree about is a *finding*, and printing only the
+    # settlements would read as though the run had nothing to say about it.
+    if report.settled or report.refused:
+        console.print(
+            f"\n[bold]settled[/bold] [dim]— every field whose sources disagreed, read "
+            f"together rather than sorted. {report.settle_calls} call(s)[/dim]"
+        )
+        for line in report.settled:
+            console.print(f"  [green]•[/green] {escape(line)}")
+        for line in report.refused:
+            console.print(f"  [yellow]refused[/yellow] {escape(line)}")
+
     console.print(f"[dim]stopped: {report.stopped_because}[/dim]")
 
 
