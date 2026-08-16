@@ -498,39 +498,102 @@ initial build of the v1 PRD.
     once. Pure memoisation, verified byte-identical against the old path on 40
     projects, and worth **2.3 of the 4.0 seconds**.
 
-- **The sources modal reads our own copy of the article, not the live page**
-  (`webui/article.py` **new**, `server.py`, `app.js`, `app.css`).
+- **The sources modal renders a reader view of the article** (`webui/article.py`
+  **new**, `server.py`, `app.js`, `pyproject.toml`).
 
-  The modal framed the publisher. Measured across the fifteen most-cited
+  The modal framed the publisher's page. Measured across the fifteen most-cited
   publishers, **ten refuse to be framed** — `X-Frame-Options: SAMEORIGIN`/`DENY`
   or a `frame-ancestors` directive — and those ten carry **388 of their 689
   citations**. `datacenterdynamics.com`, the most-cited publisher in the database
-  at 150 citations, is one of them. So the modal showed "refused to connect" more
-  often than it showed an article, and no header of ours overrides a publisher's.
+  at 150 citations, is one of them. No header of ours overrides a publisher's, so
+  the frame could never have been the default.
 
-  `GET /api/article?url=` now serves the text the pipeline itself read: from the
-  article cache when it is there, otherwise one fetch on the cheap rungs, written
-  back so the second reader waits for nothing. Measured on three frame-refusing
-  publishers: 2.5–4.1s cold, **0.01s once cached**. The browser rung stays out —
-  Chromium is seconds and hundreds of megabytes, and this runs on a click.
+  Serving the pipeline's stored text instead was worse in a different way: the
+  ingest path strips every tag before the model sees it, deliberately, so the
+  evidence gate matches quotes against exactly what the extractor read. Correct
+  for the gate, unreadable as a page.
 
-  **The stored quotes are located in the text and marked.** 1,142 of 1,269 quotes
-  land exactly; 113 are shorter than a mark is worth drawing; 14 have drifted
-  since they were cited and are deliberately *not* highlighted — the gate's fuzzy
-  recovery decides whether to *store* a value, but drawing a highlight asserts
-  "this sentence is the evidence", and a mark over the nearest similar sentence
-  would be a claim the page no longer supports. Locating happens on the server
-  against the gate's own helpers, so the browser cannot drift from it.
+  So the modal now does what every read-later tool does with this problem — the
+  arc90/Mozilla readability algorithm over the publisher's own HTML, rendered
+  under our stylesheet. Measured on eight publishers including all the
+  frame-refusing ones:
 
-  This is the better answer to the question anyway: a live page may have been
-  edited since it was cited, and the cached text is what the values rest on. The
-  live frame is still one click away for the publishers that permit it.
+  | | |
+  |---|---|
+  | first open | 430–1,400 ms |
+  | reopen (cached) | ~10 ms |
+  | paragraphs recovered | 12–26 (1,286 on a 10-Q) |
+  | navigation, promo images, footers | dropped |
 
-  **The endpoint refuses any URL the database does not already cite.** That is the
-  entire access rule, and it is not decoration: a reader that fetches whatever it
-  is handed is a request forwarder pointed at whatever network the console runs
-  on. Verified over HTTP — an uncited URL and `169.254.169.254` both 404,
-  `file:///` 400s before anything is opened.
+  **The stored quotes are marked in the article**, which is what the reader is
+  actually there for: not "here is the page" but "here is the sentence this
+  number rests on". Marking survives an inline tag splitting the sentence, and
+  forgives only whitespace and case — a quote absent from the page is left
+  unmarked rather than fitted to the nearest similar sentence, because a
+  highlight asserts "this is the evidence" and the page may have changed.
+
+  **Chrome is thrown away in two passes bracketing readability.** It ranks by
+  text density, which finds the article and is indifferent to what shares a
+  container with it. So containers *named* as furniture are removed before
+  scoring — ad slots, share rails, nav, related lists, comment threads, cookie
+  bars, FAQ accordions — and what survives is trimmed at its seams afterwards: a
+  "Related:" line embedded in the prose, a press release's contact block, the
+  "Sign up at…" a publisher ends every post with, a legal disclaimer. A stop
+  heading (`Frequently Asked Questions`, `Related Stories`, `Comments`) ends the
+  article, along with everything after it.
+
+  **The kill criterion was fixed before the pass was written: it must not cost a
+  single marked quote.** Over fifteen publishers it cuts 101 lines and keeps all
+  25 — `prnewswire.com` 44 → 22, `stackinfra.com` 58 → 32, `yahoo.com` 48 → 38.
+  It caught two failures that testing by eye would not have:
+
+  * **A `<body class="… no-sidebar">` matched the `sidebar` rule** and the whole
+    document was deleted — three publishers returned empty while the pass
+    reported success. Structural elements are now exempt from name matching, and
+    so is any container holding more than 40% of the page's prose, since chrome
+    is never most of what a page says.
+  * **Cutting a tail removed its own ancestors.** Walking up and deleting from
+    each parent *inclusive* discarded the parent still holding everything kept so
+    far. The ancestors are walked now, never removed.
+
+  **Mojibake the publisher baked in is repaired.** `datacenterknowledge.com`
+  serves "Cote dâ€™Ivoire" — and our decode is not the one at fault: the
+  response says UTF-8, the bytes *are* valid UTF-8, and they encode those three
+  characters literally. 36 instances on one page. The repair runs per damaged
+  sequence rather than per document, because a single character outside
+  Windows-1252 anywhere on the page makes a whole-document round trip raise and
+  silently do nothing; and each run is kept only if it round-trips, so real
+  accents, genuine curly quotes and CJK are provably untouched.
+
+  Charset detection was wrong in both directions before this and is now decided
+  by the bytes: **valid UTF-8 beats any declaration**, because a page that
+  declares Latin-1 and serves UTF-8 decodes without error as Latin-1 — every byte
+  is a valid character — so believing the page produces mojibake with no
+  exception to fall through.
+
+  Images appear when the article has them and not otherwise. Readability drops
+  sidebar promos, which is it working: one `datacenterdynamics.com` page carries
+  fourteen images, all furniture, and its `og:image` is an advertiser's logo — so
+  no lead-image fallback, which would have shown a worse lie than nothing.
+
+  **Three independent guards, because this renders somebody else's markup.** The
+  HTML is sanitized to an attribute allowlist, so `on*` handlers and constructs
+  nobody anticipated go together; the frame carries `sandbox` with no `allow-`
+  tokens, giving the document an opaque origin and no script at all; and the
+  response carries its own `default-src 'none'`. The endpoint also refuses any
+  URL the database does not already cite — verified over HTTP, an uncited URL and
+  `169.254.169.254` both 404 and `file:///` 400s before anything is opened.
+
+  Two things that only showed up in a browser:
+
+  * **`frame-src https:` silently forbade our own frame.** Naming `frame-src` at
+    all replaces the fallback chain to `default-src 'self'`, so the same-origin
+    reader was blocked with the only evidence in a console message. Now
+    `frame-src 'self' https:`, asserted in the CSP test.
+  * **A second CSP header would have blocked every image.** Browsers intersect
+    multiple policies rather than merging them, so the reader's `img-src https:`
+    against the console's `img-src 'self'` would have permitted nothing. `_send`
+    takes a `csp` that replaces rather than appends.
 
 - **The console's CSP allows framing, and nothing else moved** (`server.py`). The
   sources page opens a cited article in a modal, and `frame-src` falls back through

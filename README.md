@@ -73,7 +73,7 @@ ranges. Regenerate the lock after any dependency change:
 .venv/Scripts/python -m pip freeze --exclude-editable > requirements.lock
 ```
 
-Three optional extras, none required:
+Four optional extras, none required:
 
 - `.[iso]` adds `openpyxl`, for the ISO queue exports that ship as XLSX rather
   than CSV. The loader reads CSV and JSON without it.
@@ -87,6 +87,12 @@ Three optional extras, none required:
   install chromium`), the last escalation rung, for pages that assemble themselves
   after load. Reached only with `--browser`. Heavy — Chromium plus ~70 transitive
   packages — which is why it stays opt-in, and why the cheap rung above it exists.
+- `.[reader]` adds `readability-lxml`, which is what the console's sources page
+  uses to show a cited article. Ten of the fifteen most-cited publishers refuse to
+  be framed, so the modal extracts the article from their HTML and renders it
+  here, with the sentences the database quotes marked in it. Purely display —
+  nothing in the pipeline reads it, and without the extra the modal falls back to
+  the stored text.
 
 **Escalation is a ladder, cheapest rung first**, the same ordering `enrich` uses
 for its harvesters. Measured on three hosts whose `robots.txt` permits us and
@@ -473,7 +479,7 @@ tracker serve
 
 | | | |
 |---|---|---|
-| **`/`** | Overview · Projects · Sources · Map · Capex — each on its own URL | reading the dataset. Nothing on it changes anything. |
+| **`/`** | Overview · Projects · Sources · Map · Capex — each on its own URL; Sources opens any cited article in a reader view | reading the dataset. Nothing on it changes anything. |
 | **`/dev`** | Pipeline · Commands · Help | the queue, the runs, the command palette. |
 
 They were one console with eight tabs, which put the machinery on the same
