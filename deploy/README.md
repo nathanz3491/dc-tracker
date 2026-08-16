@@ -43,6 +43,21 @@ Everything lives under one project directory, `~/dev/tracker`:
 `ops/` sits beside the checkout rather than inside it, which is what lets the
 deployer survive the deploy — see below — while still living under the project.
 
+**The CLI is on `PATH` as `tracker`**, via a symlink at `~/.local/bin/tracker`
+pointing into the venv. That directory was already on the login shell's `PATH`
+and did not exist, so creating it took no shell-config edit — nothing in
+`~/.zshrc` or `~/.zprofile` was touched. Symlinking the one entry point rather
+than putting the whole `.venv/bin` on `PATH` keeps the venv's `python` and `pip`
+from shadowing the system's.
+
+`tracker` works from any directory: the settings file is found relative to the
+installed package, not the working directory, and `TRACKER_DB` in it is absolute.
+
+```bash
+ssh mm 'tracker gaps'
+ssh mm 'tracker ingest crawl'
+```
+
 **Four paths are outside the project, and only because the OS dictates them.**
 Nothing else is:
 
@@ -52,8 +67,9 @@ Nothing else is:
 | `~/.ssh/dc_tracker_deploy`, and a `github-dctracker` block in `~/.ssh/config` | ssh reads keys and host aliases only from here |
 | `~/.cloudflared/cert.pem` | written by `cloudflared tunnel login`; per account, not per project |
 | `~/.cloudflared/<tunnel-uuid>.json` | written by `cloudflared tunnel create`; the tunnel will not run without it |
+| `~/.local/bin/tracker` | a symlink, so the CLI is on `PATH`; that directory was already on it |
 
-None of the four holds anything this repository could carry instead. The plists
+None of the five holds anything this repository could carry instead. The plists
 are committed here in `deploy/` and hold no secrets; the other three are
 credentials and are not committed anywhere.
 
