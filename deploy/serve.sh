@@ -32,8 +32,23 @@ if [ ! -f "$HOME/.cloudflared/cert.pem" ]; then
   echo "not published: no Cloudflare login yet. See deploy/README.md."
   exec "$python" -m tracker serve "${mode[@]}"
 fi
-if ! cloudflared tunnel list 2>/dev/null | grep -qw "$name"; then
+
+# The tunnel has to exist *and* this machine has to hold its credentials, and
+# those are two different things. `cloudflared tunnel create` writes
+# ~/.cloudflared/<UUID>.json on whichever machine ran it, and only `cert.pem`
+# comes from `login` — so a tunnel created elsewhere lists fine here, routes DNS
+# fine here, and cannot be run here. Checking only the login missed exactly that:
+# `dc-console` existed, `mastri.app` already pointed at it, and its credentials
+# were still on the development machine.
+id=$(cloudflared tunnel list --output json 2>/dev/null \
+  | /usr/bin/python3 -c "import json,sys;print(next((t['id'] for t in json.load(sys.stdin) if t['name']=='$name'),''))" 2>/dev/null)
+if [ -z "$id" ]; then
   echo "not published: no tunnel named '$name'. See deploy/README.md."
+  exec "$python" -m tracker serve "${mode[@]}"
+fi
+if [ ! -f "$HOME/.cloudflared/$id.json" ]; then
+  echo "not published: tunnel '$name' ($id) exists but its credentials are not on this machine."
+  echo "  Copy ~/.cloudflared/$id.json from wherever it was created, or recreate the tunnel here."
   exec "$python" -m tracker serve "${mode[@]}"
 fi
 

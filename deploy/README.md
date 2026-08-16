@@ -38,12 +38,12 @@ scp deploy/poll.sh mm:/tmp/ && ssh mm 'install -m 755 /tmp/poll.sh ~/dc-tracker-
 
 ---
 
-## Publishing it — three commands only you can run
+## Publishing it — the commands only you can run
 
-The console is on loopback until these are done, and says so in `serve.log`.
-They are yours because each one outlives the process: a browser sign-in, a
-credential written to your home directory, a record written to your DNS zone.
-`tunnel.py` refuses to do them on your behalf for the same reason.
+The console is on loopback until these are done, and says which step is missing
+in `serve.log`. They are yours because each outlives the process: a browser
+sign-in, a credential written to your home directory, a record written to your
+DNS zone. `tunnel.py` refuses to do them on your behalf for the same reason.
 
 ```bash
 ssh mm
@@ -51,6 +51,33 @@ cloudflared tunnel login
 cloudflared tunnel create dc-console
 cloudflared tunnel route dns dc-console mastri.app
 ```
+
+**`mastri.app` used to be served by a second tunnel running on the development
+machine** — `mastri-app`, `fc20e7c6…`, created 2026-05-24. That one is retired.
+The hostname now routes to `dc-console` on the mini, and the mini is the only
+machine that should hold a running tunnel for it. Two tunnels claiming one
+hostname is a coin toss over which one answers.
+
+Two things that look like failures and are not, both met while setting this up:
+
+**"mastri.app is already configured to route to your tunnel" is success.** It is
+an `INF` line from an idempotent command. Check the `tunnelID=` it prints against
+`cloudflared tunnel list`; if it is the tunnel you want, there is nothing to do.
+Only if it names a *different* tunnel do you need `--overwrite-dns`.
+
+**A tunnel can exist, route correctly, and still be unrunnable here.** `login`
+writes `~/.cloudflared/cert.pem`, which is per *account*. `create` writes
+`~/.cloudflared/<UUID>.json`, which is per *tunnel* and lands only on the machine
+that ran it. `dc-console` had been created on the development machine, so the
+mini could list it and route DNS to it but had no credentials to run it — with no
+error until start-up. `serve.sh` checks for both and names whichever is missing.
+To move an existing tunnel to a new machine, copy that one file:
+
+```bash
+scp ~/.cloudflared/<UUID>.json mm:~/.cloudflared/ && ssh mm 'chmod 600 ~/.cloudflared/<UUID>.json'
+```
+
+Then delete it from the machine that no longer runs the tunnel.
 
 Then set the console password — required, because a tunnel bypasses the
 loopback-only check by design and the password is what replaces it:
