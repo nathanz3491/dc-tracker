@@ -463,6 +463,42 @@ initial build of the v1 PRD.
   a lifecycle word meaning something earlier, generation quoted as the site's
   capacity, and a figure the source itself presents as superseded.
 
+### Added
+
+- **Production deploys to the Mac mini** (`deploy/` **new**, `scripts/ship_db.py`
+  **new**).
+
+  Code travels through GitHub; data goes straight over SSH. The development
+  machine stays the only writer, so production runs `serve --no-run` and needs no
+  API keys at all — the read-only decision is what makes that true.
+
+  The mini polls `origin/main` every two minutes rather than receiving a webhook:
+  it is behind NAT, and a poller needs no inbound surface. A commit that does not
+  import is refused and the checkout rolled back, so a bad push leaves the console
+  serving the previous code instead of crash-looping under launchd.
+
+  Published through a **named** Cloudflare tunnel at a `mastri.app` hostname.
+  Named tunnels are free — the same product as a `trycloudflare.com` URL, with a
+  hostname that survives a restart, which the quick-tunnel URL does not. The three
+  commands that create it stay with the operator: a browser sign-in, a credential
+  written to a home directory, a record written to a DNS zone.
+
+  **`ship_db.py` never copies the database file.** It runs `VACUUM INTO`. A
+  WAL-mode database copied on its own opens cleanly and is silently out of date —
+  measured here at 16.3 MB of main file against a 7.9 MB WAL — and that exact
+  mistake has already produced wrong figures in this project once. The snapshot is
+  verified before it is sent and renamed into place after, so a reader sees one
+  database or the other, never half of one.
+
+  The first version of that verification checked nothing: it counted tables named
+  `projects`/`sources`, the real ones are singular, so the comparison ran over an
+  empty dict and reported "verified". It now refuses outright when it recognises
+  no table.
+
+  The mini pulls with a read-only deploy key, and the running copy of the poller
+  sits outside the repository — a deployer that deploys itself can be bricked by
+  one bad commit, since the broken version is what runs next.
+
 ### Changed
 
 - **Every view has its own URL, and the console loads in a quarter of the time**

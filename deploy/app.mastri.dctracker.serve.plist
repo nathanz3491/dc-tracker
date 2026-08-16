@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>app.mastri.dctracker.serve</string>
+  <key>ProgramArguments</key>
+  <array><string>/Users/nz/dc-tracker-ops/serve.sh</string></array>
+  <key>RunAtLoad</key><true/>
+  <!-- The console is the service. If it exits for any reason, bring it back. -->
+  <key>KeepAlive</key><true/>
+  <!-- Without this a crash-looping process is restarted as fast as it can fail. -->
+  <key>ThrottleInterval</key><integer>10</integer>
+  <key>WorkingDirectory</key><string>/Users/nz/dc-tracker</string>
+  <key>StandardOutPath</key><string>/Users/nz/dc-tracker-ops/logs/serve.log</string>
+  <key>StandardErrorPath</key><string>/Users/nz/dc-tracker-ops/logs/serve.log</string>
+  <key>EnvironmentVariables</key>
+  <dict><key>PATH</key><string>/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string></dict>
+</dict>
+</plist>
