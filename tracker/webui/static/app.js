@@ -4393,67 +4393,38 @@ const FOLDED_INTO_PIPELINE = { queue: "queue", gaps: "gaps", runs: "runs" };
  *
  * `Dialog` comes from the design bundle rather than another hand-rolled overlay:
  * Escape and body-scroll locking are already in it. */
-/* The article text, with the sentences the database rests on marked in it.
- *
- * The spans come from the server. Locating a quote is normalisation, folding and
- * offsets — the evidence gate's own judgement — and a second implementation in
- * the browser would eventually disagree with the gate about what a source says,
- * with nothing to report the drift. Here the text is only sliced. */
-function ReaderText({ text, spans }) {
-  const parts = [];
-  let at = 0;
-  (spans || []).forEach(([start, end, field], i) => {
-    if (start > at) parts.push(text.slice(at, start));
-    parts.push(html`<mark key=${i} class="dc-read-mark" title=${"evidence for " + field}
-      >${text.slice(start, end)}</mark>`);
-    at = end;
-  });
-  if (at < text.length) parts.push(text.slice(at));
-  return html`<div class="dc-read-text">${parts}</div>`;
-}
-
 /* One citation, opened.
  *
- * **Reader first, the live page second, and that order was measured.** Across the
- * fifteen most-cited publishers, ten refuse to be framed — `X-Frame-Options` or
- * `frame-ancestors` — and those ten carry 388 of their 689 citations, including
- * `datacenterdynamics.com`, the most-cited publisher in the database. A
- * frame-first modal shows "refused to connect" more often than it shows an
- * article, and no header of ours can override a publisher's.
+ * **Reader view first, the live page second, and that order was measured.**
+ * Across the fifteen most-cited publishers, ten refuse to be framed —
+ * `X-Frame-Options` or `frame-ancestors` — and those ten carry 388 of their 689
+ * citations, `datacenterdynamics.com` (the most-cited of all) among them. No
+ * header of ours can override a publisher's, so a frame-first modal shows
+ * "refused to connect" more often than it shows an article.
  *
- * Reading our own copy is also the better answer to the question being asked. A
- * live page may have been edited since it was cited; the cached text is the
- * evidence the values actually rest on, and the quotes are highlighted in it. */
+ * So the first tab is what every read-later tool does with this problem: the
+ * readability algorithm over the publisher's own HTML, rendered under our
+ * stylesheet, with the stored quotes marked in it. Structure survives —
+ * headings, paragraphs, images, links — and a live page that may have been
+ * edited since it was cited is not the thing the reader wanted anyway.
+ *
+ * **The frame is sandboxed with no `allow-` tokens.** It loads same-origin, so
+ * the document could otherwise script *our* page; `sandbox=""` gives it an
+ * opaque origin and no script at all. That is the second of three guards, after
+ * sanitising the HTML server-side and before the document's own
+ * `default-src 'none'`. */
 function ArticleModal({ article, onClose }) {
   const [pane, setPane] = useState("read");
-  const [body, setBody] = useState(null);
-  const [failed, setFailed] = useState("");
-  const cache = useRef({});
   const url = article?.url;
-
-  useEffect(() => { setPane("read"); setFailed(""); }, [url]);
-  useEffect(() => {
-    if (!url) return;
-    if (cache.current[url]) { setBody(cache.current[url]); return; }
-    setBody(null);
-    let cancelled = false;
-    api(`/api/article?url=${encodeURIComponent(url)}`)
-      .then((payload) => {
-        cache.current[url] = payload;
-        if (!cancelled) setBody(payload);
-      })
-      .catch((err) => { if (!cancelled) setFailed(String(err && err.message ? err.message : err)); });
-    return () => { cancelled = true; };
-  }, [url]);
+  useEffect(() => { setPane("read"); }, [url]);
 
   if (!article) return null;
   const fields = (article.fields || "").split(",").filter(Boolean);
   const quotes = article.quotes || {};
-  const VIA = {
-    cache: "our copy, saved when this page was read",
-    fetch: "fetched just now and saved",
-    excerpt: "only the stored excerpt — the full text could not be read",
-  };
+  const dark = document.documentElement.classList.contains("dark")
+    || document.documentElement.getAttribute("data-theme") === "dark";
+  const readerSrc = `/api/article?url=${encodeURIComponent(article.url)}`
+    + (dark ? "&theme=dark" : "");
   return html`
     <${Dialog} open=${true} onOpenChange=${(v) => !v && onClose()}>
       <${DialogContent} className="dc-article">
@@ -4477,36 +4448,28 @@ function ArticleModal({ article, onClose }) {
         </div>
 
         <div class="dc-article-tabs">
-          <button type="button" class=${"dc-seg-btn" + (pane === "read" ? " is-on" : "")}
-                  onClick=${() => setPane("read")}>Reader</button>
-          <button type="button" class=${"dc-seg-btn" + (pane === "live" ? " is-on" : "")}
-                  onClick=${() => setPane("live")}>Live page</button>
+          <div class="dc-seg">
+            <button type="button" class="dc-seg-btn" aria-pressed=${pane === "read"}
+                    onClick=${() => setPane("read")}>Reader</button>
+            <button type="button" class="dc-seg-btn" aria-pressed=${pane === "live"}
+                    onClick=${() => setPane("live")}>Live page</button>
+          </div>
+          <span class="dc-article-via">
+            ${pane === "read"
+              ? "The publisher's own article, extracted and rendered here — most refuse to be framed."
+              : "The publisher's live page. Ten of our fifteen most-cited refuse this; a blank panel is the site declining."}
+          </span>
           <a href=${article.url} target="_blank" rel="noreferrer" class="dc-article-out"
              >open in a new tab ↗</a>
-          ${pane === "read" && body && body.via && html`
-            <span class="dc-article-via">${VIA[body.via] || body.via}</span>`}
         </div>
 
         <div class="dc-article-body">
           ${pane === "live"
             ? html`<iframe class="dc-article-frame" src=${article.url} title=${article.url}
                            referrerpolicy="no-referrer" loading="lazy" />`
-            : html`<div class="dc-article-read">
-                ${failed
-                  ? html`<p class="dc-article-note">This article could not be read:
-                      ${failed}. The evidence we hold for it is on the right, and
-                      "open in a new tab" always works.</p>`
-                  : !body
-                    ? html`<p class="dc-article-note">Reading the article…</p>`
-                    : html`<${ReaderText} text=${body.text} spans=${body.spans} />`}
-              </div>`}
+            : html`<iframe class="dc-article-frame" src=${readerSrc} sandbox=""
+                           title=${"Reader view of " + article.url} />`}
           <aside class="dc-article-side">
-            ${pane === "live" && html`
-              <p class="dc-article-note">
-                Most publishers refuse to be embedded — ten of our fifteen most-cited do.
-                A blank panel is the site declining, not a fault here. Reader shows the
-                copy this database actually read.
-              </p>`}
             ${fields.length > 0 && html`
               <div>
                 <div class="dc-article-h">supports</div>

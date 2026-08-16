@@ -279,15 +279,44 @@ nothing it may load or call. A test pins the rest shut.
 It buys less than it appears to, and measurement decided how the modal is built.
 Across the fifteen most-cited publishers **ten refuse to be framed**, carrying 388
 of their 689 citations — `datacenterdynamics.com`, the most-cited of all, among
-them. No header of ours overrides theirs. So the frame is the *second* tab: the
-modal opens on the text the pipeline itself read, served by `/api/article` from
-the article cache, with the stored quotes marked in it.
+them. No header of ours overrides theirs.
+
+So the frame usually holds **our own reader view**, not the publisher's page: the
+readability algorithm over their HTML, rendered under our stylesheet, served
+same-origin from `/api/article`. Their live page is still one tab away for the
+publishers that permit it, which is why the directive lists both. `'self'` is
+listed explicitly and has to be — naming `frame-src` at all replaces the fallback
+chain to `default-src`, so `frame-src https:` alone forbade our own frame.
+
+**Readability finds the article; it does not tidy it.** It ranks by text density,
+which is what makes it work on any publisher, and is indifferent to what shares a
+container with the prose. So two passes bracket it: containers named as furniture
+are removed before scoring, and the seams are trimmed after — a "Related:" line
+inside the prose, a press release's contact block, a legal disclaimer, a stop
+heading like "Frequently Asked Questions" that ends the article and everything
+after it.
+
+The rule that keeps this honest is a kill criterion fixed before the pass was
+written: **it must not cost a single marked quote**. That is what a measurement
+can settle, and it caught the failure that eye-checking would not — a WordPress
+`<body class="… no-sidebar">` matched the `sidebar` rule, deleted the whole
+document, and reported success on three publishers. Nothing structural is name-
+matched now, and neither is any container holding most of the page's prose,
+because chrome is never most of what a page says.
 
 That inversion is not a retreat. A live page may have been edited since it was
-cited; our copy is the evidence the stored values actually rest on, and seeing
-*which sentence* carried a field is the thing the reader came for. Locating a
-quote is normalisation, folding and offsets — the evidence gate's judgement — so
-it happens on the server against the gate's own helpers. The browser only slices.
+cited, and what the reader came for is not "the page" but *which sentence* carried
+a field — so the stored quotes are marked in the text. Locating them is
+normalisation and folding, the evidence gate's own judgement, so it happens on the
+server; the browser renders and decides nothing, which is the rule this document
+opens with.
+
+**Rendering somebody else's markup gets three independent guards.** The HTML is
+sanitized to an attribute allowlist, so `on*` handlers and whatever nobody thought
+of go together. The frame carries `sandbox` with no `allow-` tokens — it loads
+same-origin, so without that the document could script the console; with it the
+document has an opaque origin and cannot script at all. And the response carries
+its own `default-src 'none'`, images excepted. Any one would do.
 
 **The endpoint reads a page the pipeline chose, and nothing else.** Its allowlist
 is the database: a URL that is not a stored `source.url` is refused. Without that

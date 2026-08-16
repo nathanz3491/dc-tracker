@@ -35,6 +35,13 @@ impersonate = ["curl_cffi>=0.7"]
 # above `impersonate`: the Meta/Blue Owl press release returns 200 and 106
 # characters to curl_cffi, being a shell that assembles itself in the browser.
 crawl = ["crawl4ai>=0.9"]
+# Reader view for the console's sources page. Ten of the fifteen most-cited
+# publishers refuse to be framed, so the modal renders our own extraction of the
+# article — the arc90/Mozilla Reader View algorithm, which is what every
+# read-later tool converged on for exactly this problem. Optional because it is
+# purely display: nothing in the pipeline reads it, and a console without it
+# falls back to the stored text.
+reader = ["readability-lxml>=0.8", "lxml>=5.0"]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
@@ -42,6 +49,7 @@ dev = [
     "respx>=0.21",
     "ruff>=0.6",
     "openpyxl>=3.1",
+    "readability-lxml>=0.8",
 ]
 
 [project.scripts]
@@ -97,3 +105,6 @@ ignore = [
 "tracker/ingest/fetch.py" = ["RUF001"]
 "tests/test_normalize.py" = ["RUF001"]
 "tests/test_ingest_crawl.py" = ["RUF001"]
+# Same again for the reader: `_demojibake` exists to turn "Cote dâ€™Ivoire"
+# back into "Cote d’Ivoire", so the tests have to name both spellings.
+"tests/test_webui.py" = ["B011", "RUF001"]

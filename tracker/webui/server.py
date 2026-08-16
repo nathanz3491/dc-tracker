@@ -87,6 +87,7 @@ class Handler(BaseHTTPRequestHandler):
         *,
         cache: str = "no-store",
         extra: dict[str, str] | None = None,
+        csp: str | None = None,
     ) -> None:
         if len(body) >= GZIP_MIN and "gzip" in self.headers.get("Accept-Encoding", ""):
             body = gzip.compress(body, 6)
@@ -101,22 +102,36 @@ class Handler(BaseHTTPRequestHandler):
         # URL creeping into the front end fails loudly in the console instead of
         # quietly reintroducing a network dependency.
         #
-        # `frame-src https:` is the single deliberate exception, and it is scoped
-        # as narrowly as the feature allows. The sources page opens a cited article
-        # in a modal, and without this the browser refuses the frame outright —
-        # `frame-src` falls back to `child-src` and then to `default-src`, which is
-        # `'self'`. Everything else stays shut: scripts, styles, fonts, images and
-        # `connect-src` are all still same-origin, so this widens what the page may
-        # *display* and nothing it may load or call.
+        # `frame-src 'self' https:` is the single deliberate exception, and it is
+        # scoped as narrowly as the feature allows. The sources modal frames two
+        # things: our own reader view at `/api/article`, and — behind a second tab
+        # — the publisher's live page. Everything else stays shut: scripts, styles,
+        # fonts, images and `connect-src` are all still same-origin, so this widens
+        # what the page may *display* and nothing it may load or call.
+        #
+        # **`'self'` is listed explicitly and has to be.** Naming `frame-src` at
+        # all replaces the fallback chain to `default-src`, so `frame-src https:`
+        # alone silently forbade our own same-origin reader frame — the browser
+        # blocked it and the modal came up empty.
         #
         # It buys less than it looks like. Publishers that send `X-Frame-Options`
         # or their own `frame-ancestors` still refuse, and no header of ours can
         # override theirs — see `ArticleModal` in app.js for what is shown instead.
+        #
+        # **`csp` replaces this policy rather than adding to it, and that is not a
+        # convenience.** A response carrying two CSP headers is held to *both*: the
+        # browser intersects them. The reader view needs `img-src https:` and the
+        # console's policy says `img-src 'self'`, so appending a second header
+        # would leave an intersection permitting no images at all — a stricter
+        # result than either policy asks for, arrived at silently.
         self.send_header(
             "Content-Security-Policy",
-            "default-src 'self'; style-src 'self' 'unsafe-inline'; "
-            "script-src 'self' 'unsafe-inline'; img-src 'self' data:; "
-            "font-src 'self'; connect-src 'self'; frame-src https:",
+            csp
+            or (
+                "default-src 'self'; style-src 'self' 'unsafe-inline'; "
+                "script-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+                "font-src 'self'; connect-src 'self'; frame-src 'self' https:"
+            ),
         )
         self.send_header("X-Content-Type-Options", "nosniff")
         if encoding:
@@ -628,18 +643,21 @@ class Handler(BaseHTTPRequestHandler):
         self._json({"project": project_id, "claims_by_field": payload})
 
     def _article(self, query: dict[str, list[str]]) -> None:
-        """The text behind one cited URL, with its quotes located in it.
+        """Reader view of one cited article, for the sources modal's frame.
+
+        Serves a whole document rather than JSON because that is what the frame
+        loads. Same-origin, so the parent's `default-src 'self'` already permits
+        it; the document then carries its own `default-src 'none'`, and the frame
+        that holds it carries `sandbox` with no `allow-` tokens.
 
         **The console reads a page the pipeline already chose, and nothing else.**
-        `article.load` refuses any URL that is not a stored `source.url`, so this
-        cannot be pointed at an arbitrary address — the allowlist is the database
-        itself, and a console reachable from a network is otherwise a request
-        forwarder aimed at whatever sits behind it.
+        `article.load` refuses any URL that is not a stored `source.url` — the
+        allowlist is the database itself. Without that rule a console reachable
+        from a network is a request forwarder aimed at whatever sits behind it,
+        and being read-only says nothing about where it may be pointed.
 
-        A cache miss costs one ordinary request on the cheap rungs and is written
-        back, so the second reader of an article waits for nothing. It writes a
-        file, never a row: the read-only handle is untouched and no stored value
-        can move because somebody opened a modal.
+        A cache miss costs one ordinary request and is written back, so the second
+        reader of an article waits for nothing. It writes a file, never a row.
         """
         url = (query.get("url") or [""])[0].strip()
         if not url:
@@ -650,12 +668,25 @@ class Handler(BaseHTTPRequestHandler):
         from tracker.config import install_root
         from tracker.webui import article as article_mod
 
-        cache_dir = install_root() / ".cache" / "articles"
+        root = install_root() / ".cache"
         with self.console.read_session() as session:
-            found = article_mod.load(session, url, cache_dir=cache_dir)
-        if found.error and not found.text:
+            found = article_mod.load(
+                session, url, cache_dir=root / "articles", reader_dir=root / "reader"
+            )
+        if found.error and not found.body:
             return self._error(404, found.error)
-        self._json(found.to_json_object())
+        dark = (query.get("theme") or [""])[0] == "dark"
+        page = article_mod.render(found, dark=dark).encode("utf-8")
+        self._send(
+            200,
+            page,
+            "text/html; charset=utf-8",
+            # Its own policy, not the console's: this document is somebody else's
+            # markup. Nothing may load except images, and no script at all — which
+            # is the third of three independent guards, after sanitising the HTML
+            # and sandboxing the frame that holds it.
+            csp="default-src 'none'; img-src https: data:; style-src 'unsafe-inline'",
+        )
 
     def _landing(self) -> None:
         """What the landing page needs to answer "can I trust these numbers?".
