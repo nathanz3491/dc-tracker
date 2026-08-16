@@ -44,7 +44,7 @@ looking:
    /                                    /dev
    ┌────────────────────────────┐       ┌────────────────────────────┐
    │ Overview · Projects        │       │ Pipeline · Commands · Help │
-   │ Map · Capex                │       │                            │
+   │ Sources · Map · Capex      │       │                            │
    │                            │       │ the queue, the runs,       │
    │ reads the dataset.         │       │ the command palette.       │
    │ nothing here changes       │       │ this is where work         │
@@ -56,6 +56,13 @@ looking:
                    one bundle, one server
                    window.DC_MODE picks the view set
 ```
+
+**Each view has its own URL** — `/projects`, `/sources`, `/dev/pipeline` — so a
+page can be linked to, refreshed and reached with the back button. The server does
+not render them differently; it stamps which view was asked for and the front end
+opens on it, then `pushState`s as you navigate. The bundle and the dataset are
+already in memory, so a real navigation per tab would be slower than the switch it
+replaced. An unknown path 404s rather than quietly serving Overview.
 
 **The mode is a display choice, not a permission.** What `/dev` can do is still
 governed by `allow_write` on the server — `serve --no-run` serves the page with
@@ -259,6 +266,33 @@ than letting you find out eight articles in.
 ## Three doors
 
 The console can run commands, so three things stand in front of it:
+
+**One deliberate hole in the CSP, and only one.** The page declares
+`default-src 'self'` so a stray CDN URL fails loudly instead of quietly
+reintroducing a network dependency. The sources page needs an exception: it opens a
+cited article in a modal, and `frame-src` falls back through `child-src` to
+`default-src`, so without `frame-src https:` the browser refuses the frame
+outright. That directive is the only addition — scripts, styles, fonts, images and
+`connect-src` stay same-origin, so it widens what the page may *display* and
+nothing it may load or call. A test pins the rest shut.
+
+It buys less than it appears to, and measurement decided how the modal is built.
+Across the fifteen most-cited publishers **ten refuse to be framed**, carrying 388
+of their 689 citations — `datacenterdynamics.com`, the most-cited of all, among
+them. No header of ours overrides theirs. So the frame is the *second* tab: the
+modal opens on the text the pipeline itself read, served by `/api/article` from
+the article cache, with the stored quotes marked in it.
+
+That inversion is not a retreat. A live page may have been edited since it was
+cited; our copy is the evidence the stored values actually rest on, and seeing
+*which sentence* carried a field is the thing the reader came for. Locating a
+quote is normalisation, folding and offsets — the evidence gate's judgement — so
+it happens on the server against the gate's own helpers. The browser only slices.
+
+**The endpoint reads a page the pipeline chose, and nothing else.** Its allowlist
+is the database: a URL that is not a stored `source.url` is refused. Without that
+rule a read-only console is a request forwarder aimed at whatever network it runs
+on, and "it only reads" says nothing about where it may be pointed.
 
 **The bind address.** Loopback by default. If you can reach localhost you are
 already at the machine, and a password there would protect nothing.

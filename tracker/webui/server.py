@@ -36,6 +36,15 @@ DEFAULT_PORT = 8765
 #: Below this, compressing costs more than it saves.
 GZIP_MIN = 8192
 
+#: The views that have their own URL, one per face of the console.
+#:
+#: Duplicated from `app.js` on purpose, and the duplication is bounded: the server
+#: needs to know which paths are pages so an unknown one 404s instead of silently
+#: serving the console. A test asserts the two lists agree, which is cheaper than
+#: a route that generates itself from a JavaScript array.
+READ_VIEWS: frozenset[str] = frozenset({"overview", "projects", "sources", "map", "capex"})
+DEV_VIEWS: frozenset[str] = frozenset({"pipeline", "commands", "help"})
+
 
 class Console:
     """Shared state one server instance hands to every request."""
@@ -91,11 +100,23 @@ class Handler(BaseHTTPRequestHandler):
         # The page loads only same-origin vendored files; say so, so a stray CDN
         # URL creeping into the front end fails loudly in the console instead of
         # quietly reintroducing a network dependency.
+        #
+        # `frame-src https:` is the single deliberate exception, and it is scoped
+        # as narrowly as the feature allows. The sources page opens a cited article
+        # in a modal, and without this the browser refuses the frame outright —
+        # `frame-src` falls back to `child-src` and then to `default-src`, which is
+        # `'self'`. Everything else stays shut: scripts, styles, fonts, images and
+        # `connect-src` are all still same-origin, so this widens what the page may
+        # *display* and nothing it may load or call.
+        #
+        # It buys less than it looks like. Publishers that send `X-Frame-Options`
+        # or their own `frame-ancestors` still refuse, and no header of ours can
+        # override theirs — see `ArticleModal` in app.js for what is shown instead.
         self.send_header(
             "Content-Security-Policy",
             "default-src 'self'; style-src 'self' 'unsafe-inline'; "
             "script-src 'self' 'unsafe-inline'; img-src 'self' data:; "
-            "font-src 'self'; connect-src 'self'",
+            "font-src 'self'; connect-src 'self'; frame-src https:",
         )
         self.send_header("X-Content-Type-Options", "nosniff")
         if encoding:
@@ -281,6 +302,16 @@ class Handler(BaseHTTPRequestHandler):
             return self._page()
         if route in {"/dev", "/dev/"}:
             return self._page(dev=True)
+        # One shell per view, so a page can be linked to, refreshed and reached
+        # with the back button. The server does not render them differently — it
+        # tells the front end which to open, and the front end pushes the same
+        # paths as you navigate. Anything else 404s rather than silently serving
+        # the console, so a typo is visible instead of landing on Overview.
+        page = route.strip("/")
+        if page in READ_VIEWS:
+            return self._page(view=page)
+        if page.startswith("dev/") and page[len("dev/") :] in DEV_VIEWS:
+            return self._page(dev=True, view=page[len("dev/") :])
         if route == "/api":
             return self._api_index()
         if route.startswith("/static/"):
@@ -313,6 +344,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(record) if record else self._error(404, f"no run {rest!r}")
         if route == "/api/discover":
             return self._discover()
+        if route == "/api/claims":
+            return self._claims(query)
+        if route == "/api/article":
+            return self._article(query)
         if route == "/api/landing":
             return self._landing()
         if route == "/api/health":
@@ -389,7 +424,7 @@ class Handler(BaseHTTPRequestHandler):
         log.info("console: signed in from %s", client)
         self._json({"ok": True}, extra=self._set_session_cookie(token))
 
-    def _page(self, *, dev: bool = False) -> None:
+    def _page(self, *, dev: bool = False, view: str = "") -> None:
         """The console shell. Two faces, one bundle.
 
         `/` reads the dataset; `/dev` runs commands. The difference is one flag on
@@ -402,6 +437,10 @@ class Handler(BaseHTTPRequestHandler):
         actually do is still governed by `allow_write` on the server, so
         `serve --no-run` renders `/dev` with every button inert. A page cannot
         grant itself a capability by asking for a different shell.
+
+        `view` is the page the URL asked for, injected as `window.DC_VIEW` so the
+        front end opens on it directly. Without it a deep link would paint the
+        default view first and then swap, which reads as a flash of the wrong page.
         """
         index = assets.STATIC_ROOT / "index.html"
         if not index.is_file():
@@ -413,9 +452,11 @@ class Handler(BaseHTTPRequestHandler):
         # Stamped on the way out, so every asset URL carries its file's version.
         # The page itself is `no-store`, so the tokens are never stale.
         html = assets.stamp(index.read_text(encoding="utf-8"))
+        mode = "dev" if dev else "read"
         html = html.replace(
             '<div id="root"></div>',
-            f'<script>window.DC_MODE="{"dev" if dev else "read"}"</script>\n<div id="root"></div>',
+            f'<script>window.DC_MODE="{mode}";window.DC_VIEW="{view}"</script>\n'
+            '<div id="root"></div>',
         )
         self._send(200, html.encode("utf-8"), "text/html; charset=utf-8")
 
@@ -482,10 +523,22 @@ class Handler(BaseHTTPRequestHandler):
     API: ClassVar[dict[str, dict[str, Any]]] = {
         "GET /api": {"answers": "this index", "reads": None},
         "GET /api/health": {"answers": "liveness and version", "reads": None},
+        "GET /api/article": {
+            "answers": "the text behind one cited URL, with its stored quotes located in it",
+            "reads": "the article cache, and the network on a miss",
+            "note": "?url=<url>. Refused unless that URL is already cited in the "
+            "database. Ten of the fifteen most-cited publishers refuse to be framed, "
+            "so the modal reads our own copy rather than the live page.",
+        },
+        "GET /api/claims": {
+            "answers": "every claim any citation made about one project, field by field",
+            "reads": "one project and its sources",
+            "note": "?project=<id>. Split out of /api/dataset, where it was 48% of 19 MB",
+        },
         "GET /api/dataset": {
-            "answers": "every project with its claims, plus capex, gaps, queue and totals",
+            "answers": "every project with its provenance, plus capex, gaps, queue and totals",
             "reads": "the whole database",
-            "note": "the console refetches this after every run; ~1 MB",
+            "note": "refetched after every run. Excludes claims_by_field — see /api/claims",
         },
         "GET /api/landing": {
             "answers": "evidence census, clean tiers, and what is waiting on a person",
@@ -551,6 +604,58 @@ class Handler(BaseHTTPRequestHandler):
                 "routes": self.API,
             }
         )
+
+    def _claims(self, query: dict[str, list[str]]) -> None:
+        """Every claim any citation made about one project, field by field.
+
+        Split out of `/api/dataset` because it was **48% of a 19 MB payload** —
+        9.2 MB shipped on every load for a table that renders one project at a
+        time, inside a drawer most visits never open. One project's worth is a few
+        kilobytes and arrives while the drawer is animating.
+        """
+        raw = (query.get("project") or [""])[0]
+        try:
+            project_id = int(raw)
+        except ValueError:
+            return self._error(400, "project must be an integer id")
+
+        from tracker.export import claims_for
+
+        with self.console.read_session() as session:
+            payload = claims_for(session, project_id)
+        if payload is None:
+            return self._error(404, f"no project {project_id}")
+        self._json({"project": project_id, "claims_by_field": payload})
+
+    def _article(self, query: dict[str, list[str]]) -> None:
+        """The text behind one cited URL, with its quotes located in it.
+
+        **The console reads a page the pipeline already chose, and nothing else.**
+        `article.load` refuses any URL that is not a stored `source.url`, so this
+        cannot be pointed at an arbitrary address — the allowlist is the database
+        itself, and a console reachable from a network is otherwise a request
+        forwarder aimed at whatever sits behind it.
+
+        A cache miss costs one ordinary request on the cheap rungs and is written
+        back, so the second reader of an article waits for nothing. It writes a
+        file, never a row: the read-only handle is untouched and no stored value
+        can move because somebody opened a modal.
+        """
+        url = (query.get("url") or [""])[0].strip()
+        if not url:
+            return self._error(400, "url is required")
+        if urlsplit(url).scheme not in {"http", "https"}:
+            return self._error(400, "url must be http or https")
+
+        from tracker.config import install_root
+        from tracker.webui import article as article_mod
+
+        cache_dir = install_root() / ".cache" / "articles"
+        with self.console.read_session() as session:
+            found = article_mod.load(session, url, cache_dir=cache_dir)
+        if found.error and not found.text:
+            return self._error(404, found.error)
+        self._json(found.to_json_object())
 
     def _landing(self) -> None:
         """What the landing page needs to answer "can I trust these numbers?".

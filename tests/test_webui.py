@@ -435,6 +435,89 @@ def test_the_page_references_no_external_host(server):
         assert host not in body, f"the shell reaches out to {host}"
 
 
+def test_the_csp_stays_shut_except_for_framing(server):
+    """The sources page frames a cited article, so `frame-src https:` was added.
+
+    Pinned here because a relaxation nobody is watching creeps: everything except
+    framing must still be same-origin, and `default-src 'self'` must survive.
+    """
+    address, _ = server
+    conn = HTTPConnection(*address, timeout=30)
+    conn.request("GET", "/api/health")
+    csp = conn.getresponse().headers["Content-Security-Policy"]
+    conn.close()
+
+    assert "default-src 'self'" in csp
+    assert "frame-src https:" in csp
+    for directive in ("script-src 'self'", "connect-src 'self'", "img-src 'self'"):
+        assert directive in csp, f"{directive} was loosened along with frame-src"
+    assert "frame-src *" not in csp and "frame-src http:" not in csp
+
+
+def test_every_view_has_its_own_url(server):
+    """A page you cannot link to, refresh or reach with the back button is a tab.
+
+    The server does not render them differently — it stamps which view the URL
+    asked for so a deep link opens on it directly instead of painting the default
+    and swapping.
+    """
+    address, _ = server
+    for path in ("/overview", "/projects", "/sources", "/map", "/capex"):
+        status, body = request(address, path)
+        assert status == 200, path
+        assert f'window.DC_VIEW="{path.strip("/")}"' in body
+        assert 'window.DC_MODE="read"' in body
+
+    status, body = request(address, "/dev/pipeline")
+    assert status == 200
+    assert 'window.DC_MODE="dev"' in body and 'window.DC_VIEW="pipeline"' in body
+
+
+def test_an_unknown_path_is_a_404_not_the_console(server):
+    """Otherwise a typo lands silently on Overview and reads as a broken link."""
+    address, _ = server
+    for path in ("/nonsense", "/projectss", "/dev/nope"):
+        status, _ = request(address, path)
+        assert status == 404, path
+
+
+def test_the_server_and_the_front_end_agree_on_the_view_names(server):
+    """Two lists, one truth. The server needs them to 404 an unknown path; the
+    bundle needs them to draw the nav. A test is cheaper than generating one from
+    the other."""
+    app = (assets.STATIC_ROOT / "app.js").read_text(encoding="utf-8")
+    for view in server_module.READ_VIEWS:
+        assert f'["{view}", "' in app, f"{view} is routed but not in USER_VIEWS"
+    for view in server_module.DEV_VIEWS:
+        assert f'["{view}", "' in app, f"{view} is routed but not in DEV_VIEWS"
+
+
+def test_the_claim_tables_are_not_in_the_list_payload(server):
+    """They were 48% of a 19 MB response, for a table that renders one project at
+    a time inside a drawer most visits never open."""
+    address, _ = server
+    _status, data = request(address, "/api/dataset")
+    assert data["projects"], "expected at least one project"
+    for project in data["projects"]:
+        assert "claims_by_field" not in project
+        # What the table and the drawer still need is still there.
+        assert "prov" in project and "sources" in project
+
+
+def test_one_projects_claims_are_fetchable_on_their_own(server):
+    address, _ = server
+    _status, data = request(address, "/api/dataset")
+    pid = data["projects"][0]["id"]
+
+    status, payload = request(address, f"/api/claims?project={pid}")
+    assert status == 200
+    assert payload["project"] == pid
+    assert isinstance(payload["claims_by_field"], dict)
+
+    assert request(address, "/api/claims?project=999999")[0] == 404
+    assert request(address, "/api/claims?project=nope")[0] == 400
+
+
 def test_static_refuses_to_escape_its_root(server):
     address, _ = server
     for attempt in (
@@ -1850,3 +1933,134 @@ def test_the_consoles_own_error_is_never_reported_as_the_console_being_down(serv
     assert "_isGateway(res.status) && !answered" in source
     # And the panel needs the code to tell the two apart, which means carrying it.
     assert "status: e.status," in source
+
+
+# --- The article reader ------------------------------------------------------
+#
+# The sources modal used to frame the live page. Measured across the fifteen
+# most-cited publishers, ten refuse — `X-Frame-Options` or `frame-ancestors` —
+# carrying 388 of their 689 citations, `datacenterdynamics.com` (the most-cited
+# publisher in the database) among them. So the modal reads our own copy, and
+# these guard the endpoint that serves it.
+
+
+@pytest.fixture
+def cached_article(tmp_path, seeded_db):
+    """The article cache, holding the one page the seeded project cites."""
+    from tracker.ingest.fetch import cache_path
+
+    root = tmp_path / "articles"
+    root.mkdir()
+    body = (
+        "Microsoft broke ground at Mount Pleasant this week.\n\n"
+        "The campus will draw 900 MW at full build, the company said.\n"
+    )
+    cache_path("https://news.microsoft.com/fairwater/", root).write_text(body, encoding="utf-8")
+    return root
+
+
+def _load(db_path, url, root, **kw):
+    from tracker.db import open_db
+    from tracker.webui import article
+
+    engine = open_db(db_path, readonly=True)
+    with session_scope(engine, commit=False) as session:
+        return article.load(session, url, cache_dir=root, **kw)
+
+
+def test_the_reader_refuses_a_url_the_database_does_not_cite(seeded_db, cached_article):
+    """The allowlist is the database itself, and that is the whole access rule.
+
+    Without it the console is a request forwarder aimed at whatever network it
+    runs on — `?url=http://169.254.169.254/…` fetched and rendered back. Nothing
+    about "it is only a reader" limits where a reader may be pointed.
+    """
+    found = _load(seeded_db, "https://evil.example/internal", cached_article)
+    assert found.text == ""
+    assert "not cited" in found.error
+
+
+def test_the_reader_serves_the_cache_without_touching_the_network(seeded_db, cached_article):
+    found = _load(seeded_db, "https://news.microsoft.com/fairwater/", cached_article, fetch=False)
+    assert found.via == "cache"
+    assert "Mount Pleasant" in found.text
+
+
+def test_a_stored_quote_is_located_in_the_article(seeded_db, cached_article):
+    """And the span is the *article's* words, not the quote's.
+
+    Measured on the live database: 1,142 of 1,269 stored quotes land exactly, 113
+    are shorter than a mark is worth drawing, and 14 have drifted since they were
+    cited.
+    """
+    from tracker.db import make_engine
+    from tracker.models import Source
+
+    # The fixture's own quote is 16 characters — under the floor a mark is worth
+    # drawing at. A real evidence quote is a sentence.
+    with session_scope(make_engine(seeded_db)) as session:
+        session.query(Source).one().quotes = json.dumps(
+            {"mw_planned": "campus will draw 900 MW at full build"}
+        )
+
+    found = _load(seeded_db, "https://news.microsoft.com/fairwater/", cached_article, fetch=False)
+    assert [f for _, _, f in found.spans] == ["mw_planned"]
+    start, end, _ = found.spans[0]
+    # Exactly the stored quote's extent, in the article's own casing — not a
+    # widened sentence. The gate already widened when it decided to store this;
+    # widening again at display time would mark words no citation rested on.
+    assert found.text[start:end] == "campus will draw 900 MW at full build"
+
+
+def test_a_quote_absent_from_the_page_is_not_highlighted_anyway(
+    seeded_db, tmp_path, cached_article
+):
+    """No fuzzy fallback here, deliberately.
+
+    The gate recovers a near-miss when it is *deciding* whether to store a value,
+    because the model resolves pronouns while quoting. Drawing a highlight is a
+    different claim: it says "this sentence is the evidence". If the page has
+    changed since it was cited, the honest outcome is no mark at all rather than
+    a mark over the nearest similar sentence.
+    """
+    from tracker.ingest.fetch import cache_path
+
+    url = "https://news.microsoft.com/fairwater/"
+    cache_path(url, cached_article).write_text(
+        "Microsoft broke ground at Mount Pleasant. The site was rezoned in March.",
+        encoding="utf-8",
+    )
+    found = _load(seeded_db, url, cached_article, fetch=False)
+    assert found.via == "cache"
+    assert found.spans == ()
+
+
+def test_the_reader_falls_back_to_the_excerpt_rather_than_an_empty_pane(seeded_db, tmp_path):
+    empty = tmp_path / "none"
+    empty.mkdir()
+    found = _load(seeded_db, "https://news.microsoft.com/fairwater/", empty, fetch=False)
+    assert found.via == "excerpt"
+    assert "900 MW" in found.text
+
+
+def test_two_fields_resting_on_one_sentence_are_marked_once(seeded_db, cached_article):
+    """Nested marks render as a darker band that reads like a third kind of
+    highlight, so the first span wins."""
+    from tracker.webui import article
+
+    text = "Alpha beta gamma delta epsilon zeta eta theta iota kappa lambda."
+    spans = article._locate(
+        text,
+        {"mw_planned": "beta gamma delta epsilon zeta eta", "phase": "gamma delta epsilon zeta"},
+    )
+    assert len(spans) == 1
+
+
+def test_the_article_route_validates_before_it_reaches_the_database(server):
+    address, _ = server
+    status, body = request(address, "/api/article")
+    assert status == 400 and "url is required" in body["error"]
+    status, body = request(address, "/api/article?url=file:///etc/passwd")
+    assert status == 400 and "http or https" in body["error"]
+    status, body = request(address, "/api/article?url=https%3A%2F%2Fevil.example%2Fx")
+    assert status == 404 and "not cited" in body["error"]

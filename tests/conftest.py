@@ -123,6 +123,22 @@ def logical_snapshot():
 
 
 @pytest.fixture(autouse=True)
+def _clear_the_source_policy_cache():
+    """`policy.load` is `lru_cache`d because every filtered URL consults it.
+
+    That makes it a trap: a test that writes a policy file passes on its own and
+    fails inside a suite, because a neighbour already cached the empty default.
+    Cleared on both sides so neither direction can leak. `crawl.operator_hosts` has
+    the identical shape and the identical hazard.
+    """
+    from tracker import policy
+
+    policy.load.cache_clear()
+    yield
+    policy.load.cache_clear()
+
+
+@pytest.fixture(autouse=True)
 def _clear_the_overview_cache():
     """The briefing cache is module-global and keyed on (project id, content hash).
 

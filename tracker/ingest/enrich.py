@@ -106,12 +106,26 @@ class Round:
 
     @property
     def urls(self) -> list[str]:
+        """Every URL this round harvested, best first, minus the ignored publishers.
+
+        **One place, five harvesters.** Only `harvest_search` filters hosts today;
+        the queue, retry, archive and refresh harvesters apply nothing. Doing it
+        here rather than in each of them means one call covers all five and a sixth
+        harvester inherits it for free.
+
+        **Before the batch slice, not after.** `run()` takes `fresh[:max_articles]`,
+        so an ignored host filtered later would still have eaten the round's budget
+        and `articles_read` would count pages that were never read.
+        """
+        from tracker import policy as policy_mod
+
         seen: list[str] = []
         for harvest in self.harvests:
             for url in harvest.urls:
                 if url not in seen:
                     seen.append(url)
-        return seen
+        kept, _ignored = policy_mod.load().partition(seen)
+        return kept
 
 
 @dataclass

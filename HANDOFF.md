@@ -1,5 +1,88 @@
 # Handoff
 
+## Yesterday (state at start of 2026-08-16)
+
+The 2026-08-15 run (`d84ce54`) committed the enrich settle-step work that had
+been sitting uncommitted — `enrich`'s last stage now sends every still-contested
+field through `conflicts.disputes`/`solve`, the same machinery `tracker logic
+conflicts` exposes standalone, with `--skip-settle` to opt out and
+`deepseek_reasoning_model`'s default moved to `deepseek-v4-pro`. Suite verified
+green (2,103 tests) before that commit.
+
+Sitting in the working tree, uncommitted and unmentioned in any prior handoff:
+two features, both already fully documented in CHANGELOG.md/README.md/
+`docs/architecture.md` inside the same uncommitted diff — the pattern this
+project's history shows repeatedly, work completed and written up but never
+staged.
+
+1. **`tracker sources policy`** (`tracker/policy.py` new, `seed/sources.toml`
+   new, plus `cli.py`/`crawl.py`/`enrich.py`). `tracker sources` and `tracker
+   feeds` have measured publisher performance for a while and ended every run
+   by handing the verdict to a person with a text editor; this writes the
+   verdict to a file `sync`, `enrich` and `ingest crawl` now read —
+   `priority` domains offered first under a budget, `ignore` domains dropped
+   from the queue. Never changes what a stored citation is worth (weight
+   stays hand-edited in `confidence.SOURCE_WEIGHTS`); a snapshot test pins
+   that applying the policy leaves every field byte-identical. On the live
+   database: 16 priority, 1 ignore, out of 654 publishers — reached only
+   after two threshold rules were measured and rejected first (a `LOW_YIELD`
+   floor would have promoted 75 of 94 judgeable publishers).
+2. **A sources page, and the article behind any citation** (`tracker/webui/
+   article.py` new, plus `server.py`/`app.js`/`app.css`/`export.py`). 1,928
+   article URLs across 683 publishers had no screen listing them. The new
+   page also stopped framing the live publisher page — ten of the fifteen
+   most-cited publishers refuse to be framed (`X-Frame-Options`), carrying
+   388 of their 689 citations — in favour of serving the pipeline's own
+   cached copy with stored quotes located and marked in it, never the live
+   page. Access is allowlisted to URLs already cited in the database. Rode
+   in in the same diff: real per-view URLs (`/projects`, `/sources`, ...)
+   with `pushState` navigation, and a payload/build-time fix
+   (`claims_by_field` moved off the bulk dataset route, `gaps.provenance`
+   memoised per-project) measured at 19.1 MB → 9.9 MB and 4.03s → 1.06s for
+   `dataset.build`.
+
+The 2026-08-12 live-database purge (1,189 → 300 projects, still unexplained)
+remains open, five days old at that point. `tracker logic conflicts` still
+never run against a real key. `work/` (the teammate's Hyperion review
+material) and the untracked reference PDF in `docs/` both still present,
+unchanged since 2026-08-12 and 2026-08-06 respectively — except the
+PowerPoint lock file in `work/` (`~$Hyperion-Tracker-Review-FINAL.pptx`,
+flagged present for three straight handoffs) is gone as of this run, and a
+new file, `Extraction-Pipeline-Today.pdf` (2026-08-15 13:32), has appeared
+in the same directory — see Today.
+
+## Today (2026-08-16 run)
+
+- **Found and committed the source-policy and sources-page work described
+  above**, sitting complete and documented but unstaged. Verified the suite
+  green first: full `.venv` pytest run, 2,120 tests collected (up from 2,103
+  the 2026-08-15 run reported), 0 failures/0 errors, exit 0 — confirmed via
+  `--junitxml` since this run's plain `-q` output was truncated by the
+  terminal before the summary line, a tooling quirk rather than a test
+  result. Ruff clean.
+- **No CHANGELOG.md/README.md/docs/architecture.md editing needed this run**
+  — unlike several prior handoff-run housekeeping passes, this uncommitted
+  work had already written its own docs in the same diff, correctly scoped:
+  the policy file's own header, the sources-page section, the CSP-relaxation
+  paragraph in `docs/architecture.md`. No AGENTS.md exists, still correctly
+  so — one CLI/data-pipeline codebase, no distinct agent roles.
+- **Did not re-run the live-database measurement commands** (`audit`,
+  `risks`, `duplicates`, `blocks`, `logic check`, `sources`, `feeds`) — only
+  confirmed the live project count directly against `data/tracker.db`
+  (still 300, unchanged) rather than spending model calls this run's scope
+  didn't need. Every count under Tomorrow predating 2026-08-15 is still that
+  old.
+- **`work/`'s PowerPoint lock file is gone.** `~$Hyperion-Tracker-Review-
+  FINAL.pptx`, present and flagged in every handoff since 2026-08-13, is no
+  longer in the directory — the deck is very likely closed now, though
+  nobody has said so explicitly. A new file appeared alongside it,
+  `Extraction-Pipeline-Today.pdf` (136 KB, written 2026-08-15 13:32) — more
+  of the same teammate's review material, not project output, left
+  uncommitted like the rest of `work/` pending a person's call on whether
+  any of it belongs in `docs/`.
+- The untracked reference PDF in `docs/` is unchanged since 2026-08-06 (now
+  eleven days carried).
+
 ## Yesterday (state at start of 2026-08-15)
 
 The 2026-08-14 run (`f078818`) closed out seven unrecorded 2026-08-13 commits —
@@ -854,8 +937,9 @@ branch, not this branch's work, left alone.
 
 ## Tomorrow
 
-- **Top priority, now three days old: find out who ran the 2026-08-12 purge
-  and why, and whether 889 of 1,189 projects were meant to go.**
+- **Top priority, now four days old: find out who ran the 2026-08-12 purge
+  and why, and whether 889 of 1,189 projects were meant to go.** Still 300
+  live as of 2026-08-16, confirmed by direct count, not re-derived.
   `data/tracker.backup-before-purge-20260812.db` is still the only record
   of it — no commit, script, or doc names the criteria, and nothing landed
   2026-08-13 touches project counts either. This now also caps how far to
@@ -966,15 +1050,18 @@ branch, not this branch's work, left alone.
   moved this much since 08-09.
 - **An untracked 2 MB PDF still sits in `docs/`**
   (`docs/能源科技AI系列报告（三）：北美AI电力新趋势PPT+ED (1).pdf`, added
-  2026-08-06 14:52, unchanged since — ten days now). Still reference
+  2026-08-06 14:52, unchanged since — eleven days now). Still reference
   material, not project output; still needs a human call on whether it
   belongs in the repo, `.gitignore`, or somewhere else entirely.
-- **The untracked `work/` directory** (four `.pptx` decks, two `.pdf`
-  diagrams, one planning `.md`, added 2026-08-12) needs the same call as
-  the PDF above — plus one thing the PDF doesn't have: a live PowerPoint
-  lock file (`~$Hyperion-Tracker-Review-FINAL.pptx`), still present as of
-  2026-08-15 (three days unchanged), meaning a deck may still be open for
-  editing elsewhere. Don't touch until confirmed closed.
+- **The untracked `work/` directory** (four `.pptx` decks, three `.pdf`
+  diagrams, one planning `.md`, added 2026-08-12/15) needs the same call as
+  the PDF above. **Update: the PowerPoint lock file
+  (`~$Hyperion-Tracker-Review-FINAL.pptx`) present in every handoff since
+  2026-08-13 is gone as of 2026-08-16** — the deck is very likely closed
+  now, though nobody has confirmed it explicitly, and a new file
+  (`Extraction-Pipeline-Today.pdf`, 2026-08-15 13:32) landed in the same
+  directory. Still needs a person's call before anything in `work/` is
+  touched or moved.
 - **Every prompt's stamp moved** when `_industry.txt` was prepended
   (`06b575a`), so `tracker clean`'s `vintage_current` check fails on every
   row by construction — nothing has been read by the current gate yet.

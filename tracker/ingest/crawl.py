@@ -2096,6 +2096,7 @@ def run(
     cache_dir: Path | None = None,
     cached_only: bool = False,
     existing_only: bool = False,
+    policy: Any = None,
     run_id: str | None = None,
 ) -> IngestReport:
     """Fetch, extract and upsert a list of article URLs.
@@ -2114,6 +2115,12 @@ def run(
     database already cites also yields whatever else that article names, and a
     repair pass that quietly adds campuses is an ingest with no worklist and no
     review.
+
+    `policy` is the source policy, loaded from `seed/sources.toml` when not given.
+    **This is where the ignore list becomes a guarantee rather than a convention**:
+    `sync`, `enrich`, `ingest crawl` and `backfill` all funnel through here, so
+    filtering once covers callers nobody remembered to update, and covers queue
+    rows that predate the policy. Pass an explicit `policy.EMPTY` to disable it.
     """
     import asyncio
 
@@ -2128,6 +2135,21 @@ def run(
     run_id = run_id or utcnow().strftime("%Y%m%dT%H%M%S")
 
     wanted = list(dict.fromkeys(urls))
+
+    # Filtering, never re-ordering. Ordering here would be a second authority
+    # competing with the queue's own, and `[*cached, *fetched]` below reshuffles
+    # anyway — it would buy nothing but a disagreement.
+    if policy is None:
+        from tracker import policy as policy_mod
+
+        policy = policy_mod.load()
+    if getattr(policy, "entries", ()):
+        keep, dropped = policy.partition(wanted)
+        if dropped:
+            report.skipped_ignored = len(dropped)
+            log.info("skipping %d URL(s) on publishers seed/sources.toml ignores", len(dropped))
+        wanted = keep
+
     if not force:
         done = already_done(session, wanted)
         if done:

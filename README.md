@@ -473,7 +473,7 @@ tracker serve
 
 | | | |
 |---|---|---|
-| **`/`** | Overview · Projects · Map · Capex | reading the dataset. Nothing on it changes anything. |
+| **`/`** | Overview · Projects · Sources · Map · Capex — each on its own URL | reading the dataset. Nothing on it changes anything. |
 | **`/dev`** | Pipeline · Commands · Help | the queue, the runs, the command palette. |
 
 They were one console with eight tabs, which put the machinery on the same
@@ -1662,6 +1662,64 @@ and DataCenterDynamics are `trade_press`, weight 2, and out-decide almost every
 weight-3 host in the database.** Nothing here changes a weight —
 `SOURCE_WEIGHTS` is still edited by hand in `tracker/confidence.py`. This is the
 evidence for doing so, and `--json` is the machine-readable form.
+
+### Acting on it: `tracker sources policy`
+
+```bash
+tracker sources policy               # propose; writes nothing
+tracker sources policy --apply       # write seed/sources.toml
+```
+
+The ranking above could only ever be *printed*. This turns it into a file that
+`sync`, `enrich` and `ingest crawl` read: `priority` domains are offered first when
+a run is working to a budget, `ignore` domains are not queued or fetched again.
+
+**It changes what gets read. It never changes what a stored citation is worth.**
+Weight stays per `source_type`; applying the policy across 300 projects left every
+field byte-identical, and a test snapshots whole rows to keep it so.
+
+On the live database it proposes **16 priority and 1 ignore** out of 654
+publishers. Both thresholds came from measuring, and the first two attempts were
+wrong:
+
+| rule tried | result |
+|---|---|
+| ignore anything deciding nothing | 9 publishers at a sensible floor, 1 at a strict one |
+| priority above `LOW_YIELD` (0.15) | **75 of the 94** judgeable — not an ordering |
+| **priority above the fleet's own mean** (0.58 today) | **16**, and they are the ones carrying the dataset |
+
+So `priority` is measured against the corpus rather than a constant, and adjusts as
+it grows. `ignore` fires on **zero, never on thin** — `LOW_YIELD` is documented in
+`funnel.py` as reported and never proposed, and that discipline carries down: thin
+is a prompt to look, zero is a proposal.
+
+**The refusals carry more than the proposals**, so they are printed:
+
+```
+cannot read       digitalrealty.com (28 unread against 11 cited)
+thin              cnbc.com (0.12 per citation), datacenterscatalogs.com (0.05) and 4 more
+too few to judge  560 publishers below five citations
+```
+
+`cannot read` is checked before anything can propose ignoring a host: a publisher we
+mostly cannot *fetch* looks identical to a worthless one from the citation count
+alone. That is the mistake `tracker feeds` documents, and here it would be worse,
+because this writes a file that silences the host. Also refused — a domain still
+configured as a feed (retire it in `feeds.toml`, or discovery keeps polling and
+discarding it), and an operator's own newsroom.
+
+**It proposes; you decide.** A domain already in the file keeps its rank *and* its
+sentence on a re-run, and nothing is ever deleted — an entry the evidence no longer
+supports is reported and left alone. The argument for that is in the data: `cnbc.com`
+and `entergy.com` both sit in the thin band, and Entergy is the utility building
+Hyperion's power.
+
+The file is keyed on `confidence.registrable_domain`, the same identity the ranking
+prints, so a row is directly pasteable. That matters more than it sounds: there are
+five different URL→host normalisations in this codebase, and a policy keyed on the
+wrong one would silently never fire while the run *looked* like it obeyed. Matching
+is on label boundaries — `x.com` covers `mobile.x.com` and must never touch
+`equinix.com`, which a substring test once did.
 
 ### What discovery costs, per feed
 

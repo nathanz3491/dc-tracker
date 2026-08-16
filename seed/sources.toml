@@ -1,0 +1,100 @@
+# Which publishers to read first, and which to stop reading.
+#
+# Written by `tracker sources policy --apply`, and safe to edit by hand: a domain
+# already here keeps its rank and its `why` on a re-run unless --refresh is passed.
+#
+# rank = "priority"  read it before the others when a run is working to a budget
+# rank = "ignore"    do not queue, fetch or read it again
+#
+# A domain that is NOT listed has no opinion attached, which is different from
+# being kept. Absence is the normal state: most publishers are cited too few times
+# to judge.
+#
+# This changes what gets READ. It never changes what a stored citation is worth —
+# weight stays per source_type in tracker/confidence.py, and citations already
+# stored keep their values whatever is written here.
+
+[[source]]
+domain = "applieddigital.com"
+rank   = "priority"
+why    = "16 citation(s), 12 value(s) decided, 7 against a disagreeing rival"
+
+[[source]]
+domain = "atmeta.com"
+rank   = "priority"
+why    = "13 citation(s), 11 value(s) decided, 9 against a disagreeing rival"
+
+[[source]]
+domain = "cologix.com"
+rank   = "priority"
+why    = "21 citation(s), 20 value(s) decided, 7 against a disagreeing rival"
+
+[[source]]
+domain = "databank.com"
+rank   = "priority"
+why    = "52 citation(s), 41 value(s) decided, 27 against a disagreeing rival"
+
+[[source]]
+domain = "datacenterdynamics.com"
+rank   = "priority"
+why    = "170 citation(s), 178 value(s) decided, 120 against a disagreeing rival"
+
+[[source]]
+domain = "datacenterfrontier.com"
+rank   = "priority"
+why    = "267 citation(s), 231 value(s) decided, 107 against a disagreeing rival"
+
+[[source]]
+domain = "datacenterknowledge.com"
+rank   = "priority"
+why    = "63 citation(s), 45 value(s) decided, 26 against a disagreeing rival"
+
+[[source]]
+domain = "dchub.cloud"
+rank   = "priority"
+why    = "10 citation(s), 7 value(s) decided, 4 against a disagreeing rival"
+
+[[source]]
+domain = "epoch.ai"
+rank   = "priority"
+why    = "11 citation(s), 13 value(s) decided, 5 against a disagreeing rival"
+
+[[source]]
+domain = "global.ntt"
+rank   = "priority"
+why    = "24 citation(s), 25 value(s) decided, 17 against a disagreeing rival"
+
+[[source]]
+domain = "h5datacenters.com"
+rank   = "priority"
+why    = "27 citation(s), 23 value(s) decided, 11 against a disagreeing rival"
+
+[[source]]
+domain = "mlq.ai"
+rank   = "priority"
+why    = "12 citation(s), 7 value(s) decided, 1 against a disagreeing rival"
+
+[[source]]
+domain = "morethanjustparks.com"
+rank   = "priority"
+why    = "18 citation(s), 25 value(s) decided, 11 against a disagreeing rival"
+
+[[source]]
+domain = "sec.gov"
+rank   = "priority"
+why    = "133 citation(s), 173 value(s) decided, 81 against a disagreeing rival"
+
+[[source]]
+domain = "servercountry.org"
+rank   = "priority"
+why    = "11 citation(s), 8 value(s) decided, 5 against a disagreeing rival"
+
+[[source]]
+domain = "stocktitan.net"
+rank   = "priority"
+why    = "12 citation(s), 7 value(s) decided, 4 against a disagreeing rival"
+
+[[source]]
+domain = "ithome.com"
+rank   = "ignore"
+why    = "10 citation(s), 0 value(s) decided, 0 against a disagreeing rival"

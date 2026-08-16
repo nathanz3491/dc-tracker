@@ -2457,3 +2457,77 @@ def test_a_county_name_never_lands_in_the_city_column(session, prompt):
     assert dedup_key("Meta", "Richland Parish", None, "LA") == dedup_key(
         "Meta", None, "Richland Parish", "LA"
     )
+
+
+# --- the source policy ------------------------------------------------------
+
+
+def _ignore_everything(monkeypatch, domain="datacenterdynamics.com"):
+    from tracker import policy
+
+    monkeypatch.setattr(
+        policy, "load", lambda *a, **k: policy.Policy((policy.Entry(domain, policy.IGNORE),))
+    )
+
+
+def test_an_ignored_publisher_is_never_fetched(session, monkeypatch):
+    """The guarantee, at the one chokepoint every path funnels through.
+
+    A fetcher that raises if it is called at all — so this fails loudly if the
+    filter is ever moved somewhere a caller can bypass.
+    """
+    _ignore_everything(monkeypatch)
+
+    class Exploding:
+        async def fetch(self, url, **_):
+            raise AssertionError(f"fetched an ignored publisher: {url}")
+
+    report = crawl.run(
+        session, [URL], fetcher=Exploding(), extractor=FakeLLM([]), run_id="ignored"
+    )
+    assert report.skipped_ignored == 1
+    assert report.read == 0
+    assert session.scalar(select(Project)) is None
+
+
+def test_ignoring_a_publisher_moves_no_stored_value(session, monkeypatch):
+    """The invariant the whole feature rests on.
+
+    A policy decides what gets READ. It must not reach back and change what a
+    citation already stored is worth — so the whole row, its sources and its
+    confidence are snapshotted and compared, not one field.
+    """
+    llm = FakeLLM([canned("llm_response_microsoft_wi.json")])
+    crawl.run(session, [URL], fetcher=FakeFetcher({URL: fetched()}), extractor=llm, run_id="a")
+
+    def snapshot():
+        project = session.scalar(select(Project))
+        return (
+            {c.name: getattr(project, c.name) for c in Project.__table__.columns},
+            sorted(
+                (s.url, s.source_type, s.fields, s.claims, s.quotes)
+                for s in session.scalars(select(Source)).all()
+            ),
+        )
+
+    before = snapshot()
+    _ignore_everything(monkeypatch)
+
+    # A run that now skips everything, plus the full re-derivation.
+    from tracker.upsert import recompute_from_sources
+
+    crawl.run(session, [URL], fetcher=FakeFetcher({URL: fetched()}), extractor=llm, run_id="b")
+    recompute_from_sources(session, session.scalar(select(Project)))
+    session.flush()
+
+    assert snapshot() == before
+
+
+def test_an_empty_policy_changes_nothing(session):
+    """Every existing install starts here, and must behave exactly as before."""
+    llm = FakeLLM([canned("llm_response_microsoft_wi.json")])
+    report = crawl.run(
+        session, [URL], fetcher=FakeFetcher({URL: fetched()}), extractor=llm, run_id="t"
+    )
+    assert report.skipped_ignored == 0
+    assert report.inserted == 1

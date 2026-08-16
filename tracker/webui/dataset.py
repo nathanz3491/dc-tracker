@@ -403,7 +403,10 @@ def build(session: Session, *, db_path: str, schema_version: int) -> dict[str, A
     rows = fetch_projects(session)
     projects = []
     for project in rows:
-        payload = to_json_object(project)
+        # Without `claims_by_field`: 9.2 MB of the 19 MB this route used to send,
+        # for a table that renders one project at a time inside a drawer. The
+        # console fetches it per project from `/api/claims`.
+        payload = to_json_object(project, claims=False)
         payload["iso"] = _iso_of(project)
         payload["nulls"] = _nulls(project)
         payload["unconfirmed_because"] = _unconfirmed_because(project)

@@ -69,7 +69,9 @@ CSV_COLUMNS: tuple[str, ...] = (
 #: each source. Both are additive; `basis` is unchanged for readers keying on it.
 #: 5 adds `sources[].id` and `claims_by_field` — every claim any citation made for
 #: a field, in the merge engine's own order, with the winner marked. Also additive.
-JSON_SCHEMA_TAG = "tracker/5"
+#: 6 adds `sources[].published_at`, which existed on the row but was only exposed
+#: inside `claims_by_field`. Additive.
+JSON_SCHEMA_TAG = "tracker/6"
 
 FORMATS = ("md", "csv", "json", "html")
 
@@ -320,12 +322,19 @@ def _provenance_json(project: Project) -> tuple[dict[str, str], dict[str, Any]]:
     it came from.
     """
     from tracker.gaps import provenance
+    from tracker.upsert import claims_by_field
     from tracker.vocab import WRITABLE_FIELDS
+
+    # Once per project, not once per field. `provenance` needs the whole claim map
+    # to answer about one field, so computing it inside the loop re-parsed every
+    # source's JSON seventeen times over — 2.3 seconds of the console payload's
+    # 4.0, for an answer identical each time.
+    by_field = claims_by_field(list(getattr(project, "sources", ()) or ()))
 
     basis_out: dict[str, str] = {}
     prov_out: dict[str, Any] = {}
     for field in WRITABLE_FIELDS:
-        result = provenance(project, field)
+        result = provenance(project, field, by_field)
         if result is None:
             continue
         basis_out[field] = result.tier
@@ -495,13 +504,20 @@ def _reason_for(source: Any, field: str) -> str | None:
     return reasons.get(field) if isinstance(reasons, dict) else None
 
 
-def to_json_object(project: Project) -> dict[str, Any]:
-    """Nested dict per project, preserving the citation structure."""
+def to_json_object(project: Project, *, claims: bool = True) -> dict[str, Any]:
+    """Nested dict per project, preserving the citation structure.
+
+    `claims=False` omits `claims_by_field`, which is **48% of the console's whole
+    payload** — 9.2 MB of 19 MB across 300 projects — and is read by exactly one
+    component, the claim table inside a project's drawer, for one project at a
+    time. The file export keeps it: a downloaded JSON has no second request to
+    make, and the guarantee there is that everything is in the file.
+    """
     basis_map, prov_map = _provenance_json(project)
     return {
         "basis": basis_map,
         "prov": prov_map,
-        "claims_by_field": _claims_json(project),
+        **({"claims_by_field": _claims_json(project)} if claims else {}),
         "standing": _standing_json(project),
         "id": project.id,
         "name": project.name,
@@ -538,6 +554,12 @@ def to_json_object(project: Project) -> dict[str, Any]:
                 "url": s.url,
                 "source_type": s.source_type,
                 "fetched_at": _iso(s.fetched_at),
+                # When the PUBLISHER published it, as against when we visited.
+                # Carried on the row since migration 0014 and, until now, only
+                # reachable inside `claims_by_field` — so a page listing citations
+                # could show the crawl date and nothing else, which is the exact
+                # confusion `backfill dates` exists to remove.
+                "published_at": _iso(s.published_at),
                 "excerpt": s.excerpt,
                 "fields": s.fields,
                 "unconfirmed_fields": s.unconfirmed_fields,
@@ -904,3 +926,18 @@ __all__ = [
     "to_row",
     "write_export",
 ]
+
+
+def claims_for(session: Any, project_id: int) -> dict[str, Any] | None:
+    """One project's claim table, or None when there is no such project.
+
+    The console's per-drawer fetch. `to_json_object(claims=False)` leaves this out
+    of the list payload because it is 48% of it and one drawer needs one project's
+    worth; this is the other half of that trade.
+    """
+    from sqlalchemy import select
+
+    project = session.scalar(
+        select(Project).options(selectinload(Project.sources)).where(Project.id == project_id)
+    )
+    return None if project is None else _claims_json(project)

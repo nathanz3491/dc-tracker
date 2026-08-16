@@ -239,6 +239,10 @@ class IngestReport:
     #: not track is a candidate to add deliberately, so the number is reported
     #: rather than left to be inferred from a flat project count.
     refused_new: int = 0
+    #: URLs skipped because `seed/sources.toml` ignores their publisher. A saving,
+    #: reported for the same reason `refused_new` is: a run that silently declined
+    #: a quarter of its worklist reads as a run that covered it.
+    skipped_ignored: int = 0
     events: int = 0
     risks: int = 0
     #: What the run actually spent. `ExtractionOutcome` has carried these per URL
@@ -273,6 +277,7 @@ class IngestReport:
         that can never be anything but zero, widening every report to say nothing.
         """
         refused = [("new projects refused", self.refused_new)] if self.refused_new else []
+        ignored = [("publisher ignored", self.skipped_ignored)] if self.skipped_ignored else []
         return [
             ("read", self.read),
             ("filtered out", self.filtered),
@@ -288,6 +293,7 @@ class IngestReport:
             ("parse errors", self.parse_error),
             ("not an article", self.thin_content),
             ("not cached", self.skipped_uncached),
+            *ignored,
             *refused,
         ]
 

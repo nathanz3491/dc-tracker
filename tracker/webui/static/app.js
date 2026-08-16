@@ -28,6 +28,10 @@ const {
   Button, Card, CardHeader, CardTitle, CardDescription, Input, Select, Switch,
   Table, TableHeader, TableBody, TableRow, TableHead, Tabs, TabsList, TabsTrigger,
   StatCard, EmptyState, Skeleton, Glyph, Badge, Alert,
+  /* Vendored with the bundle and unused until the sources page needed a large
+     modal. It already handles Escape and locks body scroll — the two things a
+     hand-rolled dialog gets wrong. */
+  Dialog, DialogContent,
 } = NS;
 
 /* ---- vocabulary ---------------------------------------------------------- */
@@ -974,10 +978,27 @@ function ProjectsView({ data, onOpen, openId }) {
 
 function Drawer({ data, project, onClose }) {
   const [tab, setTab] = useState("stats");
+  /* One project's claim table, fetched when the drawer opens. Keyed by id and
+     kept for the session, so re-opening a row costs nothing. */
+  const [claims, setClaims] = useState({});
   const [quote, showQuote] = useQuote();
   const closeRef = useRef(null);
 
   useEffect(() => { setTab("stats"); }, [project?.id]);
+  useEffect(() => {
+    const id = project?.id;
+    if (id == null || claims[id]) return;
+    let cancelled = false;
+    api(`/api/claims?project=${id}`)
+      .then((payload) => {
+        if (!cancelled) setClaims((c) => ({ ...c, [id]: payload.claims_by_field || {} }));
+      })
+      /* A failed fetch leaves the claim tables absent, which is what they looked
+         like before this route existed. Every value and its tier is already on
+         screen from the list payload. */
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [project?.id, claims]);
   useEffect(() => {
     const page = document.getElementById("dc-page");
     if (page) {
@@ -1048,6 +1069,7 @@ function Drawer({ data, project, onClose }) {
         <div class="dc-drawer-body" style=${{ flex: 1, overflowY: "auto", padding: "20px 24px 56px" }}>
           ${tab === "stats" && html`<${StatsTab} data=${data} p=${p} populated=${populated}
                                                  open=${open} onQuote=${showQuote} onTab=${setTab}
+                                                 claims=${claims[p.id]}
                                                  allowWrite=${data.allow_write} />`}
           ${tab === "blocks" && html`<${BlocksTab} p=${p} />`}
           ${tab === "risks" && html`<${RisksTab} data=${data} p=${p} />`}
@@ -1679,9 +1701,13 @@ function Timeline({ p }) {
  * `decided_by` is only set when a real rival exists. The browser sorts nothing and
  * decides nothing — three claims at different scopes are not a disagreement, and
  * saying "credibility won" there would be a plausible sentence and the wrong one. */
-function ClaimTable({ p, field }) {
+function ClaimTable({ claims, field }) {
   const [open, setOpen] = useState(false);
-  const env = (p.claims_by_field || {})[field];
+  /* Fetched per drawer rather than shipped with the list — it was 48% of a 19 MB
+     payload for a table that renders one project at a time. Absent means still in
+     flight, and rendering nothing is right: the row above already carries the
+     value and its tier. */
+  const env = (claims || {})[field];
   if (!env || env.claims.length < 2) return null;
 
   const rivals = env.claims.length - 1;
@@ -1755,7 +1781,7 @@ function BlockerWhy({ why, onTab }) {
     </div>`;
 }
 
-function StatsTab({ data, p, populated, open, onQuote, allowWrite, onTab }) {
+function StatsTab({ data, p, populated, open, onQuote, allowWrite, onTab, claims }) {
   const worst = open.slice().sort((a, b) => SEV_ORDER.indexOf(b.severity) - SEV_ORDER.indexOf(a.severity))[0];
   const stats = [
     { label: "IT capacity, planned", value: p.mw_planned == null ? "—" : p.mw_planned.toLocaleString() + " MW",
@@ -1832,7 +1858,7 @@ function StatsTab({ data, p, populated, open, onQuote, allowWrite, onTab }) {
                       ...(tier === "missing" ? { opacity: .75 } : {}) }}>
                       ${quoted && q.exact ? `“${q.text}”` : q.text}</p>
                     ${key === "blocker" && html`<${BlockerWhy} why=${p.blocker_rationale} onTab=${onTab} />`}
-                    <${ClaimTable} p=${p} field=${key} />
+                    <${ClaimTable} claims=${claims} field=${key} />
                   </div>
                 </div>`;
             })}
@@ -4344,7 +4370,8 @@ function OverviewView({ data }) {
 const DEV = window.DC_MODE === "dev";
 
 const USER_VIEWS = [
-  ["overview", "Overview"], ["projects", "Projects"], ["map", "Map"], ["capex", "Capex"],
+  ["overview", "Overview"], ["projects", "Projects"], ["sources", "Sources"],
+  ["map", "Map"], ["capex", "Capex"],
 ];
 const DEV_VIEWS = [
   ["pipeline", "Pipeline"], ["commands", "Commands"], ["help", "Help"],
@@ -4353,6 +4380,290 @@ const VIEWS = DEV ? DEV_VIEWS : USER_VIEWS;
 
 /* Old view keys that are now sections of Pipeline. */
 const FOLDED_INTO_PIPELINE = { queue: "queue", gaps: "gaps", runs: "runs" };
+
+/* One cited article, opened.
+ *
+ * **The frame will be blank for a lot of publishers, and that is not a bug we can
+ * fix.** `frame-src https:` is set on our side, but a site that sends
+ * `X-Frame-Options: DENY` or its own `frame-ancestors` refuses, and no header of
+ * ours overrides theirs. The browser gives us no reliable event for it either —
+ * `onload` fires for a refusal too — so rather than guess, everything we already
+ * hold about the URL sits beside the frame permanently. If the frame comes up
+ * empty, that panel is the answer; if it loads, the panel is the provenance.
+ *
+ * `Dialog` comes from the design bundle rather than another hand-rolled overlay:
+ * Escape and body-scroll locking are already in it. */
+/* The article text, with the sentences the database rests on marked in it.
+ *
+ * The spans come from the server. Locating a quote is normalisation, folding and
+ * offsets — the evidence gate's own judgement — and a second implementation in
+ * the browser would eventually disagree with the gate about what a source says,
+ * with nothing to report the drift. Here the text is only sliced. */
+function ReaderText({ text, spans }) {
+  const parts = [];
+  let at = 0;
+  (spans || []).forEach(([start, end, field], i) => {
+    if (start > at) parts.push(text.slice(at, start));
+    parts.push(html`<mark key=${i} class="dc-read-mark" title=${"evidence for " + field}
+      >${text.slice(start, end)}</mark>`);
+    at = end;
+  });
+  if (at < text.length) parts.push(text.slice(at));
+  return html`<div class="dc-read-text">${parts}</div>`;
+}
+
+/* One citation, opened.
+ *
+ * **Reader first, the live page second, and that order was measured.** Across the
+ * fifteen most-cited publishers, ten refuse to be framed — `X-Frame-Options` or
+ * `frame-ancestors` — and those ten carry 388 of their 689 citations, including
+ * `datacenterdynamics.com`, the most-cited publisher in the database. A
+ * frame-first modal shows "refused to connect" more often than it shows an
+ * article, and no header of ours can override a publisher's.
+ *
+ * Reading our own copy is also the better answer to the question being asked. A
+ * live page may have been edited since it was cited; the cached text is the
+ * evidence the values actually rest on, and the quotes are highlighted in it. */
+function ArticleModal({ article, onClose }) {
+  const [pane, setPane] = useState("read");
+  const [body, setBody] = useState(null);
+  const [failed, setFailed] = useState("");
+  const cache = useRef({});
+  const url = article?.url;
+
+  useEffect(() => { setPane("read"); setFailed(""); }, [url]);
+  useEffect(() => {
+    if (!url) return;
+    if (cache.current[url]) { setBody(cache.current[url]); return; }
+    setBody(null);
+    let cancelled = false;
+    api(`/api/article?url=${encodeURIComponent(url)}`)
+      .then((payload) => {
+        cache.current[url] = payload;
+        if (!cancelled) setBody(payload);
+      })
+      .catch((err) => { if (!cancelled) setFailed(String(err && err.message ? err.message : err)); });
+    return () => { cancelled = true; };
+  }, [url]);
+
+  if (!article) return null;
+  const fields = (article.fields || "").split(",").filter(Boolean);
+  const quotes = article.quotes || {};
+  const VIA = {
+    cache: "our copy, saved when this page was read",
+    fetch: "fetched just now and saved",
+    excerpt: "only the stored excerpt — the full text could not be read",
+  };
+  return html`
+    <${Dialog} open=${true} onOpenChange=${(v) => !v && onClose()}>
+      <${DialogContent} className="dc-article">
+        <div class="dc-article-head">
+          <div style=${{ minWidth: 0 }}>
+            <div style=${{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <span style=${chip("--chart-1")}>${article.publisher}</span>
+              <span style=${chip(article.source_type === "company_filing"
+                || article.source_type === "government_doc" ? "--success" : "--muted-foreground")}
+                >${article.source_type}</span>
+              <span style=${{ fontFamily: "var(--font-mono)", fontSize: 12,
+                              color: "var(--muted-foreground)" }}>
+                ${article.published_at
+                  ? "published " + String(article.published_at).slice(0, 10)
+                  : "crawled " + String(article.fetched_at).slice(0, 10)}</span>
+            </div>
+            <a href=${article.url} target="_blank" rel="noreferrer" class="dc-article-url"
+               >${article.url}</a>
+          </div>
+          <button type="button" class="dc-xbtn" onClick=${onClose} aria-label="Close">✕</button>
+        </div>
+
+        <div class="dc-article-tabs">
+          <button type="button" class=${"dc-seg-btn" + (pane === "read" ? " is-on" : "")}
+                  onClick=${() => setPane("read")}>Reader</button>
+          <button type="button" class=${"dc-seg-btn" + (pane === "live" ? " is-on" : "")}
+                  onClick=${() => setPane("live")}>Live page</button>
+          <a href=${article.url} target="_blank" rel="noreferrer" class="dc-article-out"
+             >open in a new tab ↗</a>
+          ${pane === "read" && body && body.via && html`
+            <span class="dc-article-via">${VIA[body.via] || body.via}</span>`}
+        </div>
+
+        <div class="dc-article-body">
+          ${pane === "live"
+            ? html`<iframe class="dc-article-frame" src=${article.url} title=${article.url}
+                           referrerpolicy="no-referrer" loading="lazy" />`
+            : html`<div class="dc-article-read">
+                ${failed
+                  ? html`<p class="dc-article-note">This article could not be read:
+                      ${failed}. The evidence we hold for it is on the right, and
+                      "open in a new tab" always works.</p>`
+                  : !body
+                    ? html`<p class="dc-article-note">Reading the article…</p>`
+                    : html`<${ReaderText} text=${body.text} spans=${body.spans} />`}
+              </div>`}
+          <aside class="dc-article-side">
+            ${pane === "live" && html`
+              <p class="dc-article-note">
+                Most publishers refuse to be embedded — ten of our fifteen most-cited do.
+                A blank panel is the site declining, not a fault here. Reader shows the
+                copy this database actually read.
+              </p>`}
+            ${fields.length > 0 && html`
+              <div>
+                <div class="dc-article-h">supports</div>
+                ${fields.map((f) => html`
+                  <div key=${f} style=${{ marginBottom: 10 }}>
+                    <span style=${chip("--success")}>${f}</span>
+                    ${quotes[f] && html`
+                      <p class="dc-article-quote">“${quotes[f]}”</p>`}
+                  </div>`)}
+              </div>`}
+            ${article.excerpt && html`
+              <div>
+                <div class="dc-article-h">excerpt</div>
+                <p class="dc-article-quote">${article.excerpt}</p>
+              </div>`}
+            <div>
+              <div class="dc-article-h">cited by</div>
+              ${article.projects.map((p) => html`
+                <div key=${p.id} style=${{ fontSize: 13, marginBottom: 4 }}>
+                  <span style=${{ fontFamily: "var(--font-mono)", fontSize: 11,
+                                  color: "var(--muted-foreground)" }}>#${p.id}</span>
+                  ${" "}${p.name}
+                </div>`)}
+            </div>
+          </aside>
+        </div>
+      <//>
+    <//>`;
+}
+
+/* Every publisher, every article, and what each one actually decided.
+ *
+ * Both halves come from data the payload already carries: the per-publisher record
+ * from `/api/landing`, which the server has computed and shipped since `tracker
+ * sources` existed and nothing rendered; and every citation from
+ * `projects[].sources[]`.
+ *
+ * **URLs are deduplicated here, not on the server.** One article routinely cites
+ * several projects — 2,758 source rows over 1,928 distinct URLs — and the page
+ * wants the article once, carrying the list of projects that rest on it. */
+function SourcesView({ data }) {
+  const [open, setOpen] = useState(null);
+  const [expanded, setExpanded] = useState(null);
+  const [query, setQuery] = useState("");
+  const [trust, setTrust] = useState(null);
+
+  /* The publisher record rides on `/api/landing` rather than `/api/dataset`,
+     because the survey costs ~0.24s and the dataset is refetched after every run.
+     The list below paints from data already in hand; this only fills in the
+     "decided" column when it arrives. */
+  useEffect(() => {
+    let cancelled = false;
+    api("/api/landing")
+      .then((payload) => { if (!cancelled) setTrust(payload); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  const publishers = useMemo(() => {
+    const host = (u) => {
+      try {
+        const h = new URL(u).hostname.replace(/^www\./, "");
+        const parts = h.split(".");
+        return parts.length > 2 ? parts.slice(-2).join(".") : h;
+      } catch { return "?"; }
+    };
+    const byUrl = new Map();
+    for (const p of data.projects || []) {
+      for (const s of p.sources || []) {
+        const entry = byUrl.get(s.url) || { ...s, publisher: host(s.url), projects: [] };
+        entry.projects.push({ id: p.id, name: `${p.company} — ${p.name}` });
+        byUrl.set(s.url, entry);
+      }
+    }
+    const groups = new Map();
+    for (const a of byUrl.values()) {
+      const g = groups.get(a.publisher) || { host: a.publisher, articles: [] };
+      g.articles.push(a);
+      groups.set(a.publisher, g);
+    }
+    /* The measured record, keyed onto the same publisher identity the CLI prints.
+       Absent for a host with no decisions yet, which is most of them. */
+    const stats = new Map((trust?.sources?.top || []).map((h) => [h.host, h]));
+    return [...groups.values()]
+      .map((g) => ({ ...g, stat: stats.get(g.host) || null }))
+      .sort((a, b) => (b.stat?.decisive || 0) - (a.stat?.decisive || 0)
+        || b.articles.length - a.articles.length
+        || a.host.localeCompare(b.host));
+  }, [data.projects, trust]);
+
+  const needle = query.trim().toLowerCase();
+  const shown = needle
+    ? publishers.filter((p) => p.host.includes(needle)
+        || p.articles.some((a) => (a.url + (a.excerpt || "")).toLowerCase().includes(needle)))
+    : publishers;
+  const articles = publishers.reduce((n, p) => n + p.articles.length, 0);
+
+  return html`
+    <div class="dc-view dc-rise" style=${{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)",
+                     gap: 16, padding: "22px 26px 60px" }}>
+      <${Eyebrow} figure="fig. 06 — sources" title="Everything this rests on">
+        ${articles} article(s) across ${publishers.length} publisher(s). Ordered by how many
+        stored values each publisher's claims actually decided — not by how often it is cited,
+        which is a measure of how much we read rather than how much it was worth reading.
+        Open one to read it; what it supports is listed beside it either way.
+      <//>
+
+      <${Card}>
+        <div style=${{ padding: "12px 20px" }}>
+          <${Input} placeholder="Filter by publisher or URL…" value=${query}
+                    onInput=${(e) => setQuery(e.target.value)} />
+        </div>
+      <//>
+
+      ${shown.map((p) => html`
+        <${Card} key=${p.host}>
+          <button type="button" class="dc-disclose"
+                  aria-expanded=${expanded === p.host}
+                  onClick=${() => setExpanded(expanded === p.host ? null : p.host)}>
+            <span style=${{ display: "grid", gap: 3, minWidth: 0 }}>
+              <span style=${{ fontSize: 15, fontWeight: 500 }}>${p.host}</span>
+              <span style=${{ fontSize: 12, color: "var(--muted-foreground)" }}>
+                ${p.articles.length} article${p.articles.length === 1 ? "" : "s"}${p.stat
+                  ? ` · decided ${p.stat.decisive}, ${p.stat.contested} against a rival`
+                  : " · nothing decided yet"}</span>
+            </span>
+            <span style=${{ fontSize: 12, color: "var(--muted-foreground)" }}>
+              ${expanded === p.host ? "hide" : "show"}</span>
+          </button>
+          ${expanded === p.host && html`
+            <div style=${{ padding: "0 16px 12px" }}>
+              ${p.articles.map((a) => html`
+                <button key=${a.url} type="button" class="dc-srcrow"
+                        onClick=${() => setOpen(a)}>
+                  <span class="dc-num" style=${{ fontSize: 11, color: "var(--muted-foreground)" }}>
+                    ${(a.published_at || a.fetched_at || "").slice(0, 10)}</span>
+                  <span style=${{ minWidth: 0 }}>
+                    <span class="dc-srcurl">${a.url}</span>
+                    ${(a.fields || "") && html`
+                      <span style=${{ display: "block", fontSize: 11,
+                                      color: "var(--muted-foreground)", marginTop: 2 }}>
+                        supports ${a.fields}</span>`}
+                  </span>
+                  <span style=${{ fontSize: 11, color: "var(--muted-foreground)",
+                                  whiteSpace: "nowrap" }}>
+                    ${a.projects.length} project${a.projects.length === 1 ? "" : "s"}</span>
+                </button>`)}
+            </div>`}
+        <//>`)}
+
+      ${shown.length === 0 && html`
+        <${EmptyState} variant="dashed" title="Nothing matches"
+          description="No publisher or URL contains that." />`}
+
+      <${ArticleModal} article=${open} onClose=${() => setOpen(null)} />
+    </div>`;
+}
 
 /* Queue, Coverage and Runs, stacked, with the section you arrived for opened.
  *
@@ -4403,7 +4714,13 @@ function PipelineView({ data, section, allowWrite, busy, onRan, watchId }) {
 function App() {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
-  const [view, setView] = useState(DEV ? "pipeline" : "overview");
+  /* The URL is the view. `window.DC_VIEW` is stamped into the shell by whichever
+     path the server was asked for, so a deep link opens on the right page rather
+     than painting the default and swapping — which reads as a flash of the wrong
+     screen. */
+  const [view, setView] = useState(
+    () => window.DC_VIEW || (DEV ? "pipeline" : "overview"),
+  );
   /* Which Pipeline section to open on arrival. `goto` sets it, so a run finishing
    * still lands you on Runs even though Runs is no longer a tab. */
   const [pipelineSection, setPipelineSection] = useState(null);
@@ -4435,11 +4752,32 @@ function App() {
   /* One way to change view, because three of the old eight are now sections.
    * Anything still asking for "runs" — the run-finished redirect, a bookmark —
    * gets Pipeline with that section open rather than a blank page. */
-  const goto = useCallback((key) => {
+  const goto = useCallback((key, { push = true } = {}) => {
     const section = FOLDED_INTO_PIPELINE[key];
+    const next = section ? "pipeline" : key;
     setPipelineSection(section || null);
-    setView(section ? "pipeline" : key);
+    setView(next);
+    /* `pushState`, not a real navigation: the bundle and the dataset are already
+       in memory, so re-fetching either to change tab would be slower than the tab
+       switch it replaces. The URL is kept honest so refresh, back and a pasted
+       link all land where the reader expects. */
+    if (push) {
+      const path = (DEV ? "/dev/" : "/") + next;
+      if (window.location.pathname !== path) {
+        window.history.pushState({ view: next }, "", path);
+      }
+    }
   }, []);
+
+  /* Back and forward. `push: false` so replaying history does not re-push it. */
+  useEffect(() => {
+    const onPop = () => {
+      const key = window.location.pathname.replace(/^\/(dev\/)?/, "") || (DEV ? "pipeline" : "overview");
+      goto(key, { push: false });
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, [goto]);
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => { document.documentElement.classList.toggle("dark", dark); }, [dark]);
@@ -4591,6 +4929,7 @@ function App() {
 
         ${view === "overview" && html`<${OverviewView} data=${data} />`}
         ${view === "projects" && html`<${ProjectsView} data=${data} openId=${openId} onOpen=${setOpenId} />`}
+        ${view === "sources" && html`<${SourcesView} data=${data} />`}
         ${view === "map" && html`<${MapView} data=${data} openId=${openId} onOpen=${setOpenId} />`}
         ${view === "capex" && html`
           <${CapexView} data=${data} allowWrite=${data.allow_write} busy=${!!running}

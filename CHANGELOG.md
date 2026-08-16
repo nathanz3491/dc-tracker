@@ -12,6 +12,67 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **`tracker sources policy` — the measurement finally acts** (`tracker/policy.py`,
+  `seed/sources.toml`, `tracker/cli.py`, `crawl.py`, `enrich.py`).
+
+  `tracker sources` has ranked publishers by what they actually decide for a
+  while, and ended every run by saying so: *"Nothing here changes a weight. This is
+  the evidence for doing so."* `tracker feeds` said the same about retirement, and
+  told the operator to go and comment a line out of a TOML file. Two commands that
+  reached a verdict and handed it to a text editor.
+
+  This writes `seed/sources.toml`, and `sync`, `enrich` and `ingest crawl` obey it:
+  `priority` domains are offered first when a run is working to a budget, `ignore`
+  domains are not queued or fetched again. On the live database it proposes **16
+  priority and 1 ignore** out of 654 publishers.
+
+  **It changes what gets read, never what a stored citation is worth.** Weight
+  stays per `source_type` and hand-edited; applying the policy to 300 projects left
+  every field byte-identical, and a test snapshots whole rows to keep it that way.
+
+  Three things worth recording about the rules:
+
+  * **The obvious threshold was useless.** `ignore` on "decides nothing" yields
+    nine publishers at a sensible floor, one at a strict one. `priority` on
+    `LOW_YIELD` promoted **75 of the 94** judgeable publishers — a priority list
+    containing nearly everything is not an ordering. Priority is now measured
+    against the fleet's own decisions-per-citation, which is 0.58 today, promotes
+    16, and self-adjusts as the corpus grows.
+  * **`ignore` fires on zero, never on thin.** `funnel.LOW_YIELD` is documented
+    there as reported and never proposed, and that discipline carries down: thin is
+    a prompt to look, zero is a proposal.
+  * **The refusals carry more than the proposals.** A publisher we mostly cannot
+    *fetch* looks identical to a worthless one from the citation count alone, so
+    "cannot read" is checked before anything can propose ignoring it. Also refused:
+    a domain still configured as a feed (retire it there, or discovery keeps
+    polling and discarding) and an operator's own newsroom.
+
+  The one resolver delegates to `confidence.registrable_domain`, so what the
+  ranking prints is directly pasteable into the file — there are five different
+  URL→host normalisations in this codebase and a policy keyed on the wrong one
+  would silently never fire. Matching is on label boundaries, with a regression
+  test for the `x.com`-blocks-`equinix.com` bug `search.py` already records.
+
+- **A sources page, and the article behind any citation** (`app.js`, `app.css`,
+  `server.py`, `export.py`).
+
+  1,928 article URLs across 683 publishers were in the database with no screen that
+  listed them — the only way to see a source was to open one project's drawer and
+  scroll. `fig. 06 — sources` lists every publisher ordered by what it decided,
+  every article under it, and opens one in a large modal.
+
+  Built almost entirely from data already being computed: the per-publisher record
+  rides on `/api/landing`, which has shipped a `sources` block since `tracker
+  sources` existed and **nothing ever rendered it**; the citations come from
+  `projects[].sources[]`. The modal is the Meridian `Dialog`, vendored with the
+  bundle and unused until now — Escape handling and body-scroll locking already in
+  it. No new API route.
+
+  `sources[].published_at` is now exposed (schema tag `tracker/6`). It was on the
+  row and reachable only inside `claims_by_field`, so a page listing citations
+  could show the crawl date and nothing else — the exact confusion `backfill dates`
+  exists to remove.
+
 - **`tracker enrich` settles what it just put into dispute** (`tracker/ingest/enrich.py`,
   `tracker/cli.py`, `.env.example`). Harvesting sources is what *creates*
   contested fields, and until now a run ended by handing that disagreement to a
@@ -401,6 +462,89 @@ initial build of the v1 PRD.
   the contradiction checker, the three patterns behind most real failures —
   a lifecycle word meaning something earlier, generation quoted as the site's
   capacity, and a figure the source itself presents as superseded.
+
+### Changed
+
+- **Every view has its own URL, and the console loads in a quarter of the time**
+  (`server.py`, `app.js`, `export.py`, `gaps.py`, `dataset.py`).
+
+  `/overview`, `/projects`, `/sources`, `/map`, `/capex` (and `/dev/...`) are real
+  paths now: linkable, refreshable, and the back button works. The server stamps
+  which view the URL asked for so a deep link opens on it rather than painting the
+  default and swapping; navigation is `pushState`, because the bundle and the data
+  are already in memory and a real navigation would be slower than the tab switch
+  it replaced. An unknown path 404s instead of silently serving Overview.
+
+  **Routing was asked for to reduce loading time, and on its own it does nothing
+  for that** — same bundle, same payload. Measuring found the actual costs:
+
+  | | before | after |
+  |---|---|---|
+  | `/api/dataset` | 19.1 MB | **9.9 MB** |
+  | `dataset.build` | 4.03s | **1.06s** |
+  | over the wire, gzipped | — | 1.5 MB |
+
+  Two independent findings:
+
+  * **`claims_by_field` was 48% of the payload** — 9.2 MB shipped on every load
+    for a table that renders one project at a time inside a drawer many visits
+    never open. It moves to `GET /api/claims?project=<id>`, fetched when a drawer
+    opens and kept for the session. `prov` and `sources` stay: the projects table
+    and the sources page read them.
+  * **`gaps.provenance` recomputed the whole claim map once per field.** 4,191
+    calls across 300 projects, each re-parsing every source's JSON to answer about
+    one field — a project with 61 sources and 12 fields parsed 732 blobs instead
+    of 61. It now takes the map as an argument and `_provenance_json` computes it
+    once. Pure memoisation, verified byte-identical against the old path on 40
+    projects, and worth **2.3 of the 4.0 seconds**.
+
+- **The sources modal reads our own copy of the article, not the live page**
+  (`webui/article.py` **new**, `server.py`, `app.js`, `app.css`).
+
+  The modal framed the publisher. Measured across the fifteen most-cited
+  publishers, **ten refuse to be framed** — `X-Frame-Options: SAMEORIGIN`/`DENY`
+  or a `frame-ancestors` directive — and those ten carry **388 of their 689
+  citations**. `datacenterdynamics.com`, the most-cited publisher in the database
+  at 150 citations, is one of them. So the modal showed "refused to connect" more
+  often than it showed an article, and no header of ours overrides a publisher's.
+
+  `GET /api/article?url=` now serves the text the pipeline itself read: from the
+  article cache when it is there, otherwise one fetch on the cheap rungs, written
+  back so the second reader waits for nothing. Measured on three frame-refusing
+  publishers: 2.5–4.1s cold, **0.01s once cached**. The browser rung stays out —
+  Chromium is seconds and hundreds of megabytes, and this runs on a click.
+
+  **The stored quotes are located in the text and marked.** 1,142 of 1,269 quotes
+  land exactly; 113 are shorter than a mark is worth drawing; 14 have drifted
+  since they were cited and are deliberately *not* highlighted — the gate's fuzzy
+  recovery decides whether to *store* a value, but drawing a highlight asserts
+  "this sentence is the evidence", and a mark over the nearest similar sentence
+  would be a claim the page no longer supports. Locating happens on the server
+  against the gate's own helpers, so the browser cannot drift from it.
+
+  This is the better answer to the question anyway: a live page may have been
+  edited since it was cited, and the cached text is what the values rest on. The
+  live frame is still one click away for the publishers that permit it.
+
+  **The endpoint refuses any URL the database does not already cite.** That is the
+  entire access rule, and it is not decoration: a reader that fetches whatever it
+  is handed is a request forwarder pointed at whatever network the console runs
+  on. Verified over HTTP — an uncited URL and `169.254.169.254` both 404,
+  `file:///` 400s before anything is opened.
+
+- **The console's CSP allows framing, and nothing else moved** (`server.py`). The
+  sources page opens a cited article in a modal, and `frame-src` falls back through
+  `child-src` to `default-src 'self'` — so without this the browser refuses the
+  frame outright. `frame-src https:` is the single directive added; scripts,
+  styles, fonts, images and `connect-src` are all still same-origin, and a test
+  pins that so the relaxation cannot creep.
+
+  It buys less than it looks like, and the page says so rather than pretending
+  otherwise: a publisher sending `X-Frame-Options` or its own `frame-ancestors`
+  still refuses, and no header of ours overrides theirs. The browser gives no
+  reliable signal for it either — `onload` fires for a refusal too — so the modal
+  keeps the citation's quotes, excerpt and the projects resting on it permanently
+  beside the frame. If the frame comes up blank, that panel is the answer.
 
 ### Fixed
 

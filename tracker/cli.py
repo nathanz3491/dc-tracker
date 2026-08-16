@@ -91,6 +91,11 @@ app.add_typer(duplicates_app)
 audit_app = typer.Typer(name="audit", invoke_without_command=True)
 app.add_typer(audit_app)
 
+#: The ranking and the policy it justifies, under one name. `invoke_without_command`
+#: so bare `tracker sources` keeps printing today's table unchanged.
+sources_app = typer.Typer(name="sources", invoke_without_command=True)
+app.add_typer(sources_app)
+
 #: The listing and the confirmation pass over obstacles, under one name.
 risks_app = typer.Typer(name="risks", invoke_without_command=True)
 app.add_typer(risks_app)
@@ -3122,8 +3127,9 @@ def stats() -> None:
             )
 
 
-@app.command("sources")
+@sources_app.callback(invoke_without_command=True)
 def sources_cmd(
+    ctx: typer.Context,
     by: Annotated[
         str,
         typer.Option(
@@ -3152,7 +3158,14 @@ def sources_cmd(
     anything, because an unopposed win just means nobody else spoke. Identity
     fields are excluded: `name` and `company` are FILL_ONLY, so winning one
     records crawl order.
+
+    `tracker sources policy` turns this table into a file the pipeline obeys.
     """
+    # A group with a callback: without this, `tracker sources policy` would print
+    # the whole ranking first and then run the subcommand.
+    if ctx.invoked_subcommand is not None:
+        return
+
     from tracker import sources as sources_mod
 
     engine = _read_engine()
@@ -3235,8 +3248,159 @@ def sources_cmd(
         )
     console.print(
         "[dim]Nothing here changes a weight. `SOURCE_WEIGHTS` is edited by hand in "
-        "tracker/confidence.py; this is the evidence for doing so.[/dim]"
+        "tracker/confidence.py; this is the evidence for doing so. "
+        "`tracker sources policy` turns it into a file the pipeline obeys.[/dim]"
     )
+
+
+@sources_app.command("policy")
+def sources_policy(
+    apply: Annotated[
+        bool, typer.Option("--apply", help="Write the file. Without it, proposes and writes nothing.")
+    ] = False,
+    path: Annotated[
+        Path | None,
+        typer.Option("--path", help="Policy file to read and write.", show_default=False),
+    ] = None,
+    show_refused: Annotated[
+        bool, typer.Option("--refused", help="List every publisher it declined to judge.")
+    ] = False,
+) -> None:
+    """Turn the publisher ranking into a list the pipeline obeys. Free, no LLM.
+
+    `tracker sources` has measured which publishers decide stored values for a
+    while and could only ever print it. This writes `seed/sources.toml`, which
+    `sync`, `enrich` and `ingest crawl` read: `priority` domains are offered first
+    when a run is working to a budget, `ignore` domains are not queued or fetched
+    again.
+
+    **It changes what gets read, never what a stored citation is worth.** Weight
+    stays per `source_type` and hand-edited. Citations already stored keep their
+    values, quotes and weight whatever this writes.
+
+    **Most publishers get no entry, and that is the design.** 560 of 654 are cited
+    fewer than five times, where a per-citation ratio means nothing. `priority`
+    needs ten citations, a win against a disagreeing rival, and a yield above the
+    fleet's own average. `ignore` needs ten citations and a record of never once
+    backing a stored value — the publisher-level twin of the `retire` verdict
+    `tracker feeds` gives a feed.
+
+    **Four things it refuses to propose**, and they carry more information than the
+    proposals: a publisher we mostly cannot *fetch* (blocked is not worthless — the
+    mistake `tracker feeds` documents), one still configured as a feed (retire it
+    there, or discovery keeps polling and discarding), an operator's own newsroom,
+    and anything merely thin. Thin is a prompt to look, never a proposal.
+
+    Proposes by default; `--apply` writes. A domain already in the file keeps its
+    rank and its sentence — an operator who has vetoed a proposal should not have to
+    veto it again after every run — and nothing is ever deleted.
+    """
+    from tracker import policy as policy_mod
+    from tracker import sources as sources_mod
+    from tracker.ingest import discover as disc
+
+    target = path or policy_mod.default_path()
+    existing = policy_mod.load(target)
+
+    engine = _read_engine()
+    with session_scope(engine, commit=False) as session:
+        survey = sources_mod.survey(session)
+        unread = disc.failure_summary(session)
+
+    # Both are advisory context for the refusals; a broken feeds.toml must not stop
+    # the policy being written, the same posture `sync` takes with it.
+    try:
+        feeds, _ = disc.load_config()
+        feed_hosts = frozenset(policy_mod.registrable_domain(f.url) for f in feeds)
+    except disc.DiscoverError:
+        feed_hosts = frozenset()
+    # Advisory only, and swallowed for the same reason `crawl.operator_hosts` does:
+    # a missing or broken newsroom map should soften a refusal, never stop the run.
+    try:
+        newsrooms = frozenset(
+            policy_mod.registrable_domain(f"https://{h}") for h in disc.newsroom_companies()
+        )
+    except (OSError, ValueError, KeyError):
+        newsrooms = frozenset()
+
+    analysis = policy_mod.analyse(
+        survey,
+        existing,
+        unread_hosts=unread,
+        feed_hosts=feed_hosts,
+        newsroom_hosts=newsrooms,
+    )
+    proposed = policy_mod.to_policy(analysis.proposals)
+
+    if json_mode():
+        emit(
+            {
+                "path": str(target),
+                "proposals": [
+                    {"domain": p.domain, "rank": p.rank, "why": p.why, "was": p.was, "do": p.verb}
+                    for p in analysis.proposals
+                ],
+                "refused": [
+                    {"domain": r.domain, "class": r.why_class, "detail": r.detail}
+                    for r in analysis.refusals
+                ],
+                "stale": analysis.stale,
+                "applied": apply,
+            }
+        )
+        if apply:
+            policy_mod.write(proposed, target)
+        return
+
+    changing = [p for p in analysis.proposals if p.verb != "keep"]
+    _print_report_rows(
+        [
+            ("publishers measured", len(survey.hosts)),
+            ("priority", sum(1 for p in analysis.proposals if p.rank == policy_mod.PRIORITY)),
+            ("ignore", sum(1 for p in analysis.proposals if p.rank == policy_mod.IGNORE)),
+            ("would add or change", len(changing)),
+            ("declined to judge", len(analysis.refusals)),
+        ],
+        title="sources policy" + ("" if apply else " (proposal)"),
+    )
+
+    for entry in analysis.proposals:
+        if entry.verb == "keep":
+            continue
+        verb = "add   " if entry.verb == "add" else f"{entry.was} ->"
+        tone = "green" if entry.rank == policy_mod.PRIORITY else "yellow"
+        console.print(
+            f"  [{tone}]{entry.rank:<8}[/{tone}] {escape(entry.domain):<28} "
+            f"[dim]{verb} {escape(entry.why)}[/dim]"
+        )
+
+    by_class = analysis.by_class()
+    for name in ("cannot read", "still a feed", "own newsroom", "thin", "too few to judge"):
+        found = by_class.get(name)
+        if not found:
+            continue
+        shown = ", ".join(f"{escape(r.domain)} ({escape(r.detail)})" for r in found[:4])
+        more = f" and {len(found) - 4} more" if len(found) > 4 else ""
+        console.print(f"  [dim]{name:<17}[/dim] {shown}{more}")
+        if show_refused and len(found) > 4:
+            for r in found[4:]:
+                console.print(f"  [dim]{'':<17} {escape(r.domain)} ({escape(r.detail)})[/dim]")
+
+    for line in analysis.stale:
+        console.print(f"  [yellow]no longer justified[/yellow] {escape(line)} [dim]— left alone[/dim]")
+
+    if apply:
+        written = policy_mod.write(proposed, target)
+        console.print(f"\n[green]wrote[/green] {written}")
+        console.print(
+            "[dim]`sync`, `enrich` and `ingest crawl` read it on their next run. "
+            "Nothing here touched a stored value.[/dim]"
+        )
+    else:
+        console.print(
+            f"\n[yellow]Nothing written.[/yellow] [dim]--apply writes {target}. "
+            "It changes what gets read, never what a stored citation is worth.[/dim]"
+        )
 
 
 @ingest_app.command("edgar")
@@ -6238,6 +6402,7 @@ def sync(
     costs an LLM call. Use --dry-run to see what a run would do before paying for
     it, and raise the caps once you are happy with what it finds.
     """
+    from tracker import policy as policy_mod
     from tracker.ingest import crawl
     from tracker.ingest import discover as disc
     from tracker.llm import DeepSeekExtractor, MissingApiKey
@@ -6405,13 +6570,15 @@ def sync(
             _, queue_spec = disc.load_config()
         except disc.DiscoverError:
             queue_spec = None  # ordering is an optimization; a bad config is phase 1's problem
-        pending_urls = [
-            row.url
-            for row in disc.pending(
-                session, limit=limit, known_first=not breadth_first, spec=queue_spec
-            )
-        ]
-        backlog = len(disc.pending(session))
+        # Ordered and filtered BEFORE the limit bites, which is the whole point:
+        # truncating first and prioritising after would reorder a batch that was
+        # already chosen. `pending` is asked for everything and cut here, which
+        # also removes the second full query this used to run for `backlog`.
+        ordered = disc.pending(session, known_first=not breadth_first, spec=queue_spec)
+        backlog = len(ordered)
+        source_policy = policy_mod.load()
+        kept, ignored_urls = source_policy.partition([row.url for row in ordered])
+        pending_urls = kept[:limit]
         deepening, _fresh = disc.pending_split(session)
         risky = disc.pending_risk_count(session, queue_spec) if queue_spec else 0
         # Counted whether or not we are retrying, so the summary can never claim
@@ -6427,6 +6594,13 @@ def sync(
         console.print(
             f"[dim]{deepening} of {backlog} queued candidate(s) cover a project already "
             f"tracked{detail}; those go first[/dim]"
+        )
+    if ignored_urls:
+        # Named, not merely subtracted: the queue still holds these rows and
+        # `tracker queue` still lists them, so the number has to be attributable.
+        console.print(
+            f"[dim]{len(ignored_urls)} candidate(s) skipped — seed/sources.toml ignores "
+            f"their publisher[/dim]"
         )
 
     if not pending_urls:

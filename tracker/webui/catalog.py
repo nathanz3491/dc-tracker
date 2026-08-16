@@ -169,6 +169,9 @@ GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "risks confirm",
             "queue check",
             "queue prune",
+            # Under Repair rather than Inspect: it is the only command in the
+            # palette that writes a file the pipeline then obeys.
+            "sources policy",
         ),
     ),
     ("Maintain", ("init", "backfill", "export")),

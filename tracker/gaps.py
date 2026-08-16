@@ -234,7 +234,7 @@ class FieldProvenance:
         return self.axes.get("date_precision")
 
 
-def _winning_source(project, field: str, value):
+def _winning_source(project, field: str, value, by_field=None):
     """The source whose claim actually became the stored value.
 
     Not simply the strongest source that mentions the field. For a field two
@@ -251,7 +251,11 @@ def _winning_source(project, field: str, value):
     sources = list(getattr(project, "sources", ()) or ())
     by_url = {s.url: s for s in sources}
 
-    claims = claims_by_field(sources).get(field, [])
+    # `by_field` is the whole claim map, optionally computed once by the caller.
+    # Without it this recomputes every field's claims to read one of them, and a
+    # caller walking all twelve fields pays for twelve — measured at 2.3s of the
+    # console payload's 4.0s, re-parsing one project's 61 source blobs 732 times.
+    claims = (claims_by_field(sources) if by_field is None else by_field).get(field, [])
     # `_resolve` discards 待确认 claims whenever a confirmed one exists; mirror that
     # or an unquoted claim could be credited with a quoted value.
     if any(c.confirmed for c in claims):
@@ -298,7 +302,7 @@ def _same_value(claim_value_, stored) -> bool:
     return claim_value_ == stored
 
 
-def provenance(project, field: str) -> FieldProvenance | None:
+def provenance(project, field: str, by_field=None) -> FieldProvenance | None:
     """Which tier the value rests on, the sentence behind it, and whose it is.
 
     ``None`` when the field is NULL — there is nothing to justify.
@@ -310,7 +314,7 @@ def provenance(project, field: str) -> FieldProvenance | None:
     if value is None:
         return None
 
-    source = _winning_source(project, field, value)
+    source = _winning_source(project, field, value, by_field)
     if source is None:
         # Nothing claims this value and nothing says it supports the field. Either
         # the NOT NULL column fell back to its schema default, or the row was

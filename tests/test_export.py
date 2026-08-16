@@ -460,3 +460,39 @@ def test_html_is_a_registered_format():
 
     assert "html" in FORMATS
     assert RENDERERS["html"] is render_html
+
+
+def test_a_citation_carries_the_publishers_own_date(session):
+    """`published_at` was on the row and reachable only inside `claims_by_field`.
+
+    A page listing citations could therefore show the crawl date and nothing else —
+    exactly the confusion `tracker backfill dates` exists to remove.
+    """
+    import datetime as dt
+
+    from tracker.export import to_json_object
+    from tracker.ingest.records import IngestRecord, SourceRecord
+    from tracker.models import Project, Source
+    from tracker.upsert import upsert_record
+
+    upsert_record(
+        session,
+        IngestRecord(
+            project={"company": "Meta", "name": "Hyperion", "city": "Richland", "state": "LA"},
+            sources=[
+                SourceRecord(
+                    url="https://example.test/a",
+                    source_type="trade_press",
+                    excerpt="e",
+                    claims={"mw_planned": 5000.0},
+                    fetched_at=dt.datetime(2026, 8, 10, 12, 0),
+                )
+            ],
+        ),
+    )
+    session.scalars(select(Source)).one().published_at = dt.datetime(2024, 12, 4)
+    session.flush()
+
+    payload = to_json_object(session.scalar(select(Project)))
+    assert payload["sources"][0]["published_at"] == "2024-12-04T00:00:00"
+    assert payload["sources"][0]["fetched_at"] == "2026-08-10T12:00:00"

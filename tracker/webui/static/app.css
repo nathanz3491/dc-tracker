@@ -933,3 +933,103 @@ dc-map svg:active { cursor: grabbing; }
     display: none;
   }
 }
+
+/* ---- Sources page and the article modal -----------------------------------
+   One row per cited article. A real <button>, so the whole row is the target and
+   the keyboard reaches it — the URL used to be a bare <a>, which meant the only
+   way in was to hit a line of 100-character monospace exactly. */
+.dc-srcrow {
+  display: grid; grid-template-columns: 74px minmax(0, 1fr) auto; gap: 12px;
+  align-items: baseline; width: 100%; text-align: left; padding: 9px 4px;
+  background: none; border: 0; border-top: 1px solid var(--border);
+  cursor: pointer; color: inherit; font: inherit;
+}
+.dc-srcrow:hover { background: color-mix(in oklab, var(--muted) 40%, transparent); }
+.dc-srcurl {
+  display: block; font-family: var(--font-mono); font-size: 12px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* A gap in the vendored design system, not a preference.
+   `Dialog` emits <div class="mrd-dialog-layer"> and Meridian's stylesheets define
+   `.mrd-backdrop` but NOTHING for the layer — so the backdrop went fixed at
+   z-index 50 while the dialog rendered unpositioned in normal flow behind it,
+   below the fold. On screen that reads as "the popup does not open": the page
+   dims and nothing appears. Supplied here rather than patched into vendor/, which
+   is replaced wholesale on the next Meridian sync. */
+.mrd-dialog-layer {
+  position: fixed; inset: 0; z-index: 51; display: flex;
+  align-items: center; justify-content: center; padding: 16px;
+  pointer-events: none;
+}
+.mrd-dialog-layer > * { pointer-events: auto; }
+
+/* The modal is deliberately near-fullscreen: it is showing a web page, and a
+   letterboxed article is worse than no article. */
+.dc-article {
+  width: min(1400px, 96vw); height: min(900px, 92vh);
+  display: flex; flex-direction: column; padding: 0; overflow: hidden;
+}
+.dc-article-head {
+  display: flex; align-items: flex-start; gap: 16px; padding: 14px 18px;
+  border-bottom: 1px solid var(--border); background: var(--surface);
+}
+.dc-article-url {
+  display: block; margin-top: 4px; font-family: var(--font-mono); font-size: 11px;
+  color: var(--muted-foreground); overflow-wrap: anywhere;
+}
+.dc-article-body {
+  flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 320px;
+}
+/* No border-radius: a single-sided border with rounded corners renders as a
+   detached arc. Same rule the rest of this sheet follows. */
+.dc-article-frame { width: 100%; height: 100%; border: 0; background: var(--background); }
+.dc-article-side {
+  border-left: 1px solid var(--border); padding: 16px; overflow-y: auto;
+  display: grid; gap: 16px; align-content: start; background: var(--surface);
+}
+.dc-article-note {
+  margin: 0; font-size: 12px; line-height: 18px; color: var(--muted-foreground);
+  padding-left: 9px; border-left: 2px solid var(--warning); border-radius: 0;
+}
+.dc-article-h {
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em;
+  color: var(--muted-foreground); margin-bottom: 6px;
+}
+.dc-article-quote {
+  margin: 4px 0 0; font-size: 12px; line-height: 18px; color: var(--muted-foreground);
+}
+.dc-article-tabs {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 8px 18px; border-bottom: 1px solid var(--border); background: var(--surface);
+}
+.dc-article-out, .dc-article-via {
+  font-size: 12px; color: var(--muted-foreground);
+}
+.dc-article-out { margin-left: auto; }
+.dc-article-via { flex-basis: 100%; }
+/* A measure, not a column: the reader is prose and 74ch is where a line stops
+   being one the eye can track back from. */
+.dc-article-read { overflow-y: auto; padding: 24px 28px; background: var(--background); }
+.dc-read-text {
+  max-width: 74ch; margin: 0 auto; font-size: 14px; line-height: 24px;
+  white-space: pre-wrap; overflow-wrap: anywhere; color: var(--foreground);
+}
+/* The evidence, marked in the text it came from. Tinted rather than filled: a
+   solid highlight over a paragraph reads as a selection, and several of them
+   read as a broken page. */
+.dc-read-mark {
+  background: color-mix(in oklab, var(--success) 22%, transparent);
+  color: inherit; border-radius: 2px; padding: 1px 0;
+  box-shadow: inset 0 -2px 0 var(--success);
+}
+
+@media (max-width: 900px) {
+  /* The frame keeps the height it needs; the evidence stacks under it rather than
+     being squeezed into a column too narrow to read a quote in. */
+  .dc-article-body { grid-template-columns: minmax(0, 1fr); grid-auto-rows: minmax(0, auto); }
+  .dc-article-frame, .dc-article-read { min-height: 50vh; }
+  .dc-article-side { border-left: 0; border-top: 1px solid var(--border); }
+  .dc-srcrow { grid-template-columns: minmax(0, 1fr) auto; }
+  .dc-srcrow > .dc-num { grid-column: 1 / -1; }
+}
