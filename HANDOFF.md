@@ -1,5 +1,102 @@
 # Handoff
 
+## Yesterday (state at start of 2026-08-17)
+
+The 2026-08-16 run recorded as of `2355dc1` (10:47) — the source-policy and
+sources-page work committed, 2,120 tests green, ruff clean. The day continued
+anyway: ten more commits landed 17:39–21:14 that same day (2026-08-16), none
+recorded until this run. Two threads:
+
+1. **The reader view, for real** (`4c1f778`, merged `9a6e102` 17:40). The
+   sources modal had been framing the publisher's own page; measured across the
+   fifteen most-cited publishers, ten refuse to be framed (`X-Frame-Options` or
+   `frame-ancestors`) and those ten carry 388 of their 689 citations —
+   datacenterdynamics.com, the single most-cited publisher, among them. Now the
+   arc90/Mozilla readability algorithm runs over the publisher's own HTML,
+   rendered under the console's stylesheet, with the stored quotes marked in
+   the text — "here is the sentence this number rests on," not "here is the
+   page." Chrome removal gets a pre-pass (named furniture) and a post-pass
+   (trimming seams left after readability's density ranking), kill-criterion'd
+   before it was written (must not cost one marked quote) and measured over
+   fifteen publishers: cuts 101 lines, keeps all 25. Charset detection now
+   trusts valid UTF-8 over any declared charset (a page lying about Latin-1
+   while serving UTF-8 was decoding as Latin-1 and mojibaking silently), and
+   repairs mojibake per damaged run only when the repair round-trips. Iframe'd
+   third-party markup gets three independent guards (attribute-allowlist
+   sanitizing, `sandbox=""`, its own `default-src 'none'` CSP) after two
+   browser-only surprises (`frame-src https:` silently killed the console's own
+   same-origin frame; a second CSP header intersects with the first rather than
+   merging, which would have blocked every image). `readability-lxml` ships as
+   a new optional `.[reader]` extra; without it the modal falls back to the
+   stored text.
+2. **Deployed to a Mac mini, and the two machines' roles got rewritten in the
+   process** (`ad9cc68` 19:05 through `cbc991b` 21:14, eight commits, plus
+   `9e9b32f`'s unrelated merge of the remote's LICENSE-only initial commit).
+   `mastri.app` now serves off a Mac mini behind a named, password-gated
+   Cloudflare tunnel; `poll.sh` polls `origin/main` every ≤2 minutes, refuses a
+   checkout that doesn't import and rolls it back, and the poller itself lives
+   outside the checkout so a bad commit can't brick its own remedy. Bugs found
+   deploying for real: `poll.sh` called `tracker init --migrate`, a flag `init`
+   doesn't have, silently skipped every migration; `serve.sh` had three checks
+   for reaching Cloudflare and none for the password `tracker cloudflare`
+   itself requires, so a missing password meant launchd crash-looped it every
+   ten seconds; a second tunnel check was needed because `cloudflared tunnel
+   login`'s `cert.pem` is per-account but `tunnel create`'s `<uuid>.json` is
+   per-tunnel and doesn't travel with a git checkout; the checkout itself first
+   landed at `~/dc-tracker` with an invented `~/dc-tracker-ops` sibling,
+   violating the user's own global CLAUDE.md rule (projects go under `dev/`,
+   never under `~`) before being caught and moved to `~/dev/tracker/{repo,ops}`;
+   and a CRLF line-ending regression in `deploy/*.sh` (reintroduced by editing
+   from Windows) took the console down via `/bin/zsh\r: no such file or
+   directory`, fixed by pinning `*.sh`/`*.plist` to `eol=lf`. Underneath all of
+   that, `sync_db.py` replaced `ship_db.py` and reversed the data flow: the
+   mini is now the sole writer — ingest and enrich only ever run there — and
+   this dev machine's copy of the database is disposable, pulled down via
+   `VACUUM INTO` rather than ever pushed except to seed or restore a host,
+   refusing whenever the destination holds rows the source doesn't. The CLI is
+   symlinked onto the mini's `PATH`, and `/api/health` now reports the commit
+   it's actually serving, read straight from `.git/HEAD` rather than shelling
+   out. All of this is now written down as `CLAUDE.md` — the operating rules
+   for whichever machine you're on, including the rule that governs this very
+   run: ingest/enrich/merge/backfill only run on the mini, this repo only
+   reads.
+
+Carried forward unchanged: `work/` (a teammate's Hyperion review material,
+unchanged since 2026-08-15) and the untracked reference PDF in `docs/`
+(unchanged since 2026-08-06, eleven days carried as of the last run). The
+2026-08-12 live-database purge (1,189 → 300 projects) is still unexplained.
+
+## Today (2026-08-17 run)
+
+- **No new commits landed in this run's own window** (`git log --since
+  "2026-08-17 00:00"` empty). This run's work was entirely the accounting
+  above: ten 2026-08-16 commits sitting unrecorded in git history, none of
+  them uncommitted work this time — everything from the reader view through
+  the mini deploy had already landed on `main`.
+- **Verified the suite green**: full `.venv` pytest run, 2,138 tests collected
+  (up from 2,120 on 2026-08-16), 0 failures/0 errors/0 skipped confirmed via
+  `--junitxml`. Ruff clean. One "Exception occurred during processing of
+  request" line printed to stderr mid-run from a webui test that deliberately
+  exercises a server error path — not a failure, the junit summary counts
+  zero.
+- **No CHANGELOG.md/README.md/docs/architecture.md editing needed this run** —
+  every one of the ten commits above wrote its own docs in the same diff (the
+  `.[reader]` extra and reader-view section, the two-machine deploy section,
+  `/api/health`'s new `commit` field), continuing this project's usual
+  pattern. No AGENTS.md exists, still correctly so: the new `CLAUDE.md`
+  documents which *machine* may do what, not distinct agent roles in the
+  software — this remains one CLI/data-pipeline codebase.
+- **Followed the new operating rules rather than just reading them**: this run
+  ran no ingest/enrich/merge/backfill command and did not re-run the live
+  database measurement commands (`audit`, `risks`, `duplicates`, `blocks`,
+  `logic check`, `sources`, `feeds`) — permitted read-only on this machine per
+  `CLAUDE.md`, but outside a documentation-only run's scope. Did not `ssh mm`
+  to confirm `mastri.app` is actually serving `cbc991b` — see Tomorrow.
+- `work/` and the untracked reference PDF in `docs/` are unchanged since the
+  last run (2026-08-15 and 2026-08-06 respectively — twelve days now for the
+  PDF). The 2026-08-12 purge remains unresolved, untouched by anything in this
+  window.
+
 ## Yesterday (state at start of 2026-08-16)
 
 The 2026-08-15 run (`d84ce54`) committed the enrich settle-step work that had
@@ -937,9 +1034,10 @@ branch, not this branch's work, left alone.
 
 ## Tomorrow
 
-- **Top priority, now four days old: find out who ran the 2026-08-12 purge
+- **Top priority, now five days old: find out who ran the 2026-08-12 purge
   and why, and whether 889 of 1,189 projects were meant to go.** Still 300
-  live as of 2026-08-16, confirmed by direct count, not re-derived.
+  live as of 2026-08-16, confirmed by direct count, not re-derived; not
+  re-checked 2026-08-17 (housekeeping-only run, no db access).
   `data/tracker.backup-before-purge-20260812.db` is still the only record
   of it — no commit, script, or doc names the criteria, and nothing landed
   2026-08-13 touches project counts either. This now also caps how far to
@@ -1042,15 +1140,24 @@ branch, not this branch's work, left alone.
   are still wired up but unrun — ninth day carried.
 - The 30-required-projects gap, unverified ERCOT/CAISO column names, and the
   two unconfigured Google CSE keys are still open — ninth day carried.
-- `tracker cloudflare --name`/`TRACKER_TUNNEL_HOSTNAME` still need a real
-  run against a named tunnel with DNS actually pointed at it.
+- ~~`tracker cloudflare --name`/`TRACKER_TUNNEL_HOSTNAME` still need a real
+  run against a named tunnel with DNS actually pointed at it.~~ **Done** —
+  `ad9cc68` (2026-08-16) published `mastri.app` through a real named tunnel on
+  the Mac mini.
+- **The mini deploy loop (`CLAUDE.md`, `ad9cc68`…`cbc991b`) has never been
+  watched end-to-end from outside**: no one has confirmed a push actually
+  reaches `mastri.app` within the ≤2-minute poll window, that a
+  non-importing commit really rolls back rather than half-applies, or that
+  `/api/health`'s reported commit matches `git rev-parse` on the mini after a
+  real deploy — all verified by code reading and unit tests, not by watching
+  a live push land. Worth doing once someone is at the keyboard with `ssh mm`.
 - `tracker audit`, the evidence-quote gate, and `quality`/the claim envelope
   are all measured only against the live database as it stands today — worth
   rerunning after the next sync, truer than ever now that today's counts
   moved this much since 08-09.
 - **An untracked 2 MB PDF still sits in `docs/`**
   (`docs/能源科技AI系列报告（三）：北美AI电力新趋势PPT+ED (1).pdf`, added
-  2026-08-06 14:52, unchanged since — eleven days now). Still reference
+  2026-08-06 14:52, unchanged since — twelve days now). Still reference
   material, not project output; still needs a human call on whether it
   belongs in the repo, `.gitignore`, or somewhere else entirely.
 - **The untracked `work/` directory** (four `.pptx` decks, three `.pdf`
