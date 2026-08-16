@@ -43,9 +43,12 @@ if ! git diff --quiet "$local_head" "$remote_head" -- pyproject.toml; then
   uv pip install --quiet -e ".[reader,impersonate,iso]" || { log "dependency sync failed"; exit 1; }
 fi
 
-# Migrations run before the new code serves the old schema.
-if ! .venv/bin/python -m tracker init --migrate >/dev/null 2>&1; then
-  log "WARNING: migrate reported a problem; check with 'tracker init --migrate'"
+# Migrations, so new code never serves an old schema. `init` takes no flags: it
+# applies what is outstanding and recomputes the derived values, and it is a
+# write -- but only to this replica, which the next `ship_db.py` overwrites
+# wholesale, so nothing can drift here for longer than one deploy.
+if ! .venv/bin/python -m tracker init >>"$HOME/dc-tracker-ops/logs/deploy.log" 2>&1; then
+  log "WARNING: 'tracker init' failed; schema may be behind the code"
 fi
 
 # **Import before restart.** A commit that does not import takes the console down
