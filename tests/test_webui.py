@@ -2365,3 +2365,23 @@ def test_a_page_that_really_is_latin1_still_decodes():
 
     raw = "<p>Café naïve</p>".encode("latin-1")
     assert "Café naïve" in article._decode(raw, "text/html; charset=iso-8859-1")
+
+
+def test_health_reports_the_commit_it_is_serving(server):
+    """Which version is in production is a question the deploy pipeline created.
+
+    Code reaches the host by a poller rather than by a person, so "is my fix live
+    yet?" has no answer at the keyboard, and a restart is not proof that the
+    restart picked up the intended commit.
+    """
+    import subprocess
+
+    from tracker.webui.server import deployed_commit
+
+    status, body = request(server[0], "/api/health")
+    assert status == 200 and body["ok"] is True
+    expected = subprocess.run(
+        ["git", "rev-parse", "--short=8", "HEAD"], capture_output=True, text=True
+    ).stdout.strip()
+    if expected:  # a tarball install has no .git, and reports None
+        assert body["commit"] == expected == deployed_commit()

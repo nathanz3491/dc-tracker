@@ -465,6 +465,21 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **`CLAUDE.md`: the operating rules for a two-machine setup.** Which machine you
+  are on now decides what you may do, and none of that is inferable from the
+  code: code goes out through GitHub and never by hand, data is made on the mini
+  and ingest here writes nothing that survives, the database moves only through
+  `sync_db.py`, and the five paths outside the project are listed with what
+  dictates each. `deploy/README.md` stays the runbook; this is the rules.
+
+- **`/api/health` reports the commit it is serving** (`webui/server.py`).
+
+  A question this pipeline created: code reaches the host by a poller rather than
+  by a person, so "is my fix live yet?" has no answer at the keyboard, and a
+  restart is not proof the restart picked up the commit you meant. Read from
+  `.git` directly rather than by running `git` — it answers a health check, and a
+  subprocess per request is a cost with no return.
+
 - **The Mac mini is the writer** (`scripts/sync_db.py`, replacing `ship_db.py`).
 
   It runs ingest and enrich now, not just the console — always-on is what a job

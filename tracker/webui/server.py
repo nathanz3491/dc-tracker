@@ -14,12 +14,14 @@ import logging
 import queue
 import threading
 import webbrowser
+from functools import lru_cache
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, ClassVar
 from urllib.parse import parse_qs, urlsplit
 
 from tracker import __version__
+from tracker.config import install_root
 from tracker.db import MigrationError, open_db, schema_version, session_scope
 from tracker.webui import assets, catalog, runs
 from tracker.webui.auth import COOKIE, Gate, cookie_value
@@ -44,6 +46,40 @@ GZIP_MIN = 8192
 #: a route that generates itself from a JavaScript array.
 READ_VIEWS: frozenset[str] = frozenset({"overview", "projects", "sources", "map", "capex"})
 DEV_VIEWS: frozenset[str] = frozenset({"pipeline", "commands", "help"})
+
+
+@lru_cache(maxsize=1)
+def deployed_commit() -> str | None:
+    """The commit this process is serving, or None when there is no checkout.
+
+    **Which version is in production is a question this system created.** Code
+    now reaches the host by a poller rather than by a person, so "is my fix live
+    yet?" has no answer at the keyboard — the deploy log is on the far side of an
+    ssh, and a restart is not proof that the restart picked up the commit you
+    meant.
+
+    Read from `.git` directly rather than by running `git`: this is answered on a
+    health check, and a subprocess per request is a cost with no return. Cached,
+    because the answer cannot change without the process restarting — the
+    deployer restarts it precisely so that it does.
+    """
+    head = install_root() / ".git" / "HEAD"
+    try:
+        ref = head.read_text(encoding="utf-8").strip()
+        if ref.startswith("ref: "):
+            target = install_root() / ".git" / ref[5:]
+            if target.is_file():
+                return target.read_text(encoding="utf-8").strip()[:8]
+            # A packed ref: the loose file is gone once `git gc` has run.
+            packed = install_root() / ".git" / "packed-refs"
+            name = ref[5:]
+            for line in packed.read_text(encoding="utf-8").splitlines():
+                if line.endswith(f" {name}"):
+                    return line.split()[0][:8]
+            return None
+        return ref[:8]  # detached HEAD
+    except OSError:
+        return None
 
 
 class Console:
@@ -366,7 +402,9 @@ class Handler(BaseHTTPRequestHandler):
         if route == "/api/landing":
             return self._landing()
         if route == "/api/health":
-            return self._json({"ok": True, "version": __version__})
+            return self._json(
+                {"ok": True, "version": __version__, "commit": deployed_commit()}
+            )
         self._error(404, f"no route {route!r}")
 
     def do_POST(self) -> None:
