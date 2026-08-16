@@ -52,5 +52,19 @@ if [ ! -f "$HOME/.cloudflared/$id.json" ]; then
   exec "$python" -m tracker serve "${mode[@]}"
 fi
 
+# **A password is a precondition for publishing, so it is checked with the rest.**
+# `tracker cloudflare` refuses without one, correctly -- but refusing means
+# exiting, and exiting under KeepAlive means launchd restarts it into the same
+# refusal about every ten seconds. That took the console down: every other
+# precondition had been met, so this script stopped falling back and started
+# handing launchd a command that could only fail. A missing password is a reason
+# not to publish, never a reason not to serve.
+password=$(sed -n 's/^TRACKER_CONSOLE_PASSWORD=//p' "$REPO/.env" 2>/dev/null | tr -d '"'"'"' \r')
+if [ -z "${TRACKER_CONSOLE_PASSWORD:-$password}" ]; then
+  echo "not published: TRACKER_CONSOLE_PASSWORD is empty in $REPO/.env."
+  echo "  A tunnel bypasses the loopback-only check by design; the password replaces it."
+  exec "$python" -m tracker serve "${mode[@]}"
+fi
+
 echo "publishing through named tunnel '$name'"
 exec "$python" -m tracker cloudflare --name "$name" "${mode[@]}"
