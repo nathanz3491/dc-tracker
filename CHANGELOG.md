@@ -465,6 +465,22 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **The Mac mini is the writer** (`scripts/sync_db.py`, replacing `ship_db.py`).
+
+  It runs ingest and enrich now, not just the console — always-on is what a job
+  measured in hours wants, and it serves the console from the same file it
+  writes. SQLite takes one writer and any number of readers, so `mastri.app`
+  stays up through a crawl.
+
+  That inverts the data flow. `ship_db.py` pushed dev to prod because prod held
+  no keys and never wrote; once the mini started ingesting, pushing meant
+  overwriting the only copy of work that existed. `sync_db.py` pulls by default
+  and refuses either direction when the destination holds rows the source does
+  not — there is no merge here, a whole file replaces a whole file.
+
+  Most of the CLI is unaffected and runs anywhere: `gaps`, `sources`, `overview`,
+  `export` and `capex` only read.
+
 - **Production deploys to the Mac mini** (`deploy/` **new**, `scripts/ship_db.py`
   **new**).
 

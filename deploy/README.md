@@ -1,19 +1,31 @@
 # Deploying to the Mac mini
 
 ```
-this machine (sole writer) ──git push──▶ github ──poll 2min──▶ mac mini
-        └────────── scripts/ship_db.py over ssh ─────────────▶ serve --no-run
-                                                               └─▶ mastri.app
+this machine ──git push──▶ github ──poll 2min──▶ mac mini ──▶ mastri.app
+     ▲                                          (the writer:
+     └────── scripts/sync_db.py over ssh ────────  ingest, enrich, merge)
 ```
 
-Two things travel, by different roads, and that split is the design:
+**Code flows out; data flows back.** Code goes through GitHub, so every deploy is
+a commit somebody can read. The database never goes through git — it is
+gitignored, and a 16 MB binary in history is a mistake that compounds.
 
-- **code** goes through GitHub, so every deploy is a commit somebody can read;
-- **data** goes straight over SSH, because the database is gitignored and a
-  16 MB binary in git history would be a mistake that compounds.
+**The mini is the writer, and there is exactly one.** It is always on, which is
+what a job measured in hours wants, and it serves the console from the same file
+it writes. Every command that changes data runs there: `ingest`, `enrich`,
+`merge`, `infer`, `backfill`. This machine develops against a copy and pulls a
+fresh one when it wants current numbers.
 
-The development machine stays the **only writer**. Production never runs a model,
-never searches, never writes a row — so it holds no API keys at all.
+That split matters more than it looks. There is **no merge** — a whole file
+replaces a whole file — so two machines ingesting independently would mean the
+later copy silently destroys the earlier one's work. Most of the CLI is
+unaffected: `gaps`, `sources`, `overview`, `export` and `capex` only read, and
+run anywhere.
+
+The console opens the database read-only (`serve --no-run`) while ingest writes
+it. SQLite in WAL mode takes one writer and any number of readers, so the site
+stays up through a crawl — verified with a `backfill derive` pass running against
+a live `mastri.app`.
 
 ---
 
@@ -54,7 +66,8 @@ scp deploy/poll.sh mm:/tmp/ && ssh mm 'install -m 755 /tmp/poll.sh ~/dev/tracker
 ```
 
 **Shell scripts must stay LF in the working tree.** They are shipped to macOS
-verbatim by `scp`, and a CRLF file fails at the shebang — `/bin/zsh` is not a
+verbatim by `scp`, and a CRLF file fails at the shebang — `/bin/zsh
+` is not a
 file that exists, so the error blames the interpreter and says nothing about line
 endings. `.gitattributes` pins `*.sh` and `*.plist` to `eol=lf`; a Python rewrite
 on Windows reintroduced CRLF once and took the console down.
@@ -121,8 +134,9 @@ survives restarts, which a quick-tunnel URL does not.
 ## Deploying
 
 ```bash
-git push                                    # code
-python scripts/ship_db.py                   # data
+git push                                    # code goes out
+ssh mm 'cd ~/dev/tracker/repo && .venv/bin/tracker ingest crawl'   # data is made there
+python scripts/sync_db.py                   # and pulled back here
 ```
 
 Within two minutes `deploy.log` shows the new commit and a restart. To skip the
@@ -132,13 +146,18 @@ wait:
 ssh mm '~/dev/tracker/ops/poll.sh'
 ```
 
-`ship_db.py` never copies the database file. It runs `VACUUM INTO`, which asks
-SQLite for a consistent single-file snapshot with the WAL folded in; a plain copy
-of a WAL-mode database opens cleanly and is silently out of date, which has cost
-this project a wrong answer once already. The snapshot is checked
-(`integrity_check`, and no table smaller than the source) before it is sent, and
-lands under a temporary name that is then renamed, so a reader sees one database
-or the other and never a half-written one.
+`sync_db.py` pulls by default, because that is now the safe direction. `--push`
+exists for seeding a new host or restoring one, and **refuses when the far end
+holds rows this database does not** — which is what losing an ingest looks like
+from here. `--force` overrides it deliberately.
+
+Neither direction copies the file. `VACUUM INTO` runs on whichever machine is the
+source and asks SQLite for a consistent single-file snapshot with the WAL folded
+in; a plain copy of a WAL-mode database opens cleanly and is silently out of
+date, which has cost this project a wrong answer once already. The result is
+checked (`integrity_check`, and no table smaller than the source) before it
+replaces anything, and a pull also clears the old `-wal`/`-shm` siblings, which
+otherwise describe a database that no longer exists here.
 
 ---
 
