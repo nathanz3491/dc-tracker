@@ -19,22 +19,45 @@ never searches, never writes a row — so it holds no API keys at all.
 
 ## The parts
 
+Everything lives under one project directory, `~/dev/tracker`:
+
 | Where | What |
 | --- | --- |
-| `~/dc-tracker` | the clone, reset to `origin/main` on every deploy |
-| `~/dc-tracker-ops/serve.sh` | starts the console; publishes if it can |
-| `~/dc-tracker-ops/poll.sh` | notices a push, takes it down, restarts |
-| `~/dc-tracker-ops/logs/` | `serve.log`, `deploy.log` |
-| `app.mastri.dctracker.serve` | launchd, `KeepAlive` |
-| `app.mastri.dctracker.poll` | launchd, every 120s |
+| `~/dev/tracker/repo` | the clone, reset to `origin/main` on every deploy |
+| `~/dev/tracker/ops/serve.sh` | starts the console; publishes if it can |
+| `~/dev/tracker/ops/poll.sh` | notices a push, takes it down, restarts |
+| `~/dev/tracker/ops/logs/` | `serve.log`, `deploy.log` |
+
+`ops/` sits beside the checkout rather than inside it, which is what lets the
+deployer survive the deploy — see below — while still living under the project.
+
+**Four paths are outside the project, and only because the OS dictates them.**
+Nothing else is:
+
+| Path | Dictated by |
+| --- | --- |
+| `~/Library/LaunchAgents/app.mastri.dctracker.{serve,poll}.plist` | launchd loads user agents only from here |
+| `~/.ssh/dc_tracker_deploy`, and a `github-dctracker` block in `~/.ssh/config` | ssh reads keys and host aliases only from here |
+| `~/.cloudflared/cert.pem` | written by `cloudflared tunnel login`; per account, not per project |
+| `~/.cloudflared/<tunnel-uuid>.json` | written by `cloudflared tunnel create`; the tunnel will not run without it |
+
+None of the four holds anything this repository could carry instead. The plists
+are committed here in `deploy/` and hold no secrets; the other three are
+credentials and are not committed anywhere.
 
 **The running `poll.sh` is a copy, not the repo's file.** A deployer that deploys
 itself can be bricked by one bad commit — the broken version is what runs next,
 so it can never pull the fix. Updating it is a conscious step:
 
 ```bash
-scp deploy/poll.sh mm:/tmp/ && ssh mm 'install -m 755 /tmp/poll.sh ~/dc-tracker-ops/'
+scp deploy/poll.sh mm:/tmp/ && ssh mm 'install -m 755 /tmp/poll.sh ~/dev/tracker/ops/'
 ```
+
+**Shell scripts must stay LF in the working tree.** They are shipped to macOS
+verbatim by `scp`, and a CRLF file fails at the shebang — `/bin/zsh` is not a
+file that exists, so the error blames the interpreter and says nothing about line
+endings. `.gitattributes` pins `*.sh` and `*.plist` to `eol=lf`; a Python rewrite
+on Windows reintroduced CRLF once and took the console down.
 
 ---
 
@@ -83,7 +106,7 @@ Then set the console password — required, because a tunnel bypasses the
 loopback-only check by design and the password is what replaces it:
 
 ```bash
-ssh mm 'vi ~/dc-tracker/.env'      # TRACKER_CONSOLE_PASSWORD=
+ssh mm 'vi ~/dev/tracker/repo/.env'      # TRACKER_CONSOLE_PASSWORD=
 ssh mm 'launchctl kickstart -k gui/$(id -u)/app.mastri.dctracker.serve'
 ```
 
@@ -106,7 +129,7 @@ Within two minutes `deploy.log` shows the new commit and a restart. To skip the
 wait:
 
 ```bash
-ssh mm '~/dc-tracker-ops/poll.sh'
+ssh mm '~/dev/tracker/ops/poll.sh'
 ```
 
 `ship_db.py` never copies the database file. It runs `VACUUM INTO`, which asks
@@ -122,8 +145,8 @@ or the other and never a half-written one.
 ## When it goes wrong
 
 ```bash
-ssh mm 'tail -30 ~/dc-tracker-ops/logs/deploy.log'
-ssh mm 'tail -30 ~/dc-tracker-ops/logs/serve.log'
+ssh mm 'tail -30 ~/dev/tracker/ops/logs/deploy.log'
+ssh mm 'tail -30 ~/dev/tracker/ops/logs/serve.log'
 ssh mm 'launchctl list | grep mastri'          # 2nd column is the last exit code
 ssh mm 'curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:8765/api/health'
 ```

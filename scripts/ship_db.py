@@ -47,7 +47,7 @@ from pathlib import Path
 _COUNTED = ("project", "source", "event", "risk", "capacity_block", "ingest_url")
 
 DEFAULT_HOST = "mm"
-DEFAULT_REMOTE = "~/dc-tracker/data/tracker.db"
+DEFAULT_REMOTE = "~/dev/tracker/repo/data/tracker.db"
 
 
 def counts(path: Path) -> dict[str, int]:

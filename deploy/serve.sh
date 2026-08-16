@@ -12,7 +12,7 @@
 # than crash-looping under launchd every ten seconds with an error nobody reads.
 set -u
 
-REPO="$HOME/dc-tracker"
+REPO="$HOME/dev/tracker/repo"
 PORT=8765
 cd "$REPO" || exit 1
 

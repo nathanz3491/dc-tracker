@@ -4,13 +4,13 @@
 <dict>
   <key>Label</key><string>app.mastri.dctracker.poll</string>
   <key>ProgramArguments</key>
-  <array><string>/Users/nz/dc-tracker-ops/poll.sh</string></array>
+  <array><string>/Users/nz/dev/tracker/ops/poll.sh</string></array>
   <key>RunAtLoad</key><true/>
   <!-- Two minutes. The mini is behind NAT, so this replaces a webhook. -->
   <key>StartInterval</key><integer>120</integer>
-  <key>WorkingDirectory</key><string>/Users/nz/dc-tracker</string>
-  <key>StandardOutPath</key><string>/Users/nz/dc-tracker-ops/logs/deploy.log</string>
-  <key>StandardErrorPath</key><string>/Users/nz/dc-tracker-ops/logs/deploy.log</string>
+  <key>WorkingDirectory</key><string>/Users/nz/dev/tracker/repo</string>
+  <key>StandardOutPath</key><string>/Users/nz/dev/tracker/ops/logs/deploy.log</string>
+  <key>StandardErrorPath</key><string>/Users/nz/dev/tracker/ops/logs/deploy.log</string>
   <key>EnvironmentVariables</key>
   <dict><key>PATH</key><string>/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string></dict>
 </dict>

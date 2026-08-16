@@ -8,14 +8,14 @@
 # and two minutes is well inside "I pushed, go look" latency.
 #
 # **The running copy of this script lives outside the repo**, at
-# ~/dc-tracker-ops/poll.sh, and is deliberately not updated by the deploy it
+# ~/dev/tracker/ops/poll.sh, and is deliberately not updated by the deploy it
 # performs. A deployer that deploys itself can be bricked by one bad commit: the
 # broken version is what runs next, so it can never pull the fix. The canonical
 # copy is here in the repo for review and history; installing an update is a
 # conscious `cp`, documented in deploy/README.md.
 set -u
 
-REPO="$HOME/dc-tracker"
+REPO="$HOME/dev/tracker/repo"
 BRANCH="main"
 LABEL="app.mastri.dctracker.serve"
 export PATH="/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
@@ -47,7 +47,7 @@ fi
 # applies what is outstanding and recomputes the derived values, and it is a
 # write -- but only to this replica, which the next `ship_db.py` overwrites
 # wholesale, so nothing can drift here for longer than one deploy.
-if ! .venv/bin/python -m tracker init >>"$HOME/dc-tracker-ops/logs/deploy.log" 2>&1; then
+if ! .venv/bin/python -m tracker init >>"$HOME/dev/tracker/ops/logs/deploy.log" 2>&1; then
   log "WARNING: 'tracker init' failed; schema may be behind the code"
 fi
 
