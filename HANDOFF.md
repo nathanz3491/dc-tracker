@@ -1,5 +1,67 @@
 # Handoff
 
+## Yesterday (state at start of 2026-08-18)
+
+The 2026-08-17 run (`f694d0a`) found no new commits in its own window — a
+housekeeping-only pass recording ten already-landed 2026-08-16 commits (the
+reader view and the Mac mini deploy) and verifying 2,138 tests green, ruff
+clean. That commit itself was never pushed to `origin/main` — this run found
+it still sitting one commit ahead of the remote a full day later, the first
+time a handoff commit has gone unpushed. `work/` (unchanged since 2026-08-15)
+and the untracked reference PDF in `docs/` (unchanged since 2026-08-06,
+twelve days at that point) were carried forward untouched. The 2026-08-12
+live-database purge (1,189 → 300 projects) remained unexplained.
+
+## Today (2026-08-18 run)
+
+- **No new commits landed in this run's own window** (`git log --since
+  "2026-08-18 00:00"` empty). Housekeeping only.
+- **Verified the suite green**: full `.venv` pytest run, 2,138 tests
+  collected (unchanged from 2026-08-17), 0 failures/0 errors/0 skipped
+  confirmed via `--junitxml` (plain `-q` output again truncated before the
+  summary line by the same tooling quirk noted 2026-08-16). Ruff clean.
+- **Found, not caused, by this run: the mini has been unable to reach GitHub
+  for about 14 hours.** Following `CLAUDE.md`'s "confirm what is actually
+  live" instruction turned up more than confirmation. `ssh mm` succeeds and
+  the console itself is up and serving (`curl localhost:8765/` → 200,
+  `/api/health` → `{"error": "sign in first"}`, both expected), still on
+  `cbc991b` — the last commit that actually deployed, 2026-08-16 21:15:28.
+  But `ops/logs/deploy.log` shows every poll failing with `fetch failed
+  (network?)` starting 2026-08-17 21:38:44 and continuing unbroken through
+  this run (11:50, 2026-08-18) — 424 consecutive failures. Diagnosed rather
+  than just noted: DNS resolves (`100.100.100.100`, a Tailscale-style
+  resolver), `ping 8.8.8.8` succeeds, and a raw `nc -zv github.com 443`
+  connects — but `curl https://github.com` hangs indefinitely, and verbose
+  output shows the TLS handshake completing the server's Certificate and
+  CERT-verify records before going silent, never finishing. That shape
+  (handshake completes, larger post-handshake records never arrive) points
+  at packet-size/fragmentation trouble on one of the mini's tunnel
+  interfaces (`netstat -rn` shows the default route split across `en1` and
+  four `utun` interfaces), not a DNS or auth problem and not GitHub-specific
+  (`https://www.google.com` hangs identically). Made no changes on the
+  mini — diagnosis only, since a network/tunnel fix is a system-configuration
+  change outside this run's remit. See Tomorrow.
+- **Consequently, `f694d0a` (yesterday's handoff commit) still hasn't
+  reached the mini** — it never left `origin/main` either, since it was
+  never pushed (see Yesterday). Left unpushed again this run rather than
+  pushed blind: pushing wouldn't help while the mini can't fetch, and
+  CLAUDE.md's own workflow is push-then-poll, not push-and-hope.
+- No CHANGELOG.md/README.md/docs/architecture.md edit needed — nothing
+  changed. No AGENTS.md exists, still correctly so: one CLI/data-pipeline
+  codebase, no distinct agent roles.
+- `work/` and the untracked reference PDF in `docs/` are unchanged since the
+  last run (2026-08-15 and 2026-08-06 respectively — thirteen days now for
+  the PDF). The 2026-08-12 purge remains unresolved, untouched by anything
+  in this window.
+- **For next session:** the mini's outbound HTTPS needs a person, not a
+  repair from here — start from the tunnel interfaces (`netstat -rn`'s four
+  `utun` entries), an MTU mismatch on one of them being the leading suspect
+  given TLS handshakes start and then stall. Until it's fixed, `poll.sh`
+  cannot pull `main` no matter how many commits are pushed. Push `f694d0a`
+  (and this run's commit) once the mini's network is confirmed working
+  again — pushing now would just sit unfetched. The 2026-08-12 purge is
+  still unexplained, now six days old.
+
 ## Yesterday (state at start of 2026-08-17)
 
 The 2026-08-16 run recorded as of `2355dc1` (10:47) — the source-policy and
