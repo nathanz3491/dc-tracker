@@ -1,5 +1,81 @@
 # Handoff
 
+## Yesterday (state at start of 2026-08-21)
+
+The 2026-08-18 run (`582c754`) found no new commits in its own window and used
+CLAUDE.md's "confirm what is actually live" step to discover the mini had been
+unable to reach GitHub for about 14 hours at that point — `poll.sh` failing
+every ~2 minutes since 2026-08-17 21:38:44 with `fetch failed (network?)`,
+diagnosed (via `curl https://github.com` on port 443 hanging mid-TLS-handshake)
+as likely a packet-fragmentation/MTU problem on one of the mini's tunnel
+interfaces. The console itself stayed up throughout, still serving `cbc991b`
+(the last commit that actually deployed, 2026-08-16 21:15:28). That commit,
+and `f694d0a` before it, were left unpushed — pushing wouldn't help while the
+mini can't fetch. No commits landed, and **no handoff ran, on 2026-08-19 or
+2026-08-20** — the first multi-day gap in this file's own history. `work/`
+(unchanged since 2026-08-15) and the untracked reference PDF in `docs/`
+(unchanged since 2026-08-06, fourteen days at that point) carried forward
+untouched. The 2026-08-12 live-database purge (1,189 → 300 projects) remained
+unexplained.
+
+## Today (2026-08-21 run)
+
+- **No new commits landed across the whole gap** (`git log --since
+  "2026-08-19 00:00"` empty) — the missing 08-19/08-20 handoffs represent a
+  scheduling gap, not unrecorded work; nothing happened on `main` in that
+  window.
+- **Verified the suite green**: full `.venv` pytest run, 2,138 tests collected
+  (unchanged since 08-17), 0 failures/0 errors/0 skipped confirmed via
+  `--junitxml`. Ruff clean.
+- **The mini's GitHub outage is still ongoing** — confirmed live rather than
+  assumed: `ssh mm` succeeds, the console is still up and serving `cbc991b`
+  (`curl localhost:8765/` → 200), and `ops/logs/deploy.log` shows unbroken
+  `fetch failed (network?)` entries from 2026-08-17 21:38:44 straight through
+  this run (05:22, 2026-08-21) — 811 consecutive failures, roughly 3.5 days
+  now, no self-recovery.
+- **Yesterday's diagnosis tested the wrong protocol, and the real cause is
+  narrower and more fixable than an MTU guess.** `poll.sh`'s `git fetch`
+  doesn't use HTTPS at all — the mini's `origin` remote is an SSH alias
+  (`github-dctracker` → `git@github.com` port 22, via
+  `~/.ssh/dc_tracker_deploy`), never tested on 08-18, which checked `curl` on
+  port 443 instead. Run directly this session: `ssh -T git@github.com` on
+  port 22 connects at the TCP layer but is closed by GitHub's own host
+  (`20.205.243.166`) during `kex_exchange_identification`, before any key
+  exchange — an earlier and different failure than a stalled TLS handshake.
+  Meanwhile a plain `curl https://github.com` from the mini now returns 200,
+  so port 443 itself is not broken today, which the 08-18 tunnel/MTU theory
+  wouldn't predict. Testing GitHub's own documented fallback — SSH over port
+  443 to `ssh.github.com` — got measurably further: TCP and TLS both connect
+  and the exchange reaches host-key verification (`Host key verification
+  failed`, expected since that host isn't pinned in this identity's
+  `known_hosts`) rather than being closed outright. That points at outbound
+  **port 22 specifically being blocked or filtered** somewhere upstream of the
+  mini (ISP/router policy), not a generic tunnel-interface fragmentation
+  issue.
+- **Fix identified, not applied.** Changing `~/.ssh/config`'s
+  `github-dctracker` block to `HostName ssh.github.com` / `Port 443` and
+  accepting its host key is a system-configuration change on a production
+  machine, made without a person present in this run — left for one,
+  consistent with 08-18's own reasoning for not touching the network
+  unattended. Once made, `poll.sh` should succeed on its next ≤2-minute cycle
+  with no code change needed.
+- Still left `f694d0a` and `582c754` unpushed (2 commits ahead of
+  `origin/main`, unchanged from 08-18) — same reasoning as before, sharper now
+  that the cause is identified: pushing before the SSH host is fixed would
+  still just sit unfetched.
+- No CHANGELOG.md/README.md/docs/architecture.md edit needed — nothing
+  changed in the codebase. No AGENTS.md exists, still correctly so: one
+  CLI/data-pipeline codebase, no distinct agent roles.
+- `work/` and the untracked reference PDF in `docs/` are unchanged since the
+  last run (2026-08-15 and 2026-08-06 respectively — fifteen days now for the
+  PDF). The 2026-08-12 purge remains unresolved, now nine days old, untouched
+  by anything in this window.
+- **For next session:** fix the mini's SSH remote (see above) before spending
+  any more time on the 08-18 tunnel/MTU theory — it's very likely a red
+  herring now that the actual failing protocol and port have been isolated.
+  Push the pending handoff commits (`f694d0a`, `582c754`, and this run's) once
+  the mini can fetch again. The 2026-08-12 purge is still unexplained.
+
 ## Yesterday (state at start of 2026-08-18)
 
 The 2026-08-17 run (`f694d0a`) found no new commits in its own window — a
