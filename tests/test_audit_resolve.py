@@ -19,6 +19,7 @@ import json
 import pytest
 
 from tracker import audit
+from tracker import blocks as blocks_mod
 from tracker.models import Project, Source
 
 
@@ -100,7 +101,11 @@ def test_a_tranche_whose_label_states_its_own_capacity_is_settled_for_free(sessi
 
     assert got.stage == "arithmetic"
     assert got.acted
-    assert project.blocks[0].mw == pytest.approx(2.4)
+    # The figure stays visible and stops being counted. Asserting the label's 2.4 MW
+    # *into* the row is what this used to do, and it could not survive a recompute:
+    # the claim still said 2400, so the next `blocks.rebuild` restored it.
+    assert project.blocks[0].mw == pytest.approx(2400.0)
+    assert not blocks_mod.mw_is_confirmed(project.blocks[0])
     assert "thousand times" in got.reason
 
 
@@ -116,17 +121,17 @@ def test_a_tranche_the_label_does_not_explain_is_left_to_the_ladder(session):
 def test_the_operator_is_asked_before_any_model_is(session):
     project, finding = _out_of_scale(session, label="Phase 1", mw=2250.0)
     model = _Model()
-    got = audit.resolve_one(session, project, finding, extractor=model, ask=lambda *_: "c")
+    got = audit.resolve_one(session, project, finding, extractor=model, ask=lambda *_: "u")
 
     assert got.stage == "operator"
-    assert project.blocks[0].mw is None
+    assert not blocks_mod.mw_is_confirmed(project.blocks[0])
     assert model.prompts == [], "the model must not be asked what a person answered"
 
 
 def test_a_shrug_at_the_keyboard_hands_the_question_down(session):
     """Not knowing is the commonest honest answer and must cost one keystroke."""
     project, finding = _out_of_scale(session, label="Phase 1", mw=2250.0)
-    model = _Model('{"key": "c", "confidence": 0.8, "reason": "no quote anywhere"}')
+    model = _Model('{"key": "u", "confidence": 0.8, "reason": "no quote anywhere"}')
     got = audit.resolve_one(session, project, finding, extractor=model, ask=lambda *_: None)
 
     assert got.stage == "model"
@@ -147,7 +152,7 @@ def test_a_skip_at_the_keyboard_stops_there(session):
 
 def test_a_model_below_the_confidence_floor_changes_nothing(session):
     project, finding = _out_of_scale(session, label="Phase 1", mw=2250.0)
-    model = _Model('{"key": "c", "confidence": 0.4, "reason": "probably"}')
+    model = _Model('{"key": "u", "confidence": 0.4, "reason": "probably"}')
     got = audit.resolve_one(session, project, finding, extractor=model)
 
     assert not got.acted
@@ -166,7 +171,7 @@ def test_an_option_that_was_not_offered_is_refused(session):
 def test_an_answer_with_no_reason_is_unusable(session):
     """The reason is stored on the project and read by people later."""
     project, finding = _out_of_scale(session, label="Phase 1", mw=2250.0)
-    model = _Model('{"key": "c", "confidence": 0.9}')
+    model = _Model('{"key": "u", "confidence": 0.9}')
     got = audit.resolve_one(session, project, finding, extractor=model)
 
     assert not got.acted and "no reason" in got.note
@@ -191,12 +196,12 @@ def test_needing_more_evidence_sends_the_question_to_the_web(session, monkeypatc
 
     model = _Model(
         '{"key": "m", "confidence": 0.2, "reason": "nothing here states it"}',
-        '{"key": "k", "confidence": 0.9, "reason": "the article says 2.25 MW"}',
+        '{"key": "u", "confidence": 0.9, "reason": "the article says 2.25 MW"}',
     )
     got = audit.resolve_one(session, project, finding, extractor=model)
 
     assert got.stage == "model-after-search"
-    assert project.blocks[0].mw == pytest.approx(2.25)
+    assert not blocks_mod.mw_is_confirmed(project.blocks[0]), "the figure stops counting"
     assert "2.25 MW" in model.prompts[1], "what the search found reaches the second call"
 
 
@@ -231,7 +236,7 @@ def test_every_edit_names_who_made_it(session):
     different things, and six months later the note is the only place that
     difference survives."""
     project, finding = _out_of_scale(session, label="Phase 1", mw=2250.0)
-    model = _Model('{"key": "c", "confidence": 0.9, "reason": "nothing cites it"}')
+    model = _Model('{"key": "u", "confidence": 0.9, "reason": "nothing cites it"}')
     audit.resolve_one(session, project, finding, extractor=model)
 
     assert "model (0.90) resolved `block_out_of_scale`" in project.notes
@@ -272,6 +277,256 @@ def test_a_reverted_repair_re_opens_the_question(session):
     assert "campus_exceeds_worlds_largest" not in settled
     open_now = [f.code for f in audit.check_project(project) if f.code not in settled]
     assert "campus_exceeds_worlds_largest" in open_now
+
+
+def _cited(session, name, campus, **claims_by_url):
+    """A project whose figures come from real citations, written by the real path.
+
+    The other fixtures here hand-build block rows, which is enough to make a finding
+    fire. Durability is a different question — it is about what the *claims* say — so
+    these tests need sources the merge engine will re-derive from.
+    """
+    from tracker.ingest.records import IngestRecord, SourceRecord
+    from tracker.upsert import upsert_record
+
+    sources = [
+        SourceRecord(
+            url=url,
+            source_type="trade_press",
+            excerpt="excerpt",
+            claims=dict(claims),
+            quotes={k: f"the campus draws {v}" for k, v in claims.items()},
+            fetched_at=dt.datetime(2026, 1, 1),
+        )
+        for url, claims in claims_by_url.items()
+    ]
+    result = upsert_record(
+        session,
+        IngestRecord(
+            project={"company": "Someone", "name": name, "city": "Englewood", "state": "CO"},
+            sources=sources,
+        ),
+    )
+    session.commit()
+    project = session.get(Project, result.project_id)
+    assert project.mw_planned == campus, "fixture must merge to the figure under test"
+    return project
+
+
+def test_choosing_the_low_figure_survives_a_recompute(session):
+    """**The test this whole change turns on.**
+
+    Every action used to assign a project scalar, and a scalar is a cache: the next
+    ingest, merge or `backfill derive` re-derived it from the claims and the repair
+    was silently undone. Ruling the claim out is what makes the answer hold — and the
+    only way to prove that is to run the recompute that used to revert it.
+    """
+    from tracker.upsert import recompute_from_sources
+
+    project = _cited(
+        session,
+        "Portland 3",
+        144_000.0,
+        **{
+            "https://a.test/low": {"mw_planned": 144.0},
+            "https://b.test/high": {"mw_planned": 144_000.0},
+        },
+    )
+    finding = next(f for f in audit.check_project(project) if f.code == "same_figure_two_units")
+    audit.resolve_one(session, project, finding, ask=lambda *_: "l")
+    assert project.mw_planned == 144.0
+
+    recompute_from_sources(session, project)
+    assert project.mw_planned == 144.0, "the repair must survive the thing that used to undo it"
+
+    loser = next(s for s in project.sources if "high" in s.url)
+    assert json.loads(loser.unconfirmed_reasons)["mw_planned"] == "superseded"
+    # The claim is untouched: the article still said what it said.
+    assert json.loads(loser.claims)["mw_planned"] == 144_000.0
+
+
+def test_a_capacity_no_claim_supports_stays_empty(session):
+    """Clearing has to mean empty, and used to mean "back in a moment".
+
+    `resolve`'s 待确认 rule is conditional on a confirmed rival existing, so
+    superseding the only claim left the figure winning as a last resort. Every
+    clear-the-capacity answer was a no-op on a single-source row.
+    """
+    from tracker.upsert import recompute_from_sources
+
+    project = _cited(
+        session, "Englewood", 11_250.0, **{"https://a.test/only": {"mw_planned": 11_250.0}}
+    )
+    finding = next(
+        f for f in audit.check_project(project) if f.code == "campus_exceeds_worlds_largest"
+    )
+    audit.resolve_one(session, project, finding, ask=lambda *_: "c")
+    assert project.mw_planned is None
+
+    recompute_from_sources(session, project)
+    assert project.mw_planned is None
+
+
+def test_a_kilowatt_campus_figure_is_ruled_out_rather_than_divided(session):
+    """The decided trade, written where somebody will look for it.
+
+    Dividing by 1000 was epistemically sound and durably impossible: the claim still
+    said 36,000, so the corrected 36 had nowhere to live and every recompute restored
+    the misread. Nothing states the corrected figure, and inventing a citation for it
+    is the one thing the evidence model refuses — so the claim is ruled out, the field
+    empties, and the row becomes a work item a re-read answers.
+    """
+    project = _cited(
+        session, "Hillsboro", 36_000.0, **{"https://a.test/kw": {"mw_planned": 36_000.0}}
+    )
+    finding = next(
+        f for f in audit.check_project(project) if f.code == "campus_exceeds_worlds_largest"
+    )
+    got = audit.resolve_one(session, project, finding, ask=lambda *_: "k")
+
+    assert project.mw_planned is None
+    assert "-> empty" in got.changed
+    assert "backfill blocks" in got.changed, "the message has to name the real repair"
+    assert json.loads(project.sources[0].claims)["mw_planned"] == 36_000.0
+
+
+def test_a_repair_survives_a_re_read_of_the_same_article(session):
+    """`DECIDED_REASONS` carries the mark, and this pins that audit's write is that kind.
+
+    A re-crawl overwrites a source's claims wholesale. If the decision did not
+    survive it, every repair would last exactly until the next crawl of that URL.
+    """
+    from tracker.ingest.records import IngestRecord, SourceRecord
+    from tracker.upsert import upsert_record
+
+    project = _cited(
+        session,
+        "Recrawled",
+        144_000.0,
+        **{
+            "https://a.test/low": {"mw_planned": 144.0},
+            "https://b.test/high": {"mw_planned": 144_000.0},
+        },
+    )
+    finding = next(f for f in audit.check_project(project) if f.code == "same_figure_two_units")
+    audit.resolve_one(session, project, finding, ask=lambda *_: "l")
+    session.commit()
+
+    upsert_record(
+        session,
+        IngestRecord(
+            project={
+                "company": "Someone",
+                "name": "Recrawled",
+                "city": "Englewood",
+                "state": "CO",
+            },
+            sources=[
+                SourceRecord(
+                    url="https://b.test/high",
+                    source_type="trade_press",
+                    excerpt="excerpt",
+                    claims={"mw_planned": 144_000.0},
+                    quotes={"mw_planned": "the campus draws 144000"},
+                    fetched_at=dt.datetime(2026, 2, 1),
+                )
+            ],
+        ),
+    )
+    session.commit()
+    assert project.mw_planned == 144.0, "a re-crawl must not undo the decision"
+
+
+def test_an_early_capex_figure_gives_way_to_the_later_one(session):
+    """`investment_below_build_cost` offered nothing while its remedy named the fix.
+
+    Hyperion's shape: the superseded $10B wins on *crawl order*, because both sources
+    are equally weighted and the tiebreak is when we happened to visit.
+    """
+    from tracker.ingest.records import IngestRecord, SourceRecord
+    from tracker.upsert import upsert_record
+
+    def _s(url, money, when):
+        return SourceRecord(
+            url=url,
+            source_type="company_filing",
+            excerpt="excerpt",
+            claims={"mw_planned": 5_000.0, "investment_usd": money},
+            quotes={"mw_planned": "5000 MW", "investment_usd": f"${money}"},
+            fetched_at=when,
+        )
+
+    result = upsert_record(
+        session,
+        IngestRecord(
+            project={"company": "Meta", "name": "Outgrown", "city": "Richland", "state": "LA"},
+            sources=[
+                _s("https://a.test/new", 50_000_000_000, dt.datetime(2026, 1, 1)),
+                _s("https://b.test/old", 10_000_000_000, dt.datetime(2026, 1, 2)),
+            ],
+        ),
+    )
+    session.commit()
+    project = session.get(Project, result.project_id)
+    assert project.investment_usd == 10_000_000_000, "the stale figure wins on crawl order"
+
+    finding = next(
+        f for f in audit.check_project(project) if f.code == "investment_below_build_cost"
+    )
+    audit.resolve_one(session, project, finding, ask=lambda *_: "o")
+
+    assert project.investment_usd == 50_000_000_000
+    assert not [f for f in audit.check_project(project) if f.code == "investment_below_build_cost"]
+
+
+def test_two_findings_on_one_project_do_not_crash_on_an_empty_field(session):
+    """Four `TypeError`s lived here: `{was:g}` on a column already emptied.
+
+    `cli` builds the whole pending list before applying anything, so the second
+    finding on a row reached its formatter with a None in hand.
+    """
+    project = _cited(
+        session,
+        "Doubly wrong",
+        11_250.0,
+        **{"https://a.test/only": {"mw_planned": 11_250.0, "investment_usd": 2_000_000_000}},
+    )
+    pending = [
+        f
+        for f in audit.check_project(project)
+        if f.code in {"usd_per_mw_out_of_band", "campus_exceeds_worlds_largest"}
+    ]
+    assert len(pending) == 2, "fixture must produce both findings"
+
+    audit.apply_action(session, project, pending[0], "c")
+    second = audit.apply_action(session, project, pending[1], "c")
+    assert "empty -> empty" in second
+
+
+def test_an_out_of_scale_tranche_stops_counting_and_stays_that_way(session):
+    project, finding = _out_of_scale(session, label="Phase 1", mw=2250.0)
+    audit.resolve_one(session, project, finding, ask=lambda *_: "u")
+
+    block = project.blocks[0]
+    assert block.mw == pytest.approx(2250.0), "the figure stays visible"
+    assert not blocks_mod.mw_is_confirmed(block)
+    assert blocks_mod.rollup(list(project.blocks)).mw_planned is None
+
+
+def test_a_tranche_a_re_crawl_re_confirms_re_opens_the_question(session):
+    """`source.blocks` has no `DECIDED_REASONS` carry, so this mark really can go.
+
+    Left unchecked the code stayed settled forever, because a block decision names no
+    Project column and `_EDIT` therefore never matched it — the same muzzling
+    `settled_codes` exists to prevent, in the one place it still happened.
+    """
+    project, finding = _out_of_scale(session, label="Phase 1", mw=2250.0)
+    audit.resolve_one(session, project, finding, ask=lambda *_: "u")
+    assert "block_out_of_scale" in audit.settled_codes(project)
+
+    project.blocks[0].unconfirmed_fields = None
+    session.flush()
+    assert "block_out_of_scale" not in audit.settled_codes(project)
 
 
 def test_a_dismissal_survives_a_value_changing_under_it(session):

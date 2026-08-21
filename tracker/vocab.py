@@ -25,6 +25,9 @@ PHASE_PROGRESSION: Final[tuple[str, ...]] = (
     "construction",
     "operational",
 )
+#: `PHASE_TERMINAL` is read as membership by three more: `capex` excludes it from the
+#: totals, `blocks.furthest_status` gives it the same override one level down, and
+#: `normalize._PHASE_FALLBACK` resolves a phrase naming two phases to it.
 PHASE_TERMINAL: Final[tuple[str, ...]] = ("paused", "cancelled")
 PHASES: Final[tuple[str, ...]] = PHASE_PROGRESSION + PHASE_TERMINAL
 

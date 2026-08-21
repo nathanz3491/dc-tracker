@@ -46,7 +46,8 @@ log = logging.getLogger(__name__)
 #: `iso_queue` is deliberately 1, not 2: the public ISO queues are *generator*
 #: interconnection queues with no data-center column, so a match there is a
 #: keyword heuristic over a project name, not an authoritative statement that a
-#: data center exists. See README "Why the ISO queue path caps at confidence 1".
+#: data center exists. See docs/design-decisions.md "ISO interconnection queues do
+#: not identify data centers".
 SOURCE_WEIGHTS: dict[str, int] = {
     "company_filing": 3,
     "government_doc": 3,

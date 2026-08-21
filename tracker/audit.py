@@ -53,6 +53,12 @@ SINGLE_CAMPUS_CEILING_MW = 8_000
 UNIT_RATIOS = (1000.0, 100.0)
 UNIT_RATIO_TOLERANCE = 0.15
 
+#: A claim this many times the lowest one is what "the low figure is right" rules
+#: against. Derived from the check's own ratios rather than picked, so an action
+#: cannot rule against a claim the check would not have called a unit misread — a
+#: merely-disagreeing 200 MW beside 144 MW is a job for `tracker logic conflicts`.
+_UNIT_SUSPECT_FLOOR: Final = min(UNIT_RATIOS) * (1 - UNIT_RATIO_TOLERANCE)
+
 #: `mw_planned` above this on a row whose figure is 待确认 (no quote anywhere
 #: names it) is flagged. A gigawatt claim resting on nothing quotable deserves a
 #: human eye before it deserves a place in a total.
@@ -81,9 +87,18 @@ class UnitFinding:
     remedy: str
 
 
-def _claims_for(project: Project, field: str) -> list[float]:
-    """Every numeric value any source ever claimed for one field."""
-    out: list[float] = []
+def _claim_rows(project: Project, field: str, *, live_only: bool = True) -> list[tuple[Any, float]]:
+    """(source, value) for every positive numeric claim about one field.
+
+    `live_only` drops claims a decision has already ruled against, which is what
+    stops a repaired row being reported forever as a disagreement between a figure
+    and the figure that replaced it. `audit check` does not filter by
+    `settled_codes`, so without this the finding count could never fall. The one
+    reader that wants them all is `evidence_block`, which labels them.
+    """
+    from tracker.upsert import _decided_against
+
+    out: list[tuple[Any, float]] = []
     for source in project.sources:
         if not source.claims:
             continue
@@ -91,9 +106,17 @@ def _claims_for(project: Project, field: str) -> list[float]:
             value = json.loads(source.claims).get(field)
         except (TypeError, ValueError):
             continue
-        if isinstance(value, (int, float)) and value > 0:
-            out.append(float(value))
+        if not isinstance(value, (int, float)) or isinstance(value, bool) or value <= 0:
+            continue
+        if live_only and field in _decided_against(source):
+            continue
+        out.append((source, float(value)))
     return out
+
+
+def _claims_for(project: Project, field: str) -> list[float]:
+    """Every numeric value any source still claims for one field."""
+    return [value for _, value in _claim_rows(project, field)]
 
 
 def _mw_unconfirmed(project: Project) -> bool:
@@ -182,8 +205,8 @@ def check_project(project: Project, *, settings: Any = None) -> list[UnitFinding
                 f"${per_mw / 1e6:.1f}M per MW (${project.investment_usd:,} over {mw:g} MW) "
                 f"— a campus this size costs $8-15M per MW to build, so this figure is "
                 "probably an early announcement the project has since outgrown",
-                "check the claim table for a later figure from the same publisher; "
-                "mark the old claim `superseded` rather than editing the field",
+                "rule the early claim out (`o`) and the later figure wins the merge on "
+                "its own — the claim is superseded, never the field edited",
             )
 
     # --- the H200 estimate disagreeing with its own input ---------------------
@@ -271,36 +294,134 @@ class Action:
     apply: Any  # (session, project, finding) -> str
 
 
+def _fmt(value: Any) -> str:
+    """A value as a decision sentence writes it.
+
+    `None` renders `empty`, which is the fix for four `TypeError`s: `{was:g}` on a
+    column an earlier action on the same project had already emptied. `cli` builds
+    the whole pending list before applying anything, so two findings on one row
+    reached the second formatter with a None in hand.
+    """
+    if value is None:
+        return "empty"
+    if isinstance(value, float):
+        return f"{value:g}"
+    if isinstance(value, int):
+        return f"{value:,}"
+    return str(value)
+
+
+def _rule_against(
+    session: Session, project: Project, field: str, sources: list[Any], why: str
+) -> str:
+    """Mark these citations' claims about one field superseded, then re-derive.
+
+    **This is the whole repair, and the reason every action here changed shape.** A
+    project scalar is a cache: `upsert.recompute_from_sources` re-derives it from the
+    claim set on the next ingest, merge or `backfill derive`, so an action that
+    assigned the column was undone silently and the finding came back. `audit`'s own
+    remedy for `investment_below_build_cost` has said so all along — "mark the old
+    claim `superseded` rather than editing the field".
+
+    The field is emptied *before* the recompute rather than assigned after it.
+    `upsert.resolve` returns the existing value when no claim participates, so a
+    field whose every claim has been ruled out stays empty — durably, and without
+    this function ever choosing a number. Where a claim survives, the recompute picks
+    it and the sentence reports what it picked, which is what `settled_codes` then
+    checks the row against.
+    """
+    from tracker.conflicts import supersede
+    from tracker.upsert import recompute_from_sources
+
+    was = getattr(project, field)
+    marked = sum(1 for source in sources if supersede(source, field))
+    setattr(project, field, None)
+    session.flush()
+    recompute_from_sources(session, project)
+    now = getattr(project, field)
+    tail = f"{marked} claim(s) superseded" if marked else "nothing left to rule against"
+    return f"{field} {_fmt(was)} -> {_fmt(now)} ({why}; {tail})"
+
+
 def _lowest_claim(session: Session, project: Project, _f: UnitFinding) -> str:
     """Adopt the smallest cited capacity — the classic kilowatts-as-megawatts fix."""
-    claims = sorted(_claims_for(project, "mw_planned"))
-    was, project.mw_planned = project.mw_planned, claims[0]
-    _resync_h200(project)
-    return f"mw_planned {was:g} -> {claims[0]:g} (the lower cited figure)"
+    rows = _claim_rows(project, "mw_planned")
+    low = min((value for _, value in rows), default=None)
+    if low is None:
+        return _rule_against(session, project, "mw_planned", [], "no claim left to choose between")
+    losers = [s for s, value in rows if value > low * _UNIT_SUSPECT_FLOOR]
+    return _rule_against(session, project, "mw_planned", losers, "the lower cited figure stands")
 
 
-def _divide_by_1000(session: Session, project: Project, _f: UnitFinding) -> str:
-    was = project.mw_planned or 0.0
-    project.mw_planned = round(was / 1000.0, 3)
-    _resync_h200(project)
-    return f"mw_planned {was:g} -> {project.mw_planned:g} (read as kilowatts)"
+def _kilowatt_capacity(session: Session, project: Project, _f: UnitFinding) -> str:
+    """Rule out every campus figure beyond the world's largest — it is kilowatts.
+
+    This used to divide the stored figure by 1000, which was epistemically sound and
+    *durably impossible*: the claim still said 36,000 and every recompute re-read it.
+    Nothing states the corrected 36, so there is nowhere for it to live — inventing a
+    citation for it is the one thing the evidence model refuses. So the claim is ruled
+    out, the field empties, and the row becomes a work item `gaps` already routes back
+    into enrichment. A null is answerable; a hand-divided figure looks cited and is not.
+    """
+    losers = [
+        s for s, value in _claim_rows(project, "mw_planned") if value > SINGLE_CAMPUS_CEILING_MW
+    ]
+    return _rule_against(
+        session,
+        project,
+        "mw_planned",
+        losers,
+        f"read as kilowatts; re-read with `tracker backfill blocks --project {project.id} --force`",
+    )
 
 
 def _clear_capacity(session: Session, project: Project, _f: UnitFinding) -> str:
-    was, project.mw_planned = project.mw_planned, None
-    _resync_h200(project)
-    return f"mw_planned {was:g} -> empty (no source states it)"
+    losers = [s for s, _ in _claim_rows(project, "mw_planned")]
+    return _rule_against(session, project, "mw_planned", losers, "no claim is trustworthy")
 
 
 def _clear_investment(session: Session, project: Project, _f: UnitFinding) -> str:
-    was, project.investment_usd = project.investment_usd, None
-    return f"investment_usd {was:,} -> empty"
+    losers = [s for s, _ in _claim_rows(project, "investment_usd")]
+    return _rule_against(session, project, "investment_usd", losers, "no claim is trustworthy")
+
+
+def _outgrown_investment(session: Session, project: Project, _f: UnitFinding) -> str:
+    """Rule out capex figures too small to have built the stored capacity.
+
+    Re-derived the way `check_project` found them rather than carried on the finding,
+    for the reason `_out_of_scale_blocks` gives. A later, larger figure on the row
+    then wins the recompute on its own.
+    """
+    mw = project.mw_planned or 0.0
+    losers = [
+        s
+        for s, value in _claim_rows(project, "investment_usd")
+        if mw and value / mw < _BUILD_COST_FLOOR_USD_PER_MW
+    ]
+    return _rule_against(
+        session,
+        project,
+        "investment_usd",
+        losers,
+        "an early announcement the project has outgrown",
+    )
 
 
 def _recompute_h200(session: Session, project: Project, _f: UnitFinding) -> str:
+    """Arithmetic, not a judgement. Nothing is ruled against.
+
+    Routed through the recompute rather than assigning the column, so it honours a
+    cited chip count the way `upsert.apply_h200_equivalent` does — the old helper
+    overwrote one with a figure derived from capacity.
+    """
+    from tracker.upsert import recompute_from_sources
+
     was = project.h200_equivalent
-    _resync_h200(project)
-    return f"h200_equivalent {was:,} -> {project.h200_equivalent or 0:,} (recomputed from capacity)"
+    session.flush()
+    recompute_from_sources(session, project)
+    return (
+        f"h200_equivalent {_fmt(was)} -> {_fmt(project.h200_equivalent)} (re-derived from capacity)"
+    )
 
 
 def _out_of_scale_blocks(project: Project) -> list:
@@ -322,34 +443,37 @@ def _out_of_scale_blocks(project: Project) -> list:
     return [b for b in (getattr(project, "blocks", ()) or ()) if b.label in labels]
 
 
-def _blocks_are_kw(session: Session, project: Project, _f: UnitFinding) -> str:
-    """Read the offending tranche capacities as kilowatts.
+def _blocks_not_counted(session: Session, project: Project, _f: UnitFinding) -> str:
+    """Stop counting tranches the campus cannot contain. The figure stays visible.
 
-    The signature is unmistakable and it is on the live database four times over:
-    a tranche *labelled* "2.4 MW Lease" carrying `mw = 2400`, on a 15 MW campus.
-    Nobody leased 2.4 GW into a building that size — an extraction read the label's
-    own number as megawatts twice.
+    Superseding cannot express this: `mw` is not a `WRITABLE_FIELD`, so
+    `conflicts.supersede` would drop it from `unconfirmed_fields` silently. Blocks
+    have their own 待确认 tier one level down, in the `source.blocks` JSON, and
+    `mw_is_confirmed` reads it to show a tranche's capacity while keeping it out of
+    every sum — which is exactly "this tranche's number is wrong".
+
+    It matters more than it looks: `rollup` does *not* apply `account`'s out-of-scale
+    filter, so a confirmed tranche larger than its own campus still feeds `reconcile`
+    and could raise a campus scalar. Marking it stops that.
+
+    This replaces two actions that divided the figure or deleted it. Both lived in the
+    same JSON and so had the same durability — a re-crawl overwrites `source.blocks`
+    wholesale — and both were worse: one rewrote what the extraction found, the other
+    threw away a number a person could check.
     """
-    fixed = []
-    for block in _out_of_scale_blocks(project):
-        if block.mw is None:
-            continue
-        was, block.mw = block.mw, round(block.mw / 1000.0, 3)
-        fixed.append(f"{block.label} {was:g} -> {block.mw:g} MW")
-    session.flush()
-    return "read as kilowatts: " + ("; ".join(fixed) if fixed else "nothing to change")
+    from tracker import blocks as blocks_mod
 
-
-def _clear_block_capacity(session: Session, project: Project, _f: UnitFinding) -> str:
-    """Empty the capacity on tranches larger than their own campus."""
-    cleared = []
-    for block in _out_of_scale_blocks(project):
-        if block.mw is None:
-            continue
-        cleared.append(f"{block.label} ({block.mw:g} MW)")
-        block.mw = None
-    session.flush()
-    return "cleared the capacity on " + ("; ".join(cleared) if cleared else "nothing")
+    blocks = _out_of_scale_blocks(project)
+    labels = sorted(b.label for b in blocks)
+    if not labels:
+        return "tranches not counted: none — nothing is out of scale any more"
+    touched = blocks_mod.mark_mw_unconfirmed(session, project, {b.block_key for b in blocks})
+    listed = ", ".join(repr(label) for label in labels)
+    return (
+        f"tranches not counted: {listed} (larger than the whole campus; capacity marked "
+        f"待确认 on {touched} citation(s) — re-read with `tracker backfill blocks "
+        f"--project {project.id} --force`)"
+    )
 
 
 def _dismiss(session: Session, project: Project, _f: UnitFinding) -> str:
@@ -357,49 +481,58 @@ def _dismiss(session: Session, project: Project, _f: UnitFinding) -> str:
     return "left as it stands — the figure was judged correct"
 
 
-def _resync_h200(project: Project) -> None:
-    from tracker.compute import h200_equivalent
-
-    project.h200_equivalent = h200_equivalent(project.mw_built or project.mw_planned)
-
-
 #: finding code -> the edits that answer it. `d` (dismiss) is offered on every
 #: finding and is a real answer: an implausible-looking figure that a source
 #: actually states is a fact about an unusual project, and recording that stops the
 #: check asking again.
 #:
-#: No entry rewrites a value to something nobody claimed. `_divide_by_1000` looks
-#: like an exception and is not — a unit misread means the *source* said 36,000 and
-#: meant 36,000 kW, so 36 MW is that source's own figure in the column's units.
+#: **No entry writes a project scalar, and none rewrites a value to something nobody
+#: claimed.** Every one of them rules a *claim* out and lets the merge engine
+#: re-derive the field, because a scalar is a cache: assigning it produced a repair
+#: the next recompute silently undid, which is how the same 11,250 MW expansion
+#: survived every run of this command.
+#:
+#: `_divide_by_1000` used to sit here, on the reasoning that a unit misread means the
+#: source said 36,000 and meant 36,000 kW, so 36 MW is that source's own figure in the
+#: column's units. That reasoning is sound and it does not survive contact with the
+#: claim table: the claim still says 36,000, so the corrected value has nowhere to
+#: live, and inventing a citation for it is the one thing the evidence model refuses.
+#: Ruling the claim out and leaving the field empty is what can actually be recorded.
 ACTIONS: Final[dict[str, tuple[Action, ...]]] = {
     "same_figure_two_units": (
-        Action("l", "the low figure is right — the other is kW or a decimal slip", _lowest_claim),
-        Action("c", "neither is trustworthy — clear the capacity", _clear_capacity),
+        Action("l", "the low figure is right — rule out the kW/decimal-slip claim", _lowest_claim),
+        Action("c", "neither is trustworthy — rule out both", _clear_capacity),
     ),
     "campus_exceeds_worlds_largest": (
-        Action("k", "it is kilowatts — divide by 1000", _divide_by_1000),
-        Action("c", "clear the capacity until a source is re-read", _clear_capacity),
+        Action(
+            "k", "it is kilowatts — rule out the claim and re-read the source", _kilowatt_capacity
+        ),
+        Action("c", "rule out the capacity until a source is re-read", _clear_capacity),
     ),
     "giant_capacity_unconfirmed": (
-        Action("c", "no quote names it — clear the capacity", _clear_capacity),
+        Action("c", "no quote names it — rule out the claim", _clear_capacity),
     ),
     "usd_per_mw_out_of_band": (
-        Action("i", "the investment figure is the wrong one — clear it", _clear_investment),
-        Action("c", "the capacity is the wrong one — clear it", _clear_capacity),
+        Action("i", "the investment figure is the wrong one — rule it out", _clear_investment),
+        Action("c", "the capacity is the wrong one — rule it out", _clear_capacity),
+    ),
+    # This offered nothing at all, while its own remedy text named the right
+    # mechanism. Now it uses it.
+    "investment_below_build_cost": (
+        Action("o", "an early figure the project outgrew — rule it out", _outgrown_investment),
+        Action("i", "no capex figure is trustworthy — rule them all out", _clear_investment),
     ),
     "h200_disagrees_with_capacity": (
-        Action("r", "recompute the H200 estimate from the stored capacity", _recompute_h200),
+        Action("r", "re-derive the H200 estimate from the stored capacity", _recompute_h200),
     ),
-    # These used to offer nothing, on the reasoning that the tranche is already
-    # excluded from every total so the repair is a re-crawl. That was wrong in the
-    # commonest case: five of the twenty-two findings on the live database are one
-    # tranche labelled "2.4 MW Lease" carrying 2400, on a 15 MW campus. The label
-    # states the true figure and the stored value is it in kilowatts, so the fix is
-    # the same arithmetic `campus_exceeds_worlds_largest` already offers — applied
-    # to the tranche rather than to the campus.
+    # This used to offer nothing, on the reasoning that the tranche is already
+    # excluded from every total so the repair is a re-crawl. That was wrong twice
+    # over: `rollup` ignores that exclusion and still feeds `reconcile`, and five of
+    # the twenty-two findings on the live database are one tranche labelled "2.4 MW
+    # Lease" carrying 2400 on a 15 MW campus. What can be recorded durably is that the
+    # figure is not countable — not a corrected number for it.
     "block_out_of_scale": (
-        Action("k", "the tranche figure is kilowatts — divide it by 1000", _blocks_are_kw),
-        Action("c", "clear that tranche's capacity until it is re-read", _clear_block_capacity),
+        Action("u", "the tranche figure cannot be counted — mark it 待确认", _blocks_not_counted),
     ),
 }
 
@@ -424,6 +557,34 @@ _DECISION = re.compile(r"resolved `([a-z0-9_-]+)`: *([^\n]*)")
 #: that is not an edit — a dismissal, `removed 2 milestone(s)`, `closed 3
 #: obstacle(s)` — deliberately does not match.
 _EDIT = re.compile(r"^([a-z][a-z0-9_]*) .+? -> ([^(—]+?)(?: *[(—]|$)")
+
+
+#: A block-level decision, which `_EDIT` deliberately cannot match — it has no `->`
+#: and names no Project column. It needs checking anyway, and for a sharper reason
+#: than a scalar does: `source.blocks` has no `DECIDED_REASONS` carry, so a re-crawl
+#: or a `backfill blocks --force` restores the confirmed figure and the question is
+#: genuinely open again. Left unchecked, these codes were settled permanently — the
+#: same muzzling this function exists to prevent, in the one place it still happened.
+_BLOCK_EDIT = re.compile(r"^tranches not counted: ([^(]+)")
+
+
+def _block_edits_still_hold(project: Project, listed: str) -> bool:
+    """Are the named tranches still uncounted? Conservative on anything unreadable.
+
+    A tranche that has vanished entirely leaves the code settled, matching this
+    module's stance everywhere else: re-opening every question whose sentence we
+    failed to parse would bury the specific reverts worth seeing.
+    """
+    from tracker.blocks import mw_is_confirmed
+
+    labels = {part.strip().strip("'\"") for part in listed.split(",") if part.strip()}
+    if not labels or "none" in labels:
+        return True
+    by_label = {b.label: b for b in (getattr(project, "blocks", ()) or ())}
+    return all(
+        block is None or not mw_is_confirmed(block)
+        for block in (by_label.get(label) for label in labels)
+    )
 
 
 def _edit_still_holds(project: Project, field: str, expected: str) -> bool:
@@ -475,6 +636,9 @@ def settled_codes(project: Project) -> set[str]:
         edit = _EDIT.match(what.strip())
         if edit and not _edit_still_holds(project, edit.group(1), edit.group(2)):
             continue
+        block = _BLOCK_EDIT.match(what.strip())
+        if block and not _block_edits_still_hold(project, block.group(1)):
+            continue
         settled.add(code)
     return settled
 
@@ -496,7 +660,14 @@ def free_answer(project: Project, finding: UnitFinding) -> tuple[str, str] | Non
             "so re-deriving it is arithmetic and not an opinion"
         )
     if finding.code == "same_figure_two_units":
-        quoted = {value for value, quote, _ in _claims_detail(project, "mw_planned") if quote}
+        # Ruled-out claims are excluded from both sides: a superseded figure is not a
+        # rival, and counting its quote would stop this rung ever firing on a row that
+        # has already been half-repaired.
+        quoted = {
+            value
+            for value, quote, _, ruled_out in _claims_detail(project, "mw_planned")
+            if quote and not ruled_out
+        }
         claims = sorted(_claims_for(project, "mw_planned"))
         if claims and quoted == {claims[0]}:
             return "l", (
@@ -508,10 +679,13 @@ def free_answer(project: Project, finding: UnitFinding) -> tuple[str, str] | Non
         stated = [_label_states_mw(b) for b in blocks]
         if blocks and all(s is not None for s in stated):
             listed = ", ".join(f"{b.label!r} holds {b.mw:g}" for b in blocks)
-            return "k", (
+            # The label states the true figure a thousandfold below the stored one, so
+            # the stored one is not countable. That much is arithmetic. Asserting the
+            # label's figure *into* the data is not, and is what this used to do.
+            return "u", (
                 f"each tranche's own label states its capacity and the stored value is "
                 f"exactly a thousand times it ({listed}) — that is the label read as "
-                "kilowatts, not a disagreement"
+                "kilowatts, so the stored figure cannot be counted"
             )
     return None
 
@@ -539,24 +713,23 @@ def _label_states_mw(block: Any) -> float | None:
     return stated if abs(block.mw - stated * 1000.0) <= stated else None
 
 
-def _claims_detail(project: Project, field: str) -> list[tuple[float, str, str]]:
-    """(value, quote, url) for every numeric claim any source made for one field."""
-    out: list[tuple[float, str, str]] = []
-    for source in project.sources:
-        if not source.claims:
-            continue
-        try:
-            value = json.loads(source.claims).get(field)
-        except (TypeError, ValueError):
-            continue
-        if not isinstance(value, (int, float)) or value <= 0:
-            continue
+def _claims_detail(project: Project, field: str) -> list[tuple[float, str, str, bool]]:
+    """(value, quote, url, ruled_out) for every numeric claim made for one field.
+
+    Includes the claims a decision has ruled against, flagged rather than hidden:
+    this feeds what a person and a model *read*, and a superseded figure with its
+    quote beside it is the record of why the row says what it says.
+    """
+    from tracker.upsert import _decided_against
+
+    out: list[tuple[float, str, str, bool]] = []
+    for source, value in _claim_rows(project, field, live_only=False):
         quote = ""
         try:
             quote = str((json.loads(source.quotes or "{}") or {}).get(field) or "").strip()
         except (TypeError, ValueError):
             quote = ""
-        out.append((float(value), quote, source.url or ""))
+        out.append((value, quote, source.url or "", field in _decided_against(source)))
     return out
 
 
@@ -596,8 +769,9 @@ def evidence_block(project: Project, finding: UnitFinding) -> str:
         if stored is None and not detail:
             continue
         lines.append(f"  {name} = {stored if stored is not None else 'unknown'}")
-        for value, quote, url in sorted(detail, key=lambda d: -d[0]):
-            lines.append(f"      claim {value:g} — {url[:110] or 'no url'}")
+        for value, quote, url, ruled_out in sorted(detail, key=lambda d: -d[0]):
+            tag = " (superseded — ruled against, not in the merge)" if ruled_out else ""
+            lines.append(f"      claim {value:g}{tag} — {url[:110] or 'no url'}")
             if quote:
                 lines.append(f'        "{quote[:280]}"')
             else:

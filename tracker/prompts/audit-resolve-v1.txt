@@ -14,6 +14,12 @@ or to say that the row does not contain the answer.
 You are choosing from a list. You are NOT writing a value. Every option was written
 by a person and every one of them operates on figures already in the row.
 
+What an option actually does is rule a *claim* out — it marks that citation's figure
+superseded and lets the merge engine re-derive the field from what is left. So the
+question in front of you is always "which claim should stop counting", never "what
+should this field say". A claim marked superseded stays visible with its quote; it
+just stops feeding the value.
+
 Six rules.
 
 1. **The commonest cause is a unit misread, and it has a signature.** Two claims a
@@ -38,9 +44,12 @@ Six rules.
    already existed. If the evidence supports the number, say so; it stops the check
    asking about this row again.
 
-5. **Clearing a value is a loss and needs a reason.** Prefer an edit that keeps a
-   sourced figure over one that empties the field. Clear only when nothing supports
-   the value at all.
+5. **Emptying a field is a loss and needs a reason.** Ruling out every claim for a
+   field leaves it empty, because nothing is left to derive it from. Prefer an option
+   that rules out only the suspect claim and leaves a sourced figure standing. Rule
+   them all out only when nothing supports the value at all — and note that an empty
+   field is recoverable by re-reading the article, whereas a wrong figure that looks
+   cited is not.
 
 6. **Give a calibrated confidence and name what decided it.** Below 0.6 the answer
    is discarded and treated as a skip, so an inflated number is not a way to be

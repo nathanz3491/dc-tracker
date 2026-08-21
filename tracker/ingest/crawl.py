@@ -279,9 +279,9 @@ _PROSE_LINE_CHARS: Final = 60
 #: English median in the thousands. Accepted rather than corrected: the measure
 #: was chosen over a word count precisely so those pages score honestly instead
 #: of zero, and a Chinese repost is a source this pipeline can barely use anyway
-#: — `looks_english` refuses its summary fields and no quantity pattern matches
-#: its numerals. A per-script floor would be the fix if that ever stops being
-#: true.
+#: — `looks_english` refuses its summary fields and its phase wording, and no
+#: quantity pattern matches its numerals. A per-script floor would be the fix if
+#: that ever stops being true.
 #: A refusal is recorded as `thin_content`, which is visible in
 #: `tracker queue --failed` and retried by `--retry-failed`, so a page a site
 #: later serves in full is recoverable rather than lost.
@@ -470,6 +470,10 @@ def _widen_to_sentence(article: str, start: int, end: int) -> tuple[int, int]:
 #: discarded 60 of 90 correct classifications, and because `phase` is NOT NULL
 #: every one of them silently became the `announced` default — so the stored
 #: phase distribution was an artefact of the gate, not of the projects.
+#:
+#: Consulted only from `_stated_in`, and therefore only reachable because `phase` is
+#: *not* in `_SUMMARY_FIELDS`. While it was, any quote the model labelled `phase`
+#: skipped this table entirely — see that set's docstring.
 _PHASE_EVIDENCE: dict[str, tuple[str, ...]] = {
     "announced": ("announce", "plans to", "proposed", "propose", "unveil", "will build"),
     "permitting": ("permit", "zoning", "rezon", "entitlement", "application", "approval"),
@@ -665,14 +669,25 @@ _DATE_EXPR = re.compile(
 #: verified to be real is the strongest check available; demanding the value
 #: appear verbatim would discard every honest summary.
 #:
-#: `blocker` used to be here and no longer is, because it is no longer a value the
-#: model returns: obstacles come back in `risks[]` and the column is derived from
-#: the stored rows. `_risks` applies a strictly stronger form of this same
-#: carve-out — the quote must be real *and* must contain wording for the category
-#: it is filed under, so an unrelated real sentence under a plausible label is not
-#: enough. Trusting the label alone is the weakest link here, and the risk path is
-#: where that was worth removing.
-_SUMMARY_FIELDS = frozenset({"phase", "notes"})
+#: Two fields have left this set, both for the same reason: a wording table is a
+#: strictly stronger form of the same carve-out, because it asks the quote to be real
+#: *and* to contain wording for the label it is filed under, so an unrelated real
+#: sentence under a plausible label is no longer enough. Trusting the label alone is
+#: the weakest link here.
+#:
+#: * `blocker`, because it is no longer a value the model returns: obstacles come
+#:   back in `risks[]`, are checked against `_RISK_EVIDENCE`, and the column is
+#:   derived from the stored rows.
+#: * `phase`, which had `_PHASE_EVIDENCE` all along and never needed the carve-out.
+#:   While the carve-out sat in front of it the table never ran on any quote the
+#:   model happened to label `phase`, so `phase="operational"` beside a genuine
+#:   "announced plans to build" sentence was stored as a confirmed fact. `phase` is
+#:   also where that is least recoverable: `upsert._resolve_ladder` merges by taking
+#:   the furthest-along value, so one overclaim outranks every later correction.
+#:
+#: `notes` is what genuinely needs it, and it is the whole set: a note falls through
+#: to the verbatim-substring branch of `_stated_in`, which no paraphrase can pass.
+_SUMMARY_FIELDS = frozenset({"notes"})
 
 
 def _stated_in(field: str, value: Any, quote: str) -> bool:
@@ -683,6 +698,15 @@ def _stated_in(field: str, value: Any, quote: str) -> bool:
     whole point: the model's own words for a number never match our storage form.
     """
     if field == "phase":
+        # The one field whose evidence is *wording* rather than a value, and so the
+        # one field a translated repost can still reach. Every `_PHASE_EVIDENCE`
+        # token is ASCII, which refuses a wholly Chinese sentence for free — but one
+        # English lifecycle word left standing inside a Chinese paragraph would be
+        # enough, and value matching is what protects every other field ("230兆瓦"
+        # matches no MW pattern). The check used to guard only the quote the model
+        # *labelled*, in `evidence_gate`; here it guards whichever quote is tested.
+        if not looks_english(quote):
+            return False
         low = quote.lower()
         return any(token in low for token in _PHASE_EVIDENCE.get(str(value), ()))
 
@@ -951,15 +975,14 @@ def evidence_gate(
         if name == "country":
             kept[name] = value
             continue
-        # A paraphrase cannot be matched against its own source text, so for those
-        # fields the model's label over a verified quote is what we have.
+        # A paraphrase cannot be matched against its own source text, so for `notes`
+        # the model's label over a verified quote is what we have.
         #
-        # The language check closes the one hole that carve-out opens. Every other
-        # field is protected from a foreign-language source for free, because
-        # "230兆瓦" matches no MW pattern and no English phase keyword — but a
-        # summary field skips value matching entirely, so a Chinese sentence could
-        # evidence `phase=construction`. Measured against a real translated repost:
-        # it did, while every quantity on the same article was correctly dropped.
+        # The language check closes the one hole that carve-out opens: every other
+        # field is protected from a foreign-language source by value matching —
+        # "230兆瓦" matches no MW pattern — and a summary field skips value matching
+        # entirely. `phase` used to be here and is now checked against
+        # `_PHASE_EVIDENCE` in `_stated_in`, which carries the same check.
         if name in _SUMMARY_FIELDS and name in quotes and looks_english(quotes[name]):
             kept[name] = value
             continue

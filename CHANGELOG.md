@@ -10,6 +10,154 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 First working version. Nothing has been released yet, so everything below is the
 initial build of the v1 PRD.
 
+### Fixed
+
+- **A corrected figure could not come down: `Policy.MAX` and `Policy.MIN` ignored the
+  ratchet** (`tracker/upsert.py`, `logic.py`, `blocks.py`).
+
+  `resolve` takes a `ratchet` flag and threaded it into the PHASE branch only, so MAX
+  folded the stored value in as one of its own candidates and MIN did the same with
+  the stored date. Both write paths pass `ratchet=False` — they re-derive from the
+  complete claim set, so the value the row happens to be carrying gets no vote — and
+  for two of the three scanning policies that argument did nothing at all.
+
+  The visible cost: **superseding a claim demoted the citation and left the number
+  alone.** `conflicts.apply_outcome` marks the losing claim and re-derives, on purpose,
+  so that a value is never a thing somebody typed — and on `mw_built` the re-derivation
+  resolved the stored figure straight back. Stargate Abilene (#3) held 1,200 MW against
+  a single well-quoted 200; project #2 held 1,691 MW against citations supporting at
+  most 1,000.
+
+  `logic check` could not see it either, and for a sharper reason: it asked
+  `resolve_field` with the ratchet on, which makes the comparison tautological. A
+  wrong-high `mw_built` resolves to itself, so `stored_disagrees` was never True and
+  `logic resolve` — the one repair a machine is allowed to make — had nothing to
+  repair. `resolve_field` now takes `ratchet` and `check_collisions` passes `False`,
+  while still passing the stored value, because FILL_ONLY consults it as policy rather
+  than as a ratchet.
+
+  Turning the ratchet off does not make a field clearable: with no candidate the policy
+  can read, the stored value is returned exactly as before. That return is what
+  `DERIVED_FIELDS` cites as the reason `blocker` cannot live in the merge loop, and
+  only a rival the policy can actually compare may lower a MAX field.
+
+  `blocks.reconcile` carried the other half of the same bug. It promises to fill a null
+  and never overwrite a value, and the Hyperion fix made that true of `mw_planned` —
+  while the next clause still raised `mw_built` to the tranche sum, three lines later,
+  undoing the merge that had just lowered it. `mw_built` is now disclosed exactly as
+  `mw_planned` is: a sum above the cited figure is a question about double-counting,
+  not an answer. `phase` still climbs, because a ladder cannot double-count.
+
+- **A claim a decision ruled against came back as a last resort** (`tracker/upsert.py`).
+
+  `resolve` discards 待确认 claims only when a *confirmed* rival exists, because an
+  unquoted value still beats nothing. `superseded` is a different question — it records
+  that a human or the conflict solver ruled a figure out — and it was going through the
+  same conditional filter. So superseding the only claim for a field handed the ruled-out
+  figure straight back, and "no source we trust states this" resolved to the source
+  nobody trusted. That is why `audit`'s clear-the-capacity answers were no-ops on
+  single-source rows. Such claims now leave the merge outright, while staying visible
+  and attributed in `export` and the console — which is the whole reason for superseding
+  a claim rather than deleting it.
+
+- **Every `tracker audit` repair was silently reverted by the next recompute**
+  (`tracker/audit.py`, `blocks.py`, `prompts/audit-resolve-v1.txt`).
+
+  Each action assigned a project scalar, and a scalar is a cache: `recompute_from_sources`
+  re-derives it from the claim set on the next ingest, merge or `backfill derive`. The
+  repair vanished and the finding came back, which is how the same 11,250 MW colocation
+  expansion survived every run of the command. `audit`'s own remedy text for
+  `investment_below_build_cost` had named the right mechanism all along — "mark the old
+  claim `superseded` rather than editing the field" — and that finding was the one with
+  no action at all.
+
+  Every action now rules a *claim* out and lets the merge engine re-derive the field.
+  `investment_below_build_cost` gained the two it describes. `same_figure_two_units`
+  rules against claims a factor of ~100+ above the lowest, derived from the check's own
+  `UNIT_RATIOS` so an action cannot rule against something the check would not have
+  called a unit misread.
+
+  `_divide_by_1000` is gone. Dividing the stored figure by 1000 was epistemically sound
+  — a unit misread means the source said 36,000 and meant kilowatts — and durably
+  impossible: the claim still says 36,000, so the corrected 36 has nowhere to live, and
+  inventing a citation for it is the one thing the evidence model refuses. The claim is
+  ruled out instead and the field empties, which is answerable: `gaps` reports a null as
+  MISSING and routes the row back into enrichment, whereas a hand-divided figure looks
+  cited and is not.
+
+  Block repairs get the tier one level down, `blocks.mark_mw_unconfirmed`, because `mw`
+  is not a `WRITABLE_FIELD` and `supersede` would drop it silently. The tranche's figure
+  stays visible and stops being counted — which matters more than it looked, since
+  `rollup` does not apply `account`'s out-of-scale filter and still feeds `reconcile`.
+  And because `source.blocks` has no `DECIDED_REASONS` carry, `settled_codes` learned to
+  check those decisions against the blocks: a block message names no Project column, so
+  `_EDIT` never matched it and the code stayed settled forever — the same muzzling that
+  function exists to prevent, in the one place it still happened.
+
+  Also fixed: four `TypeError`s from `{was:g}` on a column an earlier action on the same
+  project had already emptied, reachable because `cli` builds the whole pending list
+  before applying anything. And `audit check` now ignores ruled-out claims, without
+  which the finding count could never fall.
+
+- **An overclaimed `phase` was stored as a confirmed fact whenever the model labelled
+  its quote `"phase"`** (`tracker/ingest/crawl.py`, `normalize.py`).
+
+  `_PHASE_EVIDENCE` exists because `phase` is a judgement, not a value copied out of the
+  text — an article says "broke ground", never `phase: construction`. It was also
+  unreachable half the time: `_SUMMARY_FIELDS` still listed `phase`, and that carve-out
+  `continue`s before `_stated_in` runs, so any verified sentence filed under the label
+  `"phase"` confirmed whatever phase came with it. Reproduced: `phase="operational"`
+  beside the real sentence "Acme Corp announced plans to build…" was stored confirmed.
+  `phase` is the worst field for that, because `_resolve_ladder` merges by taking the
+  furthest-along value, so an overclaimed `operational` outranks every later correction.
+
+  `phase` is out of `_SUMMARY_FIELDS`, which now holds only `notes`, on the same grounds
+  `blocker` left it: a wording table is a strictly stronger form of the same carve-out,
+  because the quote must be real *and* must contain wording for the label it is filed
+  under. The language check moved with it, into `_stated_in`'s phase branch, and got
+  stronger on the way — it used to see only the quote the model *labelled*, and now sees
+  whichever quote is being tested, so a Chinese paragraph with one English lifecycle
+  word left in it is refused too. A refusal reads `quote_off_target`, not `no_quote`:
+  the article does have a sentence about the phase, and it says something else.
+
+  The three fixture payloads come out byte-identical, phase included — their quote is
+  "Microsoft has begun construction on Fairwater", which is what evidence for a phase is
+  supposed to look like.
+
+- **A cancelled project normalized to `construction`** (`tracker/normalize.py`,
+  `vocab.py`).
+
+  `norm_phase`'s substring fallback scanned the longest synonym first, and length is
+  uncorrelated with meaning: every terminal synonym is short, so "construction paused",
+  "construction halted", "cancelled after construction began", "permitting withdrawn"
+  and "operational but suspended" all resolved to a *progression* phase. A stopped
+  project recorded as advancing — and `capex` excludes `PHASE_TERMINAL` from the totals,
+  so it kept counting one. `_resolve_ladder` and `blocks.furthest_status` both already
+  read "a terminal state always wins"; this was the one place that did not.
+
+  Terminal synonyms are scanned first now, longest-first within each group, and the whole
+  order is derived from `_PHASE_SYNONYMS` and compiled once rather than written down
+  twice. Reordering alone would have been a new bug — `dead` is inside "deadline" and
+  `hold` inside "household" — so matching is on word boundaries, which also retires four
+  misreads that were already live: "installed" read as `paused` via `stalled`, "delivery"
+  as `operational` via `live`, "decommissioned" as `operational` via `commissioned`, and
+  "inactive" as `permitting` via `active`. The boundary strands no synonym, asserted by a
+  test over the whole table; the plural and nominalized forms a source actually uses as a
+  status ("cancellation", "plans", "approvals", "operations", "announcement") are keys of
+  their own, because losing "cancellation" would lose a terminal state.
+
+  Nothing in the ISO path changes: `pjm` consults `iso_map.status_map` first and every
+  real PJM/MISO status is an exact entry there. The comment defending longest-first had
+  no test behind it either — "zoning approval", the table's only composite case, maps to
+  `permitting` whichever key wins. "pre-construction work begins in May" now pins it.
+
+- **A rejected duplicate pair was re-proposed on every crawl** (`tracker/upsert.py`).
+
+  Only the *reports* consulted `not_duplicate`. `_find_duplicate_candidate` did not, so
+  after an operator parked a pair the next ingest of either row rewrote the derived
+  "possible duplicate of project #N" note and re-capped `confidence` at 1 — the ingest
+  path quietly overruling a recorded decision, for as long as the row kept being read.
+
 ### Added
 
 - **`tracker sources policy` — the measurement finally acts** (`tracker/policy.py`,
@@ -467,8 +615,8 @@ initial build of the v1 PRD.
 
 - **`CLAUDE.md`: the operating rules for a two-machine setup.** Which machine you
   are on now decides what you may do, and none of that is inferable from the
-  code: code goes out through GitHub and never by hand, data is made on the mini
-  and ingest here writes nothing that survives, the database moves only through
+  code: code goes out through GitHub and never by hand, data is made on the
+  production host and ingest here writes nothing that survives, the database moves only through
   `sync_db.py`, and the five paths outside the project are listed with what
   dictates each. `deploy/README.md` stays the runbook; this is the rules.
 
@@ -480,15 +628,15 @@ initial build of the v1 PRD.
   `.git` directly rather than by running `git` — it answers a health check, and a
   subprocess per request is a cost with no return.
 
-- **The Mac mini is the writer** (`scripts/sync_db.py`, replacing `ship_db.py`).
+- **The production host is the writer** (`scripts/sync_db.py`, replacing `ship_db.py`).
 
   It runs ingest and enrich now, not just the console — always-on is what a job
   measured in hours wants, and it serves the console from the same file it
-  writes. SQLite takes one writer and any number of readers, so `mastri.app`
+  writes. SQLite takes one writer and any number of readers, so the console
   stays up through a crawl.
 
   That inverts the data flow. `ship_db.py` pushed dev to prod because prod held
-  no keys and never wrote; once the mini started ingesting, pushing meant
+  no keys and never wrote; once that host started ingesting, pushing meant
   overwriting the only copy of work that existed. `sync_db.py` pulls by default
   and refuses either direction when the destination holds rows the source does
   not — there is no merge here, a whole file replaces a whole file.
@@ -496,19 +644,19 @@ initial build of the v1 PRD.
   Most of the CLI is unaffected and runs anywhere: `gaps`, `sources`, `overview`,
   `export` and `capex` only read.
 
-- **Production deploys to the Mac mini** (`deploy/` **new**, `scripts/ship_db.py`
+- **Production deploys to an always-on host** (`deploy/` **new**, `scripts/ship_db.py`
   **new**).
 
   Code travels through GitHub; data goes straight over SSH. The development
   machine stays the only writer, so production runs `serve --no-run` and needs no
   API keys at all — the read-only decision is what makes that true.
 
-  The mini polls `origin/main` every two minutes rather than receiving a webhook:
+  The host polls `origin/main` every two minutes rather than receiving a webhook:
   it is behind NAT, and a poller needs no inbound surface. A commit that does not
   import is refused and the checkout rolled back, so a bad push leaves the console
   serving the previous code instead of crash-looping under launchd.
 
-  Published through a **named** Cloudflare tunnel at a `mastri.app` hostname.
+  Published through a **named** Cloudflare tunnel at a stable hostname.
   Named tunnels are free — the same product as a `trycloudflare.com` URL, with a
   hostname that survives a restart, which the quick-tunnel URL does not. The three
   commands that create it stay with the operator: a browser sign-in, a credential
@@ -3493,7 +3641,7 @@ initial build of the v1 PRD.
 - ISO queue ingest is scoped as candidate generation, not a project feed: the
   public queues are *generator* queues with no data-center column, so matching is
   a keyword heuristic, confidence caps at 1, and queue MW is disclosed in `notes`
-  rather than written to `mw_planned`. See README "Why".
+  rather than written to `mw_planned`. See docs/design-decisions.md.
 - Crawl4AI is an optional extra used for fetching only, not for LLM extraction,
   so that prompt versioning is truthful and the JSON contract is enforced in
   testable code. `httpx` is the default fetcher.

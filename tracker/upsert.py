@@ -43,6 +43,7 @@ from tracker.dedup import (
 )
 from tracker.ingest.records import IngestRecord
 from tracker.models import Event, Project, ProjectAlias, Risk, Source, utcnow
+from tracker.pairs import is_parked
 from tracker.vocab import (
     DEFAULT_PHASE,
     OPEN_RISK_STATUS,
@@ -175,6 +176,21 @@ def claim_value(raw: Any) -> Any:
 DECIDED_REASONS: frozenset[str] = frozenset({"superseded"})
 
 
+def _decided_against(row: Source) -> frozenset[str]:
+    """Fields on this citation a decision has ruled out of the merge.
+
+    Keyed off :data:`DECIDED_REASONS` rather than the literal `"superseded"`, so a
+    second decision reason added there is honoured here without a second edit.
+    """
+    try:
+        reasons = json.loads(row.unconfirmed_reasons or "{}")
+    except (TypeError, ValueError):
+        return frozenset()
+    if not isinstance(reasons, dict):
+        return frozenset()
+    return frozenset(k for k, v in reasons.items() if v in DECIDED_REASONS)
+
+
 def _carried_reasons(row: Source, claims: dict[str, Any]) -> dict[str, str]:
     """Decisions already recorded on this source row, for fields it still claims."""
     try:
@@ -220,6 +236,13 @@ class _Claim:
     #: When the publisher published it (migration 0014), or None when nothing
     #: recorded a date. Only consulted when `merge_by_publication_date` is on.
     published_at: Any = None
+    #: True when a *decision* ruled this claim out — the reasons in
+    #: :data:`DECIDED_REASONS`, i.e. `superseded`. Deliberately distinct from
+    #: `confirmed`, which is a *measurement* of the evidence: an unquoted value is a
+    #: last resort and still better than nothing, whereas a figure a human ruled
+    #: against must not come back the moment no confirmed rival remains. `resolve`
+    #: drops these outright rather than demoting them.
+    decided_against: bool = False
 
     def recency(self, *, by_publication: bool) -> Any:
         """The timestamp this claim is ranked by.
@@ -292,6 +315,7 @@ def claims_by_field(sources: list[Source], *, settings: Any = None) -> dict[str,
         if not isinstance(claims, dict):
             continue
         unconfirmed = {f.strip() for f in (s.unconfirmed_fields or "").split(",") if f.strip()}
+        decided = _decided_against(s)
         for name, value in claims.items():
             if name not in WRITABLE_FIELDS or value is None:
                 continue
@@ -304,6 +328,7 @@ def claims_by_field(sources: list[Source], *, settings: Any = None) -> dict[str,
                     s.url,
                     confirmed=not placeholder and name not in unconfirmed,
                     published_at=getattr(s, "published_at", None),
+                    decided_against=name in decided,
                 )
             )
     # Confirmed first, then strongest source, then most recent. `url` is the final
@@ -312,7 +337,10 @@ def claims_by_field(sources: list[Source], *, settings: Any = None) -> dict[str,
     # runs and break idempotence.
     #
     # `confirmed` leads because a quote-backed value must never be displaced by a
-    # 待确认 one, however authoritative or recent that source is.
+    # 待确认 one, however authoritative or recent that source is. A claim a decision
+    # ruled against leads even that, sorting last of all: `resolve` drops it from the
+    # merge entirely, and the readers that *display* every claim — `export`, the web
+    # UI — should show it where the engine ranks it.
     #
     # What "most recent" means is the one part of this that is configurable, and
     # the default is the wrong answer kept deliberately: `fetched_at` is crawl
@@ -320,7 +348,13 @@ def claims_by_field(sources: list[Source], *, settings: Any = None) -> dict[str,
     by_publication = _prefer_publication_date(settings)
     for claims_list in out.values():
         claims_list.sort(
-            key=lambda c: (c.confirmed, c.weight, c.recency(by_publication=by_publication), c.url),
+            key=lambda c: (
+                not c.decided_against,
+                c.confirmed,
+                c.weight,
+                c.recency(by_publication=by_publication),
+                c.url,
+            ),
             reverse=True,
         )
     return out
@@ -335,15 +369,28 @@ def _coerce_like(value: Any, template: Any) -> Any:
     return value
 
 
-def resolve_field(field_name: str, claims: list[_Claim], existing: Any) -> Any:
+def resolve_field(
+    field_name: str, claims: list[_Claim], existing: Any, *, ratchet: bool = True
+) -> Any:
     """Public alias for :func:`_resolve`.
 
     `tracker logic check` has to report which of two conflicting claims the database
     keeps, and the only way to report that faithfully is to ask the same function
     the write path asks. Re-deriving it produced a report that disagreed with the
     stored value on 73 rows.
+
+    `ratchet` is exposed for the same reason, one level down. Both write paths pass
+    `ratchet=False`, so a caller reporting what the write path *would* choose has to
+    be able to say so. Asking with the ratchet on made every MAX and MIN comparison
+    tautological: the stored value was folded in as a candidate of its own, so it
+    always agreed with itself and no drift was reportable.
+
+    Pass `existing` regardless of `ratchet`. FILL_ONLY consults it as **policy**, not
+    as a ratchet: an identity field already on the row is never overwritten, and that
+    is what the write path does too. Dropping it is what once reported 73 healthy rows
+    as drifted.
     """
-    return _resolve(field_name, claims, existing)
+    return _resolve(field_name, claims, existing, ratchet=ratchet)
 
 
 def _resolve(field_name: str, claims: list[_Claim], existing: Any, *, ratchet: bool = True) -> Any:
@@ -378,7 +425,35 @@ def resolve(
     exists for the field. Done here, once, rather than inside each policy: MAX and
     MIN scan every claim and LADDER takes the furthest-along, so any of the three
     would otherwise let an unquoted value beat a quoted one.
+
+    A claim a *decision* ruled against leaves the merge entirely, before that rule
+    runs. The two are different questions: 待确认 measures the evidence, and an
+    unquoted value is a last resort that still beats nothing, which is why the filter
+    above is conditional on a confirmed rival existing. `superseded` records that a
+    human or the conflict solver ruled the figure out, and it has to hold even when
+    it is the only claim left — otherwise "no source we trust states this" resolves
+    straight back to the figure nobody trusts. That was why clearing a capacity never
+    stuck: the claim was demoted, no confirmed rival remained, and the last-resort
+    rule handed the bad figure back.
+
+    `ratchet` folds the value already on the row into the comparison, and governs all
+    three policies that scan the whole claim set — MAX, MIN and PHASE. It was
+    threaded into PHASE alone, which made it a lie for the other two: a stored figure
+    was one of its own candidates and therefore self-justifying, so Stargate Abilene
+    held `mw_built = 1200` against a single well-quoted 200 and superseding a claim
+    demoted the citation without moving the value. Both write paths pass
+    `ratchet=False`, so the result is a deterministic function of the claim set.
+
+    Turning the ratchet off does **not** make a field clearable. With no candidate
+    this policy can read — no claims at all, or none of the right type — `existing`
+    comes back exactly as before, because the callers write the result straight
+    through and :data:`DERIVED_FIELDS` cites that return as the reason `blocker`
+    cannot live in the merge loop. Only a rival the policy can actually compare may
+    lower a MAX field.
     """
+    if not claims:
+        return existing
+    claims = [c for c in claims if not c.decided_against]
     if not claims:
         return existing
     if any(c.confirmed for c in claims):
@@ -389,15 +464,18 @@ def resolve(
 
     if policy is Policy.MAX:
         numeric = [c.value for c in claims if isinstance(c.value, (int, float))]
-        candidates = numeric + ([existing] if isinstance(existing, (int, float)) else [])
-        return max(candidates) if candidates else existing
+        if ratchet and isinstance(existing, (int, float)):
+            numeric.append(existing)
+        return max(numeric) if numeric else existing
 
     if policy is Policy.MIN:
         # Dates are ISO strings in claims, so lexical order is chronological.
-        # `existing` participates: an earlier date already on the row is still
-        # the earliest anybody saw.
+        # `existing` participates only while the ratchet is on: an earlier date
+        # already on the row is the earliest anybody saw *if* something still says
+        # so. With it off, the row's own date gets no vote, which is what lets a
+        # `first_announced` that outlived its citation move.
         values = [str(c.value) for c in claims]
-        if existing is not None:
+        if ratchet and existing is not None:
             values.append(existing.isoformat() if hasattr(existing, "isoformat") else str(existing))
         return min(values) if values else existing
 
@@ -433,13 +511,13 @@ def _resolve_ladder(
     Parameterised so a block's status ladder reuses it: same argument, different
     rungs.
 
-    `ratchet` folds the value already on the row into the comparison, so an
-    incremental upsert cannot let one thin new source drag a well-established
-    project backwards. **`recompute_from_sources` turns it off**, and the reason is
-    in that function's own docstring: it derives the row from the complete set of
-    citations rather than from whatever either row happened to be carrying. A full
-    recompute is not a thin new source, so the guard has nothing to protect and the
-    stored value stops being self-justifying.
+    `ratchet` folds the value already on the row into the comparison. **No write path
+    uses it**: `upsert_record` and `recompute_from_sources` both pass `ratchet=False`,
+    because each derives the row from the complete set of citations rather than from
+    whatever the row happened to be carrying, so the guard has nothing to protect and
+    the stored value stops being self-justifying. It stays on by default for the read
+    paths, and `logic.check_collisions` turns it off for the same reason the writers
+    do — to report what the write path would choose.
 
     Without that, `phase` can only ever climb. Hyperion (#10) read `operational`
     because a single Instagram post said so — a claim the evidence gate had already
@@ -472,11 +550,15 @@ def _conflict_notes(by_field: dict[str, list[_Claim]]) -> tuple[list[str], list[
     fields: list[str] = []
     for field_name in conf.KEY_FIELDS:
         claims = by_field.get(field_name, [])
-        # The same 待确认 rule `resolve` applies, and for the same reason: a claim
+        # The same two filters `resolve` applies, and for the same reason: a claim
         # the engine discarded outright is not a rival, and reporting it as one
         # describes a contest that never happened. Observed live on Fairwater (#1),
         # whose notes credited a placeholder URL as the "higher-weighted" side of a
-        # phase conflict — a source that does not exist, disputing nothing.
+        # phase conflict — a source that does not exist, disputing nothing. A
+        # superseded figure is the same story with a decision behind it: once it is
+        # ruled out, the disagreement is settled and the note should stop announcing
+        # it every recompute.
+        claims = [c for c in claims if not c.decided_against]
         if any(c.confirmed for c in claims):
             claims = [c for c in claims if c.confirmed]
         if len(claims) < 2:
@@ -729,7 +811,17 @@ def upsert_record(
     # A routed record's own survivor is not a duplicate of itself: the candidate
     # scan works on the arriving key, which is not the survivor's, so without the
     # id check an aliased record would flag — and confidence-cap — its own row.
-    if candidate is not None and candidate.id != project.id:
+    #
+    # A pair an operator has already rejected is not a duplicate either. Only the
+    # *reports* consulted `not_duplicate`, so every crawl of either row rewrote the
+    # derived warning and re-capped confidence at 1 — the ingest path quietly
+    # overruling a recorded decision, for as long as the row kept being read. Same
+    # membership test `capex.suspected_duplicates` uses.
+    if (
+        candidate is not None
+        and candidate.id != project.id
+        and not is_parked(session, project.id, candidate.id)
+    ):
         duplicate_of = candidate.id
 
     before = _snapshot(project)

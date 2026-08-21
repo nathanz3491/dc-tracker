@@ -969,13 +969,96 @@ def rebuild(session: Any, project: Any) -> int:
     return changed
 
 
+def mark_mw_unconfirmed(session: Any, project: Any, keys: set[str]) -> int:
+    """Mark named tranches' capacity 待确认 on every source that states it.
+
+    The block-level counterpart to `conflicts.supersede`, and it has to live in the
+    `source.blocks` JSON rather than on the source row: `mw` is not a
+    `WRITABLE_FIELD`, so `unconfirmed_fields` cannot carry it — `supersede` would
+    filter it out silently.
+
+    `mw_is_confirmed` then keeps the figure visible and out of `rollup`, which is what
+    "this tranche's number is wrong" actually means. The alternative — deleting the
+    number — throws away something a person can check. It matters that `rollup` stops
+    seeing it: `rollup` does *not* apply `account`'s out-of-scale filter, so a
+    confirmed tranche larger than its own campus still feeds `reconcile`.
+
+    **Not carried across a re-read.** `upsert_record` and `backfill blocks` overwrite
+    `source.blocks` wholesale, and there is no block-level `DECIDED_REASONS`. That is
+    the right default — re-reading the article is the real repair — but it means
+    `audit.settled_codes` has to be able to see the mark go, which is what its
+    `_BLOCK_EDIT` branch is for.
+
+    Keyed on `block_key` through the project's aliases, never on `label`: two sources
+    can spell one tranche differently, and the identity is the key.
+
+    Marks the JSON *and* then the block row, because the two can disagree: a block
+    row no source asserts any more still exists until the next `rebuild` deletes it,
+    and it is the only record of that tranche in the meantime. Returns the number of
+    citations whose JSON was rewritten, which is the durable part.
+    """
+    import json
+
+    if not keys:
+        return 0
+
+    aliases = aliases_for(session, project.id)
+    touched = 0
+    for source in project.sources:
+        if not source.blocks:
+            continue
+        try:
+            entries = json.loads(source.blocks)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(entries, list):
+            continue
+        changed = False
+        for entry in entries:
+            if not isinstance(entry, dict) or not str(entry.get("label") or "").strip():
+                continue
+            key = block_key(entry["label"], entry.get("parent"))
+            if aliases.get(key.value, key.value) not in keys:
+                continue
+            unconfirmed = set(entry.get("unconfirmed") or ())
+            if "mw" in unconfirmed:
+                continue
+            unconfirmed.add("mw")
+            entry["unconfirmed"] = sorted(unconfirmed)
+            changed = True
+        if changed:
+            source.blocks = json.dumps(entries, ensure_ascii=False, sort_keys=True)
+            touched += 1
+
+    if touched:
+        session.flush()
+        rebuild(session, project)
+
+    # Whatever `rebuild` did not cover: a tranche no source states any more, whose
+    # block row is the only place it is written down. Marking the row says the same
+    # thing, and says it now — a `rebuild` that later deletes the row settles the
+    # question a different way.
+    for block in list(project.blocks):
+        if block.block_key not in keys or mw_is_confirmed(block) is False:
+            continue
+        marks = {p.strip() for p in (block.unconfirmed_fields or "").split(",") if p.strip()}
+        marks.add("mw")
+        block.unconfirmed_fields = ",".join(sorted(marks))
+    session.flush()
+    return touched
+
+
 def reconcile(project: Any) -> list[str]:
     """Fill the project's scalars from its blocks where they are empty. Disclosures.
 
-    **It may fill a null, never overwrite a value.** That is the guarantee which
-    makes this safe over an existing database: a project with no blocks is
-    untouched, so rows predating this are unaffected and the "9 of 12" count can
-    only go up.
+    **It may fill a null, never overwrite a cited figure** — `mw_planned`, `mw_built`
+    and `customer`. That is the guarantee which makes this safe over an existing
+    database: a project with no blocks is untouched, so rows predating this are
+    unaffected and the "9 of 12" count can only go up.
+
+    `phase` is the one exception, on purpose. It is a ladder, not a sum: two tranches
+    both `serving` cannot add up to something further along, so the double-counting
+    that disqualifies a capacity sum cannot happen to a status.
 
     It used to *raise* a non-null `mw_planned` to the block sum as well, on the
     reasoning that "a block sum is a floor on the campus". **That reasoning holds
@@ -998,6 +1081,14 @@ def reconcile(project: Any) -> list[str]:
     A block sum above a cited campus total is still worth knowing, so it is
     disclosed rather than acted on: something is either double-counted or the cited
     figure is stale, and neither is a question arithmetic can settle.
+
+    `mw_built` carried the other half of that same mistake, found second. The fix
+    above was applied to `mw_planned` and the next clause went on raising `mw_built`
+    to the tranche sum three lines later — and a whole-campus restatement filed as a
+    sibling tranche is `serving` as readily as it is `planned`, so the partition
+    argument fails identically. Worse, it undid the merge: `resolve` had just lowered
+    `mw_built` to what the claims support, and this raised it straight back, the same
+    way it once undid an `audit` action on `mw_planned`.
     """
     if not project.blocks:
         return []
@@ -1017,8 +1108,18 @@ def reconcile(project: Any) -> list[str]:
                 "either double-count or the campus figure is stale"
             )
 
-    if got.mw_built is not None and (project.mw_built or 0) < got.mw_built:
-        project.mw_built = got.mw_built
+    if got.mw_built is not None:
+        # `not project.mw_built` rather than `is None`, which keeps the old treatment
+        # of a stored 0.0 as unfilled: a row carrying zero is filled from its tranches
+        # instead of being told they are "above the cited built figure of 0 MW".
+        if not project.mw_built:
+            project.mw_built = got.mw_built
+        elif got.mw_built > project.mw_built:
+            notes.append(
+                f"energised tranches total {got.mw_built:g} MW, above the cited built figure "
+                f"of {project.mw_built:g} MW; kept the cited figure — the tranches either "
+                "double-count or the campus figure is stale"
+            )
 
     if got.phase is not None and _PHASE_RANK.get(got.phase, -1) > _PHASE_RANK.get(
         project.phase, -1

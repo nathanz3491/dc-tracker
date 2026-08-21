@@ -9,6 +9,8 @@ halves: the report forgets a parked pair, and so does the rollup.
 
 from __future__ import annotations
 
+import datetime as dt
+
 import pytest
 
 from tracker import capex, pairs
@@ -63,6 +65,48 @@ def test_a_parked_pair_is_still_visible_when_asked_for(session):
     a, b = _two_that_pair(session)
     pairs.park(session, [a.id, b.id])
     assert capex.suspected_duplicates(session, include_parked=True)
+
+
+def test_parking_reaches_the_ingest_path_too(session):
+    """The third reader, and the one that was overruling the decision.
+
+    Only the *reports* consulted `not_duplicate`. `upsert._find_duplicate_candidate`
+    did not, so the next crawl of either row rewrote the derived "possible duplicate
+    of project #N" warning and re-capped confidence at 1 — the operator's recorded
+    decision quietly reversed, for as long as the row kept being read.
+    """
+    from tracker.ingest.records import IngestRecord, SourceRecord
+    from tracker.upsert import upsert_record
+
+    a, b = _two_that_pair(session)
+    pairs.park(session, [a.id, b.id], reason="different buildings on one street")
+    session.commit()
+
+    result = upsert_record(
+        session,
+        IngestRecord(
+            project={
+                "company": a.company,
+                "name": a.name,
+                "city": a.city,
+                "state": a.state,
+                "mw_planned": 1200.0,
+            },
+            sources=[
+                SourceRecord(
+                    url="https://a.test/recrawl",
+                    source_type="trade_press",
+                    excerpt="excerpt",
+                    claims={"mw_planned": 1200.0},
+                    quotes={"mw_planned": "1200 MW"},
+                    fetched_at=dt.datetime(2026, 1, 1),
+                )
+            ],
+        ),
+    )
+    assert result.duplicate_of is None, "a rejected pair must not be re-proposed"
+    row = session.get(Project, result.project_id)
+    assert "possible duplicate" not in (row.notes or "")
 
 
 def test_parking_is_pairwise_so_a_new_row_is_still_asked_about(session):

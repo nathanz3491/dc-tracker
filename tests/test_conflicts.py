@@ -257,6 +257,53 @@ def test_applying_moves_the_value_by_superseding_the_loser(session):
     assert json.loads(loser.claims)["investment_usd"] == 10_000_000_000
 
 
+def test_superseding_a_high_claim_brings_a_max_field_down(session):
+    """The whole point of superseding on a MAX field, which used to do nothing.
+
+    `apply_outcome` never assigns the field — it marks the losing citation and
+    re-derives, so that a value is never a thing somebody typed. On `mw_built` that
+    re-derivation could not move: `Policy.MAX` folded the stored figure back in as a
+    candidate of its own and ignored `ratchet`, so the citation was demoted, the
+    notes said so, and the number on the page did not change. Stargate Abilene held
+    1,200 MW against a single well-quoted 200 for exactly this reason.
+    """
+    project = _hyperion(
+        session,
+        _source("https://campus.example/2026", source_type="company_filing", mw_built=200.0),
+        _source(
+            "https://campus.example/2024",
+            source_type="government_doc",
+            when=T1,
+            mw_built=1200.0,
+        ),
+    )
+    assert project.mw_built == 1200.0, "MAX keeps the largest until something is superseded"
+
+    (dispute,) = [d for d in conflicts.disputes(project) if d.field == "mw_built"]
+    energised = next(o for o in dispute.options if o.value == 200.0)
+    outcome = conflicts.solve(
+        dispute,
+        extractor=_Extractor(
+            json.dumps(
+                {
+                    "pick": energised.key,
+                    "confidence": 0.9,
+                    "reason": "1.2 GW is committed capacity, not energised",
+                }
+            ),
+            json.dumps({"stands": True, "reason": "nothing rivals it"}),
+        ),
+    )
+    assert conflicts.apply_outcome(session, project, outcome) == 1
+    session.commit()
+
+    assert project.mw_built == 200.0
+    loser = session.scalar(select(conflicts.Source).where(conflicts.Source.url.like("%2024%")))
+    assert json.loads(loser.unconfirmed_reasons)["mw_built"] == "superseded"
+    # The claim itself is untouched: the article still said what it said.
+    assert json.loads(loser.claims)["mw_built"] == 1200.0
+
+
 def test_a_refusal_writes_nothing(session):
     project = _contested(session)
     (dispute,) = [d for d in conflicts.disputes(project) if d.field == "investment_usd"]

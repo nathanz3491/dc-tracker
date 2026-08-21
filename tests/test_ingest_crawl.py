@@ -359,6 +359,25 @@ def test_evidence_gate_reads_phase_from_article_wording():
     assert dropped == {"phase": "no_quote"}
 
 
+def test_a_labelled_quote_does_not_license_a_further_phase():
+    """The hole the summary-field carve-out left, and the reason `phase` is out of it.
+
+    The sibling test above labels its quote `"x"`, so it has always taken the
+    value-matching path. Label it `"phase"` and the carve-out used to `continue`
+    before `_stated_in` ran: a real sentence about an announcement confirmed
+    `phase="operational"`, and the PHASE ladder's furthest-along merge then made the
+    overclaim effectively permanent.
+    """
+    text = "Acme Corp announced plans to build a 200-megawatt campus in Mesa."
+    kept, _, dropped = crawl.evidence_gate(
+        {"phase": "operational"}, [{"field": "phase", "quote": text}], text
+    )
+    assert kept == {}
+    # The model did quote a real sentence for this field; it just does not say this.
+    # Same reason a mislabelled figure gets.
+    assert dropped == {"phase": "quote_off_target"}
+
+
 def test_evidence_gate_ignores_malformed_entries():
     kept, _, _ = crawl.evidence_gate(
         {"mw_planned": 900.0},
@@ -1935,10 +1954,14 @@ def test_a_foreign_language_quote_cannot_evidence_a_phase():
     """The one hole the summary-field carve-out opened.
 
     Quantities and dates are protected from a translated repost for free: "230兆瓦"
-    matches no MW pattern. But `phase` is a `_SUMMARY_FIELD`, so the gate trusts
-    the model's *label* over a verified quote -- and measured against a real
+    matches no MW pattern. `phase` was not, because it was a `_SUMMARY_FIELD` and the
+    gate trusted the model's *label* over a verified quote — measured against a real
     Chinese repost, `phase=construction` sailed through while every number on the
     same article was correctly dropped.
+
+    `phase` is checked against `_PHASE_EVIDENCE` now, whose tokens are all ASCII, so
+    this sentence fails the wording check on its own. The language check still earns
+    its place on the *mixed* case, which the test below pins.
     """
     chinese = (
         "Stack Infrastructure正计划在美国俄勒冈州希尔斯伯勒市开发230兆瓦"
@@ -1964,6 +1987,21 @@ def test_an_english_quote_still_evidences_a_phase():
         {"phase": "construction"}, [{"field": "phase", "quote": english}], english
     )
     assert kept == {"phase": "construction"}
+
+
+def test_a_mixed_language_quote_cannot_evidence_a_phase():
+    """Why the language check survived `phase` leaving `_SUMMARY_FIELDS`.
+
+    `_PHASE_EVIDENCE`'s tokens are all ASCII, so a wholly Chinese sentence fails the
+    wording check for free — but a translated repost that leaves one English
+    lifecycle word standing would pass on that word alone.
+    """
+    mixed = "Stack Infrastructure的希尔斯伯勒园区已进入construction阶段，预计2027年投运。"
+    kept, _, dropped = crawl.evidence_gate(
+        {"phase": "construction"}, [{"field": "phase", "quote": mixed}], mixed
+    )
+    assert kept == {}
+    assert dropped == {"phase": "quote_off_target"}
 
 
 def test_a_first_party_release_outranks_trade_press():

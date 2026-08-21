@@ -474,6 +474,59 @@ def test_reconcile_still_fills_a_null_total(session):
     assert row.mw_planned == 300.0
 
 
+def test_reconcile_discloses_a_built_figure_the_tranches_exceed(session):
+    """`mw_built` carried the other half of the Hyperion mistake, found second.
+
+    The fix was applied to `mw_planned` and the next clause went on raising
+    `mw_built` to the tranche sum three lines later — and a whole-campus restatement
+    filed as a sibling tranche is `serving` as readily as it is `planned`, so the
+    partition argument fails identically. It also undid the merge: `resolve` had just
+    lowered `mw_built` to what the claims support, and this raised it straight back.
+    """
+    from tracker import blocks as blocks_mod
+    from tracker.models import CapacityBlock, Project
+
+    row = Project(
+        name="Restated",
+        company="Oracle",
+        city="Abilene",
+        state="TX",
+        dedup_key="oracle|restated",
+        phase="operational",
+        mw_built=200.0,
+    )
+    for key, mw in (("phase-1", 600.0), ("whole-campus", 600.0)):
+        row.blocks.append(CapacityBlock(block_key=key, label=key, mw=mw, status="serving"))
+    session.add(row)
+    session.flush()
+
+    notes = blocks_mod.reconcile(row)
+    assert row.mw_built == 200.0, "the cited built figure stands"
+    assert any("kept the cited figure" in n for n in notes), notes
+
+
+def test_reconcile_still_fills_a_null_built_figure(session):
+    """The half of the old behaviour that was right, kept."""
+    from tracker import blocks as blocks_mod
+    from tracker.models import CapacityBlock, Project
+
+    row = Project(
+        name="Unbuilt",
+        company="Oracle",
+        city="Abilene",
+        state="TX",
+        dedup_key="oracle|unbuilt",
+        phase="operational",
+    )
+    for key, mw in (("p1", 150.0), ("p2", 150.0)):
+        row.blocks.append(CapacityBlock(block_key=key, label=key, mw=mw, status="serving"))
+    session.add(row)
+    session.flush()
+
+    blocks_mod.reconcile(row)
+    assert row.mw_built == 300.0
+
+
 def test_generation_is_not_the_campus(session):
     """A utility's gas plant is real, cited, placeable — and not a data center.
 

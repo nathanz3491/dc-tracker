@@ -287,6 +287,41 @@ def test_built_capacity_takes_the_largest_not_the_best_sourced(session):
     assert not collision.stored_disagrees
 
 
+def test_a_max_field_can_disagree_with_its_own_claims(session):
+    """The tautology this check used to contain.
+
+    Asking `resolve_field` with the ratchet on folded the stored value in as a
+    candidate of its own, so a wrong-high `mw_built` resolved to itself,
+    `stored_disagrees` was never True, and `resolve_drift` had nothing to repair. The
+    sibling test above pins the policy with a stored figure the claims support; this
+    one pins that the row is allowed to be wrong about it.
+    """
+    project = _project(session, name="Drifted", mw_built=1200)
+    _source(
+        session,
+        project,
+        "https://a.test/1",
+        source_type="company_filing",
+        claims='{"mw_built": 200}',
+        fetched=T0,
+        fields="mw_built",
+    )
+    _source(
+        session,
+        project,
+        "https://b.test/2",
+        source_type="general_media",
+        claims='{"mw_built": 100}',
+        fetched=T0,
+        fields="mw_built",
+    )
+
+    collision = next(c for c in logic.check_collisions(project) if c.field == "mw_built")
+    assert collision.winner == 200, "the largest of the CLAIMS, not of the row"
+    assert collision.stored == 1200
+    assert collision.stored_disagrees
+
+
 def test_first_announced_takes_the_earliest(session):
     project = _project(session, name="A", first_announced=dt.date(2023, 1, 1))
     _source(

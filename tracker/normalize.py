@@ -32,6 +32,7 @@ from typing import Any, NamedTuple, TypeVar
 from tracker.vocab import (
     DEFAULT_PHASE,
     EVENT_TYPES,
+    PHASE_TERMINAL,
     PHASES,
     RISK_CATEGORIES,
     RISK_SEVERITIES,
@@ -155,11 +156,13 @@ def looks_english(text: str | None) -> bool:
     `topnews.cn`, `uyijian.zhiding.cn` all turned up in one measured run.
     Script is the property that generalises.
 
-    The evidence gate: quantities and dates are safe from a foreign-language
-    source because "230兆瓦" matches no MW pattern, but `phase` is a
-    `_SUMMARY_FIELD` whose carve-out trusts the model's label over a verified
-    quote — so without a language check, a Chinese sentence could evidence
-    `phase=construction`. Measured; it did.
+    The evidence gate, in two places. `notes` is a `_SUMMARY_FIELD`, so the gate
+    accepts the model's *label* over a verified quote and does no value matching at
+    all. And `phase` is evidenced by wording rather than by a value:
+    `_PHASE_EVIDENCE`'s tokens are all ASCII, so a wholly Chinese sentence fails for
+    free, but a single English lifecycle word inside one would not. Measured against
+    a real Chinese repost: `phase=construction` sailed through while every number on
+    the same article was correctly dropped.
 
     Absent text returns True: silence is not evidence of a foreign source, and the
     keyword filter downstream is the thing that should reject an empty title.
@@ -747,8 +750,47 @@ _PHASE_SYNONYMS: dict[str, str] = {
     "withdrawn": "cancelled", "retracted": "cancelled",
     "abandoned": "cancelled", "scrapped": "cancelled",
     "terminated": "cancelled", "deactivated": "cancelled", "dead": "cancelled",
+    # Plural and nominalized forms are spelled out rather than left to a stem match:
+    # `_PHASE_FALLBACK` matches on word boundaries, so `cancel` does not cover
+    # "cancellation" — and losing that would lose a terminal state, which is the
+    # invariant this table's ordering exists to protect.
+    "plans": "announced", "announcement": "announced",
+    "approvals": "permitting",
+    "operations": "operational",
+    "cancellation": "cancelled",
 }
 # fmt: on
+
+#: The fallback's scan order, compiled once: terminal synonyms before progression
+#: ones, longest before shortest, on word boundaries.
+#:
+#: **Terminal-first** fixes a real defect. "construction paused", "permitting
+#: withdrawn" and "operational but suspended" each carry wording for two phases;
+#: length is uncorrelated with meaning and every terminal synonym is short, so
+#: longest-first recorded a stopped project as an advancing one — and `capex` went on
+#: counting it, because it excludes `PHASE_TERMINAL` from the totals.
+#: `upsert._resolve_ladder` and `blocks.furthest_status` both already read "a terminal
+#: state always wins"; this was the one place that did not.
+#:
+#: **Longest-first** within each group is what keeps "pre-construction" from being
+#: read as `construction` by the shorter entry.
+#:
+#: **Word boundaries** are what make terminal-first safe rather than merely reordered:
+#: `dead` sits inside "deadline" and `hold` inside "household", so scanning the short
+#: terminal keys first against a bare substring would read a construction deadline as
+#: a cancelled project. The same boundary retires four misreads that were already
+#: live — "installed" resolved to `paused` via `stalled`, "delivery" to `operational`
+#: via `live`, "decommissioned" to `operational` via `commissioned`, and "inactive" to
+#: `permitting` via `active`. It strands no key: every synonym above still matches
+#: inside a sentence, which a test asserts so that adding one stays safe.
+_PHASE_FALLBACK: tuple[tuple[re.Pattern[str], str], ...] = tuple(
+    (re.compile(rf"\b{re.escape(key)}\b"), phase)
+    for key, phase in sorted(
+        _PHASE_SYNONYMS.items(),
+        key=lambda item: (item[1] in PHASE_TERMINAL, len(item[0])),
+        reverse=True,
+    )
+)
 
 
 def norm_phase(raw: Any, *, field: str = "phase", default: str | None = None) -> str | None:
@@ -757,6 +799,11 @@ def norm_phase(raw: Any, *, field: str = "phase", default: str | None = None) ->
     Returns ``default`` (usually None) when the source states no phase. Ingest
     paths that then fall back to :data:`DEFAULT_PHASE` must omit ``phase`` from
     ``source.fields``, so confidence scoring treats it as uncited.
+
+    A phrase naming two phases resolves to the *terminal* one: "construction halted"
+    is `paused`, not `construction`. Same rule as `upsert._resolve_ladder` and
+    `blocks.furthest_status`; the ordering, and why it needs word boundaries, is in
+    :data:`_PHASE_FALLBACK`.
     """
     if is_blank(raw):
         return default
@@ -765,11 +812,9 @@ def norm_phase(raw: Any, *, field: str = "phase", default: str | None = None) ->
         return text
     if text in _PHASE_SYNONYMS:
         return _PHASE_SYNONYMS[text]
-    # Substring fallback, longest synonym first so "under construction" is not
-    # matched by the shorter "construction" entry with a different meaning.
-    for key in sorted(_PHASE_SYNONYMS, key=len, reverse=True):
-        if key in text:
-            return _PHASE_SYNONYMS[key]
+    for pattern, phase in _PHASE_FALLBACK:
+        if pattern.search(text):
+            return phase
     raise NormalizationError(field, raw, "unrecognized project phase")
 
 

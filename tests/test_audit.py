@@ -42,7 +42,14 @@ def _project(session, **kwargs) -> Project:
 _URLS = iter(range(1, 10_000))
 
 
-def _source(session, project, claims: dict, *, unconfirmed: str | None = None) -> None:
+def _source(
+    session,
+    project,
+    claims: dict,
+    *,
+    unconfirmed: str | None = None,
+    reasons: dict | None = None,
+) -> None:
     """One citation.
 
     Two columns decide the tier and they have to be set the way ingest sets them:
@@ -60,6 +67,7 @@ def _source(session, project, claims: dict, *, unconfirmed: str | None = None) -
             claims=json.dumps(claims),
             fields=",".join(k for k in claims if k not in unconfirmed_set),
             unconfirmed_fields=unconfirmed,
+            unconfirmed_reasons=json.dumps(reasons) if reasons else None,
             extractor="crawl:v1",
         )
     )
@@ -97,6 +105,26 @@ def test_two_sources_a_thousandfold_apart_are_a_unit_error(session):
     _source(session, project, {"mw_planned": 36000.0})
     session.refresh(project)
     assert "same_figure_two_units" in _codes(project)
+
+
+def test_a_superseded_claim_is_not_a_rival_figure(session):
+    """What makes the finding count actually fall after a repair.
+
+    `audit check` does not filter by `settled_codes`, so a check that kept counting a
+    ruled-out claim would report the same unit misread forever — a row reported as a
+    disagreement between a figure and the figure that replaced it.
+    """
+    project = _project(session, name="Repaired", mw_planned=36.0)
+    _source(session, project, {"mw_planned": 36.0})
+    _source(
+        session,
+        project,
+        {"mw_planned": 36000.0},
+        unconfirmed="mw_planned",
+        reasons={"mw_planned": "superseded"},
+    )
+    session.refresh(project)
+    assert "same_figure_two_units" not in _codes(project)
 
 
 def test_a_hundredfold_gap_is_caught_too(session):

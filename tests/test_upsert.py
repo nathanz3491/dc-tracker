@@ -1700,9 +1700,10 @@ def test_a_recompute_lets_phase_come_back_down(session):
     `_resolve_ladder` folded the stored value into the comparison and nothing could
     ever lower it.
 
-    An incremental upsert still ratchets: there, the guard stops one thin new
-    source dragging a well-established row backwards. A full recompute is not a
-    thin new source.
+    Neither write path ratchets — `upsert_record` and `recompute_from_sources` both
+    pass `ratchet=False`, because each derives the row from the complete set of
+    citations rather than from whatever the row happened to be carrying. The ratchet
+    is on by default for the *read* paths only.
     """
     import json
 
@@ -1737,10 +1738,173 @@ def test_a_recompute_lets_phase_come_back_down(session):
     assert row.phase == "construction"
 
 
-def test_an_ordinary_upsert_still_ratchets_phase(session):
-    """The guard that stops a thin new source walking a live campus backwards."""
+def test_the_phase_ratchet_is_the_default_and_can_be_turned_off(session):
+    """On by default for the read paths; off in both writers."""
     from tracker.upsert import Policy, _Claim, resolve
 
     claims = [_Claim("announced", 1, dt.datetime(2026, 1, 1), "general_media", "u")]
     assert resolve(Policy.PHASE, claims, "operational") == "operational"
     assert resolve(Policy.PHASE, claims, "operational", ratchet=False) == "announced"
+
+
+def test_the_ratchet_governs_max_and_min_too(session):
+    """It was threaded into PHASE only, so MAX could not fall and MIN could not rise.
+
+    The flag was a lie for the two other policies that scan the whole claim set: the
+    stored value was appended to the candidates unconditionally, so it was always one
+    of its own rivals and always won.
+    """
+    from tracker.upsert import Policy, _Claim, resolve
+
+    built = [_Claim(200.0, 2, dt.datetime(2026, 1, 1), "trade_press", "u")]
+    assert resolve(Policy.MAX, built, 1200.0) == 1200.0
+    assert resolve(Policy.MAX, built, 1200.0, ratchet=False) == 200.0
+
+    announced = [_Claim("2024-03-01", 2, dt.datetime(2026, 1, 1), "trade_press", "u")]
+    assert resolve(Policy.MIN, announced, dt.date(2019, 1, 1)) == "2019-01-01"
+    assert resolve(Policy.MIN, announced, dt.date(2019, 1, 1), ratchet=False) == "2024-03-01"
+
+
+def test_turning_the_ratchet_off_does_not_make_a_field_clearable(session):
+    """`DERIVED_FIELDS` rests on this: no usable candidate returns what is stored.
+
+    The merge loop writes `chosen` straight through, so returning None here would
+    NULL a column on the strength of an unreadable claim — which is exactly why
+    `blocker` had to leave the loop rather than be given a policy. Only a rival the
+    policy can actually compare may lower a MAX field.
+    """
+    from tracker.upsert import Policy, _Claim, resolve
+
+    assert resolve(Policy.MAX, [], 1200.0, ratchet=False) == 1200.0
+    prose = [_Claim("about 200 MW", 2, dt.datetime(2026, 1, 1), "trade_press", "u")]
+    assert resolve(Policy.MAX, prose, 1200.0, ratchet=False) == 1200.0
+
+
+def test_a_claim_a_decision_ruled_against_leaves_the_merge(session):
+    """Superseding the *only* claim must not hand the figure straight back.
+
+    The 待确认 filter is conditional on a confirmed rival existing, because an
+    unquoted value still beats nothing. A decision is the other question: once a
+    human or the solver rules a figure out, "no source we trust states this" has to
+    mean the field is empty, not that the ruled-out figure returns as a last resort.
+    That was why `audit`'s clear-the-capacity action never stuck.
+    """
+    import json
+
+    from tracker.conflicts import supersede
+    from tracker.models import Project, Source
+    from tracker.upsert import recompute_from_sources
+
+    row = Project(
+        name="Ruled",
+        company="Meta",
+        city="Rayville",
+        state="LA",
+        dedup_key="meta|ruled",
+        mw_planned=36000.0,
+    )
+    session.add(row)
+    session.flush()
+    source = Source(
+        project=row,
+        url="https://ruled.test/1",
+        source_type="company_filing",
+        fetched_at=dt.datetime(2026, 1, 1),
+        excerpt="an excerpt",
+        fields="mw_planned",
+        claims=json.dumps({"mw_planned": 36000.0}),
+        quotes=json.dumps({"mw_planned": "36,000 MW at full buildout"}),
+    )
+    session.add(source)
+    session.flush()
+
+    assert supersede(source, "mw_planned") is True
+    row.mw_planned = None
+    session.flush()
+    recompute_from_sources(session, row)
+    assert row.mw_planned is None
+    # The claim itself is untouched — the article still said what it said.
+    assert json.loads(source.claims)["mw_planned"] == 36000.0
+
+
+def test_a_recompute_lets_a_max_field_come_back_down(session):
+    """`mw_built` was a one-way ratchet for the same reason `phase` was.
+
+    Stargate Abilene (#3) read `mw_built = 1200` while the only claim on the row was
+    a well-quoted 200: both "1.2 GW" quotes had been re-extracted as `mw_planned`,
+    correctly — committed capacity is not energised capacity — and MAX counted the
+    stored figure among its own candidates, so nothing could lower it. The figure
+    outlived the claim that produced it by 1,000 MW.
+    """
+    import json
+
+    from tracker.models import Project, Source
+    from tracker.upsert import recompute_from_sources
+
+    row = Project(
+        name="Abilene",
+        company="Oracle",
+        city="Abilene",
+        state="TX",
+        dedup_key="oracle|abilene",
+        mw_built=1200.0,
+    )
+    session.add(row)
+    session.flush()
+    session.add(
+        Source(
+            project=row,
+            url="https://abilene.test/1",
+            source_type="trade_press",
+            fetched_at=dt.datetime(2026, 1, 1),
+            excerpt="an excerpt",
+            fields="mw_built",
+            claims=json.dumps({"mw_built": 200.0}),
+            quotes=json.dumps({"mw_built": "200 MW is energised and serving"}),
+        )
+    )
+    session.flush()
+
+    recompute_from_sources(session, row)
+    assert row.mw_built == 200.0
+
+
+def test_a_recompute_lets_first_announced_move_later(session):
+    """The MIN half of the same defect: a date earlier than anything cited.
+
+    `first_announced` means the first announcement anybody saw, so MIN is right — but
+    the row's own date was one of the candidates, which made a wrong-early value as
+    permanent as a wrong-high capacity.
+    """
+    import json
+
+    from tracker.models import Project, Source
+    from tracker.upsert import recompute_from_sources
+
+    row = Project(
+        name="Early",
+        company="Oracle",
+        city="Abilene",
+        state="TX",
+        dedup_key="oracle|early",
+        first_announced=dt.date(2019, 1, 1),
+    )
+    session.add(row)
+    session.flush()
+    session.add(
+        Source(
+            project=row,
+            url="https://early.test/1",
+            source_type="company_filing",
+            fetched_at=dt.datetime(2026, 1, 1),
+            excerpt="an excerpt",
+            fields="first_announced",
+            claims=json.dumps({"first_announced": "2024-03-01"}),
+            quotes=json.dumps({"first_announced": "announced in March 2024"}),
+        )
+    )
+    session.flush()
+
+    recompute_from_sources(session, row)
+    assert row.first_announced == dt.date(2024, 3, 1)
+    assert isinstance(row.first_announced, dt.date)

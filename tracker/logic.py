@@ -300,16 +300,24 @@ def _check_stored_against_evidence(project: Project) -> list[Finding]:
     Observed live on Stargate Abilene (#3), which read `mw_built = 1200` while the
     only `mw_built` claim on the row was a well-quoted 200. The 1.2 GW quotes had
     been re-extracted as `mw_planned`, correctly — "committed capacity" is not
-    energised capacity — but `mw_built` is policy MAX and `_resolve` counts the
-    stored value among the candidates, so **MAX can never come back down.** Once
-    written, the figure outlived the claim that produced it. 1,000 MW, against
-    HTI's ~0.4 GW satellite read and our own `phase-1` block of 200 MW serving.
+    energised capacity — but `mw_built` is policy MAX and `_resolve` counted the
+    stored value among its own candidates, so **MAX could not come back down.** Once
+    written, the figure outlived the claim that produced it. 1,000 MW, against HTI's
+    ~0.4 GW satellite read and our own `phase-1` block of 200 MW serving.
+
+    A recompute lowers that row now — MAX and MIN honour `ratchet`, and both write
+    paths turn it off — so this rule is a detector rather than a life sentence. It
+    stays necessary because a repair needs something to re-derive *from*: the shape
+    above is one claim and a row that disagrees with it, which `check_collisions`
+    cannot see and `logic resolve` therefore cannot fix. Two of the three fields here
+    are PREFER_WEIGHT besides, which never ratcheted at all.
 
     Two things can legitimately support a scalar, and both are consulted:
 
     * the field's own claims, resolved by the same policy the write path uses; and
-    * the **block rollup**, because `blocks.reconcile` deliberately raises a campus
-      scalar to the sum of its tranches. Ignoring it reported 28 false positives.
+    * the **block rollup**, because a tranche's capacity is cited capacity whether or
+      not `reconcile` writes the sum onto the campus. Ignoring it reported 28 false
+      positives.
 
     Deliberately *not* an ERROR. Nothing here is arithmetically impossible — the
     row may be right and the extraction stale — so this is a question for a person,
@@ -370,9 +378,9 @@ def _check_stored_against_evidence(project: Project) -> list[Finding]:
                     ),
                     fields=(name,),
                     remedy=(
-                        "usually a figure that outlived the claim behind it — MAX fields "
-                        "never come back down on their own; confirm and correct in "
-                        "`tracker review`"
+                        "usually a figure that outlived the claim behind it; "
+                        "`tracker logic resolve` re-derives it when two claims disagree, "
+                        "otherwise confirm and correct in `tracker review`"
                     ),
                 )
             )
@@ -849,9 +857,18 @@ def check_collisions(project: Project) -> list[Collision]:
 
         stored = getattr(project, name, None)
         policy = FIELD_POLICY.get(name, Policy.PREFER_WEIGHT)
-        # Resolve as the write path would, against the value already on the row —
-        # FILL_ONLY, MAX and MIN all consult it.
-        chosen = resolve_field(name, claims, stored)
+        # Resolve as the write path would — and the write path does not ratchet:
+        # `upsert_record` and `recompute_from_sources` both pass `ratchet=False`,
+        # because each re-derives from the complete claim set. Asking with the ratchet
+        # on made this check tautological on MAX, MIN and PHASE: the stored value was
+        # folded in as one of its own candidates, so it always won and
+        # `stored_disagrees` could never be True. Abilene's `mw_built = 1200` resolved
+        # to 1200 against a lone well-quoted 200, and `resolve_drift` — the one repair
+        # a machine is allowed to make — had nothing to repair.
+        #
+        # `stored` is still passed, because FILL_ONLY consults it as policy rather
+        # than as a ratchet; dropping it reported 73 healthy rows as drifted.
+        chosen = resolve_field(name, claims, stored, ratchet=False)
         winner = next((c for c in claims if _same(c.value, chosen)), claims[0])
         rival = next((c for c in claims if values_conflict(chosen, c.value)), None)
         if rival is None:
@@ -966,6 +983,13 @@ def _decided_by(policy, winner, rival, claims) -> str:
     from tracker.upsert import Policy
     from tracker.vocab import PHASE_TERMINAL
 
+    # Before any policy: `resolve` applies the 待确认 filter first, for every policy.
+    # When that is what separated these two, "largest" or "furthest along" names a
+    # comparison that never happened — the rival was discarded, not out-measured.
+    # Reachable on MAX and MIN only since the ratchet stopped letting the stored value
+    # win by default, which is what made those two branches unconditional.
+    if winner.confirmed != rival.confirmed:
+        return "confirmed"
     if policy is Policy.FILL_ONLY:
         return "first seen"
     if policy is Policy.MAX:
@@ -975,8 +999,6 @@ def _decided_by(policy, winner, rival, claims) -> str:
     if policy is Policy.PHASE:
         return "terminal" if winner.value in PHASE_TERMINAL else "furthest along"
     # PREFER_WEIGHT: the ordering itself is the answer, so say which step of it.
-    if winner.confirmed != rival.confirmed:
-        return "confirmed"
     if winner.weight != rival.weight:
         return "credibility"
     if (winner.fetched_at or _EPOCH) != (rival.fetched_at or _EPOCH):

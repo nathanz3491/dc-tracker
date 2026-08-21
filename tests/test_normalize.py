@@ -442,6 +442,25 @@ def test_norm_date_rejects_invalid(raw):
         ("canceled", "cancelled"),
         ("Withdrawn", "cancelled"),
         ("Retracted", "cancelled"),
+        # A terminal state wins over a progression phase in the same phrase. Scanning
+        # the longest synonym first read every one of these as an advancing project,
+        # and `capex` went on counting a dead one.
+        ("construction paused", "paused"),
+        ("construction halted", "paused"),
+        ("construction on hold", "paused"),
+        ("operational but suspended", "paused"),
+        ("cancelled after construction began", "cancelled"),
+        ("permitting withdrawn", "cancelled"),
+        ("project cancellation", "cancelled"),
+        # Longest-first, pinned where the two candidates *disagree*: nothing else in
+        # this table does, so the invariant its old comment defended was untested.
+        # "pre-construction" is `announced` and contains `construction`.
+        ("pre-construction work begins in May", "announced"),
+        ("currently under construction", "construction"),
+        # Word boundaries: "deadline" is not `dead`.
+        ("construction deadline", "construction"),
+        ("plans submitted to the county", "announced"),
+        ("commercial operations", "operational"),
     ],
 )
 def test_norm_phase(raw, expected):
@@ -456,6 +475,38 @@ def test_norm_phase_default_is_returned_for_blank_not_invented():
 def test_norm_phase_rejects_unknown_wording():
     with pytest.raises(NormalizationError):
         norm_phase("Unknown Blah")
+
+
+@pytest.mark.parametrize(
+    "raw",
+    ["inactive", "installed capacity of 200 MW", "delivery expected in 2027", "decommissioned"],
+)
+def test_norm_phase_refuses_a_synonym_buried_in_an_unrelated_word(raw):
+    """Four misreads the word-boundary match retires.
+
+    Each of these resolved to a phase off a synonym inside an unrelated word:
+    `active` in "inactive", `stalled` in "installed", `live` in "delivery",
+    `commissioned` in "decommissioned" — and two landed on `operational`, the top of
+    the ladder. Refusing is the right answer, and every caller handles it: `crawl`
+    wraps this in `soft`, `pjm` notes that the status did not map and omits the field,
+    `manual` rejects the record.
+    """
+    with pytest.raises(NormalizationError):
+        norm_phase(raw)
+
+
+def test_every_phase_synonym_still_matches_inside_a_sentence():
+    r"""The boundary must not silently strand a key.
+
+    `_PHASE_FALLBACK` wraps each synonym in `\b`, which is what stops `dead` matching
+    "deadline" — and would quietly retire any key that only ever occurs as part of a
+    longer word. Asserting the table is wholly reachable is what makes adding a
+    synonym safe.
+    """
+    from tracker.normalize import _PHASE_SYNONYMS
+
+    for key, phase in _PHASE_SYNONYMS.items():
+        assert norm_phase(f"the project is {key} as of today") == phase, key
 
 
 # --- Closed vocabularies ----------------------------------------------------
