@@ -73,3 +73,10 @@ docs/*.zh-CN.md
 # out of the repo. CLAUDE.md is committed but names no host — see its §6.
 deploy/
 HANDOFF.md
+
+# Only Markdown is documentation. Decks, PDFs and spreadsheets under docs/ are
+# client deliverables by nature — same rule as the Chinese-language documents.
+docs/*.pdf
+docs/*.pptx
+docs/*.docx
+docs/*.xlsx
