@@ -4,7 +4,7 @@
 !.env.example
 
 # Database — a build artifact, reproduced by replaying seed/ + data/raw/.
-# See README "Why the database is not committed".
+# See docs/design-decisions.md "The database is not committed".
 *.db
 *.db-wal
 *.db-shm
@@ -18,7 +18,8 @@ data/*
 # Census reference data is the exception to the rule above: 3.8 MB of national
 # lookup tables that are not evidence of any project claim, are byte-identical for
 # everyone, and are re-downloadable from a stable URL. `tracker ingest geo` names
-# the URLs when they are absent. See README "Deriving county and coordinates".
+# the URLs when they are absent. See docs/design-decisions.md "Deriving county
+# and coordinates".
 data/raw/census/
 !data/exports/
 data/exports/*
@@ -51,3 +52,24 @@ coverage.xml
 
 # Claude Code local state — machine-specific launch config and session locks
 .claude/
+
+# Working documents and client deliverables. Only *technical* docs are committed —
+# the ones a person reading this codebase needs. See CLAUDE.md §6 for the rule.
+#
+# Plans, reviews and feedback are dated snapshots of a decision in progress: they
+# go stale the moment the code lands, and a reader who finds one cannot tell
+# whether it describes the system or an argument somebody had about it. The
+# Chinese-language documents are client deliverables, not repo documentation.
+docs/plan-*.md
+docs/*-plan.md
+docs/review-*.md
+docs/*-review-*.md
+docs/feedback-*.md
+docs/*.zh-CN.md
+
+# Deployment tooling and the session log: host-specific by nature. `deploy/` names
+# the production host in its launchd plist filenames and its runbook is procedure
+# for that one machine; HANDOFF.md is a dated working log. Both stay on disk and
+# out of the repo. CLAUDE.md is committed but names no host — see its §6.
+deploy/
+HANDOFF.md

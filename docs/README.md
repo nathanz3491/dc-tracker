@@ -1,43 +1,27 @@
 # Documentation
 
-Seven documents, and honestly you need at most two of them. Start with
-`what-we-built.zh-CN.md` if you are new.
+The root [`README.md`](../README.md) is the tour — what this is, how to install it,
+the core loop, and the three ideas everything else is shaped by. These files are the
+detail behind it.
 
-| | What it is | Read it when |
-| --- | --- | --- |
-| [`what-we-built.zh-CN.md`](what-we-built.zh-CN.md) | 最短的一份。要的是什么、有了什么、怎么跑、报数前要知道哪些数字。~100 行。 | 你刚接手，或要把这个交给别人。 |
-| [`../README.md`](../README.md) | The exhaustive one. Install, API keys, every command, every design decision and why. ~1100 lines. | You are setting this up, or you want to know why something works the way it does. |
-| [`architecture.md`](architecture.md) | How the CLI, the database and the web console fit together. Logic, not code. | You are changing the console, or wondering why the browser does not compute anything itself. |
-| [`guide.zh-CN.md`](guide.zh-CN.md) | 中文使用指南。按「你想做什么」组织。 | 你想用它，而不是改它。 |
-| [`architecture.zh-CN.md`](architecture.zh-CN.md) | 架构说明，中文。 | 同上。 |
-| [`government-sources.md`](government-sources.md) | Four routes to bulk government data, all measured, all rejected — and what to do instead. | You are about to go looking for permit or docket data. Read this first; it is a day you do not have to spend. |
-| [`plan-scale-with-sources.md`](plan-scale-with-sources.md) | What breaks now that the best rows hold 26 citations instead of 2: `logic check`'s findings growing quadratically, and one building acquiring sixteen names. Part 2 (`tracker blocks`) is built; Part 1 (`logic check` grouping) is still just measured. | You are about to work on contradictions or capacity blocks, or you are wondering whether to point an LLM at either. |
+## Using it
 
-There is no English counterpart to `guide.zh-CN.md`, and that is deliberate:
-the root `README.md` already is one, and two documents covering the same ground
-is how one of them becomes wrong.
+| | What it covers |
+| --- | --- |
+| [Ingesting](ingesting.md) | The API key, the one-command loop, depth versus breadth, reaching back for older projects, operator press releases, optional search providers, and SEC filings |
+| [Sources and feeds](sources-and-feeds.md) | Which publishers actually decide stored values, what discovery costs per feed, feeds worth adding and retiring, and `tracker sources policy` |
+| [Backfill and gaps](backfill-and-gaps.md) | Seeing where the data is thin, filling capacity blocks on older rows, deriving county and coordinates without an LLM |
+| [The console, and exporting](console-and-export.md) | The whole dataset as one page, the live console and its two modes, driving it without a browser, and publishing it |
+| [Analysis](analysis.md) | Who is buying the capacity, what could stop these projects being built, `tracker infer`, and how slippage is measured |
 
-## The three ideas
+## Understanding it
 
-If you read nothing else, read these — everything on screen is shaped by them,
-and they are also in the console's own Help tab.
-
-**A model's answer is not a fact.** Every stored value carries a tier saying what
-it rests on: `reported` (a verbatim sentence in a fetched article, checked
-against that article), `derived` (a Census lookup — deterministic, but nobody
-said it), `unconfirmed` (待确认 — extracted and unquotable, kept but never
-counted), `inferred` (a model's judgement), `defaulted` (nobody said anything and
-the column is NOT NULL). Absence is a fifth answer, and it is often the correct
-one.
-
-**Progress is five tracks, not one ladder.** Site control, permits, power,
-construction, commercial. A campus can own its land outright and be four years
-into an interconnection queue. Power is never inferred from the others, because
-building ahead of grid connection is normal and a finished shell waiting on a
-substation is the most valuable signal here.
-
-**Confidence is recomputed, never stored,** and one source can never reach 3
-however authoritative — independence is counted by domain.
+| | What it covers |
+| --- | --- |
+| [Architecture](architecture.md) | How the CLI, the database and the console fit together — and why the browser never computes a judgement of its own |
+| [Data quality](data-quality.md) | Numbers that cannot be true, one tranche wearing several names, values that contradict each other, what each stored value rests on, and why crawl order is not publication order |
+| [Design decisions](design-decisions.md) | The reasoning that is not obvious from the code, and where this diverges from the PRD — the evidence gate, provenance per field, confidence, the schema additions, the seed file |
+| [Government sources](government-sources.md) | Four routes to bulk permit and docket data, all measured, all rejected, and what to do instead. Read it before going looking; it is a day you do not have to spend |
 
 ## Not documented here
 
@@ -46,3 +30,6 @@ is the one worth reading if you care about how per-field evidence works.
 `tracker/tracks.py` and `tracker/gaps.py` both open with an explanation of the
 judgement they encode, and those are the two modules where the reasoning matters
 more than the code.
+
+`CLAUDE.md` at the repo root is the operating rules — which machine may write data,
+how code reaches production, and what must never be committed.

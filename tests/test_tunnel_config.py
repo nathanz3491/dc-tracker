@@ -19,7 +19,7 @@ runner = CliRunner()
 @pytest.fixture
 def configured(monkeypatch):
     """A machine with a named tunnel set up, as `.env` would supply it."""
-    settings = Settings(tunnel_name="dc-console", tunnel_hostname="mastri.app")
+    settings = Settings(tunnel_name="dc-console", tunnel_hostname="console.example")
     for module in ("tracker.cli", "tracker.config"):
         monkeypatch.setattr(f"{module}.get_settings", lambda: settings, raising=False)
     return settings
@@ -42,7 +42,7 @@ def test_a_configured_tunnel_needs_no_arguments(configured, monkeypatch):
     assert runner.invoke(app, ["cloudflare"]).exit_code == 0
     assert seen["publish"] == "named"
     assert seen["tunnel_name"] == "dc-console"
-    assert seen["hostname"] == "mastri.app"
+    assert seen["hostname"] == "console.example"
 
 
 def test_quick_ignores_the_configured_tunnel(configured, monkeypatch):
@@ -63,7 +63,7 @@ def test_quick_and_a_named_tunnel_together_are_refused(configured, monkeypatch):
 def test_an_explicit_name_does_not_inherit_the_configured_hostname(configured, monkeypatch):
     """The load-bearing one.
 
-    Filling `mastri.app` in behind `--name staging` would print a URL pointing at
+    Filling the configured hostname in behind `--name staging` would print a URL pointing at
     the *other* tunnel — and it would look right, because the hostname is real.
     The pair is taken together or not at all.
     """
@@ -95,7 +95,7 @@ def test_with_nothing_configured_it_is_still_a_quick_tunnel(monkeypatch):
 
 def test_a_hostname_without_a_tunnel_name_is_refused(monkeypatch):
     """Half-configured is a mistake worth naming rather than quietly ignoring."""
-    settings = Settings(tunnel_hostname="mastri.app")
+    settings = Settings(tunnel_hostname="console.example")
     monkeypatch.setattr("tracker.cli.get_settings", lambda: settings)
     _plan(monkeypatch)
     result = runner.invoke(app, ["cloudflare"])
@@ -113,7 +113,7 @@ def test_serve_tunnel_uses_the_same_configured_tunnel(configured, monkeypatch):
     assert runner.invoke(app, ["serve", "--tunnel"]).exit_code == 0
     assert seen["publish"] == "named"
     assert seen["tunnel_name"] == "dc-console"
-    assert seen["hostname"] == "mastri.app"
+    assert seen["hostname"] == "console.example"
 
 
 def test_serve_without_tunnel_publishes_nothing(configured, monkeypatch):

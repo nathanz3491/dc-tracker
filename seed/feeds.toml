@@ -33,7 +33,7 @@ topic_implied = true
 # Their robots.txt sets `Content-Signal: search=yes,ai-train=no,use=reference`.
 # We do not train on the content and we store only short attributed excerpts, but
 # the Cloudflare block is a deliberate access control and this project does not
-# try to defeat it. See README "Why DataCenterDynamics is discovery-only".
+# try to defeat it. See docs/ingesting.md "Why DataCenterDynamics is discovery-only".
 url = "https://www.datacenterdynamics.com/en/rss/"
 source_type = "trade_press"
 
