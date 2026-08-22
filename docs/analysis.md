@@ -118,6 +118,7 @@ tracker duplicates                       # suspected groups, strongest evidence 
 tracker duplicates --no-weak             # only pairs raised by more than a shared word
 tracker duplicates park 55 58 --reason "different operators, different buildings"
 tracker duplicates parked                # every pair ruled out, and who ruled it out
+tracker duplicates resolve               # let a model settle them: parks, and merges with --merge
 tracker duplicates unpark 55 58          # put the question back
 ```
 
@@ -146,6 +147,47 @@ more than one town is vocabulary, not identity**, and no longer pairs anything;
 rarity is measured across localities rather than across rows so the flagship case
 survives — the Abilene campus is stored four times and all four hold `building-1`,
 in one town.
+
+### Letting a model answer: `tracker duplicates resolve`
+
+```bash
+tracker duplicates resolve --dry-run     # ask about every pair, write nothing
+tracker duplicates resolve               # park the ones it rules are different sites
+tracker duplicates resolve --merge       # ...and fold the ones it rules are one campus
+tracker duplicates resolve --ask         # put each pair to you first, model as the fallback
+```
+
+One model call per pair, three answers, and they are not equally trusted because
+their consequences are not equally reversible.
+
+**`different` parks the pair**, recording `model (0.87)` as the decider —
+`not_duplicate.decided_by` was built for exactly that, and `unpark` undoes it. This
+is the answer that pays for the run: a false pair holds a real campus out of the
+capex roll-up until somebody rules it out.
+
+**`same` merges, and only past every rail.** All of them are refusals stated
+elsewhere in the codebase, restated as something a run can print:
+
+| rail | why |
+|---|---|
+| confidence below 0.9 | unparking undoes a park; nothing undoes a merge |
+| name-word evidence only | "a shared name word is a word" |
+| cross-granularity evidence only | `dedup` has never merged a county row into a city row unattended |
+| coordinates over 25 km apart | a campus can span a mile, not a county |
+| no `--merge` flag | the default run parks and never deletes |
+
+**`unclear` is a real answer** and the prompt says so twice: a wrong "same"
+destroys two rows, a wrong "different" hides a real duplicate, and both are worse
+than admitting the two rows do not settle it.
+
+**Which row survives is not the model's choice** — most citations, then most fields
+filled, then the lower id. It barely matters either way, because the merge recomputes
+every field from the combined claims; what it decides is a row number. The model's
+whole output is one word from three, a confidence and a sentence, so it cannot name
+a survivor or write a value even if it tried.
+
+A person at the keyboard may merge what the rails refuse a model. The rails guard an
+*unattended* decision, and `--ask` is the opposite of unattended.
 
 ## What could stop these projects being built
 

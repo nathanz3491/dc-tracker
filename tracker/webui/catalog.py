@@ -43,6 +43,8 @@ LLM_COMMANDS: frozenset[str] = frozenset(
         "risks confirm",
         # One to two calls per contested field, on the reasoning tier.
         "logic conflicts",
+        # One call per suspected pair.
+        "duplicates resolve",
     }
 )
 
@@ -59,6 +61,10 @@ LLM_COMMANDS: frozenset[str] = frozenset(
 #: said is lost — but the row numbers are gone and there is no undo.
 DESTRUCTIVE: dict[str, str] = {
     "merge": "deletes the rows it folds in. There is no undo.",
+    # Named, not flag-read: it only deletes with `--merge`, and a gate that reads
+    # arguments is a gate with a bypass in it. What it deletes is what `merge`
+    # deletes, decided by a model against the rails in `dupresolve.merge_blocked`.
+    "duplicates resolve": "folds the pairs a model rules are one campus, with --merge.",
     # Not destruction — it writes values derived from citations that stay exactly
     # where they are, and running it twice changes nothing the second time. It is
     # here because it is the only command that rewrites fields across the whole
@@ -171,6 +177,7 @@ GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "audit resolve",
             "logic conflicts",
             "risks confirm",
+            "duplicates resolve",
             "queue check",
             "queue prune",
             # Under Repair rather than Inspect: it is the only command in the

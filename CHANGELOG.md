@@ -190,6 +190,59 @@ initial build of the v1 PRD.
   one now narrows the list to that watch. The tallies carry titles and accessible
   labels: a bare ▼ beside a number is a glyph, not a fact.
 
+### Added
+
+- **`tracker duplicates resolve` — a model settles the suspected duplicates, and
+  the rails decide what it is allowed to do** (`tracker/dupresolve.py`,
+  `prompts/duplicates-resolve-v1.txt`, `cli.py`, `webui/catalog.py`).
+
+  `tracker duplicates` proposed and never disposed, which `merge.py` argues for
+  directly: "a wrong merge destroys two projects and leaves no trace, while a wrong
+  split is visible and recoverable." The cost of that caution was a report nobody
+  answered — 30 pairs on the live database, 29 of them across genuinely different
+  company names, so no alias table will ever fix them, each waiting on a person to
+  open two rows and read their citations. This is that first pass.
+
+  One call per pair. Three answers, trusted unequally because their consequences
+  are not equally reversible:
+
+  * **different** parks the pair with `decided_by = "model (0.87)"`. That string is
+    not new — migration 0016 shipped it as the example value, with the comment "a
+    model may park a pair; a reader must be able to tell that one did" — and
+    `duplicates unpark` undoes it. It is also the half that pays: `capex.rollup`
+    holds one row of every suspected group out of the buyer table, so a false pair
+    keeps a real campus's capacity out of a published number until somebody rules
+    it out.
+  * **same** merges, but only with `--merge`, and only past every rail.
+  * **unclear** leaves the pair in the report, which the prompt is explicit is a
+    real answer rather than a failure.
+
+  **`merge_blocked` is the safety argument and it refuses more than it allows.** No
+  merge below 0.9 — far above the 0.6 a park needs, because unparking undoes a park
+  and nothing undoes a merge. No merge on a pair whose only evidence is a shared
+  name word, per `capex`'s own line that "a shared name word is a word". No merge on
+  a pair whose only evidence is a cross-granularity key match, because that is
+  `dedup.py`'s founding invariant — a county row and a city row are never merged
+  automatically, since "Racine County, WI" and "Mount Pleasant, WI" may or may not
+  be one project and nothing in the row can tell. And no merge between two rows
+  whose stored coordinates are more than 25 km apart: geography outranks the model.
+  A person at the keyboard (`--ask`) may still merge what the rails refuse a model,
+  because the rails guard an *unattended* decision.
+
+  **Which row survives is not the model's choice.** Most citations, then most fields
+  filled, then the lower id — deterministic and reviewable, and nearly
+  consequence-free because a merge recomputes every field from the combined claims.
+  The model's whole output is one word from three, a confidence and a sentence: it
+  cannot name a survivor, cannot edit a field, and cannot reach past the rails.
+
+  Registered in the console under both gates it earns — `LLM_COMMANDS` because it
+  spends a call per pair, and `DESTRUCTIVE` because with `--merge` it deletes rows —
+  so the palette makes the name be typed back before it runs.
+
+  `--dry-run` asks and reports without writing, and it holds a writable connection
+  to do it: a `mode=ro` connection cannot even flush the park it is about to roll
+  back. Its own test says so, because that is how it was found.
+
 ### Changed
 
 - **`GET /api/landing` is now `GET /api/publishers`, and answers less**

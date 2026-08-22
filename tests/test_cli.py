@@ -1635,3 +1635,73 @@ def test_digest_markdown_carries_both_dates(initialized: Path):
 
     out = invoke(initialized, "digest", "--markdown", "--days", "2").output
     assert "2022-03-04" in out and "learned" in out
+
+
+# --- duplicates resolve ----------------------------------------------------
+
+
+def test_duplicates_resolve_refuses_when_nothing_can_decide(seeded: Path):
+    """No key, no keyboard: say so rather than reporting "0 pairs settled"."""
+    result = invoke(seeded, "duplicates", "resolve", "--no-llm", "--no-ask")
+    assert result.exit_code != 0
+    assert "nothing can decide" in result.output
+
+
+def test_duplicates_resolve_dry_run_writes_nothing(initialized: Path, monkeypatch):
+    """The calls are still paid for; the database is not touched."""
+    import json as _json
+
+    from tracker import dupresolve
+    from tracker.db import open_db, session_scope
+    from tracker.models import CapacityBlock, NotDuplicate, Project, Source
+
+    with session_scope(open_db(initialized, readonly=False)) as session:
+        for i, company in enumerate(("Crusoe", "Oracle")):
+            project = Project(
+                name="Stargate Abilene",
+                company=company,
+                city="Abilene",
+                state="TX",
+                dedup_key=f"k{i}",
+            )
+            session.add(project)
+            session.flush()
+            session.add(
+                Source(
+                    project_id=project.id,
+                    url=f"https://trade.example/{i}",
+                    source_type="trade_press",
+                    excerpt="One campus in Abilene.",
+                )
+            )
+            session.add(
+                CapacityBlock(
+                    project_id=project.id, label="Building 1", block_key="stingray", mw=70.0
+                )
+            )
+
+    reply = _json.dumps({"verdict": "different", "confidence": 0.95, "reason": "two builds"})
+
+    class _Model:
+        def complete(self, **_kwargs):
+            class R:
+                text = reply
+                model = "test-model"
+
+            return R()
+
+    monkeypatch.setattr("tracker.llm.reasoning_extractor", lambda *a, **k: _Model())
+
+    result = invoke(initialized, "duplicates", "resolve", "--dry-run")
+    assert result.exit_code == 0, result.output
+    assert "ruled out" in result.output
+    assert "nothing was written" in result.output
+
+    with session_scope(open_db(initialized), commit=False) as session:
+        assert session.query(NotDuplicate).count() == 0, "--dry-run must not park anything"
+        assert session.query(Project).count() == 2, "--dry-run must not merge anything"
+
+    # That the write path writes is `tests/test_dupresolve.py`'s job — a second
+    # writing command in this process would trip the single-writer lock, which
+    # `atexit` only releases when the process ends.
+    assert dupresolve.MERGE_CONFIDENCE > dupresolve.MIN_CONFIDENCE

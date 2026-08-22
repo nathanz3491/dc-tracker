@@ -2956,6 +2956,182 @@ def duplicates_unpark(
     console.print(f"\n{len(removed)} pair(s) back in `tracker duplicates`")
 
 
+@duplicates_app.command("resolve")
+def duplicates_resolve(
+    llm: Annotated[
+        bool,
+        typer.Option("--llm/--no-llm", help="Let a reasoning model decide the ones you did not."),
+    ] = True,
+    ask: Annotated[
+        bool,
+        typer.Option(
+            "--ask/--no-ask",
+            help="Put each pair to you first. Off, or with no terminal, goes to the model.",
+        ),
+    ] = False,
+    merge_them: Annotated[
+        bool,
+        typer.Option(
+            "--merge",
+            help="Also fold the pairs it rules are one campus. Deletes rows; read the rails first.",
+        ),
+    ] = False,
+    weak: Annotated[
+        bool,
+        typer.Option("--weak", help="Also ask about pairs raised only by a shared name word."),
+    ] = False,
+    limit: Annotated[int, typer.Option("--limit", help="Pairs to work through.")] = 20,
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Ask, report, write nothing. The calls are still paid for."),
+    ] = False,
+) -> None:
+    """Settle the suspected duplicates: a model decides, and the rails decide what it may do.
+
+    `tracker duplicates` proposes and never disposes, which is right — a wrong
+    merge destroys two rows and no re-crawl recovers them. The cost of that caution
+    was a report nobody answered: 30 pairs on the live database, 29 of them across
+    genuinely different company names, each waiting on a person to open two rows and
+    read their citations. This is that first pass.
+
+    **One call per pair, three answers, trusted unequally** — because their
+    consequences are not equally reversible.
+
+    * **different** parks the pair, recording `model (0.87)` as the decider. That
+      is what `not_duplicate.decided_by` was built for, and `duplicates unpark`
+      undoes it. It is also the useful half: `capex` holds one row of every
+      suspected group out of the buyer table, so a false pair keeps a real campus's
+      capacity out of a published number until somebody rules it out.
+    * **same** merges, but only with `--merge` and only past every rail below.
+    * **unclear** leaves the pair in the report, which is a real answer.
+
+    **What `--merge` still refuses**, all of it printed per pair when it bites:
+    confidence under 0.9; a pair whose only evidence is a shared name word ("a
+    shared name word is a word"); a pair whose only evidence is a cross-granularity
+    key match, because `dedup` has never merged a county row into a city row
+    unattended and a model is not a person with a map; and two rows whose stored
+    coordinates are more than 25 km apart, because geography outranks the model.
+
+    **Which row survives is not the model's choice.** It is the row with more
+    citations, then more fields filled, then the lower id — and it barely matters,
+    because a merge recomputes every field from the combined claims. The model
+    cannot name a survivor, cannot edit a field, and cannot merge anything the
+    rails refuse.
+
+    Spends one model call per pair. `--dry-run` still pays for the calls and writes
+    nothing, which is the honest way to see what a run would do.
+    """
+    import sys as _sys
+
+    from tracker import dupresolve
+
+    path = _db_path()
+    if not path.is_file():
+        _fail(f"database not found: {path}\nRun `tracker init` first.")
+
+    extractor = None
+    if llm:
+        from tracker.llm import MissingApiKey, reasoning_extractor
+
+        try:
+            extractor = reasoning_extractor()
+        except MissingApiKey as exc:
+            _fail(str(exc))
+
+    interactive = ask and _sys.stdin.isatty() and not json_mode()
+    keyboard = _dupe_prompt if interactive else None
+    if extractor is None and keyboard is None:
+        _fail("nothing can decide: pass --llm with a key configured, or --ask at a terminal.")
+
+    # Writable even for `--dry-run`, exactly as `tracker merge --dry-run` is: the
+    # run parks and merges inside a transaction and the dry run is the transaction
+    # not being committed. A `mode=ro` connection cannot even hold those writes
+    # long enough to describe them — SQLAlchemy flushes the park and SQLite
+    # refuses. The write lock is taken either way, because this command can delete
+    # rows and belongs under the same discipline as the merge it performs.
+    engine = _writable("duplicates resolve")
+    with _explain_db_locks(), session_scope(engine, commit=not dry_run) as session:
+        decisions = dupresolve.resolve(
+            session,
+            extractor=extractor,
+            limit=limit,
+            allow_merge=merge_them,
+            weak=weak,
+            ask=keyboard,
+        )
+
+    if json_mode():
+        emit(
+            {
+                "decisions": [d.as_json() for d in decisions],
+                "merged": sum(1 for d in decisions if d.action == "merged"),
+                "parked": sum(1 for d in decisions if d.action == "parked"),
+                "left": sum(1 for d in decisions if d.action == "left"),
+                "dry_run": dry_run,
+            }
+        )
+        return
+
+    if not decisions:
+        console.print("[green]no suspected duplicates to settle[/green]")
+        return
+
+    style = {"merged": "red", "parked": "green", "left": "dim"}
+    for got in decisions:
+        verdict = got.judgement.verdict if got.judgement else "no answer"
+        confidence = f" {got.judgement.confidence:.2f}" if got.judgement else ""
+        console.print(
+            f"\n[{style[got.action]}]{got.action}[/{style[got.action]}] "
+            f"[bold]{verdict}{confidence}[/bold]  {escape(got.label)}"
+        )
+        if got.judgement and got.judgement.reason:
+            console.print(f"  [dim]{escape(got.judgement.reason)}[/dim]")
+        if got.detail:
+            console.print(f"  {escape(got.detail)}")
+
+    merged = sum(1 for d in decisions if d.action == "merged")
+    parked = sum(1 for d in decisions if d.action == "parked")
+    left = sum(1 for d in decisions if d.action == "left")
+    console.print(
+        f"\n[bold]{len(decisions)} pair(s)[/bold] — {merged} merged, {parked} ruled out, "
+        f"{left} left for a person"
+    )
+    if dry_run:
+        console.print("[yellow]--dry-run: nothing was written[/yellow]")
+    elif merged:
+        console.print(
+            "[dim]merges are recorded in the surviving rows' notes, naming the model "
+            "and its reason. `tracker duplicates parked` lists what was ruled out.[/dim]"
+        )
+    if left and not merge_them:
+        console.print("[dim]pass --merge to fold the pairs it ruled are one campus.[/dim]")
+
+
+def _dupe_prompt(a, b, pair) -> str:
+    """Put one pair to the operator, with both rows on screen.
+
+    The best rung and the reason it is offered first: a person who knows the market
+    settles in a second what a model has to reason its way to. Returns "same",
+    "different", "skip", or "" to hand it to the model.
+    """
+    from tracker.dupresolve import km_apart
+
+    console.print(f"\n[bold]{escape(pair.locality)}, {pair.state}[/bold] — {escape(pair.why)}")
+    for tag, project in (("A", a), ("B", b)):
+        console.print(
+            f"  [{tag}] #{project.id} {escape(project.company)} — {escape(project.name)}"
+            f"  [dim]{escape(_location(project))}, {_fmt_mw(project.mw_planned)} MW, "
+            f"{len(project.sources)} citation(s)[/dim]"
+        )
+    distance = km_apart(a, b)
+    if distance is not None:
+        console.print(f"  [dim]{distance:.1f} km apart[/dim]")
+    answer = typer.prompt(
+        "  [s]ame campus / [d]ifferent / [Enter] let the model decide / [k]skip", default=""
+    )
+    return {"s": "same", "d": "different", "k": "skip"}.get(answer.strip().lower()[:1], "")
+
+
 @duplicates_app.command("parked")
 def duplicates_parked() -> None:
     """Every pair ruled out so far, who ruled it out, and why.
