@@ -19,10 +19,14 @@ Three ingest paths converge on one normalizer and one write path:
 | SEC filings | `tracker ingest edgar` | Investment, in-service dates and named tenants, from the one publisher that cannot refuse us |
 
 Articles to extract from come from `tracker discover`, which polls news feeds and
-queues candidates for triage.
+queues candidates for triage — and from `tracker prospect`, which starts from the
+opposite end: `seed/operators.toml` names the operators this database is supposed
+to know about, `tracker coverage` says which of them have no rows, and `prospect`
+goes and looks for those specifically.
 
 Then query: `tracker list`, `tracker show ID`, `tracker stats`, `tracker capex`,
-`tracker duplicates`, `tracker blocks`, `tracker review`, `tracker verify`,
+`tracker coverage`, `tracker duplicates`, `tracker blocks`, `tracker review`,
+`tracker verify`,
 `tracker export {md,csv,json}`. `tracker merge` folds rows that turned out to be
 one campus; it is the only command here that deletes anything. `tracker point
 "<name>"` goes and gets one named data center on demand — matching it to an
@@ -77,12 +81,17 @@ Then the real loop, which needs one API key — see [Ingesting](docs/ingesting.m
 tracker discover      # poll news feeds, queue candidates
 tracker ingest crawl  # extract the tracked fields, gated on quoted evidence
 tracker gaps          # see what is thin
+tracker coverage      # which operators we hold no rows for at all
 tracker watch add xAI # the companies you want to be told about
 tracker digest        # what changed on them, good and bad
 tracker serve         # the same dataset as a live console
 ```
 
-`tracker sync` runs discover → crawl → enrich as one command.
+`tracker sync` is the one command for all of it: discover → prospect → extract →
+refresh → enrich → settle → list. A bare run does the cheap five and `--full` does
+every phase, because the two that hunt for what is absent — `--prospect` for
+operators we have no rows for, `--enrich` for rows that are thin — are the two that
+can spend without a ceiling in sight. See [Ingesting](docs/ingesting.md).
 
 ## The three ideas
 
@@ -111,13 +120,19 @@ arrived last night. `tracker digest` and the console's landing page filter on wh
 we learned a fact and print both dates, because either one alone reads as a
 different claim than the evidence supports.
 
+**Coverage is a question the sources cannot answer.** Discovery finds what was
+published, so an operator nobody wrote about last month is indistinguishable from
+one that does not exist. Measured here: 300 projects, 102 company spellings, and no
+Nebius row at all. `seed/operators.toml` is the checked-in opinion about who ought
+to be here, and it is the only thing in the system capable of noticing an absence.
+
 ## Documentation
 
 This file is the tour. The detail lives in [`docs/`](docs/README.md):
 
 | | What |
 | --- | --- |
-| [Ingesting](docs/ingesting.md) | The API key, the one-command loop, depth versus breadth, operator press releases, optional search, SEC filings |
+| [Ingesting](docs/ingesting.md) | The API key, the one-command loop, the operators we are missing, depth versus breadth, operator press releases, optional search, SEC filings |
 | [Sources and feeds](docs/sources-and-feeds.md) | Which publishers are worth crawling, what discovery costs, and the command that acts on the measurement |
 | [Data quality](docs/data-quality.md) | Numbers that cannot be true, contradictions, and what each stored value actually rests on |
 | [Backfill and gaps](docs/backfill-and-gaps.md) | Finding thin data and filling it — capacity blocks, county and coordinates |
@@ -216,7 +231,7 @@ directory, which is what lets `tracker init` work from anywhere.
 .venv/Scripts/python -m pytest
 ```
 
-1685 tests, about two minutes. **A fresh clone with no API key and no network access
+2,361 tests, about five and a half minutes. **A fresh clone with no API key and no network access
 must produce a green run.** Tests that would hit the network or spend DeepSeek
 tokens are marked `network` / `llm` and deselected by default; run them
 explicitly with `-m network` or `-m llm`.
@@ -243,8 +258,14 @@ Both modules sit above 90%. Lint and format:
   and `tracker discover` now supplies candidates to close it.
 - **Discovery finds articles, not projects.** It surfaces what the feeds publish
   *now*, so a project announced three years ago will not appear unless an outlet
-  writes about it again. Backfilling older projects still needs hand-supplied URLs
-  or the ISO queue path.
+  writes about it again. `tracker prospect` and `--deep` reach back for it;
+  otherwise backfilling older projects needs hand-supplied URLs or the ISO queue
+  path.
+- **The roster is hand-written, so it goes stale by itself.** `seed/operators.toml`
+  covers the operators known when it was written; a company founded next quarter is
+  absent until somebody adds it. `tracker coverage` prints the reverse gap —
+  companies in the database that no entry claims — which is the mechanism for
+  growing it, but nothing proposes new entries on its own.
 - ERCOT and CAISO column names in `iso_maps.py` are unverified assumptions;
   PJM's and MISO's are taken from their real exports. A wrong guess fails loudly
   via `assert_headers` rather than ingesting nothing, and `--map-override`

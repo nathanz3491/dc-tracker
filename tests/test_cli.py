@@ -735,18 +735,6 @@ def test_sync_needs_a_key_before_touching_the_network(initialized: Path):
     assert "TRACKER_DEEPSEEK_API_KEY" in result.output
 
 
-def test_sync_runs_all_four_phases(initialized: Path, monkeypatch):
-    """Phases are labelled 1/4..4/4 so a long run is legible while it happens."""
-    set_key(monkeypatch)
-    result = invoke(initialized, "sync", "--skip-discover", "--skip-refresh", "--limit", "1")
-    assert result.exit_code == 0
-    assert "1/4 discover" in result.output
-    assert "2/4 extract new" in result.output
-    assert "3/4 refresh" in result.output
-    assert "4/4 projects" in result.output
-    assert "sync complete" in result.output
-
-
 def test_sync_reports_an_empty_queue_rather_than_failing(initialized: Path, monkeypatch):
     set_key(monkeypatch)
     result = invoke(initialized, "sync", "--skip-discover", "--skip-refresh")
@@ -1705,3 +1693,237 @@ def test_duplicates_resolve_dry_run_writes_nothing(initialized: Path, monkeypatc
     # writing command in this process would trip the single-writer lock, which
     # `atexit` only releases when the process ends.
     assert dupresolve.MERGE_CONFIDENCE > dupresolve.MIN_CONFIDENCE
+
+
+# --- coverage: the operators we should hold ---------------------------------
+
+
+def test_coverage_on_an_empty_database_calls_everything_absent(initialized: Path):
+    result = invoke(initialized, "coverage")
+    assert result.exit_code == 0, result.output
+    assert "with no row at all" in result.output
+    assert "Nebius" in result.output, "the roster is read even with nothing to compare against"
+
+
+def test_coverage_finds_the_seeded_operators(seeded: Path):
+    result = invoke(seeded, "coverage", "--covered")
+    assert result.exit_code == 0, result.output
+    assert "Microsoft" in result.output
+    assert "Crusoe" in result.output
+
+
+def test_coverage_names_the_absent_operators_in_the_next_hint(seeded: Path):
+    result = invoke(seeded, "coverage")
+    assert "tracker prospect" in result.output
+
+
+def test_coverage_json_is_parseable_on_an_empty_database(initialized: Path):
+    result = invoke(initialized, "--json", "coverage")
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["projects"] == 0
+    assert payload["unrostered"] == []
+    assert {"name", "kind", "status", "projects"} <= set(payload["operators"][0])
+
+
+def test_coverage_kind_filter_still_reports_the_whole_unrostered_tail(seeded: Path):
+    """The reverse gap does not depend on --kind.
+
+    Measuring it against a filtered roster reported every landlord we hold as
+    unrostered the moment somebody asked to see the neoclouds.
+    """
+    result = invoke(seeded, "--json", "coverage", "--kind", "neocloud")
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert {row["kind"] for row in payload["operators"]} == {"neocloud"}
+    assert payload["unrostered"] == [], (
+        "Microsoft and xAI are rostered as a hyperscaler and an ai_lab; asking to see "
+        "the neoclouds must not reclassify them as operators nobody claims"
+    )
+
+
+def test_coverage_rejects_an_unknown_kind(initialized: Path):
+    result = invoke(initialized, "coverage", "--kind", "hyperscalar")
+    assert result.exit_code == 2
+    assert "hyperscaler" in result.output
+
+
+def test_coverage_rejects_an_unknown_status(initialized: Path):
+    result = invoke(initialized, "coverage", "--status", "missing")
+    assert result.exit_code == 2
+    assert "absent" in result.output
+
+
+def test_coverage_reports_a_broken_roster(initialized: Path, tmp_path: Path):
+    bad = tmp_path / "operators.toml"
+    bad.write_text('[[operator]]\nname = "X"\nkind = "nonsense"\n', encoding="utf-8")
+    result = invoke(initialized, "coverage", "--roster", str(bad))
+    assert result.exit_code == 2
+    assert "nonsense" in result.output
+
+
+def test_coverage_does_not_write(initialized: Path, logical_snapshot):
+    before = logical_snapshot(initialized)
+    assert invoke(initialized, "coverage").exit_code == 0
+    assert logical_snapshot(initialized) == before
+
+
+# --- prospect ---------------------------------------------------------------
+
+
+def test_prospect_refuses_an_operator_not_in_the_roster(initialized: Path, monkeypatch):
+    set_key(monkeypatch)
+    result = invoke(initialized, "prospect", "Wintermute Compute", "--skip-archive")
+    assert result.exit_code == 2
+    assert "operators.toml" in result.output
+
+
+def test_prospect_with_no_backend_at_all_says_so(initialized: Path):
+    """No search key and no archives is the one configuration it cannot work in."""
+    result = invoke(initialized, "prospect", "--skip-archive")
+    assert result.exit_code == 2
+    assert "no search backend" in result.output or "nothing to prospect with" in result.output
+
+
+def test_prospect_without_a_key_still_runs_the_templated_half(
+    initialized: Path, monkeypatch, tmp_path
+):
+    """A keyless install prospects the archives, and says that is what it is doing."""
+    from tracker.ingest import enrich as enrich_mod
+
+    monkeypatch.setattr(
+        enrich_mod, "sweep_archives", lambda *a, **k: enrich_mod.ArchiveSweep(candidates=[])
+    )
+    result = invoke(initialized, "prospect", "--limit", "1")
+    assert result.exit_code == 0, result.output
+    assert "no API key" in result.output
+    assert "no search backend" in result.output
+
+
+# --- sync as the master command --------------------------------------------
+
+
+def test_sync_numbers_the_phases_it_actually_runs(initialized: Path, monkeypatch):
+    """Labels are 1/5..5/5 so a long run is legible while it happens."""
+    set_key(monkeypatch)
+    result = invoke(initialized, "sync", "--skip-discover", "--skip-refresh", "--limit", "1")
+    assert result.exit_code == 0, result.output
+    assert "1/5 discover" in result.output
+    assert "2/5 extract new" in result.output
+    assert "3/5 refresh existing" in result.output
+    assert "4/5 settle" in result.output
+    assert "5/5 projects" in result.output
+    assert "sync complete" in result.output
+
+
+def test_a_phase_not_asked_for_is_absent_from_the_count(initialized: Path, monkeypatch):
+    """Rather than shown as skipped on every ordinary run.
+
+    "2/7 prospect — skipped" every time would train a reader to ignore the labels,
+    and the point of numbering is that somebody watching knows what is left.
+    """
+    set_key(monkeypatch)
+    result = invoke(initialized, "sync", "--skip-discover", "--skip-refresh")
+    assert "prospect" not in result.output.split("sync complete")[0].replace(
+        "tracker prospect", ""
+    )
+    assert "/5 " in result.output
+
+
+def test_sync_skipping_derive_drops_the_settle_phase(initialized: Path, monkeypatch):
+    set_key(monkeypatch)
+    result = invoke(
+        initialized, "sync", "--skip-discover", "--skip-refresh", "--skip-derive"
+    )
+    assert result.exit_code == 0, result.output
+    assert "1/4 discover" in result.output
+    assert "settle" not in result.output
+
+
+def test_sync_settles_what_the_citations_imply(seeded: Path, monkeypatch):
+    set_key(monkeypatch)
+    result = invoke(seeded, "sync", "--skip-discover", "--skip-refresh")
+    assert result.exit_code == 0, result.output
+    assert "4/5 settle" in result.output
+    assert "citations imply" in result.output
+
+
+def test_sync_asks_for_the_enrich_phase_by_number(seeded: Path, monkeypatch):
+    """--enrich N adds a phase; without it the phase does not exist."""
+    set_key(monkeypatch)
+    result = invoke(
+        seeded,
+        "sync",
+        "--skip-discover",
+        "--skip-refresh",
+        "--enrich",
+        "1",
+        "--enrich-budget",
+        "0",
+    )
+    assert result.exit_code == 0, result.output
+    assert "4/6 enrich" in result.output
+
+
+def test_sync_prospect_phase_reports_a_broken_roster_without_dying(
+    initialized: Path, monkeypatch
+):
+    """One phase's bad config must not lose the work of the phases before it."""
+    set_key(monkeypatch)
+    from tracker import roster as roster_mod
+
+    def boom(*_a, **_k):
+        raise roster_mod.RosterError("no operator roster at nowhere/operators.toml")
+
+    monkeypatch.setattr(roster_mod, "load", boom)
+    result = invoke(
+        initialized, "sync", "--skip-discover", "--skip-refresh", "--prospect", "2"
+    )
+    assert result.exit_code == 0, result.output
+    assert "prospect skipped" in result.output
+    assert "sync complete" in result.output
+
+
+def test_sync_points_at_coverage_when_it_did_not_prospect(initialized: Path, monkeypatch):
+    """The gap `sync` cannot otherwise see: operators never in the database at all."""
+    set_key(monkeypatch)
+    result = invoke(initialized, "sync", "--skip-discover", "--skip-refresh")
+    assert "tracker coverage" in result.output
+
+
+def test_full_sets_the_phases_that_are_otherwise_off(initialized: Path, monkeypatch):
+    set_key(monkeypatch)
+    from tracker.ingest import enrich as enrich_mod
+
+    monkeypatch.setattr(
+        enrich_mod, "sweep_archives", lambda *a, **k: enrich_mod.ArchiveSweep(candidates=[])
+    )
+    result = invoke(initialized, "sync", "--full", "--skip-discover", "--skip-refresh")
+    assert result.exit_code == 0, result.output
+    assert "prospect" in result.output
+    assert "/7 " in result.output, "seven phases with everything on"
+
+
+def test_full_does_not_overrule_a_number_given_beside_it(initialized: Path, monkeypatch):
+    """`--full --prospect 1` means one operator, not five."""
+    set_key(monkeypatch)
+    from tracker.ingest import enrich as enrich_mod
+
+    monkeypatch.setattr(
+        enrich_mod, "sweep_archives", lambda *a, **k: enrich_mod.ArchiveSweep(candidates=[])
+    )
+    result = invoke(
+        initialized,
+        "sync",
+        "--full",
+        "--prospect",
+        "1",
+        "--skip-discover",
+        "--skip-refresh",
+        "--enrich",
+        "1",
+        "--enrich-budget",
+        "0",
+    )
+    assert result.exit_code == 0, result.output
+    assert "chasing 1 operator(s)" in result.output

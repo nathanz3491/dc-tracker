@@ -1,0 +1,426 @@
+# Operators this database is *supposed* to know about.
+#
+# Operator-editable: add a company here without touching code.
+#
+# WHY THIS FILE EXISTS.
+#
+# Every other discovery path is source-driven: poll the feeds, read what turned
+# up, see what accumulates. That answers "what got published this week" and it
+# cannot answer "who are we missing", because an operator nobody wrote about last
+# month is indistinguishable from an operator who does not exist.
+#
+# Measured on the live database before this file was added: 300 projects, 102
+# distinct company spellings, and **zero rows for Nebius** — a top-five AI cloud
+# with a Kansas City campus. CoreWeave had no row under its own name either; it
+# appeared only as a tenant inside two Core Scientific projects. Nothing in the
+# system was capable of noticing, because nothing held an opinion about who ought
+# to be there.
+#
+# This file is that opinion. `tracker coverage` diffs it against the companies
+# actually in the database; `tracker prospect` goes and hunts the ones with no
+# rows. Neither writes an operator into the database — a name here is a reason to
+# go looking, never a fact. Only a fetched article that survives the evidence gate
+# creates a row, exactly as with any other path.
+#
+# WHY NOT edgar-companies.toml. That list is scoped by CIK, because EDGAR
+# full-text search is only precise when filtered by filer. Two thirds of the
+# operators that matter here — Vantage, STACK, Aligned, Crusoe, Lambda, QTS —
+# are private and have no CIK at all, so they can never appear in it. The two
+# files overlap on the public names and a test asserts every EDGAR company also
+# appears here, so the rosters cannot drift apart.
+#
+# WHAT AN ENTRY COSTS. Nothing until you prospect it. `tracker coverage` is a
+# read: it spends no calls and runs anywhere. `tracker prospect` spends searches
+# and LLM calls per operator it chases, so the ordering that command uses —
+# absent before thin — is what decides where the budget goes.
+#
+# WHAT A WRONG ENTRY COSTS. An operator that does not build in the US wastes one
+# prospecting round: the searches return nothing that survives the keyword filter
+# and the run moves on. That is the cheap direction. The expensive mistake is the
+# omission, which is silent, which is the whole reason this file is checked in.
+#
+# `kind` records what the company is. `tracker coverage --kind` filters a report
+# to one class:
+#   hyperscaler  builds and operates at scale for its own cloud
+#   ai_lab       commissions capacity in its own name, whoever builds it
+#   neocloud     AI-native compute providers, often their own tenant
+#   landlord     wholesale, colocation and site developers — they own the campus
+#
+# Utilities and contractors are deliberately NOT here. They do not own campuses,
+# so "we have no rows for Dominion" is not a coverage gap — it is the schema
+# working. They live in edgar-companies.toml, where they belong, as *sources*.
+#
+# `aliases` are the other spellings of the SAME operator. Coverage matching
+# normalizes both sides through `dedup.company_key` and then accepts a token
+# subset, so "Nebius" already finds a row filed as "Nebius Group N.V." and
+# "Aligned" finds "Aligned DataCenters". Aliases are for the cases no string rule
+# can reach: renames (RagingWire became NTT), acquisitions (DuPont Fabros is
+# Digital Realty), and subsidiaries filed under their own name. `tracker coverage`
+# prints the spellings it matched, so a wrong alias is visible rather than quietly
+# folding two operators into one.
+
+# --- hyperscalers ------------------------------------------------------------
+
+[[operator]]
+name = "Microsoft"
+kind = "hyperscaler"
+aliases = ["MSFT"]
+
+[[operator]]
+name = "Amazon"
+kind = "hyperscaler"
+aliases = ["Amazon Web Services", "AWS", "Amazon Data Services"]
+
+[[operator]]
+name = "Google"
+kind = "hyperscaler"
+aliases = ["Alphabet", "Google Cloud"]
+
+[[operator]]
+name = "Meta"
+kind = "hyperscaler"
+aliases = ["Facebook", "Meta Platforms"]
+
+[[operator]]
+name = "Oracle"
+kind = "hyperscaler"
+aliases = ["Oracle Cloud Infrastructure", "OCI"]
+
+[[operator]]
+name = "Apple"
+kind = "hyperscaler"
+note = "Maiden NC, Mesa AZ, Reno NV. Announces rarely and in its own words."
+
+# --- AI labs: they commission the capacity, somebody else pours the concrete --
+
+[[operator]]
+name = "OpenAI"
+kind = "ai_lab"
+note = "Named on the Stargate sites alongside whoever builds them."
+
+[[operator]]
+name = "Stargate"
+kind = "ai_lab"
+note = "The OpenAI/Oracle/SoftBank/MGX vehicle. A site is routinely filed under the JV, the lab and the builder, which is why all three are rostered."
+
+[[operator]]
+name = "xAI"
+kind = "ai_lab"
+aliases = ["X.AI", "X AI"]
+
+[[operator]]
+name = "Anthropic"
+kind = "ai_lab"
+note = "Buys capacity rather than building it, so it surfaces as an end customer far more often than as an operator. Rostered because a site announced in its name is one we want."
+
+[[operator]]
+name = "SoftBank"
+kind = "ai_lab"
+aliases = ["SB Energy"]
+note = "SB Energy develops the sites; SoftBank is the name on the announcement."
+
+[[operator]]
+name = "SpaceX"
+kind = "ai_lab"
+aliases = ["SpaceX AI"]
+note = "Starbase. Filed under two spellings already, which is what the alias is for."
+
+[[operator]]
+name = "Tesla"
+kind = "ai_lab"
+note = "Cortex, inside Giga Texas. An AI hall on a car plant's site is still an AI hall."
+
+# --- neoclouds ---------------------------------------------------------------
+
+[[operator]]
+name = "CoreWeave"
+kind = "neocloud"
+aliases = ["Core Weave"]
+note = "Was absent under its own name while appearing as a tenant in two Core Scientific rows. The reason the reverse check in `tracker coverage` exists."
+
+[[operator]]
+name = "Nebius"
+kind = "neocloud"
+aliases = ["Nebius Group", "Nebius AI"]
+note = "Kansas City MO, plus newer US sites. Files with the SEC as a foreign private issuer, so edgar-companies.toml has to ask for 20-F/6-K — which is why the filings path saw nothing for it."
+
+[[operator]]
+name = "Lambda"
+kind = "neocloud"
+aliases = ["Lambda Labs"]
+
+[[operator]]
+name = "Crusoe"
+kind = "neocloud"
+aliases = ["Crusoe Energy", "Crusoe Energy Systems"]
+
+[[operator]]
+name = "IREN"
+kind = "neocloud"
+aliases = ["Iris Energy", "IREN Limited"]
+
+[[operator]]
+name = "Applied Digital"
+kind = "neocloud"
+
+[[operator]]
+name = "TeraWulf"
+kind = "neocloud"
+aliases = ["Terawulf"]
+
+[[operator]]
+name = "Cipher Mining"
+kind = "neocloud"
+aliases = ["Cipher Digital", "Cipher Stingray"]
+note = "Single-site LLCs file under their own names; the aliases fold them back."
+
+[[operator]]
+name = "Core Scientific"
+kind = "neocloud"
+
+[[operator]]
+name = "Hut 8"
+kind = "neocloud"
+
+[[operator]]
+name = "Riot Platforms"
+kind = "neocloud"
+
+[[operator]]
+name = "Galaxy Digital"
+kind = "neocloud"
+note = "Helios, West Texas — a mining site converted to AI hosting."
+
+[[operator]]
+name = "Nscale"
+kind = "neocloud"
+note = "UK-domiciled, building in the US on hyperscaler offtake."
+
+[[operator]]
+name = "Together AI"
+kind = "neocloud"
+
+[[operator]]
+name = "Fluidstack"
+kind = "neocloud"
+note = "Builds for the labs; a site can be announced in its name or in theirs."
+
+[[operator]]
+name = "Vultr"
+kind = "neocloud"
+aliases = ["Constant Company"]
+
+[[operator]]
+name = "Soluna"
+kind = "neocloud"
+
+[[operator]]
+name = "Fermi America"
+kind = "neocloud"
+note = "Amarillo TX. Power-led: the generation is the pitch and the halls follow."
+
+# --- landlords: wholesale, colocation, and the people who develop the site ---
+
+[[operator]]
+name = "Equinix"
+kind = "landlord"
+
+[[operator]]
+name = "Digital Realty"
+kind = "landlord"
+aliases = ["Digital Realty Trust", "DuPont Fabros Technology"]
+note = "DuPont Fabros was acquired in 2017 and its buildings still get written about under the old name."
+
+[[operator]]
+name = "QTS"
+kind = "landlord"
+aliases = ["QTS Data Centers", "QTS Realty Trust"]
+
+[[operator]]
+name = "Vantage"
+kind = "landlord"
+aliases = ["Vantage Data Centers"]
+
+[[operator]]
+name = "Aligned"
+kind = "landlord"
+aliases = ["Aligned Data Centers", "Aligned DataCenters", "Aligned Energy"]
+
+[[operator]]
+name = "STACK"
+kind = "landlord"
+aliases = ["STACK Infrastructure"]
+
+[[operator]]
+name = "CyrusOne"
+kind = "landlord"
+
+[[operator]]
+name = "Switch"
+kind = "landlord"
+
+[[operator]]
+name = "EdgeConneX"
+kind = "landlord"
+
+[[operator]]
+name = "DataBank"
+kind = "landlord"
+
+[[operator]]
+name = "Cologix"
+kind = "landlord"
+
+[[operator]]
+name = "Flexential"
+kind = "landlord"
+
+[[operator]]
+name = "H5 Data Centers"
+kind = "landlord"
+
+[[operator]]
+name = "CoreSite"
+kind = "landlord"
+aliases = ["CoreSite (American Tower)", "American Tower"]
+note = "American Tower's data center arm. The parent's name appears on some announcements and the subsidiary's on others."
+
+[[operator]]
+name = "Iron Mountain"
+kind = "landlord"
+
+[[operator]]
+name = "NTT"
+kind = "landlord"
+aliases = [
+  "NTT DATA",
+  "NTT Global Data Centers",
+  "NTT Global Data Centers Americas",
+  "NTT Ltd.",
+  "RagingWire",
+  "RagingWire Data Centers",
+]
+note = "RagingWire was renamed NTT Global Data Centers Americas in 2021; both names are still in circulation, and a rename is exactly what no string rule catches."
+
+[[operator]]
+name = "Sabey Data Centers"
+kind = "landlord"
+aliases = ["Sabey"]
+
+[[operator]]
+name = "T5 Data Centers"
+kind = "landlord"
+
+[[operator]]
+name = "Stream Data Centers"
+kind = "landlord"
+
+[[operator]]
+name = "Novva Data Centers"
+kind = "landlord"
+aliases = ["Novva"]
+
+[[operator]]
+name = "Prime Data Centers"
+kind = "landlord"
+
+[[operator]]
+name = "Yondr Group"
+kind = "landlord"
+aliases = ["Yondr"]
+
+[[operator]]
+name = "Tract"
+kind = "landlord"
+note = "Sells shovel-ready land with power secured, so its sites appear years before an operator is named."
+
+[[operator]]
+name = "Quantum Loophole"
+kind = "landlord"
+
+[[operator]]
+name = "PowerHouse Data Centers"
+kind = "landlord"
+aliases = ["Powerhouse Data Centers", "Related Digital", "PowerHouse"]
+
+[[operator]]
+name = "Corscale"
+kind = "landlord"
+aliases = ["Corscale Data Centers"]
+
+[[operator]]
+name = "EdgeCore"
+kind = "landlord"
+aliases = ["EdgeCore Digital Infrastructure"]
+
+[[operator]]
+name = "Skybox Datacenters"
+kind = "landlord"
+aliases = ["Skybox"]
+
+[[operator]]
+name = "DC BLOX"
+kind = "landlord"
+aliases = ["DC Blox Inc."]
+
+[[operator]]
+name = "Netrality Data Centers"
+kind = "landlord"
+aliases = ["Netrality"]
+
+[[operator]]
+name = "Compass Datacenters"
+kind = "landlord"
+note = "Absent from the database entirely when this file was written, despite campuses in Dallas, Phoenix and Red Oak."
+
+[[operator]]
+name = "DigitalBridge"
+kind = "landlord"
+note = "Owns rather than operates — Vantage, DataBank and Switch file under their own names. Rostered because its filings name campuses none of them announce."
+
+[[operator]]
+name = "TierPoint"
+kind = "landlord"
+
+[[operator]]
+name = "Ascent"
+kind = "landlord"
+aliases = ["Ascent Corporation"]
+
+[[operator]]
+name = "Centersquare"
+kind = "landlord"
+aliases = ["Cyxtera", "Cyxtera Technologies", "Evoque"]
+note = "Cyxtera and Evoque merged into Centersquare in 2024. Both predecessor names are in the database, which is what an unrostered rename looks like from the inside."
+
+[[operator]]
+name = "Lancium"
+kind = "landlord"
+note = "Develops the Abilene site that Crusoe builds Stargate on. Power-first campuses get filed under whichever party the article is about."
+
+[[operator]]
+name = "Edged Energy"
+kind = "landlord"
+aliases = ["Edged"]
+
+[[operator]]
+name = "Nautilus Data Technologies"
+kind = "landlord"
+aliases = ["Nautilus"]
+
+[[operator]]
+name = "Element Critical"
+kind = "landlord"
+
+[[operator]]
+name = "phoenixNAP"
+kind = "landlord"
+
+[[operator]]
+name = "Atmosphere Data Centers"
+kind = "landlord"
+
+[[operator]]
+name = "Vertical Bridge"
+kind = "landlord"
+note = "Tower operator moving into edge halls. Marginal, and rostered so the answer is measured rather than assumed."

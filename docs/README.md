@@ -8,7 +8,7 @@ detail behind it.
 
 | | What it covers |
 | --- | --- |
-| [Ingesting](ingesting.md) | The API key, the one-command loop, depth versus breadth, reaching back for older projects, operator press releases, optional search providers, and SEC filings |
+| [Ingesting](ingesting.md) | The API key, the one-command loop, the operators we have no rows for, depth versus breadth, reaching back for older projects, operator press releases, optional search providers, and SEC filings |
 | [Sources and feeds](sources-and-feeds.md) | Which publishers actually decide stored values, what discovery costs per feed, feeds worth adding and retiring, and `tracker sources policy` |
 | [Backfill and gaps](backfill-and-gaps.md) | Seeing where the data is thin, filling capacity blocks on older rows, deriving county and coordinates without an LLM |
 | [The console, and exporting](console-and-export.md) | The whole dataset as one page, the live console and its two modes, driving it without a browser, and publishing it |

@@ -12,6 +12,100 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **A roster of the operators this database is supposed to know about, and a
+  command that goes and gets the ones it has none of** (`seed/operators.toml`,
+  `tracker/roster.py`, `tracker/prospect.py`, `cli.py`, `webui/catalog.py`).
+
+  Every discovery path here was source-driven — poll the feeds, sweep an archive,
+  ask a model to brainstorm projects, read a filing — so all of them answered *what
+  has been published* and none could answer *who are we missing*. An operator
+  nobody wrote about last month was indistinguishable from one that does not exist.
+
+  Measured on the live database: 300 projects, 102 distinct company spellings, and
+  **zero rows for Nebius**, a top-five AI cloud running a Kansas City campus.
+  CoreWeave had none under its own name either — it appeared only as a tenant
+  inside two Core Scientific projects. `gaps`, `verify` and `stats` were all silent,
+  because all three measure the rows that exist.
+
+  `seed/operators.toml` is the expectation written down: 73 operators across
+  `hyperscaler`, `ai_lab`, `neocloud` and `landlord`, with the aliases each files
+  under. Hand-written rather than generated, because a model asked each run would
+  answer differently and nothing would say what it forgot. Not
+  `edgar-companies.toml`, because that list is scoped by CIK and structurally
+  cannot hold Vantage, STACK, Aligned, Crusoe, Lambda or QTS. A test asserts every
+  EDGAR company that owns campuses also appears here, so the two cannot drift.
+
+  `tracker coverage` diffs it against the database — `absent`, `thin`, `covered`
+  per operator — and prints the reverse gap too: companies with projects that no
+  entry claims, which is how the file grows. It is a read and spends nothing.
+
+  `tracker prospect` chases the gaps. Three lead sources per operator, cheapest
+  first: candidates **already in the queue** that name the operator and were never
+  read, then sitemap slugs naming it (both free, no key), then four templated
+  searches plus one per US campus a model proposes. **Nothing the model says is
+  stored** — the same asymmetry the search path rests on, asserted directly by
+  `test_a_campus_the_model_invented_never_reaches_the_database`. The run ends by
+  re-measuring coverage and printing `Nebius 0 -> 2 row(s)`, because "queued 40
+  URLs" says what it spent and only the second number says what it got.
+
+  The queue source is the one worth naming, because it was a starvation bug hiding
+  behind a correct decision. The extract phase is depth-first on purpose — a call
+  spent on an article about a tracked project buys a second source and lifts
+  confidence — so an article about an operator with *no* rows matches no known
+  project and sorts last behind a permanent supply of better candidates. A queue can
+  therefore hold a Nebius URL indefinitely while the database holds no Nebius row.
+  Inside `sync --prospect N` these URLs are moved to the front of the extract
+  phase's list, and the run says how many of the batch got there that way.
+
+  Matching folds the spellings one operator files under: both sides normalized
+  through `dedup.company_key`, stripped of the words every data center company
+  shares, then compared as token subsets — so "Nebius" finds "Nebius Group N.V."
+  and "Aligned" finds "Aligned DataCenters" with no alias needed. The subset runs
+  one way only, so "Cipher Mining" finds "Cipher Mining Inc." and never a bare
+  "Cipher": a wrong fold credits one operator with another's capacity and nothing
+  downstream detects it. Loose matches print with a `~`.
+
+- **A `[[company]]` entry in `edgar-companies.toml` may carry its own `forms`**
+  (`tracker/ingest/edgar.py`, `seed/edgar-companies.toml`).
+
+  Nebius was on that list from the start and produced no filings at all, because
+  every query asked for 10-K, 10-Q and 8-K and Nebius Group N.V. is a Dutch foreign
+  private issuer: it files 20-F and 6-K. Not a reduced yield — zero. The override is
+  per company rather than a wider shared list, which would have doubled the cost of
+  every domestic filer to reach one foreign one. The second of two independent blind
+  spots behind the same missing operator: one in what we looked for, one in where we
+  looked.
+
+### Changed
+
+- **`tracker sync` is the master command it was described as, not one job**
+  (`cli.py`, `docs/ingesting.md`, `README.md`).
+
+  It ran discover → extract → refresh → list, and the README claimed it ran
+  "discover → crawl → enrich", which it never did. It now runs up to seven phases:
+  discover, **prospect**, extract, refresh, **enrich**, **settle**, list.
+
+  The two new spending phases are off unless asked for (`--prospect N`,
+  `--enrich N`), so a bare `sync` is the same cheap keep-current run it always was,
+  and `--full` turns everything on — the "bring the database up to date" button.
+  `--full` does not overrule a number given beside it. `settle` is free and
+  deterministic: derived values and confidence are both pure functions of a row's
+  citations and are only recomputed when something writes to the row, so a run that
+  added sources and stopped left them stale.
+
+  Each phase keeps its own cap because they buy different things — breadth,
+  currency, coverage, depth — and one shared budget would silently favour whichever
+  ran first. Phases are numbered against the plan the run chose (`1/5` by default,
+  `1/7` with `--full`); a phase not asked for is absent from the count rather than
+  printed as skipped every time, which would only train a reader to ignore the
+  labels.
+
+  An ordinary run now ends by pointing at `tracker coverage`, because the gap it
+  cannot see for itself is the one where a "0 failed, queue empty" report is
+  perfectly true and an operator was never in the database at all.
+
+### Added
+
 - **The console's landing page now answers "what changed on what I care about"**
   (`tracker/feed.py`, `tracker/watchlist.py`, `migrations/0018`, `0019`,
   `webui/server.py`, `static/app.js`, `cli.py`).

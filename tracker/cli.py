@@ -6221,6 +6221,170 @@ def gaps() -> None:
                 console.print(f"  {gap.field:16} {gap.missing} of {gap.applicable} to fill")
 
 
+@app.command()
+def coverage(
+    kind: Annotated[
+        str, typer.Option("--kind", help="One class only: hyperscaler, ai_lab, neocloud, landlord.")
+    ] = "",
+    status: Annotated[str, typer.Option("--status", help="One of absent, thin, covered.")] = "",
+    covered: Annotated[
+        bool, typer.Option("--covered", help="List the operators we do have, as well as the gaps.")
+    ] = False,
+    roster: Annotated[
+        Path | None,
+        typer.Option("--roster", help="A different operator roster.", show_default=False),
+    ] = None,
+) -> None:
+    """Who we are supposed to know about, against who we actually have.
+
+    `tracker gaps` measures the fields missing from the projects we hold. This
+    measures the operators missing from the database entirely, which no amount of
+    per-project completeness can reveal — a campus nobody wrote about last month
+    looks exactly like a campus that does not exist.
+
+    The roster is `seed/operators.toml`, hand-written and checked in. Matching folds the spellings one operator files under: "Nebius"
+    finds a row stored as "Nebius Group N.V.", "Aligned" finds "Aligned
+    DataCenters", and the aliases in the file handle the renames no string rule
+    catches (RagingWire became NTT). Every match prints the spelling it matched,
+    and one made by the loose rule alone is marked `~`, so a wrong fold is visible
+    rather than silent.
+
+    Three answers per operator:
+
+    \b
+      absent    no rows at all — the gap `tracker prospect` exists to close
+      thin      one row, or rows with no capacity figure among them
+      covered   two or more rows, at least one of them sized
+
+    It also prints the reverse: companies with projects that no roster entry
+    claims. Those are how the roster grows — each is either an operator to add or
+    a spelling to alias.
+
+    A read. It spends nothing and runs anywhere.
+    """
+    from tracker import roster as roster_mod
+
+    if kind and kind not in roster_mod.KINDS:
+        _fail(f"--kind must be one of {', '.join(roster_mod.KINDS)}")
+        return
+    statuses = ("absent", "thin", "covered")
+    if status and status not in statuses:
+        _fail(f"--status must be one of {', '.join(statuses)}")
+        return
+
+    try:
+        operators = roster_mod.load(roster)
+    except roster_mod.RosterError as exc:
+        _fail(str(exc))
+        return
+
+    engine = _read_engine()
+    with session_scope(engine, commit=False) as session:
+        # Always measured against the WHOLE roster, whatever --kind says. The
+        # unrostered tail is "companies no entry claims", and computing it from a
+        # filtered roster would report every landlord we hold as unrostered the
+        # moment somebody asked to see the neoclouds.
+        report = roster_mod.measure(session, operators)
+
+    shown = [row for row in report.rows if not kind or row.kind == kind]
+    if kind and not shown:
+        _fail(f"no rostered operator has kind {kind!r}")
+        return
+    counts = {
+        name: sum(1 for row in shown if row.status == name)
+        for name in ("absent", "thin", "covered")
+    }
+
+    if json_mode():
+        emit(
+            {
+                "rostered": len(shown),
+                "projects": report.projects_total,
+                "rostered_projects": report.rostered_projects,
+                "operators": [
+                    {
+                        "name": row.name,
+                        "kind": row.kind,
+                        "status": row.status,
+                        "projects": row.projects,
+                        "with_capacity": row.with_capacity,
+                        "mw_planned": round(row.mw_planned, 1),
+                        "states": list(row.states),
+                        "matched": [
+                            {"company": name, "projects": count, "how": how}
+                            for name, count, how in row.matched
+                        ],
+                    }
+                    for row in shown
+                    if not status or row.status == status
+                ],
+                "unrostered": [
+                    {"company": name, "projects": count, "mw_planned": round(mw, 1)}
+                    for name, count, mw in report.unrostered
+                ],
+            }
+        )
+        return
+
+    console.print(
+        f"[bold]{len(shown)}[/bold] rostered operator(s)  "
+        f"[red]{counts['absent']}[/red] with no row at all  "
+        f"[yellow]{counts['thin']}[/yellow] thin  "
+        f"[green]{counts['covered']}[/green] covered"
+    )
+
+    wanted = [row for row in shown if not status or row.status == status]
+    if not status and not covered:
+        wanted = [row for row in wanted if row.status != "covered"]
+    if wanted:
+        table = Table(header_style="bold", box=TABLE_BOX, title_justify="left")
+        table.add_column("operator")
+        table.add_column("kind")
+        table.add_column("rows", justify="right")
+        table.add_column("MW", justify="right")
+        table.add_column("states", justify="right")
+        # One line per operator, cropped rather than wrapped: this table is read as
+        # a checklist of names, and a three-line cell for the roster's note on why
+        # an operator is listed buries the twenty names underneath it.
+        table.add_column("stored as / why listed", style="dim", no_wrap=True, max_width=44)
+        for row in wanted:
+            style = {"absent": "red", "thin": "yellow", "covered": "green"}[row.status]
+            spellings = ", ".join(
+                f"{name}{' ~' if how == 'loose' else ''}" for name, _, how in row.matched[:3]
+            )
+            if len(row.matched) > 3:
+                spellings += f", +{len(row.matched) - 3}"
+            table.add_row(
+                f"[{style}]{escape(row.name)}[/{style}]",
+                row.kind,
+                str(row.projects) if row.projects else "-",
+                _fmt_mw(row.mw_planned or None),
+                str(len(row.states)) if row.states else "-",
+                escape(spellings or row.operator.note),
+            )
+        console.print(table)
+
+    if report.unrostered and not status:
+        total = sum(count for _, count, _ in report.unrostered)
+        console.print(
+            f"\n[bold]{len(report.unrostered)} spelling(s)[/bold] hold {total} project(s) "
+            f"that no roster entry claims"
+        )
+        for name, count, mw in report.unrostered[:15]:
+            console.print(f"  {count:>3}  {escape(name[:44]):<44} {_fmt_mw(mw or None)}")
+        if len(report.unrostered) > 15:
+            console.print(f"  [dim]… and {len(report.unrostered) - 15} more[/dim]")
+        console.print(
+            "[dim]each is an operator to add to seed/operators.toml, or a spelling to "
+            "alias onto one already there[/dim]"
+        )
+
+    absent = [row for row in shown if row.status == "absent"]
+    if absent:
+        names = ", ".join(row.name for row in absent[:4])
+        console.print(f"\n[dim]next:[/dim] tracker prospect  [dim]— chases {names}…[/dim]")
+
+
 #: Where `clean --snapshot` accumulates. A file rather than a table: the numbers
 #: are a pure function of the rows, so storing them per project would drift the
 #: moment a source changed — but a *time series* is the one thing a column cannot
@@ -6601,24 +6765,65 @@ def sync(
     skip_refresh: Annotated[
         bool, typer.Option("--skip-refresh", help="Do not re-read existing projects' sources.")
     ] = False,
+    prospect_limit: Annotated[
+        int,
+        typer.Option(
+            "--prospect",
+            help="Also chase this many operators the roster says we have no rows for.",
+        ),
+    ] = 0,
+    enrich_limit: Annotated[
+        int,
+        typer.Option(
+            "--enrich", help="Also complete this many of the thinnest projects we already hold."
+        ),
+    ] = 0,
+    enrich_budget: Annotated[
+        int, typer.Option("--enrich-budget", help="Articles the enrich phase may read in total.")
+    ] = 60,
+    full: Annotated[
+        bool,
+        typer.Option(
+            "--full",
+            help="Every phase: prospect 5, enrich 10, --deep and --retry-failed. Spends the most.",
+        ),
+    ] = False,
+    skip_derive: Annotated[
+        bool, typer.Option("--skip-derive", help="Do not re-derive what the citations imply.")
+    ] = False,
     dry_run: Annotated[
         bool, typer.Option("--dry-run", help="Do everything except write to the database.")
     ] = False,
     show_rows: Annotated[int, typer.Option("--rows", help="Projects to list at the end.")] = 30,
 ) -> None:
-    """Everything in one command: find new projects, refresh known ones, then list.
-
-    Four phases:
+    """Everything in one command: find what is missing, read it, settle it, list it.
 
     \b
-      1. discover   poll the feeds and queue new candidate articles
-      2. extract    crawl the queue -> new projects in the database
-      3. refresh    re-read existing projects' sources -> updated fields
-      4. list       show the result
+      1. discover   poll the feeds, sweep archives, search -> queued candidates
+      2. prospect   chase operators the roster says we have no rows for  (--prospect)
+      3. extract    crawl the queue -> new projects in the database
+      4. refresh    re-read existing projects' sources -> updated fields
+      5. enrich     throw every method at the thinnest rows we hold      (--enrich)
+      6. settle     re-derive what the citations imply, rescore confidence
+      7. list       show the result
 
-    Both crawl phases are capped (--limit, --refresh-limit) because each article
-    costs an LLM call. Use --dry-run to see what a run would do before paying for
-    it, and raise the caps once you are happy with what it finds.
+    Phases 2 and 5 are the expensive ones and are off unless asked for, which is
+    what keeps a bare `tracker sync` the same cheap keep-current run it has always
+    been. `--full` turns everything on and is the "bring the database up to date"
+    button:
+
+    \b
+        tracker sync                 keep current: discover, extract, refresh
+        tracker sync --full          the whole loop, including the operators we lack
+        tracker sync --prospect 3    keep current, and go after three missing operators
+        tracker sync --dry-run       what a run would do, spending nothing
+
+    Every phase that costs LLM calls is capped separately — `--limit`,
+    `--refresh-limit`, `--prospect`, `--enrich`/`--enrich-budget` — because they buy
+    different things. `--limit` buys breadth (new rows), `--refresh-limit` buys
+    currency, `--prospect` buys coverage of operators we are blind to, and
+    `--enrich` buys depth on rows that are already here. A single budget spread
+    across all four would silently favour whichever phase ran first.
     """
     from tracker import policy as policy_mod
     from tracker.ingest import crawl
@@ -6627,6 +6832,15 @@ def sync(
     from tracker.upsert import recompute_confidence
 
     settings = get_settings()
+
+    # `--full` sets the phases that are otherwise off, and does NOT override a
+    # number given explicitly: `--full --prospect 1` means one operator, because a
+    # flag that silently discarded the value beside it would be a trap.
+    if full:
+        prospect_limit = prospect_limit or 5
+        enrich_limit = enrich_limit or 10
+        deep = True
+        retry_failed = True
 
     # Checked before any network call: every later phase needs it, and failing
     # here costs nothing rather than after a round of feed polling.
@@ -6653,7 +6867,32 @@ def sync(
 
     engine, _ = init_db(_db_path())
     cache_dir = install_root() / ".cache" / "articles"
-    totals = {"queued": 0, "new": 0, "refreshed": 0, "failed": 0}
+    totals = {"queued": 0, "new": 0, "refreshed": 0, "failed": 0, "enriched": 0, "chased": 0}
+    #: URLs the prospect phase wants read first, handed to the extract phase below.
+    prospect_urls: list[str] = []
+
+    # The phases this run will actually perform, decided before the first one
+    # prints. A phase that was not asked for is absent from the count rather than
+    # shown as skipped: "2/7 prospect — skipped" on every ordinary run would train
+    # a reader to ignore the labels, and the point of numbering a long run is that
+    # somebody watching it knows how much is left.
+    plan = ["discover"]
+    if prospect_limit:
+        plan.append("prospect")
+    plan += ["extract new", "refresh existing"]
+    if enrich_limit:
+        plan.append("enrich")
+    if not skip_derive:
+        plan.append("settle")
+    plan.append("projects")
+
+    def step(name: str, *, skipped: str = "") -> None:
+        """Announce a phase, numbered within the plan this run chose."""
+        position = f"{plan.index(name) + 1}/{len(plan)}"
+        if skipped:
+            console.print(f"[dim]{position} {name} — {skipped}[/dim]")
+        else:
+            console.rule(f"[bold]{position} {name}[/bold]", align="left")
 
     # Held for the whole run. SQLite takes one writer, and two overlapping syncs
     # fail partway through -- after the second has already paid for LLM calls.
@@ -6666,11 +6905,11 @@ def sync(
     # and registering the release covers all of them including typer.Exit.
     atexit.register(release_lock)
 
-    # --- 1. discover --------------------------------------------------------
+    # --- discover -----------------------------------------------------------
     if skip_discover:
-        console.print("[dim]1/4 discover — skipped[/dim]")
+        step("discover", skipped="skipped")
     else:
-        console.rule("[bold]1/4 discover[/bold]", align="left")
+        step("discover")
         try:
             with session_scope(engine) as session:
                 report, _ = disc.run(
@@ -6772,8 +7011,78 @@ def sync(
                 if s_report.quota_exhausted:
                     err.print("[yellow]daily search quota exhausted[/yellow]")
 
-    # --- 2. extract new -----------------------------------------------------
-    console.rule("[bold]2/4 extract new[/bold]", align="left")
+    # --- prospect -----------------------------------------------------------
+    # A separate phase from discover even though both end in queued candidates,
+    # because they answer different questions. Discover and search ask "what is
+    # being published"; this asks "who are we blind to", which is a question only
+    # the roster can pose. Nebius was absent from 300 projects and no amount of
+    # feed polling was ever going to say so.
+    #
+    # It runs BEFORE extract so the candidates it queues are eligible for this
+    # run's crawl rather than waiting for the next one.
+    if prospect_limit:
+        step("prospect")
+        from tracker import prospect as prospect_mod
+        from tracker import roster as roster_mod
+        from tracker.ingest import enrich as enrich_mod
+        from tracker.ingest import search as srch2
+
+        try:
+            operators = roster_mod.load()
+        except roster_mod.RosterError as exc:
+            # Not fatal: the roster is one phase's input, and a run that has
+            # already polled the feeds should still extract what it found.
+            err.print(f"[yellow]prospect skipped[/yellow]: {str(exc).splitlines()[0]}")
+        else:
+            with session_scope(engine, commit=False) as session:
+                coverage_before = roster_mod.measure(session, operators)
+            targets = roster_mod.hunt_order(coverage_before)[:prospect_limit]
+            if not targets:
+                console.print("[dim]every rostered operator already has rows[/dim]")
+            else:
+                console.print(
+                    f"chasing {len(targets)} operator(s) with no or thin coverage: "
+                    + ", ".join(f"{t.name} ({t.status})" for t in targets)
+                )
+                provider = None
+                if settings.has_search_keys():
+                    with contextlib.suppress(srch2.SearchError):
+                        provider = srch2.build_provider(settings)
+                # After the emptiness check, not before: the sweep is ~30 requests
+                # across the configured sitemaps, and paying for them to chase
+                # nobody is the mistake `enrich.run_many` already learned.
+                sweep = enrich_mod.sweep_archives(settings)
+                with session_scope(engine, commit=False) as session:
+                    p_report = prospect_mod.run(
+                        session,
+                        targets,
+                        provider=provider,
+                        extractor=extractor,
+                        settings=settings,
+                        sweep=sweep,
+                        dry_run=dry_run,
+                    )
+                totals["queued"] += p_report.queued
+                totals["chased"] = len(p_report.outcomes)
+                # Respect the source policy here rather than in the extract phase's
+                # partition, which has already run by then on a different list.
+                prospect_urls = policy_mod.load().partition(p_report.queued_urls)[0]
+                console.print(
+                    f"{p_report.queries_run} search(es), queued "
+                    f"[bold]{p_report.queued}[/bold] candidate(s) naming them"
+                )
+                for outcome in p_report.outcomes:
+                    detail = f"{len(outcome.queued)} queued"
+                    if outcome.archive_hits:
+                        detail += f" ({outcome.archive_hits} from the archives)"
+                    if outcome.from_queue:
+                        detail += f", {len(outcome.from_queue)} already queued and unread"
+                    console.print(f"  [dim]{outcome.name:<24} {detail}[/dim]")
+                for name, reason in p_report.errors[:3]:
+                    err.print(f"[yellow]{escape(name[:40])}[/yellow]: {reason.splitlines()[0]}")
+
+    # --- extract new --------------------------------------------------------
+    step("extract new")
     with session_scope(engine, commit=False) as session:
         # known_first spends each LLM call on depth: a queued article covering a
         # project we already track becomes a SECOND source, which fills fields one
@@ -6796,6 +7105,15 @@ def sync(
         backlog = len(ordered)
         source_policy = policy_mod.load()
         kept, ignored_urls = source_policy.partition([row.url for row in ordered])
+        # The prospect phase's finds go to the front, and this is the whole reason
+        # that phase is worth running inside sync. `known_first` sorts by "covers a
+        # project we already track", which an article about an operator we have NO
+        # rows for can never satisfy — so left to the ordinary ordering it sits
+        # behind a permanent supply of better candidates and is never read. That is
+        # how a queue ends up holding a Nebius URL while the database holds no
+        # Nebius row.
+        if prospect_urls:
+            kept = prospect_urls + [url for url in kept if url not in set(prospect_urls)]
         pending_urls = kept[:limit]
         deepening, _fresh = disc.pending_split(session)
         risky = disc.pending_risk_count(session, queue_spec) if queue_spec else 0
@@ -6831,7 +7149,11 @@ def sync(
         else:
             console.print("queue is empty — nothing new to extract")
     else:
-        console.print(f"extracting {len(pending_urls)} of {backlog} queued candidate(s)")
+        first = sum(1 for url in pending_urls if url in set(prospect_urls))
+        console.print(
+            f"extracting {len(pending_urls)} of {backlog} queued candidate(s)"
+            + (f", {first} of them named by the prospect phase" if first else "")
+        )
         with _explain_db_locks(), session_scope(engine) as session:
             new_report = crawl.run(
                 session,
@@ -6852,11 +7174,11 @@ def sync(
                 f"raise --limit or run again[/dim]"
             )
 
-    # --- 3. refresh existing ------------------------------------------------
+    # --- refresh existing ---------------------------------------------------
     if skip_refresh:
-        console.print("[dim]3/4 refresh — skipped[/dim]")
+        step("refresh existing", skipped="skipped")
     else:
-        console.rule("[bold]3/4 refresh existing[/bold]", align="left")
+        step("refresh existing")
         with session_scope(engine, commit=False) as session:
             stale = crawl.stale_sources(session, older_than_days=refresh_days, limit=refresh_limit)
         if not stale:
@@ -6881,25 +7203,101 @@ def sync(
             totals["failed"] += ref_report.fetch_error + ref_report.parse_error
             _print_report(ref_report, title="refreshed projects")
 
-    # Confidence is a cache of a pure function, so recompute after any write.
-    if not dry_run:
+    # --- enrich -------------------------------------------------------------
+    # The opposite spend from `extract new`: every article here goes to a row that
+    # already exists. Both are worth having and they compete for the same money,
+    # which is why they are separate caps rather than one budget — see the
+    # docstring. `enrich` picks the projects closest to the field target, because
+    # taking one row from 8 fields to 9 costs a single article and taking another
+    # from 4 to 9 may never get there.
+    if enrich_limit:
+        step("enrich")
+        from tracker.ingest import enrich as enrich_mod2
+
+        census = _db_path().parent / "raw" / "census"
+        with _explain_db_locks(), session_scope(engine, commit=not dry_run) as session:
+            chosen = enrich_mod2.select_projects(session, enrich_limit)
+            if not chosen:
+                console.print(
+                    "[green]nothing thin enough[/green] [dim]— every project already holds "
+                    f"{enrich_mod2.DEFAULT_TARGET_FIELDS} of the 12 tracked fields[/dim]"
+                )
+            else:
+                console.print(
+                    f"completing {len(chosen)} project(s), closest to target first, "
+                    f"within {enrich_budget} article(s)"
+                )
+                batch = enrich_mod2.run_many(
+                    session,
+                    chosen,
+                    settings=settings,
+                    max_articles=enrich_budget,
+                    cache_dir=cache_dir,
+                    census_dir=census if census.exists() else None,
+                    escalate=escalate,
+                    extractor=extractor,
+                    dry_run=dry_run,
+                )
+                totals["enriched"] = len(batch.reports)
+                _render_batch(batch, target=enrich_mod2.DEFAULT_TARGET_FIELDS, dry_run=dry_run)
+
+    # --- settle -------------------------------------------------------------
+    # Two recomputations, both pure functions of what the rows now cite, and both
+    # wrong to skip after a phase that added sources. `derive` reapplies every
+    # derived value (county, coordinates, capacity rollups) because those are only
+    # recomputed when something writes to the row; confidence is a cache of a
+    # function of the citations, so it is stale the moment a citation lands.
+    if not skip_derive:
+        step("settle")
+        if dry_run:
+            console.print("[dim]dry run — nothing to settle[/dim]")
+        else:
+            from tracker import derive as derive_mod
+
+            with _explain_db_locks(), session_scope(engine) as session:
+                derived = derive_mod.run(session)
+            console.print(
+                f"re-derived {derived.changed} project(s) from what their citations imply"
+                if derived.changed
+                else "[dim]every row already matches what its citations imply[/dim]"
+            )
+            with session_scope(engine) as session:
+                rescored = recompute_confidence(session)
+            if rescored:
+                console.print(f"[dim]recomputed confidence on {rescored} project(s)[/dim]")
+    elif not dry_run:
+        # Confidence is a cache of a pure function, so recompute after any write —
+        # even when the derive half was declined.
         with session_scope(engine) as session:
             rescored = recompute_confidence(session)
         if rescored:
             console.print(f"[dim]recomputed confidence on {rescored} project(s)[/dim]")
 
-    # --- 4. list ------------------------------------------------------------
-    console.rule("[bold]4/4 projects[/bold]", align="left")
+    # --- list ---------------------------------------------------------------
+    step("projects")
     if dry_run:
         console.print("[yellow]dry run — nothing was written[/yellow]")
     list_projects(
         company=None, state=None, phase=None, min_confidence=None, sort="mw", limit=show_rows
     )
 
-    console.print(
+    summary = (
         f"\n[bold]sync complete[/bold]  queued {totals['queued']}  "
-        f"new {totals['new']}  refreshed {totals['refreshed']}  failed {totals['failed']}"
+        f"new {totals['new']}  refreshed {totals['refreshed']}"
     )
+    if totals["chased"]:
+        summary += f"  operators chased {totals['chased']}"
+    if totals["enriched"]:
+        summary += f"  enriched {totals['enriched']}"
+    console.print(f"{summary}  failed {totals['failed']}")
+    if not prospect_limit:
+        # Printed on every ordinary run, because the gap this closes is the one
+        # nothing else here can see: a `sync` that reports "0 failed, queue empty"
+        # is silent about the operators that were never in the database at all.
+        console.print(
+            "[dim]coverage of the operators we should hold is a separate question: "
+            "`tracker coverage`, then `tracker sync --full`[/dim]"
+        )
     # Always reported, never only when *this* run failed. Unread URLs are invisible
     # to both `discover` (which never re-queues a known URL) and the pending queue,
     # so without this a run says "queue is empty, 0 failed" while articles pile up.
@@ -7013,6 +7411,304 @@ def search_cmd(
             table.add_row(escape(c.title[:78]), escape(c.url[:64]))
         console.print(table)
         console.print("\n[dim]next:[/dim] tracker sync --skip-discover")
+
+
+@app.command()
+def prospect(
+    operator: Annotated[
+        list[str] | None,
+        typer.Argument(help="Operators to chase by name. Omit to take them from `coverage`."),
+    ] = None,
+    limit: Annotated[
+        int, typer.Option("--limit", help="Uncovered operators to chase when none are named.")
+    ] = 5,
+    absent_only: Annotated[
+        bool,
+        typer.Option("--absent-only", help="Skip the thin operators; chase only the missing ones."),
+    ] = False,
+    queries: Annotated[int, typer.Option("--queries", help="Search queries per operator.")] = 8,
+    extract: Annotated[
+        int,
+        typer.Option(
+            "--extract", help="Articles to read now, out of what this run queues. 0 queues only."
+        ),
+    ] = 12,
+    skip_campuses: Annotated[
+        bool,
+        typer.Option("--skip-campuses", help="Do not ask the model to name each operator's sites."),
+    ] = False,
+    skip_archive: Annotated[
+        bool, typer.Option("--skip-archive", help="Do not sweep the sitemap archives.")
+    ] = False,
+    browser: Annotated[
+        bool,
+        typer.Option(
+            "--browser", help="Escalate blocked pages to Crawl4AI. Needs the 'crawl' extra."
+        ),
+    ] = False,
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="Find and report, write nothing.")
+    ] = False,
+    roster: Annotated[
+        Path | None,
+        typer.Option("--roster", help="A different operator roster.", show_default=False),
+    ] = None,
+) -> None:
+    """Go and get the operators the database has no rows for.
+
+    `discover` waits for a feed to mention a project and `search` asks a model to
+    brainstorm projects. Both are aimed at projects, and both share a blind spot:
+    an operator missing from last week's headlines is missing from the database and
+    nothing notices. Nebius sat at zero rows through both of them while running a
+    Kansas City campus.
+
+    This runs the other way round. `tracker coverage` says who is absent, and each
+    absent name is turned into leads three ways:
+
+    \b
+      queue     URLs already discovered that name the operator and were never
+                read. Free and already ours — and they need looking for, because
+                the extract phase spends its calls depth-first on projects it
+                already has, so an article about an operator with no rows waits
+                behind a permanent supply of better candidates.
+      archive   the configured sitemaps, filtered to URLs naming the operator.
+                Free, needs no key, and reaches back years — which matters,
+                because an operator we never had is usually one whose
+                announcements are old.
+      search    four templated queries per operator, plus one for each US campus
+                a model proposes for it.
+
+    **The model's campus names are leads, never facts.** They are only ever used to
+    build a search query. If it invents a site, the search finds nothing and the run
+    moves on; a row appears only where an article was fetched and the evidence gate
+    found a verbatim quote for each value, exactly as on every other path.
+
+    Then it reads up to `--extract` of what it queued and re-measures coverage, so
+    the run ends by saying whether each operator actually gained a row rather than
+    how many URLs it collected.
+
+    \b
+        tracker prospect                    the five worst gaps
+        tracker prospect Nebius CoreWeave   these two, now
+        tracker prospect --dry-run          the queries and the archive hits, unspent
+
+    Costs one LLM call per operator for the campus names, one search per query, and
+    one call per article read. `--skip-campuses` removes the first; `--extract 0`
+    removes the last and leaves the queue for `tracker sync`.
+    """
+    from tracker import prospect as prospect_mod
+    from tracker import roster as roster_mod
+    from tracker.ingest import enrich as enrich_mod
+    from tracker.ingest import search as srch
+    from tracker.ingest.fetch import Crawl4AIFetcher, MissingDependency, escalation_ladder
+    from tracker.llm import DeepSeekExtractor, MissingApiKey
+
+    settings = get_settings()
+    if browser:
+        try:
+            Crawl4AIFetcher.ensure_available()
+        except MissingDependency as exc:
+            _fail(str(exc))
+            return
+
+    try:
+        operators = roster_mod.load(roster)
+    except roster_mod.RosterError as exc:
+        _fail(str(exc))
+        return
+
+    engine, _ = init_db(_db_path())
+    with session_scope(engine, commit=False) as session:
+        report_before = roster_mod.measure(session, operators)
+
+    named = [name.strip() for name in (operator or []) if name.strip()]
+    if named:
+        targets = []
+        for name in named:
+            found = next(
+                (row for row in report_before.rows if row.operator.matches(name) is not None), None
+            )
+            if found is None:
+                # Refused rather than prospected anyway: an operator absent from the
+                # roster has no aliases and no kind, so the run would be
+                # unrepeatable and its result unattributable.
+                _fail(
+                    f"{name!r} is not in the roster. Add it to seed/operators.toml — "
+                    f"`tracker coverage` lists the companies already in the database "
+                    f"that no entry claims."
+                )
+                return
+            if found not in targets:
+                targets.append(found)
+    else:
+        targets = roster_mod.hunt_order(report_before, include_thin=not absent_only)[:limit]
+
+    if not targets:
+        console.print(
+            "[green]nothing to chase[/green] — every rostered operator has rows. "
+            "`tracker coverage --covered` shows them."
+        )
+        return
+
+    # Both halves are optional and each says so once, here, rather than per
+    # operator: a keyless install can still prospect the archives, and that is a
+    # configuration rather than a failure.
+    extractor = None
+    if not skip_campuses:
+        try:
+            extractor = DeepSeekExtractor(settings)
+        except MissingApiKey:
+            console.print(
+                "[yellow]no API key[/yellow] [dim]— templated queries only, no campus names[/dim]"
+            )
+    provider = None
+    if settings.has_search_keys():
+        try:
+            provider = srch.build_provider(settings)
+        except srch.SearchError as exc:
+            err.print(f"[yellow]search unavailable[/yellow]: {exc}")
+    else:
+        console.print("[yellow]no search backend[/yellow] [dim]— archives only[/dim]")
+
+    sweep = None
+    if not skip_archive:
+        console.print("[dim]sweeping the configured archives once for the whole run…[/dim]")
+        sweep = enrich_mod.sweep_archives(settings)
+        if sweep.skipped:
+            console.print(f"[dim]archives: {sweep.skipped}[/dim]")
+    if provider is None and (sweep is None or sweep.skipped):
+        _fail(
+            "nothing to prospect with: no search backend configured and no archives to "
+            f"sweep.\n{srch.SEARCH_KEY_HELP}"
+        )
+        return
+
+    console.print(
+        f"chasing [bold]{len(targets)}[/bold] operator(s): "
+        + ", ".join(f"{t.name} ({t.status})" for t in targets)
+    )
+
+    if not dry_run:
+        try:
+            release_lock = acquire_write_lock(_db_path(), command="prospect")
+        except AlreadyRunning as exc:
+            _fail(str(exc))
+            return
+        atexit.register(release_lock)
+
+    with _explain_db_locks(), session_scope(engine, commit=False) as session:
+        report = prospect_mod.run(
+            session,
+            targets,
+            provider=provider,
+            extractor=extractor,
+            settings=settings,
+            sweep=sweep,
+            per_operator=queries,
+            dry_run=dry_run,
+        )
+
+    table = Table(header_style="bold", box=TABLE_BOX, title_justify="left", title="leads")
+    table.add_column("operator")
+    table.add_column("rows", justify="right")
+    table.add_column("queue", justify="right")
+    table.add_column("archive", justify="right")
+    table.add_column("hits", justify="right")
+    table.add_column("queued", justify="right")
+    table.add_column("campuses proposed", style="dim", no_wrap=True, max_width=44)
+    for outcome in report.outcomes:
+        table.add_row(
+            escape(outcome.name),
+            str(outcome.projects_before),
+            str(len(outcome.from_queue)) if outcome.from_queue else "-",
+            str(outcome.archive_hits) if outcome.archive_hits else "-",
+            str(outcome.hits) if outcome.hits else "-",
+            f"[bold]{len(outcome.queued)}[/bold]" if outcome.queued else "-",
+            escape(", ".join(c.label for c in outcome.campuses)) or outcome.note,
+        )
+    console.print(table)
+    console.print(
+        f"[dim]{report.queries_run} search(es) run, {report.queued} candidate(s) queued, "
+        f"{report.from_queue} already in the queue and never read[/dim]"
+    )
+    for name, reason in report.errors[:5]:
+        err.print(f"[yellow]{escape(name[:50])}[/yellow]: {reason.splitlines()[0]}")
+    if report.quota_exhausted:
+        err.print("[yellow]daily search quota exhausted; resets at midnight Pacific[/yellow]")
+
+    if dry_run:
+        console.print("\n[yellow]dry run — nothing was written[/yellow]")
+        for outcome in report.outcomes:
+            for lead in outcome.queries:
+                console.print(f"  [dim]{outcome.name:<22} {escape(lead.query[:70])}[/dim]")
+        return
+
+    urls = report.queued_urls[:extract] if extract else []
+    if not urls:
+        waiting = report.queued + report.from_queue
+        if waiting:
+            console.print(
+                f"[dim]{waiting} candidate(s) waiting and not read. `tracker sync` will "
+                f"crawl them, though an article about an operator with no rows sorts last "
+                f"there — which is what --extract is for.[/dim]"
+            )
+        return
+
+    try:
+        crawl_extractor = DeepSeekExtractor(settings)
+    except MissingApiKey as exc:
+        console.print(f"[yellow]queued but not read[/yellow] [dim]— {exc}[/dim]")
+        return
+
+    from tracker.ingest import crawl
+    from tracker.upsert import recompute_confidence
+
+    console.rule("[bold]reading[/bold]", align="left")
+    console.print(f"reading {len(urls)} of {report.queued + report.from_queue} candidate(s)")
+    with _explain_db_locks(), session_scope(engine) as session:
+        crawl_report = crawl.run(
+            session,
+            urls,
+            extractor=crawl_extractor,
+            escalate=escalation_ladder(settings, browser=browser),
+            settings=settings,
+            force=True,
+            cache_dir=install_root() / ".cache" / "articles",
+        )
+    _print_report(crawl_report, title="prospect")
+
+    with session_scope(engine) as session:
+        recompute_confidence(session)
+
+    # The only honest measure of this command: coverage, re-run. "Queued 40 URLs"
+    # says what we spent; "Nebius 0 -> 2" says what we got, and the gap between
+    # those two numbers is the whole reason the report ends here.
+    with session_scope(engine, commit=False) as session:
+        report_after = roster_mod.measure(session, operators)
+    by_name = {row.name: row for row in report_after.rows}
+    console.rule("[bold]coverage[/bold]", align="left")
+    gained = 0
+    for outcome in report.outcomes:
+        after = by_name.get(outcome.name)
+        if after is None:
+            continue
+        moved = after.projects - outcome.projects_before
+        gained += 1 if moved > 0 else 0
+        style = "green" if moved > 0 else "dim"
+        console.print(
+            f"  [{style}]{escape(outcome.name):<24} {outcome.projects_before} -> "
+            f"{after.projects} row(s)[/{style}]"
+        )
+    console.print(
+        f"\n[bold]prospect complete[/bold]  {gained} of {len(report.outcomes)} operator(s) "
+        f"gained a row"
+    )
+    if gained < len(report.outcomes):
+        console.print(
+            "[dim]an operator that gained nothing is not necessarily a failure: the "
+            "articles may exist and say nothing quotable, which is what the evidence "
+            "gate is for. `tracker queue --failed` shows what could not be read.[/dim]"
+        )
 
 
 @app.command()

@@ -697,6 +697,88 @@ tracker ingest pjm --csv data/raw/pjm_2025q3.csv --iso pjm
   no home for dedup matching, merge policy or Q2, and putting them in
   `normalize.py` would break that module's side-effect-free contract.
 
+## Coverage needs a list, because absence has no source
+
+Every discovery path here is source-driven: poll the feeds, sweep an archive, ask a
+model to brainstorm projects, read a filing. All of them answer *what has been
+published*, and none can answer *who are we missing* — an operator nobody wrote
+about last month is indistinguishable from an operator that does not exist. The
+system had no representation of an expectation, so it could not detect a gap.
+
+Measured before this was fixed: 300 projects, 102 distinct company spellings, and
+zero rows for **Nebius** — a top-five AI cloud running a Kansas City campus.
+CoreWeave had no row under its own name either, appearing only as a tenant inside
+two Core Scientific projects. Both were invisible to `gaps`, `verify` and `stats`,
+because all three measure the rows that exist.
+
+`seed/operators.toml` is the expectation, written down. It is deliberately:
+
+- **hand-written and checked in**, not generated. A model asked each run which
+  operators exist would answer differently each time, and nothing would tell you
+  what it forgot — the failure mode being fixed. A file diffs, reviews, and can be
+  argued with.
+- **not `edgar-companies.toml`.** That list is scoped by CIK because EDGAR
+  full-text search is only precise when filtered by filer, so it structurally
+  cannot hold Vantage, STACK, Aligned, Crusoe, Lambda or QTS — all private. The
+  rosters overlap on the public names and a test asserts every EDGAR company
+  (except the utilities and contractors, which own no campuses) also appears in the
+  operator roster, so they cannot drift.
+- **operators only.** Utilities and contractors are sources, not owners. "No rows
+  for Dominion" is the schema working, not a gap, so putting them here would
+  manufacture 14 permanent false positives.
+
+**Why matching is loose, and why it says so.** One operator files under many
+spellings — "Nebius Group N.V.", "Aligned DataCenters", "Cipher Stingray LLC",
+"RagingWire" — and coverage is worthless if it reports a gap that is really a
+spelling. Both sides are normalized through `dedup.company_key`, stripped of the
+words every data center company shares (including the plurals `company_key` leaves
+behind, which is what makes "Compass Datacenters" find "Compass Data Centers"), and
+compared as token subsets.
+
+The subset runs in one direction only: "Cipher Mining" finds "Cipher Mining Inc."
+and must not find a bare "Cipher", which could be anybody. That asymmetry is the
+same one `tracker point` uses and for the same reason — a wrong fold silently
+credits one operator with another's capacity and nothing downstream detects it,
+while a wrong miss shows up as an operator you already have appearing in the absent
+list, which is annoying and self-correcting. Loose matches print with a `~` so the
+rule is auditable, and the reverse gap — companies no entry claims — is printed
+every run, because a hand-written list's real failure mode is going stale.
+
+**`tracker prospect` writes nothing it is told.** It turns a rostered name into
+leads from three sources — the unread queue and the sitemap archives, both free,
+then the paid search — and the model's contribution is at most a list of campus
+names used to build those queries. Rows still come only from a fetched article that passes the evidence
+gate. This is the same asymmetry `search.py` documents, and `tests/test_prospect.py`
+asserts it directly: a campus the model invented produces no project, no source and
+not even a queued URL.
+
+**A second, unrelated hole under the same name.** Nebius was in
+`edgar-companies.toml` from the start and yielded no filings, because that file
+asked every filer for 10-K, 10-Q and 8-K and Nebius Group N.V. is a Dutch foreign
+private issuer: it files 20-F and 6-K. The fix is a per-company `forms` override
+rather than widening the shared list, which would have doubled the cost of every
+domestic filer to reach one foreign one. Worth recording because the two blind spots
+were independent — one in what we looked for, one in where we looked — and the
+roster is what made either visible.
+
+**The cheapest lead source is the queue, and finding it took writing the roster
+first.** `ingest_url` already held candidates naming operators with no rows: the
+extract phase is depth-first by design — an LLM call spent on an article about a
+tracked project buys a second source, which fills fields one article cannot — so an
+article about an operator we have nothing for matches no known project and sorts
+last behind a permanent supply of better candidates. Correct ordering, and it has a
+starvation case at the exact place coverage is worst. Nothing measured that until
+something held an opinion about which operators ought to be there. `sync
+--prospect N` therefore moves those URLs to the front of the extract phase rather
+than queueing them and hoping.
+
+**Scope stays US-only.** Nebius's largest sites are in Finland and none of them
+belong here. `project.state` is a NOT NULL two-letter code, the locality derivation
+is Census-backed, and the ISO and EDGAR paths are US-shaped throughout; going
+global is a migration and a second locality pipeline, not a filter change. The
+roster therefore lists operators by their *US* presence, and an operator with no US
+campus wastes one prospecting round rather than being silently right.
+
 ## The seed file
 
 `seed/sample-projects.json` names three real, widely-reported projects —

@@ -32,6 +32,10 @@ LLM_COMMANDS: frozenset[str] = frozenset(
         "infer",
         "search",
         "point",
+        # One call per operator for the campus names it searches for, then one per
+        # article it reads. `coverage`, which decides who it chases, is a read and
+        # is deliberately not here.
+        "prospect",
         "logic check",
         "ingest crawl",
         "ingest edgar",
@@ -137,7 +141,7 @@ def _enum_hints() -> dict[str, tuple[str, ...]]:
 #: but in an "Other" bucket at the bottom, which is where the four commands added
 #: with `capex` and `duplicates` sat until they were listed.
 GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("The loop", ("sync", "discover", "enrich", "search", "point")),
+    ("The loop", ("sync", "discover", "prospect", "enrich", "search", "point")),
     (
         "Load data",
         ("ingest manual", "ingest pjm", "ingest crawl", "ingest edgar", "ingest geo"),
@@ -152,6 +156,9 @@ GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "capex",
             "stats",
             "gaps",
+            # Beside `gaps` deliberately: one measures the fields missing from the
+            # rows we have, the other the operators missing from the database.
+            "coverage",
             "clean",
             "queue",
             "queue stats",

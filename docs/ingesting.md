@@ -1,6 +1,6 @@
 # Ingesting
 
-Getting articles in: the API key, the one-command loop, depth versus breadth, operator press releases, optional search, and SEC filings.
+Getting articles in: the API key, the one-command loop, the operators we are missing, depth versus breadth, operator press releases, optional search, and SEC filings.
 
 Part of the [dc-tracker documentation](README.md).
 
@@ -36,16 +36,49 @@ spend a run's worth of fetches.
 ## One command for the whole loop
 
 ```bash
-tracker sync
+tracker sync         # keep current
+tracker sync --full  # everything, including the operators we have no rows for
 ```
 
-Four phases: **discover** new candidate articles from the feeds, **extract** them
-into the database, **refresh** existing projects by re-reading their sources, then
-**list** the result. Needs the API key set as above. When a search key is also
-configured (see "Search" below), the discover phase runs LLM-proposed web
-searches automatically — `--search 0` skips them for a run.
+Up to seven phases. A bare `tracker sync` runs five of them:
 
-Both crawl phases are capped, because each article costs an LLM call:
+| | phase | what it does | on by default |
+|---|---|---|---|
+| 1 | discover | poll the feeds, sweep archives, search -> queued candidates | yes |
+| 2 | prospect | chase operators the roster says we have no rows for | `--prospect N` |
+| 3 | extract | crawl the queue -> new projects | yes |
+| 4 | refresh | re-read existing projects' sources -> updated fields | yes |
+| 5 | enrich | throw every retrieval method at the thinnest rows we hold | `--enrich N` |
+| 6 | settle | re-derive what the citations imply, rescore confidence | yes |
+| 7 | list | show the result | yes |
+
+Needs the API key set as above. When a search key is also configured (see "Search"
+below), the discover phase runs LLM-proposed web searches automatically —
+`--search 0` skips them for a run.
+
+Phases are numbered against the plan the run actually chose, so a default run says
+`1/5 … 5/5` and `--full` says `1/7 … 7/7`. A phase that was not asked for is absent
+from the count rather than printed as skipped — "2/7 prospect — skipped" on every
+ordinary run only trains you to ignore the labels.
+
+**Why the expensive two are off by default.** `prospect` and `enrich` are the phases
+that can spend without a ceiling in sight, and the run people do daily is the cheap
+one. `--full` is the deliberate version:
+
+```bash
+tracker sync --full                 # prospect 5, enrich 10, --deep, --retry-failed
+tracker sync --prospect 3           # keep current, and chase three missing operators
+tracker sync --enrich 20            # keep current, and complete twenty thin rows
+tracker sync --full --prospect 1    # --full, but one operator: a number given beside
+                                    # it is never overruled
+```
+
+Every phase that costs LLM calls is capped separately — `--limit`,
+`--refresh-limit`, `--prospect`, `--enrich`/`--enrich-budget` — because they buy
+different things. `--limit` buys breadth, `--refresh-limit` buys currency,
+`--prospect` buys coverage of operators we are blind to, and `--enrich` buys depth
+on rows already here. One budget spread across all four would silently favour
+whichever phase ran first.
 
 ```bash
 tracker sync --limit 25 --refresh-limit 25 --refresh-days 14
@@ -53,6 +86,7 @@ tracker sync --dry-run          # see what a run would do, spend nothing
 tracker sync --browser          # escalate blocked pages, needs the 'crawl' extra
 tracker sync --skip-discover    # work the existing queue only
 tracker sync --skip-refresh     # new projects only
+tracker sync --skip-derive      # leave the derived values alone
 ```
 
 The refresh phase is what keeps data current rather than merely growing: articles
@@ -60,6 +94,94 @@ get edited, and a campus that was "announced" last quarter is under construction
 now. Re-reading a known citation updates every field it supports. It deliberately
 bypasses the article cache — serving a cached copy would guarantee the answer is
 "nothing changed".
+
+The settle phase is free and deterministic. Every derived value — county,
+coordinates, capacity block rollups — is a function of the row's citations and is
+recomputed only when something writes to the row, so a run that added sources and
+stopped there would leave them stale. Confidence is the same shape of cache.
+Neither spends a call or a request.
+
+## The operators we do not have
+
+Discovery is source-driven: it finds what was published. That cannot answer "who are
+we missing", because an operator nobody wrote about last month looks exactly like an
+operator that does not exist. Measured on the live database: 300 projects, 102
+distinct company spellings, and **no Nebius row at all** — a top-five AI cloud with
+a Kansas City campus. CoreWeave had none under its own name either, appearing only
+as a tenant inside two Core Scientific projects.
+
+[`seed/operators.toml`](../seed/operators.toml) is the missing half of that
+comparison: the operators this database is supposed to know about, hand-written and
+checked in, including the private ones that can never appear in
+`edgar-companies.toml` because they have no CIK.
+
+```bash
+tracker coverage                    # who is absent, thin, covered
+tracker coverage --kind neocloud    # one class
+tracker coverage --covered          # list the ones we do have, too
+```
+
+A read: it spends nothing and runs anywhere. Three answers per operator — `absent`
+(no rows), `thin` (one row, or rows nobody has sized), `covered`. It also prints the
+reverse, companies with projects that no roster entry claims, which is how the file
+grows: each is either an operator to add or a spelling to alias.
+
+Matching folds the spellings one operator files under. Both sides are normalized
+through `dedup.company_key`, stripped of the words every data center company shares,
+then compared as token subsets — so "Nebius" finds a row stored as "Nebius Group
+N.V." and "Aligned" finds "Aligned DataCenters" with no alias needed. The aliases in
+the file are for what no string rule can reach: renames (RagingWire became NTT),
+acquisitions (DuPont Fabros is Digital Realty), and single-site LLCs filed under
+their own names. A match made by the loose rule alone prints with a `~`, so a wrong
+fold is visible rather than silent.
+
+Then go and get them:
+
+```bash
+tracker prospect                    # the five worst gaps
+tracker prospect Nebius CoreWeave   # these two, now
+tracker prospect --dry-run          # the queries and the archive hits, unspent
+tracker prospect --extract 0        # queue only; let the next sync read them
+```
+
+Three lead sources per operator, cheapest first — the same ordering `enrich` uses:
+
+| source | cost | what it contributes |
+|---|---|---|
+| queue | free | URLs already in `ingest_url` that name the operator and were never read |
+| archive | fetch | sitemap URLs whose slug or headline names the operator. No key, and reaches back years |
+| search | search + one LLM call | four templated queries, plus one per US campus a model proposes |
+
+**The queue source is not redundant, and it is the one that surprised us.** The
+extract phase is depth-first on purpose: it spends each LLM call on an article
+covering a project already tracked, because a second source fills fields one
+article cannot. An article about an operator we have *no* rows for matches no known
+project, so it sorts last behind a permanent supply of better candidates and can
+wait indefinitely. That is one way a database ends up holding a Nebius URL and no
+Nebius row. Inside `tracker sync --prospect N`, these URLs are moved to the front
+of the extract phase's list for exactly that reason.
+
+None of the three is required. Without a search key it reads the queue and the
+archives; without an API key it runs the templated queries only. Both are
+configurations rather than failures, and the command says which one it is in.
+
+**The model's campus names are leads, never facts** — the same asymmetry the search
+path rests on. They are only ever used to build a query. If it invents a site, the
+search finds nothing and the run moves on; a row appears only where an article was
+fetched and the evidence gate found a verbatim quote, exactly as on every other
+path. `tests/test_prospect.py` asserts that directly.
+
+The run ends by re-measuring coverage and printing `Nebius 0 -> 2 row(s)`, because
+"queued 40 URLs" says what it spent and only the second number says what it got. An
+operator that gained nothing is not necessarily a failure: the articles may exist
+and say nothing quotable, which is what the evidence gate is for.
+
+**Nebius also had a second, unrelated hole.** It was in `edgar-companies.toml` from
+the start and produced no filings at all, because that file asked every filer for
+10-K, 10-Q and 8-K — and Nebius Group N.V. is a Dutch foreign private issuer, which
+files 20-F and 6-K. A `[[company]]` entry may now carry its own `forms = [...]`, and
+Nebius does. Two independent blind spots, one missing operator, and the roster is
+what made either of them visible.
 
 ## Depth versus breadth
 
