@@ -1031,6 +1031,21 @@ def _template_for(name: str) -> Any:
     return None
 
 
+def _discovered_at(source: Source | None) -> _dt.datetime:
+    """When we learned a milestone or an obstacle: the fetch that carried it.
+
+    The citation's `fetched_at` rather than the clock, for two reasons. It is what
+    migration 0018 backfilled every pre-existing row from, so the column means one
+    thing across the whole table; and a re-read of a cached page keeps the date we
+    actually first saw the fact, because `_upsert_sources` only ever advances
+    `fetched_at` for a genuinely newer fetch.
+
+    Falls back to now for a row with no citation — `ingest manual` and the derived
+    `delayed` event — where now is the truth.
+    """
+    return getattr(source, "fetched_at", None) or utcnow()
+
+
 def _upsert_events(session: Session, project: Project, rec: IngestRecord) -> int:
     """Write events, deduplicating on (project, type, date) per the schema.
 
@@ -1039,7 +1054,8 @@ def _upsert_events(session: Session, project: Project, rec: IngestRecord) -> int
     """
     if not rec.events:
         return 0
-    url_to_id = {s.url: s.id for s in project.sources}
+    by_url = {s.url: s for s in project.sources}
+    url_to_id = {url: s.id for url, s in by_url.items()}
     # Queried rather than read off `project.events`: rows added earlier in this
     # same session are not necessarily reflected on the relationship yet, and a
     # stale view here means a second upsert re-inserts and trips the
@@ -1061,6 +1077,7 @@ def _upsert_events(session: Session, project: Project, rec: IngestRecord) -> int
                 quote=ev.quote,
                 unconfirmed=ev.unconfirmed,
                 source_id=source_id,
+                created_at=_discovered_at(by_url.get(ev.source_url or "")),
             )
             session.add(row)
             # Registered immediately, because ONE record can carry two events
@@ -1105,7 +1122,8 @@ def _upsert_risks(session: Session, project: Project, rec: IngestRecord) -> int:
     """
     if not rec.risks:
         return 0
-    url_to_id = {s.url: s.id for s in project.sources}
+    by_url = {s.url: s for s in project.sources}
+    url_to_id = {url: s.id for url, s in by_url.items()}
     # Queried rather than read off `project.risks`, for the same reason as events:
     # rows added earlier in this session may not be on the relationship yet, and a
     # stale view here re-inserts and trips the UNIQUE constraint.
@@ -1116,6 +1134,7 @@ def _upsert_risks(session: Session, project: Project, rec: IngestRecord) -> int:
     inserted = 0
     for risk in rec.risks:
         source_id = url_to_id.get(risk.source_url) if risk.source_url else None
+        source_row = by_url.get(risk.source_url or "")
         found = existing.get((risk.category, risk.first_seen))
         if found is None:
             row = Risk(
@@ -1129,6 +1148,7 @@ def _upsert_risks(session: Session, project: Project, rec: IngestRecord) -> int:
                 delay_days=risk.delay_days,
                 source_id=source_id,
                 unconfirmed=risk.unconfirmed,
+                created_at=_discovered_at(source_row),
             )
             session.add(row)
             # Registered immediately, for the same reason as in `_upsert_events`:
@@ -1213,6 +1233,9 @@ def _record_slippage(session: Session, project: Project, previous: _dt.date | No
                 event_date=current,
                 event_type="delayed",
                 description=detail,
+                # No source: this milestone is derived from two citations
+                # disagreeing, so the moment we learned it really is now.
+                created_at=utcnow(),
             )
         )
         written = 1

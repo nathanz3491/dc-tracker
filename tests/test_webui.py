@@ -322,35 +322,50 @@ def test_reading_the_dataset_does_not_write(server, seeded_db, logical_snapshot)
         "/api/runs",
         "/api/health",
         "/api/discover",
-        "/api/landing",
+        "/api/publishers",
+        "/api/updates",
     ):
         assert request(address, path)[0] == 200
     assert logical_snapshot(seeded_db) == before
 
 
-def test_the_landing_route_answers_the_trust_question(server):
-    """What the Overview leads with, and the shape it reads.
+def test_the_publishers_route_answers_who_decided(server):
+    """What Sources fills its "decided" column from.
 
-    Its own route rather than a field on `/api/dataset`: the census and the tier
-    sweep take about 2.5 seconds together on the live database, and `/api/dataset`
-    is refetched after every run.
+    Its own route rather than a field on `/api/dataset`, which is refetched after
+    every run: the survey costs about 0.24s on the live database.
     """
     address, _ = server
-    status, data = request(address, "/api/landing")
+    status, data = request(address, "/api/publishers")
     assert status == 200
+    assert data["sources"]["citations"] >= 0
+    assert data["sources"]["publishers"] >= 0
+    for host in data["sources"]["top"]:
+        assert host["host"]
 
-    assert 0.0 <= data["evidence"]["quote_backed_share"] <= 1.0
-    assert data["evidence"]["total"] >= 0
-    # The tier ladder is ordered and carries -1 — "not even sourced" is a rung,
-    # not a rounding of 0 — because the bar draws them in sequence.
-    levels = [level for level, _name in data["tier_names"]]
-    assert levels == sorted(levels)
-    assert levels[0] == -1
-    for row in data["attention"]:
-        assert row["label"] and row["remedy"], "a failure with no remedy is a complaint"
-        # `{id}` would read as a substitution that failed; the count spans
-        # projects, so there is no single id to fill in.
-        assert "{id}" not in row["remedy"]
+
+def test_the_updates_route_is_the_landing_page(server):
+    """Signed, ranked, and honest about which clock the window is on."""
+    address, _ = server
+    status, data = request(address, "/api/updates?days=3650")
+    assert status == 200
+    assert data["watching_everything"] is True, "no watchlist means the whole database"
+    assert data["days"] == 3650
+    assert isinstance(data["watchlist"], list)
+    assert set(data["counts"]) == {"good", "bad", "total", "notify"}
+    for signal in data["signals"]:
+        assert signal["sign"] in {"good", "bad", "neutral"}
+        assert signal["unconfirmed"] is None, "an unquoted signal belongs in held[]"
+        # Both clocks, always: one of them alone is a lie in one direction.
+        assert "at" in signal and "happened" in signal
+
+
+def test_the_updates_route_refuses_a_window_it_cannot_read(server):
+    """A silently ignored filter and an empty week look identical on the page."""
+    address, _ = server
+    assert request(address, "/api/updates?days=soon")[0] == 400
+    assert request(address, "/api/updates?days=0")[0] == 400
+    assert request(address, "/api/updates?since=lastweek")[0] == 400
 
 
 def test_two_consoles_one_bundle(server):
@@ -462,15 +477,16 @@ def test_the_api_index_lists_every_route_the_handler_serves(server):
     assert not missing, f"routes the handler serves but /api does not document: {missing}"
 
 
-def test_the_landing_route_does_not_collide_with_the_ai_overview(server):
+def test_the_read_routes_do_not_collide_with_the_ai_overview(server):
     """`/api/overview` is the POST that writes a project's AI reading.
 
     A second handler named `_overview` silently shadowed it — Python keeps the
-    last definition — so every GET arrived at a handler expecting a body. The two
-    live at different paths now, and this is what says so.
+    last definition — so every GET arrived at a handler expecting a body. Nothing
+    reads at that path now, and this is what says so.
     """
     address, _ = server
-    assert request(address, "/api/landing")[0] == 200
+    assert request(address, "/api/publishers")[0] == 200
+    assert request(address, "/api/updates")[0] == 200
     # GET on the AI overview path is not a route at all.
     assert request(address, "/api/overview")[0] == 404
 
@@ -516,7 +532,7 @@ def test_every_view_has_its_own_url(server):
     and swapping.
     """
     address, _ = server
-    for path in ("/overview", "/projects", "/sources", "/map", "/capex"):
+    for path in ("/updates", "/projects", "/sources", "/map", "/capex"):
         status, body = request(address, path)
         assert status == 200, path
         assert f'window.DC_VIEW="{path.strip("/")}"' in body
@@ -528,7 +544,7 @@ def test_every_view_has_its_own_url(server):
 
 
 def test_an_unknown_path_is_a_404_not_the_console(server):
-    """Otherwise a typo lands silently on Overview and reads as a broken link."""
+    """Otherwise a typo lands silently on Updates and reads as a broken link."""
     address, _ = server
     for path in ("/nonsense", "/projectss", "/dev/nope"):
         status, _ = request(address, path)
@@ -2434,3 +2450,124 @@ def test_health_reports_the_commit_it_is_serving(server):
     ).stdout.strip()
     if expected:  # a tarball install has no .git, and reports None
         assert body["commit"] == expected == deployed_commit()
+
+
+# --- the watchlist, the one write on the reading console --------------------
+
+
+def test_the_watchlist_write_lands_in_the_database(server, seeded_db):
+    """The page and `tracker watch` are one list, so this checks the row itself."""
+    from sqlalchemy import select
+
+    from tracker.db import open_db, session_scope
+    from tracker.models import Watch
+
+    address, _ = server
+    status, body = request(
+        address, "/api/watch", method="POST", body={"action": "add", "entry": "Microsoft"}
+    )
+    assert status == 200
+    assert body["created"] is True
+    assert [w["entry"] for w in body["watchlist"]] == ["Microsoft"]
+
+    with session_scope(open_db(seeded_db), commit=False) as session:
+        rows = session.scalars(select(Watch)).all()
+        assert [(r.entry, r.company_key) for r in rows] == [("Microsoft", "microsoft")]
+
+    # And the digest narrows to it, which is the whole point of writing it.
+    _status, updates = request(address, "/api/updates?days=36500")
+    assert updates["watching_everything"] is False
+    assert [e["entry"] for e in updates["entities"]] == ["Microsoft"]
+
+
+def test_the_watchlist_write_answers_rather_than_hanging(server):
+    """It shipped reading the request body twice, which blocks on `rfile` forever.
+
+    `do_POST` reads the body once, up front, and every route below takes that
+    value — there is a comment there saying so, and this route was written against
+    it. A 30-second client timeout in `request` is what makes this a failure rather
+    than a hung suite.
+    """
+    address, _ = server
+    status, _body = request(
+        address, "/api/watch", method="POST", body={"action": "add", "entry": "Google"}
+    )
+    assert status == 200
+
+
+def test_removing_a_watch(server):
+    address, _ = server
+    request(address, "/api/watch", method="POST", body={"action": "add", "entry": "Meta"})
+    status, body = request(
+        address, "/api/watch", method="POST", body={"action": "remove", "entry": "meta"}
+    )
+    assert status == 200 and body["removed"] is True and body["watchlist"] == []
+
+
+def test_the_watchlist_write_refuses_what_it_cannot_store(server):
+    """A 400 with a reason, not a 500 and not a silent no-op."""
+    address, _ = server
+    for body in (
+        {"action": "sudo", "entry": "xAI"},
+        {"action": "add", "entry": ""},
+        {"action": "add"},
+        {"action": "add", "entry": " | Colossus"},
+        {"action": "add", "entry": "xAI", "note": {"not": "a string"}},
+    ):
+        status, _ = request(address, "/api/watch", method="POST", body=body)
+        assert status == 400, body
+
+
+def test_the_watchlist_write_can_be_switched_off(seeded_db):
+    """`--no-watch-edits` for a deployment that wants the page strictly read-only."""
+    from http.server import ThreadingHTTPServer
+
+    console = Console(seeded_db, allow_write=False, allow_watch=False)
+    handler = type("Bound", (Handler,), {"console": console})
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    httpd.daemon_threads = True
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        address = httpd.server_address
+        status, _ = request(
+            address, "/api/watch", method="POST", body={"action": "add", "entry": "xAI"}
+        )
+        assert status == 403
+        # The page is told, so it does not render an editor that cannot work.
+        _status, updates = request(address, "/api/updates")
+        assert updates["allow_watch"] is False
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_a_read_only_console_still_takes_a_watch(seeded_db):
+    """`--no-run` blocks commands. A watch is not a command, and that is the point.
+
+    The flag exists because these are different risks: this write cannot touch a
+    project, a citation or a figure, cannot start a run and cannot spend a token.
+    """
+    from http.server import ThreadingHTTPServer
+
+    console = Console(seeded_db, allow_write=False)
+    handler = type("Bound", (Handler,), {"console": console})
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    httpd.daemon_threads = True
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        address = httpd.server_address
+        assert console.allow_watch is True
+        status, _ = request(
+            address, "/api/watch", method="POST", body={"action": "add", "entry": "xAI"}
+        )
+        assert status == 200
+        # ... and still refuses to run anything.
+        status, _ = request(
+            address, "/api/run", method="POST", body={"cmd": "stats", "flags": {}}
+        )
+        assert status == 403
+    finally:
+        httpd.shutdown()
+        httpd.server_close()

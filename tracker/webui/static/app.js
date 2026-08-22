@@ -4232,127 +4232,319 @@ function RunsView({ watchId }) {
 
 /* ---- Root ---------------------------------------------------------------- */
 
-/* ---- Overview -------------------------------------------------------------
+/* ---- Updates ---------------------------------------------------------------
  *
- * The landing page, and the one view that answers a question rather than listing
- * rows. Three bands in decreasing order of importance — trust, portfolio,
- * pipeline — because the old landing page gave a filter card, a coverage strip
- * and eighteen columns equal weight, and nothing on it read as the answer.
+ * The landing page, and the only view that is about *change* rather than about
+ * state. Projects already holds the inventory and holds it better; what nothing
+ * answered was the question somebody actually arrives with — what moved, on the
+ * things I named, and do I need to worry about it.
  *
- * **Two data sources, deliberately.** The portfolio band draws on `/api/dataset`,
- * already in hand, so it paints on the first frame. The trust band needs an
- * evidence census and a tier sweep — 2.5 seconds together, measured — so it comes
- * from `/api/overview` behind a skeleton. Blocking the page on it would trade the
- * problem we are fixing for a slower one.
+ * **Everything on it is computed server-side, and that is not laziness.** The
+ * dataset already carries every project's events and risks, so this page could
+ * assemble the list itself — and then the one rule the feature exists to get right
+ * (a window on when we *learned* a fact, not on when it happened) would live in
+ * JavaScript, beside a second copy of `tracks.standing` deciding which track was
+ * blocked. `docs/architecture.md`: the console makes no judgements of its own.
+ *
+ * The page therefore paints in two passes, like Sources: the shell and the
+ * watchlist are up immediately, the signals arrive from `/api/updates`.
  */
 
-const ATTENTION_TONE = { 0: "critical", 1: "serious", 2: "warning", 3: "muted" };
+const WINDOWS = [
+  [1, "today"],
+  [7, "week"],
+  [30, "month"],
+];
 
-/* The tier mix as one stacked bar. Sequential, one hue, because the tiers are
- * ORDERED — UNSOURCED through SETTLED — and ordered data takes a ramp rather than
- * a palette.
+/* Green for good, red for bad, quiet for neither — the semantic tones, not a hue
+ * chosen here, so a theme switch cannot leave one of them unreadable. */
+const SIGN_TONE = {
+  good: { color: "var(--success)", soft: "var(--success-soft)", mark: "+" },
+  bad: { color: "var(--danger)", soft: "var(--danger-soft)", mark: "−" },
+  neutral: { color: "var(--muted-foreground)", soft: "var(--muted)", mark: "·" },
+};
+
+/* A crawl that died looks exactly like a quiet week on a page like this, so the
+ * header says when the last citation was fetched and complains past this. Two
+ * days, because the ingest runs nightly: one missed night is a hiccup, two is a
+ * fault worth a person's attention. */
+const STALE_HOURS = 48;
+
+function hoursSince(iso) {
+  if (!iso) return null;
+  const then = new Date(iso.endsWith("Z") ? iso : `${iso}Z`);
+  return Number.isNaN(then.getTime()) ? null : (Date.now() - then.getTime()) / 3.6e6;
+}
+
+function shortDate(iso) {
+  return iso ? iso.slice(0, 10) : null;
+}
+
+/* One watched entity as a chip: what it is, how it went, and a way to drop it.
  *
- * The counts sit on the same line as the bar rather than in a legend beneath it.
- * A bar with no labels plus a legend that names every segment is one fact told
- * twice, and it was eight of the thirty-seven numbers this page used to show. */
-function TrustBar({ histogram, names }) {
-  const rows = names
-    .map(([level, name], i) => ({ level, name, n: histogram[String(level)] || 0, step: i + 1 }))
-    .filter((r) => r.n);
-  const total = rows.reduce((sum, r) => sum + r.n, 0);
-  if (!total) return null;
-  const label = rows.map((r) => `${r.n} ${r.name.toLowerCase()}`).join(", ");
+ * The counts are the point of the strip. "xAI — 3 updates, 1 bad" is the whole
+ * page in one line, and it is what makes the list below skippable on a quiet day. */
+function WatchChip({ entity, digest, onRemove, disabled }) {
+  const bad = digest?.bad || 0;
+  const good = digest?.good || 0;
   return html`
-    <div style=${{ display: "grid", gap: 8 }}>
-      <div class="dc-trustbar" role="img" aria-label=${label}>
-        ${rows.map((r) => html`
-          <span key=${r.level} title=${`${r.n} ${r.name.toLowerCase()}`}
-                style=${{ width: `${(r.n / total) * 100}%`,
-                          background: `var(--dc-trust-${r.step})` }} />`)}
+    <span class="dc-watch" title=${entity.note || ""}>
+      <b style=${{ fontWeight: 500 }}>${entity.entry}</b>
+      <span style=${{ fontVariantNumeric: "tabular-nums" }}>
+        ${digest ? `${digest.total}` : "0"}
+        ${bad ? html`<em style=${{ color: "var(--danger)", fontStyle: "normal" }}> ${bad}▼</em>` : null}
+        ${good ? html`<em style=${{ color: "var(--success)", fontStyle: "normal" }}> ${good}▲</em>` : null}
+      </span>
+      ${!entity.project_ids.length
+        ? html`<em style=${{ color: "var(--warning)", fontStyle: "normal" }} title="nothing in the database matches this yet">no match</em>`
+        : null}
+      ${!disabled &&
+      html`<button type="button" class="dc-watch-x" aria-label=${`Stop watching ${entity.entry}`}
+                   onClick=${() => onRemove(entity.entry)}>✕</button>`}
+    </span>`;
+}
+
+/* The watchlist, and the box that edits it.
+ *
+ * Editable from the page deliberately, and it is the console's only write that is
+ * not a command: a `watch` row says whose news to show, nothing derives from it,
+ * and the person whose list it is is sitting in front of the published page rather
+ * than at a terminal. The server still refuses it under `--no-watch-edits`, and
+ * `allow_watch` is what this reads to know. */
+function Watchlist({ payload, onChanged, onError }) {
+  const [typed, setTyped] = useState("");
+  const [busy, setBusy] = useState(false);
+  const entities = payload?.watchlist || [];
+  const digests = useMemo(
+    () => Object.fromEntries((payload?.entities || []).map((e) => [e.entry, e])),
+    [payload],
+  );
+  const editable = !!payload?.allow_watch;
+
+  const send = async (body) => {
+    setBusy(true);
+    try {
+      onChanged(await api("/api/watch", { method: "POST", body }));
+      setTyped("");
+    } catch (err) {
+      onError(err.message || "that did not work");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return html`
+    <div style=${{ display: "grid", gap: 10 }}>
+      <div style=${{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+        ${entities.map((e) => html`
+          <${WatchChip} key=${e.entry} entity=${e} digest=${digests[e.entry]}
+                        disabled=${!editable || busy}
+                        onRemove=${(entry) => send({ action: "remove", entry })} />`)}
+        ${!entities.length &&
+        html`<span style=${{ fontSize: 13, color: "var(--muted-foreground)" }}>
+          Watching everything — ${payload?.projects_watched ?? 0} projects. Name a company to narrow it.
+        </span>`}
       </div>
-      <span style=${{ fontSize: 12, color: "var(--muted-foreground)" }}>${label}</span>
+
+      ${editable &&
+      html`
+        <form style=${{ display: "flex", gap: 8, alignItems: "center" }}
+              onSubmit=${(ev) => { ev.preventDefault(); if (typed.trim()) send({ action: "add", entry: typed.trim() }); }}>
+          <${Input} size="sm" value=${typed} disabled=${busy}
+                    placeholder="xAI — or xAI | Colossus for one project"
+                    onInput=${(ev) => setTyped(ev.target.value)}
+                    style=${{ maxWidth: 320 }} />
+          <${Button} size="sm" variant="outline" type="submit" disabled=${busy || !typed.trim()}>Watch<//>
+        </form>`}
     </div>`;
 }
 
-function OverviewView({ data }) {
-  const [trust, setTrust] = useState(null);
-  const [failed, setFailed] = useState(false);
+/* One thing that changed.
+ *
+ * The order of the lines is the argument: what happened, what it means for the
+ * five tracks, the sentence somebody published, then the dates and the publisher.
+ * A reader who stops after two lines has still had the finding.
+ *
+ * **Both dates, always.** "energized (2024-09-01, learned 2026-08-11)" is a
+ * milestone from two years ago that reached us last night, and a page that printed
+ * only one of those dates would be lying in one direction or the other. */
+function SignalCard({ signal, onOpen }) {
+  const tone = SIGN_TONE[signal.sign] || SIGN_TONE.neutral;
+  const happened = shortDate(signal.happened);
+  const learned = shortDate(signal.at);
+  return html`
+    <article style=${{ display: "grid", gap: 6, padding: "14px 16px",
+                       borderLeft: `3px solid ${tone.color}`, background: "var(--card)",
+                       borderRadius: "0 var(--radius) var(--radius) 0" }}>
+      <div style=${{ display: "flex", gap: 10, alignItems: "baseline", flexWrap: "wrap" }}>
+        <span aria-hidden="true" style=${{ color: tone.color, fontWeight: 600 }}>${tone.mark}</span>
+        ${/* `headline` rather than `label`: the category alone made a resolved
+             obstacle read as a live one, because the sentence under it is the
+             obstacle's own summary. Composed server-side so the CLI says the
+             same thing. */ ""}
+        <b style=${{ fontWeight: 500 }}>${signal.headline}</b>
+        <button type="button" class="dc-linkish" onClick=${() => onOpen(signal.project_id)}>
+          ${signal.company} — ${signal.project}
+        </button>
+        ${signal.expected &&
+        html`<span style=${{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.08em",
+                             color: "var(--warning)" }}>expected, not reached</span>`}
+        ${signal.unblocks &&
+        html`<span style=${{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.08em",
+                             color: "var(--success)" }}>the blocker moved</span>`}
+        ${signal.notify &&
+        html`<span title="this crosses the notification bar: tracker digest --notify"
+                   style=${{ fontSize: 11, fontFamily: "var(--font-mono)",
+                             color: "var(--muted-foreground)" }}>would notify</span>`}
+      </div>
+
+      ${signal.effect &&
+      html`<div style=${{ fontSize: 13, color: signal.unblocks ? "var(--foreground)" : "var(--muted-foreground)",
+                          fontWeight: signal.unblocks ? 500 : 400 }}>${signal.effect}</div>`}
+
+      <div style=${{ fontSize: 14, lineHeight: "22px" }}>${signal.detail}</div>
+
+      ${signal.quote &&
+      html`<blockquote style=${{ margin: 0, paddingLeft: 12, borderLeft: "1px solid var(--border)",
+                                 fontSize: 13, color: "var(--muted-foreground)" }}>
+        ${signal.quote}
+      </blockquote>`}
+
+      <div class="dc-num" style=${{ display: "flex", gap: 10, flexWrap: "wrap", fontSize: 12,
+                                    color: "var(--muted-foreground)" }}>
+        <span>${happened || "undated"}</span>
+        ${learned && html`<span>· learned ${learned}</span>`}
+        ${signal.publisher && html`<span>· ${signal.publisher}</span>`}
+        ${signal.entry && html`<span>· watching ${signal.entry}${
+          signal.via && signal.via !== "operator" ? ` (as ${signal.via.replace(/_/g, " ")})` : ""
+        }</span>`}
+        ${signal.restatements
+          ? html`<span title="the same moment, reported again elsewhere">· +${signal.restatements} more report${signal.restatements > 1 ? "s" : ""}</span>`
+          : null}
+      </div>
+    </article>`;
+}
+
+function UpdatesView({ data, onOpen }) {
+  const [days, setDays] = useState(7);
+  const [payload, setPayload] = useState(null);
+  const [failed, setFailed] = useState(null);
+  const [showHeld, setShowHeld] = useState(false);
+  /* Off by default: the page is the place that shows everything, and the whole
+     argument for a notification bar is that it is *higher* than this one. The
+     toggle is for the reader who wants to see what a nightly `--notify` would
+     have sent. */
+  const [onlyAlerts, setOnlyAlerts] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
-    api("/api/landing")
-      .then((payload) => { if (!cancelled) setTrust(payload); })
-      .catch(() => { if (!cancelled) setFailed(true); });
+    setPayload(null);
+    setFailed(null);
+    api(`/api/updates?days=${days}`)
+      .then((body) => { if (!cancelled) setPayload(body); })
+      .catch((err) => { if (!cancelled) setFailed(err.message || "could not read the updates"); });
     return () => { cancelled = true; };
-  }, []);
+  }, [days]);
 
-  const t = data.totals;
-  const share = trust?.evidence?.quote_backed_share ?? 0;
+  const stale = hoursSince(payload?.last_crawl);
+  const counts = payload?.counts;
+  const shown = useMemo(
+    () => (payload ? payload.signals.filter((s) => !onlyAlerts || s.notify) : []),
+    [payload, onlyAlerts],
+  );
 
   return html`
-    <div class="dc-view dc-rise" style=${{ display: "grid", gap: 30, padding: "26px 26px 60px",
-                                            maxWidth: 760 }}>
-      <${Eyebrow} figure="fig. 00 — overview" title="Can these numbers be quoted?">
-        Every figure in this console traces to a sentence somebody published. This page says
-        how much of the dataset does, and what is standing on nothing.
+    <div class="dc-view dc-rise" style=${{ display: "grid", gap: 24, padding: "26px 26px 60px",
+                                            maxWidth: 820 }}>
+      <${Eyebrow} figure="fig. 00 — updates" title="What changed on what you are watching">
+        Good news and bad, most material first, for the companies and projects on your list.
+        The window is on when <em>we</em> learned something — a crawl reads one article and
+        imports a whole back-history, so a milestone from 2022 can be this morning's news.
+        Every line carries both dates. The ones marked <b>would notify</b> are what a nightly
+        <code>tracker digest --notify</code> sends: a blocker moving, a decisive milestone, a
+        dated slip, or an obstacle of material severity opening or clearing. Everything else
+        is here to be read, not to interrupt you.
       <//>
 
-      ${failed && html`
-        <${Alert} tone="warning" title="The trust figures did not load">
-          The capacity and investment totals below are unaffected.
-        <//>`}
-      ${!trust && !failed && html`
-        <div style=${{ display: "grid", gap: 12 }}>
-          <${Skeleton} style=${{ height: 58, width: 300 }} />
-          <${Skeleton} style=${{ height: 26 }} />
-        </div>`}
-
-      ${trust && html`
-        <div style=${{ display: "grid", gap: 26 }}>
-          ${/* One number, and the sentence that says what it is of. */ ""}
-          <div>
-            <div style=${{ display: "flex", alignItems: "baseline", gap: 14, flexWrap: "wrap" }}>
-              <span style=${{ fontFamily: "var(--font-display)", fontSize: 62, fontWeight: 500,
-                              lineHeight: 1, letterSpacing: "-0.03em" }}>
-                ${(share * 100).toFixed(1)}%
-              </span>
-              <span style=${{ fontSize: 16, color: "var(--muted-foreground)", maxWidth: "34ch" }}>
-                of ${trust.evidence.total.toLocaleString()} stored values carry a verbatim quote
-              </span>
-            </div>
-            ${trust.evidence.defects > 0 && html`
-              <div style=${{ marginTop: 12, fontSize: 13, color: "var(--destructive)" }}>
-                ${trust.evidence.defects} stated as fact with nothing behind them
-              </div>`}
-          </div>
-
-          <${TrustBar} histogram=${trust.tiers.histogram} names=${trust.tier_names} />
-
-          ${/* Three, not five, and no command column. The commands only run in the
-               developer console now, and a command you cannot run — truncated to
-               "tracker ingest crawl --stale-pro…" at that — is furniture. */ ""}
-          ${trust.attention.length > 0 && html`
-            <div style=${{ display: "grid", gap: 9 }}>
-              <span style=${{ fontSize: 12, textTransform: "uppercase", letterSpacing: "0.08em",
-                              color: "var(--muted-foreground)" }}>Waiting on a person</span>
-              ${trust.attention.slice(0, 3).map((a) => html`
-                <div key=${a.condition}
-                     style=${{ display: "flex", gap: 12, alignItems: "baseline", fontSize: 14 }}>
-                  <b style=${{ fontVariantNumeric: "tabular-nums", minWidth: 42,
-                               textAlign: "right" }}>${a.projects}</b>
-                  <span>${a.label}</span>
-                </div>`)}
-            </div>`}
-        </div>`}
-
-      ${/* The two portfolio figures worth quoting, as a sentence rather than as
-           cards. The header strip already gives projects, states and citations. */ ""}
-      <div style=${{ fontSize: 14, color: "var(--muted-foreground)", lineHeight: "24px",
-                     borderTop: "1px solid var(--border)", paddingTop: 18 }}>
-        <b style=${{ color: "var(--foreground)" }}>${fmtMw(t.mw_planned)} MW</b> planned and
-        <b style=${{ color: "var(--foreground)" }}> ${fmtUSD(t.investment_usd)}</b> announced —
-        both floors, counting only the ${t.mw_cited_projects} projects that cite a figure.
+      <div class="dc-band">
+        <${Watchlist} payload=${payload} onError=${setFailed}
+                      onChanged=${(body) => setPayload((p) => (p ? { ...p, watchlist: body.watchlist } : p))} />
       </div>
+
+      <div class="dc-band" style=${{ display: "flex", gap: 14, alignItems: "center",
+                                     flexWrap: "wrap", paddingBottom: 18 }}>
+        <div class="dc-seg">
+          ${WINDOWS.map(([n, label]) => html`
+            <button key=${n} type="button" class="dc-seg-btn" aria-pressed=${days === n}
+                    onClick=${() => setDays(n)}>${label}</button>`)}
+        </div>
+        ${counts &&
+        html`<span style=${{ fontSize: 13 }}>
+          <b>${counts.total}</b> update${counts.total === 1 ? "" : "s"} —
+          <span style=${{ color: "var(--success)" }}>${counts.good} good</span>,
+          <span style=${{ color: "var(--danger)" }}>${counts.bad} bad</span>
+        </span>`}
+        ${!!counts?.total &&
+        html`<button type="button" class="dc-linkish" aria-pressed=${onlyAlerts}
+                     onClick=${() => setOnlyAlerts((v) => !v)}>
+          ${onlyAlerts ? "show all" : `${counts.notify} worth telling you about`}
+        </button>`}
+        <span style=${{ flex: "1 1 20px" }} />
+        ${payload &&
+        html`<span style=${{ fontSize: 12, color: stale != null && stale > STALE_HOURS
+                                                    ? "var(--warning)" : "var(--muted-foreground)" }}>
+          ${payload.last_crawl
+            ? `last crawl ${payload.last_crawl.replace("T", " ").slice(0, 16)}${
+                stale != null && stale > STALE_HOURS ? ` — ${Math.floor(stale / 24)} days ago` : ""
+              }`
+            : "nothing has ever been fetched into this database"}
+        </span>`}
+      </div>
+
+      ${failed && html`
+        <${Alert} variant="warning"><div>
+          <div class="mrd-alert-title">Updates</div>
+          <div class="mrd-alert-desc">${failed}</div>
+        </div><//>`}
+
+      ${!payload && !failed &&
+      html`<div style=${{ display: "grid", gap: 12 }}>
+        ${[0, 1, 2].map((i) => html`<${Skeleton} key=${i} style=${{ height: 96 }} />`)}
+      </div>`}
+
+      ${payload && !!payload.signals.length && !shown.length &&
+      html`<${EmptyState} variant="dashed" title="Nothing crossed the notification bar"
+                          description="Everything in this window is worth knowing and none of it is worth interrupting you for. Show all to read it." />`}
+
+      ${payload && !payload.signals.length &&
+      html`<${EmptyState} variant="dashed" title="Nothing new in this window"
+                          description=${payload.last_crawl
+                            ? "The crawl ran and nothing on your list moved. Widen the window, or add a company."
+                            : "No citation has ever been fetched, so there is nothing to compare against."} />`}
+
+      ${payload &&
+      html`<div style=${{ display: "grid", gap: 12 }}>
+        ${shown.map((s, i) => html`
+          <${SignalCard} key=${`${s.project_id}-${s.kind}-${s.label}-${i}`} signal=${s} onOpen=${onOpen} />`)}
+      </div>`}
+
+      ${/* Held back rather than hidden. These are signals the evidence gate could
+           not confirm — the model asserted them and no quote stood up — and the
+           console's standing rule is that a model's answer is not a fact. Counting
+           them beside the confirmed ones would quietly abandon that; leaving them
+           out entirely would hide work waiting for `tracker risks confirm`. */ ""}
+      ${payload && !!payload.held.length &&
+      html`<div class="dc-band" style=${{ paddingBottom: 0 }}>
+        <button type="button" class="dc-linkish" onClick=${() => setShowHeld((v) => !v)}>
+          ${showHeld ? "Hide" : "Show"} ${payload.held.length} unconfirmed —
+          nobody could quote ${payload.held.length === 1 ? "it" : "them"}
+        </button>
+        ${showHeld &&
+        html`<div style=${{ display: "grid", gap: 12, opacity: 0.75 }}>
+          ${payload.held.map((s, i) => html`
+            <${SignalCard} key=${`held-${s.project_id}-${s.label}-${i}`} signal=${s} onOpen=${onOpen} />`)}
+        </div>`}
+      </div>`}
     </div>`;
 }
 
@@ -4371,7 +4563,7 @@ function OverviewView({ data }) {
 const DEV = window.DC_MODE === "dev";
 
 const USER_VIEWS = [
-  ["overview", "Overview"], ["projects", "Projects"], ["sources", "Sources"],
+  ["updates", "Updates"], ["projects", "Projects"], ["sources", "Sources"],
   ["map", "Map"], ["capex", "Capex"],
 ];
 const DEV_VIEWS = [
@@ -4504,7 +4696,7 @@ function ArticleModal({ article, onClose }) {
 /* Every publisher, every article, and what each one actually decided.
  *
  * Both halves come from data the payload already carries: the per-publisher record
- * from `/api/landing`, which the server has computed and shipped since `tracker
+ * from `/api/publishers`, which the server has computed and shipped since `tracker
  * sources` existed and nothing rendered; and every citation from
  * `projects[].sources[]`.
  *
@@ -4517,13 +4709,13 @@ function SourcesView({ data }) {
   const [query, setQuery] = useState("");
   const [trust, setTrust] = useState(null);
 
-  /* The publisher record rides on `/api/landing` rather than `/api/dataset`,
+  /* The publisher record rides on `/api/publishers` rather than `/api/dataset`,
      because the survey costs ~0.24s and the dataset is refetched after every run.
      The list below paints from data already in hand; this only fills in the
      "decided" column when it arrives. */
   useEffect(() => {
     let cancelled = false;
-    api("/api/landing")
+    api("/api/publishers")
       .then((payload) => { if (!cancelled) setTrust(payload); })
       .catch(() => {});
     return () => { cancelled = true; };
@@ -4683,7 +4875,7 @@ function App() {
      than painting the default and swapping — which reads as a flash of the wrong
      screen. */
   const [view, setView] = useState(
-    () => window.DC_VIEW || (DEV ? "pipeline" : "overview"),
+    () => window.DC_VIEW || (DEV ? "pipeline" : "updates"),
   );
   /* Which Pipeline section to open on arrival. `goto` sets it, so a run finishing
    * still lands you on Runs even though Runs is no longer a tab. */
@@ -4891,7 +5083,7 @@ function App() {
           </div>
         </header>
 
-        ${view === "overview" && html`<${OverviewView} data=${data} />`}
+        ${view === "updates" && html`<${UpdatesView} data=${data} onOpen=${setOpenId} />`}
         ${view === "projects" && html`<${ProjectsView} data=${data} openId=${openId} onOpen=${setOpenId} />`}
         ${view === "sources" && html`<${SourcesView} data=${data} />`}
         ${view === "map" && html`<${MapView} data=${data} openId=${openId} onOpen=${setOpenId} />`}

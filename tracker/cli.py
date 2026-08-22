@@ -100,6 +100,12 @@ app.add_typer(sources_app)
 risks_app = typer.Typer(name="risks", invoke_without_command=True)
 app.add_typer(risks_app)
 
+#: The watchlist the updates page is about: bare `tracker watch` lists it, `add`
+#: and `rm` edit it. The console's landing page writes the same rows through the
+#: same module, so a watch set on the page and a watch set here are one thing.
+watch_app = typer.Typer(name="watch", invoke_without_command=True)
+app.add_typer(watch_app)
+
 #: Tables use ASCII borders, not Rich's default box-drawing characters.
 #: This machine's console codepage is cp936, where Unicode box characters render
 #: as mojibake — and the PRD's whole output story is redirection (`tracker export
@@ -367,6 +373,13 @@ def serve(
             help="Allow the LLM panels (briefing, infer, capex overview). Defaults to --run.",
         ),
     ] = None,
+    watch_edits: Annotated[
+        bool,
+        typer.Option(
+            "--watch-edits/--no-watch-edits",
+            help="Allow the landing page to edit the watchlist. Independent of --run.",
+        ),
+    ] = True,
     allow_remote: Annotated[
         bool,
         typer.Option("--allow-remote", help="Permit a non-loopback --host. Read the warning."),
@@ -403,6 +416,7 @@ def serve(
         open_browser=open_browser,
         run=run,
         ai=ai,
+        watch_edits=watch_edits,
         allow_remote=allow_remote,
         publish=(("named" if settings.tunnel_name else "quick") if tunnel else None),
         tunnel_name=settings.tunnel_name if tunnel else None,
@@ -495,6 +509,7 @@ def _run_console(
     open_browser: bool,
     run: bool,
     ai: bool | None = None,
+    watch_edits: bool = True,
     allow_remote: bool = False,
     publish: str | None = None,
     tunnel_name: str | None = None,
@@ -604,6 +619,7 @@ def _run_console(
             open_browser=open_browser and not publish,
             allow_write=run,
             allow_ai=ai,
+            allow_watch=watch_edits,
             password=password,
         )
     finally:
@@ -651,6 +667,13 @@ def cloudflare(
             help="Allow the LLM panels (briefing, infer, capex overview). Defaults to --run.",
         ),
     ] = None,
+    watch_edits: Annotated[
+        bool,
+        typer.Option(
+            "--watch-edits/--no-watch-edits",
+            help="Allow the landing page to edit the watchlist. Independent of --run.",
+        ),
+    ] = True,
     proxy: Annotated[
         str | None,
         typer.Option(
@@ -733,6 +756,7 @@ def cloudflare(
         open_browser=False,
         run=run,
         ai=ai,
+        watch_edits=watch_edits,
         publish="named" if name else "quick",
         tunnel_name=name,
         hostname=hostname,
@@ -7515,6 +7539,368 @@ def _print_report(report, *, title: str) -> None:
         err.print(
             f"[yellow]{report.rejected} record(s) rejected[/yellow] — see the log lines above."
         )
+
+
+# --- Updates -----------------------------------------------------------------
+
+
+@watch_app.callback(invoke_without_command=True)
+def watch(ctx: typer.Context) -> None:
+    """Companies and projects the digest is about. Read-only; `add` and `rm` edit.
+
+    A watch is a company ("xAI") or one project of one company
+    ("xAI | Colossus"), and it covers what that company is building *and* what
+    others are building for it — `tracker.watchlist` has the reasoning, and the
+    listing says which way each project matched.
+
+    With no watchlist at all, `tracker digest` and the console's landing page read
+    the whole database. That is the useful default rather than an empty page, so an
+    empty list here is a legitimate state and not a warning.
+    """
+    if ctx.invoked_subcommand is not None:
+        return
+
+    from tracker import watchlist
+
+    engine = _read_engine()
+    with session_scope(engine, commit=False) as session:
+        entities = watchlist.watched(session)
+
+        if json_mode():
+            emit({"watching": [e.as_json() for e in entities]})
+            return
+
+        if not entities:
+            console.print(
+                "[dim]nothing is being watched, so the digest reads the whole database.\n"
+                'Add one with `tracker watch add "xAI"`.[/dim]'
+            )
+            return
+
+        table = Table(header_style="bold", title_justify="left", box=TABLE_BOX)
+        table.add_column("entry")
+        table.add_column("projects", justify="right")
+        table.add_column("matched")
+        table.add_column("note")
+        for entity in entities:
+            vias = sorted(set(entity.matches.values()))
+            table.add_row(
+                entity.entry,
+                str(len(entity.matches)),
+                ", ".join(v.replace("_", " ") for v in vias) or "[yellow]nothing yet[/yellow]",
+                entity.note or "",
+            )
+        console.print(table)
+
+
+def _watch_engine():
+    """A writable engine for a watchlist edit, without the single-writer lock.
+
+    Deliberately not `_writable()`. That takes the lock file, which is held for the
+    whole of a crawl and is what stops two ingests colliding — a rule about derived
+    data, which a `watch` row is not: nothing reads it but the digest, and no
+    ingest touches it. Blocking somebody from changing which companies they are
+    told about because tonight's crawl is still running would be a worse answer
+    than letting the two writes interleave, which SQLite serialises anyway.
+
+    `Handler._watch` reached the same conclusion for the console, and this is the
+    same operation. SQLite's `busy_timeout` covers the contention; a genuine
+    collision surfaces as a message rather than a traceback.
+    """
+    from tracker.db import open_db
+
+    try:
+        return open_db(_db_path(), readonly=False)
+    except (FileNotFoundError, MigrationError) as exc:
+        _fail(str(exc))
+        raise  # unreachable; _fail always raises
+
+
+@watch_app.command("add")
+def watch_add(
+    entry: Annotated[
+        str,
+        typer.Argument(help='A company ("xAI"), or a company and a project ("xAI | Colossus").'),
+    ],
+    note: Annotated[
+        str | None, typer.Option("--note", help="Why, in a few words. Shown on the digest.")
+    ] = None,
+) -> None:
+    """Start watching a company, or one of its projects.
+
+    Idempotent on the normalized company key, so adding "Microsoft" when
+    "Microsoft Corporation" is already watched updates the note instead of
+    creating a second row for the same company.
+    """
+    from tracker import watchlist
+
+    engine = _watch_engine()
+    with _explain_db_locks(), session_scope(engine) as session:
+        try:
+            row, created = watchlist.add(session, entry, note=note)
+        except watchlist.WatchError as exc:
+            _fail(str(exc))
+            raise
+        entry_text = row.entry
+        projects = session.scalars(select(Project)).all()
+        matched = len(watchlist.resolve([row], projects)[0].matches)
+
+    if json_mode():
+        emit({"entry": entry_text, "created": created, "projects": matched})
+        return
+    verb = "watching" if created else "already watching"
+    console.print(f"[green]{verb}[/green] {escape(entry_text)} — {matched} project(s) match today")
+    if not matched:
+        console.print(
+            "[dim]nothing matches yet. A watch set before the project is tracked is "
+            "fine — it starts reporting as soon as one appears.[/dim]"
+        )
+
+
+@watch_app.command("rm")
+def watch_rm(
+    entry: Annotated[str, typer.Argument(help="The entry to stop watching.")],
+) -> None:
+    """Stop watching a company or project."""
+    from tracker import watchlist
+
+    engine = _watch_engine()
+    with _explain_db_locks(), session_scope(engine) as session:
+        try:
+            dropped = watchlist.remove(session, entry)
+        except watchlist.WatchError as exc:
+            _fail(str(exc))
+            raise
+
+    if json_mode():
+        emit({"entry": entry, "removed": dropped})
+        return
+    if dropped:
+        console.print(f"[green]stopped watching[/green] {escape(entry)}")
+    else:
+        console.print(f"[yellow]{escape(entry)} was not being watched[/yellow]")
+
+
+@app.command()
+def digest(
+    days: Annotated[int, typer.Option("--days", help="How far back to look, in days.")] = 7,
+    since: Annotated[
+        str | None,
+        typer.Option("--since", help="An ISO date or datetime, instead of --days."),
+    ] = None,
+    limit: Annotated[
+        int | None, typer.Option("--limit", help="Signals to print. Unlimited by default.")
+    ] = None,
+    held: Annotated[
+        bool,
+        typer.Option("--held/--no-held", help="Include signals whose evidence is unconfirmed."),
+    ] = False,
+    notify: Annotated[
+        bool,
+        typer.Option(
+            "--notify",
+            help="Only what is worth interrupting somebody for, and nothing at all if "
+            "nothing is.",
+        ),
+    ] = False,
+    markdown: Annotated[
+        bool, typer.Option("--markdown", help="Emit Markdown, for pasting or mailing.")
+    ] = False,
+) -> None:
+    """What changed on the watchlist, good and bad, since a date.
+
+    The same reading the console's landing page renders, in a form that can be
+    sent: `tracker digest --markdown --days 1` is the nightly note. Reads only, so
+    it is safe on either machine.
+
+    **The window is on when we learned a fact, not when it happened.** A crawl
+    reads one article and imports a project's whole back-history, so filtering on
+    the milestone's own date would report 2022 every morning. Every line carries
+    both dates for exactly that reason — `tracker/feed.py` has the argument.
+
+    **`--notify` is the form to schedule.** It prints only what `feed.notable`
+    admits — the blocker moving, a decisive milestone, a dated slip, an obstacle of
+    `material` severity or worse opening or clearing — and prints *nothing at all*
+    when none of that happened, so a nightly job piped into a mailer sends on the
+    nights that earn it and stays quiet otherwise. Silence is the useful default
+    for a channel somebody is meant to keep trusting.
+
+    It also exits 1 when it printed nothing, so a shell can tell "quiet night"
+    from "we sent something" without parsing the output:
+
+        tracker digest --notify --markdown --days 1 | mail -s "dc-tracker" you@…
+    """
+    import datetime as dt
+
+    from tracker import feed
+
+    when: dt.datetime | None = None
+    if since:
+        try:
+            when = dt.datetime.fromisoformat(since)
+        except ValueError:
+            _fail(f"--since must be an ISO date or datetime, not {since!r}")
+
+    engine = _read_engine()
+    with session_scope(engine, commit=False) as session:
+        brief = feed.digest(session, since=when, days=days, limit=limit)
+
+    if notify:
+        # Nothing printed on a quiet night, in any format: an empty digest that
+        # still prints a header is exactly the mail somebody starts filtering.
+        sending = brief.notifying
+        if json_mode():
+            emit({"notify": [s.as_json() for s in sending], "since": brief.since.isoformat()})
+        elif sending:
+            lines = (
+                _notify_markdown(brief, sending)
+                if markdown
+                else [_signal_line(s) for s in sending]
+            )
+            for line in lines:
+                print(line)
+        if not sending:
+            raise typer.Exit(1)
+        return
+
+    if json_mode():
+        emit(brief.as_json())
+        return
+    if markdown:
+        for line in digest_markdown(brief, held=held):
+            print(line)
+        return
+    _print_digest(brief, held=held)
+
+
+def _digest_scope(brief) -> str:
+    if brief.watching_everything:
+        return f"the whole database ({brief.projects_watched} projects)"
+    entries = ", ".join(e.entry for e in brief.entities)
+    return f"{entries} — {brief.projects_watched} project(s)"
+
+
+_SIGN_STYLE = {"good": "green", "bad": "red", "neutral": "dim"}
+_SIGN_MARK = {"good": "+", "bad": "-", "neutral": "."}
+
+
+def _signal_line(signal) -> str:
+    """One signal as a sentence, with both of its dates."""
+    when = signal.happened.isoformat() if signal.happened else "undated"
+    learned = f", learned {signal.at.date().isoformat()}" if signal.at else ""
+    tail = f" [{signal.publisher}]" if signal.publisher else ""
+    return (
+        f"{signal.company} — {signal.project}: {signal.headline} "
+        f"({when}{learned}). {signal.detail}{tail}"
+    )
+
+
+def _print_digest(brief, *, held: bool) -> None:
+    console.print(f"[bold]since {brief.since.date().isoformat()}[/bold] — {_digest_scope(brief)}")
+    if brief.last_crawl:
+        console.print(f"[dim]last citation fetched {brief.last_crawl.isoformat(sep=' ')}[/dim]")
+    else:
+        console.print("[yellow]nothing has ever been fetched into this database[/yellow]")
+
+    for entity in brief.entities:
+        extra = f", {entity.held} unconfirmed" if entity.held else ""
+        console.print(
+            f"  {escape(entity.entry)}: [bold]{entity.total}[/bold] update(s) — "
+            f"{entity.good} good, {entity.bad} bad{extra}"
+        )
+
+    sending = brief.notifying
+    if brief.signals:
+        console.print(
+            f"[dim]{len(sending)} of {len(brief.signals)} would notify "
+            "(`--notify` for those alone)[/dim]"
+        )
+
+    if not brief.signals:
+        console.print("\n[dim]nothing new in this window.[/dim]")
+    for signal in brief.signals:
+        style = _SIGN_STYLE.get(signal.sign, "dim")
+        mark = _SIGN_MARK.get(signal.sign, ".")
+        bell = " [bold]!​[/bold]" if signal.notify else ""
+        console.print(f"\n[{style}]{mark}[/{style}]{bell} {escape(_signal_line(signal))}")
+        if signal.unblocks:
+            console.print(f"  [bold]{escape(signal.effect or '')}[/bold]")
+        elif signal.effect:
+            console.print(f"  [dim]{escape(signal.effect)}[/dim]")
+        if signal.quote:
+            console.print(f'  [dim]"{escape(signal.quote)}"[/dim]')
+
+    if held and brief.held:
+        console.print(
+            f"\n[yellow]{len(brief.held)} signal(s) nobody could quote[/yellow] "
+            "— shown because --held was passed, and not counted above."
+        )
+        for signal in brief.held:
+            console.print(f"  [dim]? {escape(_signal_line(signal))} ({signal.unconfirmed})[/dim]")
+
+
+def _notify_markdown(brief, sending) -> list[str]:
+    """The notification itself: what happened, and nothing about what did not.
+
+    Deliberately not `digest_markdown` with a filter. That renders the whole
+    reading — scope, tallies, the last crawl — which is right for a page somebody
+    opened and wrong for a message that arrives unasked. A notification says the
+    thing and gets out of the way.
+    """
+    lines = [f"# {len(sending)} update(s) worth telling you about", ""]
+    for signal in sending:
+        mark = _SIGN_MARK.get(signal.sign, ".")
+        lines.append(f"### {mark} {_signal_line(signal)}")
+        if signal.effect:
+            lines.append(f"*{signal.effect}*")
+        if signal.quote:
+            lines.append(f"> {signal.quote}")
+        if signal.source_url:
+            lines.append(f"[source]({signal.source_url})")
+        lines.append("")
+    lines.append(f"[since {brief.since.date().isoformat()}]")
+    return lines
+
+
+def digest_markdown(brief, *, held: bool = False) -> list[str]:
+    """The same reading as Markdown, for pasting into a mail or a message.
+
+    Public because the nightly note is the point of `--markdown`: whatever ends up
+    sending it should not have to re-render the digest itself.
+    """
+    lines = [
+        f"# What changed since {brief.since.date().isoformat()}",
+        "",
+        f"Watching: {_digest_scope(brief)}.",
+    ]
+    if brief.last_crawl:
+        lines.append(f"Last citation fetched {brief.last_crawl.isoformat(sep=' ')}.")
+    lines.append("")
+    for entity in brief.entities:
+        lines.append(
+            f"- **{entity.entry}** — {entity.total} update(s), {entity.good} good, {entity.bad} bad"
+        )
+    if brief.entities:
+        lines.append("")
+
+    if not brief.signals:
+        lines += ["Nothing new in this window.", ""]
+    for signal in brief.signals:
+        mark = _SIGN_MARK.get(signal.sign, ".")
+        lines.append(f"### {mark} {_signal_line(signal)}")
+        if signal.effect:
+            lines.append(f"*{signal.effect}*")
+        if signal.quote:
+            lines.append(f"> {signal.quote}")
+        if signal.source_url:
+            lines.append(f"[source]({signal.source_url})")
+        lines.append("")
+
+    if held and brief.held:
+        lines += [f"## {len(brief.held)} unconfirmed, not counted above", ""]
+        lines += [f"- {_signal_line(s)} ({s.unconfirmed})" for s in brief.held]
+        lines.append("")
+    return lines
 
 
 def main(argv: list[str] | None = None) -> int:

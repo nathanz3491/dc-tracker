@@ -641,93 +641,37 @@ tr.dc-enter { animation-name: fade-in; }
    the app header. */
 :root { --dc-header-h: 60px; }
 
-/* ---- The trust ramp -------------------------------------------------------
-   One hue, light to dark, for the one thing this console encodes in colour.
-
-   COLOUR MEANS TRUST, NEVER CATEGORY — the rule at the top of this file — and a
-   sequential ramp is what that rule looks like when the data is *ordered*. The
-   clean tiers are ordered (UNSOURCED < SOURCED < SOUND < COMPLETE < SETTLED), so
-   they take one hue in five steps rather than five hues. Phase and customer are
-   magnitude on the Overview and take a single accent, not a palette.
-
-   **Do not reach for Meridian's `--chart-1..5`.** Measured against its own
-   surfaces with the palette validator: in light mode the worst adjacent pair
-   separates by ΔE 2.7 under deuteranopia and 7.8 with *normal* colour vision —
-   below the 15 floor, so full-colour readers cannot tell them apart either, and
-   secondary encoding does not excuse that one. Two of the five also fall under
-   the chroma floor and read as grey. Dark mode is worse: all five sit outside the
-   L 0.48–0.67 band. If a categorical set is ever genuinely needed, author one and
-   run the validator; the CHANGELOG carries a validated pair.
-
-   Steps are OKLCH-monotonic in L: light 0.790→0.396 descending, dark
-   0.421→0.828 ascending. Dark is re-stepped against the dark surface rather than
-   flipped, because a ramp that reads correctly on cream is mud on #1b1410.
-
-   **Neither end reaches the extreme, and that is the fix for a real defect.** The
-   first cut ran the full range and put step 1 at 1.48:1 against the surface —
-   which made UNSOURCED, the *worst* tier and the one a reader most needs to see,
-   read as a gap in the bar rather than as a segment. Compressing both ends lifts
-   the minimum to 1.81 (light) and 2.12 (dark). That is still under 3:1, which is
-   inherent to a ramp — its low end is meant to be quiet — so the relief the
-   validator requires is carried by the legend beneath the bar, which names every
-   tier and its count in text. */
-:root {
-  --dc-trust-1: #dcb377;
-  --dc-trust-2: #c9974e;
-  --dc-trust-3: #b0782a;
-  --dc-trust-4: #8e5a16;
-  --dc-trust-5: #633d08;
-}
-.dark {
-  --dc-trust-1: #6a4413;
-  --dc-trust-2: #8a5c1c;
-  --dc-trust-3: #a87a2b;
-  --dc-trust-4: #c89a4a;
-  --dc-trust-5: #e6c085;
-}
-
-/* ---- Overview -------------------------------------------------------------
-   One column, three bands, decreasing importance. Deliberately not a grid of
-   equal cards: equal weight is what the old landing page did, and it is why
-   nothing on it read as the answer. */
+/* ---- Updates ---------------------------------------------------------------
+   One column, bands in decreasing importance. Deliberately not a grid of equal
+   cards: equal weight is what the old landing page did, and it is why nothing on
+   it read as the answer. */
 .dc-band { display: grid; gap: 14px; padding: 0 0 26px; }
 .dc-band + .dc-band { border-top: 1px solid var(--border); padding-top: 26px; }
 
-/* The stacked trust bar. A 2px surface gap between segments is required, not
-   decorative: adjacent ramp steps are close by construction, and the gap is what
-   keeps the boundary readable in print, in forced-colours mode, and for a reader
-   who cannot separate the hues. */
-.dc-trustbar {
-  display: flex; height: 26px; border-radius: 6px; overflow: hidden;
-  /* An inset hairline, so the pale end of the ramp still has an edge against the
-     page. Inset rather than a border: a border would shrink the track and make
-     the segment percentages lie by a pixel. */
-  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--foreground) 12%, transparent);
+/* One watched company or project, with its tally.
+   Not `.dc-chip-x`: that class turns the whole chip red on hover, which promises
+   "click to remove" about a body that removes nothing. Here only the x does. */
+.dc-watch {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 7px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
 }
-.dc-trustbar > span { position: relative; }
-.dc-trustbar > span + span { box-shadow: -2px 0 0 0 var(--background); }
-
-/* Magnitude bars: one accent, length carries the value, the number is written
-   beside it. No per-row hue — the rows are not identities. */
-.dc-magrow { display: grid; grid-template-columns: minmax(90px, 26%) 1fr auto; gap: 10px; align-items: center; }
-.dc-magbar { height: 8px; border-radius: 4px; background: var(--dc-trust-4); min-width: 2px; }
-
-/* One "what is holding rows back" row: count, what is wrong, and the command.
-   The command drops onto its own line under 640px rather than being clipped to an
-   ellipsis — a truncated command is worse than a wrapped one, because you cannot
-   copy what you cannot see. */
-.dc-attn {
-  display: grid; grid-template-columns: auto 1fr auto; gap: 4px 12px;
-  align-items: center; padding: 9px 12px; background: var(--card);
+.dc-watch-x {
+  border: 0;
+  background: none;
+  padding: 0 0 0 2px;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
 }
-.dc-attn code {
-  font-family: var(--font-mono); font-size: 11px; color: var(--muted-foreground);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 34ch;
-}
-@media (max-width: 640px) {
-  .dc-attn { grid-template-columns: auto 1fr; }
-  .dc-attn code { grid-column: 1 / -1; max-width: 100%; }
-}
+.dc-watch-x:hover { color: var(--danger); }
 
 /* ---- Disclosure -----------------------------------------------------------
    The header of a foldable section. A real <button> rather than a styled div, so

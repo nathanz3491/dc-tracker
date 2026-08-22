@@ -259,6 +259,65 @@ severe open category. Grouping by `category` deliberately does not — a project
 obstructed three ways belongs under all three — so that view says so rather than
 inviting you to add the column up.
 
+## What changed since I last looked
+
+```bash
+tracker watch                          # the companies and projects the digest is about
+tracker watch add "xAI"                # or "xAI | Colossus" for one campus
+tracker watch add "Meta" --note "Q3"   # the note is shown on the page
+tracker watch rm "xAI"
+tracker digest --days 1                # what moved yesterday, signed good or bad
+tracker digest --notify --days 1        # only what is worth interrupting you for
+tracker digest --notify --markdown      # the nightly note, silent on a quiet night
+tracker digest --held                  # including what nobody could quote
+```
+
+Every other command here answers "what do we know". This one answers "what is
+new", which is a different question and needs a different clock. `event_date` is
+when a milestone happened, `risk.first_seen` is the date a source puts on an
+obstacle, `source.published_at` is when a publisher published — and none of them
+is when the row appeared in our database. A crawl reads one article and imports a
+project's whole back-history, so stored milestones span 1997 to 2040 while the rows
+arrived last night. Migration 0018 added `created_at` to `event` and `risk` for
+exactly this, backfilled from each citation's `fetched_at` and left NULL where
+nothing ever recorded it.
+
+So the window filters on when we learned something, and every line prints both
+dates. `tracker/feed.py` carries the rest of the reasoning: the sign comes from the
+vocabulary rather than from a model, a future-dated milestone is a schedule and not
+an achievement, and a signal that reaches the milestone a *blocked* track was
+waiting for is ranked above everything else — that is
+`tracks.ProjectStanding.watch_for` arriving.
+
+With no watchlist at all, this reads the whole database and says so. Add an entry
+and it narrows: a watch covers what that company is building **and** what others
+are building for it, because in this dataset the interesting news about a
+hyperscaler is routinely filed under a developer's name.
+
+**Showing and notifying are different bars.** The page and a plain `digest` carry
+everything; `--notify` prints only what `feed.notable` admits, and prints nothing at
+all when nothing does, so a scheduled job sends on the nights that earn it. Three
+gates: the signal has to be quote-backed (an unconfirmed one never notifies,
+whatever it says), it has to have actually happened (a future-dated milestone is a
+schedule), and it has to be material — which means the blocker moving, a decisive
+milestone, a dated slip, or an obstacle at `material` severity or worse opening or
+clearing. An announcement, a filed permit, earthworks and a new row in the tracker
+are all on the page and none of them is worth an interruption.
+
+It exits 1 when it printed nothing, so a shell can tell a quiet night from a
+failure:
+
+```bash
+tracker digest --notify --markdown --days 1 | mail -s "dc-tracker" you@example.com
+```
+
+Nothing records what was already sent, and nothing needs to: the window is on when
+we learned a fact, so a row falls inside exactly one `--days 1` window and a nightly
+job reports it once.
+
+The same reading is the console's landing page, where the watchlist can also be
+edited — see `docs/console-and-export.md`.
+
 ## What no article says: `tracker infer`
 
 The PRD asks for two things no document contains — 你还需要分析项目可能遇到的困难,

@@ -10,6 +10,155 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 First working version. Nothing has been released yet, so everything below is the
 initial build of the v1 PRD.
 
+### Added
+
+- **The console's landing page now answers "what changed on what I care about"**
+  (`tracker/feed.py`, `tracker/watchlist.py`, `migrations/0018`, `0019`,
+  `webui/server.py`, `static/app.js`, `cli.py`).
+
+  Asked for directly: the projects table already holds the inventory and holds it
+  better, so a reader who wants to look something up goes there. What nothing
+  answered was the question somebody actually arrives with — *which of the things
+  I care about moved since I last looked, and was it good or bad.*
+
+  Every example that came up was already a row type we store, which is the useful
+  part of this change: 又搞定了一个电 is `event.interconnection_agreement`,
+  那个社团又来干我了 is `risk.community_opposition`, 终于上线了 is `energized` /
+  `first_customer`, 宣布追加投资 is `expanded`. So the sign is a lookup over closed
+  enums rather than a model's opinion, and it cannot say something different
+  tomorrow. **Updates** replaces **Overview** as the landing page and as `/`.
+
+  **The one thing the schema could not answer was "since when".** Every existing
+  date answers a different question — `event_date` is when a milestone happened,
+  `risk.first_seen` is the date a source puts on an obstacle,
+  `source.published_at` is when a publisher published — and none of them is when
+  the row entered our database. That distinction is not academic here: stored
+  event dates span 1997-01-01 to 2040-01-01, and the 2026-08-11 crawl batch
+  inserted milestones dated 2021 and 2022, because a crawl reads one article and
+  imports a project's whole back-history. A feed keyed on `event_date` shows the
+  same old news every morning; one keyed on "recent" hides a 2023 fact we learned
+  an hour ago that changes the picture.
+
+  Migration 0018 adds `created_at` to `event` and `risk`, backfilled from each
+  citation's `fetched_at` (2,749 of 2,825 events and 654 of 654 risks carry a
+  `source_id`) and left NULL for the rest — nothing anywhere recorded when those
+  were entered, and stamping them with the migration's own clock would assert that
+  every one was discovered today. Same discipline as 0017's `no_quote` backfill.
+  The window filters on that column and every line prints both dates.
+
+  Migration 0019 adds `watch`: a company ("xAI") or one project of one company
+  ("xAI | Colossus"), matched by `dedup.company_key` so "Microsoft Corporation"
+  and "Microsoft" are one watch. A table rather than a seed file, because
+  `seed/required-projects.txt` encodes the PRD's definition of done and belongs in
+  a diff, while a watchlist is one reader's current interest and turns over
+  monthly. A watch covers what that company is *building* and what others are
+  building **for** it — `project.customer` and the per-block customers — because
+  in this dataset the interesting news about a hyperscaler is routinely filed
+  under a developer's name.
+
+  Materiality is not a vibe. `feed.SCALE` puts the PRD's decisive milestones
+  (interconnection agreement, energisation, first customer, a dated slip) above
+  the ones that restate an intention, and a signal that reaches the awaited
+  milestone on a **blocked** track outranks everything — that is
+  `tracks.ProjectStanding.watch_for` arriving, which is the single most
+  informative thing this dataset can say. Unconfirmed signals are ranked but held
+  in their own tray: a model's answer is not a fact, and a briefing is the last
+  place to abandon that.
+
+  **Three faults found by running it, all fixed before shipping.** Pointed at
+  the live 300-project copy, the page reported Meta's Hyperion as *energized, the
+  blocker moved* — on the strength of two events reading "Partial energisation
+  **expected** 2027" and "full Phase 1 **expected** online 2028", on a campus that
+  has never drawn power. That is the exact trap `tracks.standing` filters with
+  `as_of`, and the feed now makes the same call: a future-dated milestone is
+  marked expected, scores lowest, and never counts as an advance. Second, the same
+  moment reported by two articles produced two signals — Louisa County's withdrawn
+  CUP application, twice, with two dates. `feed.fold` groups by (project, kind,
+  label) and carries the rest as `restatements`, which is the discipline
+  `export._timeline_json` already applies on the stored side. Third, on the page
+  itself: a *resolved* `permitting` risk rendered as its category over its own
+  summary sentence — "permitting" above "xAI is operating 27 gas turbines without a
+  required air permit" — which reads as a live violation. A risk row stores the
+  obstacle's description, so `kind` has to carry the other half of the fact;
+  `Signal.headline` composes it ("permitting — cleared") in one place both the page
+  and the CLI read.
+
+  A fourth was in the route rather than the reading, and the comment two lines
+  below it already said so: `POST /api/watch` called `self._body()` a second time
+  after `do_POST` had already read the body, so every watchlist edit from the page
+  hung until the browser gave up. `tests/test_webui.py` now asserts the route
+  answers at all, which is the test that was missing.
+
+- **A notification bar, higher than the page's** (`feed.notable`,
+  `tracker digest --notify`). The page shows everything; a notification interrupts
+  a person, and a channel that interrupts too often gets muted, at which point it
+  protects nobody. So three gates, all of which must be cleared.
+
+  *Checkable*: an unconfirmed signal never notifies, whatever it says — waking
+  somebody over a sentence no quote stood up for is the fastest way to make the
+  channel ignorable, and `tracker risks confirm` exists to settle those first.
+  *Already happened*: a future-dated milestone is a schedule and schedules page
+  nobody. *Material*, which admits exactly five things — the awaited milestone on a
+  **blocked** track arriving, a decisive milestone (interconnection agreement,
+  energisation, first customer), a dated slip, and an obstacle at `material`
+  severity or worse opening or clearing.
+
+  What it excludes is the point: an announcement, a filed permit, earthworks, an
+  equipment delivery, land bought, a new row appearing. All on the page, none of
+  them a reason to look up from something else.
+
+  `OBSTACLE_OFFSET` is what puts a *material* obstacle level with a decisive
+  milestone, and it is deliberate rather than a tuning artifact: an obstacle is
+  actionable and a milestone is not. Without it only `blocking` obstacles crossed
+  the bar, which would have dropped the case this was asked for — a local group
+  opposing a site is recorded `material` far more often than `blocking`.
+
+  Nothing remembers what it already sent, and nothing needs to: the window is on
+  `created_at`, so a row falls inside exactly one `--days 1` window and a nightly
+  job notifies about it once. Measured on the live copy with two companies watched,
+  a one-day window: 29 updates on the page, 11 across the bar — energisations,
+  interconnection agreements, community opposition, dated slips.
+
+- **`tracker watch` and `tracker digest`** (`tracker/cli.py`). `watch` lists the
+  entities and says how each project matched; `watch add` / `watch rm` edit it.
+  `digest` prints the same reading the page renders, marks which lines would have
+  notified, and `digest --notify --markdown --days 1` is the nightly note: only
+  what crossed the bar, nothing at all when nothing did, and exit 1 on a quiet
+  night so a shell can tell silence from a failure. That is what makes "tell me
+  promptly" not depend on somebody opening a browser.
+
+  `watch add`/`rm` deliberately do **not** take the single-writer file lock.
+  That lock is right for a crawl or a backfill — it is held for hours and guards
+  derived data — and wrong for one row of a table no derived value reads. Refusing
+  a watchlist edit because tonight's ingest is halfway through would be the worse
+  answer, so both the command and the console use a plain read-write engine and
+  SQLite's own `busy_timeout`.
+
+- **`--watch-edits/--no-watch-edits`** on `serve` and `cloudflare`
+  (`tracker/cli.py`, `webui/server.py`). A third capability flag beside `--run`
+  and `--ai`, for the reason there is a second one: these are different risks.
+  `POST /api/watch` is the only write a `--no-run` console performs, and its
+  blast radius is one row of `watch` — a statement about whose news to show, which
+  nothing derives from and no ingest reads. It cannot touch a project, a citation
+  or a figure, cannot start a run, cannot spend a token, and it is behind the
+  password like every other route. The single-writer *file* lock is deliberately
+  not taken: it is held for the hours a crawl runs, and a watchlist edit that
+  failed because the nightly ingest was halfway through would be the worse answer.
+  SQLite's `busy_timeout` covers a single-row insert, and real contention returns
+  503 rather than a silent no-op.
+
+### Changed
+
+- **`GET /api/landing` is now `GET /api/publishers`, and answers less**
+  (`tracker/webui/server.py`, `static/app.js`). It was named for a page it no
+  longer serves. Its evidence census and tier sweep — 3.5 seconds between them —
+  existed for the trust bands on the old Overview; with that page gone, the route
+  keeps only `sources.survey` (0.24s), which is what the Sources view actually
+  reads it for. Nothing is lost: the census and the sweep are `tracker stats` and
+  `tracker clean`, where they were computed from all along. The trust ramp
+  (`--dc-trust-1..5`), the stacked tier bar and two rules that had already lost
+  their last consumer (`.dc-magbar`, `.dc-attn`) go with it.
+
 ### Fixed
 
 - **A published console refused the one thing it could safely do**

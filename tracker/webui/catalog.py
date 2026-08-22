@@ -152,6 +152,10 @@ GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "blocks",
             "sources",
             "feeds",
+            # The two reads behind the landing page: what is being watched, and
+            # what changed on it.
+            "watch",
+            "digest",
         ),
     ),
     ("Judge", ("review", "verify", "infer", "logic check", "audit", "audit check")),
@@ -174,7 +178,9 @@ GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "sources policy",
         ),
     ),
-    ("Maintain", ("init", "backfill", "export")),
+    # `watch add`/`watch rm` write, but what they write is a preference rather than
+    # a fact about a project, which is why they sit here and not under Repair.
+    ("Maintain", ("init", "backfill", "export", "watch add", "watch rm")),
 )
 
 

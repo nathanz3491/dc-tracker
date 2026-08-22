@@ -77,6 +77,8 @@ Then the real loop, which needs one API key — see [Ingesting](docs/ingesting.m
 tracker discover      # poll news feeds, queue candidates
 tracker ingest crawl  # extract the tracked fields, gated on quoted evidence
 tracker gaps          # see what is thin
+tracker watch add xAI # the companies you want to be told about
+tracker digest        # what changed on them, good and bad
 tracker serve         # the same dataset as a live console
 ```
 
@@ -102,6 +104,12 @@ substation is the most valuable signal here.
 
 **Confidence is recomputed, never stored,** and one source can never reach 3
 however authoritative — independence is counted by domain.
+
+**"New" means new to us.** A crawl reads one article and imports a project's whole
+back-history, so stored milestones run from 1997 to 2040 while the rows themselves
+arrived last night. `tracker digest` and the console's landing page filter on when
+we learned a fact and print both dates, because either one alone reads as a
+different claim than the evidence supports.
 
 ## Documentation
 

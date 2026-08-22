@@ -1514,3 +1514,124 @@ def test_every_subcommand_help_is_more_than_its_summary(group, phrase, subcomman
         command = root.commands[group].commands[name]
         paragraphs = [p for p in (command.help or "").split("\n\n") if p.strip()]
         assert len(paragraphs) >= 2, f"`tracker {group} {name}` has no explanation"
+
+
+# --- the watchlist and the digest ------------------------------------------
+
+
+def test_watch_add_list_and_remove(seeded: Path):
+    """One list, and `tracker watch` is how it is read on the machine that has it."""
+    assert invoke(seeded, "watch").exit_code == 0
+    assert "nothing is being watched" in invoke(seeded, "watch").output
+
+    added = invoke(seeded, "watch", "add", "xAI", "--note", "Memphis")
+    assert added.exit_code == 0, added.output
+    listing = invoke(seeded, "watch")
+    assert "xAI" in listing.output and "Memphis" in listing.output
+
+    payload = json.loads(invoke(seeded, "--json", "watch").output)
+    assert payload["watching"][0]["entry"] == "xAI"
+    assert payload["watching"][0]["project_ids"], "the seed has an xAI project"
+
+    assert invoke(seeded, "watch", "rm", "xai").exit_code == 0
+    assert "nothing is being watched" in invoke(seeded, "watch").output
+
+
+def test_watch_add_refuses_an_entry_with_no_company(seeded: Path):
+    result = invoke(seeded, "watch", "add", " | Colossus")
+    assert result.exit_code != 0
+    assert "names no company" in result.output
+
+
+def test_watch_add_is_idempotent_on_the_normalized_key(seeded: Path):
+    assert invoke(seeded, "watch", "add", "Microsoft Corporation").exit_code == 0
+    again = json.loads(invoke(seeded, "--json", "watch", "add", "Microsoft").output)
+    assert again["created"] is False
+    assert len(json.loads(invoke(seeded, "--json", "watch").output)["watching"]) == 1
+
+
+def test_digest_reads_the_whole_database_with_no_watchlist(seeded: Path):
+    payload = json.loads(invoke(seeded, "--json", "digest", "--days", "36500").output)
+    assert payload["watching_everything"] is True
+    assert payload["projects_watched"] == 3
+
+
+def test_digest_refuses_a_since_it_cannot_parse(seeded: Path):
+    result = invoke(seeded, "digest", "--since", "last tuesday")
+    assert result.exit_code != 0
+    assert "ISO date" in result.output
+
+
+def test_digest_notify_prints_nothing_and_exits_1_on_a_quiet_night(seeded: Path):
+    """A nightly job pipes this into a mailer, so silence has to be the default.
+
+    The seed carries no milestone anywhere near the notification bar, so this is
+    also the assertion that the bar is not accidentally letting everything past.
+    """
+    result = invoke(seeded, "digest", "--notify", "--days", "36500")
+    assert result.exit_code == 1
+    assert result.output.strip() == ""
+
+
+def test_digest_notify_prints_what_crosses_the_bar(initialized: Path):
+    """An energisation is one of the five things worth interrupting somebody for."""
+    import datetime as when
+
+    from tracker.db import open_db, session_scope
+    from tracker.models import Event, Project
+
+    with session_scope(open_db(initialized, readonly=False)) as session:
+        project = Project(
+            name="Colossus", company="xAI", city="Memphis", state="TN", dedup_key="k"
+        )
+        session.add(project)
+        session.flush()
+        session.add(
+            Event(
+                project_id=project.id,
+                event_date=when.date.today() - when.timedelta(days=1),
+                event_type="energized",
+                description="Site energized.",
+                quote="The site was energized on Friday.",
+                created_at=when.datetime.now(),
+            )
+        )
+
+    result = invoke(initialized, "digest", "--notify", "--days", "2")
+    assert result.exit_code == 0
+    assert "energized" in result.output
+
+    as_markdown = invoke(initialized, "digest", "--notify", "--markdown", "--days", "2")
+    assert as_markdown.exit_code == 0
+    assert as_markdown.output.startswith("# 1 update(s) worth telling you about")
+    # A notification says the thing and gets out of the way: no scope line, no
+    # tallies, none of the page's furniture.
+    assert "Watching:" not in as_markdown.output
+
+
+def test_digest_markdown_carries_both_dates(initialized: Path):
+    """The window is on when we learned it; the line has to say when it happened."""
+    import datetime as when
+
+    from tracker.db import open_db, session_scope
+    from tracker.models import Event, Project
+
+    with session_scope(open_db(initialized, readonly=False)) as session:
+        project = Project(
+            name="Colossus", company="xAI", city="Memphis", state="TN", dedup_key="k"
+        )
+        session.add(project)
+        session.flush()
+        session.add(
+            Event(
+                project_id=project.id,
+                event_date=when.date(2022, 3, 4),
+                event_type="land_acquired",
+                description="Bought the land.",
+                quote="The company bought the site in March 2022.",
+                created_at=when.datetime.now(),
+            )
+        )
+
+    out = invoke(initialized, "digest", "--markdown", "--days", "2").output
+    assert "2022-03-04" in out and "learned" in out

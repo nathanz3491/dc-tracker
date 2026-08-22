@@ -2,8 +2,11 @@
 
 Routing is written out rather than derived, because the read/write split is the
 security posture and it should be readable in one screen. Everything under
-``/api/`` except ``POST /api/run`` and ``POST /api/queue/drop`` opens the database
-``mode=ro``, so a bug in a read path raises instead of writing.
+``/api/`` except ``POST /api/run``, ``POST /api/queue/drop`` and ``POST
+/api/watch`` opens the database ``mode=ro``, so a bug in a read path raises
+instead of writing. The third of those is the narrowest: it writes one row of
+`watch`, which says whose news the landing page shows and which nothing derives
+from — see `Handler._watch`.
 """
 
 from __future__ import annotations
@@ -19,6 +22,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, ClassVar
 from urllib.parse import parse_qs, urlsplit
+
+from sqlalchemy.exc import OperationalError
 
 from tracker import __version__
 from tracker.config import install_root
@@ -44,7 +49,7 @@ GZIP_MIN = 8192
 #: needs to know which paths are pages so an unknown one 404s instead of silently
 #: serving the console. A test asserts the two lists agree, which is cheaper than
 #: a route that generates itself from a JavaScript array.
-READ_VIEWS: frozenset[str] = frozenset({"overview", "projects", "sources", "map", "capex"})
+READ_VIEWS: frozenset[str] = frozenset({"updates", "projects", "sources", "map", "capex"})
 DEV_VIEWS: frozenset[str] = frozenset({"pipeline", "commands", "help"})
 
 
@@ -91,6 +96,7 @@ class Console:
         *,
         allow_write: bool = True,
         allow_ai: bool | None = None,
+        allow_watch: bool = True,
         password: str | None = None,
     ) -> None:
         self.db_path = db_path
@@ -104,6 +110,20 @@ class Console:
         #: Follows `allow_write` unless a deployment says otherwise, so the local
         #: default is unchanged and only a published console has to think about it.
         self.allow_ai = allow_write if allow_ai is None else allow_ai
+        #: Whether the watchlist may be edited from the page. A THIRD flag, for the
+        #: same reason `allow_ai` is a second one: these are different risks and
+        #: collapsing them costs the console the one thing it could safely offer.
+        #:
+        #: What this write can do is add or drop a row of `watch` — a statement
+        #: about whose news to show, which no derived value reads and no ingest
+        #: consults. It cannot touch a project, a citation or a figure, and it
+        #: cannot run a command or spend a token. That is why it defaults to on
+        #: even under `--no-run`: a published console is exactly where the person
+        #: whose watchlist it is will be sitting. `serve --no-watch-edits` turns it
+        #: off for a deployment that wants the page strictly read-only.
+        #:
+        #: It is still behind the password, like every other route.
+        self.allow_watch = allow_watch
         self.gate = Gate(password=password)
         self.runner = Runner(db_path)
         self._schema_version: int | None = None
@@ -413,8 +433,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._claims(query)
         if route == "/api/article":
             return self._article(query)
-        if route == "/api/landing":
-            return self._landing()
+        if route == "/api/publishers":
+            return self._publishers()
+        if route == "/api/updates":
+            return self._updates(query)
         if route == "/api/health":
             return self._json(
                 {"ok": True, "version": __version__, "commit": deployed_commit()}
@@ -443,11 +465,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self._start_workflow(body)
             if parsed.path == "/api/run/cancel":
                 return self._json({"cancelled": self.console.runner.cancel()})
+            # `body` everywhere below, never `self._body()`: the request body was
+            # already read above, and reading it twice blocks on `rfile` waiting
+            # for bytes that will never come — the request hangs until the
+            # client's timeout rather than failing. The watchlist route was
+            # written with a second `self._body()` and hung exactly like that.
+            if parsed.path == "/api/watch":
+                return self._watch(body)
             if parsed.path == "/api/infer":
-                # `body`, not `self._body()`: the request body was already read
-                # above, and reading it twice blocks on `rfile` waiting for bytes
-                # that will never come — the request hangs until the client's
-                # timeout rather than failing.
                 return self._infer(body)
             if parsed.path == "/api/overview":
                 return self._overview(body)
@@ -565,6 +590,7 @@ class Handler(BaseHTTPRequestHandler):
             )
         payload["allow_write"] = self.console.allow_write
         payload["allow_ai"] = self.console.allow_ai
+        payload["allow_watch"] = self.console.allow_watch
         payload["password_protected"] = self.console.gate.required
         self._json(payload)
 
@@ -608,10 +634,23 @@ class Handler(BaseHTTPRequestHandler):
             "reads": "the whole database",
             "note": "refetched after every run. Excludes claims_by_field — see /api/claims",
         },
-        "GET /api/landing": {
-            "answers": "evidence census, clean tiers, and what is waiting on a person",
-            "reads": "quality.evidence_census + clean.scan + sources.survey",
-            "note": "~2.5s. Its own route so /api/dataset stays fast.",
+        "GET /api/publishers": {
+            "answers": "which publishers actually decide a stored value",
+            "reads": "sources.survey",
+            "note": "~0.24s. Its own route so /api/dataset stays fast.",
+        },
+        "GET /api/updates": {
+            "answers": "what changed on the watchlist, signed good or bad, most material first",
+            "reads": "feed.digest — every project with its events, risks and citations",
+            "note": "?days=<n> or ?since=<iso>, ?limit=<n>. The window is on when we "
+            "learned a fact, not when it happened: see tracker/feed.py.",
+        },
+        "POST /api/watch": {
+            "answers": "adds or drops one watchlist entry; returns the list",
+            "writes": True,
+            "note": "Body: {action: add|remove, entry, note?}. The only write a "
+            "read-only console allows, because a watch is a statement about whose "
+            "news to show and nothing derives from it. Refused under --no-watch-edits.",
         },
         "GET /api/discover": {
             "answers": "per-feed funnel: queued, read, no_project, cited, dated",
@@ -670,6 +709,7 @@ class Handler(BaseHTTPRequestHandler):
                 },
                 "allow_write": self.console.allow_write,
                 "allow_ai": self.console.allow_ai,
+                "allow_watch": self.console.allow_watch,
                 "routes": self.API,
             }
         )
@@ -742,52 +782,34 @@ class Handler(BaseHTTPRequestHandler):
             csp="default-src 'none'; img-src https: data:; style-src 'unsafe-inline'",
         )
 
-    def _landing(self) -> None:
-        """What the landing page needs to answer "can I trust these numbers?".
+    def _publishers(self) -> None:
+        """Which publishers actually decide a stored value.
 
-        Named `_landing`, not `_overview`: `/api/overview` is already the POST that
-        writes a project's AI reading, and a second `_overview` silently shadowed
-        it — Python keeps the last definition, so the *write* path was the one that
-        survived and every GET arrived at a handler expecting a body.
+        **Its own route, and that is not a style choice.** `/api/dataset` is
+        refetched on every redraw and after every run, so a scan belongs anywhere
+        but there. Measured on the live database: `sources.survey` 0.24s. Fetched
+        once, when Sources opens, and the page renders what it already has from the
+        dataset while this arrives.
 
-        **Its own route, and that is not a style choice.** Measured on the live
-        database: `quality.evidence_census` 1.0s, `clean.scan` 2.5s,
-        `sources.survey` 0.24s. `/api/dataset` is refetched on every redraw and
-        after every run, so putting a 3.8-second scan in it would make the whole
-        console slower to answer a question only one view asks. Here it is fetched
-        once, when the Overview opens, and the page renders its cheap bands from
-        the dataset it already has while this arrives.
+        Named `_publishers` rather than `_landing`, because it no longer answers
+        for the landing page. That page used to ask "can I trust these numbers?"
+        and answered it with an evidence census and a tier sweep costing 3.5
+        seconds between them; it is now the Updates page, and the census and the
+        sweep are `tracker stats` and `tracker clean`, where they always also were.
+        A route named for a page it does not serve is how a name goes stale.
 
-        Nothing is computed here. The census, the tier sweep and the attention list
-        are the same functions the CLI calls, for the reason
-        `docs/architecture.md` states: the console makes no judgements of its own.
+        Nothing is computed here. The survey is the same function the CLI calls,
+        for the reason `docs/architecture.md` states: the console makes no
+        judgements of its own.
         """
-        from tracker import clean, quality, sources
+        from tracker import sources
 
         with self.console.read_session() as session:
-            census = quality.evidence_census(session)
-            sweep = clean.scan(session)
             survey = sources.survey(session)
 
         top = survey.ranked(by="decisive")[:8]
         self._json(
             {
-                "evidence": {
-                    "total": census.total,
-                    "buckets": dict(census.buckets),
-                    # Pre-divided, so the page cannot disagree with `tracker stats`
-                    # about what "quote-backed" means.
-                    "quote_backed": census.buckets.get(quality.QUOTE_BACKED, 0),
-                    "quote_backed_share": round(census.share(quality.QUOTE_BACKED), 4),
-                    "defects": census.defects,
-                    "by_field": census.by_field,
-                },
-                "tiers": sweep.as_json(),
-                # Ordered, because the tier bar is a *sequence* and a dict of
-                # counts does not carry the order. -1 is a real rung — "not even
-                # sourced" — and is deliberately not folded into 0.
-                "tier_names": [[-1, "UNSOURCED"], *[[n, name] for n, name, _ in clean.TIERS]],
-                "attention": clean.attention(sweep, limit=8),
                 "sources": {
                     "publishers": len(survey.hosts),
                     "citations": survey.sources_read,
@@ -797,6 +819,136 @@ class Handler(BaseHTTPRequestHandler):
                 },
             }
         )
+
+    def _updates(self, query: dict[str, list[str]]) -> None:
+        """What changed on the watchlist, and whether it was good news.
+
+        The landing page. Everything on it is derived — `tracker.feed` stores
+        nothing — so this route is a read like any other and is safe on a console
+        started `--no-run`.
+
+        **Not folded into `/api/dataset`.** The dataset already ships every
+        project's events and risks, so a page *could* assemble this in the
+        browser, and an earlier draft did. Two things decided against it: the
+        window has to be applied to `created_at`, which means re-deriving in
+        JavaScript the one rule this feature exists to get right, and
+        `feed.digest` calls `tracks.standing` per project to find what a blocked
+        track was waiting for — the judgement `docs/architecture.md` says the
+        console must never make for itself.
+
+        `?days=` and `?since=` are the same knob, and `?since=` wins when both are
+        given. An unparseable value is a 400 rather than a silent fallback to a
+        week, because "no updates" and "your filter was ignored" look identical on
+        the page.
+        """
+        import datetime as dt
+
+        from tracker import feed
+
+        since: dt.datetime | None = None
+        raw = (query.get("since") or [""])[0]
+        if raw:
+            try:
+                since = dt.datetime.fromisoformat(raw)
+            except ValueError:
+                return self._error(400, f"since must be an ISO date or datetime, not {raw!r}")
+
+        days = feed.DEFAULT_DAYS
+        raw_days = (query.get("days") or [""])[0]
+        if raw_days:
+            try:
+                days = int(raw_days)
+            except ValueError:
+                return self._error(400, f"days must be a whole number, not {raw_days!r}")
+            if days < 1:
+                return self._error(400, "days must be at least 1")
+
+        limit: int | None = None
+        raw_limit = (query.get("limit") or [""])[0]
+        if raw_limit:
+            try:
+                limit = max(1, int(raw_limit))
+            except ValueError:
+                return self._error(400, f"limit must be a whole number, not {raw_limit!r}")
+
+        # One session for both, because both walk the same projects: the digest to
+        # find what changed, the watchlist to say which entry each one came from.
+        with self.console.read_session() as session:
+            payload = feed.digest(session, since=since, days=days, limit=limit).as_json()
+            payload["watchlist"] = self._watchlist_json(session)
+
+        payload["days"] = days
+        payload["allow_watch"] = self.console.allow_watch
+        self._json(payload)
+
+    def _watchlist_json(self, session: Any) -> list[dict[str, Any]]:
+        """The watchlist as the page renders it, resolved against today's projects.
+
+        The page needs more than the digest's per-entity tally: the note, and the
+        project count, so an entry matching nothing can say so rather than looking
+        like a quiet week.
+        """
+        from tracker import watchlist
+
+        return [entity.as_json() for entity in watchlist.watched(session)]
+
+    def _watch(self, body: dict[str, Any]) -> None:
+        """Add or drop one watchlist entry.
+
+        **The one write a published console performs**, and the narrowness is the
+        argument for it. `watch` rows say whose news to show; nothing derives from
+        them, no ingest reads them, and dropping the table would lose a preference
+        rather than a fact. Compare `/api/run`, which turns a body into a
+        subprocess and is refused outright without `--run`.
+
+        Opened read-write for the duration, rather than through
+        `console.read_session`. The single-writer FILE lock that `tracker` commands
+        take is deliberately *not* acquired: it is held for the hours a crawl runs,
+        and a watchlist edit that fails because the nightly ingest is halfway
+        through would be a worse answer than waiting. SQLite's `busy_timeout` (5s,
+        set in `db._apply_pragmas`) is the right instrument for a single-row insert,
+        and a genuine contention still surfaces as an error rather than a silent
+        no-op.
+        """
+        if not self.console.allow_watch:
+            return self._error(403, "this console was started with --no-watch-edits")
+
+        from tracker.watchlist import WatchError, add, remove
+
+        action = str(body.get("action") or "").strip()
+        entry = str(body.get("entry") or "").strip()
+        note = body.get("note")
+        if action not in {"add", "remove"}:
+            return self._error(400, "action must be 'add' or 'remove'")
+        if not entry:
+            return self._error(400, "entry is required")
+        if len(entry) > 200:
+            return self._error(400, "entry is too long")
+        if note is not None and not isinstance(note, str):
+            return self._error(400, "note must be a string")
+
+        engine = open_db(self.console.db_path, readonly=False)
+        try:
+            with session_scope(engine) as session:
+                if action == "add":
+                    row, created = add(session, entry, note=(note or None))
+                    result = {"entry": row.entry, "created": created}
+                else:
+                    result = {"entry": entry, "removed": remove(session, entry)}
+                # Read back inside the same session, so the response describes the
+                # list as this write left it rather than as a second connection
+                # happened to find it.
+                result["watchlist"] = self._watchlist_json(session)
+        except WatchError as exc:
+            return self._error(400, str(exc))
+        except OperationalError as exc:
+            # "database is locked": something else is writing. Actionable, and not
+            # a 500 — the request was fine, the moment was not.
+            if "locked" not in str(exc).lower():
+                raise
+            return self._error(503, "the database is busy writing; try again in a moment")
+
+        self._json(result)
 
     def _start_run(self, body: dict[str, Any]) -> None:
         if not self.console.allow_write:
@@ -1190,10 +1342,17 @@ def serve(
     open_browser: bool = True,
     allow_write: bool = True,
     allow_ai: bool | None = None,
+    allow_watch: bool = True,
     password: str | None = None,
 ) -> None:
     """Run the console until interrupted."""
-    console = Console(db_path, allow_write=allow_write, allow_ai=allow_ai, password=password)
+    console = Console(
+        db_path,
+        allow_write=allow_write,
+        allow_ai=allow_ai,
+        allow_watch=allow_watch,
+        password=password,
+    )
     handler = type("BoundHandler", (Handler,), {"console": console})
     httpd = ThreadingHTTPServer((host, port), handler)
     httpd.daemon_threads = True

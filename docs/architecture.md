@@ -43,12 +43,12 @@ looking:
 ```
    /                                    /dev
    ┌────────────────────────────┐       ┌────────────────────────────┐
-   │ Overview · Projects        │       │ Pipeline · Commands · Help │
+   │ Updates · Projects         │       │ Pipeline · Commands · Help │
    │ Sources · Map · Capex      │       │                            │
    │                            │       │ the queue, the runs,       │
-   │ reads the dataset.         │       │ the command palette.       │
-   │ nothing here changes       │       │ this is where work         │
-   │ anything.                  │       │ happens.                   │
+   │ reads the dataset. the     │       │ the command palette.       │
+   │ watchlist is the only      │       │ this is where work         │
+   │ thing it writes.           │       │ happens.                   │
    └────────────────────────────┘       └────────────────────────────┘
               │                                      │
               └──────────────┬───────────────────────┘
@@ -62,7 +62,7 @@ page can be linked to, refreshed and reached with the back button. The server do
 not render them differently; it stamps which view was asked for and the front end
 opens on it, then `pushState`s as you navigate. The bundle and the dataset are
 already in memory, so a real navigation per tab would be slower than the switch it
-replaced. An unknown path 404s rather than quietly serving Overview.
+replaced. An unknown path 404s rather than quietly serving Updates.
 
 **The mode is a display choice, not a permission.** What `/dev` can do is still
 governed by `allow_write` on the server — `serve --no-run` serves the page with
@@ -74,6 +74,16 @@ Why the reading console exists separately at all: it used to carry eight tabs,
 three of which were about running the tool rather than about what it found. That
 made the machinery compete with the data for the reader's attention, and the
 landing page — a filter card and eighteen columns — answered no question at all.
+
+**The one write on the reading console, and why it does not break the split.**
+`POST /api/watch` adds or drops a row of `watch` — a statement about whose news the
+Updates page should show. Nothing derives from it, no ingest consults it, and
+losing the table would lose a preference rather than a fact. It has its own flag,
+`--no-watch-edits`, for the same reason `--ai` is separate from `--run`: these are
+different risks, and collapsing them cost the console the one thing it could safely
+offer. What the flag does *not* do is loosen anything else — a watchlist edit
+cannot touch a project, a citation or a figure, cannot start a run and cannot spend
+a token, and it is behind the password like every other route.
 
 The split is enforced, not merely intended:
 

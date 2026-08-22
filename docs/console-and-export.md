@@ -45,7 +45,7 @@ tracker serve
 
 | | | |
 |---|---|---|
-| **`/`** | Overview · Projects · Sources · Map · Capex — each on its own URL; Sources opens any cited article in a reader view | reading the dataset. Nothing on it changes anything. |
+| **`/`** | Updates · Projects · Sources · Map · Capex — each on its own URL; Sources opens any cited article in a reader view | reading the dataset. The watchlist is the only thing on it that writes. |
 | **`/dev`** | Pipeline · Commands · Help | the queue, the runs, the command palette. |
 
 They were one console with eight tabs, which put the machinery on the same
@@ -59,21 +59,61 @@ front end picks its view set. That is a *display* choice and nothing more: what
 renders it with every button inert. A page cannot grant itself a capability by
 asking for a different URL, and a test says so.
 
-**The landing page answers one question.** It used to open on the projects
-table — figure caption, six-field filter card, coverage strip and eighteen
-columns, all at equal weight, before you had read a number. Overview is now one
-screen: the share of stored values carrying a verbatim quote, how many are stated
-as fact with nothing behind them, the tier mix as one bar, the three things
-waiting on a person, and the two portfolio figures worth quoting. It went through
-one round at 1,221px and 37 numbers before landing at **619px and 14** — the first
-cut kept a legend that repeated the bar it sat under, and a command column
-truncated to `tracker ingest crawl --stale-pro…`, which is furniture in a console
-that cannot run it.
+**The landing page answers one question: what changed on what I am
+watching.** Two pages have held this slot. The first opened on the projects
+table — filter card, coverage strip, eighteen columns, all at equal weight before
+you had read a number. The second asked "can these numbers be quoted?" and
+answered it well, but it described the *dataset*, and a reader arriving in the
+morning is not asking about the dataset. Projects already carries the inventory
+and carries it better.
 
-The trust figures arrive separately, behind a skeleton, from `/api/landing`: its
-census and tier sweep take about 2.5 seconds and `/api/dataset` is refetched after
-every run, so putting the scan there would have slowed the whole console to answer
-a question one view asks.
+**Updates** is a list of what moved, signed good or bad, most material first, for
+the companies and projects on a watchlist. The vocabulary does the signing: an
+`energized` event is good news and a `delayed` one is bad, an obstacle opening is
+bad and the same obstacle clearing is good — all four are closed enums, so the
+sign is a lookup rather than an opinion. `tracker/feed.py` has the reasoning, and
+three parts of it are worth knowing here:
+
+* **The window is on when *we* learned a fact.** A crawl reads one article and
+  imports a project's whole back-history, so stored milestones run from 1997 to
+  2040 while the rows themselves arrived last night. Filtering on the milestone's
+  own date would report 2022 every morning. Every line therefore carries both
+  dates — "energized (2024-09-01, learned 2026-08-11)" — because either one alone
+  is a lie in one direction.
+* **A future-dated milestone is a schedule, not an achievement.** "Full Phase 1
+  *expected* online 2028" is marked as expected, scores lowest, and never counts
+  as the blocker moving. This is the same trap `tracks.standing` filters with
+  `as_of`, and it bit here too before the real database was pointed at the page.
+* **A signal that reaches the milestone a *blocked* track was waiting for leads
+  the page.** Power blocked, then an interconnection agreement signed: that is
+  `ProjectStanding.watch_for` arriving, and it is the single most informative
+  thing this dataset can say.
+
+Signals whose evidence the gate could not confirm are held in their own tray,
+counted separately, never mixed in — the console's standing rule is that a model's
+answer is not a fact, and a briefing is the last place to abandon it.
+
+**Showing and notifying are different bars.** Lines marked *would notify* are what
+a nightly `tracker digest --notify` sends: the blocker moving, a decisive milestone,
+a dated slip, or an obstacle of material severity opening or clearing. Everything
+else is there to be read. The count beside the window control toggles the page down
+to just those, which is how you check what the schedule would have sent without
+waiting for it.
+
+**The watchlist is editable here, and it is the only thing on `/` that writes.** A
+`watch` row says whose news to show: nothing derives from it, no ingest reads it,
+and losing the table would lose a preference rather than a fact. It has its own
+flag — `serve --no-watch-edits` — because `--run` and `--ai` taught the lesson that
+different risks need different switches. The same list is `tracker watch` on the
+machine that holds the database.
+
+The header carries the last citation fetch, and complains after two days. A crawler
+that died on Tuesday and a genuinely quiet week look identical on a page like this,
+and only one of them is good news.
+
+The evidence census and tier sweep the previous landing page led with have not gone
+anywhere: they are `tracker stats` and `tracker clean`, which is where they were
+computed from all along.
 
 **Everything explanatory folds.** Each view opened with a paragraph that is useful
 once and furniture thereafter — the caption and heading stay, the prose sits behind
@@ -103,7 +143,8 @@ The three worth knowing:
 | route | answers | cost |
 |---|---|---|
 | `GET /api/dataset` | every project with its claims, plus capex, gaps, queue, totals | ~1 MB, refetched after each run |
-| `GET /api/landing` | evidence census, clean tiers, what is waiting on a person | ~2.5s |
+| `GET /api/updates` | what changed on the watchlist, signed and ranked | one pass over projects, events and risks |
+| `POST /api/watch` | adds or drops a watchlist entry | the only write a read-only console allows |
 | `POST /api/run` | starts a command, returns a run id | needs `--run` |
 
 `POST /api/run` takes `{cmd, flags}`, `{workflow}` or `{line}`, and validates all
@@ -111,8 +152,8 @@ three against the same catalog the palette is built from — so a blocked comman
 cannot be reached by putting it in a routine, and no request is ever spliced into
 a shell.
 
-Opens `http://127.0.0.1:8765/`. Seven views — **Overview**, Projects, Map, Capex,
-Pipeline, Commands, Help — reading the database on every request, so it
+Opens `http://127.0.0.1:8765/`. Eight views — **Updates**, Projects, Sources,
+Map, Capex, Pipeline, Commands, Help — reading the database on every request, so it
 reflects what a run just did without re-exporting anything. A run started from the
 page refetches the dataset when it finishes, so a crawl that adds a project or a
 merge that removes three is visible without a reload.

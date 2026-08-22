@@ -275,6 +275,15 @@ class Event(Base):
     #: `vocab.UNCONFIRMED_REASONS`. NULL means it did — a claim that is only true
     #: for rows written after migration 0017, which is what the backfill encodes.
     unconfirmed: Mapped[str | None] = mapped_column(Text)
+    #: When this row entered OUR database, as against `event_date`, which is when
+    #: the milestone happened. The briefing's "new since I last looked" reads
+    #: this; nothing else can answer that question, because a crawl of one
+    #: article imports a project's whole back-history at once (migration 0018).
+    #:
+    #: Nullable with no server default because SQLite's ALTER TABLE refuses a
+    #: CURRENT_TIMESTAMP default, so `upsert` sets it. NULL means "we do not know
+    #: when we learned this", which the feed treats as undated rather than new.
+    created_at: Mapped[dt.datetime | None] = mapped_column(DateTime)
     source_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("source.id", ondelete="SET NULL")
     )
@@ -289,6 +298,7 @@ class Event(Base):
         CheckConstraint("quote IS NULL OR length(quote) <= 500", name="ck_event_quote_len"),
         Index("ix_event_project_id", "project_id"),
         Index("ix_event_date", "event_date"),
+        Index("ix_event_created_at", "created_at"),
     )
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
@@ -327,6 +337,11 @@ class Risk(Base):
     resolved_at: Mapped[dt.date | None] = mapped_column(Date)
     delay_days: Mapped[int | None] = mapped_column(Integer)
 
+    #: When we learned of this obstacle, as against `first_seen`, which is the
+    #: date the *source* puts on it. See `Event.created_at`; same column, same
+    #: reason, same migration.
+    created_at: Mapped[dt.datetime | None] = mapped_column(DateTime)
+
     source_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("source.id", ondelete="SET NULL")
     )
@@ -346,6 +361,7 @@ class Risk(Base):
         Index("ix_risk_project_id", "project_id"),
         Index("ix_risk_category", "category"),
         Index("ix_risk_status", "status"),
+        Index("ix_risk_created_at", "created_at"),
     )
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
@@ -523,3 +539,46 @@ class NotDuplicate(Base):
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return f"<NotDuplicate #{self.a_id} != #{self.b_id}>"
+
+
+class Watch(Base):
+    """One entity whose news the briefing page is about.
+
+    A company ("xAI"), or one project of one company ("xAI | Colossus"). Read by
+    `tracker.watchlist`, which resolves each row to the projects it covers with
+    the same normalization `dedup` and `required.match` use.
+
+    **Data rather than a seed file**, unlike `seed/required-projects.txt`. That
+    file encodes the PRD's definition of done, so it belongs in a diff; a
+    watchlist is one reader's current interest, turns over monthly, and is edited
+    from the console by the person reading it. Migration 0019 has the argument.
+    """
+
+    __tablename__ = "watch"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    #: As typed, separator included: "xAI" or "xAI | Colossus". What gets shown
+    #: back to whoever wrote it — a normalized key cannot be displayed.
+    entry: Mapped[str] = mapped_column(Text, nullable=False)
+
+    #: `dedup.company_key()` of the company part, so "Microsoft Corporation" and
+    #: "Microsoft" are one watch. Never empty; the CHECK enforces it.
+    company_key: Mapped[str] = mapped_column(Text, nullable=False)
+
+    #: Lowercased project name, or '' for every project of the company. Empty
+    #: string rather than NULL so UNIQUE actually refuses a duplicate — SQLite
+    #: treats NULLs as distinct.
+    project_key: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("''"))
+
+    note: Mapped[str | None] = mapped_column(Text)
+    added_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False, server_default=_NOW)
+
+    __table_args__ = (
+        UniqueConstraint("company_key", "project_key", name="uq_watch_entity"),
+        CheckConstraint("length(company_key) > 0", name="ck_watch_company_key"),
+        Index("ix_watch_company_key", "company_key"),
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return f"<Watch {self.entry!r}>"
