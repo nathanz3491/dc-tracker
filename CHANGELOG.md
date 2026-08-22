@@ -12,6 +12,55 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **`tracker tui` — a full-screen terminal interface with every CLI command in
+  it** (`tracker/tui/`, `cli.py`, `webui/catalog.py`, `docs/tui.md`).
+
+  There were two interfaces and a gap between them. The CLI prints a snapshot and
+  forgets it, so comparing two projects is two commands and a scroll and a filter
+  worth keeping is a shell history entry. The console keeps state and draws
+  properly, but it wants a browser, a password and a tunnel — and the machine that
+  owns the database is reached by ssh, where a browser is not what you have.
+
+  Six panes: **overview** (headline numbers, field coverage drawn as bars, open
+  obstacles ranked by cited capacity), **projects** (the table filtered live across
+  company, name, locality, phase and customer at once, with one project opened
+  beside it), **coverage** (rostered operators against the rows we hold, absent
+  first, with the unrostered tail), **capex** (end customer × year), **queue**
+  (what is waiting, and what could not be read, grouped by host), and **run**.
+
+  **The run pane offers every command the CLI has, structurally rather than by
+  maintenance.** It reads `webui.catalog`, the same Typer introspection the
+  console's palette uses, so a command added to `cli.py` appears with its real
+  flags, types, defaults, choices and help on the next start. A test asserts the
+  pane offers exactly the catalog's set, because "the TUI has all the CLI's
+  functions" has to be a property of the code and not a promise in a changelog.
+
+  Runs go through `webui.runner` rather than a new subprocess, so the TUI inherits
+  its three properties instead of growing a second, laxer copy: no shell anywhere
+  (`gaps; rm -rf /` is refused because `rm` is a word no command has), one writer
+  at a time, and the command's own name typed back before anything that spends
+  tokens or deletes rows. Output keeps its colour — the child gets `FORCE_COLOR`
+  and the pane renders the escapes, because red-is-a-rejection is the CLI's own
+  signalling and stripping it discards exactly what a reader is scanning for.
+
+  Provenance travels with every value in the detail pane — `derived`,
+  `unconfirmed`, `inferred` are marked rather than rendered as plain figures — and
+  the five progress tracks are drawn side by side, which is the view that makes the
+  model legible: site control and permits can be finished while power is years out.
+
+  **Verifiable with nobody at the terminal.** `tracker tui --check` boots the real
+  app against the real database headlessly, fills every pane and exits non-zero if
+  any failed; `--screenshot` writes the frame it rendered as an SVG. That is how
+  the interface gets confirmed working on a host reached only by ssh, and it fails
+  on a renamed column rather than reporting a version string.
+
+  `textual` joins the base dependencies — an interface behind an install flag is
+  one nobody on the host has — but is imported lazily all the same, so a checkout
+  whose dependency sync has not run yet still imports, and the deployer's refusal
+  check still passes. `tui` is in the console's blocked list: a full-screen
+  terminal app cannot render into a browser, and starting one there would hold the
+  single run slot until the timeout while nothing appeared.
+
 - **A roster of the operators this database is supposed to know about, and a
   command that goes and gets the ones it has none of** (`seed/operators.toml`,
   `tracker/roster.py`, `tracker/prospect.py`, `cli.py`, `webui/catalog.py`).

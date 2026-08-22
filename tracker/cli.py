@@ -351,6 +351,81 @@ def init() -> None:
 
 
 @app.command()
+def tui(
+    check: Annotated[
+        bool,
+        typer.Option("--check", help="Boot headless, fill every pane, exit. For a host or CI."),
+    ] = False,
+    screenshot: Annotated[
+        Path | None,
+        typer.Option(
+            "--screenshot",
+            help="Render one frame to this SVG and exit. Implies --check.",
+            show_default=False,
+        ),
+    ] = None,
+    pane: Annotated[
+        str | None,
+        typer.Option("--pane", help="Pane to leave open for --screenshot.", show_default=False),
+    ] = None,
+    width: Annotated[int, typer.Option("--width", help="Headless terminal width.")] = 160,
+    height: Annotated[int, typer.Option("--height", help="Headless terminal height.")] = 48,
+) -> None:
+    """A full-screen interface over the same data and the same commands.
+
+    Six panes, and the last one is every command this CLI has:
+
+    \b
+      1 overview   the headline numbers, field coverage drawn, open obstacles
+      2 projects   the table, filtered live, one project opened beside it
+      3 coverage   rostered operators against the rows we hold
+      4 capex      who is buying the capacity, and which year it lands
+      5 queue      what is waiting to be read, and what could not be
+      6 run        every CLI command, its whole flag surface, and its output
+
+    The command list is read out of this CLI rather than written down, so anything
+    added to it appears there with its real flags — including the confirmation a
+    command that spends tokens or deletes rows requires, which is the console's
+    ritual unchanged rather than a second, laxer gate.
+
+    `r` re-reads the database, `/` jumps to the projects filter, and `e`, `s` and
+    `p` prefill `enrich`, `show` and `prospect` for whatever the cursor is on.
+
+    `--check` boots it headless against the real database, fills every pane and
+    exits non-zero if any of them failed — which is how "does the TUI work on the
+    host" gets answered over ssh, with nobody sitting at a terminal there.
+    `--screenshot` writes what it rendered to an SVG.
+    """
+    from tracker import tui as tui_mod
+    from tracker.tui.app import TrackerApp
+
+    if pane is not None and pane not in TrackerApp.PANES:
+        _fail(f"--pane must be one of {', '.join(TrackerApp.PANES)}")
+        return
+    # The database is opened here purely as a precondition, and read-only, so a
+    # missing file says "run `tracker init`" rather than opening a full-screen
+    # interface over nothing. The app opens it again for itself.
+    _read_engine()
+    try:
+        code = tui_mod.run(
+            _db_path(),
+            check=check or screenshot is not None,
+            screenshot=screenshot,
+            pane=pane,
+            size=(width, height),
+        )
+    except tui_mod.MissingDependency as exc:
+        _fail(str(exc))
+        return
+    if check or screenshot is not None:
+        if code == 0:
+            console.print("[green]every pane filled[/green]")
+            if screenshot is not None:
+                console.print(f"[dim]wrote {screenshot}[/dim]")
+        raise typer.Exit(code)
+
+
+@app.command()
 def serve(
     port: Annotated[int, typer.Option("--port", help="Port to listen on.")] = 8765,
     host: Annotated[

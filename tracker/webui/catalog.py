@@ -89,6 +89,10 @@ DESTRUCTIVE: dict[str, str] = {
 #: line into a terminal — hiding them would just be confusing.
 BLOCKED: dict[str, str] = {
     "serve": "already running",
+    # A full-screen terminal app cannot render into a browser, and starting one
+    # here would hold the single run slot until the 45-minute timeout while
+    # nothing appeared on the page. It stays listed so its argv can be copied.
+    "tui": "it is a terminal interface — run it in a terminal",
     # A console that can publish itself is a console that can be told to publish
     # itself. The command blocks forever running a tunnel, so it would also hold
     # the single run slot until the timeout — but the reason it is here is the
