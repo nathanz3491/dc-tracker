@@ -107,6 +107,15 @@ flag — `serve --no-watch-edits` — because `--run` and `--ai` taught the less
 different risks need different switches. The same list is `tracker watch` on the
 machine that holds the database.
 
+The box that edits it is a picker rather than a text field, over the three shapes a
+watch has: an **operator** (everything it builds), a **tenant** (what others build
+for it) and a **project** (one campus). Every candidate comes from the dataset the
+page already holds, so an empty box offers the largest operators instead of
+demanding you know what the database calls things; an entry already covered is
+shown as *watching*, sorted last, and skipped by the arrow keys. Text that matches
+nothing is still accepted — a watch set before the project is tracked starts
+reporting when the project appears. Clicking a chip narrows the list to that watch.
+
 The header carries the last citation fetch, and complains after two days. A crawler
 that died on Tuesday and a genuinely quiet week look identical on a page like this,
 and only one of them is good news.

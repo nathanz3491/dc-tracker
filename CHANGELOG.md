@@ -147,6 +147,49 @@ initial build of the v1 PRD.
   SQLite's `busy_timeout` covers a single-row insert, and real contention returns
   503 rather than a silent no-op.
 
+### Fixed
+
+- **The watchlist editor was a bare text box, which is a demand that you already
+  know what the database calls things** (`static/app.js`, `app.css`). Reported as
+  unusable, and correctly: nothing prompted you with the 300 projects, 90-odd
+  operators and named tenants sitting in the payload the page was already holding,
+  and this repo had a searchable picker for exactly that problem since the command
+  palette replaced its 224-option dropdowns.
+
+  It is now a picker over three kinds of candidate, because a watch has three
+  shapes: an **operator** covers everything it builds, a **tenant** covers what
+  others build for it, and a **project** narrows to one campus. The row says which,
+  since "xAI" and "xAI | Colossus" are different subscriptions and the text alone
+  does not show the difference. Ranking puts an exact hit above a prefix above a
+  substring, and an operator above the twelve projects it contains — the operator
+  is the subscription that covers all twelve. Arrow keys move, Enter takes, Escape
+  closes, the highlight scrolls itself into view, and the resting state offers the
+  largest operators and tenants so an empty box teaches what is in there.
+
+  **Already-watched rows are computed from the server's own answer**, never
+  re-derived: each entry ships the `project_ids` it resolved to, so a candidate is
+  "watching" when its projects are already covered. Reimplementing
+  `dedup.company_key` — legal-suffix stripping, the alias table — in JavaScript
+  would have drifted from the Python that actually decides. Those rows sort last
+  and the arrows skip them, because a highlighted row that Enter cannot take reads
+  as a broken picker.
+
+  Text matching nothing is still a legitimate watch — set one before the project is
+  tracked and it starts reporting when the project appears — so Enter takes it
+  verbatim and the empty state says so rather than refusing.
+
+- **The editor did not exist until the digest arrived, and vanished on every
+  window change** (`static/app.js`). It read `allow_watch` off `/api/updates`, so
+  the input mounted only when that request landed, and `setPayload(null)` on each
+  refetch unmounted it again — taking whatever was half-typed with it. It now reads
+  `allow_watch` and its candidates from `/api/dataset`, which the shell holds at
+  first paint, and a refetch dims the previous answer instead of blanking it.
+  Errors land under the box that caused them rather than in a page-level banner.
+
+- **The chips did nothing.** "xAI · 3 updates, 1 bad" invites a click, so clicking
+  one now narrows the list to that watch. The tallies carry titles and accessible
+  labels: a bare ▼ beside a number is a glyph, not a fact.
+
 ### Changed
 
 - **`GET /api/landing` is now `GET /api/publishers`, and answers less**

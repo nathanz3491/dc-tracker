@@ -4280,26 +4280,303 @@ function shortDate(iso) {
   return iso ? iso.slice(0, 10) : null;
 }
 
-/* One watched entity as a chip: what it is, how it went, and a way to drop it.
+/* What you can watch, offered rather than guessed at.
  *
- * The counts are the point of the strip. "xAI — 3 updates, 1 bad" is the whole
- * page in one line, and it is what makes the list below skippable on a quiet day. */
-function WatchChip({ entity, digest, onRemove, disabled }) {
+ * The first version of this was a bare text box, which is a demand that you
+ * already know what the database calls things. Everything it needs to answer that
+ * is in `/api/dataset`, which the page is holding anyway: 300 projects, their
+ * operators, and the tenants they are being built for.
+ *
+ * **Three kinds of candidate, because a watch has three shapes.** A company covers
+ * everything it builds; a tenant covers what others build *for* it (the server
+ * matches `project.customer` and per-block customers, so this is not a courtesy —
+ * it is the case where the interesting news is filed under a developer's name); a
+ * project narrows to one campus. The row says which, because "xAI" and
+ * "xAI | Colossus" are different subscriptions and the difference is not visible
+ * from the text alone.
+ *
+ * **Already-watched is computed from the server's own answer, never re-derived
+ * here.** Each watchlist entry ships the `project_ids` it resolved to, so a
+ * candidate is covered when its projects are already in that set. The alternative
+ * was reimplementing `dedup.company_key` — legal-suffix stripping, the alias table
+ * — in JavaScript, where it would drift from the Python that actually decides. */
+function watchCandidates(projects) {
+  const companies = new Map();
+  const tenants = new Map();
+  for (const p of projects) {
+    const company = (p.company || "").trim();
+    if (company) {
+      const row = companies.get(company.toLowerCase()) || { kind: "company", label: company, entry: company, ids: [], mw: 0 };
+      row.ids.push(p.id);
+      row.mw += p.mw_planned || 0;
+      companies.set(company.toLowerCase(), row);
+    }
+    /* Tenants only where somebody else is building: a company that is its own
+       customer is already offered above, and listing it twice would suggest the
+       two entries do different things. `is_undisclosed` cases ("undisclosed
+       hyperscaler") name nobody, so they are not a subscription anybody wants. */
+    const tenant = (p.customer || "").trim();
+    if (tenant && tenant.toLowerCase() !== company.toLowerCase() && !/undisclosed|unnamed|confidential|not disclosed/i.test(tenant)) {
+      const row = tenants.get(tenant.toLowerCase()) || { kind: "tenant", label: tenant, entry: tenant, ids: [], mw: 0 };
+      row.ids.push(p.id);
+      row.mw += p.mw_planned || 0;
+      tenants.set(tenant.toLowerCase(), row);
+    }
+  }
+  const byCount = (a, b) => b.ids.length - a.ids.length || b.mw - a.mw || a.label.localeCompare(b.label);
+  return [
+    ...[...companies.values()].sort(byCount),
+    ...[...tenants.values()].sort(byCount),
+    ...projects
+      .map((p) => ({
+        kind: "project",
+        label: `${p.company} — ${p.name}`,
+        entry: `${p.company} | ${p.name}`,
+        where: place(p),
+        ids: [p.id],
+        mw: p.mw_planned || 0,
+        project: p,
+      }))
+      .sort((a, b) => b.mw - a.mw || a.label.localeCompare(b.label)),
+  ];
+}
+
+const WATCH_KIND_LABEL = { company: "operator", tenant: "tenant", project: "project" };
+
+/* Rank on where the query hit, not merely whether it did.
+ *
+ * "meta" has to put the operator Meta above a project whose blocker sentence
+ * happens to mention it, and a company above the twelve projects it contains,
+ * because the company is the subscription that covers all twelve. Word-wise like
+ * `matchesProject`, so "meta ohio" narrows here the same way it narrows the table. */
+function rankWatchCandidates(candidates, query, coveredIds) {
+  const q = query.trim().toLowerCase();
+  const kindRank = { company: 0, tenant: 1, project: 2 };
+  const scored = [];
+  for (const c of candidates) {
+    const covered = c.ids.length > 0 && c.ids.every((id) => coveredIds.has(id));
+    if (!q) {
+      // The resting state teaches what is in there: the biggest operators, then
+      // the biggest tenants. Projects are not offered until asked for — 300 of
+      // them is the wall the pickers in Commands were built to avoid.
+      if (c.kind === "project") continue;
+      scored.push({ ...c, covered, score: kindRank[c.kind] * 1000 - c.ids.length });
+      continue;
+    }
+    const hay = c.kind === "project"
+      ? [c.project.name, c.project.company, c.project.customer, c.project.city, c.project.county, c.project.state]
+          .filter(Boolean).join(" ").toLowerCase()
+      : c.label.toLowerCase();
+    const words = q.split(/\s+/);
+    if (!words.every((w) => hay.includes(w))) continue;
+    const primary = c.label.toLowerCase();
+    const at = primary.indexOf(words[0]);
+    const exact = primary === q ? -400 : 0;
+    const prefix = at === 0 ? -200 : at > 0 ? -100 : 0;
+    scored.push({ ...c, covered, score: exact + prefix + kindRank[c.kind] * 10 - Math.min(c.ids.length, 9) });
+  }
+  scored.sort(
+    (a, b) =>
+      Number(a.covered) - Number(b.covered) ||
+      a.score - b.score ||
+      a.label.localeCompare(b.label),
+  );
+  return scored;
+}
+
+const WATCH_LIMIT = 30;
+
+function WatchPicker({ projects, watchlist, disabled, onAdd, error }) {
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState(false);
+  const [active, setActive] = useState(0);
+  const box = useRef(null);
+  const list = useRef(null);
+
+  const candidates = useMemo(() => watchCandidates(projects), [projects]);
+  const coveredIds = useMemo(
+    () => new Set((watchlist || []).flatMap((w) => w.project_ids || [])),
+    [watchlist],
+  );
+  const hits = useMemo(
+    () => rankWatchCandidates(candidates, query, coveredIds).slice(0, WATCH_LIMIT),
+    [candidates, query, coveredIds],
+  );
+
+  const firstOpen = hits.findIndex((h) => !h.covered);
+  useEffect(() => { setActive(firstOpen < 0 ? 0 : firstOpen); }, [query, firstOpen]);
+
+  // A click anywhere else closes it, or the list stays over whatever you were
+  // reaching for next. Same handler `ProjectSearch` uses.
+  useEffect(() => {
+    if (!open) return;
+    const away = (e) => { if (box.current && !box.current.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", away);
+    return () => document.removeEventListener("mousedown", away);
+  }, [open]);
+
+  // Keep the keyboard selection on screen. Without this, holding ↓ walks the
+  // highlight off the bottom of a 260px scroller and you are steering blind.
+  useEffect(() => {
+    const row = list.current?.querySelector('[data-active="true"]');
+    if (row) row.scrollIntoView({ block: "nearest" });
+  }, [active, open]);
+
+  const take = (candidate) => {
+    if (!candidate || candidate.covered) return;
+    onAdd(candidate.entry);
+    setQuery("");
+    setOpen(false);
+  };
+
+  /* Typed text that matches nothing is still a legitimate watch: setting one
+     before the project is tracked is the normal case for a campus somebody read
+     about this morning, and the server says so too. So Enter takes it verbatim
+     rather than refusing, and the empty state says that is what will happen. */
+  const submitTyped = () => {
+    const typed = query.trim();
+    if (!typed) return;
+    onAdd(typed);
+    setQuery("");
+    setOpen(false);
+  };
+
+  const onKeyDown = (e) => {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      setOpen(true);
+      if (!hits.length) return;
+      const step = e.key === "ArrowDown" ? 1 : -1;
+      // Skips rows already watched. They are shown — "you have this one" is worth
+      // knowing while you type — but walking onto one gives you a keystroke that
+      // does nothing, which reads as the picker being broken.
+      setActive((i) => {
+        for (let n = 1; n <= hits.length; n += 1) {
+          const next = (i + step * n + hits.length * n) % hits.length;
+          if (!hits[next].covered) return next;
+        }
+        return i;
+      });
+      return;
+    }
+    if (e.key === "Enter") {
+      e.preventDefault();
+      if (open && hits[active] && !hits[active].covered) return take(hits[active]);
+      // A covered highlight means the list has nothing left to offer for this
+      // text. Taking the text verbatim is still a real request — "Vantage | VA14"
+      // when VA13 is watched — so it goes to the server, which decides.
+      return submitTyped();
+    }
+    if (e.key === "Escape") { setOpen(false); e.stopPropagation(); }
+  };
+
+  return html`
+    <div ref=${box} style=${{ position: "relative", maxWidth: 420 }}>
+      <div style=${{ display: "flex", gap: 8, alignItems: "center" }}>
+        <${Input} size="sm" value=${query} disabled=${disabled}
+                  role="combobox" aria-expanded=${open} aria-autocomplete="list"
+                  placeholder="watch a company, a tenant, or one project…"
+                  onFocus=${() => setOpen(true)}
+                  onChange=${(e) => { setQuery(e.target.value); setOpen(true); }}
+                  onKeyDown=${onKeyDown} />
+        <${Button} size="sm" variant="outline" disabled=${disabled || !query.trim()}
+                   onClick=${() => (hits[active] && !hits[active].covered ? take(hits[active]) : submitTyped())}>
+          Watch<//>
+      </div>
+
+      ${error && html`
+        <div style=${{ fontSize: 12, color: "var(--danger)", paddingTop: 5 }}>${error}</div>`}
+
+      ${open && !disabled && html`
+        <div class="dc-picker" ref=${list} role="listbox">
+          ${!query.trim() && html`
+            <div class="dc-picker-empty">
+              the operators and tenants with the most projects — or type a project name
+            </div>`}
+          ${!hits.length && html`
+            <div class="dc-picker-empty">
+              nothing here matches <b>${query.trim()}</b> — Enter watches it anyway, and it
+              starts reporting as soon as a project appears
+            </div>`}
+          ${hits.map((c, i) => html`
+            <button key=${`${c.kind}:${c.entry}`} type="button" role="option"
+                    aria-selected=${i === active} data-active=${i === active}
+                    class="dc-picker-row"
+                    disabled=${c.covered}
+                    style=${{ opacity: c.covered ? 0.5 : 1,
+                              background: i === active && !c.covered ? "var(--accent-soft)" : undefined }}
+                    onMouseEnter=${() => setActive(i)}
+                    onClick=${() => take(c)}>
+              <span class="dc-picker-id">${WATCH_KIND_LABEL[c.kind]}</span>
+              <span class="dc-picker-name">
+                ${c.label}
+                ${c.kind === "project" && c.where
+                  ? html`<span class="dc-picker-where"> · ${c.where}</span>`
+                  : null}
+              </span>
+              <span class="dc-picker-where">
+                ${c.covered
+                  ? "watching"
+                  : c.kind === "project"
+                  ? (c.mw ? `${fmtMw(c.mw)} MW` : "")
+                  : `${c.ids.length} project${c.ids.length === 1 ? "" : "s"}`}
+              </span>
+            </button>`)}
+          ${hits.length > 0 && firstOpen < 0 && html`
+            <div class="dc-picker-empty">
+              you already watch everything matching <b>${query.trim()}</b>
+            </div>`}
+          ${hits.length === WATCH_LIMIT && html`
+            <div class="dc-picker-empty">first ${WATCH_LIMIT} shown — keep typing to narrow it</div>`}
+        </div>`}
+    </div>`;
+}
+
+/* One watched entity as a chip: what it is, how it went, and two things you can
+ * do to it.
+ *
+ * The counts are the point of the strip — "xAI, 3 updates, 1 bad" is the whole
+ * page in one line, and it is what makes the list below skippable on a quiet day.
+ * The arrows carry a title and an accessible label because a bare ▼ beside a
+ * number is a glyph, not a fact.
+ *
+ * Clicking the body filters the list to that entity, which is the question a chip
+ * invites and the first thing tried on it. */
+function WatchChip({ entity, digest, onRemove, onFilter, filtered, disabled }) {
   const bad = digest?.bad || 0;
   const good = digest?.good || 0;
+  const projects = entity.project_ids.length;
+  const parts = [
+    `${projects} project${projects === 1 ? "" : "s"}`,
+    digest ? `${digest.total} update${digest.total === 1 ? "" : "s"} in this window` : null,
+    bad ? `${bad} bad` : null,
+    good ? `${good} good` : null,
+    entity.note || null,
+  ].filter(Boolean);
+
   return html`
-    <span class="dc-watch" title=${entity.note || ""}>
-      <b style=${{ fontWeight: 500 }}>${entity.entry}</b>
-      <span style=${{ fontVariantNumeric: "tabular-nums" }}>
-        ${digest ? `${digest.total}` : "0"}
-        ${bad ? html`<em style=${{ color: "var(--danger)", fontStyle: "normal" }}> ${bad}▼</em>` : null}
-        ${good ? html`<em style=${{ color: "var(--success)", fontStyle: "normal" }}> ${good}▲</em>` : null}
-      </span>
-      ${!entity.project_ids.length
-        ? html`<em style=${{ color: "var(--warning)", fontStyle: "normal" }} title="nothing in the database matches this yet">no match</em>`
-        : null}
+    <span class=${`dc-watch${filtered ? " dc-watch--on" : ""}`}>
+      <button type="button" class="dc-watch-body" title=${parts.join(" · ")}
+              aria-pressed=${filtered}
+              onClick=${() => onFilter(filtered ? null : entity.entry)}>
+        <b style=${{ fontWeight: 500 }}>${entity.entry}</b>
+        <span class="dc-watch-num" aria-label=${`${projects} projects`}>${projects}p</span>
+        ${bad
+          ? html`<span class="dc-watch-num" style=${{ color: "var(--danger)" }}
+                       aria-label=${`${bad} bad`} title=${`${bad} bad`}>▼${bad}</span>`
+          : null}
+        ${good
+          ? html`<span class="dc-watch-num" style=${{ color: "var(--success)" }}
+                       aria-label=${`${good} good`} title=${`${good} good`}>▲${good}</span>`
+          : null}
+        ${!projects
+          ? html`<span class="dc-watch-num" style=${{ color: "var(--warning)" }}
+                       title="nothing in the database matches this yet">no match</span>`
+          : null}
+      </button>
       ${!disabled &&
       html`<button type="button" class="dc-watch-x" aria-label=${`Stop watching ${entity.entry}`}
+                   title=${`Stop watching ${entity.entry}`}
                    onClick=${() => onRemove(entity.entry)}>✕</button>`}
     </span>`;
 }
@@ -4311,23 +4588,30 @@ function WatchChip({ entity, digest, onRemove, disabled }) {
  * and the person whose list it is is sitting in front of the published page rather
  * than at a terminal. The server still refuses it under `--no-watch-edits`, and
  * `allow_watch` is what this reads to know. */
-function Watchlist({ payload, onChanged, onError }) {
-  const [typed, setTyped] = useState("");
+function Watchlist({ payload, projects, allowWatch, filter, onFilter, onChanged }) {
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
   const entities = payload?.watchlist || [];
   const digests = useMemo(
     () => Object.fromEntries((payload?.entities || []).map((e) => [e.entry, e])),
     [payload],
   );
-  const editable = !!payload?.allow_watch;
+  /* From `/api/dataset`, which the shell already has, rather than from the digest.
+     Reading it off the digest meant the input did not exist until that request
+     landed, and vanished again on every window change — taking whatever was
+     half-typed with it. The server still decides; this only decides whether to
+     offer the control. */
+  const editable = !!allowWatch;
 
   const send = async (body) => {
     setBusy(true);
+    setError(null);
     try {
       onChanged(await api("/api/watch", { method: "POST", body }));
-      setTyped("");
     } catch (err) {
-      onError(err.message || "that did not work");
+      // Inline, under the box that caused it. A page-level banner for a rejected
+      // entry puts the complaint nowhere near the thing being complained about.
+      setError(err.message || "that did not work");
     } finally {
       setBusy(false);
     }
@@ -4338,24 +4622,21 @@ function Watchlist({ payload, onChanged, onError }) {
       <div style=${{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
         ${entities.map((e) => html`
           <${WatchChip} key=${e.entry} entity=${e} digest=${digests[e.entry]}
+                        filtered=${filter === e.entry} onFilter=${onFilter}
                         disabled=${!editable || busy}
                         onRemove=${(entry) => send({ action: "remove", entry })} />`)}
         ${!entities.length &&
         html`<span style=${{ fontSize: 13, color: "var(--muted-foreground)" }}>
           Watching everything — ${payload?.projects_watched ?? 0} projects. Name a company to narrow it.
         </span>`}
+        ${filter &&
+        html`<button type="button" class="dc-linkish" style=${{ fontSize: 12 }}
+                     onClick=${() => onFilter(null)}>show all watches</button>`}
       </div>
 
       ${editable &&
-      html`
-        <form style=${{ display: "flex", gap: 8, alignItems: "center" }}
-              onSubmit=${(ev) => { ev.preventDefault(); if (typed.trim()) send({ action: "add", entry: typed.trim() }); }}>
-          <${Input} size="sm" value=${typed} disabled=${busy}
-                    placeholder="xAI — or xAI | Colossus for one project"
-                    onInput=${(ev) => setTyped(ev.target.value)}
-                    style=${{ maxWidth: 320 }} />
-          <${Button} size="sm" variant="outline" type="submit" disabled=${busy || !typed.trim()}>Watch<//>
-        </form>`}
+      html`<${WatchPicker} projects=${projects} watchlist=${entities} disabled=${busy}
+                           error=${error} onAdd=${(entry) => send({ action: "add", entry })} />`}
     </div>`;
 }
 
@@ -4430,27 +4711,44 @@ function UpdatesView({ data, onOpen }) {
   const [payload, setPayload] = useState(null);
   const [failed, setFailed] = useState(null);
   const [showHeld, setShowHeld] = useState(false);
+  /* Which watch the list is narrowed to, if any. Held here rather than in the
+     chip strip because the signal list below is what it filters. */
+  const [only, setOnly] = useState(null);
   /* Off by default: the page is the place that shows everything, and the whole
      argument for a notification bar is that it is *higher* than this one. The
      toggle is for the reader who wants to see what a nightly `--notify` would
      have sent. */
   const [onlyAlerts, setOnlyAlerts] = useState(false);
 
+  /* `nonce` is how an edit to the watchlist re-reads the digest. Patching the
+     new entry into the payload in place would leave every tally beside it
+     describing the previous scope — an entry with no counts reads as a quiet
+     week rather than as a number nobody has computed yet. */
+  const [nonce, setNonce] = useState(0);
+
+  const [loading, setLoading] = useState(true);
+
   useEffect(() => {
     let cancelled = false;
-    setPayload(null);
+    setLoading(true);
     setFailed(null);
     api(`/api/updates?days=${days}`)
       .then((body) => { if (!cancelled) setPayload(body); })
-      .catch((err) => { if (!cancelled) setFailed(err.message || "could not read the updates"); });
+      .catch((err) => { if (!cancelled) setFailed(err.message || "could not read the updates"); })
+      .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [days]);
+  }, [days, nonce]);
 
   const stale = hoursSince(payload?.last_crawl);
   const counts = payload?.counts;
   const shown = useMemo(
-    () => (payload ? payload.signals.filter((s) => !onlyAlerts || s.notify) : []),
-    [payload, onlyAlerts],
+    () =>
+      payload
+        ? payload.signals.filter(
+            (s) => (!onlyAlerts || s.notify) && (!only || s.entry === only),
+          )
+        : [],
+    [payload, onlyAlerts, only],
   );
 
   return html`
@@ -4467,8 +4765,14 @@ function UpdatesView({ data, onOpen }) {
       <//>
 
       <div class="dc-band">
-        <${Watchlist} payload=${payload} onError=${setFailed}
-                      onChanged=${(body) => setPayload((p) => (p ? { ...p, watchlist: body.watchlist } : p))} />
+        <${Watchlist} payload=${payload} projects=${data.projects}
+                      allowWatch=${data.allow_watch}
+                      filter=${only} onFilter=${setOnly}
+                      onChanged=${(body) => {
+                        setPayload((p) => (p ? { ...p, watchlist: body.watchlist } : p));
+                        setOnly(null);
+                        setNonce((n) => n + 1);
+                      }} />
       </div>
 
       <div class="dc-band" style=${{ display: "flex", gap: 14, alignItems: "center",
@@ -4478,13 +4782,15 @@ function UpdatesView({ data, onOpen }) {
             <button key=${n} type="button" class="dc-seg-btn" aria-pressed=${days === n}
                     onClick=${() => setDays(n)}>${label}</button>`)}
         </div>
-        ${counts &&
+        ${counts && loading &&
+        html`<span style=${{ fontSize: 13, color: "var(--muted-foreground)" }}>counting…</span>`}
+        ${counts && !loading &&
         html`<span style=${{ fontSize: 13 }}>
           <b>${counts.total}</b> update${counts.total === 1 ? "" : "s"} —
           <span style=${{ color: "var(--success)" }}>${counts.good} good</span>,
           <span style=${{ color: "var(--danger)" }}>${counts.bad} bad</span>
         </span>`}
-        ${!!counts?.total &&
+        ${!!counts?.total && !loading &&
         html`<button type="button" class="dc-linkish" aria-pressed=${onlyAlerts}
                      onClick=${() => setOnlyAlerts((v) => !v)}>
           ${onlyAlerts ? "show all" : `${counts.notify} worth telling you about`}
@@ -4507,14 +4813,17 @@ function UpdatesView({ data, onOpen }) {
           <div class="mrd-alert-desc">${failed}</div>
         </div><//>`}
 
-      ${!payload && !failed &&
+      ${loading && !payload && !failed &&
       html`<div style=${{ display: "grid", gap: 12 }}>
         ${[0, 1, 2].map((i) => html`<${Skeleton} key=${i} style=${{ height: 96 }} />`)}
       </div>`}
 
       ${payload && !!payload.signals.length && !shown.length &&
-      html`<${EmptyState} variant="dashed" title="Nothing crossed the notification bar"
-                          description="Everything in this window is worth knowing and none of it is worth interrupting you for. Show all to read it." />`}
+      html`<${EmptyState} variant="dashed"
+                          title=${only ? `Nothing for ${only} in this window` : "Nothing crossed the notification bar"}
+                          description=${only
+                            ? "Other watches did move. Click the chip again to see everything."
+                            : "Everything in this window is worth knowing and none of it is worth interrupting you for. Show all to read it."} />`}
 
       ${payload && !payload.signals.length &&
       html`<${EmptyState} variant="dashed" title="Nothing new in this window"
@@ -4522,8 +4831,12 @@ function UpdatesView({ data, onOpen }) {
                             ? "The crawl ran and nothing on your list moved. Widen the window, or add a company."
                             : "No citation has ever been fetched, so there is nothing to compare against."} />`}
 
+      ${/* Dimmed rather than replaced while the next window loads: the previous
+           answer is still true, and a page that empties itself on every click
+           reads as slower than it is. */ ""}
       ${payload &&
-      html`<div style=${{ display: "grid", gap: 12 }}>
+      html`<div style=${{ display: "grid", gap: 12, opacity: loading ? 0.55 : 1,
+                          transition: "opacity var(--duration-fast, .12s)" }}>
         ${shown.map((s, i) => html`
           <${SignalCard} key=${`${s.project_id}-${s.kind}-${s.label}-${i}`} signal=${s} onOpen=${onOpen} />`)}
       </div>`}

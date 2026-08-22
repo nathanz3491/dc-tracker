@@ -653,15 +653,32 @@ tr.dc-enter { animation-name: fade-in; }
    "click to remove" about a body that removes nothing. Here only the x does. */
 .dc-watch {
   display: inline-flex;
-  align-items: baseline;
-  gap: 7px;
-  padding: 4px 10px;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px 3px 10px;
   border-radius: 999px;
   border: 1px solid var(--border);
   background: var(--muted);
   font-family: var(--font-mono);
   font-size: 11.5px;
 }
+/* Pressed means "the list below is showing only this one". A border rather than a
+   fill: the tally inside is already carrying two colours, and a third would make
+   the chip the loudest thing on a page about something else. */
+.dc-watch--on { border-color: var(--primary); box-shadow: inset 0 0 0 1px var(--primary); }
+.dc-watch-body {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 7px;
+  border: 0;
+  background: none;
+  padding: 1px 0;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.dc-watch-num { font-variant-numeric: tabular-nums; color: var(--muted-foreground); }
+.dc-watch-body:hover .dc-watch-num { color: var(--foreground); }
 .dc-watch-x {
   border: 0;
   background: none;
