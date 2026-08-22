@@ -360,6 +360,13 @@ def serve(
             help="Allow the page to execute commands. --no-run makes it read-only.",
         ),
     ] = True,
+    ai: Annotated[
+        bool | None,
+        typer.Option(
+            "--ai/--no-ai",
+            help="Allow the LLM panels (briefing, infer, capex overview). Defaults to --run.",
+        ),
+    ] = None,
     allow_remote: Annotated[
         bool,
         typer.Option("--allow-remote", help="Permit a non-loopback --host. Read the warning."),
@@ -395,6 +402,7 @@ def serve(
         host=host,
         open_browser=open_browser,
         run=run,
+        ai=ai,
         allow_remote=allow_remote,
         publish=(("named" if settings.tunnel_name else "quick") if tunnel else None),
         tunnel_name=settings.tunnel_name if tunnel else None,
@@ -486,6 +494,7 @@ def _run_console(
     host: str,
     open_browser: bool,
     run: bool,
+    ai: bool | None = None,
     allow_remote: bool = False,
     publish: str | None = None,
     tunnel_name: str | None = None,
@@ -594,6 +603,7 @@ def _run_console(
             port=port,
             open_browser=open_browser and not publish,
             allow_write=run,
+            allow_ai=ai,
             password=password,
         )
     finally:
@@ -634,6 +644,13 @@ def cloudflare(
             help="Allow the page to execute commands. --no-run publishes it read-only.",
         ),
     ] = True,
+    ai: Annotated[
+        bool | None,
+        typer.Option(
+            "--ai/--no-ai",
+            help="Allow the LLM panels (briefing, infer, capex overview). Defaults to --run.",
+        ),
+    ] = None,
     proxy: Annotated[
         str | None,
         typer.Option(
@@ -715,6 +732,7 @@ def cloudflare(
         host="127.0.0.1",
         open_browser=False,
         run=run,
+        ai=ai,
         publish="named" if name else "quick",
         tunnel_name=name,
         hostname=hostname,

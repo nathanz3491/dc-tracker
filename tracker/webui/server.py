@@ -86,10 +86,24 @@ class Console:
     """Shared state one server instance hands to every request."""
 
     def __init__(
-        self, db_path: Path, *, allow_write: bool = True, password: str | None = None
+        self,
+        db_path: Path,
+        *,
+        allow_write: bool = True,
+        allow_ai: bool | None = None,
+        password: str | None = None,
     ) -> None:
         self.db_path = db_path
         self.allow_write = allow_write
+        #: Whether the LLM panels — the briefing, `infer`, the capex overview —
+        #: may run. Separate from `allow_write` because they are a different risk:
+        #: they *read* the row and spend tokens, and `tracker infer` has never
+        #: written its answer anywhere. Conflating the two made a published
+        #: read-only console refuse the one thing it could safely offer.
+        #:
+        #: Follows `allow_write` unless a deployment says otherwise, so the local
+        #: default is unchanged and only a published console has to think about it.
+        self.allow_ai = allow_write if allow_ai is None else allow_ai
         self.gate = Gate(password=password)
         self.runner = Runner(db_path)
         self._schema_version: int | None = None
@@ -550,6 +564,7 @@ class Handler(BaseHTTPRequestHandler):
                 schema_version=self.console.schema_version,
             )
         payload["allow_write"] = self.console.allow_write
+        payload["allow_ai"] = self.console.allow_ai
         payload["password_protected"] = self.console.gate.required
         self._json(payload)
 
@@ -654,6 +669,7 @@ class Handler(BaseHTTPRequestHandler):
                     "/dev": "run things — pipeline, commands, help",
                 },
                 "allow_write": self.console.allow_write,
+                "allow_ai": self.console.allow_ai,
                 "routes": self.API,
             }
         )
@@ -864,8 +880,8 @@ class Handler(BaseHTTPRequestHandler):
             if project is None:
                 return self._error(404, f"no project #{project_id}")
 
-            if not self.console.allow_write:
-                return self._error(403, "this console was started read-only (--no-run)")
+            if not self.console.allow_ai:
+                return self._error(403, "this console was started with --no-ai")
             if str(body.get("confirm") or "").strip() != "infer":
                 return self._error(
                     400, 'Running an inference spends LLM tokens. Re-send with confirm="infer".'
@@ -935,8 +951,8 @@ class Handler(BaseHTTPRequestHandler):
             if ready is not None:
                 return self._json({**ready.as_json(), "cached": True})
 
-            if not self.console.allow_write:
-                return self._error(403, "this console was started read-only (--no-run)")
+            if not self.console.allow_ai:
+                return self._error(403, "this console was started with --no-ai")
             if str(body.get("confirm") or "").strip() != "overview":
                 return self._error(
                     400, 'Writing a briefing spends LLM tokens. Re-send with confirm="overview".'
@@ -991,8 +1007,8 @@ class Handler(BaseHTTPRequestHandler):
                     "text/event-stream; charset=utf-8",
                 )
 
-            if not self.console.allow_write:
-                return self._error(403, "this console was started read-only (--no-run)")
+            if not self.console.allow_ai:
+                return self._error(403, "this console was started with --no-ai")
             if str(body.get("confirm") or "").strip() != "overview":
                 return self._error(
                     400, 'Writing a briefing spends LLM tokens. Re-send with confirm="overview".'
@@ -1067,8 +1083,8 @@ class Handler(BaseHTTPRequestHandler):
                     "text/event-stream; charset=utf-8",
                 )
 
-            if not self.console.allow_write:
-                return self._error(403, "this console was started read-only (--no-run)")
+            if not self.console.allow_ai:
+                return self._error(403, "this console was started with --no-ai")
             if str(body.get("confirm") or "").strip() != "overview":
                 return self._error(
                     400, 'Writing a briefing spends LLM tokens. Re-send with confirm="overview".'
@@ -1173,10 +1189,11 @@ def serve(
     port: int = DEFAULT_PORT,
     open_browser: bool = True,
     allow_write: bool = True,
+    allow_ai: bool | None = None,
     password: str | None = None,
 ) -> None:
     """Run the console until interrupted."""
-    console = Console(db_path, allow_write=allow_write, password=password)
+    console = Console(db_path, allow_write=allow_write, allow_ai=allow_ai, password=password)
     handler = type("BoundHandler", (Handler,), {"console": console})
     httpd = ThreadingHTTPServer((host, port), handler)
     httpd.daemon_threads = True

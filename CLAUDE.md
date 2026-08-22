@@ -86,8 +86,10 @@ it replaces anything.
 ## 4. Secrets stay where they are.
 
 `.env` is gitignored on both machines and holds different things by design. The
-mini's carries the API keys because it ingests; nothing about the console needs
-them, and the console is served `--no-run` so the public page cannot spend them.
+mini's carries the API keys because it ingests. The console is served `--no-run`,
+so the public page cannot spawn a command — and `--ai`, so the model panels that
+only read a row still work. Those are deliberately two flags: spending a token and
+mutating the database are different risks, and `tracker infer` writes nothing.
 
 Do not copy `.env` between machines wholesale. If one value is needed on the
 other side, move that one line, on the machine itself.

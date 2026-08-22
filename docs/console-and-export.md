@@ -257,6 +257,14 @@ open:
 
 `tracker serve --no-run` drops the runner entirely and serves the views read-only.
 
+`--ai/--no-ai` is a second, narrower switch, and it defaults to whatever `--run`
+is. It governs only the panels that call a model — the project briefing, `infer`,
+the capex overview — because those are a different risk from the command box: they
+*read* a row and spend tokens, and `tracker infer` has never written its answer
+anywhere. Conflating the two meant a published read-only console refused the one
+thing it could safely offer, so `serve --no-run --ai` is the useful combination
+for a public console: it answers questions and still cannot spawn a command.
+
 **No network requests at all** — React, d3, three.js, Lucide, the Census boundary
 file and all three webfonts are vendored under `tracker/webui/static/vendor/`
 (3 MB), and the server sends a `default-src 'self'` CSP so a CDN URL creeping back

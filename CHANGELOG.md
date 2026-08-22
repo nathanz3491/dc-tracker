@@ -12,6 +12,29 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **A published console refused the one thing it could safely do**
+  (`tracker/webui/server.py`, `cli.py`, `static/app.js`).
+
+  The AI overview, the inferred analysis and the capex overview all read
+  "Unavailable on a read-only console" on the public console, because they were
+  gated on `allow_write` — the same flag that stops the page spawning a CLI
+  command. Those are different risks. Those panels *read* a row and spend tokens;
+  `_infer`'s own docstring says `tracker infer` has never written its answer
+  anywhere, and the briefing is cached by content fingerprint.
+
+  So `--ai/--no-ai` is now its own switch, defaulting to whatever `--run` is —
+  nothing changes for anyone who does not ask. A public console can be
+  `--no-run --ai`: it answers a question with a model and still cannot mutate the
+  database or run `ingest` from a browser.
+
+  Half the old justification had also gone stale. The serve script's comment read
+  "production has no reason to write: the development machine is the only writer",
+  which inverted when `sync_db.py` replaced `ship_db.py` — the production host is
+  the writer now. What stands is the other half: a public URL in front of a
+  process that spawns commands is what `tunnel.py` warns about, and that is what
+  `--no-run` keeps shut.
+
+
 - **A corrected figure could not come down: `Policy.MAX` and `Policy.MIN` ignored the
   ratchet** (`tracker/upsert.py`, `logic.py`, `blocks.py`).
 

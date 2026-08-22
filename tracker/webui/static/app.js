@@ -1070,7 +1070,8 @@ function Drawer({ data, project, onClose }) {
           ${tab === "stats" && html`<${StatsTab} data=${data} p=${p} populated=${populated}
                                                  open=${open} onQuote=${showQuote} onTab=${setTab}
                                                  claims=${claims[p.id]}
-                                                 allowWrite=${data.allow_write} />`}
+                                                 allowWrite=${data.allow_write}
+                                                 allowAi=${data.allow_ai} />`}
           ${tab === "blocks" && html`<${BlocksTab} p=${p} />`}
           ${tab === "risks" && html`<${RisksTab} data=${data} p=${p} />`}
           ${tab === "sources" && html`<${SourcesTab} data=${data} p=${p} />`}
@@ -1259,7 +1260,7 @@ function wordBoundary(text, index) {
  * the legend already teaches, and the caveat as a footnote under the text where a
  * reader lands after the claim rather than before it. Still impossible to mistake
  * for a cited value; no longer shouting. */
-function InsightPanel({ project, allowWrite }) {
+function InsightPanel({ project, allowAi }) {
   const [state, setState] = useState({ status: "idle", text: "" });
   const [expanded, setExpanded] = useState(false);
   const abort = useRef(null);
@@ -1289,10 +1290,10 @@ function InsightPanel({ project, allowWrite }) {
   // abandoned — without that, opening a second row shows the first row's text
   // arriving under the second row's name.
   useEffect(() => {
-    if (!allowWrite) { setState({ status: "unavailable", text: "" }); return; }
+    if (!allowAi) { setState({ status: "unavailable", text: "" }); return; }
     ask();
     return () => abort.current?.abort();
-  }, [project.id, allowWrite, ask]);
+  }, [project.id, allowAi, ask]);
 
   const streaming = state.status === "writing";
   const shown = useTypewriter(state.text, streaming);
@@ -1323,7 +1324,7 @@ function InsightPanel({ project, allowWrite }) {
       </div>
 
       ${state.status === "unavailable" && html`
-        <p class="dc-ai-quiet">Unavailable on a read-only console.</p>`}
+        <p class="dc-ai-quiet">Unavailable: this console was started with --no-ai.</p>`}
 
       ${state.status === "failed" && html`
         <p class="dc-ai-quiet">
@@ -1369,7 +1370,7 @@ function InsightPanel({ project, allowWrite }) {
  * Everything rendered here is the model's judgement and none of it is evidence.
  * The panel says so once, plainly, at the bottom, and uses the same tint the
  * overview uses so a reader already knows what that colour means. */
-function InferPanel({ project, allowWrite }) {
+function InferPanel({ project, allowAi }) {
   const [state, setState] = useState({ status: "idle" });
 
   // A new project means the previous project's analysis must go. Without this,
@@ -1400,7 +1401,7 @@ function InferPanel({ project, allowWrite }) {
         <span class="dc-ai-spark" aria-hidden="true">◈</span>
         <span class="dc-ai-label">Inferred analysis</span>
         <span class="dc-infer-sub">what could go wrong, and what would show it is moving</span>
-        ${allowWrite && state.status !== "running" && html`
+        ${allowAi && state.status !== "running" && html`
           <button type="button" class="dc-ai-redo" onClick=${run}>
             ${state.status === "done" ? "Run again" : "Run analysis"}
           </button>`}
@@ -1408,10 +1409,10 @@ function InferPanel({ project, allowWrite }) {
           <span class="dc-ai-dots" aria-live="polite" aria-label="thinking"><i /><i /><i /></span>`}
       </div>
 
-      ${!allowWrite && html`
-        <p class="dc-ai-quiet">Unavailable on a read-only console.</p>`}
+      ${!allowAi && html`
+        <p class="dc-ai-quiet">Unavailable: this console was started with --no-ai.</p>`}
 
-      ${allowWrite && state.status === "idle" && html`
+      ${allowAi && state.status === "idle" && html`
         <p class="dc-ai-quiet">
           Not run yet — it costs one model call, and nothing here is cached or stored.
         </p>`}
@@ -1781,7 +1782,7 @@ function BlockerWhy({ why, onTab }) {
     </div>`;
 }
 
-function StatsTab({ data, p, populated, open, onQuote, allowWrite, onTab, claims }) {
+function StatsTab({ data, p, populated, open, onQuote, allowWrite, allowAi, onTab, claims }) {
   const worst = open.slice().sort((a, b) => SEV_ORDER.indexOf(b.severity) - SEV_ORDER.indexOf(a.severity))[0];
   const stats = [
     { label: "IT capacity, planned", value: p.mw_planned == null ? "—" : p.mw_planned.toLocaleString() + " MW",
@@ -1809,13 +1810,13 @@ function StatsTab({ data, p, populated, open, onQuote, allowWrite, onTab, claims
             briefly pinned above the tab strip, which made it the one block in the
             drawer you could not scroll past — and put a model's reading in front
             of the figures it is a reading *of*. A card, like the rest. */ ""}
-      <${InsightPanel} project=${p} allowWrite=${allowWrite} />
+      <${InsightPanel} project=${p} allowAi=${allowAi} />
 
       ${/* Under the briefing, because it answers the next question: the overview
             says what this row is, and this says what could stop it. Both are a
             model's words and both carry the same tint; only this one costs a call
             per click, so only this one has a button. */ ""}
-      <${InferPanel} project=${p} allowWrite=${allowWrite} />
+      <${InferPanel} project=${p} allowAi=${allowAi} />
 
       <div style=${{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(330px, 1fr))",
                      gap: 18, alignItems: "start" }}>
@@ -2916,11 +2917,11 @@ function DuplicateGroup({ ids, byId, allowWrite, busy, onRan }) {
  * endpoint, cut at the sentinel server-side, cached by content so re-hovering a
  * buyer whose data has not moved is free. Same honesty framing — a model's
  * reading, never stored, never evidence. */
-function CapexInsight({ posKey, allowWrite }) {
+function CapexInsight({ posKey, allowAi }) {
   const [state, setState] = useState({ status: "idle", text: "" });
 
   useEffect(() => {
-    if (!allowWrite) { setState({ status: "unavailable", text: "" }); return; }
+    if (!allowAi) { setState({ status: "unavailable", text: "" }); return; }
     const controller = new AbortController();
     setState({ status: "writing", text: "" });
     apiStream("/api/capex/overview/stream", { key: posKey, confirm: "overview" }, (event) => {
@@ -2936,7 +2937,7 @@ function CapexInsight({ posKey, allowWrite }) {
       if (e.name !== "AbortError") setState({ status: "failed", text: "", error: e.message });
     });
     return () => controller.abort();
-  }, [posKey, allowWrite]);
+  }, [posKey, allowAi]);
 
   const streaming = state.status === "writing";
   const shown = useTypewriter(state.text, streaming);
@@ -2953,7 +2954,7 @@ function CapexInsight({ posKey, allowWrite }) {
         ${streaming && html`<span class="dc-ai-dots" aria-live="polite" aria-label="writing"><i /><i /><i /></span>`}
       </div>
       ${state.status === "unavailable" && html`
-        <p class="dc-ai-quiet">Unavailable on a read-only console.</p>`}
+        <p class="dc-ai-quiet">Unavailable: this console was started with --no-ai.</p>`}
       ${state.status === "failed" && html`<p class="dc-ai-quiet">${state.error}</p>`}
       ${streaming && !body && html`
         <div class="dc-ai-wait" aria-hidden="true">
@@ -2971,7 +2972,7 @@ function CapexInsight({ posKey, allowWrite }) {
 /* The hover card: instant deterministic facts on top, the model's reading
  * streaming underneath. Fixed-position like QuotePopover, but interactive —
  * the reader can mouse into it, so it holds itself open. */
-function CapexHoverCard({ hover, position, allowWrite, onHold, onRelease }) {
+function CapexHoverCard({ hover, position, allowAi, onHold, onRelease }) {
   if (!hover || !position) return null;
   const facts = [
     [`${position.projects}`, position.projects === 1 ? "site" : "sites"],
@@ -2996,7 +2997,7 @@ function CapexHoverCard({ hover, position, allowWrite, onHold, onRelease }) {
             <span style=${{ fontSize: 10.5, color: "var(--muted-foreground)" }}>${label}</span>
           </div>`)}
       </div>
-      <${CapexInsight} posKey=${position.key} allowWrite=${allowWrite} />
+      <${CapexInsight} posKey=${position.key} allowAi=${allowAi} />
       <div style=${{ marginTop: 8, fontSize: 10.5, color: "var(--muted-foreground)" }}>
         click any number in the row to see the sites it is made of
       </div>
@@ -3154,7 +3155,7 @@ function CapexBreakdown({ position, col, byId, bucket, grain, onOpenProject }) {
     </div>`;
 }
 
-function CapexView({ data, allowWrite, busy, onRan, onOpen }) {
+function CapexView({ data, allowWrite, allowAi, busy, onRan, onOpen }) {
   const capex = data.capex;
   const cover = capex.coverage;
   const dupes = capex.duplicates;
@@ -3472,7 +3473,7 @@ function CapexView({ data, allowWrite, busy, onRan, onOpen }) {
         </div>
       <//>
 
-      <${CapexHoverCard} hover=${hover} position=${hovered} allowWrite=${allowWrite}
+      <${CapexHoverCard} hover=${hover} position=${hovered} allowAi=${allowAi}
         onHold=${holdHover} onRelease=${endHover} />
 
       <${Card}>
@@ -4895,7 +4896,7 @@ function App() {
         ${view === "sources" && html`<${SourcesView} data=${data} />`}
         ${view === "map" && html`<${MapView} data=${data} openId=${openId} onOpen=${setOpenId} />`}
         ${view === "capex" && html`
-          <${CapexView} data=${data} allowWrite=${data.allow_write} busy=${!!running}
+          <${CapexView} data=${data} allowWrite=${data.allow_write} allowAi=${data.allow_ai} busy=${!!running}
             onOpen=${setOpenId}
             onRan=${(id) => { setWatchRun(id); goto("runs"); }} />`}
         ${view === "pipeline" && html`

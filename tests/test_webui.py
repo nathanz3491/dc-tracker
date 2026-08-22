@@ -389,6 +389,55 @@ def test_the_dev_shell_grants_no_capability_of_its_own(seeded_db):
         httpd.server_close()
 
 
+def test_a_published_console_can_read_with_a_model_without_being_writable(seeded_db):
+    """The two risks are different, so they are two flags.
+
+    The LLM panels — the briefing, `infer`, the capex overview — *read* a row and
+    spend tokens. `tracker infer` has never written its answer anywhere. They were
+    gated on `allow_write` anyway, so the published console refused the one thing
+    it could safely offer while `--no-run` was doing double duty.
+
+    `allow_ai` follows `allow_write` unless a deployment says otherwise, which is
+    what lets a public read-only console answer a question without also handing a
+    browser the command box.
+    """
+    from http.server import ThreadingHTTPServer
+
+    console = Console(seeded_db, allow_write=False, allow_ai=True)
+    assert console.allow_ai and not console.allow_write
+    handler = type("Bound", (Handler,), {"console": console})
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    httpd.daemon_threads = True
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        address = httpd.server_address
+        # Spawning a command is still refused — that is the half that stays shut.
+        status, _ = request(address, "/api/run", method="POST", body={"cmd": "stats", "flags": {}})
+        assert status == 403
+        # The model panel is no longer refused *for being read-only*. It may still
+        # fail for want of a key, which is a different answer and not a 403.
+        status, _ = request(
+            address, "/api/infer", method="POST", body={"project_id": 1, "confirm": "infer"}
+        )
+        assert status != 403, "an AI-enabled console must not refuse this as read-only"
+        # And the page is told, so the panel renders as a button rather than a shrug.
+        dataset = request(address, "/api/dataset")[1]
+        assert dataset["allow_ai"] is True
+        assert dataset["allow_write"] is False
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_the_ai_flag_follows_run_unless_it_is_given(seeded_db):
+    """Nothing changes for anyone who does not ask: the local default is unchanged."""
+    assert Console(seeded_db, allow_write=True).allow_ai is True
+    assert Console(seeded_db, allow_write=False).allow_ai is False
+    assert Console(seeded_db, allow_write=False, allow_ai=True).allow_ai is True
+    assert Console(seeded_db, allow_write=True, allow_ai=False).allow_ai is False
+
+
 def test_the_api_index_lists_every_route_the_handler_serves(server):
     """The index is hand-written, so a new route must be added to it deliberately.
 
