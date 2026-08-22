@@ -135,3 +135,76 @@ def test_a_utility_is_a_source_and_never_a_buyer():
     # And the classes that *are* end users still are.
     assert company_key("Meta") in keys
     assert company_key("CoreWeave") in keys
+
+
+# --- Per-company forms: the foreign private issuers -------------------------
+
+
+class _RecordingClient:
+    """Captures the query parameters `search` would have sent."""
+
+    def __init__(self) -> None:
+        self.params: dict = {}
+
+    def get(self, _url: str, **params):
+        self.params = params
+
+        class _Response:
+            status_code = 200
+
+            @staticmethod
+            def json():
+                return {"hits": {"hits": []}}
+
+        return _Response()
+
+
+def _company(**kwargs):
+    defaults = {"name": "Somebody", "cik": "0001513845", "kind": "neocloud"}
+    return edgar.Company(**{**defaults, **kwargs})
+
+
+def test_a_companys_own_forms_replace_the_shared_list():
+    """A foreign private issuer files 20-F and 6-K and never a 10-K.
+
+    Asking it for the shared list is not a reduced yield, it is zero: Nebius was on
+    this list from the start and contributed no filings at all, which is half the
+    reason the database held no Nebius projects.
+    """
+    client = _RecordingClient()
+    edgar.search(client, _company(forms=("20-F", "6-K")), '"data center"', ["10-K", "10-Q"])
+    assert client.params["forms"] == "20-F,6-K"
+
+
+def test_a_company_without_its_own_forms_uses_the_shared_list():
+    client = _RecordingClient()
+    edgar.search(client, _company(), '"data center"', ["10-K", "10-Q", "8-K"])
+    assert client.params["forms"] == "10-K,10-Q,8-K"
+
+
+def test_per_company_forms_are_read_from_the_file(tmp_path):
+    path = tmp_path / "companies.toml"
+    path.write_text(
+        '[[company]]\nname = "Nebius"\ncik = "0001513845"\nkind = "neocloud"\n'
+        'forms = ["20-F", "6-K"]\n'
+        '[[company]]\nname = "Meta"\ncik = "0001326801"\nkind = "hyperscaler"\n',
+        encoding="utf-8",
+    )
+    companies = {c.name: c for c in edgar.load_companies(path)[0]}
+    assert companies["Nebius"].forms == ("20-F", "6-K")
+    assert companies["Meta"].forms == (), "empty means 'use the shared list'"
+
+
+def test_forms_must_be_a_list(tmp_path):
+    path = tmp_path / "companies.toml"
+    path.write_text(
+        '[[company]]\nname = "Nebius"\ncik = "0001513845"\nkind = "neocloud"\nforms = "20-F"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(edgar.EdgarError, match="list"):
+        edgar.load_companies(path)
+
+
+def test_the_shipped_list_asks_nebius_for_the_forms_it_actually_files():
+    companies = {c.name: c for c in edgar.load_companies()[0]}
+    assert companies["Nebius"].forms == ("20-F", "6-K")

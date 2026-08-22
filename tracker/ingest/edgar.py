@@ -83,6 +83,18 @@ class Company:
     #: neither writes "anchor tenant". Asking every filer the hyperscaler
     #: question is how a new source class looks like it added nothing.
     phrases: tuple[str, ...] = ()
+    #: Forms to search for THIS filer, overriding the shared `[search] forms`.
+    #: Empty means "use the shared list".
+    #:
+    #: Per company rather than per kind, because what varies is where the filer is
+    #: incorporated, not what it does. A foreign private issuer files 20-F and 6-K
+    #: and never a 10-K, so the shared list — 10-K, 10-Q, 8-K, which was 97% of
+    #: hits in testing — returns literally nothing for it. Measured: Nebius, a
+    #: rostered neocloud with a Kansas City campus, was on this list from the start
+    #: and contributed zero filings, because every query asked for forms it does
+    #: not file. Widening the shared list instead would double the cost of every
+    #: domestic company to fix one foreign one.
+    forms: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -147,12 +159,16 @@ def load_companies(path: Path | None = None) -> tuple[list[Company], list[str], 
                 "zero-padded. An unpadded CIK silently returns no hits."
             )
         kind = str(entry.get("kind") or "")
+        own_forms = entry.get("forms") or []
+        if not isinstance(own_forms, list):
+            raise EdgarError(f"{path.name}: forms for {entry.get('name')!r} must be a list")
         companies.append(
             Company(
                 name=str(entry.get("name") or cik),
                 cik=cik,
                 kind=kind,
                 phrases=by_kind.get(kind, ()),
+                forms=tuple(str(f).strip() for f in own_forms if str(f).strip()),
             )
         )
     if not companies:
@@ -226,7 +242,11 @@ def search(
     under construction that is the wrong end of the archive, so the window is
     applied server-side and the results are re-sorted here by filing date.
     """
-    params: dict[str, Any] = {"q": phrase, "ciks": company.cik, "forms": ",".join(forms)}
+    # The company's own list wins where it has one: see `Company.forms`. Passed in
+    # rather than read from the config here so the caller stays the only thing that
+    # reads the file.
+    wanted = list(company.forms) or forms
+    params: dict[str, Any] = {"q": phrase, "ciks": company.cik, "forms": ",".join(wanted)}
     if since is not None:
         params["dateRange"] = "custom"
         params["startdt"] = since.isoformat()

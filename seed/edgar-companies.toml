@@ -84,6 +84,12 @@ kind = "neocloud"
 name = "Nebius"
 cik = "0001513845"
 kind = "neocloud"
+# A Dutch foreign private issuer: it files 20-F and 6-K, never a 10-K or 10-Q.
+# Checked against the live submissions API for this CIK — 243 6-K, 16 20-F, and no
+# 10-K, 10-Q or 8-K at all. It was on this list from the start and produced no
+# filings, because every query asked for forms it does not file, which is half the
+# reason the database held zero Nebius projects. See `Company.forms`.
+forms = ["20-F", "6-K"]
 
 [[company]]
 name = "IREN"
@@ -329,3 +335,9 @@ contractor = [
 # tenant names in the ASC 842 lease footnotes. 8-K catches the announcement of a
 # single large lease, which is exactly the customer-attribution fact we want.
 forms = ["10-K", "10-Q", "8-K"]
+
+# A [[company]] entry may carry its own `forms = [...]`, which replaces the list
+# above for that filer alone. That is for foreign private issuers — they file 20-F
+# and 6-K and never a 10-K, so the shared list returns nothing for them — and not
+# for tuning recall on a domestic filer, where it would just cost a class of
+# document the others are read for.
