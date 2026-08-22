@@ -557,3 +557,41 @@ def test_every_kind_a_digest_produces_is_declared(session):
     )
     produced = {s.kind for s in feed.digest(session, since=SINCE).signals}
     assert produced == set(feed.KINDS)
+
+
+def test_a_chips_tally_matches_the_cards_that_chip_filters_to(session):
+    """The number above the list and the list have to agree.
+
+    They did not. Tallies were counted from the unfolded signals while the card
+    list was folded, so one moment reported by three publishers was three updates
+    in the chip and one card underneath it — measured live at 134 against 41.
+    """
+    project = _project(session)
+    # One moment, three publishers: same project, same kind, same label.
+    for i in range(3):
+        citation = _source(session, project, url=f"https://trade.example/{i}")
+        _event(session, project, source_id=citation.id, event_date=dt.date(2026, 8, 18 + i))
+    watchlist.add(session, "xAI")
+
+    got = feed.digest(session, since=SINCE)
+
+    tally = {e.entry: e for e in got.entities}["xAI"]
+    cards = [s for s in got.signals if s.entry == "xAI"]
+    assert len(cards) == 1, "three articles, one moment"
+    assert cards[0].restatements == 2
+    assert tally.total == len(cards), "the chip must count what clicking it shows"
+    assert tally.good == 1
+
+
+def test_the_page_limit_does_not_shrink_the_tally(session):
+    """The chip describes the window; the limit describes the page."""
+    project = _project(session)
+    for i, kind in enumerate(("energized", "land_acquired", "permit_approved")):
+        citation = _source(session, project, url=f"https://trade.example/{i}")
+        _event(session, project, event_type=kind, source_id=citation.id)
+    watchlist.add(session, "xAI")
+
+    got = feed.digest(session, since=SINCE, limit=1)
+
+    assert len(got.signals) == 1
+    assert {e.entry: e for e in got.entities}["xAI"].total == 3

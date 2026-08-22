@@ -692,32 +692,41 @@ def digest(
         watched_ids = set(by_id)
     else:
         for entity in entities:
-            found: list[Signal] = []
             for project_id, via in entity.matches.items():
                 project = by_id.get(project_id)
                 if project is None:  # pragma: no cover - resolved from the same query
                     continue
-                found.extend(
+                collected.extend(
                     signals_for(project, since=since, sources=sources, entry=entity.entry, via=via)
                 )
             watched_ids |= set(entity.matches)
-            collected.extend(found)
-            shown = [s for s in found if s.confirmed]
-            digests.append(
-                EntityDigest(
-                    entry=entity.entry,
-                    projects=len(entity.matches),
-                    good=sum(1 for s in shown if s.sign == "good"),
-                    bad=sum(1 for s in shown if s.sign == "bad"),
-                    neutral=sum(1 for s in shown if s.sign == "neutral"),
-                    held=len(found) - len(shown),
-                )
-            )
 
     # Folded after the confirmed/unconfirmed split, so a quote-backed signal is
     # never hidden behind an unconfirmed restatement of itself.
     shown = rank(fold([s for s in collected if s.confirmed]))
     held = rank(fold([s for s in collected if not s.confirmed]))
+
+    # Counted from the FOLDED lists, and that is the whole point of doing this
+    # after the fold rather than before it. Tallying `found` counted one moment
+    # once per article that reported it, so a chip read "134 updates" over a list
+    # that had 41 cards for the same watch — the same double-count the card list
+    # was fixed for, left behind in the number above it.
+    #
+    # Counted before `limit` is applied, because the chip describes the window and
+    # the limit describes the page.
+    for entity in entities:
+        mine = [s for s in shown if s.entry == entity.entry]
+        digests.append(
+            EntityDigest(
+                entry=entity.entry,
+                projects=len(entity.matches),
+                good=sum(1 for s in mine if s.sign == "good"),
+                bad=sum(1 for s in mine if s.sign == "bad"),
+                neutral=sum(1 for s in mine if s.sign == "neutral"),
+                held=sum(1 for s in held if s.entry == entity.entry),
+            )
+        )
+
     if limit is not None:
         shown, held = shown[:limit], held[:limit]
 

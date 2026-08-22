@@ -254,6 +254,14 @@ initial build of the v1 PRD.
   against Project Nova, parked at 0.95 because the coordinates are 9.9 km apart in
   different municipalities and one of the two is a cancelled site.
 
+- **A watch chip's tally counted restatements the card list folds** (`feed.py`).
+  Measured live: the xAI chip read 134 updates over a list that showed 41 cards for
+  the same watch, because the per-entity counts were taken before `fold` collapsed
+  "one moment reported by three publishers" into one signal — the same double-count
+  the card list was fixed for, left behind in the number above it. Counted from the
+  folded lists now, and still before `--limit`, because the chip describes the
+  window and the limit describes the page.
+
 ### Changed
 
 - **`GET /api/landing` is now `GET /api/publishers`, and answers less**
