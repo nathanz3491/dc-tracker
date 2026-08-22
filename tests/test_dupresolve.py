@@ -462,3 +462,37 @@ def test_a_row_removed_by_an_earlier_merge_is_reported_not_raised(session):
     gone = [d for d in decisions if "merged by an earlier pair" in d.detail]
     assert gone, "a pair naming a deleted row must report, not raise"
     assert session.query(Project).count() < 3
+
+
+def test_a_reply_cut_off_while_reasoning_says_so(session):
+    """It read as a broken model on the live database; it was a 700-token budget.
+
+    Five of six pairs came back "unusable reply" because the reasoning never
+    reached the JSON. The two failures need opposite responses — a bigger budget
+    versus a look at the prompt — so they must not report as one.
+    """
+
+    class _Truncated:
+        prompts: ClassVar[list[str]] = []
+
+        def complete(self, **_kwargs):
+            class R:
+                text = "<think>Both rows are in Abilene and both hold tranche"
+                model = "test-model"
+                finish_reason = "length"
+
+            return R()
+
+    _a, _b, pair = _tranche_pair(session)
+    got = dupresolve.resolve_one(session, pair, extractor=_Truncated())
+
+    assert got.action == "left"
+    assert "cut off while reasoning" in got.detail
+    assert str(dupresolve.MAX_TOKENS) in got.detail
+
+
+def test_the_budget_is_sized_for_reasoning_not_for_the_answer(session):
+    """Three fields out, a chain of thought's worth of room in."""
+    from tracker import audit
+
+    assert dupresolve.MAX_TOKENS >= audit.MAX_TOKENS

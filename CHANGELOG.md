@@ -243,6 +243,17 @@ initial build of the v1 PRD.
   to do it: a `mode=ro` connection cannot even flush the park it is about to roll
   back. Its own test says so, because that is how it was found.
 
+  **Two faults the first live run found.** `MAX_TOKENS` was 700, which read as a
+  model that could not answer: five of six pairs came back "unusable reply" on the
+  production database, and the one that answered was the pair with the least to
+  think about. The budget covers the model's *reasoning*, not its three-field
+  answer, so it is 8000 like `audit`'s. And reporting a truncated reply as
+  "unusable" pointed at the prompt when the answer was the budget — the two failures
+  now report separately, using `logic._ran_out_of_room`, which learned the same
+  lesson the same way. The one decision that did land was worth the run: Fairwater
+  against Project Nova, parked at 0.95 because the coordinates are 9.9 km apart in
+  different municipalities and one of the two is a cancelled site.
+
 ### Changed
 
 - **`GET /api/landing` is now `GET /api/publishers`, and answers less**

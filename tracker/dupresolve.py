@@ -77,10 +77,26 @@ HARD_EVIDENCE: Final = frozenset({"tranche", "party"})
 #: sites 50 km apart and this is what stops one merging into another.
 FAR_APART_KM: Final = 25.0
 
-#: Tokens per call. The evidence block carries two rows' claims and quotes.
-MAX_TOKENS: Final = 700
+#: Tokens per call, matching `audit.MAX_TOKENS`. Large because the budget covers
+#: the model's *reasoning*, not its answer — the answer is three fields. Set to 700
+#: on the first cut, which read like a broken model on the live database: five of
+#: six pairs came back "unusable reply" because the reasoning never reached the
+#: JSON, and the one that answered was the one with the least to think about.
+MAX_TOKENS: Final = 8000
 
 VERDICTS: Final = ("same", "different", "unclear")
+
+
+def _ran_out_of_room(reply: Any) -> bool:
+    """Did the budget cut the reply off, rather than the model finishing badly?
+
+    `logic._ran_out_of_room` has the full argument for why `finish_reason` is the
+    only signal that works wherever the cut landed. Shared by import rather than
+    re-derived, so the two cannot disagree about what truncation looks like.
+    """
+    from tracker.logic import _ran_out_of_room as detect
+
+    return detect(reply)
 
 
 def km_apart(a: Project, b: Project) -> float | None:
@@ -239,6 +255,26 @@ def ask_model(
     try:
         payload = parse_json_object(reply.text)
     except (LLMJsonError, ValueError):
+        # Two failures that call for opposite responses, and reporting them as one
+        # is what made a token budget look like a model that could not answer:
+        # a truncated reply needs a bigger budget, malformed JSON needs a look at
+        # the prompt. Borrowed from `logic._ran_out_of_room`, which learned it the
+        # same way.
+        if _ran_out_of_room(reply):
+            log.warning(
+                "duplicates resolve ran out of room while reasoning about #%s/#%s — it never "
+                "reached the JSON. Raise MAX_TOKENS (currently %d); this is not a verdict.",
+                a.id,
+                b.id,
+                MAX_TOKENS,
+            )
+            return Judgement(
+                "unclear",
+                0.0,
+                "",
+                outcome="rejected",
+                note=f"the reply was cut off while reasoning — MAX_TOKENS is {MAX_TOKENS}",
+            )
         return Judgement("unclear", 0.0, "", outcome="rejected", note="unusable reply")
 
     verdict = str(payload.get("verdict") or "").strip().lower()
