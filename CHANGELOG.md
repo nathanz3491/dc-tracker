@@ -163,6 +163,17 @@ initial build of the v1 PRD.
   because `0 == False`, which hid the defaults of `--prospect`, `--enrich` and
   `--select` — flags whose entire meaning is "off unless you pass a number".
 
+- **`--dry-run` no longer claims to spend nothing** (`cli.py`, `docs/ingesting.md`).
+
+  It writes nothing, and that is all it ever promised: discover still polls and
+  searches, prospect still searches and still asks the model for campus names, and
+  refresh and enrich still fetch articles and put them through the extractor —
+  "what would this change" cannot be answered without doing the reading. The old
+  wording invited a free preview that was never free. The one phase a dry run
+  genuinely does not spend on is extract, for a mechanical reason: the candidates
+  discover found were rolled back with everything else, so there is nothing queued
+  to read.
+
 - **`tracker tui --screenshot` names fonts the reader has** (`tracker/tui/`).
 
   Rich's SVG template declares `@font-face` rules that fetch Fira Code from a CDN.

@@ -6867,7 +6867,14 @@ def sync(
         bool, typer.Option("--skip-derive", help="Do not re-derive what the citations imply.")
     ] = False,
     dry_run: Annotated[
-        bool, typer.Option("--dry-run", help="Do everything except write to the database.")
+        bool,
+        typer.Option(
+            "--dry-run",
+            help=(
+                "Do everything except write to the database. Not free: it still "
+                "polls, searches and reads articles."
+            ),
+        ),
     ] = False,
     show_rows: Annotated[int, typer.Option("--rows", help="Projects to list at the end.")] = 30,
 ) -> None:
@@ -6891,7 +6898,7 @@ def sync(
         tracker sync                 keep current: discover, extract, refresh
         tracker sync --full          the whole loop, including the operators we lack
         tracker sync --prospect 3    keep current, and go after three missing operators
-        tracker sync --dry-run       what a run would do, spending nothing
+        tracker sync --dry-run       write nothing (still polls, searches and reads)
 
     Every phase that costs LLM calls is capped separately — `--limit`,
     `--refresh-limit`, `--prospect`, `--enrich`/`--enrich-budget` — because they buy
@@ -7522,7 +7529,11 @@ def prospect(
         ),
     ] = False,
     dry_run: Annotated[
-        bool, typer.Option("--dry-run", help="Find and report, write nothing.")
+        bool,
+        typer.Option(
+            "--dry-run",
+            help="Queue nothing. The searches and the campus-naming call still happen.",
+        ),
     ] = False,
     roster: Annotated[
         Path | None,
@@ -7565,7 +7576,7 @@ def prospect(
     \b
         tracker prospect                    the five worst gaps
         tracker prospect Nebius CoreWeave   these two, now
-        tracker prospect --dry-run          the queries and the archive hits, unspent
+        tracker prospect --dry-run          the queries and the archive hits, queueing none
 
     Costs one LLM call per operator for the campus names, one search per query, and
     one call per article read. `--skip-campuses` removes the first; `--extract 0`

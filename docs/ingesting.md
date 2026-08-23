@@ -82,12 +82,24 @@ whichever phase ran first.
 
 ```bash
 tracker sync --limit 25 --refresh-limit 25 --refresh-days 14
-tracker sync --dry-run          # see what a run would do, spend nothing
+tracker sync --dry-run          # write nothing; see the note below on cost
 tracker sync --browser          # escalate blocked pages, needs the 'crawl' extra
 tracker sync --skip-discover    # work the existing queue only
 tracker sync --skip-refresh     # new projects only
 tracker sync --skip-derive      # leave the derived values alone
 ```
+
+**`--dry-run` writes nothing, and that is all it promises.** It is not a free
+preview. The discover phase still polls the feeds and still runs its searches; the
+prospect phase still searches and still asks the model for campus names; the
+refresh and enrich phases still fetch articles and still put them through the
+extractor, because "what would this run change" cannot be answered without doing
+the reading. What it guarantees is the transaction: every write is rolled back.
+
+The one phase a dry run genuinely does not spend on is **extract**, and for a
+mechanical reason rather than a designed one — the candidates phase 1 found were
+rolled back with everything else, so there is nothing queued to read. The run says
+so rather than reporting an empty queue as good news.
 
 The refresh phase is what keeps data current rather than merely growing: articles
 get edited, and a campus that was "announced" last quarter is under construction
@@ -140,7 +152,7 @@ Then go and get them:
 ```bash
 tracker prospect                    # the five worst gaps
 tracker prospect Nebius CoreWeave   # these two, now
-tracker prospect --dry-run          # the queries and the archive hits, unspent
+tracker prospect --dry-run          # the queries and the archive hits, nothing queued
 tracker prospect --extract 0        # queue only; let the next sync read them
 ```
 
@@ -371,7 +383,7 @@ tracker sync --retry-failed   # re-attempt them
 ## Completing one project, cost no object
 
 ```bash
-tracker enrich 93 --dry-run     # what it would read, spending nothing
+tracker enrich 93 --dry-run     # what it would read, without writing
 tracker enrich 93
 tracker enrich --select 30      # the 30 worth finishing, chosen closest-first
 tracker enrich --all            # everything below --target; --budget is the bound
