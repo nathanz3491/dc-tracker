@@ -86,7 +86,20 @@ class CommandInput(Input):
         Binding("down", "next_completion", "next candidate", show=False, priority=True),
         Binding("up", "previous_completion", "previous candidate", show=False, priority=True),
         Binding("escape", "dismiss_completions", "dismiss", show=False, priority=True),
+        # Scrollback, reached from the prompt without leaving it — the one thing a
+        # shell gives you that a text box does not.
+        Binding("pageup", "scroll_output('page_up')", "scroll back", show=False, priority=True),
+        Binding(
+            "pagedown", "scroll_output('page_down')", "scroll forward", show=False, priority=True
+        ),
+        Binding("shift+up", "scroll_output('up')", "up a line", show=False, priority=True),
+        Binding("shift+down", "scroll_output('down')", "down a line", show=False, priority=True),
+        Binding("shift+home", "scroll_output('home')", "to the top", show=False, priority=True),
+        Binding("shift+end", "scroll_output('end')", "to the bottom", show=False, priority=True),
     ]
+
+    def action_scroll_output(self, how: str) -> None:
+        self._pane().scroll_output(how)
 
     def action_take_completion(self) -> None:
         self._pane().take_completion()
@@ -148,7 +161,16 @@ class CommandsPane(Vertical):
             yield OptionList(id="command-list")
             yield VerticalScroll(Static(id="command-detail"), id="command-detail-wrap")
         # Everything left over, because this is the part being read.
-        yield RichLog(id="command-log", highlight=False, markup=False, wrap=True, max_lines=6000)
+        #
+        # `wrap=False` on purpose. The child is told this pane's width and wraps its
+        # own tables and prose to it, so a line arrives already the right length;
+        # wrapping again here broke every long line a second time, mid-sentence,
+        # with the continuation starting at column zero. A line that is still too
+        # long — because the window shrank after the run — scrolls sideways, which
+        # is what a terminal does with one.
+        yield RichLog(
+            id="command-log", highlight=False, markup=False, wrap=False, max_lines=6000
+        )
         # Directly above the line being typed, where a shell puts them, and zero
         # height whenever there is nothing to offer.
         yield OptionList(id="command-completions")
@@ -324,6 +346,39 @@ class CommandsPane(Vertical):
     def completions_open(self) -> bool:
         return bool(self.query_one("#command-completions", OptionList).display)
 
+    def _columns(self) -> int | None:
+        """How wide the child should wrap, in characters.
+
+        The vertical scrollbar is subtracted whether or not it is there yet, and
+        that is the whole subtlety: it appears the moment output overflows, which is
+        *after* this measurement, so a table sized to the full width lost its last
+        column to a scrollbar that arrived later.
+        """
+        log = self.query_one("#command-log", RichLog)
+        usable = log.content_size.width - log.scrollbar_size_vertical
+        return max(40, usable) if usable > 0 else None
+
+    def scroll_output(self, how: str) -> None:
+        """Move the output, and stop chasing the tail once the reader has looked up.
+
+        A terminal pins to the bottom while output arrives and stays put the moment
+        you scroll back — otherwise the next line yanks you away from the thing you
+        were reading. `end` puts you back on the tail and re-arms the pinning.
+        """
+        log = self.query_one("#command-log", RichLog)
+        if how == "end":
+            log.auto_scroll = True
+            log.scroll_end(animate=False)
+            return
+        log.auto_scroll = False
+        {
+            "page_up": log.scroll_page_up,
+            "page_down": log.scroll_page_down,
+            "up": log.scroll_up,
+            "down": log.scroll_down,
+            "home": log.scroll_home,
+        }[how](animate=False)
+
     def hide_completions(self) -> None:
         self._completions = completion_mod.Completions()
         widget = self.query_one("#command-completions", OptionList)
@@ -403,7 +458,9 @@ class CommandsPane(Vertical):
             return
         log = self.query_one("#command-log", RichLog)
         try:
-            run = self._runner.start(cmd, flags, confirm=confirm)
+            # Read at start time rather than stored: the window may have been
+            # resized since the last run, and the child can only be told once.
+            run = self._runner.start(cmd, flags, confirm=confirm, columns=self._columns())
         except runner_mod.Busy as exc:
             self._status(Text(str(exc), style="yellow"))
             return
@@ -411,7 +468,8 @@ class CommandsPane(Vertical):
             self._status(Text(str(exc), style="red"))
             return
         self._clear_confirmation()
-        log.write(Text(f"$ tracker {cmd}", style="bold cyan"))
+        log.auto_scroll = True
+        log.write(Text(f"\n$ tracker {cmd}", style="bold cyan"))
         self._status(Text(f"running {cmd} …   ctrl+k cancels", style="cyan"))
         self.query_one("#command-line", Input).focus()
         self._pump(run.id)
@@ -460,8 +518,19 @@ class CommandsPane(Vertical):
             line.append(f"  {summary['duration_s']}s", style="dim")
         if touched:
             line.append(f"  {touched} project(s) changed", style="dim")
-        self._status(line)
-        self.query_one("#command-log", RichLog).write(line)
+        # The log keeps the record; the status line says what to do next. Writing
+        # the same sentence to both put two identical lines a row apart, which is
+        # how a screen ends up looking like it stuttered.
+        log = self.query_one("#command-log", RichLog)
+        log.write(line)
+        log.auto_scroll = True
+        log.scroll_end(animate=False)
+        self._status(
+            Text.assemble(
+                ("ready", "dim"),
+                ("   pageup/pagedown scroll back, shift+end returns to the tail", "dim"),
+            )
+        )
         # A run that wrote rows makes every read pane stale, and a stale pane beside
         # a fresh log is how somebody reads last hour's number as this minute's.
         if touched:

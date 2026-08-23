@@ -1179,6 +1179,43 @@ def test_the_runner_asks_for_colour_and_removes_what_would_suppress_it(monkeypat
     assert env["TERM"] == "xterm-256color"
 
 
+def test_the_child_is_told_how_wide_its_reader_is():
+    """Rich wraps to COLUMNS, so the caller has to pass the truth.
+
+    The TUI's log is whatever the window is; the console's wraps in CSS and keeps
+    the default. Getting this wrong breaks every long line twice — once at the
+    width the child was told and again at the width it is displayed in, with the
+    second break landing mid-sentence.
+    """
+    from tracker.webui import runner as runner_mod
+
+    assert runner_mod._child_env()["COLUMNS"] == str(runner_mod.DEFAULT_COLUMNS)
+    assert runner_mod._child_env(96)["COLUMNS"] == "96"
+
+
+def test_the_width_reaches_the_subprocess(tmp_path, monkeypatch):
+    """Passed to `start`, and still there by the time anything is spawned."""
+    from tracker.db import init_db
+    from tracker.webui import runner as runner_mod
+
+    db = tmp_path / "t.db"
+    init_db(db)
+    runner = runner_mod.Runner(db)
+    seen: dict[str, object] = {}
+
+    def fake_spawn(run, argv, columns=None):
+        seen["columns"] = columns
+        return 0, None
+
+    monkeypatch.setattr(runner, "_spawn", fake_spawn)
+    run = runner.start("gaps", {}, columns=137)
+    for _ in range(200):
+        if run.status != "running":
+            break
+        time.sleep(0.01)
+    assert seen["columns"] == 137
+
+
 # --- the gate ---------------------------------------------------------------
 
 PASSWORD = "correct horse battery"

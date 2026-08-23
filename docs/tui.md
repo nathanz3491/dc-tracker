@@ -109,6 +109,39 @@ reading output is what the pane is *for*.
 `tests/test_tui.py` asserts the output area is taller than the reference block, so
 a stray `height:` in the CSS cannot quietly hand the screen back.
 
+### It behaves like a terminal
+
+```
+pageup / pagedown     scroll the output back and forward
+shift+up / shift+down a line at a time
+shift+home / shift+end  to the top, and back to the tail
+ctrl+l                clear it
+ctrl+k                cancel what is running
+```
+
+All of those work from the prompt without leaving it, which is the thing a shell
+gives you that a text box does not. Output pins to the bottom while it arrives and
+**stops the moment you scroll back** — otherwise the next line yanks you off
+whatever you were reading. `shift+end` puts you on the tail again and re-arms the
+pinning.
+
+**The child is told how wide this pane is**, less the scrollbar, and nothing here
+reflows what comes back. That pairing is the whole fix for output that looked
+shredded: Rich wraps a table's columns and a paragraph's prose to `COLUMNS`, so a
+child told 160 and displayed in 118 had every long line broken twice — once at the
+right width and again mid-sentence, with the continuation starting at column zero.
+The console learned the same lesson in CSS first, and its stylesheet says it: there
+is no width but `COLUMNS` at which wrapping works. A line still too wide — because
+the window shrank after the run — scrolls sideways instead.
+
+The scrollbar is subtracted whether or not it is there yet, which is the subtle
+half: it appears the moment output overflows, which is *after* the width is
+measured, so a table sized to the full width lost its last column to a scrollbar
+that had not arrived when it was drawn.
+
+The status line under the prompt says what to do next rather than repeating the
+log's last line — two identical sentences a row apart read as a stutter.
+
 Runs go through `webui.runner`, which is the console's executor, so the TUI
 inherits its three properties rather than reimplementing them: no shell, one writer
 at a time (SQLite takes one, and a second run would fail partway through after
@@ -145,9 +178,11 @@ tracker tui --check
 tracker tui --screenshot frame.svg --pane coverage
 ```
 
-`--check` boots the real app against the real database headlessly, fills every
-pane, and exits non-zero if any of them failed — a smoke test that fails on a
-renamed column or a broken query, not a version string. `--screenshot` writes the
+`--check` boots the real app against the real database headlessly, waits for the
+read, fills every pane, and exits non-zero if any of them failed — a smoke test
+that fails on a renamed column or a broken query, not a version string. The wait is
+the part that makes it a test at all: the panes fill from a worker thread, and
+without it the check reported "every pane filled" having filled none of them. `--screenshot` writes the
 frame it rendered as an SVG, which is what makes a remote check something you can
 actually look at.
 

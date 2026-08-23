@@ -67,7 +67,14 @@ class Runner:
 
     # --- starting ---------------------------------------------------------
 
-    def start(self, cmd: str, flags: dict[str, Any], *, confirm: str | None = None) -> runs.Run:
+    def start(
+        self,
+        cmd: str,
+        flags: dict[str, Any],
+        *,
+        confirm: str | None = None,
+        columns: int | None = None,
+    ) -> runs.Run:
         command = catalog.by_name().get(cmd)
         if command is None:
             raise catalog.InvalidRequest(f"unknown command {cmd!r}")
@@ -95,7 +102,7 @@ class Runner:
             self._listeners = []
 
         runs.begin(self.db_path, run)
-        threading.Thread(target=self._execute, args=(run, argv), daemon=True).start()
+        threading.Thread(target=self._execute, args=(run, argv, columns), daemon=True).start()
         return run
 
     def start_workflow(self, name: str, *, confirm: str | None = None) -> runs.Run:
@@ -175,10 +182,10 @@ class Runner:
 
     # --- execution --------------------------------------------------------
 
-    def _execute(self, run: runs.Run, argv: list[str]) -> None:
+    def _execute(self, run: runs.Run, argv: list[str], columns: int | None = None) -> None:
         started = time.monotonic()
         before = _project_stamps(self.db_path)
-        exit_code, error = self._spawn(run, argv)
+        exit_code, error = self._spawn(run, argv, columns)
         self._close(run, exit_code=exit_code, started=started, before=before, error=error)
 
     def _execute_workflow(self, run: runs.Run, workflow: Any, plan: list[Any]) -> None:
@@ -221,9 +228,11 @@ class Runner:
 
         self._close(run, exit_code=exit_code, started=started, before=before)
 
-    def _spawn(self, run: runs.Run, argv: list[str]) -> tuple[int | None, str | None]:
+    def _spawn(
+        self, run: runs.Run, argv: list[str], columns: int | None = None
+    ) -> tuple[int | None, str | None]:
         """Run one argv to completion, streaming its output. Returns (code, error)."""
-        env = _child_env()
+        env = _child_env(columns)
         try:
             # argv came from catalog.build_argv: a validated list, never a shell
             # string. No shell=True anywhere, so metacharacters are inert.
@@ -286,7 +295,14 @@ class Runner:
         self._emit({"type": "end", "run": run.summary()})
 
 
-def _child_env() -> dict[str, str]:
+#: Columns a child is told to wrap at when nobody says otherwise.
+#:
+#: The console's own choice: its log element wraps in CSS, so the number only has
+#: to be wide enough that Rich stops truncating cell text.
+DEFAULT_COLUMNS = 160
+
+
+def _child_env(columns: int | None = None) -> dict[str, str]:
     """The environment every run's subprocess gets.
 
     Keep the colour. Rich's output is not decorated text — red means a rejection,
@@ -304,10 +320,17 @@ def _child_env() -> dict[str, str]:
     Safe because no command uses a live widget — a Progress bar or a status
     spinner would start redrawing with \\r once Rich believes it is interactive,
     and the log would fill with half-drawn frames.
+
+    **`COLUMNS` is a fourth load-bearing variable, and the caller should set it.**
+    Rich wraps the child's tables and prose to it, so a reader whose pane is a
+    different width sees every long line broken twice: once by the child at this
+    width and again by the widget displaying it, with the second break landing
+    mid-sentence and the continuation starting at column zero. Telling the child
+    the truth is what makes the output look like output.
     """
     env = {
         **os.environ,
-        "COLUMNS": "160",
+        "COLUMNS": str(columns or DEFAULT_COLUMNS),
         "FORCE_COLOR": "1",
         "COLORTERM": "truecolor",
         "PYTHONIOENCODING": "utf-8",

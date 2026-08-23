@@ -163,6 +163,37 @@ initial build of the v1 PRD.
   because `0 == False`, which hid the defaults of `--prospect`, `--enrich` and
   `--select` — flags whose entire meaning is "off unless you pass a number".
 
+- **The TUI's output pane behaves like a terminal** (`tracker/tui/commands.py`,
+  `webui/runner.py`).
+
+  Reported after a real run: the output looked shredded. Two causes, one visible.
+
+  **Every long line was wrapped twice.** `_child_env` hardcoded `COLUMNS=160` and
+  the pane wrapped what came back to its own width, so a line arrived broken at 160
+  and was broken again mid-sentence, with the continuation starting at column zero.
+  `Runner.start` now takes the width, the TUI passes its log's — less the
+  scrollbar, which appears once output overflows and therefore *after* the width is
+  measured, which is how a table sized to the full width lost its last column — and
+  the pane no longer reflows anything. A line still too wide scrolls sideways. The
+  console reached the same conclusion in CSS first; its stylesheet already said
+  there is no width but `COLUMNS` at which wrapping works.
+
+  **And scrollback now exists.** `pageup`/`pagedown`, `shift+up`/`shift+down` and
+  `shift+home`/`shift+end` scroll the output without leaving the prompt, and the
+  output stops chasing its tail the moment you scroll back — a terminal does not
+  yank you off what you are reading when the next line lands. `shift+end` returns
+  to the tail and re-arms the pinning. `ctrl+l` clears.
+
+  The finished-run summary is written to the log once and the status line now says
+  what to do next instead of repeating it; the same sentence in both, a row apart,
+  read as a stutter.
+
+  **And `tracker tui --check` was passing before it had checked anything.** The
+  panes fill from a worker thread, so the walk found no exceptions and reported
+  "every pane filled" — true only because nothing had been filled yet. It waits for
+  the read now and fails with what went wrong if the wait runs out. The tests had
+  the same hazard and were intermittently red for the same reason.
+
 - **`--dry-run` no longer claims to spend nothing** (`cli.py`, `docs/ingesting.md`).
 
   It writes nothing, and that is all it ever promised: discover still polls and

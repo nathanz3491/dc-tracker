@@ -42,6 +42,14 @@ MISSING_TEXTUAL = (
 )
 
 
+#: How long a headless check waits for the database read before giving up on it.
+#:
+#: Generous, because the read walks every project with its sources, events, risks
+#: and blocks — a minute is not a lot on a cold cache with 300 rows, and a check
+#: that times out early would report a failure the interface does not have.
+LOAD_TIMEOUT_S = 60.0
+
+
 class MissingDependency(RuntimeError):
     """Textual is not installed. Message is operator-facing."""
 
@@ -127,6 +135,18 @@ def run(
     async def _headless() -> int:
         app = TrackerApp(db_path)
         async with app.run_test(size=size) as pilot:
+            # The database is read on a worker thread, so the panes are empty for a
+            # moment after mount. Without waiting for it, this reported "every pane
+            # filled" having filled none of them — the check passing precisely
+            # because it had not happened yet.
+            deadline = LOAD_TIMEOUT_S
+            while deadline > 0 and not app.snapshot.payload and not app.startup_problems:
+                await asyncio.sleep(0.05)
+                deadline -= 0.05
+            if not app.snapshot.payload and not app.startup_problems:
+                app.startup_problems.append(
+                    f"the database was still being read after {LOAD_TIMEOUT_S:.0f}s"
+                )
             # Every pane, not just the one that opens: a broken query in the capex
             # view is exactly the kind of thing this is meant to catch. The loop
             # variable is not `pane` — shadowing the argument left every screenshot
@@ -152,6 +172,7 @@ def run(
 
 
 __all__ = [
+    "LOAD_TIMEOUT_S",
     "MISSING_TEXTUAL",
     "SVG_MONO_STACK",
     "SVG_TITLE_STACK",

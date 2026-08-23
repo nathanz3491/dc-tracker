@@ -37,6 +37,23 @@ def invoke(db: Path, *args: str):
     return runner.invoke(app, ["--db", str(db), *args])
 
 
+async def loaded(app_under_test, pilot, *, timeout: float = 20.0):
+    """Wait for the threaded database read to land, then settle a frame.
+
+    Every pane fills from a snapshot read on a worker thread, so a single
+    `pilot.pause()` is not a guarantee — it was enough on an idle machine and not
+    enough inside a full suite, which is the definition of a flaky test. The
+    product has the same hazard and `tui.run` waits for the same signal.
+    """
+    import asyncio
+
+    while timeout > 0 and not app_under_test.snapshot.payload:
+        await asyncio.sleep(0.05)
+        timeout -= 0.05
+    assert app_under_test.snapshot.payload, "the snapshot never loaded"
+    await pilot.pause()
+
+
 @pytest.fixture
 def seeded(tmp_path: Path) -> Path:
     db = tmp_path / "t.db"
@@ -92,6 +109,7 @@ def curated(tmp_path: Path) -> Path:
 async def test_every_pane_fills_against_a_real_database(curated: Path):
     app_under_test = TrackerApp(curated)
     async with app_under_test.run_test(size=(160, 48)) as pilot:
+        await loaded(app_under_test, pilot)
         for pane in TrackerApp.PANES:
             app_under_test.show_pane(pane)
             await pilot.pause()
@@ -105,7 +123,7 @@ async def test_an_empty_database_is_not_an_error(tmp_path: Path):
     assert invoke(db, "init").exit_code == 0
     app_under_test = TrackerApp(db)
     async with app_under_test.run_test() as pilot:
-        await pilot.pause()
+        await loaded(app_under_test, pilot)
         assert app_under_test.startup_problems == []
         assert app_under_test.snapshot.projects == []
 
@@ -113,7 +131,7 @@ async def test_an_empty_database_is_not_an_error(tmp_path: Path):
 async def test_the_subtitle_says_which_database_and_how_big(curated: Path):
     app_under_test = TrackerApp(curated)
     async with app_under_test.run_test() as pilot:
-        await pilot.pause()
+        await loaded(app_under_test, pilot)
         assert "2 projects" in app_under_test.sub_title
         assert str(curated) in app_under_test.sub_title
 
@@ -249,6 +267,7 @@ async def test_a_free_command_runs_and_its_output_arrives(curated: Path):
 async def test_the_filter_narrows_the_projects_table(curated: Path):
     app_under_test = TrackerApp(curated)
     async with app_under_test.run_test() as pilot:
+        await loaded(app_under_test, pilot)
         app_under_test.show_pane("projects")
         await pilot.pause()
         pane = app_under_test.query_one("#projects-pane", ProjectsPane)
@@ -266,6 +285,7 @@ async def test_the_filter_narrows_the_projects_table(curated: Path):
 async def test_the_filter_matching_nothing_says_so(curated: Path):
     app_under_test = TrackerApp(curated)
     async with app_under_test.run_test() as pilot:
+        await loaded(app_under_test, pilot)
         app_under_test.show_pane("projects")
         await pilot.pause()
         pane = app_under_test.query_one("#projects-pane", ProjectsPane)
@@ -278,6 +298,7 @@ async def test_coverage_lists_the_absent_operators_first(curated: Path):
     """Nebius is present here, so it must not be in the absent block."""
     app_under_test = TrackerApp(curated)
     async with app_under_test.run_test() as pilot:
+        await loaded(app_under_test, pilot)
         app_under_test.show_pane("coverage")
         await pilot.pause()
         pane = app_under_test.query_one("#coverage-pane", CoveragePane)
@@ -296,6 +317,7 @@ async def test_pressing_e_prefills_enrich_for_the_highlighted_row(curated: Path)
     """
     app_under_test = TrackerApp(curated)
     async with app_under_test.run_test() as pilot:
+        await loaded(app_under_test, pilot)
         app_under_test.show_pane("projects")
         await pilot.pause()
         app_under_test.action_enrich_highlighted()
@@ -309,6 +331,7 @@ async def test_pressing_e_prefills_enrich_for_the_highlighted_row(curated: Path)
 async def test_pressing_p_on_coverage_prefills_prospect_for_that_operator(curated: Path):
     app_under_test = TrackerApp(curated)
     async with app_under_test.run_test() as pilot:
+        await loaded(app_under_test, pilot)
         app_under_test.show_pane("coverage")
         await pilot.pause()
         app_under_test.action_prospect_highlighted()
@@ -387,6 +410,7 @@ def test_a_snapshot_reports_a_bad_roster_rather_than_failing(curated: Path, monk
 
 
 async def _run_pane(app_under_test, pilot):
+    await loaded(app_under_test, pilot)
     app_under_test.show_pane("run")
     await pilot.pause()
     pane = app_under_test.query_one("#commands-pane", CommandsPane)
@@ -501,3 +525,119 @@ async def test_a_command_with_many_flags_does_not_flood_the_detail(curated: Path
         text = " / ".join(strip.text for strip in strips)
         assert "more" in text, "the rest have to be accounted for, not just dropped"
         assert detail.size.height <= 7, f"{detail.size.height} rows: {text}"
+
+
+# --- The run pane as a terminal ---------------------------------------------
+
+
+async def test_the_log_does_not_reflow_what_the_child_already_wrapped(curated: Path):
+    """The console learned this first, in CSS: there is no width but COLUMNS.
+
+    The child wraps its tables and prose to the width it was told, so wrapping
+    again here breaks every long line a second time, mid-sentence, with the
+    continuation starting at column zero. A line still too wide scrolls sideways —
+    which is what a terminal does with one.
+    """
+    app_under_test = TrackerApp(curated)
+    async with app_under_test.run_test(size=(120, 30)) as pilot:
+        await _run_pane(app_under_test, pilot)
+        log = app_under_test.query_one("#command-log")
+        assert log.wrap is False
+
+
+async def test_the_child_is_told_this_panes_width(curated: Path):
+    app_under_test = TrackerApp(curated)
+    async with app_under_test.run_test(size=(140, 30)) as pilot:
+        pane = await _run_pane(app_under_test, pilot)
+        seen: dict[str, object] = {}
+        real_start = pane._runner.start
+
+        def spy(cmd, flags, *, confirm=None, columns=None):
+            seen["columns"] = columns
+            raise runner_stub.Busy("not actually running it")
+
+        import tracker.webui.runner as runner_stub
+
+        pane._runner.start = spy
+        pane.submit("gaps")
+        await pilot.pause()
+        pane._runner.start = real_start
+        log = app_under_test.query_one("#command-log")
+        # Less the scrollbar, which appears once output overflows — after this is
+        # measured. A table sized to the full width lost its last column to it.
+        assert seen["columns"] == log.content_size.width - log.scrollbar_size_vertical
+        assert seen["columns"] > 0
+
+
+async def test_scrolling_back_stops_the_output_chasing_the_tail(curated: Path):
+    """And shift+end puts you back on it.
+
+    A terminal pins to the bottom while output arrives and stays put once you
+    scroll up; otherwise the next line yanks you off whatever you were reading.
+    """
+    app_under_test = TrackerApp(curated)
+    async with app_under_test.run_test(size=(120, 30)) as pilot:
+        await _run_pane(app_under_test, pilot)
+        log = app_under_test.query_one("#command-log")
+        for index in range(200):
+            log.write(f"line {index}")
+        await pilot.pause()
+        assert log.auto_scroll is True
+
+        await pilot.press("pageup")
+        await pilot.pause()
+        assert log.auto_scroll is False, "reading has to survive the next line arriving"
+
+        await pilot.press("shift+end")
+        await pilot.pause()
+        assert log.auto_scroll is True
+
+
+async def test_the_status_line_does_not_repeat_the_log(curated: Path):
+    """Two identical sentences a row apart read as a stutter."""
+    import asyncio
+
+    app_under_test = TrackerApp(curated)
+    async with app_under_test.run_test(size=(120, 30)) as pilot:
+        pane = await _run_pane(app_under_test, pilot)
+        pane.submit("gaps")
+        for _ in range(600):
+            run = pane._runner.current
+            if run is not None and run.status != "running":
+                break
+            await asyncio.sleep(0.1)
+        await pilot.pause()
+        assert pane._runner.current.status == "ok"
+        from textual.geometry import Region
+
+        status = app_under_test.query_one("#command-status")
+        strips = status.render_lines(Region(0, 0, status.size.width, max(1, status.size.height)))
+        text = " ".join(strip.text for strip in strips)
+        assert "gaps ok" not in text, "the log already says that"
+        assert "pageup" in text, "the status line is where the next move is explained"
+
+
+def test_a_check_that_never_gets_the_data_fails_instead_of_passing(
+    curated: Path, monkeypatch
+):
+    """The guard on the bug this was: reporting success before the read happened.
+
+    Panes fill from a worker thread, so `--check` used to walk them, find no
+    exceptions and print "every pane filled" — which was true only because nothing
+    had been filled yet. It now waits, and says so when the wait runs out.
+    """
+    import time
+
+    from tracker import tui as tui_mod
+    from tracker.tui import data as data_mod
+
+    monkeypatch.setattr(tui_mod, "LOAD_TIMEOUT_S", 0.3)
+
+    def slow(_cls, _db):
+        time.sleep(2)
+        return data_mod.Snapshot()
+
+    monkeypatch.setattr(data_mod.Snapshot, "load", classmethod(slow))
+    result = invoke(curated, "tui", "--check")
+    assert result.exit_code == 1
+    assert "still being read" in result.output

@@ -238,7 +238,7 @@ directory, which is what lets `tracker init` work from anywhere.
 .venv/Scripts/python -m pytest
 ```
 
-2,415 tests, about seven minutes. **A fresh clone with no API key and no network access
+2,422 tests, about seven minutes. **A fresh clone with no API key and no network access
 must produce a green run.** Tests that would hit the network or spend DeepSeek
 tokens are marked `network` / `llm` and deselected by default; run them
 explicitly with `-m network` or `-m llm`.
