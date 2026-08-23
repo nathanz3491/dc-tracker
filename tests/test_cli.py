@@ -1796,7 +1796,9 @@ def test_prospect_without_a_key_still_runs_the_templated_half(
     )
     result = invoke(initialized, "prospect", "--limit", "1")
     assert result.exit_code == 0, result.output
-    assert "no API key" in result.output
+    # "no LLM available", not "no API key": since providers became plural the
+    # message stopped claiming to know which half is missing.
+    assert "no LLM available" in result.output
     assert "no search backend" in result.output
 
 

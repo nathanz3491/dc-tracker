@@ -1040,11 +1040,11 @@ class Handler(BaseHTTPRequestHandler):
                 )
 
             from tracker.config import get_settings
-            from tracker.llm import MissingApiKey, reasoning_extractor
+            from tracker.llm import LLMUnavailable, reasoning_extractor
 
             try:
                 extractor = reasoning_extractor(get_settings())
-            except MissingApiKey as exc:
+            except LLMUnavailable as exc:
                 return self._error(503, str(exc))
 
             analysis = analyse(project, extractor=extractor)
@@ -1111,11 +1111,11 @@ class Handler(BaseHTTPRequestHandler):
                 )
 
             from tracker.config import get_settings
-            from tracker.llm import MissingApiKey, fast_extractor
+            from tracker.llm import LLMUnavailable, fast_extractor
 
             try:
                 extractor = fast_extractor(get_settings())
-            except MissingApiKey as exc:
+            except LLMUnavailable as exc:
                 return self._error(503, str(exc))
 
             written = overview_mod.write(project, extractor=extractor)
@@ -1167,11 +1167,11 @@ class Handler(BaseHTTPRequestHandler):
                 )
 
             from tracker.config import get_settings
-            from tracker.llm import MissingApiKey, fast_extractor
+            from tracker.llm import LLMUnavailable, fast_extractor
 
             try:
                 extractor = fast_extractor(get_settings())
-            except MissingApiKey as exc:
+            except LLMUnavailable as exc:
                 return self._error(503, str(exc))
 
             self.send_response(200)
@@ -1243,11 +1243,11 @@ class Handler(BaseHTTPRequestHandler):
                 )
 
             from tracker.config import get_settings
-            from tracker.llm import MissingApiKey, fast_extractor
+            from tracker.llm import LLMUnavailable, fast_extractor
 
             try:
                 extractor = fast_extractor(get_settings())
-            except MissingApiKey as exc:
+            except LLMUnavailable as exc:
                 return self._error(503, str(exc))
 
             self.send_response(200)

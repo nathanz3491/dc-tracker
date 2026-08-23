@@ -43,7 +43,7 @@ from sqlalchemy.orm import Session
 
 from tracker.config import Settings, get_settings
 from tracker.gaps import FILLED, NOT_APPLICABLE, FieldState, for_project
-from tracker.llm import MissingApiKey
+from tracker.llm import LLMUnavailable
 from tracker.llm import reasoning_extractor as _reasoning_extractor
 from tracker.models import IngestUrl, Project, Source
 from tracker.vocab import TRACKED_FIELDS
@@ -699,7 +699,7 @@ def run(
                 extractor=settle_extractor or _reasoning_extractor(settings),
                 dry_run=dry_run,
             )
-        except MissingApiKey:
+        except LLMUnavailable:
             # The harvest is done and written. Losing it because the judgement tier
             # has no key would throw away every article this run paid to read.
             report.skipped.append(("settle", "no API key for the reasoning model"))

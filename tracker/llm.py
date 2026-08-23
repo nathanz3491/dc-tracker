@@ -1,4 +1,10 @@
-"""LLM access behind a protocol, with DeepSeek as one implementation.
+"""LLM access behind a protocol: DeepSeek over the API, or Ollama on this machine.
+
+Two implementations of one `Extractor` protocol, chosen by
+:data:`Settings.llm_provider` or per run with `--llm-provider`. Everything downstream —
+the JSON contract, the thinking filter, the tier policy in the factories — is
+provider-independent, which is the property that makes the switch a setting
+rather than a fork.
 
 **The JSON contract is still enforced here, not by the provider.** DeepSeek does
 support ``response_format={"type": "json_object"}`` — unlike MiniMax, which
@@ -63,13 +69,31 @@ MiniMax, and TRACKER_MINIMAX_* settings are no longer read at all.
 
 Check connectivity without ingesting anything:
   tracker ingest crawl --check
+
+No key at all? A local model works instead of the API: `--llm-provider ollama` on any
+command that spends LLM calls, against an Ollama server. See docs/ingesting.md.
 """
 
 #: HTTP statuses worth retrying.
 RETRYABLE_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504})
 
 
-class MissingApiKey(RuntimeError):
+#: The providers `--llm` and TRACKER_LLM_PROVIDER accept.
+LLM_PROVIDERS = ("deepseek", "ollama")
+
+
+class LLMUnavailable(RuntimeError):
+    """The configured provider cannot answer; the message says how to fix it.
+
+    The parent every call site catches. Before Ollama existed here the only way a
+    provider failed *before spending anything* was a missing key, so twenty call
+    sites caught :class:`MissingApiKey` by name. A local server adds a second way
+    — not running, model not pulled — and teaching each site both names would
+    guarantee the next provider misses one. They all catch this instead.
+    """
+
+
+class MissingApiKey(LLMUnavailable):
     """No API key configured. Message is operator-facing."""
 
 
@@ -582,6 +606,226 @@ class DeepSeekExtractor:
         }
 
 
+OLLAMA_HELP = """the local LLM server did not answer at {base_url}.
+
+  Is it running?     The Ollama app starts it; headless, `ollama serve`.
+  Is the model there?  `ollama list` should show {model}; if not:
+    ollama pull {model}
+  Serving from another machine?  Point this tool at it:
+    TRACKER_OLLAMA_BASE_URL=http://that-host:11434
+
+This run asked for the local provider (`--llm-provider ollama`, or
+TRACKER_LLM_PROVIDER=ollama in the environment or .env). The API provider
+still works in the meantime: pass `--llm-provider deepseek`.
+"""
+
+
+class OllamaUnavailable(LLMUnavailable):
+    """The Ollama server did not answer, or does not have the model."""
+
+
+class OllamaExtractor:
+    """Chat against a local Ollama server, through its native ``/api/chat``.
+
+    Native rather than Ollama's OpenAI-compatible shim, for two properties the
+    shim does not expose. ``options.num_ctx`` is settable per request — Ollama's
+    default context is a few thousand tokens and input beyond it is TRUNCATED
+    SILENTLY, which against this codebase's article-sized prompts would mean
+    extractions quietly reading half the article and the evidence gate rejecting
+    quotes that were never seen. And ``think`` is a first-class flag, so the
+    no-think tier is a request parameter here exactly as it is on DeepSeek.
+
+    The reachability probe lives in ``__init__`` for the same reason DeepSeek's
+    key check does: every caller wants to fail before polling feeds or fetching
+    pages, not after. One GET against ``/api/version``, about a millisecond when
+    the server is local and a fast refusal when it is not.
+
+    The JSON contract stays in code here too — parse, repair, validate, one
+    corrective retry — rather than on Ollama's ``format: json`` mode, for the
+    same reason it is not on DeepSeek's: a provider-side mode that constrains
+    decoding can starve a thinking model into emptiness, and the tolerant reader
+    recovers from prose-wrapped JSON but not from nothing.
+    """
+
+    def __init__(
+        self,
+        settings: Settings | None = None,
+        *,
+        model: str | None = None,
+        effort: str | None = None,
+    ) -> None:
+        self.settings = settings or get_settings()
+        self.base_url = self.settings.ollama_base_url.rstrip("/")
+        self.model = model or self.settings.ollama_model
+        #: Same field the DeepSeek extractor carries, collapsed to a boolean at
+        #: request time: qwen-class models think or do not, there is no dial. Kept
+        #: as the string so the factories apply ONE tier policy to both providers.
+        self.effort = effort
+        try:
+            httpx.get(f"{self.base_url}/api/version", timeout=5.0).raise_for_status()
+        except (httpx.RequestError, httpx.HTTPStatusError) as exc:
+            probe = f"(probe failed: {exc})"
+            raise OllamaUnavailable(f"{self._help()}{probe}") from exc
+
+    def _help(self) -> str:
+        return OLLAMA_HELP.format(base_url=self.base_url, model=self.model)
+
+    @property
+    def thinking(self) -> bool:
+        """Whether this tier reasons. Derived, so it cannot disagree with `effort`."""
+        return self.effort is not None
+
+    @property
+    def endpoint(self) -> str:
+        return f"{self.base_url}/api/chat"
+
+    def _payload(self, *, system: str, user: str, max_tokens: int | None, stream: bool) -> dict:
+        return {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            "stream": stream,
+            "think": self.thinking,
+            "options": {
+                # The same sampling the DeepSeek payload asks for, so switching
+                # provider does not also switch temperament.
+                "temperature": 0.1,
+                "top_p": 0.9,
+                "num_predict": max_tokens or self.settings.max_completion_tokens,
+                # The silent-truncation guard this class exists for.
+                "num_ctx": self.settings.ollama_num_ctx,
+            },
+        }
+
+    def complete(self, *, system: str, user: str, max_tokens: int | None = None) -> LLMReply:
+        data = self._post(
+            self._payload(system=system, user=user, max_tokens=max_tokens, stream=False)
+        )
+        message = data.get("message")
+        if not isinstance(message, dict):
+            raise LLMError(f"unexpected response shape from {self.endpoint}: {data!r}")
+
+        # Ollama returns thinking in its own field when `think` is on. Folded back
+        # into the tag form the rest of this module already understands, exactly as
+        # DeepSeek's `reasoning_content` is, and for the same reason: one place
+        # knows about provider shapes, and `split_thinking` keeps working.
+        text = message.get("content") or ""
+        reasoning = message.get("thinking")
+        if reasoning:
+            text = f"{_THINK_OPEN}{reasoning}{_THINK_CLOSE}{text}"
+
+        return LLMReply(
+            text=text,
+            finish_reason=data.get("done_reason"),
+            prompt_tokens=data.get("prompt_eval_count"),
+            completion_tokens=data.get("eval_count"),
+            model=data.get("model") or self.model,
+        )
+
+    def stream(self, *, system: str, user: str, max_tokens: int | None = None) -> Iterator[str]:
+        """Yield the answer as it is generated. NDJSON, not SSE.
+
+        Same non-retry contract as the DeepSeek stream: once the first token has
+        reached a reader, a replay would restart the paragraph mid-sentence.
+        """
+        payload = self._payload(system=system, user=user, max_tokens=max_tokens, stream=True)
+        filter_ = _ThinkFilter()
+        try:
+            with httpx.stream(
+                "POST",
+                self.endpoint,
+                json=payload,
+                timeout=httpx.Timeout(self.settings.ollama_timeout_s, connect=10.0),
+            ) as response:
+                if response.status_code >= 400:
+                    response.read()
+                    raise LLMError(
+                        f"Ollama returned HTTP {response.status_code}: {response.text[:500]}"
+                    )
+                for line in response.iter_lines():
+                    if not line.strip():
+                        continue
+                    try:
+                        chunk = json.loads(line)
+                    except ValueError:
+                        continue
+                    piece = (chunk.get("message") or {}).get("content")
+                    if piece:
+                        yield from filter_.feed(piece)
+        except httpx.RequestError as exc:
+            raise LLMError(f"LLM stream failed: {exc}") from exc
+        yield from filter_.finish()
+
+    def _post(self, payload: dict[str, Any], *, attempts: int = 3) -> dict[str, Any]:
+        """POST with the same retry discipline as the API provider.
+
+        A local server earns fewer excuses than a remote one, but model loading is
+        real: the first request after an idle period can 503 while 18 GB maps in,
+        and retrying through that is strictly better than failing an ingest on it.
+        """
+        last: Exception | None = None
+        for attempt in range(1, attempts + 1):
+            try:
+                response = httpx.post(
+                    self.endpoint,
+                    json=payload,
+                    timeout=httpx.Timeout(self.settings.ollama_timeout_s, connect=10.0),
+                )
+            except httpx.RequestError as exc:
+                last = exc
+                log.warning("Ollama request error (attempt %d/%d): %s", attempt, attempts, exc)
+            else:
+                if response.status_code in RETRYABLE_STATUS and attempt < attempts:
+                    delay = _retry_after(response) or min(2**attempt, 30)
+                    log.warning(
+                        "Ollama HTTP %d, retrying in %.1fs (attempt %d/%d)",
+                        response.status_code,
+                        delay,
+                        attempt,
+                        attempts,
+                    )
+                    time.sleep(delay)
+                    continue
+                if response.status_code == 404:
+                    # The one status with an unambiguous meaning here: the server is
+                    # up and the model is not on it.
+                    detail = (
+                        f"(the server answered, but not for {self.model!r}: {response.text[:200]})"
+                    )
+                    raise OllamaUnavailable(f"{self._help()}{detail}")
+                if response.status_code >= 400:
+                    raise LLMError(
+                        f"Ollama returned HTTP {response.status_code}: {response.text[:500]}"
+                    )
+                return response.json()
+            if attempt < attempts:
+                time.sleep(min(2**attempt, 30))
+        tail = f"(last error: {last})"
+        raise OllamaUnavailable(f"{self._help()}{tail}")
+
+    def check(self) -> dict[str, Any]:
+        """Cheap round-trip, shaped exactly like the DeepSeek one.
+
+        Same keys on purpose: `tracker ingest crawl --check` prints whatever this
+        returns, and the operator comparing providers should be reading one table.
+        """
+        started = time.monotonic()
+        reply = self.complete(system="Reply with the single word OK.", user="ping", max_tokens=512)
+        answer, thinking = split_thinking(reply.text)
+        return {
+            "base_url": self.base_url,
+            "model": reply.model,
+            "latency_s": round(time.monotonic() - started, 2),
+            "reply": (answer or "(empty)")[:80],
+            "finish_reason": reply.finish_reason,
+            "thinking_tokens": "yes" if thinking else "no",
+            "prompt_tokens": reply.prompt_tokens,
+            "completion_tokens": reply.completion_tokens,
+        }
+
+
 def _retry_after(response: httpx.Response) -> float | None:
     raw = response.headers.get("Retry-After")
     if not raw:
@@ -590,6 +834,28 @@ def _retry_after(response: httpx.Response) -> float | None:
         return min(float(raw), 60.0)
     except ValueError:
         return None
+
+
+def build_extractor(
+    settings: Settings | None = None,
+    *,
+    model: str | None = None,
+    effort: str | None = None,
+) -> Extractor:
+    """The configured provider, with no tier policy applied.
+
+    `--llm-provider` and :data:`Settings.llm_provider` decide which class this returns;
+    `model` and `effort` pass through to it unchanged, so `effort=None` still
+    means "no thinking" on both. Every call site that used to name
+    `DeepSeekExtractor` directly goes through here instead — choosing a provider
+    has to be one setting, not twenty constructor sites.
+
+    The three factories below stay the tier policy; this is only the switch.
+    """
+    settings = settings or get_settings()
+    if settings.llm_provider == "ollama":
+        return OllamaExtractor(settings, model=model, effort=effort)
+    return DeepSeekExtractor(settings, model=model, effort=effort)
 
 
 def default_extractor(settings: Settings | None = None) -> Extractor:
@@ -619,7 +885,7 @@ def default_extractor(settings: Settings | None = None) -> Extractor:
     there still is not enough.
     """
     settings = settings or get_settings()
-    return DeepSeekExtractor(settings, effort=settings.deepseek_extraction_effort)
+    return build_extractor(settings, effort=settings.deepseek_extraction_effort)
 
 
 def reasoning_extractor(settings: Settings | None = None) -> Extractor:
@@ -632,6 +898,11 @@ def reasoning_extractor(settings: Settings | None = None) -> Extractor:
     article — so it runs at `max` while extraction runs at `high`.
     """
     settings = settings or get_settings()
+    if settings.llm_provider == "ollama":
+        # One local model plays every tier — there is one installed — so the
+        # DeepSeek-specific reasoning-model name must not leak through here. The
+        # effort still does: on Ollama it collapses to think-or-not.
+        return OllamaExtractor(settings, effort=settings.deepseek_infer_effort)
     return DeepSeekExtractor(
         settings,
         model=settings.deepseek_reasoning_model,
@@ -654,19 +925,30 @@ def fast_extractor(settings: Settings | None = None) -> Extractor:
     less accurate model, which is the one part of the arrangement that improves.
     """
     settings = settings or get_settings()
+    if settings.llm_provider == "ollama":
+        # No effort means no thinking, on both providers: this is the tier a
+        # person sits and waits for, and a local model at tens of tokens a second
+        # needs the no-think flag more than the API does, not less.
+        return OllamaExtractor(settings)
     return DeepSeekExtractor(settings, model=settings.deepseek_fast_model)
 
 
 __all__ = [
     "KEY_HELP",
+    "LLM_PROVIDERS",
+    "OLLAMA_HELP",
     "RETRYABLE_STATUS",
     "DeepSeekExtractor",
     "Extractor",
     "LLMError",
     "LLMJsonError",
     "LLMReply",
+    "LLMUnavailable",
     "MissingApiKey",
+    "OllamaExtractor",
+    "OllamaUnavailable",
     "ResponseTruncated",
+    "build_extractor",
     "default_extractor",
     "fast_extractor",
     "parse_json_object",

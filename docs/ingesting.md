@@ -1,6 +1,6 @@
 # Ingesting
 
-Getting articles in: the API key, the one-command loop, the operators we are missing, depth versus breadth, operator press releases, optional search, and SEC filings.
+Getting articles in: the API key or a local model, the one-command loop, the operators we are missing, depth versus breadth, operator press releases, optional search, and SEC filings.
 
 Part of the [dc-tracker documentation](README.md).
 
@@ -32,6 +32,52 @@ Keys come from `platform.deepseek.com` and work against the single host
 
 `tracker ingest crawl --check` verifies the key in one cheap call, before you
 spend a run's worth of fetches.
+
+## Or a local model, on any command that spends LLM calls
+
+Every command that costs LLM calls takes the same flag:
+
+```bash
+tracker sync --llm-provider ollama          # this run, free and local
+tracker enrich 93 --llm-provider deepseek   # this run, the API — the default
+tracker ingest crawl --check --llm-provider ollama   # verify the local side
+```
+
+The local provider is an [Ollama](https://ollama.com) server —
+`TRACKER_OLLAMA_BASE_URL`, loopback by default — serving the model named by
+`TRACKER_OLLAMA_MODEL`. Setting `TRACKER_LLM_PROVIDER=ollama` in `.env` makes it
+the default for every run on that machine, including the console's briefing
+panels, which have no flag of their own.
+
+**DeepSeek stays the default deliberately.** Stored values carry no record of
+which model produced them, so a silent switch of model is a quality change
+nothing downstream can detect. Going local is a decision — per run with the
+flag, per machine with the setting — never an accident.
+
+Three things behave identically whichever provider answers, because they live
+outside the provider: the JSON contract (parse → repair → validate → one
+corrective retry), the thinking filter (a local model's `<think>` deliberation
+is stripped the same way DeepSeek's `reasoning_content` is), and the tier
+policy (extraction and `infer` reason, the drawer's briefing does not — on
+Ollama the effort dial collapses to think-or-not).
+
+Two Ollama-specific settings are worth knowing about, and one is load-bearing.
+`TRACKER_OLLAMA_NUM_CTX` (default 32768) rides on every request because
+Ollama's own default context is a few thousand tokens and **input beyond it is
+truncated silently** — an extraction would quietly read half the article and
+the evidence gate would reject quotes the model never saw.
+`TRACKER_OLLAMA_TIMEOUT_S` (default 600) is far above the API's, because a
+local model generates at tens of tokens a second and a timeout that fires
+mid-generation wastes everything already computed.
+
+The flag is named `--llm-provider`, not `--llm`, because `--llm/--no-llm`
+already means "let a model decide at all" on the three resolve commands — the
+name predates there being more than one model to choose.
+
+One caveat worth saying out loud: the tracked-field prompts were tuned against
+DeepSeek. A local 27B is capable of them, but nobody has measured its
+extraction accuracy here — run a few articles with `--llm-provider ollama
+--dry-run` and read what comes back before pointing a whole `sync --full` at it.
 
 ## One command for the whole loop
 

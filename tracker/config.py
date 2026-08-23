@@ -144,6 +144,39 @@ class Settings(BaseSettings):
     #: one we do not, so it stays a measured experiment rather than a default.
     deepseek_json_mode: bool = False
 
+    # --- Local LLM (Ollama) ------------------------------------------------------
+    #: Which provider answers when no `--llm-provider` flag says otherwise.
+    #:
+    #: `deepseek` stays the default deliberately: stored values carry no record of
+    #: which model produced them, so a silent switch to a different model is a
+    #: quality change nothing downstream can detect. Going local is per run
+    #: (`--llm-provider ollama`) or per machine (this setting in `.env`), never an
+    #: accident.
+    llm_provider: Literal["deepseek", "ollama"] = "deepseek"
+
+    #: Where the Ollama server answers. Loopback by default: the tracker runs on
+    #: the same machine as the model, and nothing here should assume otherwise.
+    ollama_base_url: str = "http://127.0.0.1:11434"
+
+    #: The model tag, as `ollama list` prints it.
+    ollama_model: str = "qwen3.8:27b-mlx"
+
+    #: Context window requested per call, as `options.num_ctx`.
+    #:
+    #: Load-bearing, not a tuning knob: Ollama's own default is a few thousand
+    #: tokens and input beyond it is TRUNCATED SILENTLY — against article-sized
+    #: extraction prompts that means reading half the article and rejecting quotes
+    #: the model never saw. 32k covers every prompt this tool sends with room to
+    #: spare; the installed model itself takes 262k, so raising this costs memory,
+    #: not correctness.
+    ollama_num_ctx: int = Field(default=32768, ge=2048)
+
+    #: Read timeout per call, seconds. Far above the API's 120: a local model
+    #: prefills a 20k-token article at hundreds of tokens a second and generates
+    #: at tens, and a thinking pass on top of that is minutes, not seconds. A
+    #: timeout that fires mid-generation wastes everything it already computed.
+    ollama_timeout_s: float = Field(default=600.0, gt=0)
+
     # --- Web search ------------------------------------------------------------
     # Which backend `tracker search` and `tracker enrich` use: "auto" picks the
     # first one that has a key, in the order google, brave, serper.

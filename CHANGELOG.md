@@ -12,6 +12,42 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **Every command that spends LLM calls can choose its model: `--llm-provider
+  deepseek|ollama`** (`tracker/llm.py`, `tracker/config.py`, `cli.py`,
+  `.env.example`, `docs/ingesting.md`).
+
+  A second implementation of the one `Extractor` protocol: `OllamaExtractor`
+  speaks to a local Ollama server through its native `/api/chat`. Native rather
+  than the OpenAI-compatible shim for two properties the shim does not expose,
+  and one of them is load-bearing: `options.num_ctx` rides on every request
+  (default 32768) because Ollama's own default context is a few thousand tokens
+  and input beyond it is TRUNCATED SILENTLY — an extraction would quietly read
+  half the article and the evidence gate would reject quotes the model never
+  saw. The other is `think` as a first-class flag, so the no-think tier stays a
+  request parameter on both providers.
+
+  Everything provider-shaped stays in one file. The JSON contract, the thinking
+  filter (Ollama's `thinking` field folds into the same `<think>` tags DeepSeek's
+  `reasoning_content` does), the tier policy (extraction and `infer` reason, the
+  drawer does not), and the retry discipline — including retrying the 503 a local
+  server answers while 18 GB of weights map in — are identical whichever class
+  answers. `reasoning_extractor` no longer leaks `deepseek-v4-pro` into a local
+  call, where it would 404 on every `infer`.
+
+  Fifteen commands take the flag, and that is measured rather than promised: a
+  test walks `catalog.LLM_COMMANDS` and fails on any LLM command without it, so
+  the sixteenth cannot arrive bare. The flag is `--llm-provider`, not `--llm`,
+  because `--llm/--no-llm` already means "let a model decide at all" on the three
+  resolve commands. The console and TUI render it as a dropdown, and completion
+  offers both values.
+
+  DeepSeek stays the default deliberately: stored values carry no record of which
+  model produced them, so a model switch must be a decision — per run with the
+  flag, per machine with `TRACKER_LLM_PROVIDER=ollama` — and never an accident.
+  Failures grew a common parent for the same reason the protocol exists:
+  `LLMUnavailable` covers "no key" and "no server / no model" both, every call
+  site catches it, and each message says its own fix.
+
 - **`tracker tui` — a full-screen terminal interface with every CLI command in
   it** (`tracker/tui/`, `cli.py`, `webui/catalog.py`, `docs/tui.md`).
 

@@ -233,6 +233,27 @@ def _db_path() -> Path:
     return get_settings().resolve_db(Path(override) if override else None)
 
 
+def _use_llm(provider: str | None) -> None:
+    """Apply a per-run `--llm-provider` choice before anything reads settings.
+
+    Through the environment plus a cache clear rather than a parallel state dict,
+    because that is the one route every reader already honours: `get_settings` is
+    lru_cached over the environment, the factories in `tracker.llm` read it
+    lazily, and nothing has to be told twice. Called as the first statement of
+    every command that spends LLM calls, so no `get_settings()` in the body can
+    run ahead of it.
+    """
+    if provider is None:
+        return
+    from tracker.llm import LLM_PROVIDERS
+
+    if provider not in LLM_PROVIDERS:
+        _fail(f"--llm-provider must be one of {', '.join(LLM_PROVIDERS)} (got {provider!r})")
+        return
+    os.environ["TRACKER_LLM_PROVIDER"] = provider
+    get_settings.cache_clear()
+
+
 def _read_engine():
     """Open the database read-only, with an actionable message if it is missing."""
     try:
@@ -1041,6 +1062,14 @@ def ingest_crawl(
             help="Never create a project. Refusals are reported. Pair with --stale-prompt.",
         ),
     ] = False,
+    llm_provider: Annotated[
+        str | None,
+        typer.Option(
+            "--llm-provider",
+            help="Which model answers: 'deepseek' (the API) or 'ollama' (local).",
+            show_default=False,
+        ),
+    ] = None,
 ) -> None:
     """Extract projects from news articles with an LLM.
 
@@ -1063,15 +1092,16 @@ def ingest_crawl(
     campuses is an ingest with no worklist and no review. The refusals are counted
     and logged, so a genuinely new campus can be added deliberately afterwards.
     """
+    _use_llm(llm_provider)
     from tracker.ingest import crawl
-    from tracker.llm import DeepSeekExtractor, MissingApiKey
+    from tracker.llm import LLMUnavailable, build_extractor
 
     settings = get_settings()
 
     if check:
         try:
-            info = DeepSeekExtractor(settings).check()
-        except MissingApiKey as exc:
+            info = build_extractor(settings).check()
+        except LLMUnavailable as exc:
             _fail(str(exc))
             return
         except Exception as exc:
@@ -1163,8 +1193,8 @@ def ingest_crawl(
     # Resolved before any fetching, so a missing key fails immediately rather
     # than after paying for a page load per URL.
     try:
-        extractor = DeepSeekExtractor(settings)
-    except MissingApiKey as exc:
+        extractor = build_extractor(settings)
+    except LLMUnavailable as exc:
         _fail(str(exc))
         return
 
@@ -2182,6 +2212,14 @@ def risks_confirm(
     dry_run: Annotated[
         bool, typer.Option("--dry-run", help="Judge at full cost and write nothing.")
     ] = False,
+    llm_provider: Annotated[
+        str | None,
+        typer.Option(
+            "--llm-provider",
+            help="Which model answers: 'deepseek' (the API) or 'ollama' (local).",
+            show_default=False,
+        ),
+    ] = None,
 ) -> None:
     """Read the article behind each unquoted obstacle and settle it.
 
@@ -2208,6 +2246,7 @@ def risks_confirm(
     without deleting the record of having believed it. **unclear** writes nothing,
     and is the honest majority answer.
     """
+    _use_llm(llm_provider)
     from tracker import riskcheck
 
     path = _db_path()
@@ -2216,11 +2255,11 @@ def risks_confirm(
     if category and category not in RISK_CATEGORIES:
         _fail(f"--category must be one of: {', '.join(RISK_CATEGORIES)}")
 
-    from tracker.llm import MissingApiKey, reasoning_extractor
+    from tracker.llm import LLMUnavailable, reasoning_extractor
 
     try:
         extractor = reasoning_extractor(get_settings())
-    except MissingApiKey as exc:
+    except LLMUnavailable as exc:
         _fail(str(exc))
         raise
 
@@ -3060,6 +3099,14 @@ def duplicates_resolve(
         bool,
         typer.Option("--dry-run", help="Ask, report, write nothing. The calls are still paid for."),
     ] = False,
+    llm_provider: Annotated[
+        str | None,
+        typer.Option(
+            "--llm-provider",
+            help="Which model answers: 'deepseek' (the API) or 'ollama' (local).",
+            show_default=False,
+        ),
+    ] = None,
 ) -> None:
     """Settle the suspected duplicates: a model decides, and the rails decide what it may do.
 
@@ -3096,6 +3143,7 @@ def duplicates_resolve(
     Spends one model call per pair. `--dry-run` still pays for the calls and writes
     nothing, which is the honest way to see what a run would do.
     """
+    _use_llm(llm_provider)
     import sys as _sys
 
     from tracker import dupresolve
@@ -3106,11 +3154,11 @@ def duplicates_resolve(
 
     extractor = None
     if llm:
-        from tracker.llm import MissingApiKey, reasoning_extractor
+        from tracker.llm import LLMUnavailable, reasoning_extractor
 
         try:
             extractor = reasoning_extractor()
-        except MissingApiKey as exc:
+        except LLMUnavailable as exc:
             _fail(str(exc))
 
     interactive = ask and _sys.stdin.isatty() and not json_mode()
@@ -3728,6 +3776,14 @@ def ingest_edgar(
     force: Annotated[
         bool, typer.Option("--force", help="Re-extract filings already read.")
     ] = False,
+    llm_provider: Annotated[
+        str | None,
+        typer.Option(
+            "--llm-provider",
+            help="Which model answers: 'deepseek' (the API) or 'ollama' (local).",
+            show_default=False,
+        ),
+    ] = None,
 ) -> None:
     """Read SEC filings — the one publisher that cannot lock us out.
 
@@ -3750,6 +3806,7 @@ def ingest_edgar(
 
     Needs `TRACKER_USER_AGENT` set to a real contact; SEC blocks the placeholder.
     """
+    _use_llm(llm_provider)
     from tracker.ingest import edgar
     from tracker.ingest.crawl import run as run_crawl
 
@@ -3783,10 +3840,16 @@ def ingest_edgar(
         )
         return
 
-    if not settings.has_api_key():
+    try:
+        # Constructing IS the readiness check, for whichever provider is answering:
+        # key presence on the API, a living server locally. Nothing is spent.
+        from tracker.llm import LLMUnavailable, build_extractor
+
+        build_extractor(settings)
+    except LLMUnavailable as exc:
         _fail(
-            f"{len(urls)} filing(s) are prepared, but extraction needs TRACKER_DEEPSEEK_API_KEY.\n"
-            "The prepared text is cached, so setting the key and re-running costs no fetches."
+            f"{len(urls)} filing(s) are prepared, but extraction cannot start:\n{exc}\n"
+            "The prepared text is cached, so fixing this and re-running costs no fetches."
         )
 
     try:
@@ -3921,6 +3984,14 @@ def enrich(
     dry_run: Annotated[
         bool, typer.Option("--dry-run", help="Harvest and report without writing or extracting.")
     ] = False,
+    llm_provider: Annotated[
+        str | None,
+        typer.Option(
+            "--llm-provider",
+            help="Which model answers: 'deepseek' (the API) or 'ollama' (local).",
+            show_default=False,
+        ),
+    ] = None,
 ) -> None:
     """Throw every retrieval method at one or more projects until rounds stop paying.
 
@@ -3945,6 +4016,7 @@ def enrich(
     real ceiling, and the ordering decides who gets the articles before it runs
     dry, so raise `--budget` when the point is genuinely the whole database.
     """
+    _use_llm(llm_provider)
     from tracker.ingest import enrich as enrich_mod
     from tracker.ingest.fetch import (
         Crawl4AIFetcher,
@@ -4244,6 +4316,14 @@ def logic_check(
         bool, typer.Option("--collisions/--no-collisions", help="Show source disagreements.")
     ] = True,
     limit: Annotated[int, typer.Option("--limit", help="Findings to print.")] = 40,
+    llm_provider: Annotated[
+        str | None,
+        typer.Option(
+            "--llm-provider",
+            help="Which model answers: 'deepseek' (the API) or 'ollama' (local).",
+            show_default=False,
+        ),
+    ] = None,
 ) -> None:
     """Find values that contradict each other, and say which source wins.
 
@@ -4281,16 +4361,17 @@ def logic_check(
     value in `tracker review`; an unconfirmed investment figure already stays
     out of the capex sums, so the repair path exists before the audit runs.
     """
+    _use_llm(llm_provider)
     from tracker import logic as logic_mod
 
     engine = _read_engine()
     extractor = None
     if read > 0 or audit > 0:
-        from tracker.llm import MissingApiKey, reasoning_extractor
+        from tracker.llm import LLMUnavailable, reasoning_extractor
 
         try:
             extractor = reasoning_extractor(get_settings())
-        except MissingApiKey as exc:
+        except LLMUnavailable as exc:
             _fail(str(exc))
 
     def announce(project) -> None:
@@ -4410,6 +4491,14 @@ def logic_conflicts(
     yes: Annotated[bool, typer.Option("--yes", help="Skip the confirmation for a large run.")] = (
         False
     ),
+    llm_provider: Annotated[
+        str | None,
+        typer.Option(
+            "--llm-provider",
+            help="Which model answers: 'deepseek' (the API) or 'ollama' (local).",
+            show_default=False,
+        ),
+    ] = None,
 ) -> None:
     """Let one model read every source about a contested field and settle it.
 
@@ -4442,6 +4531,7 @@ def logic_conflicts(
     equals what its citations imply. Run `tracker backfill dates` first — the
     tiebreak, and this model, both reason from publication dates.
     """
+    _use_llm(llm_provider)
     from typing import Any as _Any
 
     from tracker import conflicts as conflicts_mod
@@ -4482,11 +4572,11 @@ def logic_conflicts(
         )
         raise typer.Exit(1)
 
-    from tracker.llm import MissingApiKey, reasoning_extractor
+    from tracker.llm import LLMUnavailable, reasoning_extractor
 
     try:
         extractor = reasoning_extractor(get_settings())
-    except MissingApiKey as exc:
+    except LLMUnavailable as exc:
         _fail(str(exc))
         return
 
@@ -4561,6 +4651,14 @@ def logic_resolve(
         bool,
         typer.Option("--again", help="Re-offer findings already answered on their row."),
     ] = False,
+    llm_provider: Annotated[
+        str | None,
+        typer.Option(
+            "--llm-provider",
+            help="Which model answers: 'deepseek' (the API) or 'ollama' (local).",
+            show_default=False,
+        ),
+    ] = None,
 ) -> None:
     """Settle the collisions that can be settled, by re-running the merge policy.
 
@@ -4611,6 +4709,7 @@ def logic_resolve(
     are recorded as `model resolved`, never `operator resolved`, so a reader six
     months later can tell that nobody looked.
     """
+    _use_llm(llm_provider)
     import sys as _sys
 
     from tracker import logic as logic_mod
@@ -4621,11 +4720,11 @@ def logic_resolve(
 
     extractor = None
     if llm:
-        from tracker.llm import MissingApiKey, reasoning_extractor
+        from tracker.llm import LLMUnavailable, reasoning_extractor
 
         try:
             extractor = reasoning_extractor(get_settings())
-        except MissingApiKey as exc:
+        except LLMUnavailable as exc:
             _fail(str(exc))
 
     interactive = not auto_only and not llm and _sys.stdin.isatty() and not json_mode()
@@ -4963,6 +5062,14 @@ def point(
     max_articles: Annotated[
         int, typer.Option("--max-articles", help="Articles to read when building a new profile.")
     ] = 5,
+    llm_provider: Annotated[
+        str | None,
+        typer.Option(
+            "--llm-provider",
+            help="Which model answers: 'deepseek' (the API) or 'ollama' (local).",
+            show_default=False,
+        ),
+    ] = None,
 ) -> None:
     """Go and get one named data center: match it to a row, or build its profile.
 
@@ -4995,13 +5102,14 @@ def point(
 
     Costs one call to identify, then whatever the branch it takes costs.
     """
+    _use_llm(llm_provider)
     from tracker import point as point_mod
-    from tracker.llm import MissingApiKey, reasoning_extractor
+    from tracker.llm import LLMUnavailable, reasoning_extractor
 
     settings = get_settings()
     try:
         extractor = reasoning_extractor(settings)
-    except MissingApiKey as exc:
+    except LLMUnavailable as exc:
         _fail(str(exc))
         return
 
@@ -5334,6 +5442,14 @@ def audit_resolve(
         bool, typer.Option("--again", help="Re-ask findings a previous run already settled.")
     ] = False,
     limit: Annotated[int, typer.Option("--limit", help="Findings to work through.")] = 20,
+    llm_provider: Annotated[
+        str | None,
+        typer.Option(
+            "--llm-provider",
+            help="Which model answers: 'deepseek' (the API) or 'ollama' (local).",
+            show_default=False,
+        ),
+    ] = None,
 ) -> None:
     """Settle the implausible figures, escalating only as far as it has to.
 
@@ -5364,6 +5480,7 @@ def audit_resolve(
     asked again unless you pass `--again`. A model may not mark a row verified;
     that is a claim only a person may make.
     """
+    _use_llm(llm_provider)
     import sys as _sys
 
     from tracker import audit as audit_mod
@@ -5375,11 +5492,11 @@ def audit_resolve(
     settings = get_settings()
     extractor = None
     if llm:
-        from tracker.llm import MissingApiKey, reasoning_extractor
+        from tracker.llm import LLMUnavailable, reasoning_extractor
 
         try:
             extractor = reasoning_extractor(settings)
-        except MissingApiKey as exc:
+        except LLMUnavailable as exc:
             _fail(str(exc))
 
     interactive = ask and _sys.stdin.isatty() and not json_mode()
@@ -5919,6 +6036,14 @@ def backfill(
             help="`dates` only: include URLs no citation and no queue entry uses.",
         ),
     ] = False,
+    llm_provider: Annotated[
+        str | None,
+        typer.Option(
+            "--llm-provider",
+            help="Which model answers: 'deepseek' (the API) or 'ollama' (local).",
+            show_default=False,
+        ),
+    ] = None,
 ) -> None:
     """Bring stored rows up to date. Three jobs, one family.
 
@@ -5946,8 +6071,9 @@ def backfill(
     blocks are already stored is skipped — so a sensible way to run it is in
     tranches: `--limit 25`, look at what came back, then more.
     """
+    _use_llm(llm_provider)
     from tracker import backfill as backfill_mod
-    from tracker.llm import MissingApiKey, default_extractor
+    from tracker.llm import LLMUnavailable, default_extractor
 
     if what == "derive":
         # Dispatched first, and before any extractor is constructed: this half
@@ -6020,7 +6146,7 @@ def backfill(
 
     try:
         extractor = default_extractor(settings)
-    except MissingApiKey as exc:
+    except LLMUnavailable as exc:
         _fail(str(exc))
         return
 
@@ -6064,6 +6190,14 @@ def infer(
         str | None,
         typer.Option("--model", help="Override the reasoning model.", show_default=False),
     ] = None,
+    llm_provider: Annotated[
+        str | None,
+        typer.Option(
+            "--llm-provider",
+            help="Which model answers: 'deepseek' (the API) or 'ollama' (local).",
+            show_default=False,
+        ),
+    ] = None,
 ) -> None:
     """Ask a reasoning model what is obstructing a project and what to watch for.
 
@@ -6078,17 +6212,21 @@ def infer(
 
     Nothing here is stored yet — the analysis is printed for review.
     """
+    _use_llm(llm_provider)
     from tracker.infer import analyse
-    from tracker.llm import MissingApiKey, reasoning_extractor
+    from tracker.llm import LLMUnavailable, reasoning_extractor
 
     settings = get_settings()
     try:
         extractor = reasoning_extractor(settings)
         if model:
-            from tracker.llm import DeepSeekExtractor
+            # The override names a model on whichever provider is answering, and
+            # deliberately keeps this tier's behaviour otherwise: no thinking is
+            # what the bare constructor meant, so no thinking is what it stays.
+            from tracker.llm import build_extractor
 
-            extractor = DeepSeekExtractor(settings, model=model)
-    except MissingApiKey as exc:
+            extractor = build_extractor(settings, model=model)
+    except LLMUnavailable as exc:
         _fail(str(exc))
         raise
 
@@ -6877,6 +7015,14 @@ def sync(
         ),
     ] = False,
     show_rows: Annotated[int, typer.Option("--rows", help="Projects to list at the end.")] = 30,
+    llm_provider: Annotated[
+        str | None,
+        typer.Option(
+            "--llm-provider",
+            help="Which model answers: 'deepseek' (the API) or 'ollama' (local).",
+            show_default=False,
+        ),
+    ] = None,
 ) -> None:
     """Everything in one command: find what is missing, read it, settle it, list it.
 
@@ -6907,10 +7053,11 @@ def sync(
     `--enrich` buys depth on rows that are already here. A single budget spread
     across all four would silently favour whichever phase ran first.
     """
+    _use_llm(llm_provider)
     from tracker import policy as policy_mod
     from tracker.ingest import crawl
     from tracker.ingest import discover as disc
-    from tracker.llm import DeepSeekExtractor, MissingApiKey
+    from tracker.llm import LLMUnavailable, build_extractor
     from tracker.upsert import recompute_confidence
 
     settings = get_settings()
@@ -6927,8 +7074,8 @@ def sync(
     # Checked before any network call: every later phase needs it, and failing
     # here costs nothing rather than after a round of feed polling.
     try:
-        extractor = DeepSeekExtractor(settings)
-    except MissingApiKey as exc:
+        extractor = build_extractor(settings)
+    except LLMUnavailable as exc:
         _fail(str(exc))
         return
 
@@ -7418,6 +7565,14 @@ def search_cmd(
     dry_run: Annotated[
         bool, typer.Option("--dry-run", help="Search but do not queue anything.")
     ] = False,
+    llm_provider: Annotated[
+        str | None,
+        typer.Option(
+            "--llm-provider",
+            help="Which model answers: 'deepseek' (the API) or 'ollama' (local).",
+            show_default=False,
+        ),
+    ] = None,
 ) -> None:
     """Find candidate articles with Google search instead of waiting for a feed.
 
@@ -7429,16 +7584,17 @@ def search_cmd(
     becomes a row once a real article has been fetched and its values backed by
     verbatim quotes. If the model invents a project, the search finds nothing.
     """
+    _use_llm(llm_provider)
     from tracker.ingest import search as srch
-    from tracker.llm import DeepSeekExtractor, MissingApiKey
+    from tracker.llm import LLMUnavailable, build_extractor
 
     settings = get_settings()
     queries = list(query or [])
 
     if from_llm:
         try:
-            extractor = DeepSeekExtractor(settings)
-        except MissingApiKey as exc:
+            extractor = build_extractor(settings)
+        except LLMUnavailable as exc:
             _fail(str(exc))
             return
         engine_ro = _read_engine()
@@ -7539,6 +7695,14 @@ def prospect(
         Path | None,
         typer.Option("--roster", help="A different operator roster.", show_default=False),
     ] = None,
+    llm_provider: Annotated[
+        str | None,
+        typer.Option(
+            "--llm-provider",
+            help="Which model answers: 'deepseek' (the API) or 'ollama' (local).",
+            show_default=False,
+        ),
+    ] = None,
 ) -> None:
     """Go and get the operators the database has no rows for.
 
@@ -7582,12 +7746,13 @@ def prospect(
     one call per article read. `--skip-campuses` removes the first; `--extract 0`
     removes the last and leaves the queue for `tracker sync`.
     """
+    _use_llm(llm_provider)
     from tracker import prospect as prospect_mod
     from tracker import roster as roster_mod
     from tracker.ingest import enrich as enrich_mod
     from tracker.ingest import search as srch
     from tracker.ingest.fetch import Crawl4AIFetcher, MissingDependency, escalation_ladder
-    from tracker.llm import DeepSeekExtractor, MissingApiKey
+    from tracker.llm import LLMUnavailable, build_extractor
 
     settings = get_settings()
     if browser:
@@ -7642,10 +7807,11 @@ def prospect(
     extractor = None
     if not skip_campuses:
         try:
-            extractor = DeepSeekExtractor(settings)
-        except MissingApiKey:
+            extractor = build_extractor(settings)
+        except LLMUnavailable:
             console.print(
-                "[yellow]no API key[/yellow] [dim]— templated queries only, no campus names[/dim]"
+                "[yellow]no LLM available[/yellow] [dim]— templated queries only, "
+                "no campus names[/dim]"
             )
     provider = None
     if settings.has_search_keys():
@@ -7741,8 +7907,8 @@ def prospect(
         return
 
     try:
-        crawl_extractor = DeepSeekExtractor(settings)
-    except MissingApiKey as exc:
+        crawl_extractor = build_extractor(settings)
+    except LLMUnavailable as exc:
         console.print(f"[yellow]queued but not read[/yellow] [dim]— {exc}[/dim]")
         return
 

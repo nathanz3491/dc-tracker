@@ -76,7 +76,9 @@ The MW and investment columns are empty because `seed/sample-projects.json` ship
 with every figure as the literal string `PLACEHOLDER`. That is deliberate — see
 [The seed file](docs/design-decisions.md#the-seed-file).
 
-Then the real loop, which needs one API key — see [Ingesting](docs/ingesting.md):
+Then the real loop, which needs one API key — or a local Ollama model instead,
+`--llm-provider ollama` on any command that spends LLM calls — see
+[Ingesting](docs/ingesting.md):
 
 ```bash
 tracker tui           # all of the below, on screen, in six panes
@@ -238,7 +240,7 @@ directory, which is what lets `tracker init` work from anywhere.
 .venv/Scripts/python -m pytest
 ```
 
-2,422 tests, about seven minutes. **A fresh clone with no API key and no network access
+2,442 tests, about seven minutes. **A fresh clone with no API key and no network access
 must produce a green run.** Tests that would hit the network or spend DeepSeek
 tokens are marked `network` / `llm` and deselected by default; run them
 explicitly with `-m network` or `-m llm`.

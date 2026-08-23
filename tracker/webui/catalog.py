@@ -146,6 +146,9 @@ def _enum_hints() -> dict[Any, tuple[str, ...]]:
         "--category": tuple(RISK_CATEGORIES),
         "--iso": tuple(sorted(ISO_MAPS)),
         "--sort": ("mw", "investment", "date", "confidence", "name"),
+        # One name everywhere on purpose; `--llm` was taken by the resolve
+        # commands' use-a-model-at-all switch before providers were plural.
+        "--llm-provider": ("deepseek", "ollama"),
         "--by": ("category", "company", "state", "severity"),
         "fmt": tuple(FORMATS),
         ("coverage", "--kind"): tuple(OPERATOR_KINDS),
