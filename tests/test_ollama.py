@@ -324,3 +324,33 @@ def test_completion_offers_the_two_providers():
 
     result = completion.complete("sync --llm-provider ", catalog.by_name())
     assert [c.text for c in result.items] == ["deepseek", "ollama"]
+
+
+def test_ollama_traffic_never_transits_a_proxy(monkeypatch):
+    """Measured failure, not a hypothetical: on a machine with a system-wide
+    proxy, httpx's default routed 127.0.0.1:11434 through the proxy — macOS's
+    system proxy configuration is honoured even with no proxy variable in the
+    environment — and the proxy answered 502 for a loopback destination. curl
+    worked on the same URL. Local inference opts out of proxies entirely; the
+    API provider keeps the default, since reaching the API may be what the
+    proxy is for.
+    """
+    seen: list[bool] = []
+    real_get = httpx.get
+
+    def spy_get(url, **kwargs):
+        seen.append(kwargs.get("trust_env"))
+        return httpx.Response(200, json={"version": "test"}, request=httpx.Request("GET", url))
+
+    def spy_post(url, **kwargs):
+        seen.append(kwargs.get("trust_env"))
+        return httpx.Response(
+            200, json=chat_reply("OK"), request=httpx.Request("POST", url)
+        )
+
+    monkeypatch.setattr(httpx, "get", spy_get)
+    monkeypatch.setattr(httpx, "post", spy_post)
+    extractor = OllamaExtractor(ollama_settings())
+    extractor.complete(system="s", user="u")
+    assert seen == [False, False], f"every call must opt out, got {seen}"
+    assert real_get is not httpx.get  # the spy was in place for the whole test

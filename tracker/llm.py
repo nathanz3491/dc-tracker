@@ -640,6 +640,16 @@ class OllamaExtractor:
     pages, not after. One GET against ``/api/version``, about a millisecond when
     the server is local and a fast refusal when it is not.
 
+    **Every request here sets ``trust_env=False``, and it was measured, not
+    guessed.** httpx with its default honours not only ``HTTP_PROXY`` but the
+    operating system's proxy configuration — `urllib.request.getproxies()` reads
+    macOS's SystemConfiguration — so on a machine running a system-wide proxy,
+    requests to ``127.0.0.1:11434`` were routed to the proxy at 127.0.0.1:7897,
+    which answered 502 for a loopback destination it cannot reach. curl worked
+    and httpx failed on the same URL, with ``os.environ`` showing no proxy at
+    all. Local inference must never transit a proxy; the API provider keeps the
+    default, because reaching the API may be exactly what the proxy is for.
+
     The JSON contract stays in code here too — parse, repair, validate, one
     corrective retry — rather than on Ollama's ``format: json`` mode, for the
     same reason it is not on DeepSeek's: a provider-side mode that constrains
@@ -662,7 +672,9 @@ class OllamaExtractor:
         #: as the string so the factories apply ONE tier policy to both providers.
         self.effort = effort
         try:
-            httpx.get(f"{self.base_url}/api/version", timeout=5.0).raise_for_status()
+            httpx.get(
+                f"{self.base_url}/api/version", timeout=5.0, trust_env=False
+            ).raise_for_status()
         except (httpx.RequestError, httpx.HTTPStatusError) as exc:
             probe = f"(probe failed: {exc})"
             raise OllamaUnavailable(f"{self._help()}{probe}") from exc
@@ -738,6 +750,7 @@ class OllamaExtractor:
                 self.endpoint,
                 json=payload,
                 timeout=httpx.Timeout(self.settings.ollama_timeout_s, connect=10.0),
+                trust_env=False,
             ) as response:
                 if response.status_code >= 400:
                     response.read()
@@ -772,6 +785,7 @@ class OllamaExtractor:
                     self.endpoint,
                     json=payload,
                     timeout=httpx.Timeout(self.settings.ollama_timeout_s, connect=10.0),
+                    trust_env=False,
                 )
             except httpx.RequestError as exc:
                 last = exc

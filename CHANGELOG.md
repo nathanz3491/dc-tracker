@@ -161,6 +161,21 @@ initial build of the v1 PRD.
   spots behind the same missing operator: one in what we looked for, one in where we
   looked.
 
+### Fixed
+
+- **Ollama calls no longer transit the machine's proxy** (`tracker/llm.py`).
+
+  Deployed, verified, and the first live `--llm-provider ollama` check answered
+  502 — from the proxy, not the model. httpx's default honours not only
+  `HTTP_PROXY` but the OS's own proxy configuration (`urllib.request.getproxies()`
+  reads macOS SystemConfiguration), so on a host running a system-wide proxy,
+  requests to `127.0.0.1:11434` were routed to the proxy at 127.0.0.1:7897, which
+  cannot reach the caller's loopback. curl succeeded on the same URL while
+  `os.environ` showed no proxy anywhere, which is what made it worth writing
+  down. Every Ollama call now sets `trust_env=False`: local inference never has a
+  reason to leave the machine. The API provider keeps the default — reaching the
+  API may be exactly what the proxy is for.
+
 ### Changed
 
 - **The TUI's run pane completes what you are typing, and gives the screen back to
