@@ -46,6 +46,48 @@ class MissingDependency(RuntimeError):
     """Textual is not installed. Message is operator-facing."""
 
 
+#: Fonts the SVG export asks for, in order, all of them local.
+#:
+#: **Why this is not left as Rich ships it.** Rich's SVG template declares
+#: `@font-face` rules that fetch Fira Code from a CDN and then asks for
+#: `font-family: Fira Code, monospace`. Opening such a file offline — or in any
+#: viewer that will not fetch a remote font — silently falls through to the
+#: viewer's default monospace, which is how a frame that looked fine in the
+#: terminal arrives looking wrong. Reported exactly that way: the TUI was fine and
+#: the screenshots of it were not.
+#:
+#: So the remote faces are dropped and the stack names what the machines involved
+#: actually have: Cascadia and Consolas on Windows, SF Mono and Menlo on macOS,
+#: DejaVu and Noto on Linux. No request leaves the file, which also means a
+#: screenshot of production is not a page that phones a CDN when somebody opens it.
+SVG_MONO_STACK = (
+    '"Cascadia Code", "Cascadia Mono", "JetBrains Mono", "SF Mono", "SFMono-Regular", '
+    'Menlo, Consolas, "DejaVu Sans Mono", "Liberation Mono", "Noto Sans Mono", monospace'
+)
+
+#: The title above the frame is prose, not code, so it gets a UI face.
+SVG_TITLE_STACK = (
+    '-apple-system, "Segoe UI", system-ui, Roboto, "Helvetica Neue", Arial, sans-serif'
+)
+
+
+def _local_fonts(svg: str) -> str:
+    """Rewrite Rich's font CSS to a local stack. Every step is optional.
+
+    Deliberately surgery on the produced SVG rather than a replacement template:
+    `App.export_screenshot` does not take one, and reproducing its body would mean
+    reaching into `screen._compositor` and re-breaking on the next Textual release.
+    Each substitution is independent and a miss leaves the file exactly as it was,
+    so a template change upstream costs the nicer font and never a corrupt frame.
+    """
+    import re
+
+    svg = re.sub(r"@font-face\s*\{[^}]*\}\s*", "", svg)
+    svg = svg.replace("font-family: Fira Code, monospace;", f"font-family: {SVG_MONO_STACK};")
+    svg = svg.replace("font-family: arial;", f"font-family: {SVG_TITLE_STACK};")
+    return svg
+
+
 def ensure_available() -> None:
     """Raise before anything else happens, rather than twenty lines in."""
     try:
@@ -95,7 +137,12 @@ def run(
             app.show_pane(pane or TrackerApp.PANES[0])
             await pilot.pause()
             if screenshot:
-                app.save_screenshot(str(screenshot))
+                # Not `save_screenshot`: the frame goes through `_local_fonts`
+                # first, so the file names fonts the reader has instead of asking
+                # a CDN for one.
+                Path(screenshot).write_text(
+                    _local_fonts(app.export_screenshot(title=app.title)), encoding="utf-8"
+                )
             problems = app.startup_problems
         for problem in problems:
             print(f"error {problem}")
@@ -104,4 +151,11 @@ def run(
     return asyncio.run(_headless())
 
 
-__all__ = ["MISSING_TEXTUAL", "MissingDependency", "ensure_available", "run"]
+__all__ = [
+    "MISSING_TEXTUAL",
+    "SVG_MONO_STACK",
+    "SVG_TITLE_STACK",
+    "MissingDependency",
+    "ensure_available",
+    "run",
+]

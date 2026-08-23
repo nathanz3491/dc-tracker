@@ -381,3 +381,123 @@ def test_a_snapshot_reports_a_bad_roster_rather_than_failing(curated: Path, monk
     assert snapshot.coverage is None
     assert snapshot.problems and "coverage unavailable" in snapshot.problems[0]
     assert len(snapshot.projects) == 2, "the projects still loaded"
+
+
+# --- Typing in the run pane -------------------------------------------------
+
+
+async def _run_pane(app_under_test, pilot):
+    app_under_test.show_pane("run")
+    await pilot.pause()
+    pane = app_under_test.query_one("#commands-pane", CommandsPane)
+    app_under_test.query_one("#command-line").focus()
+    await pilot.pause()
+    return pane
+
+
+async def test_typing_offers_candidates_and_tab_takes_one(curated: Path):
+    app_under_test = TrackerApp(curated)
+    async with app_under_test.run_test(size=(120, 30)) as pilot:
+        pane = await _run_pane(app_under_test, pilot)
+        for char in "cov":
+            await pilot.press(char)
+        await pilot.pause()
+        assert [c.text for c in pane._completions.items] == ["coverage"]
+        await pilot.press("tab")
+        await pilot.pause()
+        assert app_under_test.query_one("#command-line").value == "coverage "
+
+
+async def test_the_arrows_move_through_the_candidates(curated: Path):
+    app_under_test = TrackerApp(curated)
+    async with app_under_test.run_test(size=(120, 30)) as pilot:
+        pane = await _run_pane(app_under_test, pilot)
+        for char in ("s", "y", "n", "c", "space", "minus", "minus"):
+            await pilot.press(char)
+        await pilot.pause()
+        offered = [c.text for c in pane._completions.items]
+        assert len(offered) > 3
+        await pilot.press("down")
+        await pilot.press("tab")
+        await pilot.pause()
+        assert app_under_test.query_one("#command-line").value == f"sync {offered[1]} "
+
+
+async def test_up_from_the_top_wraps_to_the_end(curated: Path):
+    app_under_test = TrackerApp(curated)
+    async with app_under_test.run_test(size=(120, 30)) as pilot:
+        pane = await _run_pane(app_under_test, pilot)
+        for char in ("s", "y", "n", "c", "space", "minus", "minus"):
+            await pilot.press(char)
+        await pilot.pause()
+        offered = [c.text for c in pane._completions.items]
+        await pilot.press("up")
+        await pilot.press("tab")
+        await pilot.pause()
+        assert app_under_test.query_one("#command-line").value == f"sync {offered[-1]} "
+
+
+async def test_escape_closes_the_list_then_leaves_the_box(curated: Path):
+    """Because the box eats `1`..`6`, `q` and `r` while it has focus."""
+    app_under_test = TrackerApp(curated)
+    async with app_under_test.run_test(size=(120, 30)) as pilot:
+        pane = await _run_pane(app_under_test, pilot)
+        await pilot.press("c", "o")
+        await pilot.pause()
+        assert pane.completions_open
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not pane.completions_open
+        assert app_under_test.focused is app_under_test.query_one("#command-line")
+        await pilot.press("escape")
+        await pilot.pause()
+        assert app_under_test.focused is not app_under_test.query_one("#command-line")
+
+
+async def test_a_project_id_can_be_completed_from_the_database(curated: Path):
+    """The completion nothing but a live database could offer."""
+    app_under_test = TrackerApp(curated)
+    async with app_under_test.run_test(size=(120, 30)) as pilot:
+        pane = await _run_pane(app_under_test, pilot)
+        for char in ("e", "n", "r", "i", "c", "h", "space"):
+            await pilot.press(char)
+        await pilot.pause()
+        offered = pane._completions.items
+        assert offered, "the ids in this database are what should be on offer"
+        assert offered[0].hint.startswith("Meta"), "biggest campus first"
+        await pilot.press("tab")
+        await pilot.pause()
+        line = app_under_test.query_one("#command-line").value
+        assert line.split()[1].isdigit()
+
+
+async def test_the_output_is_the_tallest_thing_in_the_pane(curated: Path):
+    """The correction that prompted this layout: reading output is the job.
+
+    Asserted rather than eyeballed, because a stray `height:` in the CSS would
+    quietly give the reference material the screen back.
+    """
+    app_under_test = TrackerApp(curated)
+    async with app_under_test.run_test(size=(120, 30)) as pilot:
+        await _run_pane(app_under_test, pilot)
+        log = app_under_test.query_one("#command-log")
+        top = app_under_test.query_one("#commands-top")
+        assert log.size.height > top.size.height
+
+
+async def test_a_command_with_many_flags_does_not_flood_the_detail(curated: Path):
+    """`sync` has seventeen; printing them all was six rows of a thirty-row screen."""
+    app_under_test = TrackerApp(curated)
+    async with app_under_test.run_test(size=(120, 30)) as pilot:
+        pane = await _run_pane(app_under_test, pilot)
+        pane.show_command("sync")
+        await pilot.pause()
+        # Measured off the rendered widget rather than the string it was given: the
+        # thing that matters is rows on screen, and the flag line wraps.
+        from textual.geometry import Region
+
+        detail = app_under_test.query_one("#command-detail")
+        strips = detail.render_lines(Region(0, 0, detail.size.width, detail.size.height))
+        text = " / ".join(strip.text for strip in strips)
+        assert "more" in text, "the rest have to be accounted for, not just dropped"
+        assert detail.size.height <= 7, f"{detail.size.height} rows: {text}"

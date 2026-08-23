@@ -48,13 +48,22 @@ class TrackerApp(App):
     #coverage-head, #capex-head, #queue-head, #command-status { padding: 0 1; height: auto; }
     #queue-table { width: 3fr; }
     #failed-table { width: 2fr; border-left: solid $panel; }
-    #commands-top { height: 1fr; }
-    #commands-left { width: 2fr; }
-    #command-detail-wrap { width: 3fr; border-left: solid $panel; padding: 0 1; }
-    #command-log { height: 40%; border-top: solid $panel; }
-    #command-line { border: solid $accent; }
-    #command-confirm { border: solid $error; }
-    Input { height: 3; }
+    /* The run pane, budgeted for height rather than for reference material.
+       Reported as cramped and correctly: the flag table used to take the top half
+       and the output a quarter, when reading output is the reason the pane exists.
+       The picker and the detail are now a fixed nine rows, the completion list is
+       zero rows until there is something to offer, and the log takes the rest. */
+    #commands-top { height: 7; }
+    #command-list { width: 34; }
+    #command-detail-wrap { width: 1fr; border-left: solid $panel; padding: 0 1; }
+    #command-log { height: 1fr; border-top: solid $panel; padding: 0 1; }
+    #command-completions { height: auto; max-height: 5; border-left: solid $accent; }
+    /* Five rows, not seven: the list borrows its height from the log, and a
+       reader mid-command should still see the tail of the last one. */
+    #command-line { border: none; background: $panel; }
+    #command-confirm { border: none; background: $error 30%; }
+    #command-status { height: 1; }
+    Input { height: 1; padding: 0 1; }
     """
 
     BINDINGS: ClassVar = [
@@ -132,6 +141,13 @@ class TrackerApp(App):
                 self.query_one(pane_id, pane_type).load(snapshot)
             except Exception as exc:  # one broken pane must not blank the others
                 self.startup_problems.append(f"{pane_id.lstrip('#')}: {exc}")
+        # Positional completions come out of the snapshot, so `enrich <tab>` offers
+        # the projects that exist now rather than the ones that existed at start-up.
+        from tracker.tui.completion import value_provider
+
+        self.query_one("#commands-pane", CommandsPane).use_values(
+            value_provider(snapshot.projects, snapshot.coverage)
+        )
         totals = snapshot.totals
         self.sub_title = (
             f"{self.db_path}  ·  {totals.get('projects', 0)} projects  ·  "

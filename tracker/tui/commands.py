@@ -8,6 +8,19 @@ asserts the two offer the same set: a hand-maintained list is one that silently
 falls behind, and "the TUI has all the CLI's functions" has to be a property of the
 code rather than a promise.
 
+**The output is the biggest thing in the pane, and that was a correction.** The
+first version spent the top half of the screen on a table of every flag a command
+takes — twenty rows on `sync` — and left the log a quarter of it. Reading output is
+what this pane is *for*; the flag table was reference material sitting in the space
+the answer needed. The flags are now one wrapped line, the full help appears for
+whichever flag is being typed, and the log takes everything left over.
+
+**Typing is completed rather than remembered.** `completion.complete` offers the
+next word: command names, then flags, then a closed vocabulary's values, then
+project ids and operator names read out of this database. Tab takes the highlighted
+candidate, up and down move through them, escape dismisses. So the flag reference
+arrives at the moment it is wanted and costs no height until then.
+
 **Runs go through `webui.runner`.** Nothing here builds a command line out of the
 text you typed: `catalog.parse_command_line` turns it into a `(command, flags)`
 pair, `catalog.build_argv` validates that pair against the catalog and returns an
@@ -27,27 +40,89 @@ import queue
 from typing import Any, ClassVar
 
 from rich.console import Group
-from rich.table import Table
 from rich.text import Text
 from textual import work
 from textual.app import ComposeResult
+from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.message import Message
 from textual.widgets import Input, OptionList, RichLog, Static
 from textual.widgets.option_list import Option
 
+from tracker.tui import completion as completion_mod
 from tracker.webui import catalog
 from tracker.webui import runner as runner_mod
 
 #: Cost markers in the list. `llm` spends money; `destroys` cannot be undone.
 COST_MARK = {"llm": ("$", "yellow"), "free": (" ", "dim")}
 
+#: Characters of flag names the detail will print before it says "+N more".
+#:
+#: Two lines of a narrow pane, roughly. `sync` has seventeen flags and printing
+#: them all wrapped to six rows — which is the whole top of a 30-row terminal, for
+#: reference material that the completion list now gives on demand. The cap is what
+#: keeps this block short enough for the output to have room.
+FLAG_BUDGET = 110
 
-class CommandsPane(Vertical):
-    """Pick a command, see its whole surface, run it, watch it."""
+#: Colour per candidate kind, so the list says what sort of word it is offering.
+CANDIDATE_STYLE = {
+    "command": "bold",
+    "flag": "cyan",
+    "choice": "magenta",
+    "value": "green",
+}
+
+
+class CommandInput(Input):
+    """The command line, with the completion keys bound to it.
+
+    A subclass rather than a handler on the pane: a widget's own bindings resolve
+    before the screen's, which is what lets `tab` mean "take this completion" in
+    this box while still meaning "next widget" everywhere else.
+    """
 
     BINDINGS: ClassVar = [
-        ("ctrl+k", "cancel_run", "cancel the run"),
+        Binding("tab", "take_completion", "complete", show=False, priority=True),
+        Binding("down", "next_completion", "next candidate", show=False, priority=True),
+        Binding("up", "previous_completion", "previous candidate", show=False, priority=True),
+        Binding("escape", "dismiss_completions", "dismiss", show=False, priority=True),
+    ]
+
+    def action_take_completion(self) -> None:
+        self._pane().take_completion()
+
+    def action_next_completion(self) -> None:
+        self._pane().move_completion(1)
+
+    def action_previous_completion(self) -> None:
+        self._pane().move_completion(-1)
+
+    def action_dismiss_completions(self) -> None:
+        """Dismiss the candidates, or — with none open — leave the box.
+
+        Somewhere to go matters: while this input has focus it consumes `1`..`6`,
+        `q` and `r`, because those are letters somebody is typing. Escape is the
+        way back to keys that switch panes.
+        """
+        pane = self._pane()
+        if pane.completions_open:
+            pane.hide_completions()
+        else:
+            pane.query_one("#command-list").focus()
+
+    def _pane(self) -> CommandsPane:
+        for node in self.ancestors_with_self:
+            if isinstance(node, CommandsPane):
+                return node
+        raise LookupError("CommandInput outside a CommandsPane")
+
+
+class CommandsPane(Vertical):
+    """Pick a command, complete it, run it, read the output."""
+
+    BINDINGS: ClassVar = [
+        Binding("ctrl+k", "cancel_run", "cancel the run"),
+        Binding("ctrl+l", "clear_log", "clear the output"),
     ]
 
     class DataChanged(Message):
@@ -60,24 +135,32 @@ class CommandsPane(Vertical):
         self._commands: dict[str, catalog.Command] = {}
         self._order: list[str] = []
         self._pending: tuple[str, dict[str, Any]] | None = None
+        self._completions = completion_mod.Completions()
+        #: Supplies project ids and operator names to the completer. Replaced on
+        #: every reload, so a candidate cannot name a row that has gone.
+        self._values_for = None
 
     # --- layout -----------------------------------------------------------
 
     def compose(self) -> ComposeResult:
+        # Fixed and small: reference material, not the answer.
         with Horizontal(id="commands-top"):
-            with Vertical(id="commands-left"):
-                yield Input(placeholder="search commands", id="command-search")
-                yield OptionList(id="command-list")
+            yield OptionList(id="command-list")
             yield VerticalScroll(Static(id="command-detail"), id="command-detail-wrap")
-        yield Input(
-            placeholder="tracker … — e.g. `sync --prospect 3`, `enrich 93`, `coverage --kind neocloud`",
+        # Everything left over, because this is the part being read.
+        yield RichLog(id="command-log", highlight=False, markup=False, wrap=True, max_lines=6000)
+        # Directly above the line being typed, where a shell puts them, and zero
+        # height whenever there is nothing to offer.
+        yield OptionList(id="command-completions")
+        yield CommandInput(
+            placeholder="type a command — tab completes, up/down choose, enter runs",
             id="command-line",
         )
         yield Static(id="command-status")
-        yield RichLog(id="command-log", highlight=False, markup=False, wrap=False, max_lines=4000)
 
     def on_mount(self) -> None:
         self._runner = runner_mod.Runner(self._db_path)
+        self.query_one("#command-completions", OptionList).display = False
         self.reload_catalog()
 
     # --- the catalog ------------------------------------------------------
@@ -85,6 +168,10 @@ class CommandsPane(Vertical):
     def reload_catalog(self) -> None:
         self._commands = catalog.by_name()
         self.fill_list()
+
+    def use_values(self, values_for) -> None:
+        """Point the completer at this snapshot's projects and operators."""
+        self._values_for = values_for
 
     def fill_list(self, needle: str = "") -> None:
         """Grouped as the console groups them, filtered on name and help."""
@@ -109,9 +196,6 @@ class CommandsPane(Vertical):
             ]
             if not matching:
                 continue
-            # `add_option(None)` is how Textual 8 draws a separator; the class
-            # that used to do it is gone.
-            option_list.add_option(None)
             option_list.add_option(Option(Text(label.upper(), style="bold dim"), disabled=True))
             for name in matching:
                 option_list.add_option(Option(self._label(self._commands[name]), id=name))
@@ -123,62 +207,144 @@ class CommandsPane(Vertical):
         mark, style = COST_MARK.get(command.cost, (" ", "dim"))
         line = Text(f"{mark} ", style=style)
         line.append(command.name, style="bold" if command.cost == "llm" else "")
+        # Marks rather than words: this column is two dozen rows tall and every
+        # character of width it spends is width the command names lose.
         if command.destroys:
-            line.append("  deletes", style="red")
+            line.append(" x", style="red")
         if command.blocked:
-            line.append("  terminal only", style="dim")
+            line.append(" ~", style="dim")
         return line
 
-    def show_command(self, name: str) -> None:
+    def show_command(self, name: str, *, focus_flag: Any = None) -> None:
+        """The compact detail: what it is, what it costs, its flags in one line.
+
+        `focus_flag` is the flag being typed or highlighted, and it gets the one
+        line the table used to spend twenty on. That is the whole trade: the
+        reference appears when it is asked for instead of always being on screen.
+        """
         command = self._commands.get(name)
         if command is None:
             return
         head = Text()
-        head.append(f"tracker {command.name}\n", style="bold")
-        head.append(command.help or "", style="")
+        head.append(f"tracker {command.name}", style="bold")
         if command.cost == "llm":
-            head.append("\n\nspends LLM tokens — needs the name typed back", style="yellow")
+            head.append("   $ spends tokens, needs the name typed back", style="yellow")
         if command.destroys:
-            head.append(f"\n{command.destroys}", style="red")
+            head.append(f"   x {command.destroys}", style="red")
         if command.blocked:
-            head.append(f"\ncannot run from here: {command.blocked}", style="dim")
+            head.append(f"   cannot run from here: {command.blocked}", style="dim")
 
-        table = Table(box=None, padding=(0, 1), show_header=True, header_style="dim")
-        table.add_column("flag")
-        table.add_column("type")
-        table.add_column("default")
-        table.add_column("what it does", style="dim")
+        summary = Text(command.help or "", style="dim")
+
+        flags = Text()
+        shown = 0
         for flag in command.flags:
-            default = "" if flag.default in (None, False, "") else str(flag.default)
-            kind = flag.kind + ("[]" if flag.repeatable else "")
-            if flag.choices:
-                kind = "|".join(flag.choices)
-            table.add_row(
-                Text(flag.name, style="cyan" if not flag.positional else "magenta"),
-                Text(kind),
-                Text(default),
-                Text((flag.help or "")[:70]),
+            rendered = flag.name + (
+                "" if flag.positional or flag.kind == "bool" else completion_mod.default_text(flag)
             )
+            # The flag being typed is always printed, however long the line got:
+            # hiding the one thing the reader is looking at to honour a budget
+            # would defeat the budget's purpose.
+            focused = focus_flag is not None and flag.name == getattr(focus_flag, "name", None)
+            if len(flags) + len(rendered) > FLAG_BUDGET and not focused:
+                continue
+            if flags:
+                flags.append("  ")
+            style = "magenta" if flag.positional else "cyan"
+            flags.append(rendered, style=f"reverse {style}" if focused else style)
+            shown += 1
+        hidden = len(command.flags) - shown
+        if hidden > 0:
+            flags.append(f"  +{hidden} more", style="dim")
         if not command.flags:
-            table.add_row(Text("—", style="dim"), Text(""), Text(""), Text("no options"))
+            flags = Text("no options", style="dim")
 
-        self.query_one("#command-detail", Static).update(Group(head, Text(), table))
-        line = self.query_one("#command-line", Input)
-        line.value = f"{command.name} "
+        parts = [head, summary, Text(), flags]
+        if focus_flag is not None and getattr(focus_flag, "help", ""):
+            hint = Text()
+            hint.append(f"{focus_flag.name}  ", style="bold cyan")
+            hint.append(str(focus_flag.help))
+            parts += [Text(), hint]
+        self.query_one("#command-detail", Static).update(Group(*parts))
+
+    # --- completion -------------------------------------------------------
+
+    def refresh_completions(self) -> None:
+        """Recompute the candidates for whatever is in the box."""
+        line = self.query_one("#command-line", Input).value
+        self._completions = completion_mod.complete(
+            line, self._commands, values_for=self._values_for
+        )
+        widget = self.query_one("#command-completions", OptionList)
+        widget.clear_options()
+        for candidate in self._completions.items:
+            label = Text(candidate.text, style=CANDIDATE_STYLE.get(candidate.kind, ""))
+            if candidate.hint:
+                label.append(f"   {candidate.hint}", style="dim")
+            widget.add_option(Option(label))
+        has_items = bool(self._completions.items)
+        widget.display = has_items
+        if has_items:
+            widget.highlighted = 0
+
+        # The picker and the detail follow the box, so the reference material is
+        # always about the command being typed rather than the one last clicked.
+        command = self._completions.command
+        if command is not None:
+            self.show_command(command.name, focus_flag=self._completions.context)
+        else:
+            self.fill_list(self._completions.prefix)
+
+    def move_completion(self, delta: int) -> None:
+        widget = self.query_one("#command-completions", OptionList)
+        if not widget.display or not self._completions.items:
+            return
+        count = len(self._completions.items)
+        current = widget.highlighted if widget.highlighted is not None else 0
+        widget.highlighted = (current + delta) % count
+        chosen = self._completions.items[widget.highlighted]
+        command = self._completions.command
+        if command is not None and chosen.kind == "flag":
+            flag = next((f for f in command.flags if f.name == chosen.text), None)
+            self.show_command(command.name, focus_flag=flag)
+
+    def take_completion(self) -> None:
+        """Insert the highlighted candidate, then offer the next word."""
+        if not self._completions.items:
+            return
+        widget = self.query_one("#command-completions", OptionList)
+        index = widget.highlighted if widget.highlighted is not None else 0
+        candidate = self._completions.items[index]
+        line = self.query_one("#command-line", CommandInput)
+        line.value = self._completions.apply(line.value, candidate)
+        line.cursor_position = len(line.value)
+        self.refresh_completions()
+
+    @property
+    def completions_open(self) -> bool:
+        return bool(self.query_one("#command-completions", OptionList).display)
+
+    def hide_completions(self) -> None:
+        self._completions = completion_mod.Completions()
+        widget = self.query_one("#command-completions", OptionList)
+        widget.clear_options()
+        widget.display = False
 
     # --- events -----------------------------------------------------------
 
     def on_input_changed(self, event: Input.Changed) -> None:
-        if event.input.id == "command-search":
-            self.fill_list(event.value)
+        if event.input.id == "command-line":
+            self.refresh_completions()
 
     def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
-        if event.option.id:
+        if event.option_list.id == "command-list" and event.option.id:
             self.show_command(event.option.id)
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
-        if event.option.id:
-            self.show_command(event.option.id)
+        if event.option_list.id == "command-list" and event.option.id:
+            self.prefill(f"{event.option.id} ")
+        elif event.option_list.id == "command-completions":
+            self.take_completion()
             self.query_one("#command-line", Input).focus()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
@@ -203,6 +369,7 @@ class CommandsPane(Vertical):
         if command.blocked:
             self._status(Text(f"{cmd} cannot run from here: {command.blocked}", style="yellow"))
             return
+        self.hide_completions()
         if command.needs_confirmation:
             self._pending = (cmd, flags)
             why = command.destroys or "spends LLM tokens."
@@ -245,7 +412,8 @@ class CommandsPane(Vertical):
             return
         self._clear_confirmation()
         log.write(Text(f"$ tracker {cmd}", style="bold cyan"))
-        self._status(Text(f"running {cmd} …", style="cyan"))
+        self._status(Text(f"running {cmd} …   ctrl+k cancels", style="cyan"))
+        self.query_one("#command-line", Input).focus()
         self._pump(run.id)
 
     @work(thread=True, exclusive=True)
@@ -305,14 +473,19 @@ class CommandsPane(Vertical):
         else:
             self._status(Text("nothing is running", style="dim"))
 
+    def action_clear_log(self) -> None:
+        self.query_one("#command-log", RichLog).clear()
+
     def prefill(self, text: str) -> None:
         """Put a command line in the box, ready to be edited or run."""
-        line = self.query_one("#command-line", Input)
+        line = self.query_one("#command-line", CommandInput)
         line.value = text
+        line.cursor_position = len(text)
         line.focus()
+        self.refresh_completions()
 
     def _status(self, text: Text) -> None:
         self.query_one("#command-status", Static).update(text)
 
 
-__all__ = ["CommandsPane"]
+__all__ = ["CANDIDATE_STYLE", "FLAG_BUDGET", "CommandInput", "CommandsPane"]

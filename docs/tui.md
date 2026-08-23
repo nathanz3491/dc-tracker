@@ -37,10 +37,13 @@ tracker tui
 ```
 
 `1`–`6` switch panes, `r` re-reads the database, `q` quits, `/` jumps straight to
-the projects filter. On a highlighted row, `e` and `s` prefill `enrich` and `show`
-in the run pane, and on the coverage pane `p` prefills `prospect` for the operator
-under the cursor. They *prefill* rather than run: `enrich` spends money, and the
-confirmation for that lives in one place.
+the projects filter. While the run pane's command box has focus those are letters
+being typed rather than shortcuts, and `escape` is the way back out to them.
+
+On a highlighted row, `e` and `s` prefill `enrich` and `show` in the run pane, and
+on the coverage pane `p` prefills `prospect` for the operator under the cursor.
+They *prefill* rather than run: `enrich` spends money, and the confirmation for
+that lives in one place.
 
 **Bars, not columns of percentages.** Twelve field-coverage numbers are something
 a reader compares by hand; the same twelve as bars are a shape. That is most of the
@@ -69,6 +72,43 @@ Type a command line and press Enter. **There is no shell here at any point:**
 subprocess is spawned with no shell in between. `gaps; rm -rf /` is not sanitized —
 `rm` is a word no command has, and it is refused by name.
 
+### Completion, and why it replaced the flag table
+
+```
+tab      take the highlighted candidate
+up/down  move through them
+escape   dismiss them; again to leave the box for the pane keys
+enter    run the line
+ctrl+k   cancel the running command
+ctrl+l   clear the output
+```
+
+Four kinds of candidate, decided by where the cursor is:
+
+| you have typed | it offers |
+|---|---|
+| `cov` | `coverage` — whole command names, so `ing` gives `ingest crawl` rather than a group that cannot run |
+| `sync --` | that command's flags, with type and default, minus the ones already in the line |
+| `coverage --kind ` | `hyperscaler ai_lab neocloud landlord` — the closed vocabulary `build_argv` would otherwise reject a typo against |
+| `enrich ` | project ids from **this** database, labelled `Meta — Hyperion`, biggest campus first |
+| `prospect ` | rostered operator names, the ones with no rows first, quoted when they contain a space |
+
+The last two are the ones a shell cannot do: the next word is a fact about the
+database rather than a word from the CLI. Nothing is stored or run by completing —
+the line still goes through the same parser, so completing wrongly costs a
+rejection message.
+
+**This is what let the flag table go.** The first version of this pane answered
+"what can this command take" with a table of every flag: twenty rows on `sync`,
+permanently occupying the top half of the screen, for reference material wanted
+about once a minute. Now the flags are one wrapped line ending in `+8 more`, the
+full help for a flag appears the moment that flag is being typed or highlighted,
+and the output takes everything left over. Reported as cramped, and it was:
+reading output is what the pane is *for*.
+
+`tests/test_tui.py` asserts the output area is taller than the reference block, so
+a stray `height:` in the CSS cannot quietly hand the screen back.
+
 Runs go through `webui.runner`, which is the console's executor, so the TUI
 inherits its three properties rather than reimplementing them: no shell, one writer
 at a time (SQLite takes one, and a second run would fail partway through after
@@ -81,6 +121,19 @@ Output arrives with its colour intact, because the child is given `FORCE_COLOR`
 and the pane renders the escapes: red is a rejection, amber is 待确认, dim is a
 hint, and stripping that throws away the CLI's own signalling at the moment
 somebody is reading it.
+
+## The screenshots name local fonts
+
+`--screenshot` writes the frame through `tui._local_fonts`, which strips the
+`@font-face` rules Rich's SVG template ships and asks for fonts the reader
+actually has: Cascadia or Consolas on Windows, SF Mono or Menlo on macOS, DejaVu
+or Noto on Linux.
+
+Rich's default template fetches Fira Code from a CDN. A viewer that will not make
+that request — offline, or simply strict — falls through to its own default
+monospace, and the frame arrives looking wrong while the terminal it came from
+looked fine. That was reported exactly that way. The rewrite also means a
+screenshot of production is not a file that phones a CDN when somebody opens it.
 
 ## Verifying it without sitting at a terminal
 

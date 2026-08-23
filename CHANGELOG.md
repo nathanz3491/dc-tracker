@@ -127,6 +127,52 @@ initial build of the v1 PRD.
 
 ### Changed
 
+- **The TUI's run pane completes what you are typing, and gives the screen back to
+  the output** (`tracker/tui/completion.py`, `tui/commands.py`, `tui/app.py`,
+  `webui/catalog.py`).
+
+  Reported as unhealthy to work with, and correctly. The pane answered "what can
+  this command take" with a table of every flag — twenty rows on `sync` — which sat
+  in the top half of the screen permanently and left the output a quarter of it.
+  Reading output is what the pane is for.
+
+  Typing is now completed: command names while the first words are going in (whole
+  names, so `ing` offers `ingest crawl` rather than a group that cannot run), then
+  that command's flags with type and default and minus the ones already in the
+  line, then a closed vocabulary's values, then **project ids and operator names
+  read out of this database** — `enrich ` offers `430  Fermi America — Project
+  Matador`, biggest campus first, and `prospect ` offers the rostered operators with
+  no rows first, quoted when the name has a space in it. Tab takes the highlighted
+  candidate, up and down move, escape dismisses and then leaves the box for the pane
+  keys. Nothing is run or stored by completing; the line still goes through
+  `parse_command_line` and `build_argv`.
+
+  That is what let the table go. The flags are one wrapped line ending in `+8 more`,
+  the full help appears for whichever flag is being typed, and the log takes
+  everything left over — 20 rows of output on a 34-row terminal against 8 before. A
+  test asserts the output area is taller than the reference block, so a stray
+  `height:` cannot hand the screen back.
+
+  Two fixes fell out of building it. `catalog._enum_hints` can now key a vocabulary
+  by `(command, flag)` as well as by flag name, because `--kind` means operator
+  classes on `coverage` and filer classes on `ingest edgar` — the EDGAR list
+  includes `utility`, which `coverage` refuses, so one shared list would have
+  offered a value that fails. **The console gets those dropdowns too**, where both
+  flags were free-text boxes. And a default of `0` no longer renders as no default
+  at all: the membership test `flag.default in (None, False, "")` swallowed it,
+  because `0 == False`, which hid the defaults of `--prospect`, `--enrich` and
+  `--select` — flags whose entire meaning is "off unless you pass a number".
+
+- **`tracker tui --screenshot` names fonts the reader has** (`tracker/tui/`).
+
+  Rich's SVG template declares `@font-face` rules that fetch Fira Code from a CDN.
+  A viewer that will not make that request falls through to its own default
+  monospace, so frames exported from a terminal that looked right arrived looking
+  wrong — reported exactly that way. The export now rewrites that CSS to a local
+  stack (Cascadia, Consolas, SF Mono, Menlo, DejaVu, Noto) and drops the remote
+  faces, which also means a screenshot of production is not a file that phones a CDN
+  when somebody opens it.
+
 - **`tracker sync` is the master command it was described as, not one job**
   (`cli.py`, `docs/ingesting.md`, `README.md`).
 

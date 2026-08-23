@@ -14,6 +14,7 @@ has no way to know that `sync` spends money and `gaps` does not.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any
 
 #: Commands that spend real LLM tokens. The console refuses to start one of these
@@ -109,7 +110,8 @@ BLOCKED: dict[str, str] = {
 BLOCKED_FLAGS: frozenset[str] = frozenset({"--out", "--rejects-out", "--db", "--data-dir"})
 
 
-def _enum_hints() -> dict[str, tuple[str, ...]]:
+@lru_cache(maxsize=1)
+def _enum_hints() -> dict[Any, tuple[str, ...]]:
     """Closed vocabularies for flags Typer only knows as free text.
 
     Several commands take a `str` and validate it themselves against a tuple in
@@ -120,12 +122,24 @@ def _enum_hints() -> dict[str, tuple[str, ...]]:
 
     Sourced from the same tuples the CLI checks against, so the dropdown cannot
     offer a value the command would reject.
+
+    **Keys are either a flag name or a `(command, flag)` pair**, and the pair wins.
+    One flag name can mean two different vocabularies: `--kind` on `coverage` is an
+    operator class from the roster and `--kind` on `ingest edgar` is a filer class
+    from the EDGAR list, which also contains `utility` and `contractor`. A single
+    name-keyed entry would have offered a value one of the two commands refuses,
+    which is worse than offering nothing.
+
+    Cached: `_flags_for` asks once per command, so ~60 times per catalog load, and
+    the EDGAR vocabulary is read from a file. Restarting is how a changed roster
+    reaches this, which is already true of the catalog itself.
     """
     from tracker.export import FORMATS
     from tracker.ingest.iso_maps import ISO_MAPS
+    from tracker.roster import KINDS as OPERATOR_KINDS
     from tracker.vocab import PHASES, RISK_CATEGORIES, RISK_SEVERITIES
 
-    return {
+    hints: dict[Any, tuple[str, ...]] = {
         "--phase": tuple(PHASES),
         "--risk": tuple(RISK_CATEGORIES),
         "--severity": tuple(RISK_SEVERITIES),
@@ -134,7 +148,22 @@ def _enum_hints() -> dict[str, tuple[str, ...]]:
         "--sort": ("mw", "investment", "date", "confidence", "name"),
         "--by": ("category", "company", "state", "severity"),
         "fmt": tuple(FORMATS),
+        ("coverage", "--kind"): tuple(OPERATOR_KINDS),
+        ("coverage", "--status"): ("absent", "thin", "covered"),
     }
+    # Data-driven, like the command it serves: `ingest edgar` validates against the
+    # kinds actually present in the file rather than a list in code. A missing or
+    # malformed file leaves the flag free text, which is what it was before.
+    try:
+        from tracker.ingest.edgar import load_companies
+
+        companies, _, _ = load_companies()
+        kinds = tuple(sorted({c.kind for c in companies if c.kind}))
+        if kinds:
+            hints[("ingest edgar", "--kind")] = kinds
+    except Exception:  # a broken seed file must not stop the catalog loading
+        pass
+    return hints
 
 
 #: Rendered as a section heading, in the order an operator meets them.
@@ -285,7 +314,7 @@ def _jsonable(value: Any) -> Any:
     return str(value)
 
 
-def _flags_for(command) -> tuple[Flag, ...]:
+def _flags_for(command, name: str = "") -> tuple[Flag, ...]:
     hints = _enum_hints()
     out: list[Flag] = []
     for param in command.params:
@@ -294,19 +323,22 @@ def _flags_for(command) -> tuple[Flag, ...]:
         opts = list(getattr(param, "opts", ()) or ())
         positional = not any(o.startswith("-") for o in opts)
         # The long form is the stable one; `-v` can be re-lettered without notice.
-        name = (
+        flag_name = (
             param.name
             if positional
             else next((o for o in opts if o.startswith("--")), opts[0] if opts else param.name)
         )
-        if name in {"--help", "help"} or name in BLOCKED_FLAGS:
+        if flag_name in {"--help", "help"} or flag_name in BLOCKED_FLAGS:
             continue
         kind, choices = _kind_of(param)
-        if not choices and name in hints:
-            kind, choices = "choice", hints[name]
+        # The command-specific vocabulary first: see `_enum_hints`.
+        if not choices:
+            found = hints.get((name, flag_name)) or hints.get(flag_name)
+            if found:
+                kind, choices = "choice", found
         out.append(
             Flag(
-                name=name,
+                name=flag_name,
                 kind=kind,
                 positional=positional,
                 required=bool(getattr(param, "required", False)),
@@ -346,7 +378,7 @@ def _walk(group, prefix: str = "") -> list[Command]:
                 name=full,
                 help=(command.help or "").strip().split("\n\n")[0].replace("\n", " "),
                 cost="llm" if full in LLM_COMMANDS else "free",
-                flags=_flags_for(command),
+                flags=_flags_for(command, full),
                 blocked=BLOCKED.get(full),
                 destroys=DESTRUCTIVE.get(full),
             )
