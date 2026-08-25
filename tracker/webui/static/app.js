@@ -2810,7 +2810,19 @@ function GapsView({ data }) {
  * thing the choice picks is a row number. Said on the card, because it is exactly
  * the thing an operator will otherwise agonise over.
  */
-function DuplicateGroup({ ids, byId, allowWrite, busy, onRan }) {
+/* The class a group is best described by, looked up rather than worked out.
+ *
+ * `capex.strongest_evidence` decided it and the CLI's report prints the same word.
+ * Ranking five unequal classes here — one of them permits an unattended merge,
+ * another is a word — would be a second implementation of a rule with nothing to
+ * say when the two start to disagree. See docs/architecture.md. */
+function dupeLabel(dupes, ids) {
+  const key = ids.join("-");
+  const found = (dupes.group_evidence || []).find((g) => g.ids.join("-") === key);
+  return found ? found.label : "";
+}
+
+function DuplicateGroup({ ids, byId, evidence, label, allowWrite, busy, onRan }) {
   const [keep, setKeep] = useState(ids[0]);
   const [state, setState] = useState("idle"); // idle | confirming | running
   const [typed, setTyped] = useState("");
@@ -2847,7 +2859,26 @@ function DuplicateGroup({ ids, byId, allowWrite, busy, onRan }) {
         <span class="dc-num" style=${{ fontSize: 12, color: "var(--muted-foreground)" }}>
           ${rows.length} rows · ${Math.round(mw).toLocaleString()} MW claimed between them
         </span>
+        ${label && html`<${Badge} variant="outline">${label}<//>`}
       </div>
+
+      ${/* Why each pair was raised, in the backend's own words. "These look similar"
+            is not something a reader can check; "both hold tranche horizon-1, a key
+            that appears in no other town" is. A group of three is three separate
+            questions and one of them is often the wrong one. */ ""}
+      ${(() => {
+        const lines = [];
+        for (let i = 0; i < ids.length; i += 1) {
+          for (let j = i + 1; j < ids.length; j += 1) {
+            const [a, b] = ids[i] < ids[j] ? [ids[i], ids[j]] : [ids[j], ids[i]];
+            const found = (evidence || {})[`${a}-${b}`];
+            if (found) lines.push(html`<div key=${`${a}-${b}`}>#${a} + #${b}: ${found.why}</div>`);
+          }
+        }
+        return lines.length > 0 && html`
+          <div class="dc-num" style=${{ fontSize: 11.5, color: "var(--muted-foreground)",
+                                        display: "grid", gap: 2 }}>${lines}</div>`;
+      })()}
 
       <div style=${{ display: "grid", gap: 0 }}>
         ${rows.map((p) => html`
@@ -3537,6 +3568,7 @@ function CapexView({ data, allowWrite, allowAi, busy, onRan, onOpen }) {
             </div>`}
           ${dupes.groups.map((ids) => html`
             <${DuplicateGroup} key=${ids.join("-")} ids=${ids} byId=${byId}
+                               evidence=${dupes.evidence} label=${dupeLabel(dupes, ids)}
                                allowWrite=${allowWrite} busy=${busy} onRan=${onRan} />`)}
           ${dupes.groups.length === 0 && html`
             <div style=${{ padding: "4px 20px 20px" }}>

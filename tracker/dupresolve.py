@@ -32,7 +32,17 @@ allows:
   `dedup.py`'s founding invariant — "a county-level row and a city-level row are
   *never* automatically merged", because "Racine County, WI" and "Mount Pleasant,
   WI" may or may not be one project and no string comparison can tell. A model is
-  not a string comparison, but it is not a person with a map either;
+  not a string comparison, but it is not a person with a map either. What granularity
+  no longer does is *hide* the rest of the evidence: `capex`'s second pass records
+  every signal now, so `identity+tranche` is a different question from `identity`;
+* a pair whose only shared tranche is a **market sequence** never merges —
+  `dedup.is_market_sequence`. `iad-3`, `hillsboro-1`, `chicago-2`: a market and a
+  number that restarts at one for every operator. The key is still reported,
+  because it is the only thing connecting some real duplicates, and it is not
+  enough to delete a row on;
+* two names differing only by an **ordinal** never merge —
+  `dedup.sibling_ordinals`. Neighbouring phases of one development share an
+  operator, a market and often a tranche key, and differ in one digit;
 * two rows more than :data:`FAR_APART_KM` apart with real coordinates are not one
   site, whatever the model says. Geography outranks the model.
 
@@ -53,6 +63,7 @@ from typing import Any, Final
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
+from tracker.dedup import is_market_sequence, sibling_ordinals
 from tracker.models import Project
 from tracker.vocab import TRACKED_FIELDS
 
@@ -68,9 +79,23 @@ MIN_CONFIDENCE: Final = 0.6
 MERGE_CONFIDENCE: Final = 0.9
 
 #: Evidence classes that may carry a merge on their own. `capex.DuplicatePair.kinds`
-#: names four; these are the two that are statements about the rows rather than
-#: about their words or their granularity.
-HARD_EVIDENCE: Final = frozenset({"tranche", "party"})
+#: names five; these are the three that are statements about the *building* rather
+#: than about a word or about a place.
+#:
+#: **`exact` joined the set when it started existing.** Two rows carrying the same
+#: company and the same name are a stronger claim than a shared tranche key, and
+#: measured on the live database six pairs were in that position while being
+#: reported under the weakest class the report has — `distinctive_name_tokens`
+#: strips generic words and the locality, so two identical names produced no name
+#: evidence at all. See `dedup.exact_identity`.
+#:
+#: **`identity` is still not in here**, and that is `dedup.py`'s founding
+#: invariant rather than caution: a county-level row and a city-level row may be
+#: one site or two and no comparison of strings can tell. What changed is that a
+#: pair can now carry granularity *and* something else — `capex`'s second pass used
+#: to record granularity alone however much else was true — so `identity+tranche`
+#: is decidable while `identity` is not.
+HARD_EVIDENCE: Final = frozenset({"exact", "tranche", "party"})
 
 #: Two sited rows further apart than this are not one campus. Generous on purpose —
 #: a campus can span a mile and a geocoder can miss by more — but a county holds
@@ -159,30 +184,73 @@ class Decision:
         }
 
 
-def _citations(project: Project, cap: int = 4) -> list[str]:
-    """A row's citations, longest quote first — the sentences that decide identity."""
-    rows = sorted(
+#: Citations shown per row, and how many may come from one publisher. The median
+#: row holds 7 sources and the fattest holds 78, so this is a window and the rule
+#: that picks what goes in it matters more than its size.
+CITATION_CAP: Final = 8
+PER_DOMAIN_CAP: Final = 2
+
+#: Characters of each quote. 260 truncated mid-sentence often enough to matter.
+EXCERPT_CHARS: Final = 400
+
+
+def _domain(url: str | None) -> str:
+    """The publisher, for the diversity cap. Cheap split rather than urllib."""
+    return (url or "").split("//")[-1].split("/")[0].lower().removeprefix("www.")
+
+
+def _citations(project: Project, cap: int = CITATION_CAP) -> list[str]:
+    """A row's citations — newest first, no more than two per publisher.
+
+    **Longest-quote-first was the wrong rule and it was costing the answer.** The
+    sentence that settles whether two rows are one site is usually short — a street
+    address, a "formerly known as", a county named in passing — while the longest
+    quote on a row is typically a paragraph of context from whichever article the
+    extractor happened to read most of. Sorting by length put four quotes from one
+    press release in the window and left the identifying sentence out of it.
+
+    Newest first because a campus's identity is restated every time it is written
+    about, and the most recent article is the one that knows about the rename. At
+    most two per domain because `confidence.py` counts independence by domain, and
+    the same reasoning applies to a window: eight quotes from one publisher are one
+    publisher's account of the site.
+    """
+    ranked = sorted(
         project.sources or (),
-        key=lambda s: (-(len(s.excerpt or "")), s.url or ""),
-    )[:cap]
+        key=lambda s: (
+            -(s.published_at.timestamp() if s.published_at else 0),
+            -(s.fetched_at.timestamp() if s.fetched_at else 0),
+            s.url or "",
+        ),
+    )
+    seen: dict[str, int] = {}
     out: list[str] = []
-    for source in rows:
+    for source in ranked:
+        domain = _domain(source.url)
+        if seen.get(domain, 0) >= PER_DOMAIN_CAP:
+            continue
+        seen[domain] = seen.get(domain, 0) + 1
         out.append(f"      {source.source_type}: {(source.url or 'no url')[:110]}")
         if source.excerpt:
-            out.append(f'        "{source.excerpt[:260]}"')
+            out.append(f'        "{source.excerpt[:EXCERPT_CHARS]}"')
+        if len([line for line in out if not line.startswith('        "')]) >= cap:
+            break
     return out or ["      (no citations)"]
 
 
 def _row_block(tag: str, project: Project) -> list[str]:
     """One row as the model sees it: identity, figures, tranches, citations."""
     grain = "city" if project.city else "county" if project.county else "state only"
+    # Both fields, always. Printing `city or county` meant a city row never showed
+    # its county, so the one question being asked — is this town inside that county
+    # — had to be recovered from the raw dedup key in the WHY line above.
+    where = ", ".join(part for part in (project.city, project.county, project.state) if part)
     lines = [
         f"  ROW {tag} — project #{project.id}",
         f"    company:   {project.company or 'unknown'}",
         f"    customer:  {project.customer or '(none named)'}",
         f"    name:      {project.name or 'unknown'}",
-        f"    location:  {project.city or project.county or 'unknown'}, {project.state}"
-        f"  [{grain} granularity]",
+        f"    location:  {where or 'unknown'}  [{grain} granularity]",
         f"    coords:    {project.lat}, {project.lon}"
         if project.lat is not None
         else "    coords:    (not geocoded)",
@@ -214,7 +282,17 @@ def evidence_block(a: Project, b: Project, pair: Any) -> str:
     if distance is None:
         lines.append("  DISTANCE: unknown — at least one row is not geocoded")
     else:
-        lines.append(f"  DISTANCE: {distance:.1f} km between the stored coordinates")
+        # Saying the number without saying what it measures invited the answer
+        # backwards. `ingest/geo.py` derives coordinates from the Census *place
+        # centroid* — "a place centroid is not the site", in its own words — so two
+        # rows in one town read 0.0 km apart whether they are one building or two
+        # miles apart, and 245 pairs on the live database sit within 3 km of each
+        # other for that reason alone. The figure can refute and cannot confirm.
+        lines.append(
+            f"  DISTANCE: {distance:.1f} km between the stored coordinates — these are "
+            "place centroids, not site locations, so a small number means one town "
+            "and says nothing about one building. A large one is still decisive."
+        )
     lines.append("")
     lines.extend(_row_block("A", a))
     lines.append("")
@@ -228,7 +306,7 @@ def ask_model(
     pair: Any,
     *,
     extractor,
-    prompt_name: str = "duplicates-resolve-v1",
+    prompt_name: str = "duplicates-resolve-v2",
 ) -> Judgement:
     """Ask a reasoning model whether two rows are one site. One call.
 
@@ -325,6 +403,29 @@ def merge_blocked(pair: Any, judgement: Judgement, a: Project, b: Project) -> st
                 "dedup refuses to merge a county row into a city row unattended"
             )
         return "the only evidence is a shared name word, which is not identity"
+    if kinds & HARD_EVIDENCE == {"tranche"} and all(
+        is_market_sequence(key, localities={a.city, a.county, b.city, b.county})
+        for key in pair.shared_blocks
+    ):
+        # `iad-3`, `hillsboro-1`, `chicago-2`: a market and a sequence number, and
+        # the sequence restarts at one for every operator. The key is worth showing
+        # a reader — it is how IREN's Sweetwater campus, stored twice across a
+        # rename, is connected at all — and it is not worth deleting a row over:
+        # `hillsboro-1` is held by Flexential's Hillsboro site and NTT's.
+        return (
+            f"the only shared tranche is {', '.join(pair.shared_blocks)}, which names a "
+            "market and a sequence number rather than a building"
+        )
+    if sibling_ordinals(a.name, b.name):
+        # The failure this exists for, found while measuring the change that made
+        # a shared tranche carry a merge across localities: Applied Digital's
+        # `Polaris Forge 1` in Ellendale and `Polaris Forge 2` in Harwood both hold
+        # `forge-2.polaris`, because one article listed the pair. Two real campuses,
+        # every signal in agreement, and one digit between them.
+        return (
+            f"{a.name!r} and {b.name!r} differ only by an ordinal — neighbouring "
+            "phases of one development, not one site stored twice"
+        )
     distance = km_apart(a, b)
     if distance is not None and distance > FAR_APART_KM:
         return f"the stored coordinates are {distance:.0f} km apart, further than one campus spans"
@@ -349,6 +450,19 @@ def survivor(a: Project, b: Project) -> tuple[Project, Project]:
     return (a, b) if rank(a) <= rank(b) else (b, a)
 
 
+def _surviving(project_id: int, folded: dict[int, int]) -> int:
+    """Follow a row through the merges this run has already made.
+
+    A chain rather than a lookup: three rows for one campus can be folded in two
+    steps, and the second step's survivor is what a third pair must be asked about.
+    """
+    seen: set[int] = set()
+    while project_id in folded and project_id not in seen:
+        seen.add(project_id)
+        project_id = folded[project_id]
+    return project_id
+
+
 def resolve_one(
     session: Session,
     pair: Any,
@@ -356,6 +470,7 @@ def resolve_one(
     extractor,
     allow_merge: bool = False,
     ask=None,
+    folded: dict[int, int] | None = None,
 ) -> Decision:
     """Decide one suspected pair and carry the decision out.
 
@@ -363,13 +478,22 @@ def resolve_one(
     "same", "different", "skip", or None to hand the question to the model. A
     person's answer is trusted for a merge without the confidence floor — that is
     what `--merge` behind a keyboard means — and is recorded as `operator`.
+
+    `folded` maps a row this run has already merged to the row that survived it,
+    which is what lets a group of more than two settle in one pass. See
+    :func:`resolve`.
     """
     from tracker import pairs as pairs_mod
 
-    a = session.get(Project, pair.a_id)
-    b = session.get(Project, pair.b_id)
+    folded = folded if folded is not None else {}
+    a_id, b_id = _surviving(pair.a_id, folded), _surviving(pair.b_id, folded)
     label = f"#{pair.a_id} {pair.a_company} — {pair.a_name} / #{pair.b_id} {pair.b_company} — {pair.b_name}"
     got = Decision(a_id=pair.a_id, b_id=pair.b_id, label=label)
+    if a_id == b_id:
+        got.detail = f"already one row — both sides are now #{a_id}"
+        return got
+    a = session.get(Project, a_id)
+    b = session.get(Project, b_id)
     if a is None or b is None:
         got.detail = "one of the rows is gone — merged by an earlier pair in this run"
         return got
@@ -398,7 +522,12 @@ def resolve_one(
     by = "operator" if answered_by_person else f"model ({judged.confidence:.2f})"
 
     if judged.verdict == "different":
-        pairs_mod.park(session, [a.id, b.id], reason=judged.reason, by=by)
+        # The evidence classes travel with the reason. `duplicates parked` is read
+        # months later by somebody deciding whether to reopen the question, and
+        # "these are different sites" reads differently when what raised the pair
+        # was a shared tranche key than when it was a word.
+        classes = "+".join(pair.kinds) or "locality"
+        pairs_mod.park(session, [a.id, b.id], reason=f"{judged.reason} [{classes}]", by=by)
         got.action = "parked"
         got.detail = "ruled out — capex will stop holding one of these rows back"
         return got
@@ -415,15 +544,19 @@ def resolve_one(
     from tracker.logic import record_decision
     from tracker.merge import merge_projects
 
-    keep, folded = survivor(a, b)
-    result = merge_projects(session, keep.id, [folded.id])
+    keep, gone = survivor(a, b)
+    result = merge_projects(session, keep.id, [gone.id])
     record_decision(
         keep,
         "duplicate",
-        f"folded #{folded.id} into this row",
+        f"folded #{gone.id} into this row",
         by=by,
         detail=judged.reason,
     )
+    # So a later pair naming the row just deleted is asked about the survivor
+    # instead of being reported as gone. This is what settles a group of four in
+    # one run rather than one merge per run.
+    folded[gone.id] = keep.id
     got.action = "merged"
     got.kept_id = keep.id
     got.removed_ids = list(result.removed)
@@ -451,8 +584,15 @@ def resolve(
     told what the rails already know.
 
     Pairs are re-read from `capex.suspected_duplicates` in one pass and then worked
-    in order. A merge earlier in the run can remove a row a later pair names, which
-    `resolve_one` reports rather than raising — the next run sees the new shape.
+    in order.
+
+    **A group larger than two used to need one run per merge.** Four rows for one
+    campus produce six pairs, and the first merge deleted a row the other five
+    named, so they reported "one of the rows is gone" and the operator ran the
+    command again. The live database has eight groups of three and two of four —
+    among them the Ashburn group where RagingWire and NTT hold `va-4`, `va-5` and
+    `va-6` under four names. `folded` carries this run's merges forward, so a later
+    pair is asked about the surviving row and the whole group settles in one pass.
     """
     from tracker.capex import suspected_duplicates
 
@@ -465,10 +605,18 @@ def resolve(
     found = sorted(suspected_duplicates(session), key=lambda p: (p.rank, p.a_id, p.b_id))
     if not weak:
         found = [p for p in found if set(p.kinds) - {"name"}]
+    folded: dict[int, int] = {}
     out: list[Decision] = []
     for pair in found[:limit]:
         out.append(
-            resolve_one(session, pair, extractor=extractor, allow_merge=allow_merge, ask=ask)
+            resolve_one(
+                session,
+                pair,
+                extractor=extractor,
+                allow_merge=allow_merge,
+                ask=ask,
+                folded=folded,
+            )
         )
     return out
 

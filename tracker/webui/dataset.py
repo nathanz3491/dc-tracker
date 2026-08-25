@@ -288,6 +288,25 @@ def _capex(session: Session) -> dict[str, Any]:
             "shared_blocks": {
                 f"{p.a_id}-{p.b_id}": list(p.shared_blocks) for p in pairs if p.shared_blocks
             },
+            # What raised each pair, and what each group is best described by, both
+            # named by the backend. There are five evidence classes and they are not
+            # equal — one carries an unattended merge and another is a word — so the
+            # page has to be able to say which without deriving it, per the rule in
+            # `docs/architecture.md`: a judgement is computed once and drawn twice.
+            # `capex.strongest_evidence` is the same function the CLI's report calls.
+            "evidence": {
+                f"{p.a_id}-{p.b_id}": {"kinds": list(p.kinds), "why": p.why} for p in pairs
+            },
+            "group_evidence": [
+                {
+                    "ids": ids,
+                    "kind": capex_mod.strongest_evidence(pairs, ids),
+                    "label": capex_mod.EVIDENCE_LABELS.get(
+                        capex_mod.strongest_evidence(pairs, ids), "same locality"
+                    ),
+                }
+                for ids in capex_mod.duplicate_groups(pairs)
+            ],
         },
     }
 

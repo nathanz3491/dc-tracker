@@ -165,7 +165,22 @@ def test_dataset_carries_the_capex_rollup(server):
         "suspect",
         "duplicates",
     }
-    assert set(capex["duplicates"]) == {"groups", "double_counted_mw", "shared_blocks"}
+    # `evidence` names what raised each pair. Five classes, and they are not equal —
+    # one carries an unattended merge and another is a word — so the class arrives
+    # computed rather than being inferred in the browser.
+    assert set(capex["duplicates"]) == {
+        "groups",
+        "double_counted_mw",
+        "shared_blocks",
+        "evidence",
+        "group_evidence",
+    }
+    # And the class each group is best described by arrives named, not ranked in the
+    # browser: five classes where one permits an unattended merge and another is a
+    # word is exactly the judgement `docs/architecture.md` says is computed once.
+    for group in capex["duplicates"]["group_evidence"]:
+        assert set(group) == {"ids", "kind", "label"}
+        assert group["label"]
     # The browser renders the column list; it never computes one of its own.
     assert all(isinstance(y, int) for y in capex["year_columns"])
     # Microsoft is a hyperscaler in the company list, so it is its own customer.

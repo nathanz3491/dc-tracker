@@ -12,6 +12,106 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **Duplicate detection reaches the cases it was structurally blind to, and every
+  pair now carries all the evidence there is for it** (`tracker/dedup.py`,
+  `tracker/capex.py`, `tracker/dupresolve.py`,
+  `tracker/prompts/duplicates-resolve-v2.txt`, `scripts/measure_duplicates.py`).
+
+  `tracker duplicates resolve` could settle at most 37% of its own backlog before
+  the model was asked anything, and that ceiling was arithmetic rather than
+  caution. Measured on the live database: of 49 pairs it would ask about, 31 carried
+  `identity` — a city-versus-county key match — and nothing else, which
+  `merge_blocked` refuses categorically. The evidence was not absent. `capex`'s
+  second pass recorded the key match and discarded every other signal it had
+  computed, so 12 of those pairs were silently sharing a distinctive name token, 8
+  a real tranche key, and 6 a byte-identical company *and* name. The second pass
+  now records all four signals, and `identity` became a qualifier rather than a
+  verdict: `identity+tranche` is a question a model can answer, `identity` alone
+  still is not.
+
+  **A third pass, keyed on the tranche rather than on the locality.** Both existing
+  passes start from a key — one compares rows filed under one locality, the other
+  rows whose dedup keys describe one place at two granularities — so a campus stored
+  as a city and as a county whose *names differ* was in neither.
+  `is_cross_granularity_match` needs the locality names to agree once "County" is
+  dropped, and "Abilene" is not "Shackelford". Stargate, stored as Crusoe's Abilene
+  row and Oracle's Shackelford County row, was invisible to the report while both
+  rows carried the tranche key `county.shackelford`. Seven pairs arrive this way,
+  including Cipher's Stingray facility filed under both `andrews` and
+  `andrews county`, DataBank's DFW3 stored as Plano and as Dallas, and the
+  IREN/Iris Energy Sweetwater rename.
+
+  **Rarity moved from the row to the pair.** `identifying_block_keys` kept a tranche
+  key only when it appeared in exactly one locality — correct for two rows in one
+  town, and exactly backwards for a cross-granularity duplicate, which is two
+  localities by construction. `shared_identity_keys` asks instead whether the key
+  appears in any locality *but these two*, which is the same rule for a
+  same-locality pair and the opposite one for the case that matters.
+
+  **`exact` is a new and strongest evidence class** — same company, same name, once
+  normalized. Six suspected pairs held both and every one was reported under the
+  weakest class the report has, because `distinctive_name_tokens` strips generic
+  industry words and the locality: "Stafford Technology Campus" in Stafford reduces
+  to nothing, so two identical names produced no name evidence at all. The
+  strictness that stopped `centers` pairing Aligned with NTT is what hid them.
+
+  **Three vocabulary rules, because widening recall reopens the hole precision
+  closed.** A *facility number* (`iad-3`, `va-2`, `ord-1`) names a market and a
+  sequence number: identity inside one market, an airport across two. A *market
+  sequence* is the same thing spelled with the town (`hillsboro-1`, `chicago-2`,
+  `sweetwater-1`) — reported, because it is the only thing connecting some real
+  duplicates, and never merged on, because `hillsboro-1` is held by Flexential's
+  Hillsboro site and NTT's. A key made only of *type words, digits and locality
+  words* names a kind of tranche and not one: `capacity-1`, `permanent.plant.power`,
+  and `expansion.houston`, which is the key that paired Element Critical's Houston
+  One with Switch's Houston campus. `blocks.generic` and `TYPE_WORDS` are untouched
+  — those govern whether megawatts are summed, and this governs pairing only.
+
+  **A rail for the failure the widening would have introduced.** Applied Digital's
+  `Polaris Forge 1` in Ellendale and `Polaris Forge 2` in Harwood are two real
+  campuses that both hold `forge-2.polaris`, because one article listed the pair.
+  Every signal agrees and one digit does not. `sibling_ordinals` refuses an
+  unattended merge when two names reduce to the same stem and carry differing
+  ordinals — which also catches Aligned's `SLC02` against `SLC-04`, and deliberately
+  does not catch "Sweetwater Data Center" against "IREN Sweetwater 1", where only
+  one name carries a number.
+
+  `party` also had to be narrowed to stay worth trusting: `company_parts(a) &
+  company_parts(b)` is non-empty for two rows of one company, and the second pass
+  buckets *by* company, so recording it there would have handed every pair hard
+  evidence and offered to fold NTT's Itasca campus into NTT's Chicago one, 31.7 km
+  away. It now means what it was built for — one company string naming the *other's*
+  operator, "OpenAI/Oracle" against "Oracle". No pair on the live database rested on
+  it alone, so the narrowing costs nothing today.
+
+  Measured before and after with the new `scripts/measure_duplicates.py`, which
+  answers "what would `--merge` do" for free by putting a hypothetical confident
+  verdict through the real rails — `resolve --dry-run` cannot, because it pays for
+  every call it makes:
+
+  | | before | after |
+  | --- | --- | --- |
+  | groups / pairs | 40 / 55 | 41 / 57 |
+  | `identity` and nothing else | 31 | 20 |
+  | pairs the rails would merge at 0.95 | 18 | 15 |
+  | pairs found that the report could not previously see | — | 7 |
+  | pairs dropped as vocabulary | — | 5 |
+
+  Fewer merges and better ones: the 15 include Stargate, Cipher's Stingray, the
+  IREN rename and all six exact-name pairs, while the false pairs that used to sit
+  above them — `iad-3`, `va-2`, `expansion.houston` — are gone or demoted to
+  report-only. The five dropped are every one of them a documented false pair:
+  `expansion.houston` (Element Critical against Switch), `expansion.hillsboro`,
+  `ashburn` and `douglasville` (locality names), and `permanent.plant.power`.
+
+  **`capex` moves, and the direction is not uniform.** The buyer table sets aside
+  16,796 MW against 15,202 before, because more rows are correctly held out pending
+  a decision. Two positions change materially and both are corrections: Oracle
+  loses 1,400 MW and $25B because its Shackelford County row is now grouped with
+  Crusoe's Abilene one, and IREN drops from two projects to none — both of the rows
+  that carried its own name are duplicates of a row leased to Microsoft, so that
+  capacity was being counted under a second buyer.
+
 - **Every command that spends LLM calls can choose its model: `--llm-provider
   deepseek|ollama`** (`tracker/llm.py`, `tracker/config.py`, `cli.py`,
   `.env.example`, `docs/ingesting.md`).
@@ -177,6 +277,56 @@ initial build of the v1 PRD.
   API may be exactly what the proxy is for.
 
 ### Changed
+
+- **The duplicates report leads with what a reader can act on, and names every
+  class** (`tracker/capex.py`, `tracker/cli.py`, `tracker/webui/dataset.py`,
+  `tracker/webui/static/app.js`).
+
+  `EVIDENCE_ORDER` put `identity` first, on the stated grounds that a structural
+  key match outranks a textual resemblance. The consequence was that the report
+  opened with 31 of its 49 pairs in the one class no automated path can settle, and
+  `_EVIDENCE_STYLE` had no entry for it — so the majority of the report printed a
+  bare `?` where its reason belonged. Order is now `exact`, `tranche`, `party`,
+  `identity`, `name`, and every class has a label.
+
+  The console's duplicate review draws the same thing: a badge naming the group's
+  class and, under it, one line per pair saying what raised it — `#3 + #182: both
+  hold tranche county.shackelford`. The class and the sentence are both computed by
+  `capex.strongest_evidence` and `DuplicatePair.why`, the functions the CLI's report
+  calls, and `EVIDENCE_LABELS` is one table both read: ranking five unequal classes
+  in the browser would be a second implementation of a rule with nothing to say when
+  the two start to disagree, which is the objection `docs/architecture.md` opens
+  with.
+
+- **`duplicates resolve` settles a whole group in one run, and reads more of each
+  row** (`tracker/dupresolve.py`, `tracker/prompts/duplicates-resolve-v2.txt`).
+
+  Four rows for one campus produce six pairs, and the first merge deleted a row the
+  other five named — so they reported "one of the rows is gone" and the operator
+  ran the command again, paying for another set of calls. The live database has
+  eight groups of three and two of four, including the Ashburn group where
+  RagingWire and NTT hold `va-4`, `va-5` and `va-6` under four names. The run now
+  carries its own merges forward and asks later pairs about the surviving row.
+
+  Three changes to what the model is given, each a case where the block was
+  actively misleading rather than merely thin. The **distance** now says what it
+  measures: coordinates are Census *place centroids*, so two rows in one town read
+  0.0 km apart whether they are one building or two miles apart — 245 pairs on the
+  live database sit within 3 km of each other for that reason — and printing the
+  number bare invited the rule backwards. **Both the city and the county** are
+  printed, where before it was `city or county`, so the one question being asked —
+  is this town inside that county — had to be recovered from a raw dedup key. And
+  the **citation window** takes eight quotes at two per publisher, newest first,
+  rather than four sorted longest-first: the sentence that settles identity is
+  usually short, and length-first regularly filled the window with one press
+  release while the median row holds seven sources.
+
+  `duplicates-resolve-v2` follows. Its rule 6 told the model to answer "unclear"
+  whenever granularity was the tie, on the grounds that the tool would refuse the
+  merge anyway — true when a cross-granularity pair could carry no other evidence,
+  and now an instruction to decline the very pairs this change made answerable. The
+  sibling rule and the centroid caveat are stated there too, so the model reasons
+  about them rather than being silently overruled.
 
 - **The TUI's run pane completes what you are typing, and gives the screen back to
   the output** (`tracker/tui/completion.py`, `tui/commands.py`, `tui/app.py`,

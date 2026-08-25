@@ -941,12 +941,25 @@ def test_cross_granularity_duplicates_are_found_across_localities(session):
     groups = duplicate_groups(pairs)
     assert any(len(g) == 3 for g in groups), groups
 
-    # `identity` outranks a name resemblance: two keys describing one place at
-    # different granularity is structural evidence, not textual.
+    # `identity` says the two rows describe one *place* at two granularities. It
+    # used to lead `EVIDENCE_ORDER` on the strength of being structural rather than
+    # textual, and that reading was wrong twice over: it is a weak statement about
+    # which *building*, and no automated path can settle it — `dupresolve` refuses
+    # granularity alone, so the report opened with 31 of its 49 pairs in the one
+    # class nothing could act on. It now sorts below the signals that name a
+    # building.
     identity = [p for p in pairs if "identity" in p.kinds]
     assert identity
-    assert identity[0].rank == 0
+    assert identity[0].rank > capex.EVIDENCE_ORDER.index("tranche")
     assert "granularity" in identity[0].why
+
+    # And granularity no longer arrives alone. The second pass used to record the
+    # key match and discard everything else it knew, so a pair like this one — three
+    # spellings of Hyperion — carried one evidence class while plainly sharing a
+    # name. Both are recorded now, which is what lets the rails tell "granularity
+    # and nothing else" from "granularity, and they are also the same building".
+    assert "hyperion" in identity[0].shared_tokens
+    assert "name" in identity[0].kinds
 
 
 def test_the_locality_signals_still_fire(session):
@@ -974,3 +987,170 @@ def test_the_locality_signals_still_fire(session):
 
     pairs = suspected_duplicates(session)
     assert any("name" in p.kinds or "party" in p.kinds for p in pairs), pairs
+
+
+# --- detection: the cases the report could not see, and the ones it must not ---
+#
+# Every fixture below is a pair measured on the live database. The positives were
+# invisible to the report; the negatives were false pairs it produced, or ones the
+# change that found the positives would otherwise have introduced.
+
+
+def _blocked(session, project, label, key, mw=70.0) -> None:
+    from tracker.models import CapacityBlock
+
+    session.add(
+        CapacityBlock(project_id=project.id, label=label, block_key=key, mw=mw, status="planned")
+    )
+    session.flush()
+
+
+def test_a_tranche_shared_across_two_granularities_is_found(session):
+    """The flagship case, and it was invisible.
+
+    Stargate is stored as Crusoe's `abilene` row and as Oracle's `shackelford
+    county` row, both holding `county.shackelford`. `identifying_block_keys` used to
+    discard any key appearing in more than one locality as vocabulary — and a
+    cross-granularity duplicate is two localities by construction, so the evidence
+    that would settle it was thrown away for being evidence.
+    """
+    a = _project(
+        session,
+        name="Stargate Abilene",
+        company="Crusoe",
+        city="Abilene",
+        state="TX",
+        dedup_key="crusoe|city:abilene|TX",
+    )
+    b = _project(
+        session,
+        name="Stargate - Shackelford County",
+        company="Oracle",
+        city=None,
+        county="Shackelford",
+        state="TX",
+        dedup_key="oracle|county:shackelford|TX",
+    )
+    _blocked(session, a, "Shackelford County", "county.shackelford")
+    _blocked(session, b, "Shackelford County", "county.shackelford")
+
+    found = [p for p in capex.suspected_duplicates(session) if {a.id, b.id} == {p.a_id, p.b_id}]
+    assert found, "a shared tranche across two granularities must raise a pair"
+    assert "tranche" in found[0].kinds
+    assert "county.shackelford" in found[0].shared_blocks
+
+
+def test_the_same_company_and_name_twice_is_the_strongest_class(session):
+    """Six pairs on the live database, every one reported under the weakest class.
+
+    `distinctive_name_tokens` strips generic words and the locality, so two
+    byte-identical names produced no name evidence at all and the pair rested on
+    granularity — which `dupresolve` refuses to merge on.
+    """
+    a = _project(
+        session,
+        name="Stafford Technology Campus",
+        company="STACK Infrastructure",
+        city="Stafford",
+        county="Stafford",
+        state="VA",
+        dedup_key="stack|city:stafford|VA",
+    )
+    b = _project(
+        session,
+        name="Stafford Technology Campus",
+        company="STACK Infrastructure",
+        city=None,
+        county="Stafford",
+        state="VA",
+        dedup_key="stack|county:stafford|VA",
+    )
+
+    found = [p for p in capex.suspected_duplicates(session) if {a.id, b.id} == {p.a_id, p.b_id}]
+    assert found and found[0].exact
+    assert found[0].kinds[0] == "exact"
+    assert found[0].rank == 0
+    assert "same company and the same name" in found[0].why
+
+
+def test_a_facility_number_identifies_a_building_inside_one_market(session):
+    """`va-4` on two Ashburn rows is one building. This is the largest group on the
+    live database — RagingWire and NTT under four names sharing `va-4`, `va-5` and
+    `va-6` — and a rule that treated the code as vocabulary everywhere lost it."""
+    a = _project(session, name="VA2 Data Center", company="RagingWire", city="Ashburn", state="VA")
+    b = _project(session, name="Ashburn Campus", company="NTT", city="Ashburn", state="VA")
+    _blocked(session, a, "VA4", "va-4")
+    _blocked(session, b, "VA4", "va-4")
+
+    found = [p for p in capex.suspected_duplicates(session) if {a.id, b.id} == {p.a_id, p.b_id}]
+    assert found and "tranche" in found[0].kinds
+
+
+def test_a_facility_number_across_two_markets_is_an_airport(session):
+    """DataBank's `IAD3` in Ashburn and Aligned's Sterling campus share a key and an
+    airport. Two operators, two buildings, sixty kilometres of Loudoun County."""
+    a = _project(session, name="IAD3", company="DataBank", city="Ashburn", state="VA")
+    b = _project(session, name="Aligned Sterling", company="Aligned", city="Sterling", state="VA")
+    _blocked(session, a, "IAD3", "iad-3")
+    _blocked(session, b, "IAD3", "iad-3")
+
+    assert not [p for p in capex.suspected_duplicates(session) if {a.id, b.id} == {p.a_id, p.b_id}]
+
+
+def test_a_tranche_named_after_the_town_pairs_nothing(session):
+    """`austin` is a tranche label on Switch's Austin campus and on Sabey's in Round
+    Rock. One metro, two buildings, and the locality is never distinctive."""
+    a = _project(
+        session, name="Austin Data Center Campus", company="Switch", city="Austin", state="TX"
+    )
+    b = _project(session, name="Round Rock Campus", company="Sabey", city="Round Rock", state="TX")
+    _blocked(session, a, "Austin", "austin")
+    _blocked(session, b, "Austin", "austin")
+
+    assert not [p for p in capex.suspected_duplicates(session) if {a.id, b.id} == {p.a_id, p.b_id}]
+
+
+def test_a_tranche_made_of_type_words_pairs_nothing(session):
+    """`capacity-1` names a kind of tranche. `blocks.generic` cannot catch it,
+    because it reads the label's own words and "Capacity 1" looks specific."""
+    a = _project(
+        session, name="Project Merlin", company="Galaxy Digital", city="McGregor", state="TX"
+    )
+    b = _project(
+        session, name="Helios II", company="Galaxy Digital", city=None, county="Dickens", state="TX"
+    )
+    _blocked(session, a, "Capacity 1", "capacity-1")
+    _blocked(session, b, "Capacity 1", "capacity-1")
+
+    found = [p for p in capex.suspected_duplicates(session) if {a.id, b.id} == {p.a_id, p.b_id}]
+    assert not [p for p in found if "tranche" in p.kinds]
+
+
+def test_two_spellings_of_one_company_are_not_party_evidence(session):
+    """`party` carries an unattended merge, so it has to mean something.
+
+    The second pass buckets rows by company, so `shares_a_party` is true of every
+    pair it produces. Recorded as evidence, that would have offered to fold NTT's
+    Itasca campus into NTT's Chicago one, 31.7 km away.
+    """
+    a = _project(
+        session,
+        name="Chicago Data Center",
+        company="NTT",
+        city="Itasca",
+        county="DuPage",
+        state="IL",
+    )
+    b = _project(
+        session,
+        name="Chicago Campus",
+        company="NTT",
+        city="Chicago",
+        county="DuPage",
+        state="IL",
+    )
+
+    for pair in capex.suspected_duplicates(session):
+        if {a.id, b.id} == {pair.a_id, pair.b_id}:
+            assert "party" not in pair.kinds
+            assert not pair.shared_parties

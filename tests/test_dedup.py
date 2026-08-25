@@ -251,3 +251,183 @@ def test_a_renamed_operator_folds_to_one_key():
     the Childress campus was stored twice."""
     assert dedup.company_key("Iris Energy") == dedup.company_key("IREN Limited") == "iren"
     assert dedup.shares_a_party("IREN Limited", "Iris Energy")
+
+
+# --- the four judgements the duplicates report rests on ----------------------
+#
+# Every case below is a pair that was measured on the live database, not an
+# invented one: these are the strings that produced a wrong answer.
+
+
+def test_the_same_company_and_the_same_name_is_identity():
+    """Six suspected pairs held both, and all six were reported as the weakest class.
+
+    `distinctive_name_tokens` strips generic industry words and the locality, so
+    "Stafford Technology Campus" in Stafford reduces to nothing and two identical
+    names produced no name evidence at all.
+    """
+    assert dedup.exact_identity(
+        "Stafford Technology Campus",
+        "STACK Infrastructure",
+        "Stafford Technology Campus",
+        "STACK Infrastructure",
+    )
+    # The alias table is part of it: one row says the long name, the other the short.
+    assert dedup.exact_identity(
+        "Atlanta-Douglasville", "Flexential", "atlanta douglasville", "Flexential"
+    )
+    assert (
+        dedup.distinctive_name_tokens("Stafford Technology Campus", locality="Stafford")
+        == frozenset()
+    )
+
+
+@pytest.mark.parametrize(
+    ("a", "b"),
+    [
+        ("Lithia Springs Campus", "Lithia Springs Campus II"),  # one has no ordinal
+        ("VA2 Data Center", "VA-2 Data Center"),  # same ordinal
+        ("Hyperion", "Hyperion Data Center"),
+        (None, "Polaris Forge 1"),
+    ],
+)
+def test_a_number_on_one_side_is_not_a_sibling(a, b):
+    assert not dedup.sibling_ordinals(a, b)
+
+
+@pytest.mark.parametrize(
+    ("a", "b"),
+    [
+        ("Polaris Forge 1", "Polaris Forge 2"),
+        ("SLC02", "SLC-04"),
+        ("ATL 3", "ATL 5"),
+    ],
+)
+def test_neighbouring_phases_are_siblings_not_duplicates(a, b):
+    """Applied Digital's Polaris Forge 1 (Ellendale) and 2 (Harwood) are two real
+    campuses that share the tranche key `forge-2.polaris`, because one article listed
+    both. Once a shared tranche can carry a merge across localities, one digit is all
+    that stands between them and being folded together."""
+    assert dedup.sibling_ordinals(a, b)
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "capacity-1",
+        "existing",
+        "a-1.building",
+        "planned",
+        "total.capacity",
+    ],
+)
+def test_a_key_made_of_type_words_names_a_kind_of_tranche(key):
+    assert dedup.is_vocabulary_block_key(key)
+
+
+@pytest.mark.parametrize(
+    "key", ["stingray", "horizon-1", "sweetwater-1", "county.shackelford", "dfw-3.expansion"]
+)
+def test_a_key_that_names_a_building_survives(key):
+    assert not dedup.is_vocabulary_block_key(key)
+
+
+def test_the_locality_is_never_a_tranche_either():
+    """`austin` is a tranche label on Switch's Austin campus and on Sabey's in Round
+    Rock — one metro, two buildings. The rule `distinctive_name_tokens` applies to
+    names, applied one level down."""
+    assert dedup.is_vocabulary_block_key("austin", localities={"Austin"})
+    assert not dedup.is_vocabulary_block_key("austin", localities={"Round Rock"})
+
+
+@pytest.mark.parametrize("key", ["iad-3", "IAD3", "va-2", "ord 1", "ph-1", "acc-9"])
+def test_a_facility_number_is_recognised(key):
+    """Whether it is identity depends on where the rows are, which is why it is not
+    folded into `is_vocabulary_block_key`: inside one market the code is the market
+    and the number is the building."""
+    assert dedup.is_facility_number(key)
+
+
+@pytest.mark.parametrize("key", ["stingray", "horizon-1", "douglasville-2", "forge-2.polaris"])
+def test_a_named_building_is_not_a_facility_number(key):
+    assert not dedup.is_facility_number(key)
+
+
+def test_two_spellings_of_one_company_share_no_party():
+    """The distinction that keeps `party` worth trusting for a merge.
+
+    `capex`'s second pass buckets rows *by* company, so `shares_a_party` is true of
+    every pair it produces and means nothing there. Recording it would have offered
+    to fold NTT's Itasca campus into NTT's Chicago one, 31.7 km away.
+    """
+    assert dedup.shares_a_party(
+        "NTT Global Data Centers Americas", "NTT Global Data Centers Americas"
+    )
+    assert not dedup.shared_parties_across_companies(
+        "NTT Global Data Centers Americas", "NTT Global Data Centers Americas"
+    )
+    # What the signal was built for survives.
+    assert dedup.shared_parties_across_companies("OpenAI/Oracle", "Oracle") == {"oracle"}
+
+
+@pytest.mark.parametrize(
+    ("key", "localities"),
+    [
+        ("iad-3", set()),  # the airport form needs no locality to be recognised
+        ("hillsboro-1", {"Hillsboro"}),
+        ("chicago-2", {"Chicago"}),
+        ("sweetwater-1", {"Sweetwater"}),
+        ("douglasville-2", {"Douglasville"}),
+    ],
+)
+def test_a_market_and_a_number_is_not_a_building(key, localities):
+    """Two spellings of one thing: the airport code and the town's own name.
+
+    Kept as evidence and refused as merge authority, which is the only split that
+    works — `sweetwater-1` is the whole of what connects IREN's Sweetwater campus to
+    the copy stored under its old name, and `hillsboro-1` is held by Flexential's
+    Hillsboro site and NTT's.
+    """
+    assert dedup.is_market_sequence(key, localities=localities)
+    assert not dedup.is_vocabulary_block_key(key, localities=localities)
+
+
+@pytest.mark.parametrize(
+    ("key", "localities"),
+    [
+        ("expansion.houston", {"Houston"}),
+        ("expansion.portland", {"Portland"}),
+        ("expansion.hillsboro", {"Hillsboro"}),
+    ],
+)
+def test_a_type_word_and_a_town_names_nothing(key, localities):
+    """ "An expansion, in this town" is true of every expansion in that town.
+
+    `expansion.houston` paired Element Critical's Houston One with Switch's Houston
+    campus; `expansion.portland` paired STACK's Portland site with its Hillsboro one.
+    """
+    assert dedup.is_vocabulary_block_key(key, localities=localities)
+
+
+def test_a_tranche_named_after_a_county_the_campus_reaches_into_survives():
+    """The flagship case, and it nearly died to the word "County".
+
+    `county.shackelford` ties Stargate's Abilene row to its Shackelford County one.
+    Building place words straight from the county field made "county" a place word,
+    which reduced the whole key to vocabulary.
+    """
+    assert not dedup.is_vocabulary_block_key(
+        "county.shackelford", localities={"Shackelford County"}
+    )
+
+
+def test_the_operators_own_name_is_not_a_distinctive_site_token():
+    """Every STACK project is called "STACK something", so the word says which
+    company and not which building."""
+    firms = "STACK Infrastructure"
+    assert "stack" in dedup.distinctive_name_tokens("STACK Portland Expansion")
+    assert "stack" not in dedup.distinctive_name_tokens("STACK Portland Expansion", company=firms)
+    # And what actually names a site still survives.
+    assert dedup.distinctive_name_tokens("STACK Kincora Campus", company=firms) == frozenset(
+        {"kincora"}
+    )

@@ -389,19 +389,264 @@ def shares_a_party(a: str | None, b: str | None) -> bool:
     return bool(common)
 
 
-def distinctive_name_tokens(name: str | None, *, locality: str | None = None) -> frozenset[str]:
+def shared_parties_across_companies(a: str | None, b: str | None) -> set[str]:
+    """Operators two *differently named* companies have in common.
+
+    The distinction this draws is load-bearing, and conflating it is how a
+    duplicate report turns into a data-loss bug. `shares_a_party` answers "do
+    these strings name a common operator", which is trivially true when both
+    strings are the same company — and `capex.suspected_duplicates` has a whole
+    pass that buckets rows *by* company, so on that path every pair would report
+    party evidence and none of it would mean anything. `dupresolve.HARD_EVIDENCE`
+    trusts `party` enough to carry an unattended merge, so the vacuous form would
+    have offered to fold NTT's Itasca campus into NTT's Chicago one, 31.7 km away.
+
+    What `party` was built for is the opposite case: "OpenAI/Oracle" against
+    "Oracle", where two different company strings name one campus because one
+    builds it and the other occupies it. Same company is a bucketing artefact and
+    is returned as nothing.
+    """
+    if not a or not b or company_key(a) == company_key(b):
+        return set()
+    return company_parts(a) & company_parts(b)
+
+
+def exact_identity(
+    a_name: str | None, a_company: str | None, b_name: str | None, b_company: str | None
+) -> bool:
+    """True when two rows carry the same company and the same name outright.
+
+    The strongest identity claim available, and until this function nothing looked
+    for it. Measured on the live database, six suspected pairs held a byte-identical
+    company *and* name — `Flexential — Atlanta-Douglasville` twice,
+    `STACK Infrastructure — Stafford Technology Campus` twice, `DataBank — Lithia
+    Springs Campus` twice — and every one of them was reported under the weakest
+    evidence class the report has, because none of them produced a `name` signal at
+    all: :func:`distinctive_name_tokens` drops generic industry words and the
+    locality, and "Stafford Technology Campus" in Stafford is nothing else. The
+    strictness that stopped "centers" pairing Aligned with NTT is what hid these.
+
+    Ranked above a shared tranche, and trusted for a merge. Two rows that agree on
+    both of the fields a person reads first are not a resemblance.
+    """
+    company = company_key(a_company)
+    name = _slug(a_name or "")
+    if not company or not name:
+        return False
+    return company == company_key(b_company) and name == _slug(b_name or "")
+
+
+#: A trailing ordinal, in the two shapes operators write one: "Forge 2", "SLC02".
+_TRAILING_ORDINAL = re.compile(r"^(?P<stem>.*?)[ \-]?(?P<ordinal>\d{1,3})$")
+
+
+def sibling_ordinals(a_name: str | None, b_name: str | None) -> bool:
+    """True when two names are the same site's *neighbours*, not one site twice.
+
+    A campus and the campus next to it share everything a duplicate detector looks
+    at — operator, town, often a tranche key an article listed under both — and
+    differ in one digit. `Polaris Forge 1` in Ellendale and `Polaris Forge 2` in
+    Harwood are two real Applied Digital sites holding the same `forge-2.polaris`
+    key, so once a shared tranche is allowed to carry a merge across localities,
+    they are foldable and the fold destroys a campus. Same shape for Aligned's
+    `SLC02` against `SLC-04`.
+
+    The test is deliberately narrow: both names must reduce to the *same stem* and
+    both must carry an ordinal, and the ordinals must differ. One name having a
+    number and the other not is the ordinary case of a source being more specific —
+    "Sweetwater Data Center" against "IREN Sweetwater 1" is one site written twice —
+    and is not a sibling.
+    """
+    got = []
+    for raw in (a_name, b_name):
+        match = _TRAILING_ORDINAL.match(_slug(raw or ""))
+        if not match:
+            return False
+        got.append((match.group("stem").strip(), int(match.group("ordinal"))))
+    (a_stem, a_ordinal), (b_stem, b_ordinal) = got
+    return bool(a_stem) and a_stem == b_stem and a_ordinal != b_ordinal
+
+
+def distinctive_name_tokens(
+    name: str | None, *, locality: str | None = None, company: str | None = None
+) -> frozenset[str]:
     """Name words that could identify a specific site.
 
     Generic industry vocabulary is dropped, and so is the locality: every project
     in Ashburn has "Ashburn" in its name, and treating that as distinctive would
     make fourteen unrelated campuses look like one.
+
+    **The operator's own name goes the same way** when `company` is given. Every
+    STACK project is called "STACK something", so the word says which company and
+    not which building — and on a pair already known to share an operator it is
+    tautological. Measured: it was the entire `name` evidence pairing
+    `STACK Portland Expansion` with `STACK Infrastructure Hillsboro Campus`, two
+    towns apart.
     """
     if not name:
         return frozenset()
     drop = set(_GENERIC_NAME_TOKENS)
     if locality:
         drop.update(_slug(locality).split())
+    if company:
+        drop.update(_slug(company).split())
+        drop.update(company_key(company).split())
     return frozenset(t for t in _slug(name).split() if t not in drop and len(t) > 2)
+
+
+#: A metro code and a number: `IAD3`, `VA-2`, `ORD 1`, `PH-1`, `ACC-9`. Every
+#: colocation operator in the country names facilities this way, off the nearest
+#: airport.
+_FACILITY_NUMBER = re.compile(r"^[a-z]{2,4}[ .\-]?\d{1,2}$")
+
+
+def is_facility_number(key: str | None) -> bool:
+    """True when a tranche key is a metro code and a sequence number.
+
+    **Whether this is identity depends entirely on where the two rows are**, which
+    is why it is its own predicate rather than a line in
+    :func:`is_vocabulary_block_key`. Inside one market the code is the market and
+    the number is the building, so two Ashburn rows both holding `va-4` are two
+    readings of one building — that is the four-row RagingWire/NTT group, the
+    largest on the live database, and treating the key as vocabulary loses it.
+    Across two markets the code is *all* it says, and the number is a sequence
+    every operator restarts from one: `iad-3` is held by DataBank in Ashburn and
+    Aligned in Sterling, `ord-1` and `ord-2` by three operators around Chicago,
+    and `va-2` by both RagingWire and Iron Mountain sixty kilometres apart.
+
+    So `capex.shared_identity_keys` applies it only to pairs whose rows sit in
+    different localities.
+    """
+    if not key:
+        return False
+    return bool(_FACILITY_NUMBER.match(_slug(key).replace(" ", "-")))
+
+
+def is_market_sequence(
+    key: str | None, *, localities: frozenset[str] | set[str] = frozenset()
+) -> bool:
+    """True when a tranche key is "the Nth building in this market", however spelled.
+
+    Two spellings of one thing. `iad-3` uses the airport code; `hillsboro-1`,
+    `chicago-2` and `sweetwater-1` use the town. Both name a market and a sequence
+    number, and the number restarts at one for every operator — so two rows holding
+    it are in the same market and nothing more is implied.
+
+    **Evidence, but not merge authority**, and the split is what makes this usable.
+    Discarding these keys outright would lose real duplicates: `sweetwater-1` is how
+    IREN's Sweetwater campus, stored twice across a rename, is connected at all, and
+    with the key gone that pair carries no signal and disappears from the report.
+    Keeping them as merge evidence would fold Flexential's Hillsboro site into NTT's
+    on `hillsboro-1`. So the report shows them and `dupresolve.merge_blocked` refuses
+    to merge on them alone — a person answering `--ask` still can.
+    """
+    if not key:
+        return False
+    if is_facility_number(key):
+        return True
+    match = _TRAILING_ORDINAL.match(_slug(key))
+    if not match:
+        return False
+    stem = match.group("stem").strip()
+    return bool(stem) and stem in {_slug(name) for name in localities if name}
+
+
+#: Words that name a *kind* of tranche rather than one. `blocks.TYPE_WORDS` cannot
+#: catch these, because it reads a label's own words to decide whether the label is
+#: generic, and "existing capacity" is a perfectly specific-looking label that
+#: every operator writes. `capex.identifying_block_keys` records the damage:
+#: `existing` alone paired Element Critical's Houston One with Switch's Houston
+#: campus.
+_BLOCK_VOCABULARY = frozenset(
+    {
+        "capacity",
+        "existing",
+        "planned",
+        "hyperscale",
+        "total",
+        "new",
+        "expansion",
+        "phase",
+        "building",
+        "buildings",
+        "hall",
+        "halls",
+        "site",
+        "campus",
+        "colocation",
+        "retail",
+        "wholesale",
+        # The power words. A tranche labelled "temporary power" or "permanent plant
+        # power" names a *supply arrangement* every large site has, and two rows
+        # holding it share an engineering sequence rather than a building. Measured:
+        # `permanent.plant.power` and `power.temporary` paired xAI's Colossus with a
+        # separate SpaceX row in Memphis.
+        "power",
+        "plant",
+        "permanent",
+        "temporary",
+        "substation",
+        "generation",
+        "utility",
+        "interconnection",
+    }
+)
+
+
+def is_vocabulary_block_key(
+    key: str | None, *, localities: frozenset[str] | set[str] = frozenset()
+) -> bool:
+    """True when a shared tranche key is industry vocabulary, not a building.
+
+    The counterpart to :func:`distinctive_name_tokens`, one level down. A tranche
+    key is derived from what an article called a building, so two rows carrying the
+    same key are usually two readings of one building — but only if the key names
+    something. Two ways it can fail to, both true wherever the rows are:
+
+    * a key made **only of type words and digits** — `capacity-1`, `existing`,
+      `a-1.building` — names a kind of tranche. Bare single letters count as
+      nothing here for the same reason;
+    * a key that is exactly a **locality name** is the locality, and the locality is
+      never distinctive. `austin` is a tranche label on Switch's Austin campus and
+      on Sabey's in Round Rock, which is one metro and two buildings.
+
+    `localities` is the row's own city and county, slugged. Passing them is what
+    makes the second test possible at all: rarity cannot see it, because the key
+    really is rare — it is just rare in the way a town's name is.
+
+    A locality word inside a compound key counts the same way, which is what
+    separates `expansion.portland` from `crossing.gainesville`. The first says an
+    expansion happened in this town and the second names a development; measured,
+    `expansion.houston` is the key that paired Element Critical's Houston One with
+    Switch's Houston campus, and `expansion.portland` paired STACK's Portland site
+    with its Hillsboro one.
+
+    A facility number is *not* judged here, and neither is a market sequence like
+    `sweetwater-1`. Whether those identify a building depends on where the two rows
+    are, which is a fact about a pair — and they are worth showing a reader even
+    when they are not worth merging on. See :func:`is_market_sequence`.
+    """
+    if not key:
+        return True
+    slug = _slug(key)
+    if not slug:
+        return True
+    if is_market_sequence(key, localities=localities):
+        return False
+    places = {_slug(name) for name in localities if name}
+    if slug in places:
+        return True
+    # `county_key` first, so the *word* "county" does not become a place word just
+    # because the row's county field spells it out. It did, and it cost the flagship
+    # case: `county.shackelford` — the key that ties Stargate's Abilene row to its
+    # Shackelford County one — reduced to two place words and was discarded as
+    # vocabulary. A tranche named after a county the campus reaches into is a fact
+    # about that campus; the county's own suffix is not.
+    place_words = {word for place in places for word in (county_key(place) or place).split()}
+    parts = [p for p in re.split(r"[.\-_ ]+", slug) if p]
+    return all(
+        p in _BLOCK_VOCABULARY or p in place_words or p.isdigit() or len(p) < 2 for p in parts
+    )
 
 
 def looks_like_the_same_site(

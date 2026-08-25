@@ -1,6 +1,6 @@
 """The shared industry block, and the version stamp that has to cover it.
 
-Eleven prompts read the same industry, so the background they need is written
+Twelve prompts read the same industry, so the background they need is written
 once and prepended to all of them. That creates one hazard worth a test file:
 a file outside the prompt can now change what a prompt says, and
 `source.extractor` claims to identify what produced every row.
@@ -35,7 +35,7 @@ def test_the_partial_is_not_a_prompt():
 
 
 def test_every_prompt_carries_the_industry_context():
-    """All eleven, not just extraction.
+    """All twelve, not just extraction.
 
     The failures that motivated it were spread across extraction, the evidence
     audit and the contradiction checker, and a block only some prompts get is one

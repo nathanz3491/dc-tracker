@@ -44,7 +44,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from tracker.dedup import company_key, customer_key, is_undisclosed
+from tracker.dedup import company_key, customer_key, is_undisclosed, is_vocabulary_block_key
 from tracker.models import Event, Project, Risk, Source
 from tracker.vocab import (
     BLOCK_LIVE,
@@ -637,16 +637,54 @@ def suspect_attributions(session: Session) -> list[tuple[int, str, str]]:
 #: How a pair was raised, strongest evidence first. The order is the sort order of
 #: the report and is a claim about how much each signal is worth:
 #:
-#: * a **tranche** both rows hold under one derived key, where that key appears
-#:   nowhere else in the country, is two readings of one building;
-#: * a **party** in common means one company string names the other's operator,
-#:   which is how one campus becomes four rows;
+#: * an **exact** match is the same company and the same name, outright. Two rows
+#:   agreeing on both of the fields a person reads first are not a resemblance;
+#: * a **tranche** both rows hold under one derived key, where that key appears in
+#:   no locality but theirs, is two readings of one building;
+#: * a **party** in common means one company string names the *other's* operator —
+#:   "OpenAI/Oracle" against "Oracle" — which is how one campus becomes four rows.
+#:   Two spellings of one company is not this signal; see
+#:   `dedup.shared_parties_across_companies`;
+#: * an **identity** match is structural rather than textual: the two dedup keys
+#:   describe the same place at different granularity. It is a strong statement
+#:   about *place* and a weak one about *building*, which is why it sorts below the
+#:   two signals that name a building and why it cannot carry a merge on its own.
+#:   Measured on the live database it pairs NTT's Itasca campus with NTT's Chicago
+#:   one, 31.7 km apart: same company, same county, two buildings;
 #: * a **name** token in common is the weakest — it is a word, and words recur.
-#: Duplicate signals, strongest first. `identity` leads because it is the one
-#: signal that is *structural* rather than textual: two rows whose dedup keys
-#: describe the same place at different granularity are the same place, and no
-#: amount of name resemblance is that solid.
-EVIDENCE_ORDER: tuple[str, ...] = ("identity", "tranche", "party", "name")
+#:
+#: **The order changed, and the reason is what a reader can act on.** `identity`
+#: led this list on the strength of being structural, and the report therefore
+#: opened with 31 of its 49 pairs — every one of them a class that no automated
+#: path can settle, because `dupresolve.merge_blocked` refuses granularity alone.
+#: The classes something can be done about now sort first.
+EVIDENCE_ORDER: tuple[str, ...] = ("exact", "tranche", "party", "identity", "name")
+
+#: What each class is called where a person reads it. One table, because the CLI and
+#: the console must not name the same evidence differently — the console's whole
+#: contract is that a judgement is made once and drawn twice
+#: (`docs/architecture.md`), and a label is part of the judgement when the classes
+#: are unequal enough that one carries a merge and another is a word.
+EVIDENCE_LABELS: dict[str, str] = {
+    "exact": "same name",
+    "tranche": "same tranche",
+    "party": "shared operator",
+    "identity": "city vs county",
+    "name": "name overlap",
+}
+
+
+def strongest_evidence(pairs: list[DuplicatePair], ids: list[int]) -> str:
+    """The class a group is best described by: its strongest pair's strongest signal.
+
+    Computed here rather than in the browser or twice, for the reason
+    `docs/architecture.md` gives about the port: the moment two implementations of
+    one rule exist they are free to disagree and nothing says when they start.
+    """
+    inside = [p for p in pairs if p.a_id in ids and p.b_id in ids and p.kinds]
+    if not inside:
+        return ""
+    return min(inside, key=lambda p: p.rank).kinds[0]
 
 
 @dataclass(frozen=True)
@@ -681,11 +719,16 @@ class DuplicatePair:
     #: This is the signal the locality bucketing structurally cannot see, because
     #: the two rows are in different buckets by construction.
     shared_keys: tuple[str, ...] = ()
+    #: Same company and same name, character for character once normalized. Its own
+    #: field rather than something a reader infers from the two labels, because
+    #: `dupresolve` trusts it for a merge and a rail has to read a value.
+    exact: bool = False
 
     @property
     def kinds(self) -> tuple[str, ...]:
         """Which signals raised this pair, strongest first."""
         got = {
+            "exact": self.exact,
             "identity": bool(self.shared_keys),
             "tranche": bool(self.shared_blocks),
             "party": bool(self.shared_parties),
@@ -703,6 +746,8 @@ class DuplicatePair:
     def why(self) -> str:
         """One line naming the evidence, for a reader deciding whether to merge."""
         parts: list[str] = []
+        if self.exact:
+            parts.append("same company and the same name")
         if self.shared_blocks:
             listed = ", ".join(self.shared_blocks[:3])
             parts.append(
@@ -712,7 +757,7 @@ class DuplicatePair:
         if self.shared_parties:
             parts.append(f"both name {', '.join(self.shared_parties[:3])}")
         if self.shared_keys:
-            parts.insert(0, f"same place at different granularity ({self.shared_keys[0]})")
+            parts.append(f"same place at different granularity ({self.shared_keys[0]})")
         if self.shared_tokens:
             parts.append(f"both names carry {', '.join(sorted(self.shared_tokens)[:3])}")
         return "; ".join(parts) or "same locality"
@@ -752,18 +797,109 @@ def identifying_block_keys(projects) -> dict[int, set[str]]:
     and a count-based rule would throw the flagship case away. All four are in
     Abilene, so the locality test keeps it and still discards a key that shows up
     in Ashburn and Corsicana as well.
+
+    **Rarity has moved out of this function**, to :func:`shared_identity_keys`,
+    because "appears in one locality" and "appears in no locality but these two"
+    are the same rule asked of one row and of a pair — and only the second can see
+    a cross-granularity duplicate, which is two localities by construction. What
+    stays here is the judgement that does not depend on a pair: whether the key
+    names a building at all. `dedup.is_vocabulary_block_key` is the third filter
+    the paragraph above asks for, since `generic` reads a label's own words and
+    cannot know that `IAD3` is an airport.
     """
-    where: dict[str, set[tuple[str, str]]] = {}
     per_project: dict[int, set[str]] = {}
     for project in projects:
-        locality = (project.city or project.county or "").strip().lower()
-        keys = {
-            b.block_key for b in (getattr(project, "blocks", ()) or ()) if not b.generic or b.parent
+        localities = {
+            (project.city or "").strip().lower(),
+            (project.county or "").strip().lower(),
         }
-        per_project[project.id] = keys
-        for key in keys:
-            where.setdefault(key, set()).add((locality, project.state))
-    return {pid: {k for k in keys if len(where[k]) == 1} for pid, keys in per_project.items()}
+        per_project[project.id] = {
+            b.block_key
+            for b in (getattr(project, "blocks", ()) or ())
+            if (not b.generic or b.parent)
+            and not is_vocabulary_block_key(b.block_key, localities=localities)
+        }
+    return per_project
+
+
+def block_key_localities(projects) -> dict[str, set[tuple[str, str]]]:
+    """Which localities each tranche key appears in. The rarity denominator."""
+    where: dict[str, set[tuple[str, str]]] = {}
+    for project in projects:
+        locality = (project.city or project.county or "").strip().lower()
+        for block in getattr(project, "blocks", ()) or ():
+            where.setdefault(block.block_key, set()).add((locality, project.state))
+    return where
+
+
+def shared_identity_keys(
+    a, b, keys: dict[int, set[str]], where: dict[str, set[tuple[str, str]]]
+) -> tuple[str, ...]:
+    """Tranche keys two rows share that appear in no locality except their own.
+
+    The rule the old one could not express. `identifying_block_keys` kept a key
+    only when it appeared in exactly *one* locality, which is right for two rows in
+    one town and is precisely backwards for the case that matters most: a campus
+    stored once as a city and once as the county containing it holds its tranche
+    key in two localities, so the evidence that would settle it was thrown away for
+    being evidence. Measured on the live database, eight suspected pairs shared a
+    real tranche key that this function reports and the old filter discarded —
+    among them Stargate Abilene (#3) against Stargate Shackelford County (#182) on
+    `county.shackelford`, and the IREN/Iris Energy Sweetwater rename.
+
+    Asking it of a pair rather than of a row costs nothing and collapses two rules
+    into one: when both rows sit in the same locality, "no locality but ours" *is*
+    "exactly one locality", so pass one keeps the behaviour it had.
+
+    The pair is also the only place a facility number can be judged. Two rows in
+    one market holding `va-4` are one building; two rows in different markets
+    holding `iad-3` share an airport. See `dedup.is_facility_number`.
+    """
+    from tracker.dedup import is_facility_number
+
+    a_locality = ((a.city or a.county or "").strip().lower(), a.state)
+    b_locality = ((b.city or b.county or "").strip().lower(), b.state)
+    one_market = a_locality == b_locality
+    return tuple(
+        sorted(
+            k
+            for k in keys[a.id] & keys[b.id]
+            if where.get(k, set()) <= {a_locality, b_locality}
+            and (one_market or not is_facility_number(k))
+        )
+    )
+
+
+def _shared_name_tokens(a, b) -> tuple[str, ...]:
+    """Name words two rows have in common that identify a site rather than a place.
+
+    Both rows' localities are dropped, not just one. Within a locality bucket that
+    is the same thing, but a cross-granularity pair has two localities by
+    construction — "Gainesville" against "Prince William County" — and keeping
+    either row's town would let the town's own name look like identity.
+
+    **The operator's name goes too, but only when both rows have the same one.**
+    Every STACK project is called "STACK something", so on a pair that already
+    shares an operator the word is tautological — it was the whole of the `name`
+    evidence pairing `STACK Portland Expansion` with `STACK Infrastructure Hillsboro
+    Campus`, two towns apart. Where the companies differ the word is doing real
+    work, and dropping it unconditionally cost three genuine pairs: an operator's
+    name is sometimes the *site's* name too. `Crusoe — Stargate Abilene` against
+    `Stargate — Stargate Abilene` shares "stargate", which is one row's company and
+    the other's campus; `Illinois Quantum and Microelectronics Park` is a project
+    whose developer is named after it.
+    """
+    from tracker.dedup import company_key, distinctive_name_tokens
+
+    places = " ".join(part for part in (a.city, a.county, b.city, b.county) if part)
+    one_operator = company_key(a.company) == company_key(b.company)
+    firms = a.company if one_operator else None
+    return tuple(
+        sorted(
+            distinctive_name_tokens(a.name, locality=places, company=firms)
+            & distinctive_name_tokens(b.name, locality=places, company=firms)
+        )
+    )
 
 
 def suspected_duplicates(session: Session, *, include_parked: bool = False) -> list[DuplicatePair]:
@@ -795,7 +931,7 @@ def suspected_duplicates(session: Session, *, include_parked: bool = False) -> l
     is what `tracker duplicates --parked` uses to let somebody review their own
     past decisions.
     """
-    from tracker.dedup import company_parts, distinctive_name_tokens
+    from tracker.dedup import exact_identity, shared_parties_across_companies
     from tracker.pairs import canonical, parked_keys
 
     projects = session.scalars(select(Project)).all()
@@ -807,7 +943,26 @@ def suspected_duplicates(session: Session, *, include_parked: bool = False) -> l
         by_locality.setdefault((locality, project.state), []).append(project)
 
     keys = identifying_block_keys(projects)
+    where = block_key_localities(projects)
     parked = set() if include_parked else parked_keys(session)
+
+    def evidence(a: Project, b: Project) -> dict[str, Any]:
+        """Every signal that holds for one pair.
+
+        One function for all three passes. The second pass used to record `shared_keys`
+        and nothing else, so a cross-granularity duplicate carried exactly one
+        evidence class however much evidence existed — measured on the live
+        database, 12 of those pairs shared a distinctive name token, 8 shared a real
+        tranche key, and 6 were byte-identical in name and company. None of it
+        reached the report, and `dupresolve.merge_blocked` refused all of them for
+        having only granularity to go on.
+        """
+        return {
+            "exact": exact_identity(a.name, a.company, b.name, b.company),
+            "shared_blocks": shared_identity_keys(a, b, keys, where),
+            "shared_parties": tuple(sorted(shared_parties_across_companies(a.company, b.company))),
+            "shared_tokens": _shared_name_tokens(a, b),
+        }
 
     pairs: list[DuplicatePair] = []
     for (locality, state), group in by_locality.items():
@@ -815,15 +970,8 @@ def suspected_duplicates(session: Session, *, include_parked: bool = False) -> l
             for b in group[i + 1 :]:
                 if canonical(a.id, b.id) in parked:
                     continue
-                shared = tuple(sorted(keys[a.id] & keys[b.id]))
-                parties = tuple(sorted(company_parts(a.company) & company_parts(b.company)))
-                tokens = tuple(
-                    sorted(
-                        distinctive_name_tokens(a.name, locality=locality)
-                        & distinctive_name_tokens(b.name, locality=locality)
-                    )
-                )
-                if not (shared or parties or tokens):
+                found = evidence(a, b)
+                if not any(found.values()):
                     continue
                 pairs.append(
                     DuplicatePair(
@@ -836,9 +984,7 @@ def suspected_duplicates(session: Session, *, include_parked: bool = False) -> l
                         locality=a.city or a.county or locality,
                         state=state,
                         b_mw=float(b.mw_planned or 0.0),
-                        shared_blocks=shared,
-                        shared_parties=parties,
-                        shared_tokens=tokens,
+                        **found,
                     )
                 )
     # --- The pairs the locality bucket structurally cannot see -----------------
@@ -900,6 +1046,60 @@ def suspected_duplicates(session: Session, *, include_parked: bool = False) -> l
                         state=a.state,
                         b_mw=float(b.mw_planned or 0.0),
                         shared_keys=overlap or ("city and county granularity differ",),
+                        # Everything the locality pass would have asked, asked here
+                        # too. Granularity is what *raised* the pair; it is not all
+                        # that is known about it, and recording it alone is what
+                        # left 31 pairs on the live database with one evidence class
+                        # and no route to a decision.
+                        **evidence(a, b),
+                    )
+                )
+
+    # --- The pairs neither key comparison can reach: one tranche, two localities ---
+    #
+    # Both passes above start from a *key*: pass one compares rows filed under one
+    # locality, pass two rows whose dedup keys describe one place at two
+    # granularities. A campus stored once as a city and once as a county whose names
+    # do not match is in neither — `is_cross_granularity_match` needs the locality
+    # names to agree once the "County" word is dropped, and "Abilene" is not
+    # "Shackelford". So Stargate, stored as Crusoe's Abilene row and Oracle's
+    # Shackelford County row, was invisible to the report while both rows carried
+    # the tranche key `county.shackelford`.
+    #
+    # Starting from the tranche key instead reaches it, and `shared_identity_keys`
+    # is what makes that safe: the key must appear in no locality but these two, it
+    # must not be industry vocabulary, and across two markets it must not be a
+    # facility number — which is `IAD3` held by two operators sixty kilometres
+    # apart. Measured on the live database this pass finds nine pairs, seven of
+    # them real, including Cipher's Stingray facility filed under both `andrews`
+    # and `andrews county` and the IREN/Iris Energy Sweetwater rename.
+    by_key: dict[str, list[Project]] = {}
+    for project in projects:
+        for block_key in keys[project.id]:
+            by_key.setdefault(block_key, []).append(project)
+
+    for group in by_key.values():
+        for i, a in enumerate(group):
+            for b in group[i + 1 :]:
+                key = canonical(a.id, b.id)
+                if key in seen or key in parked or a.state != b.state:
+                    continue
+                found = evidence(a, b)
+                if not found["shared_blocks"]:
+                    continue
+                seen.add(key)
+                pairs.append(
+                    DuplicatePair(
+                        a_id=a.id,
+                        a_company=a.company,
+                        a_name=a.name,
+                        b_id=b.id,
+                        b_company=b.company,
+                        b_name=b.name,
+                        locality=a.city or a.county or "",
+                        state=a.state,
+                        b_mw=float(b.mw_planned or 0.0),
+                        **found,
                     )
                 )
 

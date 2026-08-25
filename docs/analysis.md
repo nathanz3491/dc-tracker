@@ -134,24 +134,70 @@ something a reader can check:
 
 | evidence | what it means |
 |---|---|
-| `same tranche` | both rows hold one derived `block_key` that appears in no other town |
-| `shared operator` | one company string names the other's operator — how one campus becomes four rows |
+| `same name` | the same company and the same name, once normalized. The strongest claim there is |
+| `same tranche` | both rows hold one derived `block_key` that appears in no locality but theirs |
+| `shared operator` | one company string names the *other's* operator — how one campus becomes four rows |
+| `city vs county` | the two dedup keys describe one place at two granularities |
 | `name overlap` | a distinctive word in common, the weakest signal, hidden by `--no-weak` |
 
-Two false pairs on the live database prompted the scan's rules to tighten. `Aligned
-Data Centers Phoenix` matched `NTT Global Data Centers Americas Phoenix` on the
-token "centers" — the generic-word list held the singular and not the plural. And
-`Element Critical — Houston One` matched `Switch — Houston Data Center Campus`
-because both had a tranche labelled "existing". **A tranche key that turns up in
-more than one town is vocabulary, not identity**, and no longer pairs anything;
-rarity is measured across localities rather than across rows so the flagship case
-survives — the Abilene campus is stored four times and all four hold `building-1`,
-in one town.
+**The order is the sort order, and it changed.** `city vs county` used to lead, on
+the grounds that a structural key match outranks a textual resemblance. It is a
+strong statement about *place* and a weak one about *building* — on the live
+database it pairs NTT's Itasca campus with NTT's Chicago one, 31.7 km apart — and
+`resolve` refuses to merge on it alone, so the report was opening with 31 of its 49
+pairs in the one class nothing automated can settle. The classes that name a
+building come first now.
+
+**A pair carries every signal that holds for it**, which sounds obvious and was not
+true. The pass that finds cross-granularity pairs recorded the key match and threw
+away everything else it had computed, so those 31 pairs were silently sharing 12
+distinctive name tokens, 8 real tranche keys and 6 byte-identical names between
+them. That is why `city vs county` now appears *alongside* other classes rather than
+instead of them, and it is what lets `resolve` tell "granularity and nothing else"
+from "granularity, and they are also the same building".
+
+**Two false pairs, and then the opposite problem.** `Aligned Data Centers Phoenix`
+matched `NTT Global Data Centers Americas Phoenix` on the token "centers" — the
+generic-word list held the singular and not the plural. `Element Critical — Houston
+One` matched `Switch — Houston Data Center Campus` because both had a tranche
+labelled "existing". Both are fixed. But the rule that fixed the second — *a tranche
+key appearing in more than one town is vocabulary* — is exactly backwards for the
+case that matters most, because **a campus stored as a city and as a county is in
+two towns by construction**. Stargate, stored as Crusoe's Abilene row and Oracle's
+Shackelford County row, was invisible to the report while both rows held the tranche
+key `county.shackelford`.
+
+Rarity is now asked of the pair rather than of the row: a shared key counts when it
+appears in no locality *but these two*. For two rows in one town that is the old
+rule unchanged, so the flagship case still survives — Abilene is stored four times
+and all four hold `building-1`, in one town. Seven pairs arrive this way that the
+report could not previously produce — Cipher's Stingray facility, DataBank's DFW3
+stored as Plano and as Dallas, and the IREN/Iris Energy Sweetwater rename among
+them. Five go the other way, dropped as vocabulary, and every one of them is a
+false pair somebody had already written down.
+
+Widening recall reopens the hole precision closed, so three rules say when a shared
+key names nothing:
+
+| shape | example | treated as |
+|---|---|---|
+| facility number | `iad-3`, `va-2`, `ord-1` | identity inside one market, an airport across two |
+| market sequence | `hillsboro-1`, `chicago-2`, `sweetwater-1` | reported, never merged on — see the rails below |
+| type words, digits and town names | `capacity-1`, `permanent.plant.power`, `expansion.houston` | nothing at all |
+
+The middle row is the interesting one. `sweetwater-1` is the only thing connecting
+IREN's Sweetwater campus to the copy stored under its old name, so discarding it
+loses a real duplicate — and `hillsboro-1` is held by Flexential's Hillsboro site
+and NTT's, so merging on it destroys a real campus. It is evidence without being
+authority, which is a distinction the report can carry and a merge cannot.
+
+None of this touches `blocks.generic` or `TYPE_WORDS`. Those decide whether a
+tranche's megawatts are summed; these decide whether two rows are the same building.
 
 ### Letting a model answer: `tracker duplicates resolve`
 
 ```bash
-tracker duplicates resolve --dry-run     # ask about every pair, write nothing
+tracker duplicates resolve --dry-run     # ask about every pair, write nothing — still pays for the calls
 tracker duplicates resolve               # park the ones it rules are different sites
 tracker duplicates resolve --merge       # ...and fold the ones it rules are one campus
 tracker duplicates resolve --ask         # put each pair to you first, model as the fallback
@@ -173,8 +219,42 @@ elsewhere in the codebase, restated as something a run can print:
 | confidence below 0.9 | unparking undoes a park; nothing undoes a merge |
 | name-word evidence only | "a shared name word is a word" |
 | cross-granularity evidence only | `dedup` has never merged a county row into a city row unattended |
+| market-sequence tranche only | `hillsboro-1` is held by Flexential's Hillsboro site and NTT's |
+| names differing only by an ordinal | `Polaris Forge 1` and `Polaris Forge 2` are two campuses that share a tranche key |
 | coordinates over 25 km apart | a campus can span a mile, not a county |
 | no `--merge` flag | the default run parks and never deletes |
+
+The ordinal rail is there because a measurement found the failure it prevents.
+Applied Digital's `Polaris Forge 1` in Ellendale and `Polaris Forge 2` in Harwood
+both hold `forge-2.polaris`, because one article listed the pair — every signal
+agreeing, one digit apart, and a merge would have destroyed a campus. It also
+catches Aligned's `SLC02` against `SLC-04`, and deliberately does not catch
+"Sweetwater Data Center" against "IREN Sweetwater 1": one name carrying a number and
+the other not is a source being more specific, not a sibling.
+
+What a merge may now rest on that it could not before is `same name` — the same
+company and the same name outright — and granularity *plus* a building-level signal.
+Neither widens the rails so much as stops them refusing evidence the report was
+discarding before they saw it.
+
+**Every rail is a refusal of the model, not of a reader.** `--ask` answers a pair at
+the keyboard, and a person's answer skips all of them: somebody with a map outranks
+a confidence score. That is still the route for the cross-granularity class, which
+is 20 of the 57 pairs on the live database.
+
+**How much of the backlog this settles, without spending anything to find out.**
+`--dry-run` is not free — it asks about every pair and rolls back the writes, so it
+pays for every call. `scripts/measure_duplicates.py` answers the narrower question
+for nothing, by putting a hypothetical confident verdict through the real rails:
+
+```bash
+python scripts/measure_duplicates.py           # classes, and what --merge would take
+python scripts/measure_duplicates.py --json    # one object per pair, for diffing revisions
+```
+
+On the live database it reports 15 of 57 pairs mergeable, 7 of them pairs the report
+could not previously see at all. What it cannot tell you is whether those merges are
+*right*; only reading the two rows does that.
 
 **`unclear` is a real answer** and the prompt says so twice: a wrong "same"
 destroys two rows, a wrong "different" hides a real duplicate, and both are worse
@@ -185,6 +265,14 @@ filled, then the lower id. It barely matters either way, because the merge recom
 every field from the combined claims; what it decides is a row number. The model's
 whole output is one word from three, a confidence and a sentence, so it cannot name
 a survivor or write a value even if it tried.
+
+**A group larger than two settles in one run.** Four rows for one campus produce six
+pairs, and the first merge deletes a row the other five name — which used to end the
+run's usefulness: they reported "one of the rows is gone" and you ran the command
+again, paying for another set of calls. The run now carries its own merges forward
+and asks a later pair about the surviving row. The live database has eight groups of
+three and two of four, including the Ashburn group where RagingWire and NTT hold
+`va-4`, `va-5` and `va-6` under four names.
 
 A person at the keyboard may merge what the rails refuse a model. The rails guard an
 *unattended* decision, and `--ask` is the opposite of unattended.

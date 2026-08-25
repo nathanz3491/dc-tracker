@@ -123,7 +123,11 @@ def test_different_parks_the_pair_and_names_the_model(session):
     assert (row.a_id, row.b_id) == pairs.canonical(a.id, b.id)
     # The provenance string is the whole point of migration 0016's comment.
     assert row.decided_by == "model (0.80)"
-    assert row.reason == "two separate builds a mile apart"
+    # The reason carries the evidence classes as well as the sentence: somebody
+    # reading `duplicates parked` in six months weighs "not one site" differently
+    # when what raised the pair was a shared tranche key than when it was a word.
+    assert row.reason.startswith("two separate builds a mile apart")
+    assert "[tranche]" in row.reason
     # And the pair stops being proposed, which is what capex reads.
     assert suspected_duplicates(session) == []
 
@@ -446,8 +450,19 @@ def test_the_limit_caps_what_one_run_can_spend_and_delete(session):
     assert len(model.prompts) == 2
 
 
-def test_a_row_removed_by_an_earlier_merge_is_reported_not_raised(session):
-    """Three rows, one campus: the second pair names a row the first pair folded."""
+def test_a_group_of_three_settles_in_one_run(session):
+    """Three rows, one campus, one pass — not one merge per run.
+
+    The first merge deletes a row the other two pairs name, and this used to end
+    the run's usefulness: those pairs reported "one of the rows is gone" and the
+    operator ran the command again, paying for another set of calls to fold the
+    next row. The live database has eight groups of three and two of four, so the
+    Ashburn group needed four runs.
+
+    `resolve` now carries its own merges forward, so a later pair is asked about
+    the surviving row. A pair whose two sides have both become the same row is
+    reported as already settled rather than as a loss.
+    """
     rows = []
     for i in range(3):
         p = _project(session, company=f"Op{i}", name="Stargate Abilene")
@@ -458,10 +473,10 @@ def test_a_row_removed_by_an_earlier_merge_is_reported_not_raised(session):
 
     decisions = dupresolve.resolve(session, extractor=model, allow_merge=True)
 
-    assert any(d.action == "merged" for d in decisions)
-    gone = [d for d in decisions if "merged by an earlier pair" in d.detail]
-    assert gone, "a pair naming a deleted row must report, not raise"
-    assert session.query(Project).count() < 3
+    assert session.query(Project).count() == 1, "the whole group folds in one run"
+    assert sum(1 for d in decisions if d.action == "merged") == 2
+    settled = [d for d in decisions if "already one row" in d.detail]
+    assert settled, "the third pair must report the merge, not a missing row"
 
 
 def test_a_reply_cut_off_while_reasoning_says_so(session):
@@ -496,3 +511,262 @@ def test_the_budget_is_sized_for_reasoning_not_for_the_answer(session):
     from tracker import audit
 
     assert dupresolve.MAX_TOKENS >= audit.MAX_TOKENS
+
+
+# --- what the widened evidence lets through, and what still stops -------------
+
+
+def test_a_cross_granularity_pair_with_a_shared_tranche_merges(session):
+    """The half of the backlog the rails used to refuse whatever the evidence was.
+
+    `capex`'s second pass recorded the granularity match and discarded everything
+    else it knew, so a pair like this arrived carrying one evidence class and
+    `merge_blocked` refused it before reading the confidence. Measured on the live
+    database: 31 of 49 pairs were in that position, which put the ceiling on an
+    unattended run at 37% before the model said a word.
+    """
+    # Corscale's Gainesville campus, stored once as the county alone and once as the
+    # municipality inside it. The two localities are spelled differently, so the
+    # rows sit in different buckets and only the key expansion connects them —
+    # which is what makes this `identity` rather than a same-town pair.
+    a = _project(
+        session,
+        company="Corscale Data Centers",
+        name="Gainesville Crossing",
+        city=None,
+        county="Prince William",
+        state="VA",
+        dedup_key="corscale data centers|county:prince william|VA",
+    )
+    b = _project(
+        session,
+        company="Corscale Data Centers",
+        name="Corscale Gainesville Crossing Campus",
+        city="Gainesville",
+        county="Prince William",
+        state="VA",
+        dedup_key="corscale data centers|city:gainesville|VA",
+    )
+    _block(session, a, "Gainesville Crossing", "crossing.gainesville")
+    _block(session, b, "Gainesville Crossing", "crossing.gainesville")
+    _source(session, a, "https://trade.example/a")
+    _source(session, b, "https://trade.example/b")
+    found = [p for p in suspected_duplicates(session) if {a.id, b.id} == {p.a_id, p.b_id}]
+    assert found, "fixture must raise the pair"
+    assert {"identity", "tranche"} <= set(found[0].kinds), found[0].kinds
+    model = _Model(says("same", 0.95, "both hold tranche crossing.gainesville"))
+
+    got = dupresolve.resolve_one(session, found[0], extractor=model, allow_merge=True)
+
+    assert got.action == "merged"
+    assert session.query(Project).count() == 1
+
+
+def test_an_exact_name_and_company_merges(session):
+    """Two rows agreeing on both fields a reader looks at first are not a resemblance."""
+    a = _project(
+        session,
+        company="DataBank",
+        name="Lithia Springs Campus",
+        city="Lithia Springs",
+        county="Douglas",
+        state="GA",
+        dedup_key="databank|city:lithia springs|GA",
+    )
+    b = _project(
+        session,
+        company="DataBank",
+        name="Lithia Springs Campus",
+        city=None,
+        county="Douglas",
+        state="GA",
+        dedup_key="databank|county:douglas|GA",
+    )
+    _source(session, a, "https://trade.example/a")
+    _source(session, b, "https://trade.example/b")
+    found = [p for p in suspected_duplicates(session) if {a.id, b.id} == {p.a_id, p.b_id}]
+    assert found and "exact" in found[0].kinds
+    model = _Model(says("same", 0.95, "same operator, same name, one county"))
+
+    got = dupresolve.resolve_one(session, found[0], extractor=model, allow_merge=True)
+
+    assert got.action == "merged"
+
+
+def test_neighbouring_phases_are_refused_however_confident(session):
+    """The failure the widening would otherwise have introduced.
+
+    Applied Digital's Polaris Forge 1 (Ellendale) and Polaris Forge 2 (Harwood) are
+    two real campuses that both hold `forge-2.polaris`, because one article listed
+    the pair. Every signal agrees and one digit does not, and a merge destroys a
+    campus no re-crawl brings back.
+    """
+    a = _project(
+        session,
+        company="Applied Digital",
+        name="Polaris Forge 1",
+        city="Ellendale",
+        state="ND",
+        dedup_key="applied digital|city:ellendale|ND",
+    )
+    b = _project(
+        session,
+        company="Applied Digital",
+        name="Polaris Forge 2",
+        city="Harwood",
+        state="ND",
+        dedup_key="applied digital|city:harwood|ND",
+    )
+    _block(session, a, "Polaris Forge 2", "forge-2.polaris")
+    _block(session, b, "Polaris Forge 2", "forge-2.polaris")
+    _source(session, a, "https://trade.example/a")
+    _source(session, b, "https://trade.example/b")
+    found = [p for p in suspected_duplicates(session) if {a.id, b.id} == {p.a_id, p.b_id}]
+    assert found and "tranche" in found[0].kinds, "the pair must still be reported"
+    model = _Model(says("same", 0.99, "both hold forge-2.polaris"))
+
+    got = dupresolve.resolve_one(session, found[0], extractor=model, allow_merge=True)
+
+    assert got.action == "left"
+    assert "ordinal" in got.detail
+    assert session.query(Project).count() == 2
+
+
+def test_a_person_may_still_merge_a_sibling_pair(session):
+    """Every rail is a refusal of the *model*. A reader with a map outranks it, which
+    is what `--ask` has always meant."""
+    a = _project(session, name="Polaris Forge 1", company="Applied Digital")
+    b = _project(session, name="Polaris Forge 2", company="Applied Digital", dedup_key="kb")
+    _block(session, a, "Polaris Forge 2", "forge-2.polaris")
+    _block(session, b, "Polaris Forge 2", "forge-2.polaris")
+    _source(session, a, "https://trade.example/a")
+    _source(session, b, "https://trade.example/b")
+    found = [p for p in suspected_duplicates(session) if "tranche" in p.kinds]
+    assert found
+
+    got = dupresolve.resolve_one(
+        session, found[0], extractor=None, allow_merge=True, ask=lambda *_: "same"
+    )
+
+    assert got.action == "merged"
+
+
+# --- what the model is given to read ----------------------------------------
+
+
+def test_the_evidence_block_names_both_the_city_and_the_county(session):
+    """It printed `city or county`, so the one question being asked — is this town
+    inside that county — had to be recovered from a raw dedup key."""
+    a = _project(session, city="Holly Ridge", county="Richland", state="LA")
+    b = _project(session, city=None, county="Richland", state="LA", dedup_key="kb")
+    _source(session, a, "https://trade.example/a")
+    found = [p for p in suspected_duplicates(session) if {a.id, b.id} == {p.a_id, p.b_id}]
+    assert found
+
+    block = dupresolve.evidence_block(a, b, found[0])
+
+    assert "Holly Ridge, Richland, LA" in block
+    assert "[city granularity]" in block
+    assert "[county granularity]" in block
+
+
+def test_the_distance_says_what_it_measures(session):
+    """0.0 km between two place centroids means one town, not one building.
+
+    245 pairs on the live database sit within 3 km of each other and most read
+    exactly 0.00, because `ingest/geo.py` derives coordinates from the Census place
+    centroid. Printing the number without that caveat invited rule 5 backwards.
+    """
+    a, b, pair = _tranche_pair(session)
+    a.lat, a.lon = 32.45, -99.73
+    b.lat, b.lon = 32.45, -99.73
+    session.flush()
+
+    block = dupresolve.evidence_block(a, b, pair)
+
+    assert "0.0 km" in block
+    assert "centroid" in block
+
+
+def test_the_citation_window_is_not_four_quotes_from_one_publisher(session):
+    """Longest-first put a paragraph of context in the window and left the
+    identifying sentence out of it. The median row holds seven sources."""
+    a, b, pair = _tranche_pair(session)
+    for i in range(5):
+        _source(session, a, f"https://oneshop.example/{i}", excerpt="A very long paragraph " * 20)
+    _source(session, a, "https://other.example/x", excerpt="The campus at 1231 Comstock Street.")
+    session.refresh(a)
+
+    block = dupresolve.evidence_block(a, b, pair)
+
+    assert block.count("oneshop.example") <= dupresolve.PER_DOMAIN_CAP
+    assert "1231 Comstock Street" in block
+
+
+def test_a_market_sequence_tranche_is_reported_but_not_merged(session):
+    """`hillsboro-1` is held by Flexential's Hillsboro site and by NTT's.
+
+    The key is real evidence and worth a reader's attention — it is the only thing
+    connecting some genuine duplicates — and it names a market and a sequence
+    number, so it cannot be the reason a row is deleted.
+    """
+    a = _project(
+        session,
+        company="Flexential",
+        name="Portland 3",
+        city="Hillsboro",
+        state="OR",
+        dedup_key="flexential|city:hillsboro|OR",
+    )
+    b = _project(
+        session,
+        company="NTT",
+        name="Global Hillsboro Data Center",
+        city="Hillsboro",
+        state="OR",
+        dedup_key="ntt|city:hillsboro|OR",
+    )
+    _block(session, a, "Hillsboro 1", "hillsboro-1")
+    _block(session, b, "Hillsboro 1", "hillsboro-1")
+    _source(session, a, "https://trade.example/a")
+    _source(session, b, "https://trade.example/b")
+    found = [p for p in suspected_duplicates(session) if {a.id, b.id} == {p.a_id, p.b_id}]
+    assert found and "tranche" in found[0].kinds, "the pair must still be reported"
+    model = _Model(says("same", 0.99, "both hold tranche hillsboro-1"))
+
+    got = dupresolve.resolve_one(session, found[0], extractor=model, allow_merge=True)
+
+    assert got.action == "left"
+    assert "market and a sequence number" in got.detail
+    assert session.query(Project).count() == 2
+
+
+def test_a_market_sequence_beside_a_named_tranche_still_merges(session):
+    """The refusal is "the *only* shared tranche", not "any of them"."""
+    a = _project(
+        session,
+        company="IREN",
+        name="Childress",
+        city="Childress",
+        state="TX",
+        dedup_key="iren|city:childress|TX",
+    )
+    b = _project(
+        session,
+        company="Iris Energy",
+        name="Childress Data Center",
+        city="Childress",
+        state="TX",
+        dedup_key="iris|city:childress|TX",
+    )
+    for row in (a, b):
+        _block(session, row, "Childress 1", "childress-1")
+        _block(session, row, "Horizon 1", "horizon-1")
+        _source(session, row, f"https://trade.example/{row.id}")
+    found = [p for p in suspected_duplicates(session) if {a.id, b.id} == {p.a_id, p.b_id}]
+    assert found
+    model = _Model(says("same", 0.95, "both hold tranche horizon-1"))
+
+    got = dupresolve.resolve_one(session, found[0], extractor=model, allow_merge=True)
+
+    assert got.action == "merged"

@@ -2782,13 +2782,21 @@ def blocks(
     )
 
 
-#: The words matter more than they look: "both hold tranche horizon-1" is a fact a
-#: reader can check in one command, and "same locality" is not evidence of
-#: anything, which is why no pair is ever raised on it alone.
-_EVIDENCE_STYLE: dict[str, tuple[str, str]] = {
-    "tranche": ("green", "same tranche"),
-    "party": ("cyan", "shared operator"),
-    "name": ("yellow", "name overlap"),
+#: The colour each evidence class is drawn in. The *words* come from
+#: `capex.EVIDENCE_LABELS`, so the console and this report cannot name the same
+#: evidence differently — five classes that carry very different consequences, one
+#: of which permits an unattended merge and another of which is a word.
+#:
+#: `identity` was missing from this table while being the most common class in it —
+#: 31 of 49 pairs on the live database — so the majority of the report printed a
+#: bare `?` where its reason belonged. A class a reader cannot name is a class they
+#: cannot act on.
+_EVIDENCE_COLOUR: dict[str, str] = {
+    "exact": "magenta",
+    "tranche": "green",
+    "party": "cyan",
+    "identity": "blue",
+    "name": "yellow",
 }
 
 
@@ -2897,7 +2905,9 @@ def duplicates(
             (by_pair[(a, b)] for a, b in by_pair if a in ids and b in ids),
             key=lambda p: p.rank,
         )
-        colour, label = _EVIDENCE_STYLE.get(strongest.kinds[0], ("white", "?"))
+        kind = strongest.kinds[0] if strongest.kinds else ""
+        colour = _EVIDENCE_COLOUR.get(kind, "white")
+        label = capex_mod.EVIDENCE_LABELS.get(kind, "same locality")
         console.print(
             f"  [{colour}]{label}[/{colour}]  [dim]{escape(strongest.locality)}, "
             f"{strongest.state}[/dim]"
