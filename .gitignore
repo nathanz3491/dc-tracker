@@ -80,3 +80,9 @@ docs/*.pdf
 docs/*.pptx
 docs/*.docx
 docs/*.xlsx
+
+# Same rule outside docs/: review decks and PDFs staged for a client walkthrough.
+# Flagged untracked by five straight housekeeping runs (2026-08-21 through
+# 2026-08-25) with no gitignore line of its own, so a `git add -A` would have
+# swept eight binary files into a public repo the moment someone ran one.
+work/
