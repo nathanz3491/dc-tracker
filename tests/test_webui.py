@@ -2132,9 +2132,7 @@ def test_the_reader_refuses_a_url_the_database_does_not_cite(seeded_db, reader_d
     assert "not cited" in found.error
 
 
-def test_the_reader_keeps_the_article_and_drops_the_furniture(
-    seeded_db, reader_dirs, monkeypatch
-):
+def test_the_reader_keeps_the_article_and_drops_the_furniture(seeded_db, reader_dirs, monkeypatch):
     from tracker.webui import article
 
     monkeypatch.setattr(article, "_get", lambda url: (ARTICLE_HTML, ""))
@@ -2191,9 +2189,7 @@ def test_a_stored_quote_is_marked_where_the_article_really_says_it(
     assert "will draw 900 MW at full build, the company said" in found.body
 
 
-def test_a_quote_absent_from_the_page_is_not_marked_anyway(
-    seeded_db, reader_dirs, monkeypatch
-):
+def test_a_quote_absent_from_the_page_is_not_marked_anyway(seeded_db, reader_dirs, monkeypatch):
     """No fuzzy fallback here, deliberately.
 
     The gate recovers a near-miss when it is deciding whether to *store* a value,
@@ -2210,9 +2206,7 @@ def test_a_quote_absent_from_the_page_is_not_marked_anyway(
     assert found.marks == 0 and "<mark" not in found.body
 
 
-def test_only_whitespace_and_case_are_forgiven_when_marking(
-    seeded_db, reader_dirs, monkeypatch
-):
+def test_only_whitespace_and_case_are_forgiven_when_marking(seeded_db, reader_dirs, monkeypatch):
     """One rendering of a sentence differs from another by wrapping and case,
     never by words."""
     from tracker.webui import article
@@ -2350,27 +2344,27 @@ def _read_html(seeded_db, reader_dirs, monkeypatch, page):
 
 def test_named_chrome_never_reaches_the_reader(seeded_db, reader_dirs, monkeypatch):
     """Ads, share rails, nav, related lists, comments and the footer, by name."""
-    body = _read_html(
-        seeded_db, reader_dirs, monkeypatch, CHROME_HTML.format(body=PROSE)
-    ).body
-    for junk in ("Buy this thing", "Share on LinkedIn", "Another story",
-                 "Comments go here", "Copyright and terms", "Home"):
+    body = _read_html(seeded_db, reader_dirs, monkeypatch, CHROME_HTML.format(body=PROSE)).body
+    for junk in (
+        "Buy this thing",
+        "Share on LinkedIn",
+        "Another story",
+        "Comments go here",
+        "Copyright and terms",
+        "Home",
+    ):
         assert junk not in body, junk
     assert "Mount Pleasant" in body and "900 MW" in body
 
 
-def test_a_class_name_on_the_body_does_not_delete_the_document(
-    seeded_db, reader_dirs, monkeypatch
-):
+def test_a_class_name_on_the_body_does_not_delete_the_document(seeded_db, reader_dirs, monkeypatch):
     """`no-sidebar` in a WordPress body class matched the `sidebar` rule.
 
     Dropping it took the article with it, and the pass reported success —
     `stackinfra.com` came back empty. Structural elements are exempt from name
     matching, and so is anything holding most of the page's prose.
     """
-    body = _read_html(
-        seeded_db, reader_dirs, monkeypatch, CHROME_HTML.format(body=PROSE)
-    ).body
+    body = _read_html(seeded_db, reader_dirs, monkeypatch, CHROME_HTML.format(body=PROSE)).body
     assert "Mount Pleasant" in body
 
 
@@ -2395,9 +2389,7 @@ def test_a_stop_heading_ends_the_article(seeded_db, reader_dirs, monkeypatch):
     assert "Frequently Asked" not in body and "How big is it" not in body
 
 
-def test_cutting_the_tail_keeps_everything_before_it(
-    seeded_db, reader_dirs, monkeypatch
-):
+def test_cutting_the_tail_keeps_everything_before_it(seeded_db, reader_dirs, monkeypatch):
     """The ancestors are walked, never removed.
 
     A first attempt deleted the parent that still held everything kept so far, so
@@ -2413,10 +2405,8 @@ def test_cutting_the_tail_keeps_everything_before_it(
     assert "Related Articles" not in body and "no relevance" not in body
 
 
-def test_a_signpost_goes_even_when_it_wraps_a_link(
-    seeded_db, reader_dirs, monkeypatch
-):
-    """"For more information, visit <a>example.com</a>" is one sentence to a
+def test_a_signpost_goes_even_when_it_wraps_a_link(seeded_db, reader_dirs, monkeypatch):
+    """ "For more information, visit <a>example.com</a>" is one sentence to a
     reader and a parent plus a child to a parser. Judging elements with children
     by their children alone let every press release keep its sign-off."""
     page = CHROME_HTML.format(
@@ -2428,13 +2418,13 @@ def test_a_signpost_goes_even_when_it_wraps_a_link(
     assert "Mount Pleasant" in body
 
 
-def test_a_sentence_merely_mentioning_a_signpost_word_survives(
-    seeded_db, reader_dirs, monkeypatch
-):
+def test_a_sentence_merely_mentioning_a_signpost_word_survives(seeded_db, reader_dirs, monkeypatch):
     """The junk rules are anchored. "Sources close to the project said…" is
     reporting, not a sources list."""
-    keep = ("<p>Sources close to the project said the substation contract had not yet "
-            "been awarded, and that more information was expected within weeks.</p>")
+    keep = (
+        "<p>Sources close to the project said the substation contract had not yet "
+        "been awarded, and that more information was expected within weeks.</p>"
+    )
     body = _read_html(
         seeded_db, reader_dirs, monkeypatch, CHROME_HTML.format(body=PROSE + keep)
     ).body
@@ -2458,9 +2448,12 @@ def test_real_accents_are_never_mistaken_for_mojibake():
     double-encoded comes back untouched."""
     from tracker.webui import article
 
-    for intact in ("Café naïve résumé Über",
-                   "It’s “fine” — really",
-                   "数据中心", "Nothing wrong here"):
+    for intact in (
+        "Café naïve résumé Über",
+        "It’s “fine” — really",
+        "数据中心",
+        "Nothing wrong here",
+    ):
         assert article._demojibake(intact) == intact
 
 
@@ -2616,9 +2609,7 @@ def test_a_read_only_console_still_takes_a_watch(seeded_db):
         )
         assert status == 200
         # ... and still refuses to run anything.
-        status, _ = request(
-            address, "/api/run", method="POST", body={"cmd": "stats", "flags": {}}
-        )
+        status, _ = request(address, "/api/run", method="POST", body={"cmd": "stats", "flags": {}})
         assert status == 403
     finally:
         httpd.shutdown()

@@ -438,9 +438,7 @@ class Handler(BaseHTTPRequestHandler):
         if route == "/api/updates":
             return self._updates(query)
         if route == "/api/health":
-            return self._json(
-                {"ok": True, "version": __version__, "commit": deployed_commit()}
-            )
+            return self._json({"ok": True, "version": __version__, "commit": deployed_commit()})
         self._error(404, f"no route {route!r}")
 
     def do_POST(self) -> None:

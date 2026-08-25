@@ -111,7 +111,9 @@ def sample(session, *, size: int, cache_dir: Path) -> list[tuple[str, list[Sourc
     """Cached crawl articles, grouped by URL, in a fixed random order."""
     grouped: dict[str, list[Source]] = defaultdict(list)
     for source in session.scalars(select(Source)).all():
-        if (source.extractor or "").startswith("crawl:") and cache_path(source.url, cache_dir).exists():
+        if (source.extractor or "").startswith("crawl:") and cache_path(
+            source.url, cache_dir
+        ).exists():
             grouped[source.url].append(source)
     urls = sorted(grouped)
     random.Random(SEED).shuffle(urls)
@@ -140,7 +142,10 @@ def compare(session, picks, *, cache_dir: Path, extractor, prompt) -> Tally:
         for record in outcome.records:
             payload = record.project
             key = dedup_key(
-                payload.get("company"), payload.get("city"), payload.get("county"), payload.get("state")
+                payload.get("company"),
+                payload.get("city"),
+                payload.get("county"),
+                payload.get("state"),
             )
             if key not in known:
                 # What `existing_only` will refuse. Named rather than counted, so
@@ -215,7 +220,9 @@ def report(tally: Tally, *, size: int) -> None:
     per_article = tally.moved / tally.read
     total_articles = 1_928
     print(f"  {per_article:.1f} value(s) moved per article read.")
-    print(f"  Over ~{total_articles:,} cached articles that is ~{per_article * total_articles:,.0f}")
+    print(
+        f"  Over ~{total_articles:,} cached articles that is ~{per_article * total_articles:,.0f}"
+    )
     print(f"  value(s) moved for ~{total_articles:,} LLM calls.")
     print()
     if tally.unconfirmed_now > tally.confirmed_now:

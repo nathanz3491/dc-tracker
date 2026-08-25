@@ -3607,7 +3607,8 @@ def sources_cmd(
 @sources_app.command("policy")
 def sources_policy(
     apply: Annotated[
-        bool, typer.Option("--apply", help="Write the file. Without it, proposes and writes nothing.")
+        bool,
+        typer.Option("--apply", help="Write the file. Without it, proposes and writes nothing."),
     ] = False,
     path: Annotated[
         Path | None,
@@ -3738,7 +3739,9 @@ def sources_policy(
                 console.print(f"  [dim]{'':<17} {escape(r.domain)} ({escape(r.detail)})[/dim]")
 
     for line in analysis.stale:
-        console.print(f"  [yellow]no longer justified[/yellow] {escape(line)} [dim]— left alone[/dim]")
+        console.print(
+            f"  [yellow]no longer justified[/yellow] {escape(line)} [dim]— left alone[/dim]"
+        )
 
     if apply:
         written = policy_mod.write(proposed, target)
@@ -8833,8 +8836,7 @@ def digest(
         bool,
         typer.Option(
             "--notify",
-            help="Only what is worth interrupting somebody for, and nothing at all if "
-            "nothing is.",
+            help="Only what is worth interrupting somebody for, and nothing at all if nothing is.",
         ),
     ] = False,
     markdown: Annotated[
@@ -8887,9 +8889,7 @@ def digest(
             emit({"notify": [s.as_json() for s in sending], "since": brief.since.isoformat()})
         elif sending:
             lines = (
-                _notify_markdown(brief, sending)
-                if markdown
-                else [_signal_line(s) for s in sending]
+                _notify_markdown(brief, sending) if markdown else [_signal_line(s) for s in sending]
             )
             for line in lines:
                 print(line)

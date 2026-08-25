@@ -105,7 +105,7 @@ def test_two_quote_backed_figures_are_a_dispute(session):
 
 
 def test_an_identity_field_is_never_a_dispute(session):
-    """"Hyperion" against "Richland Parish Data Center" is two names, not two facts.
+    """ "Hyperion" against "Richland Parish Data Center" is two names, not two facts.
 
     `FILL_ONLY` says churn in an identity field is worse than staleness, and ruling
     against a claim would not even move the value — `resolve` keeps what the row
@@ -341,7 +341,9 @@ def test_a_superseded_claim_survives_a_re_read_of_the_same_article(session):
 
     _hyperion(
         session,
-        _source("https://gov.example/2024", source_type="government_doc", investment_usd=10_000_000_000),
+        _source(
+            "https://gov.example/2024", source_type="government_doc", investment_usd=10_000_000_000
+        ),
     )
     source = session.scalar(
         select(conflicts.Source).where(conflicts.Source.url == "https://gov.example/2024")

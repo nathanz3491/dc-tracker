@@ -617,9 +617,7 @@ async def test_the_status_line_does_not_repeat_the_log(curated: Path):
         assert "pageup" in text, "the status line is where the next move is explained"
 
 
-def test_a_check_that_never_gets_the_data_fails_instead_of_passing(
-    curated: Path, monkeypatch
-):
+def test_a_check_that_never_gets_the_data_fails_instead_of_passing(curated: Path, monkeypatch):
     """The guard on the bug this was: reporting success before the read happened.
 
     Panes fill from a worker thread, so `--check` used to walk them, find no

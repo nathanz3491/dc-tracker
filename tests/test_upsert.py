@@ -1177,7 +1177,9 @@ def test_existing_only_refuses_to_create_a_project(session):
 def test_existing_only_still_updates_a_project_that_exists(session):
     """Refusing to create is not refusing to work."""
     upsert_record(session, rec())
-    result = upsert_record(session, rec(sources=[manual_source(mw_planned=250.0)]), existing_only=True)
+    result = upsert_record(
+        session, rec(sources=[manual_source(mw_planned=250.0)]), existing_only=True
+    )
 
     assert result.action in {"update", "unchanged"}
     assert session.scalar(select(Project)).mw_planned == 250.0

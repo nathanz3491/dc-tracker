@@ -112,7 +112,7 @@ class Option:
         return (
             f"  {self.key})  {self.value}\n"
             f"      {self.source_type} (weight {self.weight}), {self.when}{rest}\n"
-            f'      {self.urls[0]}\n'
+            f"      {self.urls[0]}\n"
             f'      "{self.quote}"'
         )
 
@@ -368,9 +368,7 @@ def solve(dispute: Dispute, *, extractor: Any) -> Outcome:
 
     outcome.verdict = "resolved"
     outcome.chosen = chosen
-    outcome.superseded = tuple(
-        url for o in dispute.options if o is not chosen for url in o.urls
-    )
+    outcome.superseded = tuple(url for o in dispute.options if o is not chosen for url in o.urls)
     return outcome
 
 
@@ -459,7 +457,9 @@ def apply_outcome(session: Session, project: Project, outcome: Outcome) -> int:
     if outcome.verdict != "resolved":
         return 0
     losers = set(outcome.superseded)
-    marked = sum(1 for s in project.sources if s.url in losers and supersede(s, outcome.dispute.field))
+    marked = sum(
+        1 for s in project.sources if s.url in losers and supersede(s, outcome.dispute.field)
+    )
     if marked:
         session.flush()
         recompute_from_sources(session, project)

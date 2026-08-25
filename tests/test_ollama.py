@@ -182,9 +182,10 @@ def test_num_ctx_rides_on_every_request():
     payload = extractor._payload(system="s", user="u", max_tokens=None, stream=False)
     assert payload["options"]["num_ctx"] == 32768
     custom = OllamaExtractor(ollama_settings(ollama_num_ctx=8192))
-    assert custom._payload(system="s", user="u", max_tokens=None, stream=False)["options"][
-        "num_ctx"
-    ] == 8192
+    assert (
+        custom._payload(system="s", user="u", max_tokens=None, stream=False)["options"]["num_ctx"]
+        == 8192
+    )
 
 
 @respx.mock
@@ -344,9 +345,7 @@ def test_ollama_traffic_never_transits_a_proxy(monkeypatch):
 
     def spy_post(url, **kwargs):
         seen.append(kwargs.get("trust_env"))
-        return httpx.Response(
-            200, json=chat_reply("OK"), request=httpx.Request("POST", url)
-        )
+        return httpx.Response(200, json=chat_reply("OK"), request=httpx.Request("POST", url))
 
     monkeypatch.setattr(httpx, "get", spy_get)
     monkeypatch.setattr(httpx, "post", spy_post)

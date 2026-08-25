@@ -130,7 +130,12 @@ def test_one_project_at_a_time(session):
     other = ingest(
         session,
         IngestRecord(
-            project={"company": "Vantage", "name": "Frontier", "city": "Shackelford", "state": "TX"},
+            project={
+                "company": "Vantage",
+                "name": "Frontier",
+                "city": "Shackelford",
+                "state": "TX",
+            },
             sources=[source(url="https://example.com/b", mw_planned=1400)],
         ),
     )

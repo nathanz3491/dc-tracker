@@ -206,6 +206,7 @@ def parse(text: str) -> Policy:
 
 # --- deriving a proposal from what was measured ------------------------------
 
+
 @dataclass(frozen=True)
 class Proposal:
     """One publisher the analysis has an opinion about, and why."""

@@ -179,7 +179,7 @@ def test_archive_leads_match_the_operator_in_a_slug():
 
 
 def test_archive_leads_require_every_word_of_a_multiword_name():
-    """"Core Scientific" must not collect every CoreWeave article."""
+    """ "Core Scientific" must not collect every CoreWeave article."""
     operator = roster.Operator(name="Core Scientific", kind="neocloud")
     sweep = _sweep(
         "https://dc.test/coreweave-denton-texas/",
@@ -291,9 +291,7 @@ def test_a_campus_the_model_invented_never_reaches_the_database(session):
     It names a site, the search finds nothing, and the run ends having written no
     project, no source, and not even a queued URL.
     """
-    llm = FakeLLM(
-        [json.dumps({"campuses": [{"name": "Atlantis Compute Park", "state": "NV"}]})]
-    )
+    llm = FakeLLM([json.dumps({"campuses": [{"name": "Atlantis Compute Park", "state": "NV"}]})])
     provider = FakeProvider({})  # the invented campus has no coverage
     report = prospect.run(session, [presence(NEBIUS)], provider=provider, extractor=llm)
 
@@ -308,9 +306,7 @@ def test_prospect_only_ever_produces_queued_urls_never_projects(session):
         [hit("https://dc.test/nebius-kc", "Nebius data center campus 300 MW in Missouri")]
     )
     prospect.run(session, [presence(NEBIUS)], provider=provider)
-    assert list(session.scalars(select(Project))) == [], (
-        "only the crawl path may write a project"
-    )
+    assert list(session.scalars(select(Project))) == [], "only the crawl path may write a project"
 
 
 def test_an_off_topic_hit_is_filtered_out(session):

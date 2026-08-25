@@ -163,9 +163,7 @@ def _propagate(session: Session, found: dict[str, dt.datetime], *, apply: bool) 
     """
     dates: dict[str, dt.datetime] = dict(
         session.execute(
-            select(IngestUrl.url, IngestUrl.published_at).where(
-                IngestUrl.published_at.is_not(None)
-            )
+            select(IngestUrl.url, IngestUrl.published_at).where(IngestUrl.published_at.is_not(None))
         ).all()
     )
     dates.update({url: when for url, when in found.items() if url not in dates})

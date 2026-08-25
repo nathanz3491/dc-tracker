@@ -1315,9 +1315,7 @@ def blocker_rationale(project: Project, risks: list[Risk] | None = None) -> dict
     loaded does not go back to the database for them.
     """
     open_risks = [
-        r
-        for r in (project.risks if risks is None else risks)
-        if r.status == OPEN_RISK_STATUS
+        r for r in (project.risks if risks is None else risks) if r.status == OPEN_RISK_STATUS
     ]
     chosen = choose_blocker(open_risks)
     if chosen is None:

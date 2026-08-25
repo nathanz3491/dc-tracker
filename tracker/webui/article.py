@@ -187,9 +187,7 @@ def _get(url: str) -> tuple[str, str]:
     try:
         import httpx
 
-        response = httpx.get(
-            url, timeout=25, follow_redirects=True, headers={"user-agent": _UA}
-        )
+        response = httpx.get(url, timeout=25, follow_redirects=True, headers={"user-agent": _UA})
         if response.status_code >= 400:
             return "", f"the publisher answered {response.status_code}"
         return _decode(response.content, response.headers.get("content-type", "")), ""
@@ -199,9 +197,7 @@ def _get(url: str) -> tuple[str, str]:
 
 
 #: `<meta charset>` in either spelling, within the head where it is required to be.
-_META_CHARSET: Final = re.compile(
-    rb"""<meta[^>]+charset=['"]?\s*([\w.-]+)""", re.I
-)
+_META_CHARSET: Final = re.compile(rb"""<meta[^>]+charset=['"]?\s*([\w.-]+)""", re.I)
 
 
 def _decode(raw: bytes, content_type: str) -> str:
@@ -283,8 +279,7 @@ def _to_bytes(text: str) -> bytes:
 _LEAD_2, _LEAD_3 = _cp1252(0xC2, 0xDF), _cp1252(0xE0, 0xEF)
 _CONT = _cp1252(0x80, 0xBF)
 _MOJIBAKE: Final = re.compile(
-    f"[{re.escape(_LEAD_3)}][{re.escape(_CONT)}]{{2}}"
-    f"|[{re.escape(_LEAD_2)}][{re.escape(_CONT)}]"
+    f"[{re.escape(_LEAD_3)}][{re.escape(_CONT)}]{{2}}|[{re.escape(_LEAD_2)}][{re.escape(_CONT)}]"
 )
 
 
@@ -491,9 +486,7 @@ def _strip_furniture(raw: str) -> str:
     for el in root.xpath("//*[@class or @id or @role or @data-testid]"):
         if el.tag in _STRUCTURAL or el.getparent() is None:
             continue
-        token = " ".join(
-            str(el.get(a) or "") for a in ("class", "id", "role", "data-testid")
-        )
+        token = " ".join(str(el.get(a) or "") for a in ("class", "id", "role", "data-testid"))
         if not _JUNK_CONTAINER.search(token):
             continue
         if whole and len(" ".join(el.itertext())) > whole * _TOO_BIG_TO_BE_CHROME:
@@ -738,9 +731,7 @@ def render(found: Reader, *, dark: bool = False) -> str:
         note = ""
     else:
         body = found.body
-    heading = (
-        f"<h1 class='dc-title'>{html_mod.escape(found.title)}</h1>" if found.title else ""
-    )
+    heading = f"<h1 class='dc-title'>{html_mod.escape(found.title)}</h1>" if found.title else ""
     marks = (
         f"<span class='dc-count'>{found.marks} quoted sentence"
         f"{'' if found.marks == 1 else 's'} marked</span>"
@@ -748,7 +739,7 @@ def render(found: Reader, *, dark: bool = False) -> str:
         else ""
     )
     return f"""<!doctype html>
-<html lang="en" data-theme="{'dark' if dark else 'light'}">
+<html lang="en" data-theme="{"dark" if dark else "light"}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">

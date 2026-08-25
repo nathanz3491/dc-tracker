@@ -1022,11 +1022,13 @@ def test_the_settle_step_decides_what_the_harvest_put_in_dispute(session):
     assert project.mw_planned == 90.0
 
     settle = SettleLLM(
-        json.dumps({
-            "pick": _key_for(project, "mw_planned", 230.0),
-            "confidence": 0.9,
-            "reason": "the filing states the buildout",
-        }),
+        json.dumps(
+            {
+                "pick": _key_for(project, "mw_planned", 230.0),
+                "confidence": 0.9,
+                "reason": "the filing states the buildout",
+            }
+        ),
         json.dumps({"stands": True, "reason": "nothing rivals it"}),
     )
     report = run(session, project.id, settle_extractor=settle, target_fields=0)
@@ -1068,11 +1070,13 @@ def test_a_settled_field_is_never_asked_about_twice(session):
         session,
         project.id,
         settle_extractor=SettleLLM(
-            json.dumps({
-                "pick": _key_for(project, "mw_planned", 230.0),
-                "confidence": 0.9,
-                "reason": "the filing",
-            }),
+            json.dumps(
+                {
+                    "pick": _key_for(project, "mw_planned", 230.0),
+                    "confidence": 0.9,
+                    "reason": "the filing",
+                }
+            ),
             json.dumps({"stands": True, "reason": "stands"}),
         ),
         target_fields=0,
@@ -1088,11 +1092,13 @@ def test_a_settled_field_is_never_asked_about_twice(session):
 def test_a_dry_run_asks_but_never_writes(session):
     project = _contested(session)
     settle = SettleLLM(
-        json.dumps({
-            "pick": _key_for(project, "mw_planned", 230.0),
-            "confidence": 0.9,
-            "reason": "the filing",
-        }),
+        json.dumps(
+            {
+                "pick": _key_for(project, "mw_planned", 230.0),
+                "confidence": 0.9,
+                "reason": "the filing",
+            }
+        ),
         json.dumps({"stands": True, "reason": "stands"}),
     )
     report = run(session, project.id, settle_extractor=settle, dry_run=True, target_fields=0)

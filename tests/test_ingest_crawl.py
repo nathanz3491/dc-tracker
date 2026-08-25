@@ -1422,7 +1422,9 @@ def test_existing_only_reads_the_article_and_creates_nothing(session):
 
 def test_existing_only_still_deepens_a_project_that_exists(session):
     """Refusing to create is not refusing to work."""
-    llm = FakeLLM([canned("llm_response_microsoft_wi.json"), canned("llm_response_microsoft_wi.json")])
+    llm = FakeLLM(
+        [canned("llm_response_microsoft_wi.json"), canned("llm_response_microsoft_wi.json")]
+    )
     crawl.run(session, [URL], fetcher=FakeFetcher({URL: fetched()}), extractor=llm, run_id="a")
     report = crawl.run(
         session,
@@ -2520,9 +2522,7 @@ def test_an_ignored_publisher_is_never_fetched(session, monkeypatch):
         async def fetch(self, url, **_):
             raise AssertionError(f"fetched an ignored publisher: {url}")
 
-    report = crawl.run(
-        session, [URL], fetcher=Exploding(), extractor=FakeLLM([]), run_id="ignored"
-    )
+    report = crawl.run(session, [URL], fetcher=Exploding(), extractor=FakeLLM([]), run_id="ignored")
     assert report.skipped_ignored == 1
     assert report.read == 0
     assert session.scalar(select(Project)) is None

@@ -168,9 +168,7 @@ class CommandsPane(Vertical):
         # with the continuation starting at column zero. A line that is still too
         # long — because the window shrank after the run — scrolls sideways, which
         # is what a terminal does with one.
-        yield RichLog(
-            id="command-log", highlight=False, markup=False, wrap=False, max_lines=6000
-        )
+        yield RichLog(id="command-log", highlight=False, markup=False, wrap=False, max_lines=6000)
         # Directly above the line being typed, where a shell puts them, and zero
         # height whenever there is nothing to offer.
         yield OptionList(id="command-completions")

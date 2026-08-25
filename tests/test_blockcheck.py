@@ -370,5 +370,7 @@ def test_a_generating_asset_is_still_its_own_section():
     """
     from tracker.blockcheck import sections
 
-    labels = {s.label for s in sections(10, [Blk(id=1, label="Franklin Farms Gas Plants", mw=2262.0)])}
+    labels = {
+        s.label for s in sections(10, [Blk(id=1, label="Franklin Farms Gas Plants", mw=2262.0)])
+    }
     assert labels == {"Franklin Farms Gas Plants"}

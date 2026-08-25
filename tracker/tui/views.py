@@ -59,9 +59,7 @@ class OverviewPane(Pane):
         headline.add_column()
         headline.add_row(f"{totals.get('projects', 0):,}", "projects tracked")
         headline.add_row(f"{totals.get('mw_planned', 0):,.0f}", "MW planned, where cited")
-        headline.add_row(
-            fmt_usd(totals.get("investment_usd")), "announced investment, where cited"
-        )
+        headline.add_row(fmt_usd(totals.get("investment_usd")), "announced investment, where cited")
         headline.add_row(f"{totals.get('citations', 0):,}", "citations behind those facts")
         headline.add_row(f"{totals.get('states', 0)}", "states")
 
@@ -167,7 +165,17 @@ class OverviewPane(Pane):
 #: Ordered by how much a reader needs them, because a narrow terminal truncates
 #: from the right and the table scrolls horizontally rather than hiding anything.
 #: `investment` sits last: the detail pane beside it always shows the figure.
-PROJECT_COLUMNS = ("id", "company", "project", "location", "phase", "MW", "9/12", "conf", "investment")
+PROJECT_COLUMNS = (
+    "id",
+    "company",
+    "project",
+    "location",
+    "phase",
+    "MW",
+    "9/12",
+    "conf",
+    "investment",
+)
 
 
 class ProjectsPane(Pane):
@@ -180,7 +188,9 @@ class ProjectsPane(Pane):
     """
 
     def compose(self) -> ComposeResult:
-        yield Input(placeholder="filter — company, project, city, state, phase, customer", id="filter")
+        yield Input(
+            placeholder="filter — company, project, city, state, phase, customer", id="filter"
+        )
         with Horizontal():
             yield DataTable(id="projects-table", cursor_type="row", zebra_stripes=True)
             yield VerticalScroll(Static(id="project-detail"), id="detail-wrap")
@@ -257,7 +267,9 @@ def _matches(project: dict[str, Any], needle: str) -> bool:
 def _project_row(project: dict[str, Any]) -> list[Text]:
     phase = project.get("phase") or ""
     location = ", ".join(
-        part for part in (project.get("city") or project.get("county"), project.get("state")) if part
+        part
+        for part in (project.get("city") or project.get("county"), project.get("state"))
+        if part
     )
     filled = project.get("filled") or 0
     return [
@@ -285,7 +297,9 @@ def _detail(project: dict[str, Any]) -> Group:
     head.append(f"#{project.get('id')}  ", style="dim")
     head.append(f"{project.get('company') or '?'} — {project.get('name') or '?'}\n", style="bold")
     location = ", ".join(
-        part for part in (project.get("city") or project.get("county"), project.get("state")) if part
+        part
+        for part in (project.get("city") or project.get("county"), project.get("state"))
+        if part
     )
     head.append(location or "location unknown", style="dim")
 
@@ -332,7 +346,9 @@ def _detail(project: dict[str, Any]) -> Group:
     open_risks = [r for r in (project.get("risks") or []) if r.get("status") == "open"][:5]
     for risk in open_risks:
         risks.add_row(
-            Text(str(risk.get("severity")), style=SEVERITY_STYLE.get(str(risk.get("severity")), "")),
+            Text(
+                str(risk.get("severity")), style=SEVERITY_STYLE.get(str(risk.get("severity")), "")
+            ),
             Text(f"{risk.get('category')}: {(risk.get('summary') or '')[:52]}"),
         )
     if not open_risks:
@@ -470,13 +486,18 @@ class CapexPane(Pane):
 
         table = self.query_one("#capex-table", DataTable)
         table.clear(columns=True)
-        table.add_columns("end customer", "projects", "MW planned", "MW built", "investment", *years)
+        table.add_columns(
+            "end customer", "projects", "MW planned", "MW built", "investment", *years
+        )
         biggest = max((p.get("mw_planned") or 0 for p in positions), default=0)
         for position in positions:
             cells = [
                 Text(str(position.get("customer") or "?")[:26]),
                 Text(str(position.get("projects") or 0)),
-                Group(fmt_mw(position.get("mw_planned")), bar(position.get("mw_planned") or 0, biggest or 1, width=10)),
+                Group(
+                    fmt_mw(position.get("mw_planned")),
+                    bar(position.get("mw_planned") or 0, biggest or 1, width=10),
+                ),
                 fmt_mw(position.get("mw_built")),
                 fmt_usd(position.get("investment_usd")),
             ]

@@ -55,8 +55,7 @@ def counts(path: Path) -> dict[str, int]:
     con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
     try:
         present = {
-            row[0]
-            for row in con.execute("select name from sqlite_master where type='table'")
+            row[0] for row in con.execute("select name from sqlite_master where type='table'")
         }
         return {
             t: con.execute(f"select count(*) from {t}").fetchone()[0]
@@ -132,7 +131,7 @@ def remote_snapshot(host: str, remote: str) -> str:
         f"p=os.path.expanduser({remote!r});"
         "d=tempfile.mkdtemp(prefix='sync-db-');t=os.path.join(d,'tracker.db');"
         "c=sqlite3.connect('file:'+p+'?mode=ro',uri=True);"
-        "c.execute(\"VACUUM INTO '\"+t+\"'\");c.close();print(t)"
+        'c.execute("VACUUM INTO \'"+t+"\'");c.close();print(t)'
     )
     return _ssh_python(host, code)
 
@@ -160,7 +159,9 @@ def pull(args, local: Path) -> int:
             print("  REFUSED: this database holds rows the remote does not.")
             for table, n in ahead.items():
                 print(f"    {table}: {n} here, {theirs.get(table, 0)} there")
-            print("  The mini is the writer; work here was not expected. Use --force to discard it.")
+            print(
+                "  The mini is the writer; work here was not expected. Use --force to discard it."
+            )
             return 1
 
     started = time.perf_counter()

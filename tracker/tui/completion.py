@@ -254,7 +254,10 @@ def operator_values(coverage) -> list[tuple[str, str]]:
     order = {"absent": 0, "thin": 1, "covered": 2}
     rows = sorted(coverage.rows, key=lambda r: (order.get(r.status, 3), r.name))
     return [
-        (row.name if " " not in row.name else f'"{row.name}"', f"{row.status}, {row.projects} row(s)")
+        (
+            row.name if " " not in row.name else f'"{row.name}"',
+            f"{row.status}, {row.projects} row(s)",
+        )
         for row in rows
     ]
 

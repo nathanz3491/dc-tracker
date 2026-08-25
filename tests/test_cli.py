@@ -1569,9 +1569,7 @@ def test_digest_notify_prints_what_crosses_the_bar(initialized: Path):
     from tracker.models import Event, Project
 
     with session_scope(open_db(initialized, readonly=False)) as session:
-        project = Project(
-            name="Colossus", company="xAI", city="Memphis", state="TN", dedup_key="k"
-        )
+        project = Project(name="Colossus", company="xAI", city="Memphis", state="TN", dedup_key="k")
         session.add(project)
         session.flush()
         session.add(
@@ -1605,9 +1603,7 @@ def test_digest_markdown_carries_both_dates(initialized: Path):
     from tracker.models import Event, Project
 
     with session_scope(open_db(initialized, readonly=False)) as session:
-        project = Project(
-            name="Colossus", company="xAI", city="Memphis", state="TN", dedup_key="k"
-        )
+        project = Project(name="Colossus", company="xAI", city="Memphis", state="TN", dedup_key="k")
         session.add(project)
         session.flush()
         session.add(
@@ -1826,17 +1822,13 @@ def test_a_phase_not_asked_for_is_absent_from_the_count(initialized: Path, monke
     """
     set_key(monkeypatch)
     result = invoke(initialized, "sync", "--skip-discover", "--skip-refresh")
-    assert "prospect" not in result.output.split("sync complete")[0].replace(
-        "tracker prospect", ""
-    )
+    assert "prospect" not in result.output.split("sync complete")[0].replace("tracker prospect", "")
     assert "/5 " in result.output
 
 
 def test_sync_skipping_derive_drops_the_settle_phase(initialized: Path, monkeypatch):
     set_key(monkeypatch)
-    result = invoke(
-        initialized, "sync", "--skip-discover", "--skip-refresh", "--skip-derive"
-    )
+    result = invoke(initialized, "sync", "--skip-discover", "--skip-refresh", "--skip-derive")
     assert result.exit_code == 0, result.output
     assert "1/4 discover" in result.output
     assert "settle" not in result.output
@@ -1867,9 +1859,7 @@ def test_sync_asks_for_the_enrich_phase_by_number(seeded: Path, monkeypatch):
     assert "4/6 enrich" in result.output
 
 
-def test_sync_prospect_phase_reports_a_broken_roster_without_dying(
-    initialized: Path, monkeypatch
-):
+def test_sync_prospect_phase_reports_a_broken_roster_without_dying(initialized: Path, monkeypatch):
     """One phase's bad config must not lose the work of the phases before it."""
     set_key(monkeypatch)
     from tracker import roster as roster_mod
@@ -1878,9 +1868,7 @@ def test_sync_prospect_phase_reports_a_broken_roster_without_dying(
         raise roster_mod.RosterError("no operator roster at nowhere/operators.toml")
 
     monkeypatch.setattr(roster_mod, "load", boom)
-    result = invoke(
-        initialized, "sync", "--skip-discover", "--skip-refresh", "--prospect", "2"
-    )
+    result = invoke(initialized, "sync", "--skip-discover", "--skip-refresh", "--prospect", "2")
     assert result.exit_code == 0, result.output
     assert "prospect skipped" in result.output
     assert "sync complete" in result.output

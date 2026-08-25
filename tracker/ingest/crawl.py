@@ -2257,7 +2257,9 @@ def run(
                 # add deliberately later, and a run that reported only a number
                 # would leave nothing to act on.
                 report.refused_new += 1
-                log.info("refused a new project from %s: %s", result.url, record.project.get("name"))
+                log.info(
+                    "refused a new project from %s: %s", result.url, record.project.get("name")
+                )
                 continue
             report.bump(upsert.action)
             report.events += upsert.events_written
