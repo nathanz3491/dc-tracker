@@ -101,6 +101,23 @@ BLOCKED: dict[str, str] = {
     # somebody at a terminal, not a button on the page.
     "cloudflare": "run it from a terminal — publishing this page is not a click",
     "version": "shown in the header",
+    # Credentials are made at a terminal, and there are two independent reasons.
+    #
+    # The mechanical one: `users add` and `users passwd` read their password with
+    # `getpass`, and a run started through `webui/runner.py` has no stdin — the
+    # prompt would hold the single run slot until the 45-minute timeout with
+    # nothing on screen.
+    #
+    # The other one is the same argument `cloudflare` makes. These commands decide
+    # who may reach the console, so running them *from* the console is a page that
+    # can widen its own audience. `users` and `users rm` need no stdin at all and
+    # are blocked anyway, because "which of these five can I run from here?" is a
+    # worse rule to hold than "none of them".
+    "users": "accounts are managed at a terminal",
+    "users add": "it prompts for a password — run it in a terminal",
+    "users passwd": "it prompts for a password — run it in a terminal",
+    "users rm": "accounts are managed at a terminal",
+    "users invite": "accounts are managed at a terminal",
 }
 
 #: Flags that make no sense from a browser, or that would hand the request control
@@ -231,6 +248,9 @@ GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     # `watch add`/`watch rm` write, but what they write is a preference rather than
     # a fact about a project, which is why they sit here and not under Repair.
     ("Maintain", ("init", "backfill", "export", "watch add", "watch rm")),
+    # Every one of these is in BLOCKED as well. They are listed so their argv can
+    # be copied into a terminal, which is the only place they can run.
+    ("Accounts", ("users", "users add", "users passwd", "users rm", "users invite")),
 )
 
 

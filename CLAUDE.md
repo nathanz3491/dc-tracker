@@ -86,16 +86,26 @@ it replaces anything.
 ## 4. Secrets stay where they are.
 
 `.env` is gitignored on both machines and holds different things by design. The
-mini's carries the API keys because it ingests. The console is served `--no-run`,
-so the public page cannot spawn a command — and `--ai`, so the model panels that
-only read a row still work. Those are deliberately two flags: spending a token and
-mutating the database are different risks, and `tracker infer` writes nothing.
+mini's carries the API keys because it ingests.
+
+**The console cannot spawn a command at all** — the runner was deleted, so there
+is no `--no-run` to pass and no palette behind the public URL. `--ai` survives and
+still means what it meant: the model panels *read* a row and spend a token, which
+was always a different risk from mutating the database, and `tracker infer` writes
+nothing.
 
 Do not copy `.env` between machines wholesale. If one value is needed on the
 other side, move that one line, on the machine itself.
 
-The console is public and password-gated. Publishing without a password is
-refused by the tool, because a tunnel bypasses the loopback-only check by design.
+**Console passwords are no longer in `.env` at all.** `TRACKER_CONSOLE_PASSWORD`
+was one shared secret for every reader; accounts replaced it and a password now
+lives hashed in the database, per person. Make one with `tracker users add`, on
+the host, where the database is.
+
+The console is public and account-gated. Publishing with **no accounts** is
+refused by the tool, because a tunnel bypasses the loopback-only check by design —
+every request arrives from 127.0.0.1, so the bind-address rule never fires and the
+sign-in is what replaces it.
 
 ## 5. Paths outside the project, and why each is there
 

@@ -267,18 +267,18 @@ def test_with_no_watchlist_the_whole_database_is_read(session):
     assert len(result.signals) == 1
 
 
-def test_a_watchlist_scopes_the_digest(session):
+def test_a_watchlist_scopes_the_digest(session, account):
     watched = _project(session, created_at=NOW)
     _project(session, company="Meta", name="Hyperion", state="LA", dedup_key="m", created_at=NOW)
 
-    watchlist.add(session, "xAI")
+    watchlist.add(session, "xAI", account_id=account.id)
     result = feed.digest(session, since=SINCE)
     assert not result.watching_everything
     assert [s.project_id for s in result.signals] == [watched.id]
     assert result.projects_watched == 1
 
 
-def test_each_watched_entity_gets_its_own_tally(session):
+def test_each_watched_entity_gets_its_own_tally(session, account):
     xai = _project(session)
     meta = _project(session, company="Meta", name="Hyperion", state="LA", dedup_key="m")
     _event(session, xai, event_type="energized", description="Energized.")
@@ -293,8 +293,8 @@ def test_each_watched_entity_gets_its_own_tally(session):
         unconfirmed="no_quote",
     )
 
-    watchlist.add(session, "xAI")
-    watchlist.add(session, "Meta")
+    watchlist.add(session, "xAI", account_id=account.id)
+    watchlist.add(session, "Meta", account_id=account.id)
     result = feed.digest(session, since=SINCE)
 
     by_entry = {e.entry: e for e in result.entities}
@@ -304,11 +304,11 @@ def test_each_watched_entity_gets_its_own_tally(session):
     assert by_entry["Meta"].held == 1
 
 
-def test_a_signal_names_the_watch_that_brought_it_in(session):
+def test_a_signal_names_the_watch_that_brought_it_in(session, account):
     project = _project(session, company="Crusoe", customer="OpenAI", name="Abilene", dedup_key="c")
     _event(session, project, description="Energized.")
 
-    watchlist.add(session, "OpenAI")
+    watchlist.add(session, "OpenAI", account_id=account.id)
     [signal] = feed.digest(session, since=SINCE).signals
     assert (signal.entry, signal.via) == ("OpenAI", watchlist.VIA_CUSTOMER)
 
@@ -559,7 +559,7 @@ def test_every_kind_a_digest_produces_is_declared(session):
     assert produced == set(feed.KINDS)
 
 
-def test_a_chips_tally_matches_the_cards_that_chip_filters_to(session):
+def test_a_chips_tally_matches_the_cards_that_chip_filters_to(session, account):
     """The number above the list and the list have to agree.
 
     They did not. Tallies were counted from the unfolded signals while the card
@@ -571,7 +571,7 @@ def test_a_chips_tally_matches_the_cards_that_chip_filters_to(session):
     for i in range(3):
         citation = _source(session, project, url=f"https://trade.example/{i}")
         _event(session, project, source_id=citation.id, event_date=dt.date(2026, 8, 18 + i))
-    watchlist.add(session, "xAI")
+    watchlist.add(session, "xAI", account_id=account.id)
 
     got = feed.digest(session, since=SINCE)
 
@@ -583,13 +583,13 @@ def test_a_chips_tally_matches_the_cards_that_chip_filters_to(session):
     assert tally.good == 1
 
 
-def test_the_page_limit_does_not_shrink_the_tally(session):
+def test_the_page_limit_does_not_shrink_the_tally(session, account):
     """The chip describes the window; the limit describes the page."""
     project = _project(session)
     for i, kind in enumerate(("energized", "land_acquired", "permit_approved")):
         citation = _source(session, project, url=f"https://trade.example/{i}")
         _event(session, project, event_type=kind, source_id=citation.id)
-    watchlist.add(session, "xAI")
+    watchlist.add(session, "xAI", account_id=account.id)
 
     got = feed.digest(session, since=SINCE, limit=1)
 

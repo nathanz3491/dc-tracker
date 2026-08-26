@@ -1,12 +1,22 @@
-"""The HTTP surface: static files, a read-only data API, and the run endpoints.
+"""The HTTP surface: static files, a read-only data API, and the sign-in routes.
 
 Routing is written out rather than derived, because the read/write split is the
-security posture and it should be readable in one screen. Everything under
-``/api/`` except ``POST /api/run``, ``POST /api/queue/drop`` and ``POST
-/api/watch`` opens the database ``mode=ro``, so a bug in a read path raises
-instead of writing. The third of those is the narrowest: it writes one row of
-`watch`, which says whose news the landing page shows and which nothing derives
-from — see `Handler._watch`.
+security posture and it should be readable in one screen.
+
+**Exactly one route writes anything: ``POST /api/watch``.** Everything else under
+``/api/`` opens the database ``mode=ro``, so a bug in a read path raises instead of
+silently changing a row. And that one write is as narrow as a write gets — it adds
+or drops a row of `watch`, which says whose news the landing page shows, which
+nothing derives from and no ingest consults.
+
+This console used to be able to run commands: a palette read out of the CLI, a
+`/dev` face, and a real subprocess per button. That is gone. The database is
+changed from the CLI, by one person, on the host — so keeping a command runner
+behind a public URL meant keeping its three doors (the typed-name confirmation, the
+single-writer check, the argv-never-a-string rule) correct forever in exchange for
+a feature with no users. `tracker tui` is where the buttons live now, and it still
+shares `webui/catalog.py` and `webui/runner.py`, which is why those modules are
+still here.
 """
 
 from __future__ import annotations
@@ -14,8 +24,8 @@ from __future__ import annotations
 import gzip
 import json
 import logging
-import queue
 import threading
+import time
 import webbrowser
 from functools import lru_cache
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -28,29 +38,39 @@ from sqlalchemy.exc import OperationalError
 from tracker import __version__
 from tracker.config import install_root
 from tracker.db import MigrationError, open_db, schema_version, session_scope
-from tracker.webui import assets, catalog, runs
+from tracker.webui import assets
 from tracker.webui.auth import COOKIE, Gate, cookie_value
-from tracker.webui.runner import Busy, Runner
 
 log = logging.getLogger(__name__)
 
-#: Loopback only unless the operator overrides it deliberately. This process
-#: executes commands, so the bind address is a security boundary rather than a
-#: convenience setting.
+#: Loopback only unless the operator overrides it deliberately.
+#:
+#: This process no longer executes commands, but the bind address is still a
+#: security boundary rather than a convenience setting: what is behind it is the
+#: whole dataset and, with `--ai`, a model panel that spends real tokens per click.
+#: An open console on a routable address is those two things offered to the network.
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
 
 #: Below this, compressing costs more than it saves.
 GZIP_MIN = 8192
 
-#: The views that have their own URL, one per face of the console.
+#: How long `Console.auth_required` may go without re-reading the database. See
+#: that property for why it is cached at all and why the window is this short.
+AUTH_CACHE_S = 5.0
+
+#: The views that have their own URL. One face now, where there used to be two.
 #:
 #: Duplicated from `app.js` on purpose, and the duplication is bounded: the server
 #: needs to know which paths are pages so an unknown one 404s instead of silently
 #: serving the console. A test asserts the two lists agree, which is cheaper than
 #: a route that generates itself from a JavaScript array.
-READ_VIEWS: frozenset[str] = frozenset({"updates", "projects", "sources", "map", "capex"})
-DEV_VIEWS: frozenset[str] = frozenset({"pipeline", "commands", "help"})
+#:
+#: `help` arrives here from the old `/dev` set, and belongs here: it explains tiers,
+#: tracks and confidence — what a reader needs in order not to misread the data —
+#: and was only filed under the machinery because that is where the tab happened to
+#: sit.
+READ_VIEWS: frozenset[str] = frozenset({"updates", "projects", "sources", "map", "capex", "help"})
 
 
 @lru_cache(maxsize=1)
@@ -94,39 +114,32 @@ class Console:
         self,
         db_path: Path,
         *,
-        allow_write: bool = True,
-        allow_ai: bool | None = None,
+        allow_ai: bool = True,
         allow_watch: bool = True,
-        password: str | None = None,
     ) -> None:
         self.db_path = db_path
-        self.allow_write = allow_write
         #: Whether the LLM panels — the briefing, `infer`, the capex overview —
-        #: may run. Separate from `allow_write` because they are a different risk:
-        #: they *read* the row and spend tokens, and `tracker infer` has never
-        #: written its answer anywhere. Conflating the two made a published
-        #: read-only console refuse the one thing it could safely offer.
+        #: may run. They *read* a row and spend a token; `tracker infer` has never
+        #: written its answer anywhere, which is why spending and writing were two
+        #: flags rather than one even when this console could still write.
+        self.allow_ai = allow_ai
+        #: Whether the watchlist may be edited from the page.
         #:
-        #: Follows `allow_write` unless a deployment says otherwise, so the local
-        #: default is unchanged and only a published console has to think about it.
-        self.allow_ai = allow_write if allow_ai is None else allow_ai
-        #: Whether the watchlist may be edited from the page. A THIRD flag, for the
-        #: same reason `allow_ai` is a second one: these are different risks and
-        #: collapsing them costs the console the one thing it could safely offer.
+        #: This is now the console's **only** write, and it is a narrow one: add or
+        #: drop a row of `watch`, a statement about whose news to show, which no
+        #: derived value reads and no ingest consults. Losing the table would lose a
+        #: preference rather than a fact. `serve --no-watch-edits` turns it off for
+        #: a deployment that wants the page strictly read-only.
         #:
-        #: What this write can do is add or drop a row of `watch` — a statement
-        #: about whose news to show, which no derived value reads and no ingest
-        #: consults. It cannot touch a project, a citation or a figure, and it
-        #: cannot run a command or spend a token. That is why it defaults to on
-        #: even under `--no-run`: a published console is exactly where the person
-        #: whose watchlist it is will be sitting. `serve --no-watch-edits` turns it
-        #: off for a deployment that wants the page strictly read-only.
-        #:
-        #: It is still behind the password, like every other route.
+        #: It still requires a session, and now requires more than that: an
+        #: anonymous visitor to an open console has no list to edit, because a
+        #: watchlist without an owner is the shared list that accounts exist to
+        #: replace. See `Handler._watch`.
         self.allow_watch = allow_watch
-        self.gate = Gate(password=password)
-        self.runner = Runner(db_path)
+        self.gate = Gate()
         self._schema_version: int | None = None
+        self._auth_required = False
+        self._auth_checked_at = 0.0
 
     def read_session(self):
         engine = open_db(self.db_path)
@@ -137,6 +150,38 @@ class Console:
     @property
     def schema_version(self) -> int:
         return self._schema_version or 0
+
+    @property
+    def auth_required(self) -> bool:
+        """Whether anybody has to sign in — i.e. whether any account exists.
+
+        Read from the database rather than from a flag, because the answer is made
+        by `tracker users add` in a *different process* and a console that had been
+        told at startup would keep serving an open page until somebody restarted
+        it. That is the trap this property exists to avoid.
+
+        Cached for a few seconds, because `_authed` runs on every request including
+        every static asset, and opening the database per file would be a real cost
+        for an answer that changes about once. The staleness window is shorter than
+        the time it takes to alt-tab to the browser after creating an account.
+
+        A database that cannot be read at all is treated as **requiring** auth. The
+        request is going to fail anyway, and the safe direction for a doubt about
+        whether a password is needed is "yes".
+        """
+        now = time.monotonic()
+        if now - self._auth_checked_at < AUTH_CACHE_S:
+            return self._auth_required
+        try:
+            with self.read_session() as session:
+                from tracker import accounts
+
+                self._auth_required = accounts.any_exist(session)
+        except Exception:  # a missing file, a pending migration, a locked database
+            log.debug("console: could not count accounts; assuming a sign-in is needed")
+            self._auth_required = True
+        self._auth_checked_at = now
+        return self._auth_required
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -252,8 +297,29 @@ class Handler(BaseHTTPRequestHandler):
         return cookie_value(self.headers.get("Cookie"))
 
     @property
+    def _account_id(self) -> int | None:
+        """Which account this request is, or None for nobody.
+
+        None means two different things and the caller has to know which: on a
+        console with no accounts it means "anonymous, and that is allowed"; on one
+        with accounts it means "not signed in". `_authed` is the question that
+        distinguishes them, and it is the only one the routing asks.
+        """
+        return self.console.gate.session_for(self._session)
+
+    @property
     def _authed(self) -> bool:
-        return self.console.gate.valid(self._session)
+        """Whether this request may be served at all.
+
+        An open console — no accounts at all — serves everybody, exactly as an
+        unset `TRACKER_CONSOLE_PASSWORD` did before accounts existed: reaching
+        loopback already means having the machine, and publishing is what refuses
+        (see `cli._console_accounts`). Once one account exists, every route needs
+        a session.
+        """
+        if not self.console.auth_required:
+            return True
+        return self._account_id is not None
 
     def _client(self) -> str:
         """Who is knocking, for the lockout counter.
@@ -385,50 +451,20 @@ class Handler(BaseHTTPRequestHandler):
     def _route_get(self, route: str, query: dict[str, list[str]]) -> None:
         if route in {"/", "/index.html"}:
             return self._page()
-        if route in {"/dev", "/dev/"}:
-            return self._page(dev=True)
         # One shell per view, so a page can be linked to, refreshed and reached
         # with the back button. The server does not render them differently — it
         # tells the front end which to open, and the front end pushes the same
         # paths as you navigate. Anything else 404s rather than silently serving
-        # the console, so a typo is visible instead of landing on Overview.
+        # the console, so a typo is visible instead of landing on Updates.
         page = route.strip("/")
         if page in READ_VIEWS:
             return self._page(view=page)
-        if page.startswith("dev/") and page[len("dev/") :] in DEV_VIEWS:
-            return self._page(dev=True, view=page[len("dev/") :])
         if route == "/api":
             return self._api_index()
         if route.startswith("/static/"):
             return self._static(route[len("/static/") :], query)
         if route == "/api/dataset":
             return self._dataset()
-        if route == "/api/commands":
-            from tracker.webui import workflows
-
-            return self._json(
-                {
-                    "groups": catalog.grouped_json(),
-                    "llm": sorted(catalog.LLM_COMMANDS),
-                    "destructive": dict(catalog.DESTRUCTIVE),
-                    "workflows": workflows.as_json(),
-                }
-            )
-        if route == "/api/runs":
-            return self._json(
-                {
-                    "runs": runs.history(self.console.db_path),
-                    "current": self.console.runner.snapshot(),
-                }
-            )
-        if route.startswith("/api/run/"):
-            rest = route[len("/api/run/") :]
-            if rest.endswith("/stream"):
-                return self._stream(rest[: -len("/stream")])
-            record = runs.read_log(self.console.db_path, rest)
-            return self._json(record) if record else self._error(404, f"no run {rest!r}")
-        if route == "/api/discover":
-            return self._discover()
         if route == "/api/claims":
             return self._claims(query)
         if route == "/api/article":
@@ -450,19 +486,19 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if not self._same_origin():
                 return self._error(403, "cross-site request refused")
+            # The two unauthenticated POSTs, and the only two there will be. Both
+            # go through the gate's lockout counters — see `_login` and
+            # `_register` — because an unauthenticated route that either hands out
+            # a session or writes a row is exactly what a rate limit is for.
             if parsed.path == "/api/login":
                 return self._login(body)
+            if parsed.path == "/api/register":
+                return self._register(body)
             if not self._authed:
                 return self._error(401, "sign in first")
             if parsed.path == "/api/logout":
                 self.console.gate.revoke(self._session)
                 return self._json({"ok": True}, extra=self._set_session_cookie(None))
-            if parsed.path == "/api/run":
-                return self._start_run(body)
-            if parsed.path == "/api/workflow":
-                return self._start_workflow(body)
-            if parsed.path == "/api/run/cancel":
-                return self._json({"cancelled": self.console.runner.cancel()})
             # `body` everywhere below, never `self._body()`: the request body was
             # already read above, and reading it twice blocks on `rfile` waiting
             # for bytes that will never come — the request hangs until the
@@ -489,44 +525,117 @@ class Handler(BaseHTTPRequestHandler):
 
     # --- handlers ---------------------------------------------------------
 
+    def _locked_out(self) -> dict[str, Any] | None:
+        """The 429 body if this client may not try right now, else None.
+
+        Says it is a lockout and for how long. Answering "wrong password" here
+        would have somebody who mistyped twice sit there retyping a correct
+        password and never getting in.
+        """
+        remaining = self.console.gate.locked_for(self._client())
+        if not remaining:
+            return None
+        minutes = max(1, round(remaining / 60))
+        return {"error": f"Too many attempts. Locked for about {minutes} more minute(s)."}
+
     def _login(self, body: dict[str, Any]) -> None:
-        gate = self.console.gate
-        if not gate.required:
-            return self._json({"ok": True, "note": "no password is configured"})
+        """Exchange an email and a password for a session cookie.
+
+        On a console with no accounts there is nothing to sign in to, and saying so
+        is better than a bare 401: it is a legitimate state (`tracker serve` on
+        loopback needs no setup) and the page needs to know not to show a form.
+        """
+        if not self.console.auth_required:
+            return self._json({"ok": True, "note": "this console has no accounts"})
+
+        locked = self._locked_out()
+        if locked:
+            return self._json(locked, status=429)
+
+        from tracker import accounts
 
         client = self._client()
-        remaining = gate.locked_for(client)
-        if remaining:
-            # Say it is a lockout and for how long. Answering "wrong password"
-            # here would have an operator who mistyped twice sit there retyping a
-            # correct password and never getting in.
-            minutes = max(1, round(remaining / 60))
-            return self._json(
-                {"error": f"Too many attempts. Locked for about {minutes} more minute(s)."},
-                status=429,
+        gate = self.console.gate
+        # Read-write, and only because a successful sign-in stamps `last_seen_at`.
+        # A failed one writes nothing, which is what keeps a brute-force attempt
+        # from being a write per guess.
+        engine = open_db(self.console.db_path, readonly=False)
+        with session_scope(engine) as session:
+            account = accounts.verify(
+                session, str(body.get("email") or ""), str(body.get("password") or "")
             )
+            if account is None:
+                gate.fail(client)
+                log.warning("console: failed sign-in from %s", client)
+                # One message for a wrong password and for an unknown address.
+                # `accounts.verify` already spends the same scrypt either way, so
+                # neither the wording nor the timing says which addresses exist.
+                return self._json({"error": "Wrong email or password."}, status=401)
+            accounts.touch(session, account)
+            account_id = account.id
+            email = account.email
 
-        token = gate.attempt(str(body.get("password") or ""), client=client)
-        if token is None:
-            log.warning("console: failed sign-in from %s", client)
-            return self._json({"error": "Wrong password."}, status=401)
-
-        log.info("console: signed in from %s", client)
+        gate.succeed(client)
+        token = gate.grant(account_id)
+        log.info("console: %s signed in from %s", email, client)
         self._json({"ok": True}, extra=self._set_session_cookie(token))
 
-    def _page(self, *, dev: bool = False, view: str = "") -> None:
-        """The console shell. Two faces, one bundle.
+    def _register(self, body: dict[str, Any]) -> None:
+        """Spend an invite code and sign the new account straight in.
 
-        `/` reads the dataset; `/dev` runs commands. The difference is one flag on
-        `window.DC_MODE`, which the front end reads to pick its view set — rather
-        than a second bundle, because `assets.bundle_css` exists precisely because
-        a chain of imports costs a serial round-trip each, and the reading console
-        is the one that must not pay for them.
+        The one route that creates an identity from the browser, and it can only do
+        so with a code minted at a terminal by `tracker users invite`. Open
+        registration would hand an account to anyone who finds the URL, and while
+        an account can no longer run a command it can still read the whole dataset.
 
-        The flag is a *display* choice and nothing more. What the dev console can
-        actually do is still governed by `allow_write` on the server, so
-        `serve --no-run` renders `/dev` with every button inert. A page cannot
-        grant itself a capability by asking for a different shell.
+        Rate limited by the **same counters as `_login`**, deliberately shared: two
+        separate budgets would let somebody exhaust one while guessing at the other,
+        and a code is guessable in exactly the sense a password is (it is not, at
+        160 bits — but the counter is what makes that claim true rather than
+        assumed).
+        """
+        locked = self._locked_out()
+        if locked:
+            return self._json(locked, status=429)
+
+        from tracker.accounts import AccountError, redeem
+
+        client = self._client()
+        engine = open_db(self.console.db_path, readonly=False)
+        try:
+            with session_scope(engine) as session:
+                account = redeem(
+                    session,
+                    str(body.get("code") or ""),
+                    str(body.get("email") or ""),
+                    str(body.get("password") or ""),
+                    name=(str(body["name"]).strip() or None) if body.get("name") else None,
+                )
+                account_id, email = account.id, account.email
+        except AccountError as exc:
+            self.console.gate.fail(client)
+            log.warning("console: refused registration from %s: %s", client, exc)
+            return self._json({"error": str(exc)}, status=400)
+        except OperationalError as exc:
+            if "locked" not in str(exc).lower():
+                raise
+            return self._json(
+                {"error": "the database is busy writing; try again in a moment"}, status=503
+            )
+
+        # Signed in on the spot. Making somebody type the password they just chose
+        # into a second form teaches them nothing and is one more place to fail.
+        self.console.gate.succeed(client)
+        token = self.console.gate.grant(account_id)
+        log.info("console: %s registered from %s", email, client)
+        self._json({"ok": True}, extra=self._set_session_cookie(token))
+
+    def _page(self, *, view: str = "") -> None:
+        """The console shell. One face now.
+
+        There used to be two — `/` read the dataset and `/dev` ran commands, chosen
+        by a `window.DC_MODE` flag on one bundle. The runner is gone, so the flag
+        and the second view set went with it, and what is left is a reader.
 
         `view` is the page the URL asked for, injected as `window.DC_VIEW` so the
         front end opens on it directly. Without it a deep link would paint the
@@ -542,11 +651,9 @@ class Handler(BaseHTTPRequestHandler):
         # Stamped on the way out, so every asset URL carries its file's version.
         # The page itself is `no-store`, so the tokens are never stale.
         html = assets.stamp(index.read_text(encoding="utf-8"))
-        mode = "dev" if dev else "read"
         html = html.replace(
             '<div id="root"></div>',
-            f'<script>window.DC_MODE="{mode}";window.DC_VIEW="{view}"</script>\n'
-            '<div id="root"></div>',
+            f'<script>window.DC_VIEW="{view}"</script>\n<div id="root"></div>',
         )
         self._send(200, html.encode("utf-8"), "text/html; charset=utf-8")
 
@@ -580,33 +687,54 @@ class Handler(BaseHTTPRequestHandler):
     def _dataset(self) -> None:
         from tracker.webui.dataset import build
 
+        # One session for both, because `read_session` opens the database each
+        # time it is called and this is the request every redraw makes.
         with self.console.read_session() as session:
             payload = build(
                 session,
                 db_path=str(self.console.db_path),
                 schema_version=self.console.schema_version,
             )
-        payload["allow_write"] = self.console.allow_write
+            # Who is reading, so the header can say so and the watchlist knows
+            # whether it has an owner. None on an open console with no accounts,
+            # which the page reads as "no watchlist here" rather than "signed out".
+            #
+            # Resolved before `allow_watch`, because that flag depends on it.
+            account = self._account_json(session)
         payload["allow_ai"] = self.console.allow_ai
-        payload["allow_watch"] = self.console.allow_watch
-        payload["password_protected"] = self.console.gate.required
+        payload["auth_required"] = self.console.auth_required
+        payload["account"] = account
+        # **`allow_watch` answers "may *this reader* edit a watchlist", not "is the
+        # feature on".** A visitor with no account has no list to edit — `_watch`
+        # refuses them — so sending the server's bare flag would draw an editable
+        # box that 403s on use. The same rule is applied in `_updates`, and it has
+        # to be applied in both: whichever payload the page believed would
+        # otherwise decide, and they would disagree.
+        payload["allow_watch"] = self.console.allow_watch and account is not None
         self._json(payload)
 
-    def _discover(self) -> None:
-        """Stage 1's funnel: what each feed cost and what it returned.
+    def _account_json(self, session: Any) -> dict[str, Any] | None:
+        """The signed-in account as the page needs it, or None for nobody.
 
-        Its own route rather than a field on `/api/dataset`, because the dataset
-        payload is fetched on every redraw and this is a grouped scan of
-        `ingest_url` — 6,695 rows today and the fastest-growing table here. The
-        panel that reads it is opened deliberately, so it can pay for itself.
+        Takes the caller's session rather than opening one, because its only
+        caller is `/api/dataset` — the request every redraw makes — and
+        `read_session` opens the database each time it is called.
 
-        Read-only, like every GET: the console's only route to changing anything
-        is to start the CLI.
+        Also the place a **deleted** account's session dies. `tracker users rm`
+        runs in another process and cannot reach the gate's dictionary, so the row
+        going missing is what invalidates the cookie — see the note in
+        `webui/auth.py` about what this does and does not cover.
         """
-        from tracker import funnel
+        account_id = self._account_id
+        if account_id is None:
+            return None
+        from tracker.models import Account
 
-        with self.console.read_session() as session:
-            self._json(funnel.survey(session).as_json())
+        row = session.get(Account, account_id)
+        if row is None:
+            self.console.gate.revoke(self._session)
+            return None
+        return {"email": row.email, "name": row.name}
 
     #: Every route, what it answers, and what it costs. Hand-written on purpose,
     #: for the reason `catalog.GROUPS` is: a derived list describes the code, and
@@ -646,47 +774,33 @@ class Handler(BaseHTTPRequestHandler):
         "POST /api/watch": {
             "answers": "adds or drops one watchlist entry; returns the list",
             "writes": True,
-            "note": "Body: {action: add|remove, entry, note?}. The only write a "
-            "read-only console allows, because a watch is a statement about whose "
-            "news to show and nothing derives from it. Refused under --no-watch-edits.",
+            "note": "Body: {action: add|remove, entry, note?}. The ONLY route here "
+            "that writes, because a watch is a statement about whose news to show "
+            "and nothing derives from it. Acts on the signed-in account's list, so "
+            "it needs an account and not merely a session. Refused under "
+            "--no-watch-edits.",
         },
-        "GET /api/discover": {
-            "answers": "per-feed funnel: queued, read, no_project, cited, dated",
-            "reads": "ingest_url",
-        },
-        "GET /api/commands": {
-            "answers": "every command, its flags and their types, plus the workflows",
-            "reads": None,
-            "note": "the palette is built from this; a flag added to the CLI appears here",
-        },
-        "GET /api/runs": {"answers": "run history and the current run", "reads": "data/runs"},
-        "GET /api/run/<id>": {"answers": "one run's log", "reads": "data/runs"},
-        "GET /api/run/<id>/stream": {"answers": "that log as it is written", "reads": "data/runs"},
-        "POST /api/run": {
-            "answers": "starts a command; returns its run id",
-            "writes": True,
-            "note": "refused unless the server was started with --run. "
-            "Body: {cmd, flags} or {workflow} or {line}. Validated against the catalog.",
-        },
-        "POST /api/workflow": {
-            "answers": "starts a named routine; returns its run id",
-            "writes": True,
-            "note": "each step validated against the catalog, so a blocked command "
-            "cannot be reached by putting it in a sequence",
-        },
-        "POST /api/run/cancel": {"answers": "cancels the running command", "writes": True},
-        "POST /api/queue/drop": {"answers": "drops queued URLs", "writes": True},
-        "POST /api/infer": {"answers": "one project's inferred analysis", "writes": True},
-        "POST /api/overview": {"answers": "one project's AI reading", "writes": True},
+        # The three that spend a token and write nothing. `tracker infer` has never
+        # stored its answer anywhere, which is why spending and writing were two
+        # separate flags even when this console could still do both.
+        "POST /api/infer": {"answers": "one project's inferred analysis", "spends": True},
+        "POST /api/overview": {"answers": "one project's AI reading", "spends": True},
         "POST /api/overview/stream": {
             "answers": "that reading as it is generated",
-            "writes": True,
+            "spends": True,
         },
         "POST /api/capex/overview/stream": {
             "answers": "an AI reading of one capex position, streamed",
-            "writes": True,
+            "spends": True,
         },
-        "POST /api/login": {"answers": "exchanges the password for a session cookie"},
+        "POST /api/login": {"answers": "exchanges an email and password for a session cookie"},
+        "POST /api/register": {
+            "answers": "spends an invite code, creates the account, signs it in",
+            "writes": True,
+            "note": "Body: {code, email, password, name?}. Unauthenticated by "
+            "necessity and rate limited by the same counters as /api/login. Codes "
+            "come from `tracker users invite`, at a terminal.",
+        },
         "POST /api/logout": {"answers": "clears it"},
     }
 
@@ -701,13 +815,13 @@ class Handler(BaseHTTPRequestHandler):
             {
                 "service": "dc-tracker console",
                 "version": __version__,
-                "consoles": {
-                    "/": "read the dataset — overview, projects, map, capex",
-                    "/dev": "run things — pipeline, commands, help",
-                },
-                "allow_write": self.console.allow_write,
+                "note": (
+                    "a reader. Nothing here changes a project, a citation or a "
+                    "figure — that is the CLI's job. `tracker tui` has the commands."
+                ),
                 "allow_ai": self.console.allow_ai,
                 "allow_watch": self.console.allow_watch,
+                "auth_required": self.console.auth_required,
                 "routes": self.API,
             }
         )
@@ -871,33 +985,51 @@ class Handler(BaseHTTPRequestHandler):
 
         # One session for both, because both walk the same projects: the digest to
         # find what changed, the watchlist to say which entry each one came from.
+        #
+        # `account_id` is this reader's, so two people on one console get two
+        # different pages. None — nobody signed in, on a console with no accounts
+        # at all — reaches `feed.digest`'s existing "no watchlist, read everything"
+        # path, so the anonymous case needed no branch of its own.
+        account_id = self._account_id
         with self.console.read_session() as session:
-            payload = feed.digest(session, since=since, days=days, limit=limit).as_json()
-            payload["watchlist"] = self._watchlist_json(session)
+            payload = feed.digest(
+                session, since=since, days=days, limit=limit, account_id=account_id
+            ).as_json()
+            payload["watchlist"] = self._watchlist_json(session, account_id)
 
         payload["days"] = days
-        payload["allow_watch"] = self.console.allow_watch
+        payload["allow_watch"] = self.console.allow_watch and account_id is not None
         self._json(payload)
 
-    def _watchlist_json(self, session: Any) -> list[dict[str, Any]]:
-        """The watchlist as the page renders it, resolved against today's projects.
+    def _watchlist_json(self, session: Any, account_id: int | None) -> list[dict[str, Any]]:
+        """One account's watchlist as the page renders it, against today's projects.
 
         The page needs more than the digest's per-entity tally: the note, and the
         project count, so an entry matching nothing can say so rather than looking
         like a quiet week.
+
+        Empty for `account_id=None`, and that is not the same as "no entries". A
+        visitor to an open console has no list because there is nobody to own one;
+        the page reads `account` from `/api/dataset` to tell the two apart.
         """
+        if account_id is None:
+            return []
         from tracker import watchlist
 
-        return [entity.as_json() for entity in watchlist.watched(session)]
+        return [entity.as_json() for entity in watchlist.watched(session, account_id=account_id)]
 
     def _watch(self, body: dict[str, Any]) -> None:
-        """Add or drop one watchlist entry.
+        """Add or drop one entry on the signed-in account's watchlist.
 
-        **The one write a published console performs**, and the narrowness is the
-        argument for it. `watch` rows say whose news to show; nothing derives from
-        them, no ingest reads them, and dropping the table would lose a preference
-        rather than a fact. Compare `/api/run`, which turns a body into a
-        subprocess and is refused outright without `--run`.
+        **The one write this console performs**, and the narrowness is the argument
+        for it. `watch` rows say whose news to show; nothing derives from them, no
+        ingest reads them, and dropping the table would lose a preference rather
+        than a fact.
+
+        **It needs an account, not merely a session.** On a console with no accounts
+        every request is anonymous and allowed — but a watchlist with no owner is
+        the shared list that accounts exist to replace, so there is nothing here for
+        that visitor to edit and saying so is better than inventing an owner.
 
         Opened read-write for the duration, rather than through
         `console.read_session`. The single-writer FILE lock that `tracker` commands
@@ -910,6 +1042,14 @@ class Handler(BaseHTTPRequestHandler):
         """
         if not self.console.allow_watch:
             return self._error(403, "this console was started with --no-watch-edits")
+
+        account_id = self._account_id
+        if account_id is None:
+            return self._error(
+                403,
+                "a watchlist belongs to an account, and this console has none. "
+                "Create one with `tracker users add` and sign in.",
+            )
 
         from tracker.watchlist import WatchError, add, remove
 
@@ -929,14 +1069,17 @@ class Handler(BaseHTTPRequestHandler):
         try:
             with session_scope(engine) as session:
                 if action == "add":
-                    row, created = add(session, entry, note=(note or None))
+                    row, created = add(session, entry, account_id=account_id, note=(note or None))
                     result = {"entry": row.entry, "created": created}
                 else:
-                    result = {"entry": entry, "removed": remove(session, entry)}
+                    result = {
+                        "entry": entry,
+                        "removed": remove(session, entry, account_id=account_id),
+                    }
                 # Read back inside the same session, so the response describes the
                 # list as this write left it rather than as a second connection
                 # happened to find it.
-                result["watchlist"] = self._watchlist_json(session)
+                result["watchlist"] = self._watchlist_json(session, account_id)
         except WatchError as exc:
             return self._error(400, str(exc))
         except OperationalError as exc:
@@ -947,55 +1090,6 @@ class Handler(BaseHTTPRequestHandler):
             return self._error(503, "the database is busy writing; try again in a moment")
 
         self._json(result)
-
-    def _start_run(self, body: dict[str, Any]) -> None:
-        if not self.console.allow_write:
-            return self._error(403, "this console was started read-only (--no-run)")
-
-        # `line` is the console's command box. It is parsed *here*, against the
-        # catalog, into exactly the `(cmd, flags)` the form produces — so the box
-        # is a shorthand for the form and not a second, weaker way in. There is no
-        # shell at any point: `cd`, `rm`, `;` and `|` are words the catalog does
-        # not know, and it says so by name.
-        if body.get("line"):
-            try:
-                cmd, flags = catalog.parse_command_line(str(body["line"]))
-            except catalog.InvalidRequest as exc:
-                return self._error(400, str(exc))
-        else:
-            cmd = str(body.get("cmd") or "").strip()
-            flags = body.get("flags") or {}
-        if not isinstance(flags, dict):
-            return self._error(400, "`flags` must be an object")
-        try:
-            run = self.console.runner.start(cmd, flags, confirm=body.get("confirm"))
-        except catalog.InvalidRequest as exc:
-            # When the only thing missing is the confirmation, say which word
-            # confirms it. The command box has no form to read that off, and
-            # "re-send with confirm=..." is a sentence about an HTTP API rather
-            # than an instruction to a person.
-            command = catalog.by_name().get(cmd)
-            if command is not None and command.needs_confirmation and not body.get("confirm"):
-                return self._json(
-                    {"error": str(exc), "confirm_with": cmd, "destroys": command.destroys},
-                    status=400,
-                )
-            return self._error(400, str(exc))
-        except Busy as exc:
-            return self._error(409, str(exc))
-        self._json({"run": run.summary()}, status=202)
-
-    def _start_workflow(self, body: dict[str, Any]) -> None:
-        if not self.console.allow_write:
-            return self._error(403, "this console was started read-only (--no-run)")
-        name = str(body.get("name") or "").strip()
-        try:
-            run = self.console.runner.start_workflow(name, confirm=body.get("confirm"))
-        except catalog.InvalidRequest as exc:
-            return self._error(400, str(exc))
-        except Busy as exc:
-            return self._error(409, str(exc))
-        self._json({"run": run.summary()}, status=202)
 
     def _infer(self, body: dict[str, Any]) -> None:
         """Run `tracker infer` for one project and return it as structured JSON.
@@ -1271,62 +1365,6 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(_sse(tail).encode("utf-8"))
             self.wfile.flush()
 
-    def _stream(self, run_id: str) -> None:
-        """Server-sent events for the run in flight.
-
-        Replays what the run has already printed before attaching, so a tab opened
-        mid-run is not staring at a blank pane while output scrolls past.
-        """
-        runner = self.console.runner
-        current = runner.current
-        if current is None or current.id != run_id:
-            record = runs.read_log(self.console.db_path, run_id)
-            if record is None:
-                return self._error(404, f"no run {run_id!r}")
-            body = "".join(
-                _sse({"type": "line", "line": line}) for line in record.get("lines", [])
-            ) + _sse({"type": "end", "run": {k: v for k, v in record.items() if k != "lines"}})
-            return self._send(200, body.encode("utf-8"), "text/event-stream; charset=utf-8")
-
-        listener = runner.subscribe()
-        backlog = list(current.lines)
-        self.send_response(200)
-        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("Connection", "close")
-        self.end_headers()
-        try:
-            for line in backlog:
-                self.wfile.write(_sse({"type": "line", "line": line}).encode("utf-8"))
-            self.wfile.flush()
-            while True:
-                try:
-                    event = listener.get(timeout=15)
-                except queue.Empty:
-                    # A comment frame keeps the connection from being reaped by an
-                    # idle timeout during a long quiet phase of a crawl.
-                    self.wfile.write(b": keepalive\n\n")
-                    self.wfile.flush()
-                    continue
-                self.wfile.write(_sse(event).encode("utf-8"))
-                self.wfile.flush()
-                if event.get("type") == "end":
-                    break
-        except ConnectionError:
-            # The reader went away mid-stream. Over a Cloudflare tunnel this is
-            # ordinary rather than exceptional: the edge drops an idle connection
-            # and the browser's EventSource silently reconnects, so a long crawl
-            # produces several of these per run.
-            #
-            # `ConnectionError`, not the two subclasses that used to be listed
-            # here. Windows raises `ConnectionAbortedError` (WinError 10053) where
-            # POSIX raises `BrokenPipeError` or `ConnectionResetError`, so the
-            # narrow tuple caught nothing on the platform this runs on and every
-            # closed tab logged a traceback.
-            log.debug("stream for %s closed by the client", run_id)
-        finally:
-            runner.unsubscribe(listener)
-
 
 def _sse(event: dict[str, Any]) -> str:
     return f"data: {json.dumps(event, ensure_ascii=False, default=str)}\n\n"
@@ -1338,19 +1376,11 @@ def serve(
     host: str = DEFAULT_HOST,
     port: int = DEFAULT_PORT,
     open_browser: bool = True,
-    allow_write: bool = True,
-    allow_ai: bool | None = None,
+    allow_ai: bool = True,
     allow_watch: bool = True,
-    password: str | None = None,
 ) -> None:
     """Run the console until interrupted."""
-    console = Console(
-        db_path,
-        allow_write=allow_write,
-        allow_ai=allow_ai,
-        allow_watch=allow_watch,
-        password=password,
-    )
+    console = Console(db_path, allow_ai=allow_ai, allow_watch=allow_watch)
     handler = type("BoundHandler", (Handler,), {"console": console})
     httpd = ThreadingHTTPServer((host, port), handler)
     httpd.daemon_threads = True

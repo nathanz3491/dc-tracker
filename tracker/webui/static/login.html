@@ -87,6 +87,24 @@
     font-size:12px; line-height:18px; color:var(--muted-foreground);
   }
   code { font-family:var(--mono); font-size:11px; }
+  /* A button rather than an anchor: it switches this form's mode, it does not
+     navigate, and an <a href="#"> that does not navigate is a lie to a screen
+     reader and to the back button alike. */
+  /* `width`, `height` and `margin-top` are reset explicitly: the `button` rule
+     above makes every button a full-width 40px block, and a class that only
+     overrode colour would leave this one shaped like the submit button. The
+     `:hover` reset is there because `button:hover:not(:disabled)` outweighs a
+     single class, so without it hovering the link paints it primary. */
+  .linkish {
+    display:inline-block; width:auto; height:auto; margin:0 0 6px; padding:0;
+    border:0; background:none; font:inherit; color:var(--primary); cursor:pointer;
+    text-decoration:underline; text-underline-offset:2px;
+  }
+  .linkish:hover:not(:disabled) { background:none; color:var(--primary-hover); }
+  /* Every label after the first field wants air above it; the inputs are
+     siblings rather than wrapped rows, so this is the simplest honest rule. */
+  form > label:not(:first-of-type), form > div:not([hidden]) + label { margin-top:14px; }
+  form > div:not([hidden]) ~ div:not([hidden]) { margin-top:14px; }
 </style>
 </head>
 <body>
@@ -98,28 +116,77 @@
       </svg>
       <b>dc-tracker</b><span>console</span>
     </div>
-    <h1>This console runs commands</h1>
-    <p class="lede">It reads and writes a real database and can spend LLM tokens.
-      Sign in to continue.</p>
+    <h1 id="title">Sign in</h1>
+    <p class="lede" id="lede">The whole dataset is behind this, and each account
+      keeps its own watchlist.</p>
 
     <form id="f" autocomplete="off">
-      <label for="pw">Password</label>
-      <input id="pw" name="password" type="password" autocomplete="current-password"
-             autofocus required />
+      <!-- The invite field is first when it is showing, because somebody
+           redeeming a code has it on their clipboard and nothing else yet. -->
+      <div id="codewrap" hidden>
+        <label for="code">Invite code</label>
+        <input id="code" name="code" type="text" autocomplete="off" spellcheck="false" />
+      </div>
+
+      <label for="email">Email</label>
+      <input id="email" name="email" type="email" autocomplete="username"
+             spellcheck="false" autofocus required />
+
+      <div id="namewrap" hidden>
+        <label for="name">Name <span style="text-transform:none;letter-spacing:0">(optional)</span></label>
+        <input id="name" name="name" type="text" autocomplete="name" />
+      </div>
+
+      <label for="pw" id="pwlabel">Password</label>
+      <input id="pw" name="password" type="password" autocomplete="current-password" required />
       <button id="go" type="submit">Sign in</button>
     </form>
 
     <div id="msg" class="msg"></div>
 
-    <p class="note">Sessions last 12 hours. Repeated failures lock the gate for
-      15 minutes — if you are locked out and it was you, wait rather than retrying.</p>
+    <p class="note">
+      <button type="button" id="toggle" class="linkish">I have an invite code</button><br />
+      Sessions last 12 hours. Repeated failures lock the gate for 15 minutes —
+      if you are locked out and it was you, wait rather than retrying.
+    </p>
   </main>
 
 <script>
-  const form = document.getElementById("f");
-  const input = document.getElementById("pw");
+  const form  = document.getElementById("f");
+  const email = document.getElementById("email");
+  const pw    = document.getElementById("pw");
+  const code  = document.getElementById("code");
+  const name  = document.getElementById("name");
   const button = document.getElementById("go");
-  const msg = document.getElementById("msg");
+  const msg   = document.getElementById("msg");
+  const toggle = document.getElementById("toggle");
+
+  /* One form, two modes, one file.
+   *
+   * A separate /register page would be a second thing an unauthenticated request
+   * can fetch, and the whole point of this page is that there is exactly one —
+   * self-contained, describing nothing about what is behind it. So redeeming an
+   * invite shows two more fields and posts somewhere else. */
+  let registering = false;
+
+  const setMode = (on) => {
+    registering = on;
+    document.getElementById("codewrap").hidden = !on;
+    document.getElementById("namewrap").hidden = !on;
+    code.required = on;
+    document.getElementById("title").textContent = on ? "Redeem an invite" : "Sign in";
+    document.getElementById("lede").textContent = on
+      ? "Your code came from whoever runs this. Choose the email and password you will sign in with."
+      : "The whole dataset is behind this, and each account keeps its own watchlist.";
+    document.getElementById("pwlabel").textContent = on ? "Choose a password" : "Password";
+    pw.setAttribute("autocomplete", on ? "new-password" : "current-password");
+    button.textContent = on ? "Create account" : "Sign in";
+    toggle.textContent = on ? "I already have an account" : "I have an invite code";
+    msg.className = "msg";
+    (on ? code : email).focus();
+  };
+
+  toggle.addEventListener("click", () => setMode(!registering));
 
   const show = (text, kind) => {
     msg.textContent = text;
@@ -130,21 +197,28 @@
     event.preventDefault();
     button.disabled = true;
     msg.className = "msg";
+    const route = registering ? "/api/register" : "/api/login";
+    const body = registering
+      ? { code: code.value.trim(), email: email.value, password: pw.value, name: name.value }
+      : { email: email.value, password: pw.value };
     try {
-      const res = await fetch("/api/login", {
+      const res = await fetch(route, {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Console": "1" },
-        body: JSON.stringify({ password: input.value }),
+        body: JSON.stringify(body),
       });
       if (res.ok) {
         // Replace rather than assign: the login page should not sit in history
-        // behind the console.
+        // behind the console. Registering signs you straight in, so both land here.
         window.location.replace("/");
         return;
       }
-      const body = await res.json().catch(() => ({}));
-      show(body.error || "Sign-in failed.", res.status === 429 ? "warn" : "err");
-      input.select();
+      const payload = await res.json().catch(() => ({}));
+      show(payload.error || "That did not work.", res.status === 429 ? "warn" : "err");
+      // Keep what they typed except the password — retyping an email to fix a
+      // password is the kind of small insult that makes people write it down.
+      pw.value = "";
+      pw.focus();
     } catch {
       show("The console did not answer. Is it still running?", "err");
     } finally {

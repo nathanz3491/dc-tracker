@@ -541,8 +541,106 @@ class NotDuplicate(Base):
         return f"<NotDuplicate #{self.a_id} != #{self.b_id}>"
 
 
+class Account(Base):
+    """One person who may sign in to the console.
+
+    The identity is an email, stored twice: `email` as typed for display,
+    `email_key` trimmed and lowercased for every lookup and for UNIQUE. Same
+    reasoning as `watch.entry`/`company_key` — a normalized key cannot be shown
+    and text as typed cannot be matched.
+
+    **Not a role table.** Every account can do the same things, because what the
+    console may do at all is a property of the server (`--ai`, `--watch-edits`)
+    rather than of whoever signed in. Migration 0020 has the argument.
+    """
+
+    __tablename__ = "account"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    #: As typed. Display only.
+    email: Mapped[str] = mapped_column(Text, nullable=False)
+
+    #: Trimmed, lowercased. The identity, and the only thing looked up.
+    email_key: Mapped[str] = mapped_column(Text, nullable=False)
+
+    #: Optional display name; absent is normal.
+    name: Mapped[str | None] = mapped_column(Text)
+
+    #: `scrypt$<n>$<r>$<p>$<salt_b64>$<hash_b64>`, from `accounts.hash_password`.
+    #: Self-describing so the cost parameters can be raised without a migration.
+    password_hash: Mapped[str] = mapped_column(Text, nullable=False)
+
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False, server_default=_NOW)
+
+    #: When they last signed in. Distinct from `created_at` for the reason
+    #: `project.last_verified_at` is distinct from `updated_at`.
+    last_seen_at: Mapped[dt.datetime | None] = mapped_column(DateTime)
+
+    watches: Mapped[list[Watch]] = relationship(
+        back_populates="account", cascade="all, delete-orphan", passive_deletes=True
+    )
+
+    __table_args__ = (
+        UniqueConstraint("email_key", name="uq_account_email_key"),
+        CheckConstraint(
+            "email_key = lower(email_key) AND email_key LIKE '_%@_%'",
+            name="ck_account_email_key",
+        ),
+        CheckConstraint("length(email) > 0", name="ck_account_email"),
+        CheckConstraint("length(password_hash) > 0", name="ck_account_password_hash"),
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return f"<Account {self.email!r}>"
+
+
+class Invite(Base):
+    """One single-use code that lets somebody create their own account.
+
+    The code itself is never stored — only its sha256 — because this database
+    travels between machines through `scripts/sync_db.py` and sits in backups,
+    where a plaintext code would be a live credential in every copy.
+
+    `redeemed_at` alone says whether it is spent. `redeemed_by` is an audit link
+    and goes NULL if that account is deleted, so the two are deliberately not
+    constrained to agree.
+    """
+
+    __tablename__ = "invite"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    #: sha256 of the code, hex. Not scrypt: a 160-bit random code has no
+    #: guessable keyspace for a work factor to slow anyone down in.
+    code_hash: Mapped[str] = mapped_column(Text, nullable=False)
+
+    #: Who it was minted for, free text, so an outstanding invite is still
+    #: recognisable a fortnight later.
+    note: Mapped[str | None] = mapped_column(Text)
+
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False, server_default=_NOW)
+
+    #: Not nullable: an invite that never expires is a permanent hole.
+    expires_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False)
+
+    redeemed_at: Mapped[dt.datetime | None] = mapped_column(DateTime)
+    redeemed_by: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("account.id", ondelete="SET NULL")
+    )
+
+    __table_args__ = (
+        UniqueConstraint("code_hash", name="uq_invite_code_hash"),
+        CheckConstraint("length(code_hash) > 0", name="ck_invite_code_hash"),
+        Index("ix_invite_redeemed_at", "redeemed_at"),
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return f"<Invite {self.note!r} redeemed={self.redeemed_at is not None}>"
+
+
 class Watch(Base):
-    """One entity whose news the briefing page is about.
+    """One entity whose news the briefing page is about, for one account.
 
     A company ("xAI"), or one project of one company ("xAI | Colossus"). Read by
     `tracker.watchlist`, which resolves each row to the projects it covers with
@@ -552,11 +650,21 @@ class Watch(Base):
     file encodes the PRD's definition of done, so it belongs in a diff; a
     watchlist is one reader's current interest, turns over monthly, and is edited
     from the console by the person reading it. Migration 0019 has the argument.
+
+    **It has an owner**, added by 0021, which is that argument taken one step
+    further: with several accounts on one console, a shared list shows everybody
+    everybody else's interests and lets any of them delete yours.
     """
 
     __tablename__ = "watch"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    #: Whose list this is. Deleting the account deletes the list with it — it is
+    #: a statement of that person's interest and means nothing without them.
+    account_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("account.id", ondelete="CASCADE"), nullable=False
+    )
 
     #: As typed, separator included: "xAI" or "xAI | Colossus". What gets shown
     #: back to whoever wrote it — a normalized key cannot be displayed.
@@ -574,11 +682,14 @@ class Watch(Base):
     note: Mapped[str | None] = mapped_column(Text)
     added_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False, server_default=_NOW)
 
+    account: Mapped[Account] = relationship(back_populates="watches")
+
     __table_args__ = (
-        UniqueConstraint("company_key", "project_key", name="uq_watch_entity"),
+        UniqueConstraint("account_id", "company_key", "project_key", name="uq_watch_entity"),
         CheckConstraint("length(company_key) > 0", name="ck_watch_company_key"),
         Index("ix_watch_company_key", "company_key"),
+        Index("ix_watch_account_id", "account_id"),
     )
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
-        return f"<Watch {self.entry!r}>"
+        return f"<Watch {self.entry!r} of account {self.account_id}>"

@@ -6,7 +6,8 @@ non-null fact traces back to a source URL with a confidence score**.
 SQLite is the source of truth. Ingestion is deterministic and re-runnable. Three
 interfaces over one dataset: the CLI is primary, `tracker tui` is a full-screen
 terminal interface with every command in it, and `tracker serve` exposes the same
-dataset as a live console for anyone who would rather click than type.
+dataset as a live console for anyone who would rather read than type — sign-in
+optional on loopback, one watchlist per person once it is not.
 
 ## What it does
 
@@ -66,15 +67,17 @@ tracker list
 +----+-----------+------------------+--------------------+--------------+----+------------+------+-----+
 | id | company   | name             | location           | phase        | MW | investment | conf | src |
 +----+-----------+------------------+--------------------+--------------+----+------------+------+-----+
-|  1 | Microsoft | Fairwater        | Mount Pleasant, WI | construction |  - |          - |  2   |   1 |
-|  2 | xAI       | Colossus         | Memphis, TN        | operational  |  - |          - |  2   |   1 |
-|  3 | Crusoe    | Stargate Abilene | Abilene, TX        | construction |  - |          - |  2   |   1 |
+|  1 | Microsoft | Fairwater        | Mount Pleasant, WI | construction |  - |          - |  0   |   1 |
+|  2 | xAI       | Colossus         | Memphis, TN        | operational  |  - |          - |  0   |   1 |
+|  3 | Crusoe    | Stargate Abilene | Abilene, TX        | construction |  - |          - |  0   |   1 |
 +----+-----------+------------------+--------------------+--------------+----+------------+------+-----+
 ```
 
 The MW and investment columns are empty because `seed/sample-projects.json` ships
 with every figure as the literal string `PLACEHOLDER`. That is deliberate — see
-[The seed file](docs/design-decisions.md#the-seed-file).
+[The seed file](docs/design-decisions.md#the-seed-file). The confidence column is
+`0` for the same reason: a placeholder URL is not a citation, so it earns nothing,
+which is what stops a real project inheriting trust from a fake one.
 
 Then the real loop, which needs one API key — or a local Ollama model instead,
 `--llm-provider ollama` on any command that spends LLM calls — see
@@ -86,8 +89,9 @@ tracker discover      # poll news feeds, queue candidates
 tracker ingest crawl  # extract the tracked fields, gated on quoted evidence
 tracker gaps          # see what is thin
 tracker coverage      # which operators we hold no rows for at all
-tracker watch add xAI # the companies you want to be told about
-tracker digest        # what changed on them, good and bad
+tracker users add you@example.com   # who may read the console
+tracker watch add xAI --user you@example.com   # what you want to be told about
+tracker digest --user you@example.com          # what changed on it, good and bad
 tracker serve         # the same dataset as a live console
 ```
 
@@ -142,7 +146,7 @@ This file is the tour. The detail lives in [`docs/`](docs/README.md):
 | [Backfill and gaps](docs/backfill-and-gaps.md) | Finding thin data and filling it — capacity blocks, county and coordinates |
 | [Analysis](docs/analysis.md) | Who is buying the capacity, what could stop these projects, slippage |
 | [The terminal interface](docs/tui.md) | `tracker tui` — the six panes, why the run pane cannot fall behind the CLI, verifying it over ssh |
-| [The console, and exporting](docs/console-and-export.md) | The live console, driving it without a browser, publishing it |
+| [The console, and exporting](docs/console-and-export.md) | The live console, accounts and invites, driving it without a browser, publishing it |
 | [Architecture](docs/architecture.md) | How the CLI, the database and the console fit together |
 | [Design decisions](docs/design-decisions.md) | Why it works the way it does, and where it diverges from the PRD |
 | [Government sources](docs/government-sources.md) | Four routes to bulk permit data, all measured, all rejected — read before going looking |
@@ -240,7 +244,7 @@ directory, which is what lets `tracker init` work from anywhere.
 .venv/Scripts/python -m pytest
 ```
 
-2,442 tests, about seven minutes. **A fresh clone with no API key and no network access
+2,557 tests, about twelve minutes. **A fresh clone with no API key and no network access
 must produce a green run.** Tests that would hit the network or spend DeepSeek
 tokens are marked `network` / `llm` and deselected by default; run them
 explicitly with `-m network` or `-m llm`.

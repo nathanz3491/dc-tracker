@@ -14,10 +14,8 @@ import datetime as dt
 import json
 import os
 import re
-import struct
 import sys
 import threading
-import time
 from http.client import HTTPConnection
 from pathlib import Path
 
@@ -85,7 +83,7 @@ def server(seeded_db):
     """A live console on an ephemeral loopback port."""
     from http.server import ThreadingHTTPServer
 
-    console = Console(seeded_db, allow_write=True)
+    console = Console(seeded_db)
     handler = type("Bound", (Handler,), {"console": console})
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     httpd.daemon_threads = True
@@ -333,12 +331,10 @@ def test_reading_the_dataset_does_not_write(server, seeded_db, logical_snapshot)
     before = logical_snapshot(seeded_db)
     for path in (
         "/api/dataset",
-        "/api/commands",
-        "/api/runs",
         "/api/health",
-        "/api/discover",
         "/api/publishers",
         "/api/updates",
+        "/api/claims?project=1",
     ):
         assert request(address, path)[0] == 200
     assert logical_snapshot(seeded_db) == before
@@ -383,42 +379,6 @@ def test_the_updates_route_refuses_a_window_it_cannot_read(server):
     assert request(address, "/api/updates?since=lastweek")[0] == 400
 
 
-def test_two_consoles_one_bundle(server):
-    """`/` reads the dataset, `/dev` runs things, and the page says which it is."""
-    address, _ = server
-    read_status, read_body = request(address, "/")
-    dev_status, dev_body = request(address, "/dev")
-    assert (read_status, dev_status) == (200, 200)
-    assert 'window.DC_MODE="read"' in read_body
-    assert 'window.DC_MODE="dev"' in dev_body
-    # One bundle: the shells differ by a flag, not by which script they load.
-    assert "/static/app.js" in read_body and "/static/app.js" in dev_body
-
-
-def test_the_dev_shell_grants_no_capability_of_its_own(seeded_db):
-    """Asking for `/dev` is a display choice, not a privilege escalation.
-
-    What the dev console can do is governed by `allow_write` on the server, so a
-    read-only console serves the page and refuses the run.
-    """
-    from http.server import ThreadingHTTPServer
-
-    console = Console(seeded_db, allow_write=False)
-    handler = type("Bound", (Handler,), {"console": console})
-    httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    httpd.daemon_threads = True
-    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
-    thread.start()
-    try:
-        address = httpd.server_address
-        assert request(address, "/dev")[0] == 200
-        status, _ = request(address, "/api/run", method="POST", body={"cmd": "stats", "flags": {}})
-        assert status == 403
-    finally:
-        httpd.shutdown()
-        httpd.server_close()
-
-
 def test_a_published_console_can_read_with_a_model_without_being_writable(seeded_db):
     """The two risks are different, so they are two flags.
 
@@ -427,14 +387,14 @@ def test_a_published_console_can_read_with_a_model_without_being_writable(seeded
     gated on `allow_write` anyway, so the published console refused the one thing
     it could safely offer while `--no-run` was doing double duty.
 
-    `allow_ai` follows `allow_write` unless a deployment says otherwise, which is
-    what lets a public read-only console answer a question without also handing a
-    browser the command box.
+    That flag is gone — nothing here writes but a watchlist — and this is what is
+    left of the argument: spending is still its own switch, so a console can be
+    published with the panels off without that meaning anything else.
     """
     from http.server import ThreadingHTTPServer
 
-    console = Console(seeded_db, allow_write=False, allow_ai=True)
-    assert console.allow_ai and not console.allow_write
+    console = Console(seeded_db, allow_ai=True)
+    assert console.allow_ai
     handler = type("Bound", (Handler,), {"console": console})
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     httpd.daemon_threads = True
@@ -442,9 +402,9 @@ def test_a_published_console_can_read_with_a_model_without_being_writable(seeded
     thread.start()
     try:
         address = httpd.server_address
-        # Spawning a command is still refused — that is the half that stays shut.
+        # There is no command to spawn any more; the route is gone entirely.
         status, _ = request(address, "/api/run", method="POST", body={"cmd": "stats", "flags": {}})
-        assert status == 403
+        assert status == 404
         # The model panel is no longer refused *for being read-only*. It may still
         # fail for want of a key, which is a different answer and not a 403.
         status, _ = request(
@@ -454,18 +414,10 @@ def test_a_published_console_can_read_with_a_model_without_being_writable(seeded
         # And the page is told, so the panel renders as a button rather than a shrug.
         dataset = request(address, "/api/dataset")[1]
         assert dataset["allow_ai"] is True
-        assert dataset["allow_write"] is False
+        assert "allow_write" not in dataset, "there is nothing left for it to describe"
     finally:
         httpd.shutdown()
         httpd.server_close()
-
-
-def test_the_ai_flag_follows_run_unless_it_is_given(seeded_db):
-    """Nothing changes for anyone who does not ask: the local default is unchanged."""
-    assert Console(seeded_db, allow_write=True).allow_ai is True
-    assert Console(seeded_db, allow_write=False).allow_ai is False
-    assert Console(seeded_db, allow_write=False, allow_ai=True).allow_ai is True
-    assert Console(seeded_db, allow_write=True, allow_ai=False).allow_ai is False
 
 
 def test_the_api_index_lists_every_route_the_handler_serves(server):
@@ -482,7 +434,7 @@ def test_the_api_index_lists_every_route_the_handler_serves(server):
     address, _ = server
     status, data = request(address, "/api")
     assert status == 200
-    assert data["consoles"].keys() == {"/", "/dev"}
+    assert "consoles" not in data, "there is one face now, so the index does not list two"
 
     documented = {route.split(" ", 1)[1] for route in data["routes"]}
     source = (Path(server_module.__file__)).read_text(encoding="utf-8")
@@ -547,15 +499,15 @@ def test_every_view_has_its_own_url(server):
     and swapping.
     """
     address, _ = server
-    for path in ("/updates", "/projects", "/sources", "/map", "/capex"):
+    for path in ("/updates", "/projects", "/sources", "/map", "/capex", "/help"):
         status, body = request(address, path)
         assert status == 200, path
         assert f'window.DC_VIEW="{path.strip("/")}"' in body
-        assert 'window.DC_MODE="read"' in body
 
-    status, body = request(address, "/dev/pipeline")
-    assert status == 200
-    assert 'window.DC_MODE="dev"' in body and 'window.DC_VIEW="pipeline"' in body
+    # `/dev` was the second face, and it went with the runner. It must 404 rather
+    # than fall through to the console, or a stale bookmark reads as a broken link.
+    for gone in ("/dev", "/dev/", "/dev/pipeline", "/dev/commands"):
+        assert request(address, gone)[0] == 404, gone
 
 
 def test_an_unknown_path_is_a_404_not_the_console(server):
@@ -572,9 +524,17 @@ def test_the_server_and_the_front_end_agree_on_the_view_names(server):
     the other."""
     app = (assets.STATIC_ROOT / "app.js").read_text(encoding="utf-8")
     for view in server_module.READ_VIEWS:
-        assert f'["{view}", "' in app, f"{view} is routed but not in USER_VIEWS"
-    for view in server_module.DEV_VIEWS:
-        assert f'["{view}", "' in app, f"{view} is routed but not in DEV_VIEWS"
+        assert f'["{view}", "' in app, f"{view} is routed but not in VIEWS"
+    # And the other direction, which is the one that rotted: a view drawn in the
+    # nav but not routed is a tab whose own URL 404s. Read out of the `VIEWS`
+    # array specifically — the drawer's tabs are written the same way and are not
+    # routes, so a looser pattern picks up `stats`, `blocks` and `risks`.
+    import re
+
+    block = re.search(r"const VIEWS = \[(.*?)\];", app, re.S)
+    assert block, "app.js no longer declares a VIEWS array"
+    drawn = set(re.findall(r'\["([a-z]+)", "', block.group(1)))
+    assert drawn == set(server_module.READ_VIEWS), f"nav={drawn} routed={server_module.READ_VIEWS}"
 
 
 def test_the_claim_tables_are_not_in_the_list_payload(server):
@@ -863,15 +823,6 @@ def test_an_llm_command_needs_its_name_typed_back(seeded_db):
         runner.start("sync", {"--limit": 1}, confirm="yes")
 
 
-def test_a_free_command_needs_no_confirmation(server):
-    address, _ = server
-    status, body = request(address, "/api/run", "POST", {"cmd": "version", "flags": {}})
-    # `version` is blocked from the console, which is itself the assertion that
-    # the block list is consulted before anything is spawned.
-    assert status == 400
-    assert "cannot be run" in body["error"]
-
-
 def test_a_second_run_is_refused_rather_than_queued(seeded_db, monkeypatch):
     """SQLite takes one writer; a second run would die partway through."""
     runner = Runner(seeded_db)
@@ -879,32 +830,6 @@ def test_a_second_run_is_refused_rather_than_queued(seeded_db, monkeypatch):
     with pytest.raises(Busy) as exc:
         runner.start("gaps", {})
     assert "still running" in str(exc.value)
-
-
-def test_run_streams_output_and_records_history(server, seeded_db):
-    from tracker.webui import runs as runs_mod
-
-    address, _ = server
-    status, body = request(address, "/api/run", "POST", {"cmd": "gaps", "flags": {}})
-    assert status == 202, body
-    run_id = body["run"]["id"]
-
-    # The stream ends when the subprocess does; reading it to completion is the
-    # wait.
-    conn = HTTPConnection(*address, timeout=120)
-    conn.request("GET", f"/api/run/{run_id}/stream")
-    stream = conn.getresponse().read().decode("utf-8")
-    conn.close()
-    assert '"type": "end"' in stream or '"type":"end"' in stream
-
-    record = runs_mod.read_log(seeded_db, run_id)
-    assert record["status"] == "ok"
-    assert record["exit_code"] == 0
-    # The echoed line is the real argv, `--db` and all: a log that abbreviates
-    # what ran is a log you cannot reproduce from.
-    assert record["lines"][0].startswith("$ tracker --db ")
-    assert record["lines"][0].endswith(" gaps")
-    assert any("mw_built" in line for line in record["lines"])
 
 
 def test_writing_a_briefing_costs_money_and_says_so(server):
@@ -953,54 +878,6 @@ def test_a_briefing_already_written_needs_no_confirmation(server, seeded_db):
     assert status == 200
     assert body["cached"] is True
     assert "short briefing" in body["text"]
-
-
-def test_a_reader_that_walks_away_mid_stream_is_not_an_error(server, caplog):
-    """Closing the tab during a run must not produce a traceback.
-
-    Over a Cloudflare tunnel this is ordinary: the edge drops idle connections and
-    the browser's EventSource reconnects, so one crawl produces several aborted
-    streams. It was logging two tracebacks each — one for the aborted write, and
-    one for the failed attempt to send a 500 down the same dead socket.
-
-    The narrow cause was platform. Windows raises `ConnectionAbortedError`
-    (WinError 10053) where POSIX raises `BrokenPipeError` or
-    `ConnectionResetError`, and only the latter two were caught, so the handler
-    caught nothing on the platform this runs on.
-    """
-    import logging
-    import socket as socket_mod
-
-    address, _ = server
-    status, body = request(address, "/api/run", "POST", {"cmd": "gaps", "flags": {}})
-    assert status == 202, body
-    run_id = body["run"]["id"]
-
-    with caplog.at_level(logging.ERROR, logger="tracker.webui.server"):
-        # Attach, read a little, then vanish without closing politely — a reset
-        # rather than a shutdown, which is what a dropped tunnel looks like.
-        raw = socket_mod.create_connection(address, timeout=30)
-        raw.sendall(f"GET /api/run/{run_id}/stream HTTP/1.1\r\nHost: x\r\n\r\n".encode())
-        raw.recv(64)
-        raw.setsockopt(socket_mod.SOL_SOCKET, socket_mod.SO_LINGER, struct.pack("ii", 1, 0))
-        raw.close()
-
-        # The run is a subprocess and finishes regardless; wait it out so the
-        # server has tried and failed to write to the socket we just killed.
-        deadline = time.monotonic() + 60
-        while time.monotonic() < deadline:
-            _s, runs_body = request(address, "/api/runs")
-            if (runs_body.get("current") or {}).get("status") != "running":
-                break
-            time.sleep(0.5)
-
-    assert not [r for r in caplog.records if r.levelno >= logging.ERROR], (
-        "a client hanging up is normal operation, not a server error:\n"
-        + "\n".join(r.getMessage() for r in caplog.records)
-    )
-
-    # And the server is still answering.
-    assert request(address, "/api/health")[0] == 200
 
 
 def test_apologising_to_a_dead_socket_does_not_raise_again():
@@ -1069,25 +946,6 @@ def test_a_run_targets_the_database_the_console_is_serving(seeded_db, tmp_path):
     assert argv[1:4] == ["-m", "tracker", "--db"]
     assert argv[4] == str(seeded_db)
     assert argv[5] == "gaps"
-
-
-def test_a_read_only_console_refuses_to_run_anything(seeded_db):
-    from http.server import ThreadingHTTPServer
-
-    console = Console(seeded_db, allow_write=False)
-    handler = type("Bound", (Handler,), {"console": console})
-    httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    httpd.daemon_threads = True
-    threading.Thread(target=httpd.serve_forever, daemon=True).start()
-    try:
-        status, body = request(
-            httpd.server_address, "/api/run", "POST", {"cmd": "gaps", "flags": {}}
-        )
-        assert status == 403
-        assert "read-only" in body["error"]
-    finally:
-        httpd.shutdown()
-        httpd.server_close()
 
 
 # --- colour -----------------------------------------------------------------
@@ -1208,40 +1066,33 @@ def test_the_child_is_told_how_wide_its_reader_is():
     assert runner_mod._child_env(96)["COLUMNS"] == "96"
 
 
-def test_the_width_reaches_the_subprocess(tmp_path, monkeypatch):
-    """Passed to `start`, and still there by the time anything is spawned."""
-    from tracker.db import init_db
-    from tracker.webui import runner as runner_mod
-
-    db = tmp_path / "t.db"
-    init_db(db)
-    runner = runner_mod.Runner(db)
-    seen: dict[str, object] = {}
-
-    def fake_spawn(run, argv, columns=None):
-        seen["columns"] = columns
-        return 0, None
-
-    monkeypatch.setattr(runner, "_spawn", fake_spawn)
-    run = runner.start("gaps", {}, columns=137)
-    for _ in range(200):
-        if run.status != "running":
-            break
-        time.sleep(0.01)
-    assert seen["columns"] == 137
-
-
 # --- the gate ---------------------------------------------------------------
 
 PASSWORD = "correct horse battery"
+EMAIL = "reader@example.com"
+
+
+def _account(db_path, email=EMAIL, password=PASSWORD):
+    """One account in `db_path`, created the way the CLI creates one."""
+    from tracker import accounts
+    from tracker.db import open_db, session_scope
+
+    with session_scope(open_db(db_path, readonly=False)) as session:
+        return accounts.create(session, email, password).id
 
 
 @pytest.fixture
 def gated(seeded_db):
-    """A console with a password, on an ephemeral loopback port."""
+    """A console with one account on it, on an ephemeral loopback port.
+
+    **An account is what closes the gate**, where a password used to be. There is
+    no flag for it: the server counts rows, so a test that wants an open console
+    simply does not make one — see `test_no_accounts_means_no_gate`.
+    """
     from http.server import ThreadingHTTPServer
 
-    console = Console(seeded_db, allow_write=True, password=PASSWORD)
+    _account(seeded_db)
+    console = Console(seeded_db)
     handler = type("Bound", (Handler,), {"console": console})
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     httpd.daemon_threads = True
@@ -1267,8 +1118,8 @@ def raw(address, path, method="GET", body=None, cookie=None, headers=None):
     return result
 
 
-def sign_in(address, password=PASSWORD):
-    status, headers, _ = raw(address, "/api/login", "POST", {"password": password})
+def sign_in(address, password=PASSWORD, email=EMAIL):
+    status, headers, _ = raw(address, "/api/login", "POST", {"email": email, "password": password})
     cookie = headers.get("Set-Cookie", "").split(";")[0]
     return status, cookie
 
@@ -1277,8 +1128,8 @@ def sign_in(address, password=PASSWORD):
     "path",
     [
         "/api/dataset",
-        "/api/commands",
-        "/api/runs",
+        "/api/updates",
+        "/api/claims",
         "/api/health",
         "/static/app.js",
         "/static/app.css",
@@ -1308,7 +1159,7 @@ def test_a_navigation_gets_the_form_but_an_asset_gets_a_401(gated):
     """
     address, _ = gated
     status, _, body = raw(address, "/")
-    assert status == 200 and "This console runs commands" in body
+    assert status == 200 and "Sign in" in body
     assert raw(address, "/static/app.js")[0] == 401
 
 
@@ -1321,11 +1172,11 @@ def test_the_login_page_leaks_nothing(gated):
 
 def test_signing_in_sets_an_httponly_lax_session_cookie(gated):
     address, _ = gated
-    status, headers, _ = raw(address, "/api/login", "POST", {"password": PASSWORD})
+    status, headers, _ = raw(address, "/api/login", "POST", {"email": EMAIL, "password": PASSWORD})
     assert status == 200
     cookie = headers["Set-Cookie"]
     assert "HttpOnly" in cookie, "a script must not be able to read the session"
-    assert "SameSite=Lax" in cookie, "this is what blocks a cross-site POST to /api/run"
+    assert "SameSite=Lax" in cookie, "this is what blocks a cross-site POST to /api/watch"
     assert "Path=/" in cookie
     # Not marked Secure here: the test connection is plain http, and marking it
     # Secure would mean the browser never sent it back.
@@ -1335,11 +1186,11 @@ def test_signing_in_sets_an_httponly_lax_session_cookie(gated):
 def test_a_session_opens_every_route(gated):
     address, _ = gated
     _, cookie = sign_in(address)
-    for path in ("/api/dataset", "/api/commands", "/api/health", "/static/app.js"):
+    for path in ("/api/dataset", "/api/updates", "/api/health", "/static/app.js"):
         status, _, _ = raw(address, path, cookie=cookie)
         assert status == 200, path
     status, _, body = raw(address, "/", cookie=cookie)
-    assert "This console runs commands" not in body, "still on the login page"
+    assert "Redeem an invite" not in body, "still on the login page"
 
 
 def test_a_wrong_password_is_401_and_grants_nothing(gated):
@@ -1366,23 +1217,15 @@ def test_signing_out_revokes_the_session(gated):
     assert raw(address, "/api/dataset", cookie=cookie)[0] == 401
 
 
-def test_a_run_cannot_be_started_without_a_session(gated):
-    """The whole reason the gate exists."""
-    address, _ = gated
-    status, _, body = raw(address, "/api/run", "POST", {"cmd": "gaps", "flags": {}})
-    assert status == 401
-    assert "sign in" in body
-
-
 def test_a_cross_site_post_is_refused(gated):
     """Second lock. SameSite=Lax is the first, but it lives in the browser."""
     address, _ = gated
     _, cookie = sign_in(address)
     status, _, body = raw(
         address,
-        "/api/run",
+        "/api/watch",
         "POST",
-        {"cmd": "gaps", "flags": {}},
+        {"action": "add", "entry": "xAI"},
         cookie=cookie,
         headers={"Origin": "https://evil.example"},
     )
@@ -1400,11 +1243,11 @@ def test_repeated_failures_lock_the_gate(gated):
     address, console = gated
     for _ in range(console.gate.max_failures):
         assert sign_in(address, "wrong")[0] == 401
-    status, _, body = raw(address, "/api/login", "POST", {"password": "wrong"})
+    status, _, body = raw(address, "/api/login", "POST", {"email": EMAIL, "password": "wrong"})
     assert status == 429
     assert "Locked" in body
     # And the lockout holds even for the right password, or it is not a lockout.
-    assert raw(address, "/api/login", "POST", {"password": PASSWORD})[0] == 429
+    assert raw(address, "/api/login", "POST", {"email": EMAIL, "password": PASSWORD})[0] == 429
 
 
 def test_the_gate_closes_globally_not_just_per_client(gated):
@@ -1423,14 +1266,14 @@ def test_the_gate_closes_globally_not_just_per_client(gated):
             address,
             "/api/login",
             "POST",
-            {"password": "wrong"},
+            {"email": EMAIL, "password": "wrong"},
             headers={"CF-Connecting-IP": f"203.0.113.{i % 250}"},
         )
     status, _, body = raw(
         address,
         "/api/login",
         "POST",
-        {"password": PASSWORD},
+        {"email": EMAIL, "password": PASSWORD},
         headers={"CF-Connecting-IP": "198.51.100.7"},
     )
     assert status == 429, "a fresh address walked straight past the lockout"
@@ -1447,20 +1290,43 @@ def test_a_correct_password_clears_the_global_counter(gated):
     assert console.gate._global.count == 0
 
 
-def test_no_password_configured_means_no_gate(server):
-    """Loopback default: reaching 127.0.0.1 already means having the machine."""
+def test_no_accounts_means_no_gate(server):
+    """Loopback default: reaching 127.0.0.1 already means having the machine.
+
+    This replaced "no password configured", and the shape of the answer changed
+    with it: there is no flag to read, so the server counts rows. `seeded_db` has
+    no accounts on it, which is why `server` opens straight in and `gated` — the
+    same fixture plus one account — does not.
+    """
     address, console = server
-    assert console.gate.required is False
+    assert console.auth_required is False
     assert request(address, "/api/dataset")[0] == 200
+
+
+def test_creating_an_account_closes_the_gate_without_a_restart(server, seeded_db):
+    """`tracker users add` runs in another process.
+
+    A flag read at startup would leave a published console open until somebody
+    restarted it, which is the trap `Console.auth_required` exists to avoid. The
+    staleness window is `AUTH_CACHE_S`, reached past here rather than waited out:
+    sleeping five seconds per run to prove a cache exists is a bad trade.
+    """
+    address, console = server
+    assert request(address, "/api/dataset")[0] == 200
+
+    _account(seeded_db)
+    console._auth_checked_at = 0.0  # the cache, expired
+    assert console.auth_required is True
+    assert request(address, "/api/dataset")[0] == 401
 
 
 def test_the_password_check_is_constant_time():
     """Compare with hmac, so the secret cannot be recovered from timing."""
     import inspect
 
-    from tracker.webui import auth
+    from tracker import accounts
 
-    source = inspect.getsource(auth.Gate.attempt)
+    source = inspect.getsource(accounts.verify_password)
     assert "compare_digest" in source
     assert "==" not in source.split("compare_digest")[1].split("\n")[0]
 
@@ -2498,18 +2364,112 @@ def test_health_reports_the_commit_it_is_serving(server):
 
 
 # --- the watchlist, the one write on the reading console --------------------
+#
+# **Every test here needs somebody signed in**, which is the change: a watchlist
+# belongs to an account, so there is no such thing as "the" list any more. The
+# `reader` fixture is a console with one account on it and a cookie for that
+# account; `as_reader` is `request` with the cookie attached.
 
 
-def test_the_watchlist_write_lands_in_the_database(server, seeded_db):
+@pytest.fixture
+def reader(seeded_db):
+    """A console with one account, and a session cookie for it."""
+    from http.server import ThreadingHTTPServer
+
+    account_id = _account(seeded_db)
+    console = Console(seeded_db)
+    handler = type("Bound", (Handler,), {"console": console})
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    httpd.daemon_threads = True
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        address = httpd.server_address
+        status, cookie = sign_in(address)
+        assert status == 200, "the fixture could not sign in"
+        yield address, console, cookie, account_id
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def as_reader(address, cookie, path, method="GET", body=None):
+    """`request`, with a session on it."""
+    status, _headers, payload = raw(address, path, method, body, cookie=cookie)
+    try:
+        return status, json.loads(payload)
+    except ValueError:
+        return status, payload
+
+
+def test_a_watchlist_needs_an_account_not_merely_a_session(server):
+    """On a console with nobody signed in there is no list to edit.
+
+    An unowned watch is the shared list that accounts exist to replace, so the
+    refusal says that rather than inventing an owner — and `/api/updates` still
+    answers, with the whole database, which is what an anonymous reader wants.
+    """
+    address, _ = server
+    status, body = request(
+        address, "/api/watch", method="POST", body={"action": "add", "entry": "xAI"}
+    )
+    assert status == 403
+    assert "belongs to an account" in body["error"]
+
+    _status, updates = request(address, "/api/updates")
+    assert updates["watching_everything"] is True
+    assert updates["allow_watch"] is False, "so the page draws no editor"
+
+
+def test_two_readers_do_not_see_each_other_s_list(seeded_db):
+    """The property the whole change is for."""
+    from http.server import ThreadingHTTPServer
+
+    _account(seeded_db, "alice@example.com")
+    _account(seeded_db, "bob@example.com")
+    console = Console(seeded_db)
+    handler = type("Bound", (Handler,), {"console": console})
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    httpd.daemon_threads = True
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        address = httpd.server_address
+        _, alice = sign_in(address, email="alice@example.com")
+        _, bob = sign_in(address, email="bob@example.com")
+
+        as_reader(address, alice, "/api/watch", "POST", {"action": "add", "entry": "Microsoft"})
+        _status, hers = as_reader(
+            address, bob, "/api/watch", "POST", {"action": "add", "entry": "xAI"}
+        )
+        assert [w["entry"] for w in hers["watchlist"]] == ["xAI"], "bob sees only his"
+
+        _status, mine = as_reader(address, alice, "/api/updates?days=36500")
+        assert [w["entry"] for w in mine["watchlist"]] == ["Microsoft"]
+
+        # And one cannot drop the other's entry.
+        _status, dropped = as_reader(
+            address, bob, "/api/watch", "POST", {"action": "remove", "entry": "Microsoft"}
+        )
+        assert dropped["removed"] is False
+        _status, still = as_reader(address, alice, "/api/updates?days=36500")
+        assert [w["entry"] for w in still["watchlist"]] == ["Microsoft"]
+
+        # Nor does the payload carry whose it is.
+        assert "owner" not in still["watchlist"][0]
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_the_watchlist_write_lands_in_the_database(reader, seeded_db):
     """The page and `tracker watch` are one list, so this checks the row itself."""
     from sqlalchemy import select
 
     from tracker.db import open_db, session_scope
     from tracker.models import Watch
 
-    address, _ = server
-    status, body = request(
-        address, "/api/watch", method="POST", body={"action": "add", "entry": "Microsoft"}
+    address, _console, cookie, account_id = reader
+    status, body = as_reader(
+        address, cookie, "/api/watch", "POST", {"action": "add", "entry": "Microsoft"}
     )
     assert status == 200
     assert body["created"] is True
@@ -2517,15 +2477,17 @@ def test_the_watchlist_write_lands_in_the_database(server, seeded_db):
 
     with session_scope(open_db(seeded_db), commit=False) as session:
         rows = session.scalars(select(Watch)).all()
-        assert [(r.entry, r.company_key) for r in rows] == [("Microsoft", "microsoft")]
+        assert [(r.entry, r.company_key, r.account_id) for r in rows] == [
+            ("Microsoft", "microsoft", account_id)
+        ], "the row is filed under whoever wrote it"
 
     # And the digest narrows to it, which is the whole point of writing it.
-    _status, updates = request(address, "/api/updates?days=36500")
+    _status, updates = as_reader(address, cookie, "/api/updates?days=36500")
     assert updates["watching_everything"] is False
     assert [e["entry"] for e in updates["entities"]] == ["Microsoft"]
 
 
-def test_the_watchlist_write_answers_rather_than_hanging(server):
+def test_the_watchlist_write_answers_rather_than_hanging(reader):
     """It shipped reading the request body twice, which blocks on `rfile` forever.
 
     `do_POST` reads the body once, up front, and every route below takes that
@@ -2533,25 +2495,25 @@ def test_the_watchlist_write_answers_rather_than_hanging(server):
     it. A 30-second client timeout in `request` is what makes this a failure rather
     than a hung suite.
     """
-    address, _ = server
-    status, _body = request(
-        address, "/api/watch", method="POST", body={"action": "add", "entry": "Google"}
+    address, _console, cookie, _id = reader
+    status, _body = as_reader(
+        address, cookie, "/api/watch", "POST", {"action": "add", "entry": "Google"}
     )
     assert status == 200
 
 
-def test_removing_a_watch(server):
-    address, _ = server
-    request(address, "/api/watch", method="POST", body={"action": "add", "entry": "Meta"})
-    status, body = request(
-        address, "/api/watch", method="POST", body={"action": "remove", "entry": "meta"}
+def test_removing_a_watch(reader):
+    address, _console, cookie, _id = reader
+    as_reader(address, cookie, "/api/watch", "POST", {"action": "add", "entry": "Meta"})
+    status, body = as_reader(
+        address, cookie, "/api/watch", "POST", {"action": "remove", "entry": "meta"}
     )
     assert status == 200 and body["removed"] is True and body["watchlist"] == []
 
 
-def test_the_watchlist_write_refuses_what_it_cannot_store(server):
+def test_the_watchlist_write_refuses_what_it_cannot_store(reader):
     """A 400 with a reason, not a 500 and not a silent no-op."""
-    address, _ = server
+    address, _console, cookie, _id = reader
     for body in (
         {"action": "sudo", "entry": "xAI"},
         {"action": "add", "entry": ""},
@@ -2559,15 +2521,20 @@ def test_the_watchlist_write_refuses_what_it_cannot_store(server):
         {"action": "add", "entry": " | Colossus"},
         {"action": "add", "entry": "xAI", "note": {"not": "a string"}},
     ):
-        status, _ = request(address, "/api/watch", method="POST", body=body)
+        status, _ = as_reader(address, cookie, "/api/watch", "POST", body)
         assert status == 400, body
 
 
 def test_the_watchlist_write_can_be_switched_off(seeded_db):
-    """`--no-watch-edits` for a deployment that wants the page strictly read-only."""
+    """`--no-watch-edits` for a deployment that wants the page strictly read-only.
+
+    It wins over having an account, which is the ordering that matters: the flag
+    is the operator's decision about the deployment and a session is not.
+    """
     from http.server import ThreadingHTTPServer
 
-    console = Console(seeded_db, allow_write=False, allow_watch=False)
+    _account(seeded_db)
+    console = Console(seeded_db, allow_watch=False)
     handler = type("Bound", (Handler,), {"console": console})
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     httpd.daemon_threads = True
@@ -2575,27 +2542,30 @@ def test_the_watchlist_write_can_be_switched_off(seeded_db):
     thread.start()
     try:
         address = httpd.server_address
-        status, _ = request(
-            address, "/api/watch", method="POST", body={"action": "add", "entry": "xAI"}
+        _, cookie = sign_in(address)
+        status, _ = as_reader(
+            address, cookie, "/api/watch", "POST", {"action": "add", "entry": "xAI"}
         )
         assert status == 403
         # The page is told, so it does not render an editor that cannot work.
-        _status, updates = request(address, "/api/updates")
+        _status, updates = as_reader(address, cookie, "/api/updates")
         assert updates["allow_watch"] is False
     finally:
         httpd.shutdown()
         httpd.server_close()
 
 
-def test_a_read_only_console_still_takes_a_watch(seeded_db):
-    """`--no-run` blocks commands. A watch is not a command, and that is the point.
+def test_the_one_write_is_still_a_write(seeded_db):
+    """The console reads, with exactly one exception, and this is it.
 
-    The flag exists because these are different risks: this write cannot touch a
-    project, a citation or a figure, cannot start a run and cannot spend a token.
+    A watch cannot touch a project, a citation or a figure, cannot start a run —
+    there is nothing left to start — and cannot spend a token. That narrowness is
+    the whole argument for allowing it at all on a published page.
     """
     from http.server import ThreadingHTTPServer
 
-    console = Console(seeded_db, allow_write=False)
+    _account(seeded_db)
+    console = Console(seeded_db)
     handler = type("Bound", (Handler,), {"console": console})
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     httpd.daemon_threads = True
@@ -2604,13 +2574,14 @@ def test_a_read_only_console_still_takes_a_watch(seeded_db):
     try:
         address = httpd.server_address
         assert console.allow_watch is True
-        status, _ = request(
-            address, "/api/watch", method="POST", body={"action": "add", "entry": "xAI"}
+        _, cookie = sign_in(address)
+        status, _ = as_reader(
+            address, cookie, "/api/watch", "POST", {"action": "add", "entry": "xAI"}
         )
         assert status == 200
-        # ... and still refuses to run anything.
-        status, _ = request(address, "/api/run", method="POST", body={"cmd": "stats", "flags": {}})
-        assert status == 403
+        # ... and there is no run route to reach at all.
+        status, _ = as_reader(address, cookie, "/api/run", "POST", {"cmd": "stats", "flags": {}})
+        assert status == 404
     finally:
         httpd.shutdown()
         httpd.server_close()

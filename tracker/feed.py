@@ -648,12 +648,20 @@ def digest(
     since: dt.datetime | None = None,
     days: int | None = None,
     limit: int | None = None,
+    account_id: int | None = None,
 ) -> Digest:
     """The whole page, for the watchlist as it stands.
 
     With no watchlist the whole database is read and `watching_everything` says so.
     That is the useful default rather than an empty page: a digest that shows
     nothing until somebody configures it teaches nobody what it is for.
+
+    `account_id` names whose list to read; None is every account's, which is what
+    the CLI wants (`tracker digest` without `--user`). The existing
+    `watching_everything` fallback is what covers the console's *other* empty case
+    — a visitor to a console with no accounts at all, who has no list to read and
+    gets the whole database rather than a blank page. No new branch was needed for
+    it, which is why the anonymous path is worth having at all.
     """
     if since is None:
         since = dt.datetime.combine(
@@ -681,7 +689,7 @@ def digest(
     }
     last_crawl = _as_datetime(session.scalar(select(func.max(Source.fetched_at))))
 
-    entities = watchlist.watched(session)
+    entities = watchlist.watched(session, account_id=account_id)
     collected: list[Signal] = []
     digests: list[EntityDigest] = []
     watched_ids: set[int] = set()

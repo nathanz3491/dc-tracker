@@ -28,6 +28,7 @@ from rich.table import Table
 from sqlalchemy import func, select
 
 from tracker import __version__
+from tracker.accounts import DEFAULT_INVITE_DAYS
 from tracker.config import get_settings, install_root
 from tracker.db import (
     AlreadyRunning,
@@ -103,8 +104,18 @@ app.add_typer(risks_app)
 #: The watchlist the updates page is about: bare `tracker watch` lists it, `add`
 #: and `rm` edit it. The console's landing page writes the same rows through the
 #: same module, so a watch set on the page and a watch set here are one thing.
+#:
+#: Every row belongs to an account, and this side reads them all: a terminal on the
+#: host is looking at the database, not at one person's slice of it. `--user`
+#: narrows to one, and is required to write, because writing to the wrong person's
+#: list is invisible from here.
 watch_app = typer.Typer(name="watch", invoke_without_command=True)
 app.add_typer(watch_app)
+
+#: Who may sign in to the console. Accounts are made here and nowhere else — a
+#: browser can only create one by redeeming an invite that was minted here.
+users_app = typer.Typer(name="users", invoke_without_command=True)
+app.add_typer(users_app)
 
 #: Tables use ASCII borders, not Rich's default box-drawing characters.
 #: This machine's console codepage is cp936, where Unicode box characters render
@@ -446,6 +457,35 @@ def tui(
         raise typer.Exit(code)
 
 
+#: `--run/--no-run` used to decide whether the page could execute commands. It
+#: cannot any more — the runner is gone — so the flag does nothing.
+#:
+#: **It is still accepted, and that is a deploy-safety decision rather than
+#: politeness.** The host's `serve.sh` lives outside the repo (`deploy/` is
+#: gitignored, per CLAUDE.md §5), so the poller does not update it: it will keep
+#: passing `--no-run` after this commit lands. A flag that errored would turn the
+#: next launchd restart into an argument-parsing failure with nothing serving the
+#: console — an outage caused by a *removal*, which is the worst kind to debug.
+#:
+#: So it warns and carries on, and is removed once `serve.sh` has been edited on
+#: the host. `hidden=True` keeps it out of `--help`, where advertising a no-op
+#: would only invite somebody to pass it.
+_DEPRECATED_RUN = typer.Option(
+    "--run/--no-run",
+    hidden=True,
+    help="Does nothing. The console can no longer run commands; use `tracker tui`.",
+)
+
+
+def _warn_deprecated_run(run: bool) -> None:
+    """Say the flag was noticed and ignored. Only when it was actually passed."""
+    if not run:
+        console.print(
+            "[yellow]--no-run does nothing now[/yellow][dim] — this console cannot run "
+            "commands at all. Drop the flag; `tracker tui` has the palette.[/dim]"
+        )
+
+
 @app.command()
 def serve(
     port: Annotated[int, typer.Option("--port", help="Port to listen on.")] = 8765,
@@ -455,25 +495,19 @@ def serve(
     open_browser: Annotated[
         bool, typer.Option("--open/--no-open", help="Open a browser when the server starts.")
     ] = True,
-    run: Annotated[
+    run: Annotated[bool, _DEPRECATED_RUN] = True,
+    ai: Annotated[
         bool,
         typer.Option(
-            "--run/--no-run",
-            help="Allow the page to execute commands. --no-run makes it read-only.",
+            "--ai/--no-ai",
+            help="Allow the LLM panels (briefing, infer, capex overview).",
         ),
     ] = True,
-    ai: Annotated[
-        bool | None,
-        typer.Option(
-            "--ai/--no-ai",
-            help="Allow the LLM panels (briefing, infer, capex overview). Defaults to --run.",
-        ),
-    ] = None,
     watch_edits: Annotated[
         bool,
         typer.Option(
             "--watch-edits/--no-watch-edits",
-            help="Allow the landing page to edit the watchlist. Independent of --run.",
+            help="Allow the landing page to edit the signed-in account's watchlist.",
         ),
     ] = True,
     allow_remote: Annotated[
@@ -484,21 +518,25 @@ def serve(
         bool,
         typer.Option(
             "--tunnel",
-            help="Publish through a Cloudflare quick tunnel. Requires TRACKER_CONSOLE_PASSWORD.",
+            help="Publish through a Cloudflare quick tunnel. Requires an account.",
         ),
     ] = False,
 ) -> None:
-    """Open the console: the database as a live page, with the commands as buttons.
+    """Open the console: the database as a live page, read-only.
 
     Different from `tracker export html`, and both are worth having. The export is
     one self-contained file you can email, frozen at the moment it was written.
-    This reads the database on every request and can run the commands that change
-    it — which is also why it binds loopback and refuses anything else without
-    `--allow-remote`. Anyone who can reach this port can start a `sync`.
+    This re-reads the database on every request.
 
-    Set `TRACKER_CONSOLE_PASSWORD` to put a password in front of it. On loopback
-    that is optional; with `--tunnel` it is required, because publishing makes it
-    a public URL and what is behind it runs commands.
+    **It cannot change the data.** Nothing here writes a project, a citation or a
+    figure — that is the CLI's job, and `tracker tui` is the version of this with
+    the commands in it. The single exception is each reader's own watchlist, which
+    is a preference rather than a fact.
+
+    `tracker users add` puts a sign-in in front of it and gives each person their
+    own watchlist. With no accounts it opens straight in, which is fine on loopback
+    — reaching localhost already means having the machine — and is why `--tunnel`
+    refuses until at least one account exists.
 
     `--tunnel` uses the tunnel configured in `TRACKER_TUNNEL_NAME` /
     `TRACKER_TUNNEL_HOSTNAME` if there is one, and an anonymous quick tunnel
@@ -506,11 +544,11 @@ def serve(
     flags to override either.
     """
     settings = get_settings()
+    _warn_deprecated_run(run)
     _run_console(
         port=port,
         host=host,
         open_browser=open_browser,
-        run=run,
         ai=ai,
         watch_edits=watch_edits,
         allow_remote=allow_remote,
@@ -520,25 +558,35 @@ def serve(
     )
 
 
-def _console_password() -> str | None:
-    """The console password, checked for the one thing worth checking."""
-    from tracker.webui.auth import MIN_PASSWORD_LEN
+def _console_accounts() -> int:
+    """How many accounts exist, i.e. whether the console has a way to gate itself.
 
-    secret = get_settings().console_password
-    password = secret.get_secret_value() if secret else None
-    # A floor against a typo, not a strength policy. What makes a short password
-    # safe here is the rate limit — 40 failed attempts across all clients closes
-    # the gate for 15 minutes, which puts even a 7-character keyspace tens of
-    # millions of years out of reach. See tracker/webui/auth.py.
-    if password and len(password) < MIN_PASSWORD_LEN:
-        _fail(
-            f"TRACKER_CONSOLE_PASSWORD is under {MIN_PASSWORD_LEN} characters. "
-            "That is short enough to be a typo rather than a secret."
-        )
-    return password
+    This replaced `TRACKER_CONSOLE_PASSWORD`. The question a publish check has to
+    ask is the same one it always asked — "is there anything in front of this?" —
+    but the answer now lives in the database rather than the environment, which is
+    also why it is a *count* rather than a boolean: the messages want to say how
+    many, and "0" is what refuses a tunnel.
+
+    A database that is missing or unmigrated returns 0 rather than raising, and
+    `open_db` is called directly rather than through `_read_engine` for exactly
+    that reason: `_read_engine` turns both into `_fail`, which exits. The caller
+    wants to reach `_console_preflight`, which says the same thing about a missing
+    file and also checks the front-end files — so a broken install reports
+    everything wrong with it rather than the first thing.
+    """
+    from sqlalchemy.exc import OperationalError
+
+    from tracker import accounts
+    from tracker.db import open_db
+
+    try:
+        with session_scope(open_db(_db_path()), commit=False) as session:
+            return accounts.count(session)
+    except (FileNotFoundError, MigrationError, OperationalError):
+        return 0
 
 
-def _console_preflight(password: str | None) -> Path:
+def _console_preflight() -> Path:
     """Everything that can be checked before a socket is opened. Returns the db path."""
     from tracker.webui import assets
 
@@ -603,8 +651,7 @@ def _run_console(
     port: int,
     host: str,
     open_browser: bool,
-    run: bool,
-    ai: bool | None = None,
+    ai: bool = True,
     watch_edits: bool = True,
     allow_remote: bool = False,
     publish: str | None = None,
@@ -616,7 +663,7 @@ def _run_console(
     """Start the console, optionally behind cloudflared. Shared by `serve` and `cloudflare`.
 
     One implementation rather than two, because the interesting part is the
-    refusals — no password behind a public URL, a non-loopback bind without
+    refusals — no account behind a public URL, a non-loopback bind without
     `--allow-remote` — and a second copy of those is a second place for one of
     them to quietly go missing.
 
@@ -631,39 +678,42 @@ def _run_console(
         quick_tunnel,
     )
 
-    password = _console_password()
+    accounts_held = _console_accounts()
 
     if host not in {"127.0.0.1", "localhost", "::1"} and not allow_remote:
         _fail(
-            f"--host {host} would expose the command runner to the network.\n"
-            "Anyone who can reach that address could start a run that spends LLM "
-            "tokens and writes to the database. Pass --allow-remote if that is "
-            "genuinely what you want."
+            f"--host {host} would expose this console to the network.\n"
+            "It cannot run commands, but anyone who can reach that address could "
+            "read the whole dataset and — with --ai — spend LLM tokens a panel at "
+            "a time. Pass --allow-remote if that is genuinely what you want."
         )
 
-    # A tunnel is a public URL handed to anyone who learns it, in front of a
-    # process that runs commands. Refusing rather than warning is the point: a
-    # warning scrolls past, and there is no safe reading of "published and open".
-    if publish and not password:
+    # A tunnel is a public URL handed to anyone who learns it. Refusing rather than
+    # warning is the point: a warning scrolls past, and there is no safe reading of
+    # "published and open". The console can no longer start a run, so what is behind
+    # the URL is the dataset and the token spend — still not things to publish
+    # anonymously.
+    if publish and not accounts_held:
         _fail(
-            "publishing this console puts it on a public URL, and it has no password.\n\n"
-            "Set one first — in .env (gitignored) or the environment:\n"
-            "  TRACKER_CONSOLE_PASSWORD=...\n\n"
-            "Anything that reaches the URL can otherwise run `sync`, spend LLM "
-            "tokens and write to the database."
+            "publishing this console puts it on a public URL, and it has no accounts, "
+            "so there is nothing in front of it.\n\n"
+            "Make one first:\n"
+            "  tracker users add you@example.com\n\n"
+            "Anything that reaches the URL could otherwise read the whole dataset "
+            "and spend LLM tokens on the model panels."
         )
 
-    path = _console_preflight(password)
+    path = _console_preflight()
 
     console.print(f"database: [bold]{path}[/bold]")
     console.print(f"local:    [bold]http://{host}:{port}/[/bold]")
     console.print(
-        "[green]password protected[/green]"
-        if password
-        else "[yellow]no password[/yellow] — fine on loopback, never publish it like this"
+        f"[green]{accounts_held} account(s)[/green] — everyone signs in"
+        if accounts_held
+        else "[yellow]no accounts[/yellow] — open, and no watchlists. "
+        "Fine on loopback; `tracker users add` to change either."
     )
-    if not run:
-        console.print("[dim]read-only: the page cannot execute commands[/dim]")
+    console.print("[dim]read-only: nothing here can change a project[/dim]")
 
     public = None
     if publish:
@@ -713,10 +763,8 @@ def _run_console(
             host=host,
             port=port,
             open_browser=open_browser and not publish,
-            allow_write=run,
             allow_ai=ai,
             allow_watch=watch_edits,
-            password=password,
         )
     finally:
         if public is not None:
@@ -749,25 +797,19 @@ def cloudflare(
             help="Force an anonymous throwaway tunnel, ignoring the configured one.",
         ),
     ] = False,
-    run: Annotated[
+    run: Annotated[bool, _DEPRECATED_RUN] = True,
+    ai: Annotated[
         bool,
         typer.Option(
-            "--run/--no-run",
-            help="Allow the page to execute commands. --no-run publishes it read-only.",
+            "--ai/--no-ai",
+            help="Allow the LLM panels (briefing, infer, capex overview).",
         ),
     ] = True,
-    ai: Annotated[
-        bool | None,
-        typer.Option(
-            "--ai/--no-ai",
-            help="Allow the LLM panels (briefing, infer, capex overview). Defaults to --run.",
-        ),
-    ] = None,
     watch_edits: Annotated[
         bool,
         typer.Option(
             "--watch-edits/--no-watch-edits",
-            help="Allow the landing page to edit the watchlist. Independent of --run.",
+            help="Allow the landing page to edit the signed-in account's watchlist.",
         ),
     ] = True,
     proxy: Annotated[
@@ -807,9 +849,10 @@ def cloudflare(
     environment can do. `--name` and `--hostname` override them, together;
     `--quick` ignores them and gets a throwaway URL.
 
-    `TRACKER_CONSOLE_PASSWORD` is required either way and this refuses to start
-    without it. The URL is public and the page can run commands that spend money
-    and write to the database; a random hostname is obscurity, not access control.
+    **At least one account is required either way and this refuses to start
+    without one** (`tracker users add`). The URL is public, and what is behind it is
+    the whole dataset plus, with `--ai`, a model panel that spends real tokens per
+    click; a random hostname is obscurity, not access control.
 
     `--check` runs every test short of opening the tunnel and prints what it
     found, which is the cheap way to discover that cloudflared is a truncated
@@ -846,11 +889,11 @@ def cloudflare(
     except CloudflaredMissing as exc:
         _fail(str(exc))
 
+    _warn_deprecated_run(run)
     _run_console(
         port=port,
         host="127.0.0.1",
         open_browser=False,
-        run=run,
         ai=ai,
         watch_edits=watch_edits,
         publish="named" if name else "quick",
@@ -864,7 +907,6 @@ def cloudflare(
 def _cloudflare_check(name: str | None, hostname: str | None = None) -> None:
     """Print a publish-readiness report and exit non-zero if it would fail."""
     from tracker.webui import assets
-    from tracker.webui.auth import MIN_PASSWORD_LEN
     from tracker.webui.tunnel import (
         CloudflaredMissing,
         detect_proxy,
@@ -875,16 +917,17 @@ def _cloudflare_check(name: str | None, hostname: str | None = None) -> None:
 
     rows: list[tuple[bool, str, str]] = []
 
-    secret = get_settings().console_password
-    password = secret.get_secret_value() if secret else None
-    if not password:
-        rows.append(
-            (False, "password", "TRACKER_CONSOLE_PASSWORD is not set — required to publish")
-        )
-    elif len(password) < MIN_PASSWORD_LEN:
-        rows.append((False, "password", f"set, but under {MIN_PASSWORD_LEN} characters"))
+    held = _console_accounts()
+    if held:
+        rows.append((True, "accounts", f"{held}, so every visitor signs in"))
     else:
-        rows.append((True, "password", f"set, {len(password)} characters"))
+        rows.append(
+            (
+                False,
+                "accounts",
+                "none — required to publish. `tracker users add you@example.com`",
+            )
+        )
 
     try:
         binary = find_cloudflared()
@@ -8681,8 +8724,46 @@ def _print_report(report, *, title: str) -> None:
 # --- Updates -----------------------------------------------------------------
 
 
+#: The flag that names whose watchlist a command is about. One definition, because
+#: `watch`, `watch add`, `watch rm` and `digest` all take it and a help string that
+#: drifted between them would be four different explanations of one thing.
+_USER_OPTION = typer.Option(
+    "--user", help="Whose watchlist, by email. Every account's, if omitted."
+)
+
+
+def _account_id(session, email: str | None, *, for_write: bool) -> int | None:
+    """Resolve `--user` to an account id. None means "every account".
+
+    `for_write=True` refuses None. Reading across everybody is what a terminal on
+    the host wants — it is looking at the database rather than at one person — but
+    *writing* without naming an owner has no honest meaning now that there is no
+    shared list, and picking one would put an entry on somebody's page that they
+    did not ask for.
+    """
+    from tracker.accounts import AccountError, count, require
+
+    if email:
+        try:
+            return require(session, email).id
+        except AccountError as exc:
+            _fail(str(exc))
+    if not for_write:
+        return None
+    if count(session) == 0:
+        _fail(
+            "a watchlist belongs to an account and there are none yet.\n"
+            "Make one with `tracker users add you@example.com`."
+        )
+    _fail("say whose list this is with --user. `tracker users` lists them.")
+    return None  # unreachable; _fail raises
+
+
 @watch_app.callback(invoke_without_command=True)
-def watch(ctx: typer.Context) -> None:
+def watch(
+    ctx: typer.Context,
+    user: Annotated[str | None, _USER_OPTION] = None,
+) -> None:
     """Companies and projects the digest is about. Read-only; `add` and `rm` edit.
 
     A watch is a company ("xAI") or one project of one company
@@ -8690,9 +8771,11 @@ def watch(ctx: typer.Context) -> None:
     others are building for it — `tracker.watchlist` has the reasoning, and the
     listing says which way each project matched.
 
-    With no watchlist at all, `tracker digest` and the console's landing page read
-    the whole database. That is the useful default rather than an empty page, so an
-    empty list here is a legitimate state and not a warning.
+    **Every entry belongs to an account, and this reads all of them.** A terminal on
+    the host is looking at the database, so the owner is a column rather than a
+    filter; `--user` narrows to one person's list, which is what the console shows
+    them. With no accounts at all there are no entries, and `tracker digest` then
+    reads the whole database — a legitimate state, not a warning.
     """
     if ctx.invoked_subcommand is not None:
         return
@@ -8701,32 +8784,47 @@ def watch(ctx: typer.Context) -> None:
 
     engine = _read_engine()
     with session_scope(engine, commit=False) as session:
-        entities = watchlist.watched(session)
+        account_id = _account_id(session, user, for_write=False)
+        entities = watchlist.watched(session, account_id=account_id)
 
         if json_mode():
-            emit({"watching": [e.as_json() for e in entities]})
+            emit(
+                {
+                    "user": user,
+                    "watching": [
+                        {**e.as_json(), "owner": e.owner} if account_id is None else e.as_json()
+                        for e in entities
+                    ],
+                }
+            )
             return
 
         if not entities:
+            whose = f"{user} is watching nothing" if user else "nothing is being watched"
             console.print(
-                "[dim]nothing is being watched, so the digest reads the whole database.\n"
-                'Add one with `tracker watch add "xAI"`.[/dim]'
+                f"[dim]{whose}, so the digest reads the whole database.\n"
+                'Add one with `tracker watch add "xAI" --user you@example.com`.[/dim]'
             )
             return
 
         table = Table(header_style="bold", title_justify="left", box=TABLE_BOX)
+        # Only when it means something. One account's list has one owner, and a
+        # column repeating the address on every row is noise.
+        if account_id is None:
+            table.add_column("owner")
         table.add_column("entry")
         table.add_column("projects", justify="right")
         table.add_column("matched")
         table.add_column("note")
         for entity in entities:
             vias = sorted(set(entity.matches.values()))
-            table.add_row(
+            row = [
                 entity.entry,
                 str(len(entity.matches)),
                 ", ".join(v.replace("_", " ") for v in vias) or "[yellow]nothing yet[/yellow]",
                 entity.note or "",
-            )
+            ]
+            table.add_row(*([entity.owner or "?", *row] if account_id is None else row))
         console.print(table)
 
 
@@ -8762,19 +8860,26 @@ def watch_add(
     note: Annotated[
         str | None, typer.Option("--note", help="Why, in a few words. Shown on the digest.")
     ] = None,
+    user: Annotated[str | None, _USER_OPTION] = None,
 ) -> None:
-    """Start watching a company, or one of its projects.
+    """Start watching a company, or one of its projects, on one account's list.
 
-    Idempotent on the normalized company key, so adding "Microsoft" when
-    "Microsoft Corporation" is already watched updates the note instead of
-    creating a second row for the same company.
+    Idempotent on the normalized company key *per account*, so adding "Microsoft"
+    when "Microsoft Corporation" is already watched updates the note instead of
+    creating a second row for the same company — and two people watching Microsoft
+    are two rows rather than a collision.
+
+    `--user` is required here, unlike on the listing. Reading across everybody is
+    what a terminal wants; writing without naming an owner would put an entry on
+    somebody's page that they did not ask for.
     """
     from tracker import watchlist
 
     engine = _watch_engine()
     with _explain_db_locks(), session_scope(engine) as session:
+        account_id = _account_id(session, user, for_write=True)
         try:
-            row, created = watchlist.add(session, entry, note=note)
+            row, created = watchlist.add(session, entry, account_id=account_id, note=note)
         except watchlist.WatchError as exc:
             _fail(str(exc))
             raise
@@ -8783,10 +8888,13 @@ def watch_add(
         matched = len(watchlist.resolve([row], projects)[0].matches)
 
     if json_mode():
-        emit({"entry": entry_text, "created": created, "projects": matched})
+        emit({"entry": entry_text, "user": user, "created": created, "projects": matched})
         return
     verb = "watching" if created else "already watching"
-    console.print(f"[green]{verb}[/green] {escape(entry_text)} — {matched} project(s) match today")
+    console.print(
+        f"[green]{verb}[/green] {escape(entry_text)} for {escape(user or '')} "
+        f"— {matched} project(s) match today"
+    )
     if not matched:
         console.print(
             "[dim]nothing matches yet. A watch set before the project is tracked is "
@@ -8797,25 +8905,294 @@ def watch_add(
 @watch_app.command("rm")
 def watch_rm(
     entry: Annotated[str, typer.Argument(help="The entry to stop watching.")],
+    user: Annotated[str | None, _USER_OPTION] = None,
 ) -> None:
-    """Stop watching a company or project."""
+    """Stop watching a company or project, on one account's list.
+
+    Scoped to `--user` for the same reason `add` is: one person's list is not
+    another's to edit, and a `rm` that swept every account would be a way to delete
+    somebody else's work by typing a company name.
+    """
     from tracker import watchlist
 
     engine = _watch_engine()
     with _explain_db_locks(), session_scope(engine) as session:
+        account_id = _account_id(session, user, for_write=True)
         try:
-            dropped = watchlist.remove(session, entry)
+            dropped = watchlist.remove(session, entry, account_id=account_id)
         except watchlist.WatchError as exc:
             _fail(str(exc))
             raise
 
     if json_mode():
-        emit({"entry": entry, "removed": dropped})
+        emit({"entry": entry, "user": user, "removed": dropped})
         return
     if dropped:
         console.print(f"[green]stopped watching[/green] {escape(entry)}")
     else:
-        console.print(f"[yellow]{escape(entry)} was not being watched[/yellow]")
+        console.print(
+            f"[yellow]{escape(entry)} was not on {escape(user or 'that')}'s list[/yellow]"
+        )
+
+
+# --- Accounts ----------------------------------------------------------------
+
+
+def _ask_password(prompt: str = "Password") -> str:
+    """Read a password from the terminal, twice, without echoing it.
+
+    **Never a flag.** A password passed as an argument lands in shell history and
+    in `ps` on a multi-user host, and neither of those is a place a credential
+    survives being useful.
+
+    This is also why every `users` command is in `catalog.BLOCKED`: both the console
+    and the TUI spawn commands through `webui/runner.py` with no stdin, so a prompt
+    there would hang the single run slot until the timeout with nothing on screen.
+    """
+    import getpass
+
+    from tracker.accounts import AccountError, check_password_length
+
+    try:
+        first = getpass.getpass(f"{prompt}: ")
+        second = getpass.getpass("Again: ")
+    except (EOFError, KeyboardInterrupt):
+        _fail("no password given.")
+        raise
+    if first != second:
+        _fail("those did not match.")
+    try:
+        check_password_length(first)
+    except AccountError as exc:
+        _fail(str(exc))
+    return first
+
+
+@users_app.callback(invoke_without_command=True)
+def users(ctx: typer.Context) -> None:
+    """Who may sign in to the console. `add`, `passwd`, `rm` and `invite` change it.
+
+    **Zero accounts is a legitimate state**, and it is the one a fresh install is
+    in: the console then opens with no sign-in, exactly as it did with no
+    `TRACKER_CONSOLE_PASSWORD`, because reaching loopback already means having the
+    machine. What refuses is publishing — `serve --tunnel` will not put a page with
+    no way to gate it on the open internet.
+
+    Adding the first account therefore *changes what the console does*, and only
+    ever in the safe direction: every route starts asking for a session, and each
+    account gets its own watchlist. It takes effect within a few seconds on a
+    running console, with no restart — see `webui/server.py::Console.auth_required`.
+    """
+    if ctx.invoked_subcommand is not None:
+        return
+
+    from tracker import accounts, watchlist
+
+    engine = _read_engine()
+    with session_scope(engine, commit=False) as session:
+        rows = accounts.listing(session)
+        watches = {}
+        for entry in watchlist.entries(session):
+            watches[entry.account_id] = watches.get(entry.account_id, 0) + 1
+        pending = accounts.outstanding(session)
+
+        if json_mode():
+            emit(
+                {
+                    "accounts": [
+                        {
+                            "email": row.email,
+                            "name": row.name,
+                            "watches": watches.get(row.id, 0),
+                            "created_at": row.created_at.isoformat() if row.created_at else None,
+                            "last_seen_at": (
+                                row.last_seen_at.isoformat() if row.last_seen_at else None
+                            ),
+                        }
+                        for row in rows
+                    ],
+                    "invites_outstanding": [
+                        {"note": i.note, "expires_at": i.expires_at.isoformat()} for i in pending
+                    ],
+                }
+            )
+            return
+
+        if not rows:
+            console.print(
+                "[dim]no accounts, so the console opens without a sign-in and refuses "
+                "to publish.\nMake one with `tracker users add you@example.com`.[/dim]"
+            )
+        else:
+            table = Table(header_style="bold", title_justify="left", box=TABLE_BOX)
+            table.add_column("email")
+            table.add_column("name")
+            table.add_column("watches", justify="right")
+            table.add_column("last seen")
+            for row in rows:
+                table.add_row(
+                    row.email,
+                    row.name or "",
+                    str(watches.get(row.id, 0)),
+                    row.last_seen_at.strftime("%Y-%m-%d")
+                    if row.last_seen_at
+                    else "[dim]never[/dim]",
+                )
+            console.print(table)
+
+        if pending:
+            console.print(
+                f"\n[dim]{len(pending)} unredeemed invite(s): "
+                + ", ".join(
+                    f"{i.note or 'no note'} (expires {i.expires_at:%Y-%m-%d})" for i in pending
+                )
+                + "[/dim]"
+            )
+
+
+@users_app.command("add")
+def users_add(
+    email: Annotated[str, typer.Argument(help="The address they sign in with.")],
+    name: Annotated[
+        str | None, typer.Option("--name", help="Display name. Optional; the email is the label.")
+    ] = None,
+) -> None:
+    """Create an account, prompting for its password.
+
+    The other way in is `tracker users invite`, which lets somebody set their own
+    password in the browser. Use that when you are not the person who will be
+    typing it — a password you chose and sent them is a password in a chat log.
+    """
+    from tracker import accounts
+
+    engine = _watch_engine()
+    password = _ask_password()
+    with _explain_db_locks(), session_scope(engine) as session:
+        first = not accounts.any_exist(session)
+        try:
+            row = accounts.create(session, email, password, name=name)
+        except accounts.AccountError as exc:
+            _fail(str(exc))
+            raise
+        created = row.email
+
+    if json_mode():
+        emit({"email": created, "created": True, "first": first})
+        return
+    console.print(f"[green]created[/green] {escape(created)}")
+    if first:
+        console.print(
+            "[dim]this is the first account, so the console now asks everyone to sign "
+            "in — within a few seconds, without a restart.[/dim]"
+        )
+
+
+@users_app.command("passwd")
+def users_passwd(
+    email: Annotated[str, typer.Argument(help="Whose password to change.")],
+) -> None:
+    """Change one account's password.
+
+    **Live sessions survive this.** They are held in the console's memory and this
+    is a different process, so an old cookie keeps working until it expires — 12
+    hours at most. Restart the console if one has to die now.
+    """
+    from tracker import accounts
+
+    engine = _watch_engine()
+    password = _ask_password("New password")
+    with _explain_db_locks(), session_scope(engine) as session:
+        try:
+            row = accounts.set_password(session, email, password)
+        except accounts.AccountError as exc:
+            _fail(str(exc))
+            raise
+        changed = row.email
+
+    if json_mode():
+        emit({"email": changed, "changed": True})
+        return
+    console.print(f"[green]password changed[/green] for {escape(changed)}")
+    console.print("[dim]any session already open stays valid until it expires.[/dim]")
+
+
+@users_app.command("rm")
+def users_rm(
+    email: Annotated[str, typer.Argument(help="Whose account to delete.")],
+    yes: Annotated[bool, typer.Option("--yes", help="Skip the confirmation. For scripts.")] = False,
+) -> None:
+    """Delete an account and, with it, that person's watchlist.
+
+    The watchlist goes because it is a statement of *their* interest and means
+    nothing without them — `ON DELETE CASCADE`, decided in migration 0021. Nothing
+    about the dataset changes: an account has never owned a project, a citation or
+    a figure.
+    """
+    from tracker import accounts, watchlist
+
+    engine = _watch_engine()
+    with _explain_db_locks(), session_scope(engine) as session:
+        try:
+            row = accounts.require(session, email)
+        except accounts.AccountError as exc:
+            _fail(str(exc))
+            raise
+        target, held = row.email, len(watchlist.entries(session, account_id=row.id))
+        if not yes and not json_mode():
+            note = f" and {held} watchlist entr{'y' if held == 1 else 'ies'}" if held else ""
+            typer.confirm(f"delete {target}{note}?", abort=True)
+        accounts.delete(session, email)
+        remaining = accounts.count(session)
+
+    if json_mode():
+        emit({"email": target, "removed": True, "watches_dropped": held})
+        return
+    console.print(f"[green]deleted[/green] {escape(target)}")
+    if not remaining:
+        console.print(
+            "[yellow]that was the last account[/yellow][dim] — the console is open "
+            "again on loopback, and will refuse to publish.[/dim]"
+        )
+
+
+@users_app.command("invite")
+def users_invite(
+    note: Annotated[
+        str | None, typer.Option("--note", help="Who it is for. Shown on the outstanding list.")
+    ] = None,
+    days: Annotated[
+        int, typer.Option("--days", help="How long it stays usable.")
+    ] = DEFAULT_INVITE_DAYS,
+) -> None:
+    """Mint a single-use code somebody can redeem for an account in the browser.
+
+    **The code is printed once and is not recoverable.** Only its sha256 is stored,
+    because this database is copied between machines and kept in backups, where a
+    plaintext code would be a live credential in every copy.
+
+    They redeem it on the console's own login page, where they choose their own
+    email and password. That is the point of an invite over `users add`: a password
+    you picked and sent them is a password in a chat log.
+    """
+    from tracker import accounts
+
+    engine = _watch_engine()
+    with _explain_db_locks(), session_scope(engine) as session:
+        try:
+            row, code = accounts.mint_invite(session, note=note, days=days)
+        except accounts.AccountError as exc:
+            _fail(str(exc))
+            raise
+        expires = row.expires_at
+
+    if json_mode():
+        emit({"code": code, "note": note, "expires_at": expires.isoformat()})
+        return
+    console.print(f"[bold]{escape(code)}[/bold]")
+    console.print(
+        f"[dim]single use, expires {expires:%Y-%m-%d %H:%M} UTC. Shown once — "
+        "only its hash is stored. They redeem it on the console's sign-in page.[/dim]"
+    )
 
 
 @app.command()
@@ -8842,12 +9219,18 @@ def digest(
     markdown: Annotated[
         bool, typer.Option("--markdown", help="Emit Markdown, for pasting or mailing.")
     ] = False,
+    user: Annotated[str | None, _USER_OPTION] = None,
 ) -> None:
     """What changed on the watchlist, good and bad, since a date.
 
     The same reading the console's landing page renders, in a form that can be
     sent: `tracker digest --markdown --days 1` is the nightly note. Reads only, so
     it is safe on either machine.
+
+    **`--user` is what makes it the same reading.** Without it this runs over every
+    account's watchlist at once, which is what a terminal on the host wants;
+    `--user alice@example.com` reproduces exactly the page alice sees, which is the
+    form to schedule if the nightly note is going to *her*.
 
     **The window is on when we learned a fact, not when it happened.** A crawl
     reads one article and imports a project's whole back-history, so filtering on
@@ -8879,7 +9262,13 @@ def digest(
 
     engine = _read_engine()
     with session_scope(engine, commit=False) as session:
-        brief = feed.digest(session, since=when, days=days, limit=limit)
+        brief = feed.digest(
+            session,
+            since=when,
+            days=days,
+            limit=limit,
+            account_id=_account_id(session, user, for_write=False),
+        )
 
     if notify:
         # Nothing printed on a quiet night, in any format: an empty digest that

@@ -1507,35 +1507,194 @@ def test_every_subcommand_help_is_more_than_its_summary(group, phrase, subcomman
 # --- the watchlist and the digest ------------------------------------------
 
 
+def _account(db: Path, email="alice@example.com") -> None:
+    """One account in `db`, so there is somebody for a watch to belong to."""
+    from tracker import accounts
+    from tracker.db import open_db, session_scope
+
+    with session_scope(open_db(db, readonly=False)) as session:
+        accounts.create(session, email, "correct horse")
+
+
 def test_watch_add_list_and_remove(seeded: Path):
-    """One list, and `tracker watch` is how it is read on the machine that has it."""
+    """One list per account, and `tracker watch` reads across all of them."""
+    _account(seeded)
     assert invoke(seeded, "watch").exit_code == 0
     assert "nothing is being watched" in invoke(seeded, "watch").output
 
-    added = invoke(seeded, "watch", "add", "xAI", "--note", "Memphis")
+    added = invoke(
+        seeded, "watch", "add", "xAI", "--note", "Memphis", "--user", "alice@example.com"
+    )
     assert added.exit_code == 0, added.output
     listing = invoke(seeded, "watch")
     assert "xAI" in listing.output and "Memphis" in listing.output
+    assert "alice@example.com" in listing.output, "the whole-database view names the owner"
 
     payload = json.loads(invoke(seeded, "--json", "watch").output)
     assert payload["watching"][0]["entry"] == "xAI"
     assert payload["watching"][0]["project_ids"], "the seed has an xAI project"
+    assert payload["watching"][0]["owner"] == "alice@example.com"
 
-    assert invoke(seeded, "watch", "rm", "xai").exit_code == 0
+    assert invoke(seeded, "watch", "rm", "xai", "--user", "alice@example.com").exit_code == 0
     assert "nothing is being watched" in invoke(seeded, "watch").output
 
 
+def test_a_watch_write_refuses_to_guess_whose_list_it_is(seeded: Path):
+    """Reading across everybody is useful; writing without an owner is not.
+
+    There is no shared list to fall back on, so a default here would put an entry
+    on somebody's page that they did not ask for — invisibly, from their end.
+    """
+    _account(seeded, "alice@example.com")
+    _account(seeded, "bob@example.com")
+    result = invoke(seeded, "watch", "add", "xAI")
+    assert result.exit_code != 0
+    assert "--user" in result.output
+
+
+def test_a_watch_write_with_no_accounts_says_to_make_one(seeded: Path):
+    result = invoke(seeded, "watch", "add", "xAI")
+    assert result.exit_code != 0
+    assert "tracker users add" in result.output
+
+
+def test_an_unknown_user_names_the_ones_that_exist(seeded: Path):
+    """A silent miss looks exactly like an empty watchlist."""
+    _account(seeded, "alice@example.com")
+    result = invoke(seeded, "watch", "--user", "nobody@example.com")
+    assert result.exit_code != 0
+    assert "alice@example.com" in result.output
+
+
 def test_watch_add_refuses_an_entry_with_no_company(seeded: Path):
-    result = invoke(seeded, "watch", "add", " | Colossus")
+    _account(seeded)
+    result = invoke(seeded, "watch", "add", " | Colossus", "--user", "alice@example.com")
     assert result.exit_code != 0
     assert "names no company" in result.output
 
 
 def test_watch_add_is_idempotent_on_the_normalized_key(seeded: Path):
-    assert invoke(seeded, "watch", "add", "Microsoft Corporation").exit_code == 0
-    again = json.loads(invoke(seeded, "--json", "watch", "add", "Microsoft").output)
+    _account(seeded)
+    user = ["--user", "alice@example.com"]
+    assert invoke(seeded, "watch", "add", "Microsoft Corporation", *user).exit_code == 0
+    again = json.loads(invoke(seeded, "--json", "watch", "add", "Microsoft", *user).output)
     assert again["created"] is False
     assert len(json.loads(invoke(seeded, "--json", "watch").output)["watching"]) == 1
+
+
+def test_two_accounts_can_watch_the_same_company_from_the_cli(seeded: Path):
+    """Per-account uniqueness, from the side an operator actually types."""
+    _account(seeded, "alice@example.com")
+    _account(seeded, "bob@example.com")
+    assert invoke(seeded, "watch", "add", "xAI", "--user", "alice@example.com").exit_code == 0
+    assert invoke(seeded, "watch", "add", "xAI", "--user", "bob@example.com").exit_code == 0
+
+    everyone = json.loads(invoke(seeded, "--json", "watch").output)["watching"]
+    assert len(everyone) == 2
+    assert {w["owner"] for w in everyone} == {"alice@example.com", "bob@example.com"}
+
+    hers = json.loads(invoke(seeded, "--json", "watch", "--user", "alice@example.com").output)
+    assert len(hers["watching"]) == 1
+
+
+def test_digest_scopes_to_one_account(seeded: Path):
+    """`digest --user` is what reproduces the page that person sees."""
+    _account(seeded, "alice@example.com")
+    _account(seeded, "bob@example.com")
+    invoke(seeded, "watch", "add", "xAI", "--user", "alice@example.com")
+
+    hers = json.loads(
+        invoke(seeded, "--json", "digest", "--days", "36500", "--user", "alice@example.com").output
+    )
+    assert hers["watching_everything"] is False
+    assert hers["projects_watched"] == 1
+
+    # Bob is watching nothing, so his page is the whole database — the same
+    # fallback an empty list has always had.
+    his = json.loads(
+        invoke(seeded, "--json", "digest", "--days", "36500", "--user", "bob@example.com").output
+    )
+    assert his["watching_everything"] is True
+
+
+# --- accounts ---------------------------------------------------------------
+
+
+def test_users_lists_nothing_and_says_what_that_means(seeded: Path):
+    """Zero accounts is the state a fresh install is in, not a warning."""
+    result = invoke(seeded, "users")
+    assert result.exit_code == 0
+    assert "no accounts" in result.output
+    assert "tracker users add" in result.output
+
+
+def test_users_lists_who_exists_and_how_much_they_watch(seeded: Path):
+    _account(seeded, "alice@example.com")
+    invoke(seeded, "watch", "add", "xAI", "--user", "alice@example.com")
+
+    payload = json.loads(invoke(seeded, "--json", "users").output)
+    assert [a["email"] for a in payload["accounts"]] == ["alice@example.com"]
+    assert payload["accounts"][0]["watches"] == 1
+    assert payload["accounts"][0]["last_seen_at"] is None, "created, never signed in"
+
+
+def test_users_rm_takes_the_watchlist_with_it(seeded: Path):
+    _account(seeded, "alice@example.com")
+    invoke(seeded, "watch", "add", "xAI", "--user", "alice@example.com")
+
+    removed = invoke(seeded, "users", "rm", "alice@example.com", "--yes")
+    assert removed.exit_code == 0
+    assert "last account" in removed.output, "and it says what that changed"
+    assert json.loads(invoke(seeded, "--json", "watch").output)["watching"] == []
+
+
+def test_users_rm_names_the_accounts_that_exist(seeded: Path):
+    _account(seeded, "alice@example.com")
+    result = invoke(seeded, "users", "rm", "nobody@example.com", "--yes")
+    assert result.exit_code != 0
+    assert "alice@example.com" in result.output
+
+
+def test_an_invite_prints_a_code_once_and_stores_only_its_hash(seeded: Path):
+    payload = json.loads(invoke(seeded, "--json", "users", "invite", "--note", "carol").output)
+    code = payload["code"]
+    assert code and payload["expires_at"]
+
+    from sqlalchemy import select
+
+    from tracker.db import open_db, session_scope
+    from tracker.models import Invite
+
+    with session_scope(open_db(seeded), commit=False) as session:
+        row = session.scalars(select(Invite)).one()
+        stored, note = row.code_hash, row.note
+    assert code not in stored, "the code itself is never written down"
+    assert note == "carol"
+
+    # And it shows up as outstanding, so a fortnight later it is still findable.
+    listed = json.loads(invoke(seeded, "--json", "users").output)
+    assert [i["note"] for i in listed["invites_outstanding"]] == ["carol"]
+
+
+def test_the_password_is_never_a_flag(seeded: Path):
+    """It would land in shell history and in `ps`. `users add` prompts instead."""
+    from tracker.webui import catalog
+
+    for name in ("users add", "users passwd"):
+        command = catalog.by_name()[name]
+        assert not any("password" in flag.name for flag in command.flags), name
+
+
+def test_managing_accounts_is_blocked_from_the_console_and_the_tui(seeded: Path):
+    """`getpass` with no stdin would hold the single run slot until the timeout.
+
+    And the other reason: a page that can widen its own audience is a page that
+    decides who may read it, which is the same argument `cloudflare` makes.
+    """
+    from tracker.webui import catalog
+
+    for name in ("users", "users add", "users passwd", "users rm", "users invite"):
+        assert catalog.by_name()[name].blocked, f"{name} is runnable from a browser"
 
 
 def test_digest_reads_the_whole_database_with_no_watchlist(seeded: Path):

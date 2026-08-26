@@ -13,13 +13,18 @@ There are now three, and each answers something the others cannot.
 | | good for | needs |
 |---|---|---|
 | the CLI | one question, scriptable, pipeable | a shell |
-| the console (`tracker serve`) | showing somebody, from anywhere | a browser, a password, a tunnel |
+| the console (`tracker serve`) | showing somebody, from anywhere | a browser, an account, a tunnel |
 | the TUI (`tracker tui`) | working the data where it lives | an ssh session |
 
 The CLI prints a snapshot and forgets it: comparing two projects is two commands
 and a scroll, and a filter worth keeping is a shell history entry. The console
 keeps state and draws properly, but the machine that owns the database is reached
 by ssh — and a browser is not what you have there.
+
+**The console cannot run commands at all**, which sharpens the split rather than
+blurring it: it is for reading, and this is where the buttons are. That is the
+right way round, because a terminal on the host answers "who may start this?" with
+ssh rather than with a cookie.
 
 ```bash
 tracker tui
@@ -60,9 +65,10 @@ drawn as absence.
 
 ## The run pane has every command, and that is structural
 
-The list is read out of the live Typer app through `webui.catalog` — the same
-introspection the console's palette uses — so a command added to `cli.py` appears
-here on the next start with its real flags, types, defaults, choices and help.
+The list is read out of the live Typer app through `webui.catalog` — which now
+serves only this pane, the console's palette having been deleted with the rest of
+its runner — so a command added to `cli.py` appears here on the next start with
+its real flags, types, defaults, choices and help.
 Nothing in `tracker/tui/` holds a list of commands that could fall behind, and
 `tests/test_tui.py` asserts the pane offers exactly what the catalog does.
 
@@ -142,13 +148,18 @@ that had not arrived when it was drawn.
 The status line under the prompt says what to do next rather than repeating the
 log's last line — two identical sentences a row apart read as a stutter.
 
-Runs go through `webui.runner`, which is the console's executor, so the TUI
-inherits its three properties rather than reimplementing them: no shell, one writer
-at a time (SQLite takes one, and a second run would fail partway through after
-paying for its LLM calls), and a confirmation ritual for anything that spends
-tokens or deletes rows — the command's own name, typed back. A terminal is not a
-reason to be laxer about either loss. Every run also lands in the same
-`data/runs/` history the console lists.
+Runs go through `webui.runner`, which was the console's executor and is now this
+pane's, so the TUI inherits its three properties rather than reimplementing them:
+no shell, one writer at a time (SQLite takes one, and a second run would fail
+partway through after paying for its LLM calls), and a confirmation ritual for
+anything that spends tokens or deletes rows — the command's own name, typed back.
+A terminal is not a reason to be laxer about either loss.
+
+The module keeps its `tracker/webui/` address even though nothing in the web UI
+calls it any more, and that is deliberate rather than an oversight: moving it would
+be a rename with no behaviour change in a commit that already changes plenty, and
+its two remaining neighbours — `catalog.py` and `runs.py` — would have to move with
+it. Every run still lands in the same `data/runs/` history.
 
 Output arrives with its colour intact, because the child is given `FORCE_COLOR`
 and the pane renders the escapes: red is a rejection, amber is 待确认, dim is a
@@ -214,6 +225,10 @@ else notices.
   `roster.measure` decided, for the reason `docs/architecture.md` gives about the
   browser: a second implementation of "which years the capex grid shows" is a
   second opinion, free to disagree, with nothing to say when it starts to.
-- **It is not offered in the console.** `tui` is in the catalog's blocked list: a
-  full-screen terminal app cannot render into a browser, and starting one there
-  would hold the single run slot until the timeout while nothing appeared.
+- **It does not offer `tui`, or `users`.** `tui` is in the catalog's blocked list
+  because a full-screen terminal app cannot render inside another one's run pane,
+  and would hold the single run slot until the timeout while nothing appeared. The
+  `users` commands are blocked for a plainer reason: two of them read a password
+  with `getpass`, and a run started here has no stdin, so the prompt would hang the
+  slot with nothing on screen. Blocked commands stay visible with their argv, so
+  the line can be copied into a shell — which is where a credential belongs anyway.

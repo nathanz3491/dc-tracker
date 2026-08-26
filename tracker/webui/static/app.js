@@ -13,7 +13,6 @@
  * the dataset. So `project.standing` comes from the API and nothing here guesses.
  */
 
-import { parseAnsi } from "/static/ansi.js";
 import { HelpView } from "/static/views-help.js";
 
 const html = htm.bind(React.createElement);
@@ -410,43 +409,6 @@ const Mark = ({ size = 20, color = "var(--primary)" }) => html`
  * Every run is a React child, so the text is escaped on the way in — log lines
  * carry URLs and headlines fetched from the open web, and hand-built markup is
  * how one of those becomes a script tag. */
-const LogLine = React.memo(({ line }) => html`
-  <span class="dc-log-line">
-    ${parseAnsi(line).map((run, i) => html`<span key=${i} style=${run.style}>${run.text}</span>`)}
-  </span>`);
-
-/* The run log.
- *
- * Does not wrap, and scrolls sideways instead — see `.dc-log` in app.css for
- * why a Rich table cannot survive being reflowed. The toggle exists because the
- * other half of the output is prose: `gaps` notes and refusal messages are
- * sentences Rich has already wrapped at 160 columns, and reading those by
- * scrolling is worse than reading them wrapped. Tables are the default because
- * they are the case that breaks rather than merely inconveniences. */
-function LogPane({ lines, innerRef }) {
-  const [wrap, setWrap] = useState(false);
-  return html`
-    <div style=${{ position: "relative" }}>
-      ${lines.length > 0 && html`
-        <button type="button" class="dc-log-wrap" aria-pressed=${wrap}
-                title=${wrap ? "Lines are wrapped; tables will not line up"
-                             : "Lines are not wrapped, so tables line up. Scroll sideways to read them."}
-                onClick=${() => setWrap((w) => !w)}>${wrap ? "wrap on" : "wrap off"}</button>`}
-      <pre class=${`dc-log${lines.length > 0 ? " dc-log--framed" : ""}${wrap ? " dc-log--wrap" : ""}`}
-           ref=${innerRef} aria-live="polite" aria-atomic="false">
-        ${lines.length === 0
-          ? "connecting…"
-          : lines.map((line, i) => html`<${LogLine} key=${i} line=${line} />`)}
-      </pre>
-    </div>`;
-}
-
-/* The figure caption and heading every view opens with.
- *
- * **The explanatory paragraph now folds, and is closed by default.** It is
- * genuinely useful the first time and furniture every time after, and seven views
- * each opening with one is a large part of why the console reads as crowded. The
- * caption and the heading always stay: those are how you know where you are. */
 function Eyebrow({ figure, title, children }) {
   const [open, setOpen] = useState(false);
   return html`
@@ -1070,7 +1032,6 @@ function Drawer({ data, project, onClose }) {
           ${tab === "stats" && html`<${StatsTab} data=${data} p=${p} populated=${populated}
                                                  open=${open} onQuote=${showQuote} onTab=${setTab}
                                                  claims=${claims[p.id]}
-                                                 allowWrite=${data.allow_write}
                                                  allowAi=${data.allow_ai} />`}
           ${tab === "blocks" && html`<${BlocksTab} p=${p} />`}
           ${tab === "risks" && html`<${RisksTab} data=${data} p=${p} />`}
@@ -1782,7 +1743,7 @@ function BlockerWhy({ why, onTab }) {
     </div>`;
 }
 
-function StatsTab({ data, p, populated, open, onQuote, allowWrite, allowAi, onTab, claims }) {
+function StatsTab({ data, p, populated, open, onQuote, allowAi, onTab, claims }) {
   const worst = open.slice().sort((a, b) => SEV_ORDER.indexOf(b.severity) - SEV_ORDER.indexOf(a.severity))[0];
   const stats = [
     { label: "IT capacity, planned", value: p.mw_planned == null ? "—" : p.mw_planned.toLocaleString() + " MW",
@@ -2598,255 +2559,28 @@ function MapView({ data, onOpen, openId }) {
  * spend anything. The server-side rule is unchanged: it still requires the
  * confirmation string, and this supplies it only after the operator has said yes.
  */
-function CrawlButton({ url, disabled, onStarted }) {
-  const [state, setState] = useState("idle"); // idle | confirming | running
-  const [error, setError] = useState(null);
-
-  useEffect(() => {
-    if (state !== "confirming") return;
-    // Arming and then walking away should disarm, not stay hot.
-    const timer = setTimeout(() => setState("idle"), 6000);
-    return () => clearTimeout(timer);
-  }, [state]);
-
-  const run = async () => {
-    setState("running");
-    setError(null);
-    try {
-      const res = await api("/api/run", {
-        method: "POST",
-        body: { cmd: "ingest crawl", flags: { "--url": url }, confirm: "ingest crawl" },
-      });
-      onStarted(res.run.id);
-    } catch (e) {
-      setError(e.message);
-      setState("idle");
-    }
-  };
-
-  if (error) {
-    return html`<span style=${{ fontSize: 11, color: "var(--danger)", maxWidth: 180 }}>${error}</span>`;
-  }
-  if (state === "confirming") {
-    return html`
-      <div style=${{ display: "flex", gap: 6, alignItems: "center" }}>
-        <span style=${{ fontSize: 11, color: "var(--warning)", whiteSpace: "nowrap" }}>1 LLM call</span>
-        <${Button} size="sm" onClick=${run}>Confirm<//>
-      </div>`;
-  }
-  return html`
-    <${Button} size="sm" variant="outline" disabled=${disabled || state === "running"}
-               loading=${state === "running"} onClick=${() => setState("confirming")}>
-      Crawl
-    <//>`;
-}
-
-function QueueView({ data, onRan, allowWrite, busy }) {
-  const { queue, failed } = data;
-  return html`
-    <div class="dc-view dc-rise" style=${{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 16,
-                     padding: "22px 26px 60px" }}>
-      
-
-      <${Card}>
-        <div style=${{ padding: "16px 20px 8px" }}>
-          <span style=${{ fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--muted-foreground)" }}>
-            ${queue.length} queued candidate${queue.length === 1 ? "" : "s"}
-          </span>
-        </div>
-        <div style=${{ display: "grid", gap: 0 }}>
-          ${queue.map((c) => html`
-            <div key=${c.url} class="dc-queue-row"
-                 style=${{ padding: "11px 20px", borderTop: "1px solid var(--border)" }}>
-              <span class="dc-num" style=${{ fontSize: 12, color: "var(--muted-foreground)" }}>
-                ${(c.published_at || "—").slice(0, 10)}</span>
-              <div style=${{ minWidth: 0, display: "grid", gap: 3 }}>
-                <a href=${c.url} target="_blank" rel="noreferrer"
-                   style=${{ fontSize: 14, fontWeight: 500 }}>${c.title || c.url}</a>
-                <span style=${{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--muted-foreground)",
-                                overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>${c.url}</span>
-              </div>
-              <div style=${{ display: "flex", gap: 6, justifyContent: "flex-end",
-                             alignItems: "center", flexWrap: "wrap" }}>
-                ${c.depth && html`<span style=${chip("--success")}>deepens</span>`}
-                <span style=${chip("--muted-foreground")}>${c.feed || "manual"}</span>
-                ${allowWrite && html`
-                  <${CrawlButton} url=${c.url} disabled=${busy} onStarted=${onRan} />`}
-              </div>
-            </div>`)}
-        </div>
-        ${queue.length === 0 && html`
-          <div style=${{ padding: "4px 20px 20px" }}>
-            <${EmptyState} variant="dashed" title="The queue is empty"
-              description="Run tracker discover from the Commands view to poll the feeds. Nothing it queues costs anything until you crawl it." />
-          </div>`}
-      <//>
-
-      <${Card}>
-        <${CardHeader}>
-          <${CardTitle}>Hosts that would not answer<//>
-          <${CardDescription}>Grouped by site, because it is nearly always the site blocking us rather
-            than the article. Worth checking: a run can look like it cleared the queue while a dozen
-            articles sit here unread.<//>
-        <//>
-        <div style=${{ display: "grid", gap: 0 }}>
-          ${failed.map((h) => html`
-            <div key=${h.host} style=${{ display: "grid", gridTemplateColumns: "minmax(0,1fr) 70px 60px",
-                 gap: 14, alignItems: "center", padding: "11px 20px", borderTop: "1px solid var(--border)" }}>
-              <span style=${{ fontFamily: "var(--font-mono)", fontSize: 13, overflow: "hidden",
-                              textOverflow: "ellipsis" }}>${h.host}</span>
-              <span style=${chip(h.http_status === 403 ? "--danger" : "--warning")}>${h.http_status || "?"}</span>
-              <span class="dc-num" style=${{ fontSize: 12, textAlign: "right",
-                                             color: "var(--muted-foreground)" }}>${h.count}</span>
-            </div>`)}
-        </div>
-        ${failed.length === 0 && html`
-          <div style=${{ padding: "4px 20px 20px" }}>
-            <${EmptyState} variant="dashed" size="sm" title="Nothing failed to fetch" description="Every URL a run has tried was readable." />
-          </div>`}
-      <//>
-    </div>`;
-}
-
-function GapsView({ data }) {
-  const { fields, worst } = data.gaps;
-  const req = data.required;
-  const met = req.entries.filter((e) => e.met).length;
-  return html`
-    <div class="dc-view dc-rise" style=${{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 16,
-                     padding: "22px 26px 60px" }}>
-      
-
-      <${Card}>
-        <div style=${{ display: "grid", gap: 0 }}>
-          ${fields.map((g) => html`
-            <div key=${g.field} class="dc-gap-row" style=${{ display: "grid", gridTemplateColumns: "150px 64px minmax(0,1fr)",
-                 gap: 14, alignItems: "center", padding: "10px 20px", borderTop: "1px solid var(--border)" }}>
-              <span style=${{ fontFamily: "var(--font-mono)", fontSize: 13,
-                fontWeight: worst.includes(g.field) ? 600 : 400 }}>${g.field}</span>
-              <span class="dc-num" style=${{ fontSize: 13, textAlign: "right",
-                color: !g.measurable ? "var(--muted-foreground)" : g.pct >= 90 ? "var(--success)"
-                  : g.pct >= 50 ? "var(--foreground)" : "var(--warning)" }}>
-                ${g.measurable ? g.pct + "%" : "n/a"}</span>
-              <div style=${{ display: "grid", gap: 4, minWidth: 0 }}>
-                ${g.measurable && html`
-                  <div style=${{ height: 6, borderRadius: 999, background: "var(--muted)", overflow: "hidden" }}>
-                    <div style=${{ height: "100%", width: `${g.pct}%`, borderRadius: 999,
-                                   background: worst.includes(g.field) ? "var(--warning)" : "var(--primary)" }} />
-                  </div>`}
-                <span style=${{ fontSize: 12, color: "var(--muted-foreground)" }}>
-                  ${g.measurable ? `${g.filled} of ${g.applicable}` : "absence carries no information"}
-                  ${g.note ? " — " + g.note : ""}</span>
-              </div>
-            </div>`)}
-        </div>
-      <//>
-
-      <${Card}>
-        <${CardHeader}>
-          <${CardTitle}>Required project list — ${met} of ${req.entries.length} present<//>
-          <${CardDescription}>If you have a list of projects you need covered, paste it into
-            ${req.path} — one per line — and this becomes a checklist instead of a guess.<//>
-        <//>
-        <div style=${{ display: "grid", gap: 0 }}>
-          ${req.entries.map((e) => html`
-            <div key=${e.entry} style=${{ display: "flex", alignItems: "center", gap: 12,
-                 padding: "9px 20px", borderTop: "1px solid var(--border)" }}>
-              <span style=${chip(e.met ? "--success" : "--danger")}>${e.met ? "#" + e.id : "missing"}</span>
-              <span style=${{ fontSize: 14 }}>${e.entry}</span>
-            </div>`)}
-        </div>
-        ${req.entries.length === 0 && html`
-          <div style=${{ padding: "4px 20px 20px" }}>
-            <${EmptyState} variant="dashed" size="sm" title="No required list yet"
-              description=${`Create ${req.path} with one project per line — "Company | Project name", or just a name — to get a present/missing breakdown.`} />
-          </div>`}
-      <//>
-
-      <${Card}>
-        <${CardHeader}>
-          <${CardTitle}>Capacity behind an obstacle<//>
-          <${CardDescription}>How many megawatts are stuck behind each kind of problem. A project with
-            two problems appears twice, so these bars do not add up to a total. Projects with a problem
-            but no known size are counted off to the side rather than as zero.<//>
-        <//>
-        <div style=${{ display: "grid", gap: 0 }}>
-          ${data.exposure.map((x) => {
-            const max = Math.max(...data.exposure.map((e) => e.mw), 1);
-            return html`
-              <div key=${x.category} class="dc-exposure-row" style=${{ display: "grid", gridTemplateColumns: "170px minmax(0,1fr) 110px",
-                   gap: 14, alignItems: "center", padding: "10px 20px", borderTop: "1px solid var(--border)" }}>
-                <span style=${{ fontFamily: "var(--font-mono)", fontSize: 13 }}>${x.category}</span>
-                <div style=${{ display: "flex", height: 10, borderRadius: 999, overflow: "hidden",
-                               background: "var(--muted)", width: `${Math.max(3, (x.mw / max) * 100)}%` }}>
-                  ${SEV_ORDER.map((sev) => x.by_severity[sev] > 0 && html`
-                    <div key=${sev} style=${{ background: `var(${SEV_TOKEN[sev]})`,
-                      width: `${(x.by_severity[sev] / x.mw) * 100}%` }} />`)}
-                </div>
-                <span class="dc-num" style=${{ fontSize: 12, textAlign: "right", color: "var(--muted-foreground)" }}>
-                  ${Math.round(x.mw).toLocaleString()} MW${x.no_mw ? ` +${x.no_mw} uncited` : ""}</span>
-              </div>`;
-          })}
-        </div>
-        ${data.exposure.length === 0 && html`
-          <div style=${{ padding: "4px 20px 20px" }}>
-            <${EmptyState} variant="dashed" size="sm" title="No open obstacle in the database"
-              description="Nothing read so far reports one." />
-          </div>`}
-      <//>
-    </div>`;
-}
-
-/* ---- Capex --------------------------------------------------------------- */
-
-/* One group of rows that are probably one campus, and the merge that folds them.
- *
- * This is the one screen where a browser genuinely beats the CLI. Deciding which
- * of four rows survives is a judgement made by eye — you want their capacity,
- * their citations and their dates side by side, not four `tracker show` calls.
- *
- * Which id you keep does not decide the values: `merge` moves every citation onto
- * the survivor and then recomputes each field from the combined set, so the only
- * thing the choice picks is a row number. Said on the card, because it is exactly
- * the thing an operator will otherwise agonise over.
- */
-/* The class a group is best described by, looked up rather than worked out.
- *
- * `capex.strongest_evidence` decided it and the CLI's report prints the same word.
- * Ranking five unequal classes here — one of them permits an unattended merge,
- * another is a word — would be a second implementation of a rule with nothing to
- * say when the two start to disagree. See docs/architecture.md. */
 function dupeLabel(dupes, ids) {
   const key = ids.join("-");
   const found = (dupes.group_evidence || []).find((g) => g.ids.join("-") === key);
   return found ? found.label : "";
 }
 
-function DuplicateGroup({ ids, byId, evidence, label, allowWrite, busy, onRan }) {
-  const [keep, setKeep] = useState(ids[0]);
-  const [state, setState] = useState("idle"); // idle | confirming | running
-  const [typed, setTyped] = useState("");
-  const [error, setError] = useState(null);
-  const fold = ids.filter((i) => i !== keep);
+/* One suspected duplicate group, as a reading rather than an action.
+ *
+ * It used to carry the merge: a radio to pick the survivor, the typed-name
+ * confirmation, and a POST to /api/run. Folding rows is a CLI job now
+ * (`tracker duplicates`, then `tracker merge`), so what is left is the part a
+ * reader needs — that these rows may be one campus, how much capacity is claimed
+ * twice between them, and *why* the backend raised the pair.
+ *
+ * Keeping the panel rather than deleting it with the button is deliberate. The
+ * capex totals above it are the reason it is on this page at all: a duplicate is
+ * how a number gets counted twice, and a reader looking at a total deserves to
+ * know one is suspected even though this page cannot fix it. */
+function DuplicateGroup({ ids, byId, evidence, label }) {
   const rows = ids.map((id) => byId[id]).filter(Boolean);
 
-  const merge = async () => {
-    setState("running");
-    setError(null);
-    try {
-      const res = await api("/api/run", {
-        method: "POST",
-        body: { cmd: "merge", flags: { "--into": keep, dupe_ids: fold }, confirm: "merge" },
-      });
-      onRan(res.run.id);
-    } catch (e) {
-      setError(e.message);
-      setState("idle");
-    }
-  };
-
-  // A row missing from `byId` means the dataset is older than the group — which
-  // happens for exactly one render after a merge, before the reload lands.
+  // A row missing from `byId` means the dataset is older than the group.
   if (rows.length < 2) return null;
   const mw = rows.reduce((sum, p) => sum + (p.mw_planned || 0), 0);
 
@@ -2882,13 +2616,7 @@ function DuplicateGroup({ ids, byId, evidence, label, allowWrite, busy, onRan })
 
       <div style=${{ display: "grid", gap: 0 }}>
         ${rows.map((p) => html`
-          <label key=${p.id} class="dc-dupe-row"
-                 style=${{ cursor: allowWrite ? "pointer" : "default",
-                           background: p.id === keep ? "color-mix(in oklab, var(--success) 8%, transparent)" : "transparent" }}>
-            <input type="radio" name=${`keep-${ids.join("-")}`} checked=${p.id === keep}
-                   disabled=${!allowWrite || state === "running"}
-                   onChange=${() => { setKeep(p.id); setState("idle"); setTyped(""); }}
-                   aria-label=${`Keep #${p.id}, ${p.company} ${p.name}`} />
+          <div key=${p.id} class="dc-dupe-row">
             <span class="dc-num" style=${{ fontSize: 12, color: "var(--muted-foreground)" }}>#${p.id}</span>
             <span style=${{ minWidth: 0 }}>
               <span style=${{ fontSize: 13, fontWeight: 500 }}>${p.company}</span>
@@ -2902,45 +2630,9 @@ function DuplicateGroup({ ids, byId, evidence, label, allowWrite, busy, onRan })
                   title=${`${p.sources.length} citation(s), last updated ${String(p.updated_at).slice(0, 10)}`}>
               ${p.sources.length} src · ${String(p.updated_at).slice(0, 10)}
             </span>
-          </label>`)}
+          </div>`)}
       </div>
 
-      ${error && html`
-        <span style=${{ fontSize: 12, color: "var(--danger)" }}>${error}</span>`}
-
-      ${allowWrite && (state === "confirming"
-        ? html`
-          <div style=${{ display: "grid", gap: 8, padding: "10px 12px", borderRadius: 10,
-                         border: "1px solid color-mix(in oklab, var(--danger) 40%, var(--border))",
-                         background: "color-mix(in oklab, var(--danger) 6%, transparent)" }}>
-            <span style=${{ fontSize: 13 }}>
-              Keeps ${html`<b class="dc-num">#${keep}</b>`} and permanently deletes
-              ${" "}${html`<b class="dc-num">${fold.map((i) => "#" + i).join(", ")}</b>`}.
-              Their citations, milestones and obstacles move across first, and every field on
-              ${" "}#${keep} is then recomputed from the combined set. There is no undo.
-            </span>
-            <div style=${{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-              ${/* Wrapped rather than styled: Input spreads unknown props onto the
-                    inner <input>, so a width there would leave the field shell
-                    full-bleed around a narrow box. */ ""}
-              <div style=${{ width: 140 }}>
-                <${Input} size="sm" value=${typed} placeholder="merge"
-                          aria-label="Type merge to confirm"
-                          onChange=${(e) => setTyped(e.target.value)} />
-              </div>
-              <${Button} size="sm" variant="danger" disabled=${typed.trim() !== "merge" || busy}
-                         onClick=${merge}>Merge<//>
-              <${Button} size="sm" variant="ghost"
-                         onClick=${() => { setState("idle"); setTyped(""); }}>Cancel<//>
-            </div>
-          </div>`
-        : html`
-          <div>
-            <${Button} size="sm" variant="outline" disabled=${busy || state === "running"}
-                       loading=${state === "running"} onClick=${() => setState("confirming")}>
-              Merge ${fold.length} into #${keep}
-            <//>
-          </div>`)}
     </div>`;
 }
 
@@ -3186,7 +2878,7 @@ function CapexBreakdown({ position, col, byId, bucket, grain, onOpenProject }) {
     </div>`;
 }
 
-function CapexView({ data, allowWrite, allowAi, busy, onRan, onOpen }) {
+function CapexView({ data, allowAi, onOpen }) {
   const capex = data.capex;
   const cover = capex.coverage;
   const dupes = capex.duplicates;
@@ -3553,23 +3245,15 @@ function CapexView({ data, allowWrite, allowAi, busy, onRan, onOpen }) {
         <${Card}>
           <${CardHeader}>
             <${CardTitle}>One campus, several rows<//>
-            <${CardDescription}>Tick the row to keep; the others fold into it and their sources come
-              along. Every quantitative value is recalculated from the combined sources afterwards, but
-              ${html`<b>the name, company and locality stay the survivor's</b>`} — so pick the row whose
-              identity should win. Nothing merges on its own, because a wrong merge is hard to spot and
-              cannot be undone.<//>
+            <${CardDescription}>Rows that look like the same site, with the reason each pair was
+              raised. ${html`<b>Read this before trusting a total above</b>`} — a suspected duplicate is
+              how capacity gets counted twice. Folding them is a decision with no undo, so it is not a
+              button here: ${html`<b class="dc-num">tracker duplicates</b>`} prints the same groups
+              and${" "}${html`<b class="dc-num">tracker merge</b>`} acts on them.<//>
           <//>
-          ${!allowWrite && html`
-            <div style=${{ padding: "0 20px 14px" }}>
-              <${Alert} variant="warning"><div><div class="mrd-alert-desc">
-                Started with --no-run, so the merge button is unavailable. The groups below are still
-                the ones <b class="dc-num">tracker duplicates</b> would print.
-              </div></div><//>
-            </div>`}
           ${dupes.groups.map((ids) => html`
             <${DuplicateGroup} key=${ids.join("-")} ids=${ids} byId=${byId}
-                               evidence=${dupes.evidence} label=${dupeLabel(dupes, ids)}
-                               allowWrite=${allowWrite} busy=${busy} onRan=${onRan} />`)}
+                               evidence=${dupes.evidence} label=${dupeLabel(dupes, ids)} />`)}
           ${dupes.groups.length === 0 && html`
             <div style=${{ padding: "4px 20px 20px" }}>
               <${EmptyState} variant="dashed" size="sm" title="No suspected duplicates"
@@ -3577,98 +3261,6 @@ function CapexView({ data, allowWrite, allowAi, busy, onRan, onOpen }) {
             </div>`}
         <//>
       </div>
-    </div>`;
-}
-
-/* ---- Commands and runs --------------------------------------------------- */
-
-/* Flags, rendered for someone who has never seen a command line.
- *
- * The catalog is read from Typer, so the names in it are the CLI's: `--max-articles`,
- * `project_ids`. Those are precise and completely opaque if you have not used the
- * terminal, so each control gets a plain-language label and keeps the real flag
- * underneath it — the argv preview below the form is still the honest record of
- * what will run, and matching the two up is how someone graduates to the CLI. */
-const PROJECT_FIELDS = new Set(
-  ["project_id", "project_ids", "dupe_ids", "--into", "--verify", "--unverify"]);
-
-const humanize = (name) => {
-  const bare = name.replace(/^--/, "").replace(/_/g, "-");
-  return bare.charAt(0).toUpperCase() + bare.slice(1).replace(/-/g, " ");
-};
-
-/* Presets around the CLI's own default, rather than an empty number box.
- *
- * Every one of these is a budget — articles to read, rows to print, projects to
- * select — and the question is nearly always "the usual, less than usual, or
- * more". A blank box makes that a research task; four options makes it a choice.
- * Custom stays, because the person who knows they want 37 should get 37. */
-function NumberChoice({ flag, value, onChange }) {
-  const [custom, setCustom] = useState(false);
-  const base = typeof flag.d === "number" ? flag.d : null;
-  const presets = base == null ? []
-    : base === 0 ? [0, 1, 3, 5, 10]
-    : [...new Set([Math.max(1, Math.round(base / 2)), base, base * 2, base * 5])].sort((a, b) => a - b);
-
-  if (custom || !presets.length) {
-    return html`<${Input} size="sm" type="number" value=${value ?? ""}
-                  placeholder=${base == null ? "" : String(base)}
-                  onChange=${(e) => onChange(e.target.value)} />`;
-  }
-  return html`
-    <${Select} size="sm" value=${value ?? ""}
-      onChange=${(e) => {
-        if (e.target.value === "__custom") { setCustom(true); onChange(""); }
-        else onChange(e.target.value);
-      }}>
-      <option value="">${base} (default)</option>
-      ${presets.filter((n) => n !== base).map((n) => html`<option key=${n} value=${n}>${n}</option>`)}
-      <option value="__custom">Custom…</option>
-    <//>`;
-}
-
-/* A project picker instead of "type the id you memorised".
- *
- * This is the single biggest barrier in the old form: half the useful commands
- * take a project id, and the only way to learn one was to run `list` in another
- * tab and read it off. The dataset is already loaded on the page.
- *
- * **The multi-value case is add-one-at-a-time, not a multi-select.** It was a
- * native `<select multiple>` holding 224 rows, which works and which nobody can
- * use: `merge` takes several ids, and the report back was "I can only merge one
- * into one". Ctrl-clicking inside a scrolling list of 224 options is not a thing
- * to ask of anyone, and nothing on screen said it was possible. Picking from a
- * dropdown and getting a removable chip says what it does. */
-function ProjectChoice({ projects, many, value, onChange }) {
-  if (!many) {
-    return html`
-      <${ProjectSearch} projects=${projects} value=${value}
-        placeholder=${value ? "search to change…" : "search projects…"}
-        onPick=${(id) => onChange(id === "" ? "" : String(id))} />`;
-  }
-
-  const chosen = Array.isArray(value) ? value.map(String) : value ? [String(value)] : [];
-  return html`
-    <div style=${{ display: "grid", gap: 6 }}>
-      ${!!chosen.length && html`
-        <div style=${{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-          ${chosen.map((id) => {
-            const project = projects.find((p) => String(p.id) === id);
-            return html`
-              <button key=${id} type="button" class="dc-chip-x" title="Remove"
-                      onClick=${() => onChange(chosen.filter((x) => x !== id))}>
-                #${id}${project ? ` ${project.name}` : ""} <span aria-hidden="true">✕</span>
-              </button>`;
-          })}
-        </div>`}
-      <${ProjectSearch} projects=${projects} exclude=${chosen}
-        placeholder=${chosen.length ? "add another…" : "search projects to add…"}
-        onPick=${(id) => onChange([...chosen, String(id)])} />
-      <span style=${{ fontSize: 11, color: "var(--muted-foreground)" }}>
-        ${chosen.length
-          ? `${chosen.length} chosen — add more, or click one to remove it`
-          : "add as many as you need"}
-      </span>
     </div>`;
 }
 
@@ -3734,553 +3326,6 @@ function ProjectSearch({ projects, exclude = [], placeholder, onPick, value }) {
         </div>`}
     </div>`;
 }
-
-function FlagField({ flag, projects, value, onChange }) {
-  const control = PROJECT_FIELDS.has(flag.f) && projects.length
-    ? html`<${ProjectChoice} projects=${projects} many=${flag.many} value=${value}
-             onChange=${onChange} />`
-    : flag.t === "bool"
-    ? html`<${Switch} size="sm" label=${value ? "on" : flag.d ? "on by default" : "off"}
-             checked=${!!value} onCheckedChange=${(v) => onChange(!!v)} />`
-    : flag.t === "choice"
-    ? html`<${Select} size="sm" value=${value ?? ""} onChange=${(e) => onChange(e.target.value)}>
-             <option value="">${flag.d ?? "default"}</option>
-             ${flag.o.map((o) => html`<option key=${o} value=${o}>${o}</option>`)}<//>`
-    : flag.many
-    ? html`<textarea class="mrd-input" rows="3" style=${{ height: "auto", resize: "vertical" }}
-             placeholder="one per line"
-             value=${Array.isArray(value) ? value.join("\n") : (value ?? "")}
-             onChange=${(e) => onChange(e.target.value.split("\n").map((s) => s.trim()).filter(Boolean))} />`
-    : flag.t === "int" || flag.t === "float"
-    ? html`<${NumberChoice} flag=${flag} value=${value} onChange=${onChange} />`
-    : html`<${Input} size="sm" value=${value ?? ""}
-             placeholder=${flag.d == null ? "" : String(flag.d)}
-             onChange=${(e) => onChange(e.target.value)} />`;
-
-  return html`
-    <div style=${{ display: "grid", gap: 4 }}>
-      <label style=${{ display: "flex", alignItems: "baseline", gap: 7, flexWrap: "wrap" }}>
-        <span style=${{ fontSize: 13, fontWeight: 500 }}>
-          ${humanize(flag.f)}${flag.req ? html`<span style=${{ color: "var(--danger)" }}> *</span>` : ""}
-        </span>
-        <span style=${{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--muted-foreground)" }}>
-          ${flag.f}</span>
-      </label>
-      ${control}
-      ${flag.h && html`<span style=${{ fontSize: 11, lineHeight: "16px", color: "var(--muted-foreground)" }}>
-        ${flag.h}</span>`}
-    </div>`;
-}
-
-/* Named sequences, run as one job.
- *
- * Placed above the command list because for most visits it is the answer: the
- * question "what do I run to catch up" has one right answer and it is three
- * commands in a particular order, not a menu of thirty. */
-function WorkflowsPanel({ workflows, allowWrite, busy, onRun }) {
-  const [open, setOpen] = useState(null);
-  const [armed, setArmed] = useState(null);
-
-  if (!workflows?.length) return null;
-  return html`
-    <div style=${{ display: "grid", gap: 10 }}>
-      <span style=${{ fontFamily: "var(--font-mono)", fontSize: 12, textTransform: "uppercase",
-                      letterSpacing: "0.16em", color: "var(--muted-foreground)" }}>Routines</span>
-      <div style=${{ display: "grid", gap: 10 }}>
-        ${workflows.map((w) => {
-          const isOpen = open === w.name;
-          const needsConfirm = w.cost === "llm" || !!w.destroys;
-          return html`
-            <${Card} key=${w.name}>
-              <button type="button" onClick=${() => { setOpen(isOpen ? null : w.name); setArmed(null); }}
-                style=${{ display: "grid", width: "100%", gap: 6, padding: "14px 20px",
-                          background: "transparent", border: 0, textAlign: "left", cursor: "pointer" }}>
-                <span style=${{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
-                  <span style=${{ fontSize: 15, fontWeight: 600 }}>${w.title}</span>
-                  <span style=${chip(w.cost === "llm" ? "--warning" : "--muted-foreground")}>${w.cost}</span>
-                  <span style=${{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--muted-foreground)" }}>
-                    ${w.steps.map((s) => s.cmd).join(" → ")}</span>
-                </span>
-                <span style=${{ fontSize: 13, lineHeight: "19px", color: "var(--muted-foreground)" }}>
-                  ${w.summary}</span>
-              </button>
-              ${isOpen && html`
-                <div style=${{ borderTop: "1px solid var(--border)", padding: "14px 20px", display: "grid", gap: 12 }}>
-                  <ol style=${{ margin: 0, paddingLeft: 20, display: "grid", gap: 8 }}>
-                    ${w.steps.map((s, i) => html`
-                      <li key=${i} style=${{ fontSize: 13, lineHeight: "19px" }}>
-                        <span style=${{ fontFamily: "var(--font-mono)", fontWeight: 600 }}>
-                          tracker ${s.cmd}${Object.entries(s.flags || {})
-                            .map(([k, v]) => ` ${k} ${v}`).join("")}</span>
-                        ${s.tolerates_failure && html`
-                          <span style=${{ ...chip("--muted-foreground"), marginLeft: 7 }}>findings ok</span>`}
-                        ${s.because && html`<div style=${{ color: "var(--muted-foreground)" }}>${s.because}</div>`}
-                      </li>`)}
-                  </ol>
-                  <span style=${{ fontSize: 12, color: "var(--muted-foreground)" }}>
-                    Runs as one job. Stops at the first step that genuinely fails.
-                  </span>
-                  ${armed === w.name
-                    ? html`
-                      <div style=${{ display: "grid", gap: 8 }}>
-                        <span style=${{ fontSize: 13, color: "var(--warning)" }}>
-                          ${w.destroys ? `This ${w.destroys}` : "This spends LLM tokens across every step."}
-                          ${" "}Run it?
-                        </span>
-                        <div style=${{ display: "flex", gap: 10 }}>
-                          <${Button} size="sm" loading=${busy} variant=${w.destroys ? "danger" : undefined}
-                            onClick=${() => onRun(w)}>Yes, run ${w.title.toLowerCase()}<//>
-                          <${Button} size="sm" variant="ghost" onClick=${() => setArmed(null)}>Back<//>
-                        </div>
-                      </div>`
-                    : html`
-                      <div>
-                        <${Button} size="sm" disabled=${!allowWrite || busy}
-                          onClick=${() => (needsConfirm ? setArmed(w.name) : onRun(w))}>
-                          ${needsConfirm ? "Run…" : "Run"}
-                        <//>
-                      </div>`}
-                </div>`}
-            <//>`;
-        })}
-      </div>
-    </div>`;
-}
-
-/* A command box, for everything the form cannot say.
- *
- * The form is good at one project and a couple of flags and bad at the rest:
- * `enrich 4 7 9 12 --budget 60`, `ingest crawl --url a --url b`, anything with
- * several positionals. Making the form cover all of that would rebuild a command
- * line out of dropdowns. So: type the command line.
- *
- * **It is not a shell and never becomes one.** The line is parsed on the server
- * by `catalog.parse_command_line` into the same `(cmd, flags)` the form produces,
- * and `build_argv` turns that into the same validated argument list. There is no
- * interpreter: `cd`, `rm`, `;`, `|` and a backtick are words the catalog has
- * never heard of, and it refuses them by name. Anything that reaches a process
- * came out of the catalog.
- *
- * Confirmation is unchanged, and is a second Enter: the server answers the first
- * attempt with the word that confirms it, the box shows what it will cost, and
- * the identical line sent again carries the confirmation. Re-typing the whole
- * command is at least as deliberate as typing its name into a box. */
-function CommandLine({ allowWrite, commands, onRan }) {
-  const [line, setLine] = useState("");
-  const [log, setLog] = useState([]);
-  const [pending, setPending] = useState(null); // { line, confirm_with, destroys }
-  const [busy, setBusy] = useState(false);
-  const [historyAt, setHistoryAt] = useState(-1);
-  const input = useRef(null);
-  const tail = useRef(null);
-
-  const names = useMemo(
-    () => (commands || []).flatMap((g) => g.items).filter((c) => !c.blocked).map((c) => c.cmd),
-    [commands]);
-  const history = useMemo(() => log.filter((l) => l.kind === "in").map((l) => l.text), [log]);
-
-  useEffect(() => { tail.current?.scrollIntoView({ block: "nearest" }); }, [log]);
-
-  const say = (kind, text) => setLog((l) => [...l.slice(-60), { kind, text }]);
-
-  const submit = async (text) => {
-    const typed = text.trim();
-    if (!typed || busy) return;
-    say("in", typed);
-    setLine("");
-    setHistoryAt(-1);
-
-    if (typed === "help" || typed === "?") {
-      say("out", "Commands: " + names.join(", "));
-      say("out", "Type them as you would in a terminal — `merge 4 7 9 --into 2`. Nothing else runs here.");
-      return;
-    }
-    if (typed === "clear") { setLog([]); return; }
-
-    // The identical line, sent again, is the confirmation.
-    const confirm = pending && pending.line === typed ? pending.confirm_with : undefined;
-    setPending(null);
-    setBusy(true);
-    try {
-      const r = await api("/api/run", { method: "POST", body: { line: typed, confirm } });
-      // Deliberately does *not* jump to the Runs view the way the forms do.
-      // Switching away unmounts this box and takes its history with it, which is
-      // exactly wrong for the one control people use to type several commands in
-      // a row. The output is one click away and the click is theirs to make.
-      say("run", { text: `started — ${r.run.cmd}`, run: r.run.id });
-    } catch (e) {
-      if (e.payload?.confirm_with) {
-        setPending({ line: typed, ...e.payload });
-        say("warn", e.payload.destroys
-          ? `This ${e.payload.destroys} Press Enter again to confirm.`
-          : "This spends LLM tokens. Press Enter again to confirm.");
-      } else {
-        say("err", e.message);
-      }
-    } finally {
-      setBusy(false);
-      input.current?.focus();
-    }
-  };
-
-  const onKey = (e) => {
-    if (e.key === "Enter") { e.preventDefault(); submit(line); return; }
-    if (e.key === "Tab") {
-      // Complete the longest command name that starts with what is typed.
-      e.preventDefault();
-      const hits = names.filter((n) => n.startsWith(line.trim()));
-      if (hits.length === 1) setLine(hits[0] + " ");
-      else if (hits.length > 1) say("out", hits.join("  "));
-      return;
-    }
-    if (e.key === "ArrowUp" || e.key === "ArrowDown") {
-      if (!history.length) return;
-      e.preventDefault();
-      const next = e.key === "ArrowUp"
-        ? Math.min(history.length - 1, historyAt + 1)
-        : Math.max(-1, historyAt - 1);
-      setHistoryAt(next);
-      setLine(next === -1 ? "" : history[history.length - 1 - next]);
-    }
-  };
-
-  return html`
-    <div style=${{ display: "grid", gap: 10 }}>
-      <span style=${{ fontFamily: "var(--font-mono)", fontSize: 12, textTransform: "uppercase",
-                      letterSpacing: "0.16em", color: "var(--muted-foreground)" }}>Command box</span>
-      <${Card}>
-        <${CardHeader}>
-          <${CardTitle}>Type a command<//>
-          <${CardDescription}>
-            For everything the forms above cannot say — several projects at once, repeated
-            options, a long line you already know. Only ${html`<code class="mrd-code">tracker</code>`}
-            commands run here; there is no shell, so ${html`<code class="mrd-code">cd</code>`},
-            ${html`<code class="mrd-code">rm</code>`} and pipes are refused by name.
-            Tab completes, ↑ recalls, ${html`<code class="mrd-code">help</code>`} lists.
-          <//>
-        <//>
-        <div style=${{ padding: "0 20px 18px", display: "grid", gap: 10 }}>
-          ${!!log.length && html`
-            <div class="dc-term-log">
-              ${log.map((entry, i) => html`
-                <div key=${i} class=${"dc-term-line dc-term-" + (entry.kind === "run" ? "ok" : entry.kind)}>
-                  ${entry.kind === "in" ? html`<span class="dc-term-prompt">$</span> ` : ""}
-                  ${entry.kind === "run" ? entry.text.text : entry.text}
-                  ${entry.kind === "run" && html`
-                    <button type="button" class="dc-term-link"
-                            onClick=${() => onRan(entry.text.run)}>view output</button>`}
-                </div>`)}
-              <div ref=${tail} />
-            </div>`}
-          <div class="dc-term-entry">
-            <span class="dc-term-prompt" aria-hidden="true">$</span>
-            <input ref=${input} class="dc-term-input" spellcheck="false" autocomplete="off"
-              placeholder=${allowWrite ? "merge 4 7 9 --into 2" : "read-only console"}
-              disabled=${!allowWrite || busy}
-              value=${line}
-              onInput=${(e) => setLine(e.target.value)}
-              onKeyDown=${onKey} />
-            <${Button} size="sm" variant="ghost" loading=${busy}
-              disabled=${!allowWrite || busy || !line.trim()}
-              onClick=${() => submit(line)}>
-              ${pending && pending.line === line.trim() ? "Confirm" : "Run"}
-            <//>
-          </div>
-        </div>
-      <//>
-    </div>`;
-}
-
-function CommandsView({ data, onRan }) {
-  const [catalogue, setCatalogue] = useState(null);
-  const [openCmd, setOpenCmd] = useState(null);
-  const [values, setValues] = useState({});
-  const [confirm, setConfirm] = useState("");
-  const [armed, setArmed] = useState(false);
-  const [showAll, setShowAll] = useState(false);
-  const [error, setError] = useState(null);
-  const [busy, setBusy] = useState(false);
-
-  useEffect(() => { api("/api/commands").then(setCatalogue).catch((e) => setError(e.message)); }, []);
-
-  const projects = useMemo(
-    () => (data.projects || []).slice().sort((a, b) => a.id - b.id), [data.projects]);
-
-  const pick = (cmd) => {
-    setOpenCmd(openCmd?.cmd === cmd.cmd ? null : cmd);
-    setValues({});
-    setConfirm("");
-    setArmed(false);
-    setShowAll(false);
-    setError(null);
-  };
-
-  const run = async (cmd, confirmWith) => {
-    setBusy(true); setError(null);
-    try {
-      const r = await api("/api/run", {
-        method: "POST",
-        body: { cmd: cmd.cmd, flags: values, confirm: confirmWith ?? confirm },
-      });
-      onRan(r.run.id);
-    } catch (e) { setError(e.message); }
-    finally { setBusy(false); }
-  };
-
-  const runWorkflow = async (w) => {
-    setBusy(true); setError(null);
-    try {
-      const r = await api("/api/workflow", { method: "POST", body: { name: w.name, confirm: w.name } });
-      onRan(r.run.id);
-    } catch (e) { setError(e.message); }
-    finally { setBusy(false); }
-  };
-
-  const preview = (cmd) => "tracker " + cmd.cmd + Object.entries(values)
-    .filter(([, v]) => v !== "" && v !== false && v != null && !(Array.isArray(v) && !v.length))
-    .map(([k, v]) => {
-      const fl = cmd.flags.find((f) => f.f === k);
-      const list = Array.isArray(v) ? v : [v];
-      if (fl?.t === "bool") return ` ${k}`;
-      if (fl?.positional) return list.map((x) => ` ${x}`).join("");
-      return list.map((x) => ` ${k} ${x}`).join("");
-    }).join("");
-
-  // A required positional with nothing in it is the commonest way a run gets
-  // refused, and the server's message arrives after the click. Say it before.
-  const unmet = (cmd) => cmd.flags
-    .filter((f) => f.req)
-    .filter((f) => {
-      const v = values[f.f];
-      return v == null || v === "" || (Array.isArray(v) && !v.length);
-    })
-    .map((f) => humanize(f.f));
-
-  if (!catalogue) return html`<div style=${{ padding: 26 }}><${Skeleton} height=${180} width="100%" /></div>`;
-  const groups = catalogue.groups;
-
-  return html`
-    <div class="dc-view dc-rise" style=${{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 16,
-                     padding: "22px 26px 60px" }}>
-      <${Eyebrow} figure="fig. 05 — commands" title="Run things">
-        Start with a ${html`<b>routine</b>`} — a named sequence that does the steps in the order they
-        want doing. The individual commands are below it, read from the CLI itself so they cannot fall
-        behind. ${html`<b>llm</b>`} means it spends money; ${html`<b>destructive</b>`} means it deletes
-        rows and asks you to type the name. Nothing here is run as a shell command.
-      <//>
-
-      ${error && html`<${Alert} variant="danger"><div><div class="mrd-alert-title">Refused</div>
-        <div class="mrd-alert-desc">${error}</div></div><//>`}
-      ${!data.allow_write && html`<${Alert} variant="warning"><div><div class="mrd-alert-title">Read-only console</div>
-        <div class="mrd-alert-desc">Started with --no-run. The argv below is still correct to paste into a terminal.</div></div><//>`}
-
-      <${WorkflowsPanel} workflows=${catalogue.workflows} allowWrite=${data.allow_write}
-                         busy=${busy} onRun=${runWorkflow} />
-
-      ${groups.map((g) => html`
-        <div key=${g.group} style=${{ display: "grid", gap: 10 }}>
-          <span style=${{ fontFamily: "var(--font-mono)", fontSize: 12, textTransform: "uppercase",
-                          letterSpacing: "0.16em", color: "var(--muted-foreground)" }}>${g.group}</span>
-          <div style=${{ display: "grid", gap: 10 }}>
-            ${g.items.map((cmd) => {
-              const isOpen = openCmd?.cmd === cmd.cmd;
-              // Two different losses, one ritual. `merge` spends nothing and is
-              // the only command here you cannot undo, so it gets the same typed
-              // confirmation as `sync` and says a different sentence.
-              const needsConfirm = cmd.cost === "llm" || !!cmd.destroys;
-              return html`
-                <${Card} key=${cmd.cmd}>
-                  <button type="button" onClick=${() => pick(cmd)} disabled=${!!cmd.blocked}
-                    style=${{ display: "flex", width: "100%", gap: 12, alignItems: "baseline", padding: "14px 20px",
-                              background: "transparent", border: 0, textAlign: "left",
-                              cursor: cmd.blocked ? "not-allowed" : "pointer", opacity: cmd.blocked ? .55 : 1 }}>
-                    <span style=${{ fontFamily: "var(--font-mono)", fontSize: 14, fontWeight: 600 }}>${cmd.cmd}</span>
-                    <span style=${chip(cmd.cost === "llm" ? "--warning" : "--muted-foreground")}>${cmd.cost}</span>
-                    ${cmd.destroys && html`<span style=${chip("--danger")}>destructive</span>`}
-                    <span style=${{ flex: 1, fontSize: 13, color: "var(--muted-foreground)" }}>
-                      ${cmd.blocked ? cmd.blocked : cmd.desc}</span>
-                  </button>
-                  ${isOpen && (() => {
-                    // Required first, then a few, then the rest folded away.
-                    // `sync` has thirteen flags and all thirteen have defaults
-                    // that work; showing them all reads as thirteen decisions.
-                    const required = cmd.flags.filter((f) => f.req);
-                    const optional = cmd.flags.filter((f) => !f.req);
-                    const shown = showAll ? optional : optional.slice(0, 3);
-                    const hidden = optional.length - shown.length;
-                    const missing = unmet(cmd);
-                    const set = (f) => (v) => setValues((s) => ({ ...s, [f]: v }));
-                    return html`
-                    <div style=${{ borderTop: "1px solid var(--border)", padding: "16px 20px", display: "grid", gap: 14 }}>
-                      ${cmd.flags.length > 0 && html`
-                        <div style=${{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 14 }}>
-                          ${[...required, ...shown].map((fl) => html`
-                            <${FlagField} key=${fl.f} flag=${fl} projects=${projects}
-                                          value=${values[fl.f]} onChange=${set(fl.f)} />`)}
-                        </div>`}
-                      ${hidden > 0 && html`
-                        <div><${Button} size="sm" variant="ghost" onClick=${() => setShowAll(true)}>
-                          ${hidden} more option${hidden === 1 ? "" : "s"}
-                        <//></div>`}
-
-                      ${!!missing.length && html`
-                        <span style=${{ fontSize: 12, color: "var(--muted-foreground)" }}>
-                          Still needed: ${missing.join(", ")}.
-                        </span>`}
-
-                      ${/* The argv stays. It is the honest record of what will run,
-                            it is what you paste into a terminal on a read-only
-                            console, and it is how the labels above teach the
-                            flags they stand for. */ ""}
-                      <pre class="dc-log" style=${{ maxHeight: 80 }}>${preview(cmd)}</pre>
-
-                      ${/* Two rituals for two different losses. `merge` cannot be
-                            undone, so it keeps the typed name — deliberate friction
-                            in front of an irreversible act. Spending tokens is
-                            recoverable (you are out some money, not some data), so
-                            it gets an explicit second click instead of homework. */ ""}
-                      ${cmd.destroys && html`
-                        <div style=${{ display: "grid", gap: 6 }}>
-                          <span style=${{ fontSize: 13, color: "var(--danger)" }}>
-                            This ${cmd.destroys} Type
-                            ${" "}${html`<b style=${{ fontFamily: "var(--font-mono)" }}>${cmd.cmd}</b>`} to confirm.
-                          </span>
-                          <${Input} size="sm" value=${confirm} placeholder=${cmd.cmd}
-                                    onChange=${(e) => setConfirm(e.target.value)} />
-                        </div>`}
-                      ${!cmd.destroys && needsConfirm && armed && html`
-                        <span style=${{ fontSize: 13, color: "var(--warning)" }}>
-                          This spends LLM tokens. Run it?
-                        </span>`}
-
-                      <div style=${{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                        ${cmd.destroys
-                          ? html`<${Button} size="sm" loading=${busy} variant="danger"
-                              disabled=${!data.allow_write || busy || !!missing.length
-                                         || confirm.trim() !== cmd.cmd}
-                              onClick=${() => run(cmd)}>Run<//>`
-                          : needsConfirm && !armed
-                          ? html`<${Button} size="sm" disabled=${!data.allow_write || busy || !!missing.length}
-                              onClick=${() => setArmed(true)}>Run…<//>`
-                          : html`<${Button} size="sm" loading=${busy}
-                              disabled=${!data.allow_write || busy || !!missing.length}
-                              onClick=${() => run(cmd, needsConfirm ? cmd.cmd : undefined)}>
-                              ${needsConfirm ? "Yes, run it" : "Run"}<//>`}
-                        <${Button} size="sm" variant="ghost"
-                          onClick=${() => (armed ? setArmed(false) : setOpenCmd(null))}>
-                          ${armed ? "Back" : "Cancel"}<//>
-                      </div>
-                    </div>`;
-                  })()}
-                <//>`;
-            })}
-          </div>
-        </div>`)}
-
-      ${/* Last, because it is the escape hatch rather than the front door: the
-            forms cover the ordinary cases, and this covers the ones a form would
-            have to become a command line to express. */ ""}
-      <${CommandLine} allowWrite=${data.allow_write} commands=${groups} onRan=${onRan} />
-    </div>`;
-}
-
-function RunsView({ watchId }) {
-  const [state, setState] = useState({ runs: [], current: null });
-  const [selected, setSelected] = useState(watchId || null);
-  const [live, setLive] = useState(null);
-  const logRef = useRef(null);
-
-  const refresh = useCallback(() => api("/api/runs").then(setState).catch(() => {}), []);
-  useEffect(() => { refresh(); }, [refresh]);
-  useEffect(() => { if (watchId) setSelected(watchId); }, [watchId]);
-
-  // Stream the selected run. A finished run replays from its file and the
-  // stream closes immediately, so the same code path serves both.
-  useEffect(() => {
-    if (!selected) return;
-    setLive({ lines: [], done: false });
-    const es = new EventSource(`/api/run/${selected}/stream`);
-    es.onmessage = (msg) => {
-      const event = JSON.parse(msg.data);
-      if (event.type === "line") {
-        setLive((s) => ({ ...s, lines: [...(s?.lines || []), event.line] }));
-      } else if (event.type === "end") {
-        setLive((s) => ({ ...s, done: true, run: event.run }));
-        es.close();
-        refresh();
-      }
-    };
-    es.onerror = () => es.close();
-    return () => es.close();
-  }, [selected, refresh]);
-
-  useEffect(() => { if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight; }, [live]);
-
-  const badge = (status) => chip(status === "ok" ? "--success" : status === "running" ? "--chart-1"
-    : status === "cancelled" ? "--muted-foreground" : "--danger");
-
-  return html`
-    <div class="dc-view dc-rise" style=${{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 16,
-                     padding: "22px 26px 60px" }}>
-      
-
-      <div style=${{ display: "flex", flexWrap: "wrap", gap: 16, alignItems: "flex-start" }}>
-        <div style=${{ flex: "1 1 280px", maxWidth: 380, display: "grid", gap: 9 }}>
-          ${state.current && state.current.status === "running" && html`
-            <button type="button" class="dc-tile dc-tile--on" onClick=${() => setSelected(state.current.id)}>
-              <div style=${{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span style=${badge("running")}>running</span>
-                <span style=${{ fontFamily: "var(--font-mono)", fontSize: 13 }}>${state.current.cmd}</span>
-              </div>
-            </button>`}
-          ${state.runs.map((r) => html`
-            <button key=${r.id} type="button" class=${`dc-tile${selected === r.id ? " dc-tile--on" : ""}`}
-                    onClick=${() => setSelected(r.id)}>
-              <div style=${{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span style=${badge(r.status)}>${r.status}</span>
-                <span style=${{ flex: 1, fontFamily: "var(--font-mono)", fontSize: 13, overflow: "hidden",
-                                textOverflow: "ellipsis", whiteSpace: "nowrap" }}>${r.cmd}</span>
-                <span class="dc-num" style=${{ fontSize: 12, color: "var(--muted-foreground)" }}>
-                  ${r.duration_s == null ? "" : r.duration_s + "s"}</span>
-              </div>
-              <div style=${{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--muted-foreground)" }}>
-                ${r.started_at}${r.projects_touched ? ` · ${r.projects_touched} project(s) changed` : ""}
-              </div>
-            </button>`)}
-          ${state.runs.length === 0 && !state.current && html`
-            <${EmptyState} variant="dashed" size="sm" title="Nothing has run yet"
-              description="Start something from the Commands view and its output appears here as it happens." />`}
-        </div>
-
-        <div style=${{ flex: "1 1 460px", minWidth: 0 }}>
-          ${selected
-            ? html`<${LogPane} lines=${live?.lines || []} innerRef=${logRef} />`
-            : html`<${Card}><div style=${{ padding: 20, color: "var(--muted-foreground)", fontSize: 14 }}>
-                Pick a run to read its log.</div><//>`}
-        </div>
-      </div>
-    </div>`;
-}
-
-/* ---- Root ---------------------------------------------------------------- */
-
-/* ---- Updates ---------------------------------------------------------------
- *
- * The landing page, and the only view that is about *change* rather than about
- * state. Projects already holds the inventory and holds it better; what nothing
- * answered was the question somebody actually arrives with — what moved, on the
- * things I named, and do I need to worry about it.
- *
- * **Everything on it is computed server-side, and that is not laziness.** The
- * dataset already carries every project's events and risks, so this page could
- * assemble the list itself — and then the one rule the feature exists to get right
- * (a window on when we *learned* a fact, not on when it happened) would live in
- * JavaScript, beside a second copy of `tracks.standing` deciding which track was
- * blocked. `docs/architecture.md`: the console makes no judgements of its own.
- *
- * The page therefore paints in two passes, like Sources: the shell and the
- * watchlist are up immediately, the signals arrive from `/api/updates`.
- */
 
 const WINDOWS = [
   [1, "today"],
@@ -4615,11 +3660,17 @@ function WatchChip({ entity, digest, onRemove, onFilter, filtered, disabled }) {
 
 /* The watchlist, and the box that edits it.
  *
- * Editable from the page deliberately, and it is the console's only write that is
- * not a command: a `watch` row says whose news to show, nothing derives from it,
- * and the person whose list it is is sitting in front of the published page rather
- * than at a terminal. The server still refuses it under `--no-watch-edits`, and
- * `allow_watch` is what this reads to know. */
+ * Editable from the page deliberately, and it is the console's *only* write: a
+ * `watch` row says whose news to show, nothing derives from it, and the person
+ * whose list it is is sitting in front of the published page rather than at a
+ * terminal.
+ *
+ * **It is one account's list, and needs an account to exist.** The server sends
+ * `allow_watch: false` to a visitor of a console with no accounts — there is
+ * nobody to own a list — so this reads that one field and does not have to know
+ * the difference between "--no-watch-edits" and "nobody is signed in". What it
+ * does have to get right is that an empty list and an absent list look the same
+ * here and mean different things, which is what the two messages below are. */
 function Watchlist({ payload, projects, allowWatch, filter, onFilter, onChanged }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
@@ -4659,7 +3710,10 @@ function Watchlist({ payload, projects, allowWatch, filter, onFilter, onChanged 
                         onRemove=${(entry) => send({ action: "remove", entry })} />`)}
         ${!entities.length &&
         html`<span style=${{ fontSize: 13, color: "var(--muted-foreground)" }}>
-          Watching everything — ${payload?.projects_watched ?? 0} projects. Name a company to narrow it.
+          ${editable
+            ? html`Watching everything — ${payload?.projects_watched ?? 0} projects. Name a company to narrow it.`
+            : html`Everything — ${payload?.projects_watched ?? 0} projects. A watchlist belongs to
+                   an account; sign in to keep one.`}
         </span>`}
         ${filter &&
         html`<button type="button" class="dc-linkish" style=${{ fontSize: 12 }}
@@ -4893,31 +3947,23 @@ function UpdatesView({ data, onOpen }) {
     </div>`;
 }
 
-/* Two consoles, one server, and the split is the whole point.
+/* One console now, and it reads.
  *
- * `/` is for reading the dataset: four views, and nothing on any of them changes
- * anything. `/dev` is where work happens — the queue, the runs, the command
- * palette, the help that explains them. Those were tabs sitting beside Projects
- * and Map, which put the machinery on the same footing as the data and made the
- * reading console answer to the operator's needs rather than the reader's.
+ * There used to be two faces on one bundle: `/` for reading the dataset and
+ * `/dev` for working — the queue, the runs, the command palette. The runner is
+ * gone (the database is changed from the CLI, by one person, on the host), so the
+ * `/dev` set went with it and `window.DC_MODE` with that.
  *
- * The page says which it is through `window.DC_MODE`, set by whichever shell the
- * server served. One bundle serves both: `assets.bundle_css` exists because a
- * chain of imports costs a serial round-trip each, and splitting this file would
- * reintroduce exactly that on the page we most want to be fast. */
-const DEV = window.DC_MODE === "dev";
-
-const USER_VIEWS = [
+ * Help stayed and moved here. It explains tiers, tracks and confidence — what a
+ * reader needs in order not to misread the data — and was only ever filed under
+ * the machinery because that is where the tab happened to sit.
+ *
+ * Kept in step with `server.READ_VIEWS`, which decides which paths are pages
+ * rather than 404s; a test asserts the two agree. */
+const VIEWS = [
   ["updates", "Updates"], ["projects", "Projects"], ["sources", "Sources"],
-  ["map", "Map"], ["capex", "Capex"],
+  ["map", "Map"], ["capex", "Capex"], ["help", "Help"],
 ];
-const DEV_VIEWS = [
-  ["pipeline", "Pipeline"], ["commands", "Commands"], ["help", "Help"],
-];
-const VIEWS = DEV ? DEV_VIEWS : USER_VIEWS;
-
-/* Old view keys that are now sections of Pipeline. */
-const FOLDED_INTO_PIPELINE = { queue: "queue", gaps: "gaps", runs: "runs" };
 
 /* One cited article, opened.
  *
@@ -5166,52 +4212,6 @@ function SourcesView({ data }) {
     </div>`;
 }
 
-/* Queue, Coverage and Runs, stacked, with the section you arrived for opened.
- *
- * Sections rather than nested tabs: a tab strip inside a tab strip is how you get
- * two levels of "where am I", and these three are short enough to read in one
- * scroll. */
-function PipelineView({ data, section, allowWrite, busy, onRan, watchId }) {
-  /* Everything closed unless you were sent to a section.
-   *
-   * Opening one by default made this the tallest view in the console by a wide
-   * margin — 25,614px, because the queue section carries a full table. A
-   * disclosure whose default state is "open" is not a disclosure; it is the same
-   * page with a chevron on it. */
-  const [open, setOpen] = useState(section || null);
-  useEffect(() => { if (section) setOpen(section); }, [section]);
-  const panels = [
-    ["queue", "Queue", "What discovery found and what it costs to read"],
-    ["gaps", "Coverage", "Which fields are thin, measured only where they can be set"],
-    ["runs", "Runs", "What each run did, and what it spent"],
-  ];
-  return html`
-    <div class="dc-view dc-rise" style=${{ display: "grid", gap: 14, padding: "22px 26px 60px" }}>
-      <${Eyebrow} figure="fig. 04 — pipeline" title="What the machine found, missed and spent">
-        Three readings of one subject. Open the one you came for; the others stay out of the way.
-      <//>
-      ${panels.map(([key, title, blurb]) => html`
-        <${Card} key=${key}>
-          <button type="button" class="dc-disclose" aria-expanded=${open === key}
-                  onClick=${() => setOpen(open === key ? null : key)}>
-            <span style=${{ display: "grid", gap: 2, textAlign: "left" }}>
-              <b style=${{ fontSize: 15 }}>${title}</b>
-              <span style=${{ fontSize: 12, color: "var(--muted-foreground)" }}>${blurb}</span>
-            </span>
-            <i data-lucide=${open === key ? "chevron-up" : "chevron-down"}
-               style=${{ width: 16, height: 16, flex: "none" }} />
-          </button>
-          ${open === key && html`
-            <div style=${{ borderTop: "1px solid var(--border)" }}>
-              ${key === "queue" && html`
-                <${QueueView} data=${data} allowWrite=${allowWrite} busy=${busy} onRan=${onRan} />`}
-              ${key === "gaps" && html`<${GapsView} data=${data} />`}
-              ${key === "runs" && html`<${RunsView} watchId=${watchId} />`}
-            </div>`}
-        <//>`)}
-    </div>`;
-}
-
 function App() {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
@@ -5219,16 +4219,9 @@ function App() {
      path the server was asked for, so a deep link opens on the right page rather
      than painting the default and swapping — which reads as a flash of the wrong
      screen. */
-  const [view, setView] = useState(
-    () => window.DC_VIEW || (DEV ? "pipeline" : "updates"),
-  );
-  /* Which Pipeline section to open on arrival. `goto` sets it, so a run finishing
-   * still lands you on Runs even though Runs is no longer a tab. */
-  const [pipelineSection, setPipelineSection] = useState(null);
+  const [view, setView] = useState(() => window.DC_VIEW || "updates");
   const [openId, setOpenId] = useState(null);
   const [dark, setDark] = useState(false);
-  const [watchRun, setWatchRun] = useState(null);
-  const [running, setRunning] = useState(false);
 
   const load = useCallback(() => api("/api/dataset").then((payload) => {
     if (payload.kwPerH200) H200_KW = payload.kwPerH200;
@@ -5250,79 +4243,27 @@ function App() {
     // data, and dropping the code here left it unable to tell.
     status: e.status,
   })), []);
-  /* One way to change view, because three of the old eight are now sections.
-   * Anything still asking for "runs" — the run-finished redirect, a bookmark —
-   * gets Pipeline with that section open rather than a blank page. */
   const goto = useCallback((key, { push = true } = {}) => {
-    const section = FOLDED_INTO_PIPELINE[key];
-    const next = section ? "pipeline" : key;
-    setPipelineSection(section || null);
-    setView(next);
+    setView(key);
     /* `pushState`, not a real navigation: the bundle and the dataset are already
        in memory, so re-fetching either to change tab would be slower than the tab
        switch it replaces. The URL is kept honest so refresh, back and a pasted
        link all land where the reader expects. */
-    if (push) {
-      const path = (DEV ? "/dev/" : "/") + next;
-      if (window.location.pathname !== path) {
-        window.history.pushState({ view: next }, "", path);
-      }
+    if (push && window.location.pathname !== "/" + key) {
+      window.history.pushState({ view: key }, "", "/" + key);
     }
   }, []);
 
   /* Back and forward. `push: false` so replaying history does not re-push it. */
   useEffect(() => {
-    const onPop = () => {
-      const key = window.location.pathname.replace(/^\/(dev\/)?/, "") || (DEV ? "pipeline" : "overview");
-      goto(key, { push: false });
-    };
+    const onPop = () => goto(window.location.pathname.replace(/^\//, "") || "updates",
+                             { push: false });
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, [goto]);
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => { document.documentElement.classList.toggle("dark", dark); }, [dark]);
-
-  /* One run at a time is a server rule; knowing about it here is what lets the
-   * Queue and the merge buttons disable themselves instead of offering an action
-   * that will 409.
-   *
-   * It also refetches the dataset when a run finishes, which is what makes a
-   * command actually change the page. Until this existed, a crawl finished and
-   * the article stayed in the queue, a merge finished and the folded rows stayed
-   * in the table — the run log said it had worked and every other view
-   * disagreed.
-   *
-   * Keyed on the run's id and status rather than on a running→idle transition.
-   * A falling edge is only observable if some poll caught the run *while* it was
-   * running, and a merge takes about a second against a four-second interval —
-   * measured: the merge completed between two ticks, nothing reloaded, and the
-   * folded rows sat there looking merged in the log and present in the table.
-   * An id that has reached a terminal status is a fact about the past, so it
-   * cannot be missed however briefly the run existed.
-   *
-   * Polling rather than hooking each button covers every path that can start
-   * one, including a run started from another tab. */
-  useEffect(() => {
-    let cancelled = false;
-    let seen = null;
-    const poll = () => api("/api/runs")
-      .then((r) => {
-        if (cancelled) return;
-        const current = r.current;
-        setRunning(current?.status === "running");
-        const stamp = current ? `${current.id}:${current.status}` : null;
-        // The first poll only establishes a baseline: reloading here would be a
-        // second dataset fetch on every page load, for a run that ended before
-        // the tab was even open.
-        if (seen !== null && stamp !== seen && current?.status !== "running") load();
-        seen = stamp;
-      })
-      .catch(() => {});
-    poll();
-    const timer = setInterval(poll, 4000);
-    return () => { cancelled = true; clearInterval(timer); };
-  }, [load]);
 
   // The table's sticky header must sit below the app header, which changes
   // height when it wraps. Measure rather than hard-code.
@@ -5420,7 +4361,15 @@ function App() {
             </span>
             <${Button} size="icon" variant="outline" aria-label="Toggle theme"
                        onClick=${() => setDark((d) => !d)}>${dark ? "☀" : "☾"}<//>
-            ${data.password_protected && html`
+            ${/* Who is reading, and the way out. `account` is null on a console
+                  with no accounts at all, where there is nobody to sign out. */ ""}
+            ${data.account && html`
+              <span class="dc-head-counts" style=${{ fontSize: 12, color: "var(--muted-foreground)",
+                                                     maxWidth: 200, overflow: "hidden",
+                                                     textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                    title=${data.account.email}>
+                ${data.account.name || data.account.email}
+              </span>
               <${Button} size="sm" variant="ghost" onClick=${async () => {
                 await api("/api/logout", { method: "POST", body: {} });
                 window.location.reload();
@@ -5433,15 +4382,7 @@ function App() {
         ${view === "sources" && html`<${SourcesView} data=${data} />`}
         ${view === "map" && html`<${MapView} data=${data} openId=${openId} onOpen=${setOpenId} />`}
         ${view === "capex" && html`
-          <${CapexView} data=${data} allowWrite=${data.allow_write} allowAi=${data.allow_ai} busy=${!!running}
-            onOpen=${setOpenId}
-            onRan=${(id) => { setWatchRun(id); goto("runs"); }} />`}
-        ${view === "pipeline" && html`
-          <${PipelineView} data=${data} section=${pipelineSection} allowWrite=${data.allow_write}
-            busy=${!!running} watchId=${watchRun}
-            onRan=${(id) => { setWatchRun(id); goto("runs"); }} />`}
-        ${view === "commands" && html`<${CommandsView} data=${data}
-          onRan=${(id) => { setWatchRun(id); goto("runs"); }} />`}
+          <${CapexView} data=${data} allowAi=${data.allow_ai} onOpen=${setOpenId} />`}
         ${view === "help" && html`<${HelpView} data=${data} />`}
       </div>
 

@@ -91,6 +91,25 @@ def fixtures_dir() -> Path:
     return FIXTURES
 
 
+#: The password every test account is created with. Long enough to clear
+#: `accounts.MIN_PASSWORD_LEN`, and the same everywhere so a test that needs to
+#: sign in does not have to invent one.
+ACCOUNT_PASSWORD = "correct horse"
+
+
+@pytest.fixture
+def account(session):
+    """One account, because a watchlist now needs an owner.
+
+    Most tests that touch `watch` do not care whose list it is — they care about
+    the matching rules — so this exists to keep `account_id=account.id` a short
+    thing to type rather than four lines of setup per test.
+    """
+    from tracker import accounts
+
+    return accounts.create(session, "reader@example.com", ACCOUNT_PASSWORD, name="Reader")
+
+
 @pytest.fixture
 def logical_snapshot():
     """Every row of every table, for comparing data rather than bytes.

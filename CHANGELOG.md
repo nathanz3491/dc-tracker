@@ -12,6 +12,122 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **The console has accounts, and each one keeps its own watchlist**
+  (`tracker/accounts.py`, `migrations/0020_accounts.sql`,
+  `migrations/0021_watch_owner.sql`, `tracker/webui/auth.py`,
+  `tracker/watchlist.py`).
+
+  `TRACKER_CONSOLE_PASSWORD` was one shared secret for every reader, and the cost
+  was not only authentication: **the landing page could only ever draw one
+  watchlist**, because with no way to tell two people apart, "the things I am
+  watching" was not a sentence the data could express. A `watch` row was a
+  property of the database rather than of the reader — so everybody saw everybody
+  else's interests, and any of them could delete yours.
+
+  `tracker users add you@example.com` makes an account: an email, a password
+  hashed with **`scrypt` from the standard library**, and nothing else. No new
+  dependency, in a project that vendors its whole front end rather than take a
+  CDN. The stored form is self-describing — `scrypt$n$r$p$salt$hash` — so the cost
+  parameters can be raised later without a migration and rows written under the old
+  ones keep verifying, which is the same reasoning `source.extractor` carries its
+  own version for.
+
+  **Zero accounts still means an open console**, exactly as an unset password did:
+  `tracker serve` on loopback needs no setup, because reaching 127.0.0.1 already
+  means having the machine. What refuses is publishing — `serve --tunnel` will not
+  put a page with no way to gate it on the open internet. Creating the first
+  account closes the gate on a *running* console within a few seconds: the server
+  counts rows rather than reading a flag it was handed at startup, because
+  `tracker users add` runs in a different process and a flag read once would leave
+  a published console open until somebody noticed.
+
+  **Invites, because there is no open registration.** Behind a tunnel the login
+  page is a public URL, and an account can still read the whole dataset even
+  though it can no longer run anything. `tracker users invite` mints a single-use
+  code, prints it once, and stores only its sha256 — this database is copied
+  between machines by `scripts/sync_db.py` and kept in `backups/`, where a
+  plaintext code would be a live credential in every copy. The holder redeems it on
+  the sign-in page and chooses their own email and password, which is the point:
+  a password you picked and sent them is a password in a chat log. Every refusal —
+  unknown code, expired, already spent — is the same sentence, because the
+  difference is only useful to somebody probing.
+
+  **The terminal reads across everybody and writes to one person.** Bare
+  `tracker watch` lists every account's entries with an owner column, because a
+  terminal on the host is looking at the database rather than at one person's slice
+  of it; `--user` narrows it, and `tracker digest --user alice@example.com`
+  reproduces exactly the page alice sees, which is the form to schedule if the
+  nightly note is going to her. `watch add` and `watch rm` **require** `--user`:
+  there is no shared list to fall back on, and writing without naming an owner
+  would put an entry on somebody's page that they did not ask for.
+
+  Details worth recording. Lockout is counted per client and globally but **never
+  per email**, which would let anyone who knows an address lock its owner out. An
+  unknown address and a wrong password produce the same message *and* the same
+  work — a miss still spends one scrypt — so neither the wording nor the timing
+  says which addresses have accounts. `redeem` creates the account before marking
+  the code spent, so a typo costs a retry rather than the invite. And
+  `allow_watch` on the wire answers "may *this reader* edit a watchlist" rather
+  than "is the feature on", folding in both `--no-watch-edits` and whether anybody
+  is signed in — sent identically by `/api/dataset` and `/api/updates`, because
+  whichever the page happened to believe would otherwise decide.
+
+### Removed
+
+- **The console can no longer run commands** (`tracker/webui/server.py`,
+  `tracker/webui/static/app.js`, `tracker/webui/static/ansi.js`).
+
+  Gone: the `/dev` face and its Pipeline, Commands and Runs views; `GET
+  /api/commands`, `/api/runs`, `/api/run/<id>`, `/api/run/<id>/stream`,
+  `/api/discover`; `POST /api/run`, `/api/workflow`, `/api/run/cancel`; the
+  `window.DC_MODE` split and roughly 900 lines of front end — the command form, the
+  workflow panel, the command line, the run history and the terminal output pane.
+  They 404 now rather than 403: there is no runner to refuse.
+
+  **Not because it was broken.** It worked, and three doors stood in front of it: a
+  typed-name confirmation for anything that spends money or deletes rows, a
+  single-writer check because SQLite takes one, and the rule that the console
+  assembles an argument list and never a command string. All three were correct.
+
+  It went because **nobody used it**. The database is changed from the CLI, by one
+  person, on the host — which `CLAUDE.md` has said all along — so the runner was
+  three security properties that had to stay correct forever, behind a public URL,
+  in exchange for a feature with no users. Deleting it removes the class of
+  question rather than answering it again each time the page changes.
+
+  `tracker tui` is where the buttons live now, and it is the better home: it runs
+  in a terminal on the machine that owns the database, so "who may start this?" is
+  answered by ssh rather than by a cookie. **`webui/catalog.py`, `runner.py`,
+  `runs.py` and `workflows.py` survive** the deletion of their only HTTP caller,
+  because the TUI imports them — the introspection and the process handling were
+  never the problem, and `tests/test_tui.py` already covered the same mechanism the
+  deleted route tests did.
+
+  `help` moved from the `/dev` set into the reading console. It explains tiers,
+  tracks and confidence — what a reader needs in order not to misread the data —
+  and was only filed under the machinery because that is where the tab sat.
+
+  The capex page keeps its suspected-duplicate panel and loses its merge button.
+  The information is a read a reader wants — a duplicate is how a number gets
+  counted twice, and the totals are right above it — while folding rows is a
+  decision with no undo that belongs at a terminal.
+
+- **`TRACKER_CONSOLE_PASSWORD`** (`tracker/config.py`, `.env.example`). Replaced by
+  the `account` table. The two reasons it was an environment variable rather than a
+  flag still hold and are why `tracker users add` prompts: a plain `str` leaks into
+  any traceback Typer or Rich prints, and a `--password` flag lands in shell
+  history and in `ps` for every user on the machine.
+
+### Changed
+
+- **`serve --no-run` and `cloudflare --no-run` are accepted and do nothing**, for
+  one release. `deploy/serve.sh` on the host is outside the repo (`deploy/` is
+  gitignored, per `CLAUDE.md` §5) so the poller does not update it, and it will keep
+  passing `--no-run` after this lands. A flag that errored would turn the next
+  launchd restart into an argument-parsing failure with nothing serving the console
+  — an outage caused by a *removal*, which is the worst kind to debug. It warns and
+  carries on, and is hidden from `--help` so nothing invites its use.
+
 - **Duplicate detection reaches the cases it was structurally blind to, and every
   pair now carries all the evidence there is for it** (`tracker/dedup.py`,
   `tracker/capex.py`, `tracker/dupresolve.py`,

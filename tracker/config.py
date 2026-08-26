@@ -230,18 +230,22 @@ class Settings(BaseSettings):
     db: Path = Path("data/tracker.db")
 
     # --- Console -----------------------------------------------------------
-    #: Password for `tracker serve`. Unset means no gate, which is right for a
-    #: loopback console — reaching it already means having the machine.
-    #:
-    #: `SecretStr`, and read from the environment rather than taken as a CLI flag,
-    #: for two different reasons. Typer and Rich print local variables in
-    #: tracebacks, so a plain `str` would leak it into any crash output pasted
-    #: into a bug report; and a `--password` flag would land in shell history and
-    #: in `ps` output for every user on the machine.
-    #:
-    #: Publishing the console (a tunnel, a reverse proxy) without setting this is
-    #: refused — see `tracker serve --tunnel`.
-    console_password: SecretStr | None = None
+    #
+    # There is deliberately no console password here any more.
+    #
+    # `TRACKER_CONSOLE_PASSWORD` was one shared secret for every reader, which is
+    # why the console could only ever draw one watchlist: with no way to tell two
+    # people apart, "my watchlist" was not a sentence the data could express. It
+    # was replaced by the `account` table — `tracker users add` — and the question
+    # a publish check asks ("is there anything in front of this?") is now answered
+    # by whether any account exists. See `cli._console_accounts`.
+    #
+    # A password is now per-account and lives hashed in the database, so nothing
+    # about it belongs in configuration. The two reasons the old setting gave for
+    # being an environment variable rather than a flag still hold and are why
+    # `tracker users add` prompts instead: a plain `str` leaks into any traceback
+    # Typer or Rich prints, and a `--password` flag lands in shell history and in
+    # `ps` for every user on the machine.
 
     #: A named cloudflared tunnel to publish through, and the hostname routed to
     #: it. Set both or neither.

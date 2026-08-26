@@ -1,4 +1,4 @@
-# Architecture: CLI → web → back to the CLI
+# Architecture: one writer, three faces
 
 How the pieces fit. Logic, not code detail.
 
@@ -6,13 +6,11 @@ How the pieces fit. Logic, not code detail.
 
 ## In one line
 
-**The CLI is the system. The console is a face on it.**
+**The CLI is the system. The console and the TUI are faces on it.**
 
-The console is not a reimplementation and not a second code path. It does two
-things: it reads the database and draws it, and when you press a button it
-**starts an actual CLI process** and plays its output back to you.
-
-So the whole thing is a loop, and both ends of the loop are the CLI.
+Only the CLI writes. The console reads the database and draws it; the TUI reads
+the same database, draws it in a terminal, and can also *start* CLI commands
+because it runs on the machine that owns the data.
 
 ---
 
@@ -27,169 +25,129 @@ So the whole thing is a loop, and both ends of the loop are the CLI.
           ▼
    ┌──────────────┐
    │   database   │   one SQLite file
-   │  tracker.db  │   projects / sources / events / risks
+   │  tracker.db  │   projects / sources / events / risks / accounts
    └──────┬───────┘
           │ read-only
           ▼
    ┌──────────────┐
-   │   console    │   display and triggering
+   │   console    │   display, and one preference
    │tracker serve │   makes no judgements of its own
    └──────────────┘
 ```
 
-The console has **two faces on one server**, and the split is about who is
-looking:
+**The console reads.** Six views — Updates, Projects, Sources, Map, Capex, Help —
+and it cannot change a project, a citation or a figure. There is exactly one
+exception, `POST /api/watch`, and the section below is about why it is allowed.
 
-```
-   /                                    /dev
-   ┌────────────────────────────┐       ┌────────────────────────────┐
-   │ Updates · Projects         │       │ Pipeline · Commands · Help │
-   │ Sources · Map · Capex      │       │                            │
-   │                            │       │ the queue, the runs,       │
-   │ reads the dataset. the     │       │ the command palette.       │
-   │ watchlist is the only      │       │ this is where work         │
-   │ thing it writes.           │       │ happens.                   │
-   └────────────────────────────┘       └────────────────────────────┘
-              │                                      │
-              └──────────────┬───────────────────────┘
-                             ▼
-                   one bundle, one server
-                   window.DC_MODE picks the view set
-```
-
-**Each view has its own URL** — `/projects`, `/sources`, `/dev/pipeline` — so a
-page can be linked to, refreshed and reached with the back button. The server does
-not render them differently; it stamps which view was asked for and the front end
+**Each view has its own URL** — `/projects`, `/sources`, `/help` — so a page can
+be linked to, refreshed and reached with the back button. The server does not
+render them differently; it stamps which view was asked for and the front end
 opens on it, then `pushState`s as you navigate. The bundle and the dataset are
 already in memory, so a real navigation per tab would be slower than the switch it
 replaced. An unknown path 404s rather than quietly serving Updates.
 
-**The mode is a display choice, not a permission.** What `/dev` can do is still
-governed by `allow_write` on the server — `serve --no-run` serves the page with
-every button inert. A page cannot grant itself a capability by asking for a
-different URL, which is the same reasoning as "the gate is checked on the command
-name, never on its flags".
+### It used to run commands, and no longer does
 
-Why the reading console exists separately at all: it used to carry eight tabs,
-three of which were about running the tool rather than about what it found. That
-made the machinery compete with the data for the reader's attention, and the
-landing page — a filter card and eighteen columns — answered no question at all.
+There were two faces on one server: `/` for reading and `/dev` for working — a
+command palette built by introspecting the CLI, a run streamer, a real subprocess
+per button. That is gone.
 
-**The one write on the reading console, and why it does not break the split.**
-`POST /api/watch` adds or drops a row of `watch` — a statement about whose news the
-Updates page should show. Nothing derives from it, no ingest consults it, and
-losing the table would lose a preference rather than a fact. It has its own flag,
-`--no-watch-edits`, for the same reason `--ai` is separate from `--run`: these are
-different risks, and collapsing them cost the console the one thing it could safely
-offer. What the flag does *not* do is loosen anything else — a watchlist edit
-cannot touch a project, a citation or a figure, cannot start a run and cannot spend
-a token, and it is behind the password like every other route.
+The reasoning is not that it was badly built. It worked, and three doors stood in
+front of it: a typed-name confirmation for anything that spends money or deletes
+rows, a single-writer check because SQLite takes one writer, and the rule that the
+console assembles an **argument list** and never a command string. All three were
+correct.
 
-The split is enforced, not merely intended:
+The reasoning is that **nobody used it**. The database is changed from the CLI, by
+one person, on the host — that is what `CLAUDE.md` has said all along. So the
+runner was three security properties that had to stay correct forever, behind a
+public URL, in exchange for a feature with no users. Deleting it removes the whole
+class of question rather than answering it again each time the page changes.
 
-- The **CLI** owns everything that changes data — fetching, calling the model,
-  checking evidence, merging conflicting claims, scoring confidence.
-- The **database** is the single place a fact lives.
-- The **console** reads it and shows it. Its only route to changing anything is
-  to start the CLI.
+`tracker tui` is where the buttons live now, and it is the better home for them:
+it runs in a terminal on the machine that owns the database, so "who may start
+this?" is answered by ssh rather than by a cookie. It still shares
+`webui/catalog.py` and `webui/runner.py` with what used to be here — the
+introspection and the process handling were never the problem — which is why
+those modules survive a change that deleted their only HTTP caller.
 
 ---
 
-## The loop
+## Accounts, and the one write
 
-### Step 1 — how the console knows what commands exist
+### Why there are accounts at all
 
-There is no hard-coded list.
+The console was gated by one shared password. That made every reader the same
+principal, and it had a consequence beyond authentication: **the landing page
+could only ever draw one watchlist.** With no way to tell two people apart, "the
+things I am watching" was not a sentence the data could express, so `watch` was a
+property of the database rather than of the reader.
 
-On startup the console asks the CLI: what commands do you have, what flags does
-each take, what type is each flag, what is its default, what does its help text
-say? The CLI answers, and the console draws forms from the answer.
+`tracker users add` creates an account — an email, a password hashed with
+`scrypt`, and nothing else. Every account can do exactly what the shared password
+allowed, which after the change above is: read the dataset, and keep a watchlist.
+There are no roles, because there is nothing left to have a role *about*.
 
-The payoff is direct: **a flag added to the CLI shows up in the browser on the
-next start**, with no second place to remember. And the browser can never offer
-a button the CLI would not recognise.
+**Zero accounts is a legitimate state and means an open console.** That is what a
+fresh install is in, and it is right for loopback: reaching 127.0.0.1 already
+means having the machine. What refuses is *publishing* — `serve --tunnel` will not
+put a page with no way to gate it on the open internet, exactly as it refused
+without a password before.
 
-Two things the CLI cannot answer, both short hand-written lists rather than
-guesses, because guessing wrong is how someone spends money or loses a row by
-accident:
+Creating the first account changes what a running console does, within seconds and
+without a restart. The server counts rows rather than reading a flag it was given
+at startup, because `tracker users add` runs in a **different process** and a flag
+read once would leave a published console open until somebody noticed.
 
-* **Which commands cost money** — `sync`, `enrich`, `infer`, `search`,
-  `ingest crawl`, `ingest edgar`. Not visible in a parameter definition.
-* **Which commands destroy data** — just `merge`. A separate list, not another
-  entry in the first: `merge` spends nothing, and telling an operator it spends
-  LLM tokens would be false. Both need the command's name typed back, so there is
-  one ritual for two different losses.
+### Getting an account without a terminal
 
-Being hand-written has a cost, and the third hand-written list pays it: the
-*grouping* of commands into palette sections. Four commands arrived and all four
-landed in an unnamed "Other" bucket at the bottom until someone listed them. A
-test now fails if any command that is not blocked ends up there.
+Two routes, and neither is open registration. Behind a tunnel the login page is a
+public URL, and while an account can no longer run a command it can still read the
+whole dataset.
 
-### Step 2 — what pressing Run actually does
+- `tracker users add` — at a terminal, prompting for the password.
+- `tracker users invite` — mints a single-use code, printed once. The holder
+  redeems it on the console's own sign-in page and chooses their own email and
+  password. That is the one worth using when you are not the person who will be
+  typing the password: a password you picked and sent them is a password in a chat
+  log.
 
-Not a simulation of the command. **A real process**, identical to what you would
-have typed.
+The code is stored as a sha256 and never in the clear, because this database
+travels between machines through `scripts/sync_db.py` and sits in `backups/` —
+a plaintext code in it would be a live credential in every copy.
 
-```
-you fill in a form and press Run
-        │
-        ▼
-the console checks the request against the list from step 1
-   ├─ unknown command → refused
-   ├─ unknown flag    → refused
-   ├─ wrong type      → refused
-   └─ costs money or deletes rows, and not confirmed → refused
-      (checked on the command name, never on its flags —
-       a gate that reads arguments is a gate with a bypass in it)
-        │
-        ▼
-it assembles an argument list and starts a process
-        │
-        ▼
-each line of output is pushed to the browser as it appears
-        │
-        ▼
-the process ends; the output is kept as a file, visible under "Runs"
-```
+### The one write, and why it does not break the split
 
-One detail carries the security of the whole thing: the console assembles an
-**argument list**, never a command string. Each element is one separate
-argument, so `;`, backticks and `&&` inside a value are ordinary characters with
-no special meaning. At no point is anything you type spliced into a command line.
+`POST /api/watch` adds or drops a row of `watch` — a statement about whose news the
+Updates page should show, for the account making the request. Nothing derives from
+it, no ingest consults it, and losing the table would lose a preference rather than
+a fact.
 
-### Step 3 — how the data gets back
+It has its own flag, `--no-watch-edits`, for the same reason `--ai` is separate:
+these are different risks, and collapsing them cost the console the one thing it
+could safely offer. What the flag does *not* do is loosen anything else — a
+watchlist edit cannot touch a project, a citation or a figure, and it cannot spend
+a token.
 
-The process writes to the database and exits. The page re-reads and redraws.
+It needs an **account**, not merely a session. An anonymous visitor to an open
+console has no list to edit, because a watchlist without an owner is the shared
+list that accounts exist to replace. They get the whole-database digest instead,
+which is the same "no watchlist, so read everything" path `tracker digest` has
+always had for an empty list.
 
-That last part is automatic, and getting it right took two attempts. The page
-polls for the state of the most recent run and refetches when it has finished —
-keyed on the run's **id and status**, not on a running→idle transition. A
-transition is only observable if some poll caught the run mid-flight, and a merge
-takes about a second against a four-second interval. Measured: the merge
-completed between two ticks, nothing reloaded, and the log said three rows were
-deleted while the table still showed them. An id that has reached a terminal
-status is a fact about the past and cannot be missed.
+### The terminal reads across everybody
 
-```
-the CLI defines what commands exist
-        │
-        ▼
-the console reads that and draws the interface
-        │
-        ▼
-you press a button
-        │
-        ▼
-the console starts the CLI
-        │
-        ▼
-the CLI writes the database
-        │
-        ▼
-the console re-reads it and redraws
-        │
-        └──────► back to the start
-```
+`tracker watch` and `tracker digest` default to **every** account's entries,
+because a terminal on the host is looking at the database rather than at one
+person's slice of it; the listing carries an owner column so the rows stay
+distinguishable. `--user alice@example.com` narrows either to one person, and
+`digest --user` is what reproduces exactly the page that person sees — the form to
+schedule if the nightly note is going to *her*.
+
+Writing is the other way round: `watch add` and `watch rm` **require** `--user`.
+Reading everybody's list is useful; writing without naming an owner would put an
+entry on somebody's page that they did not ask for, and there is no shared list to
+fall back on.
 
 ---
 
@@ -235,9 +193,10 @@ both were written correctly, but because **only one of them is doing the work**.
 | Capacity behind each category of obstacle | backend |
 | Which tranches are the utility's plant, not the campus | backend |
 | Why *this* obstacle is the project's blocker | backend |
+| Whether this reader may edit a watchlist | backend |
 | Sorting, filtering, expand/collapse | browser (pure display, no judgement) |
 
-The last two are recent and both are the same rule applied twice.
+Three of those are worth naming, because each is the same rule applied twice.
 
 **Serving infrastructure.** `blocks.is_generation` has kept a utility's gas and
 solar out of every *sum* since it was written. The tranche list did not know that,
@@ -252,8 +211,13 @@ open obstacles, and the page had no way to say the other twenty-six were
 considered. `upsert.blocker_rationale` shares `choose_blocker` with the write
 path, so the explanation cannot name a different risk than the column holds — and
 when several ranked equally and the tie fell to the lowest row id, it says the
-choice was arbitrary. A browser-side copy of that rule would drift from the one
-that picked the value, which is the whole objection this section opens with.
+choice was arbitrary.
+
+**`allow_watch`.** It answers "may *this reader* edit a watchlist", not "is the
+feature enabled" — so it folds in the `--no-watch-edits` flag *and* whether anybody
+is signed in. Sent the same way by `/api/dataset` and `/api/updates`, because
+whichever one the page happened to believe would otherwise decide, and two answers
+to one question is the failure this whole section is about.
 
 ---
 
@@ -262,20 +226,28 @@ that picked the value, which is the whole objection this section opens with.
 **On the read side the database is opened read-only.**
 
 Not by convention — the handle itself rejects writes. A bug in display code
-raises instead of quietly changing a row.
+raises instead of quietly changing a row. Every route except `POST /api/watch`,
+`POST /api/login` and `POST /api/register` opens it `mode=ro`.
+
+The three that do not are as narrow as their jobs: one row of `watch`, one
+`last_seen_at` stamp on a successful sign-in, and one `account` row created by
+spending an invite.
 
 **On the write side only one thing runs at a time.**
 
-SQLite takes one writer. Two overlapping jobs mean the second dies partway
-through, after it has already paid for its model calls. So the console checks for
-a running job before starting another and refuses with an explanation, rather
-than letting you find out eight articles in.
+SQLite takes one writer, and a `tracker` command holds a lock file for the hours a
+crawl runs. The watchlist write deliberately does **not** take that lock: it is a
+rule about derived data, which a `watch` row is not, and blocking somebody from
+changing which companies they are told about because tonight's crawl is still
+running would be a worse answer than letting the two interleave. SQLite's
+`busy_timeout` covers the contention.
 
 ---
 
 ## Three doors
 
-The console can run commands, so three things stand in front of it:
+The console is a reader, so the doors are about who may read and how fast anyone
+may knock.
 
 **One deliberate hole in the CSP, and only one.** The page declares
 `default-src 'self'` so a stray CDN URL fails loudly instead of quietly
@@ -334,16 +306,27 @@ rule a read-only console is a request forwarder aimed at whatever network it run
 on, and "it only reads" says nothing about where it may be pointed.
 
 **The bind address.** Loopback by default. If you can reach localhost you are
-already at the machine, and a password there would protect nothing.
+already at the machine, and a password there would protect nothing. `--allow-remote`
+is required for anything else, because what is behind the port is the whole dataset
+and — with `--ai` — a model panel that spends real tokens per click.
 
-**A password.** The moment it is published — a tunnel, a proxy — the first door
-stops working, because a tunnel connects from the local machine and so every
-request looks local. Publishing therefore *requires* a password; without one the
-command refuses to start. Before signing in, the entire site is a login page —
-not even the frontend code is served.
+**Accounts, and a rate limit.** The moment the console is published — a tunnel, a
+proxy — loopback stops meaning anything, because a tunnel connects from the local
+machine and so every request looks local. Publishing therefore *requires* an
+account; without one the command refuses to start. Before signing in, the entire
+site is a login page — not even the frontend code is served.
 
-**Confirmation.** The five commands that spend money need their name typed
-before they run. This door is not for attackers; it is for slipped clicks.
+What makes a short password safe is not its length, it is the rate: eight failures
+lock one client out for fifteen minutes, and forty across *all* clients close the
+gate for fifteen minutes. The second counter is the one that matters behind a
+tunnel, where an attacker with a thousand addresses would otherwise get a thousand
+budgets. Nothing is counted per email — that would let anyone who knows an address
+lock its owner out.
+
+Sessions are random server-side tokens in an `HttpOnly; SameSite=Lax` cookie,
+holding no claim the server has to trust. They live in memory, so a restart signs
+everybody out; the deployer restarts this process on every commit, so that happens
+often and is not worth engineering around.
 
 ---
 
@@ -355,12 +338,14 @@ Easy to confuse:
 | --- | --- | --- |
 | What it is | a file | a server |
 | Data | frozen at export time | re-read every request |
-| Can run commands | no | yes |
+| Per-reader watchlist | no | yes |
 | Can be emailed | yes, opens by double-click | no |
 | Needs anything running | no | yes |
 
 Both are kept because they answer different needs: one is **something to send
-someone**, the other is **somewhere to work**.
+someone**, the other is **somewhere to read**.
+
+And if what you want is the commands, that is a third thing: `tracker tui`.
 
 ---
 
@@ -374,35 +359,32 @@ someone**, the other is **somewhere to work**.
    ISO queue files ───►│  crawl     fetch+extract  │
    Census data ───────►│  geo       derive geo     │
    the model    ◄─────►│  enrich    exhaust one    │
-                       │  ...                      │
+                       │  users     who may read   │
                        └────────────┬──────────────┘
                                     │ writes (one at a time)
                                     ▼
                        ┌───────────────────────────┐
                        │  tracker.db               │
                        │  projects·sources·events  │
-                       └────────────┬──────────────┘
-                                    │ read-only
-                                    ▼
-   ┌────────────────────────────────────────────────────────┐
-   │  console: tracker serve                                │
-   │                                                        │
-   │  ① read the CLI's definitions ──► draw the palette     │
-   │  ② read the database          ──► draw the views       │
-   │  ③ you press Run              ──► validate, spawn ─────┼──┐
-   │  ④ replay its output          ◄── line by line         │  │
-   │  ⑤ re-read the database       ──► redraw               │  │
-   └────────────────────────────────────────────────────────┘  │
-                                    ▲                          │
-                                    └──────────────────────────┘
-                                         back to the CLI
+                       │  account·watch            │
+                       └──────┬─────────────┬──────┘
+                     read-only│             │read-write
+                              ▼             ▼
+        ┌──────────────────────────┐   ┌──────────────────────┐
+        │ console: tracker serve   │   │ tui: tracker tui     │
+        │                          │   │                      │
+        │ sign in, read the data,  │   │ the same data, plus  │
+        │ keep your own watchlist  │   │ the commands, on the │
+        │                          │   │ machine that owns it │
+        └──────────────────────────┘   └──────────────────────┘
 ```
 
 ---
 
 ## Summary
 
-The browser took nothing away from the CLI. It **reads** the CLI to build an
-interface, **starts** it when you ask, and **reads back** what it did.
-
 One place makes the judgements. One path writes.
+
+The console is a reader with accounts: it draws what the backend decided, and the
+only thing it can change is which companies *you* are told about. The commands
+moved to the terminal, where the person who runs them already is.

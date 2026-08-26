@@ -35,29 +35,61 @@ The coordinate panel is a plot, not a map: there is no coastline because there i
 boundary data here, and drawing one would be illustration rather than reporting.
 Positions are city centres, not sites.
 
-## The console: the same dataset, live, with the commands as buttons
+## The console: the same dataset, live, one reader at a time
 
 ```bash
 tracker serve
 ```
 
-## Two consoles: one to read, one to work
+## One console, and it reads
 
-| | | |
-|---|---|---|
-| **`/`** | Updates · Projects · Sources · Map · Capex — each on its own URL; Sources opens any cited article in a reader view | reading the dataset. The watchlist is the only thing on it that writes. |
-| **`/dev`** | Pipeline · Commands · Help | the queue, the runs, the command palette. |
+Six views — **Updates**, Projects, Sources, Map, Capex, Help — each on its own
+URL, so a page can be linked to, refreshed and reached with the back button.
+Sources opens any cited article in a reader view. Nothing here changes a project,
+a citation or a figure.
 
-They were one console with eight tabs, which put the machinery on the same
-footing as the data — three of the eight top-level choices were about running the
-tool rather than about what it found. Now the reading console answers to the
-reader and the developer console answers to whoever is fixing something.
+There used to be a second face at `/dev` carrying Pipeline, Commands and Runs: a
+palette built by introspecting the CLI, and a real subprocess per button. **It is
+gone**, and not because it was broken. The database is changed from the CLI, by
+one person, on the host, so the runner was three security properties that had to
+stay correct forever — a typed-name confirmation, a single-writer check, and
+argv-never-a-string — behind a public URL, for a feature nobody used.
 
-One bundle serves both; the server sets `window.DC_MODE` on the shell and the
-front end picks its view set. That is a *display* choice and nothing more: what
-`/dev` can actually do is still governed by `allow_write`, so `serve --no-run`
-renders it with every button inert. A page cannot grant itself a capability by
-asking for a different URL, and a test says so.
+`tracker tui` is where the commands live now, and it is the better home: it runs
+in a terminal on the machine that owns the database, so "who may start this?" is
+answered by ssh rather than by a cookie. See [the terminal interface](tui.md).
+
+## Accounts
+
+```bash
+tracker users add you@example.com     # prompts for a password
+tracker users                         # who exists, and how much each watches
+tracker users invite --note carol     # a single-use code, printed once
+tracker users passwd you@example.com
+tracker users rm you@example.com      # takes their watchlist with it
+```
+
+The console used to have one shared password. That made every reader the same
+principal, and the cost was not only authentication: **the landing page could only
+ever draw one watchlist**, because with no way to tell two people apart "the
+things I am watching" was not a sentence the data could express.
+
+**Zero accounts means an open console**, which is what a fresh install is in and
+is right on loopback — reaching 127.0.0.1 already means having the machine. What
+refuses is publishing: `serve --tunnel` will not put a page with no way to gate it
+on the open internet. Creating the first account closes the gate on a *running*
+console within a few seconds, without a restart.
+
+There is no open registration. Behind a tunnel the login page is a public URL, and
+while an account cannot run a command it can still read the whole dataset. So an
+account is made either at a terminal or by redeeming a code that was minted at
+one — `tracker users invite` prints it once, stores only its sha256, and the
+holder chooses their own email and password on the sign-in page. Use the invite
+when you are not the person who will be typing the password: a password you picked
+and sent them is a password in a chat log.
+
+Nothing here is a role. Every account can do exactly what the shared password
+allowed, which is now: read the dataset, and keep a watchlist.
 
 **The landing page answers one question: what changed on what I am
 watching.** Two pages have held this slot. The first opened on the projects
@@ -100,12 +132,26 @@ else is there to be read. The count beside the window control toggles the page d
 to just those, which is how you check what the schedule would have sent without
 waiting for it.
 
-**The watchlist is editable here, and it is the only thing on `/` that writes.** A
-`watch` row says whose news to show: nothing derives from it, no ingest reads it,
-and losing the table would lose a preference rather than a fact. It has its own
-flag — `serve --no-watch-edits` — because `--run` and `--ai` taught the lesson that
-different risks need different switches. The same list is `tracker watch` on the
-machine that holds the database.
+**The watchlist is editable here, and it is the only thing on the console that
+writes.** A `watch` row says whose news to show: nothing derives from it, no
+ingest reads it, and losing the table would lose a preference rather than a fact.
+It has its own flag — `serve --no-watch-edits` — because these are different risks
+from spending a token and deserve different switches.
+
+**It is your list, not the database's.** Each account keeps its own, so two people
+reading the same console get two different landing pages, and neither can drop the
+other's entry. A visitor to a console with *no* accounts has no list to keep —
+there is nobody to own one — and gets the whole-database digest instead, which is
+the same fallback an empty watchlist has always had.
+
+The same rows are `tracker watch` on the machine that holds the database, where
+the view is deliberately the opposite: bare `tracker watch` reads **every**
+account's entries with an owner column, because a terminal on the host is looking
+at the database rather than at one person's slice of it. `--user alice@example.com`
+narrows it, and `tracker digest --user alice@example.com` reproduces exactly the
+page alice sees — the form to schedule if the nightly note is going to her.
+Writing requires `--user`: reading across everybody is useful, but writing without
+naming an owner would put an entry on somebody's page that they did not ask for.
 
 The box that edits it is a picker rather than a text field, over the three shapes a
 watch has: an **operator** (everything it builds), a **tenant** (what others build
@@ -153,19 +199,21 @@ The three worth knowing:
 |---|---|---|
 | `GET /api/dataset` | every project with its claims, plus capex, gaps, queue, totals | ~1 MB, refetched after each run |
 | `GET /api/updates` | what changed on the watchlist, signed and ranked | one pass over projects, events and risks |
-| `POST /api/watch` | adds or drops a watchlist entry | the only write a read-only console allows |
-| `POST /api/run` | starts a command, returns a run id | needs `--run` |
+| `POST /api/watch` | adds or drops a watchlist entry | **the only write there is** |
+| `POST /api/login` | exchanges an email and password for a session cookie | — |
+| `POST /api/register` | spends an invite code and creates the account | — |
 
-`POST /api/run` takes `{cmd, flags}`, `{workflow}` or `{line}`, and validates all
-three against the same catalog the palette is built from — so a blocked command
-cannot be reached by putting it in a routine, and no request is ever spliced into
-a shell.
+`POST /api/run` is gone, along with `/api/runs`, `/api/commands` and
+`/api/discover`. They 404 rather than 403: there is no runner to refuse.
 
-Opens `http://127.0.0.1:8765/`. Eight views — **Updates**, Projects, Sources,
-Map, Capex, Pipeline, Commands, Help — reading the database on every request, so it
-reflects what a run just did without re-exporting anything. A run started from the
-page refetches the dataset when it finishes, so a crawl that adds a project or a
-merge that removes three is visible without a reload.
+`POST /api/watch` acts on the signed-in account's list, so it needs an account and
+not merely a session — an anonymous visitor to an open console gets a 403 saying
+so rather than a list with no owner.
+
+Opens `http://127.0.0.1:8765/`. Six views — **Updates**, Projects, Sources, Map,
+Capex, Help — reading the database on every request, so it reflects what the last
+run did without re-exporting anything. Reload to pick up a run that finished while
+you were reading; nothing on the page can start one.
 
 **Different from `tracker export html`, and both are worth having.** The export is
 one self-contained file you can email; it is frozen at the moment it was written
@@ -305,15 +353,11 @@ open:
   catalog, so a blocked command — `cloudflare`, which publishes this page to a
   public URL — cannot be reached by putting it in a sequence.
 
-`tracker serve --no-run` drops the runner entirely and serves the views read-only.
-
-`--ai/--no-ai` is a second, narrower switch, and it defaults to whatever `--run`
-is. It governs only the panels that call a model — the project briefing, `infer`,
-the capex overview — because those are a different risk from the command box: they
-*read* a row and spend tokens, and `tracker infer` has never written its answer
-anywhere. Conflating the two meant a published read-only console refused the one
-thing it could safely offer, so `serve --no-run --ai` is the useful combination
-for a public console: it answers questions and still cannot spawn a command.
+`--ai/--no-ai` governs the panels that call a model — the project briefing,
+`infer`, the capex overview. They *read* a row and spend tokens, and `tracker
+infer` has never written its answer anywhere, which is why spending was always its
+own switch rather than a consequence of some other one. `serve --no-ai` is for a
+console you would rather nobody could run up a bill on.
 
 **No network requests at all** — React, d3, three.js, Lucide, the Census boundary
 file and all three webfonts are vendored under `tracker/webui/static/vendor/`
@@ -391,15 +435,23 @@ asset URL with that file's version, so a restart genuinely replaces the front en
 — a browser or a CDN edge cannot keep serving the previous one, because a changed
 file is a different URL. Only the Python process needs the restart.
 
-`TRACKER_CONSOLE_PASSWORD` is required for either shape and the command refuses to
-start without it. A quick-tunnel hostname is random but **not secret** — it goes
-over the wire and Cloudflare knows it — so it is obscurity, not access control.
-The password, the per-client and global lockouts, and `--no-run` are the access
+**At least one account is required for either shape** and the command refuses to
+start without one — `tracker users add you@example.com`. A quick-tunnel hostname
+is random but **not secret** — it goes over the wire and Cloudflare knows it — so
+it is obscurity, not access control. The sign-in, the per-client and global
+lockouts, and the fact that nothing here can start a command are the access
 control. The console never sees the tunnel: cloudflared connects to it over
 loopback, which means the "refuse a non-loopback bind" check never fires and the
-password is what replaces it.
+sign-in is what replaces it.
 
-**`--check` before you need it.** It verifies the password, that `cloudflared` is
+What makes a short password safe is not its length, it is the rate: eight failures
+lock one client out for fifteen minutes, and forty across *all* clients close the
+gate for the same. The second counter is the one that matters here, where every
+request arrives from 127.0.0.1 and an attacker with a thousand addresses would
+otherwise get a thousand budgets.
+
+**`--check` before you need it.** It verifies that an account exists, that
+`cloudflared` is
 present *and actually executes*, that a `--name` tunnel exists on the account, and
 that the database and front-end files are there — then exits. Worth running once,
 because two of those fail in ways that are otherwise discovered at the worst

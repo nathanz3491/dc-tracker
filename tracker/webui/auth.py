@@ -1,26 +1,43 @@
-"""The gate in front of the console.
+"""The gate in front of the console: sessions, and how fast anyone may knock.
 
-On loopback the console needs no password: reaching it already means having the
-machine. The moment it is published — a Cloudflare tunnel, a reverse proxy,
-anything — that stops being true, and what is behind it is a process that runs
-shell-free but real commands against a real database and can spend money.
+With no accounts at all the console needs no sign-in: reaching loopback already
+means having the machine, and `tracker serve` should need no setup. The moment an
+account exists — or the console is published through a tunnel or a proxy — that
+stops being true, and everything behind it is a real database that can spend LLM
+tokens on a model panel.
 
 So the rules here are deliberately not "good enough for localhost":
 
 * **Everything is behind it.** Not just the page — every API route, every static
   asset. An unauthenticated request gets the login form or a 401 and nothing else.
-* **Constant-time comparison**, so the password cannot be recovered a character at
-  a time from response timing.
 * **A lockout, not just a check.** A published URL means an unattended login form.
   A short human-memorable password is only safe if guessing is slow, so failures
   are counted and the gate closes for a while.
 * **Session tokens are random and server-side.** The cookie carries no claim the
   server has to trust — it is a lookup key, revocable, and it expires.
+
+**This module knows nothing about passwords, and that is on purpose.** It imports
+nothing from this project and touches no database. The credential check lives in
+`tracker/accounts.py`, where the hashing is; the server asks that module whether a
+pair is right and then asks this one for a token. So a token is the only thing the
+gate can hand out, and the only thing it can be asked about is which account a
+token belongs to.
+
+**Sessions are in memory, so a restart signs everybody out.** That is not an
+oversight: the host's poller restarts this process whenever a commit lands, and a
+session that survived a restart would have to be persisted somewhere the console
+can write — which is the one thing a read-only console does not have.
+
+One consequence worth stating rather than discovering. `tracker users` runs in a
+*different process*, so it cannot reach into this dictionary: deleting an account
+takes effect on that account's next request, because `Handler._account` resolves
+the session to a row and a missing row is not a session — but **changing a
+password does not sign the old cookie out**. The 12-hour TTL is what bounds that.
+If a token has to die now, restart the console.
 """
 
 from __future__ import annotations
 
-import hmac
 import logging
 import secrets
 import threading
@@ -29,7 +46,7 @@ from dataclasses import dataclass, field
 
 log = logging.getLogger(__name__)
 
-#: How long a login lasts. Long enough to work a session, short enough that a
+#: How long a sign-in lasts. Long enough to work a session, short enough that a
 #: forgotten open tab does not stay a key forever.
 SESSION_TTL_S = 12 * 60 * 60
 
@@ -51,13 +68,13 @@ LOCKOUT_S = 15 * 60
 #: ~3,800 a day. A 7-character lowercase-and-digits password is 36^7 ≈ 7.8e10
 #: combinations, so an exhaustive search is ~57 million years. Length is not what
 #: is protecting this; the rate limit is.
+#:
+#: **Nothing is counted per email**, and that is a decision rather than an
+#: omission. A per-address counter lets anyone who knows an address lock its owner
+#: out, and the global counter already bounds the rate without handing out that
+#: lever.
 GLOBAL_MAX_FAILURES = 40
 GLOBAL_LOCKOUT_S = 15 * 60
-
-#: Below this a password is a typo rather than a secret. Deliberately low: the
-#: rate limit above is the defence, and an arbitrary length rule mostly persuades
-#: people to write the password on a note.
-MIN_PASSWORD_LEN = 6
 
 #: The cookie holds a lookup key, never a claim. Named for the app so it cannot
 #: collide with anything else on localhost.
@@ -71,25 +88,32 @@ class _Attempts:
 
 
 @dataclass
-class Gate:
-    """Password check, session store and lockout for one console instance."""
+class _Session:
+    """One signed-in account, and when its token stops working."""
 
-    password: str | None = None
+    account_id: int
+    expires: float
+
+
+@dataclass
+class Gate:
+    """Session store and lockout for one console instance.
+
+    Holds no password and performs no credential check — see the module
+    docstring. `fail`, `succeed` and `grant` are the three things a login handler
+    does, in whichever order the outcome dictates.
+    """
+
     session_ttl: int = SESSION_TTL_S
     max_failures: int = MAX_FAILURES
     lockout_s: int = LOCKOUT_S
     global_max_failures: int = GLOBAL_MAX_FAILURES
     global_lockout_s: int = GLOBAL_LOCKOUT_S
 
-    _sessions: dict[str, float] = field(default_factory=dict, repr=False)
+    _sessions: dict[str, _Session] = field(default_factory=dict, repr=False)
     _attempts: dict[str, _Attempts] = field(default_factory=dict, repr=False)
     _global: _Attempts = field(default_factory=_Attempts, repr=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
-
-    @property
-    def required(self) -> bool:
-        """False when no password is configured — loopback-only, open console."""
-        return bool(self.password)
 
     # --- attempts ---------------------------------------------------------
 
@@ -111,7 +135,8 @@ class Gate:
         remaining = until - now
         return int(remaining) + 1 if remaining > 0 else 0
 
-    def _fail(self, client: str) -> None:
+    def fail(self, client: str) -> None:
+        """Count one refused attempt, and close the gate if that was enough."""
         now = time.monotonic()
         with self._lock:
             record = self._attempts.setdefault(client, _Attempts())
@@ -131,7 +156,8 @@ class Gate:
                     self.global_lockout_s,
                 )
 
-    def _succeed(self, client: str) -> None:
+    def succeed(self, client: str) -> None:
+        """Forget this client's failures, and the shared ones."""
         with self._lock:
             self._attempts.pop(client, None)
             # A correct password says the traffic is not an attack, so the global
@@ -139,48 +165,33 @@ class Gate:
             # shut, `locked_for` has already refused this request.
             self._global.count = 0
 
-    # --- the check --------------------------------------------------------
-
-    def attempt(self, offered: str, *, client: str) -> str | None:
-        """Return a fresh session token, or None if the password is wrong.
-
-        Raises nothing on lockout — the caller checks `locked_for` first, so that
-        a locked client is told how long rather than being told "wrong password"
-        and left guessing about which.
-        """
-        if not self.required:
-            return self.issue()
-        # compare_digest on bytes: it is only constant-time over equal-length
-        # inputs, and encoding first avoids a unicode fast path.
-        ok = hmac.compare_digest((offered or "").encode("utf-8"), self.password.encode("utf-8"))
-        if not ok:
-            self._fail(client)
-            return None
-        self._succeed(client)
-        return self.issue()
-
     # --- sessions ---------------------------------------------------------
 
-    def issue(self) -> str:
+    def grant(self, account_id: int) -> str:
+        """A fresh token for one account."""
         token = secrets.token_urlsafe(32)
         with self._lock:
             self._prune()
-            self._sessions[token] = time.monotonic() + self.session_ttl
+            self._sessions[token] = _Session(account_id, time.monotonic() + self.session_ttl)
         return token
 
-    def valid(self, token: str | None) -> bool:
-        if not self.required:
-            return True
+    def session_for(self, token: str | None) -> int | None:
+        """Which account this token signs in as, or None if it does not.
+
+        Returns an account id rather than a boolean because that id is what every
+        route downstream needs: a watchlist read is a question about one person,
+        and a handler that had to ask twice could ask two different gates.
+        """
         if not token:
-            return False
+            return None
         with self._lock:
-            expires = self._sessions.get(token)
-            if expires is None:
-                return False
-            if expires < time.monotonic():
+            found = self._sessions.get(token)
+            if found is None:
+                return None
+            if found.expires < time.monotonic():
                 del self._sessions[token]
-                return False
-            return True
+                return None
+            return found.account_id
 
     def revoke(self, token: str | None) -> None:
         if not token:
@@ -190,7 +201,7 @@ class Gate:
 
     def _prune(self) -> None:
         now = time.monotonic()
-        for token in [t for t, exp in self._sessions.items() if exp < now]:
+        for token in [t for t, s in self._sessions.items() if s.expires < now]:
             del self._sessions[token]
 
 
@@ -213,7 +224,6 @@ __all__ = [
     "GLOBAL_MAX_FAILURES",
     "LOCKOUT_S",
     "MAX_FAILURES",
-    "MIN_PASSWORD_LEN",
     "SESSION_TTL_S",
     "Gate",
     "cookie_value",
