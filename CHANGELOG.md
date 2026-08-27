@@ -12,6 +12,74 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **Extractions overlap, so a crawl is no longer paced by one LLM call at a time**
+  (`tracker/parallel.py`, `tracker/llm.py`, `tracker/config.py`,
+  `tracker/ingest/crawl.py`).
+
+  `ingest/fetch.py` has run four requests abreast since it was written — a global
+  semaphore, one gate per host, a politeness delay. The LLM layer beside it had
+  none, and the model is most of a run's elapsed time: a fetch is seconds, an
+  insert is milliseconds, and an extraction with reasoning on is tens of seconds.
+  The serial half was the whole cost.
+
+  `TRACKER_LLM_CONCURRENCY` (default 6) is how many extractions are in flight.
+  Nothing about what gets stored changes, and the three reasons are the design:
+  `extract_one` was already a pure function of a `FetchResult` with no session in
+  sight; `upsert` recomputes every field from the full claim set, so it is
+  order-independent and idempotent by construction; and the writes stay on one
+  thread, keeping `crawl._checkpoint`'s commit-per-article — an interrupted run
+  still resumes where it stopped rather than losing the batch.
+  `test_concurrent_extraction_writes_the_same_rows_as_serial` runs the same input
+  at 1 and at 3 into two databases and compares the rows.
+
+  **Input order, not completion order.** `map_ordered` submits everything and
+  yields results in the order they went in, so a run's log reads as it always did.
+  Ordering by whichever call returned first would make two runs over one queue
+  print different output and turn any test that pins it into an intermittent
+  failure. It costs nothing: the pool runs `limit` tasks regardless of which one
+  the consumer is waiting for, so head-of-line blocking delays a write —
+  milliseconds — never a call.
+
+  **Batching into one prompt was rejected, not overlooked.** It would be cheaper,
+  and it breaks the evidence gate: with five articles in one call the model can
+  attribute article 3's sentence to article 1's project, producing a quote that
+  verifies against the batch and not against the citation it is filed under. That
+  is a silent failure in the mechanism the whole dataset rests on. Concurrency
+  spends exactly the same tokens on exactly the same prompts.
+
+  **A local model gets 1 worker** (`TRACKER_OLLAMA_CONCURRENCY`), because local
+  inference is compute-bound: a second request queues behind the first and competes
+  for the same VRAM instead of halving the wall clock. `Settings.llm_workers()` is
+  one resolver rather than each call site reading whichever field it remembers, and
+  at 1 `map_ordered` runs inline with no pool at all — the serial path stays
+  bit-for-bit the path it was, which is what lets a failure under concurrency be
+  bisected against a serial run.
+
+### Changed
+
+- **One pooled HTTP client per destination, instead of a fresh connection per LLM
+  call** (`tracker/llm.py`). Every call went through the module-level `httpx.post`,
+  which opens a connection, completes a TLS handshake and discards both. Invisible
+  while one call was in flight; not once several are.
+
+  The `trust_env` guarantee moved with it, and is stronger for it. Keeping local
+  inference off the system proxy used to mean passing `trust_env=False` on each
+  individual call, which held only as long as every future call site remembered —
+  and there are now five. It is a *constructor* argument on the local client, so a
+  call site cannot forget. `test_ollama_traffic_never_transits_a_proxy` asserts it
+  on the client, with a companion test proving no Ollama path can reach the API
+  client instead.
+
+- **LLM retry backoff is jittered** (`TRACKER_LLM_RETRY_JITTER`, default 0.25).
+  With one call in flight the fixed `min(2**attempt, 30)` was fine. With several,
+  workers rate-limited by the same response computed the same delay, slept in
+  lockstep and retried in lockstep — a thundering herd aimed at the endpoint that
+  had just asked for less traffic. A server's own `Retry-After` still wins on
+  magnitude and gets the jitter too, since the point is that N workers told the
+  same thing must not act in unison.
+
+### Added
+
 - **The console has accounts, and each one keeps its own watchlist**
   (`tracker/accounts.py`, `migrations/0020_accounts.sql`,
   `migrations/0021_watch_owner.sql`, `tracker/webui/auth.py`,
@@ -127,6 +195,8 @@ initial build of the v1 PRD.
   launchd restart into an argument-parsing failure with nothing serving the console
   — an outage caused by a *removal*, which is the worst kind to debug. It warns and
   carries on, and is hidden from `--help` so nothing invites its use.
+
+### Added
 
 - **Duplicate detection reaches the cases it was structurally blind to, and every
   pair now carries all the evidence there is for it** (`tracker/dedup.py`,

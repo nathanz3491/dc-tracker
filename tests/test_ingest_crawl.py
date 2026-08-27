@@ -17,11 +17,15 @@ from __future__ import annotations
 import datetime as dt
 import json
 import re
+import threading
+import time
 from pathlib import Path
 
 import pytest
 from sqlalchemy import select
 
+from tracker.config import get_settings
+from tracker.db import init_db, session_scope
 from tracker.ingest import crawl
 from tracker.ingest.fetch import FetchResult, html_to_text, should_escalate
 from tracker.llm import LLMError, LLMJsonError, LLMReply, parse_json_object
@@ -69,16 +73,25 @@ class FakeFetcher:
 
 
 class FakeLLM:
-    """Returns canned replies in order. Records the prompts it received."""
+    """Returns canned replies in order. Records the prompts it received.
+
+    Locked, because `crawl.run` may call this from several threads at once
+    (`Settings.llm_concurrency`). Without it `pop(0)` and `seen.append` race, and
+    the failure is a duplicated or dropped reply rather than an exception. The lock
+    makes the fake safe; it cannot make a positional queue *deterministic* under
+    concurrency, which is why the suite pins concurrency to 1 — see `conftest`.
+    """
 
     def __init__(self, replies: list[str], *, finish_reason: str = "stop") -> None:
         self.replies = list(replies)
         self.finish_reason = finish_reason
         self.seen: list[tuple[str, str]] = []
+        self._lock = threading.Lock()
 
     def complete(self, *, system: str, user: str, max_tokens: int | None = None) -> LLMReply:
-        self.seen.append((system, user))
-        text = self.replies.pop(0) if self.replies else "{}"
+        with self._lock:
+            self.seen.append((system, user))
+            text = self.replies.pop(0) if self.replies else "{}"
         return LLMReply(text, self.finish_reason, 1200, 400, "fake-model")
 
 
@@ -2569,3 +2582,104 @@ def test_an_empty_policy_changes_nothing(session):
     )
     assert report.skipped_ignored == 0
     assert report.inserted == 1
+
+
+# --- concurrent extraction, serial writes -----------------------------------
+
+
+class ConcurrentLLM:
+    """Answers by URL rather than by position, and records how many calls overlap.
+
+    Keyed on the URL because a positional queue cannot say which article a reply
+    belongs to once several are in flight — that is the property `conftest`'s
+    `TRACKER_LLM_CONCURRENCY=1` protects the rest of this file from needing.
+    """
+
+    def __init__(self, by_url: dict[str, str], *, hold: float = 0.05) -> None:
+        self.by_url = by_url
+        self.hold = hold
+        self._lock = threading.Lock()
+        self.in_flight = 0
+        self.peak = 0
+        self.threads: set[str] = set()
+
+    def complete(self, *, system: str, user: str, max_tokens: int | None = None) -> LLMReply:
+        with self._lock:
+            self.in_flight += 1
+            self.peak = max(self.peak, self.in_flight)
+            self.threads.add(threading.current_thread().name)
+        try:
+            time.sleep(self.hold)
+            for url, reply in self.by_url.items():
+                if url in user:
+                    return LLMReply(reply, "stop", 1200, 400, "fake-model")
+            return LLMReply("{}", "stop", 10, 10, "fake-model")
+        finally:
+            with self._lock:
+                self.in_flight -= 1
+
+
+def test_extraction_overlaps_while_writes_stay_on_one_thread(session, monkeypatch):
+    """The whole point of `llm_concurrency`, and the invariant that makes it safe.
+
+    A SQLAlchemy session is not thread-safe, so the concurrency has to stop at the
+    extraction boundary. `record_url` is the write every article reaches whatever
+    its outcome, so pinning *its* thread pins the boundary: if a future refactor
+    moves any part of the write path into the pool, this fails.
+    """
+    monkeypatch.setenv("TRACKER_LLM_CONCURRENCY", "3")
+    get_settings.cache_clear()
+
+    urls = [f"https://example.test/news/{n}" for n in range(3)]
+    fetcher = FakeFetcher({url: fetched(url=url) for url in urls})
+    llm = ConcurrentLLM({})
+
+    writers: list[str] = []
+    real_record_url = crawl.record_url
+
+    def spy_record_url(session_, run_id, outcome):
+        writers.append(threading.current_thread().name)
+        return real_record_url(session_, run_id, outcome)
+
+    monkeypatch.setattr(crawl, "record_url", spy_record_url)
+
+    crawl.run(session, urls, fetcher=fetcher, extractor=llm, run_id="t")
+
+    assert llm.peak > 1, f"extractions did not overlap (peak {llm.peak})"
+    assert len(writers) == 3, "every article must still reach the write path"
+    assert set(writers) == {threading.current_thread().name}, (
+        f"a write ran off the main thread: {set(writers)}"
+    )
+
+
+def test_concurrent_extraction_writes_the_same_rows_as_serial(tmp_path, monkeypatch):
+    """Equivalence, which is the only thing that makes the speedup free.
+
+    The same input through the same code at concurrency 1 and at 3, into two fresh
+    databases; the stored rows must match. `upsert` recomputes every field from the
+    full claim set and is order-independent by construction — this asserts that the
+    property still holds through the pool rather than trusting that it does.
+    """
+    urls = [f"https://example.test/story/{n}" for n in range(3)]
+    reply = canned("llm_response_microsoft_wi.json")
+
+    def snapshot(workers: str, name: str) -> list[tuple]:
+        monkeypatch.setenv("TRACKER_LLM_CONCURRENCY", workers)
+        get_settings.cache_clear()
+        engine, _ = init_db(tmp_path / name)
+        with session_scope(engine) as s:
+            crawl.run(
+                s,
+                urls,
+                fetcher=FakeFetcher({url: fetched(url=url) for url in urls}),
+                extractor=ConcurrentLLM({urls[0]: reply}),
+                run_id="t",
+            )
+            return [
+                (p.name, p.company, p.city, p.state, p.mw_planned, p.investment_usd, p.confidence)
+                for p in s.scalars(select(Project).order_by(Project.id))
+            ]
+
+    serial = snapshot("1", "serial.db")
+    assert serial, "the fixture reply must actually produce a row"
+    assert serial == snapshot("3", "concurrent.db")

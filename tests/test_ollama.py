@@ -17,6 +17,7 @@ import pytest
 import respx
 from typer.testing import CliRunner
 
+from tracker import llm as llm_module
 from tracker.cli import app
 from tracker.config import Settings
 from tracker.llm import (
@@ -26,9 +27,11 @@ from tracker.llm import (
     MissingApiKey,
     OllamaExtractor,
     OllamaUnavailable,
+    api_client,
     build_extractor,
     default_extractor,
     fast_extractor,
+    local_client,
     reasoning_extractor,
     split_thinking,
 )
@@ -327,7 +330,7 @@ def test_completion_offers_the_two_providers():
     assert [c.text for c in result.items] == ["deepseek", "ollama"]
 
 
-def test_ollama_traffic_never_transits_a_proxy(monkeypatch):
+def test_ollama_traffic_never_transits_a_proxy():
     """Measured failure, not a hypothetical: on a machine with a system-wide
     proxy, httpx's default routed 127.0.0.1:11434 through the proxy — macOS's
     system proxy configuration is honoured even with no proxy variable in the
@@ -335,21 +338,46 @@ def test_ollama_traffic_never_transits_a_proxy(monkeypatch):
     worked on the same URL. Local inference opts out of proxies entirely; the
     API provider keeps the default, since reaching the API may be what the
     proxy is for.
+
+    Asserted on the client rather than on each call's kwargs, because that is where
+    the guarantee now lives. `trust_env` used to be passed per request, which held
+    only as long as every future call site remembered to pass it; it is a
+    constructor argument on a pooled client, so a call site cannot forget. The
+    companion test below is what makes this cover the calls themselves.
     """
-    seen: list[bool] = []
-    real_get = httpx.get
+    assert local_client(5.0).trust_env is False, "the liveness probe must skip proxies"
+    assert local_client(600.0).trust_env is False, "so must a run-length call"
+    assert api_client().trust_env is True, "the API keeps httpx's default"
 
-    def spy_get(url, **kwargs):
-        seen.append(kwargs.get("trust_env"))
-        return httpx.Response(200, json={"version": "test"}, request=httpx.Request("GET", url))
 
-    def spy_post(url, **kwargs):
-        seen.append(kwargs.get("trust_env"))
-        return httpx.Response(200, json=chat_reply("OK"), request=httpx.Request("POST", url))
+@respx.mock
+def test_every_ollama_call_goes_through_the_proxy_free_client(monkeypatch):
+    """The other half of the pair above: proving the local client is the only one a
+    local call can use.
 
-    monkeypatch.setattr(httpx, "get", spy_get)
-    monkeypatch.setattr(httpx, "post", spy_post)
-    extractor = OllamaExtractor(ollama_settings())
-    extractor.complete(system="s", user="u")
-    assert seen == [False, False], f"every call must opt out, got {seen}"
-    assert real_get is not httpx.get  # the spy was in place for the whole test
+    Without this, `local_client` could disable proxies perfectly while some Ollama
+    path quietly used the API client — which is exactly the shape of the bug the
+    original per-call kwarg was vulnerable to. `api_client` is replaced by a failing
+    stub so reaching for it is a test failure rather than a silent 502 in
+    production.
+    """
+    mock_version(respx)
+    respx.post(f"{BASE}/api/chat").respond(200, json=chat_reply("OK"))
+
+    real_local = llm_module.local_client
+    asked: list[float] = []
+
+    def spy_local(timeout_s: float) -> httpx.Client:
+        asked.append(timeout_s)
+        return real_local(timeout_s)
+
+    def no_api_client():
+        raise AssertionError("an Ollama call reached the API client")
+
+    monkeypatch.setattr(llm_module, "local_client", spy_local)
+    monkeypatch.setattr(llm_module, "api_client", no_api_client)
+
+    OllamaExtractor(ollama_settings()).complete(system="s", user="u")
+
+    # The probe in __init__ and the completion itself: two calls, both local.
+    assert len(asked) >= 2, f"expected the probe and the call to route locally, got {asked}"

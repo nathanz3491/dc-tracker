@@ -310,6 +310,41 @@ class Settings(BaseSettings):
     #: Hard cap on LLM calls per URL: one attempt plus one corrective retry.
     llm_max_attempts: int = Field(default=2, ge=1, le=5)
 
+    # --- LLM concurrency --------------------------------------------------
+    #: Extraction calls in flight at once against the API provider.
+    #:
+    #: The model is most of a crawl's elapsed time and the calls are independent —
+    #: one article each, no shared conversation state — so this is the one knob that
+    #: changes how long a run takes without changing a single thing it stores. It is
+    #: emphatically not batching: the prompts are untouched and the token spend is
+    #: identical, because these are the same calls overlapped. Putting several
+    #: articles in one prompt would be cheaper and would break the evidence gate,
+    #: which checks a quote against the article it came from.
+    #:
+    #: 6 rather than something larger because the ceiling is the provider's rate
+    #: limit rather than this process, and every worker that hits a 429 pays the
+    #: backoff. Raise it on a measurement, not on a guess.
+    llm_concurrency: int = Field(default=6, ge=1, le=32)
+
+    #: The same, for a local model, and deliberately 1.
+    #:
+    #: Local inference is compute-bound, not latency-bound. A second concurrent
+    #: request to one Ollama server does not halve the wall clock; it queues behind
+    #: the first and competes for the same VRAM, and a model that no longer fits
+    #: starts swapping. Fanning out here would trade a predictable run for an
+    #: unpredictable one and buy nothing. Kept as a setting rather than hardcoded
+    #: because a machine with headroom is a measurement away from wanting 2.
+    ollama_concurrency: int = Field(default=1, ge=1, le=8)
+
+    #: Random fraction added to an LLM retry's backoff. 0 restores the old fixed
+    #: delay.
+    #:
+    #: Irrelevant while one call was in flight at a time, and not once several are:
+    #: `llm_concurrency` workers rate-limited by the same response all computed the
+    #: same `min(2**attempt, 30)`, slept in lockstep and retried in lockstep, which
+    #: is a thundering herd aimed at the endpoint that just asked for less traffic.
+    llm_retry_jitter: float = Field(default=0.25, ge=0.0, le=1.0)
+
     # --- merge policy -----------------------------------------------------
     #: Break a merge tie on when the article was *published* rather than on when
     #: the crawler fetched it (`source.published_at`, migration 0014).
@@ -349,6 +384,18 @@ class Settings(BaseSettings):
 
     def has_api_key(self) -> bool:
         return bool(self.deepseek_api_key and self.deepseek_api_key.get_secret_value().strip())
+
+    def llm_workers(self, provider: str | None = None) -> int:
+        """Calls to keep in flight for the provider that will actually answer.
+
+        One resolver rather than each call site reading whichever field it
+        remembers, because the two providers want opposite values: a site that read
+        `llm_concurrency` unconditionally would fan six requests at a local model
+        and make it slower than it was. `provider` is for a caller holding a
+        `--llm-provider` override that has not been written back to settings.
+        """
+        chosen = provider or self.llm_provider
+        return self.ollama_concurrency if chosen == "ollama" else self.llm_concurrency
 
     def has_google_keys(self) -> bool:
         return bool(

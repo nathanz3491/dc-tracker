@@ -37,8 +37,10 @@ One platform, one host (``https://api.deepseek.com``), OpenAI-compatible.
 
 from __future__ import annotations
 
+import atexit
 import json
 import logging
+import random
 import re
 import time
 from collections.abc import Iterator
@@ -80,6 +82,86 @@ RETRYABLE_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504})
 
 #: The providers `--llm` and TRACKER_LLM_PROVIDER accept.
 LLM_PROVIDERS = ("deepseek", "ollama")
+
+
+# --- one client per destination ---------------------------------------------
+#
+# Every call used to go out through the module-level `httpx.post`, which opens a
+# connection, completes a TLS handshake and throws both away. That was invisible
+# while one call was in flight at a time and is not once `llm_concurrency` of them
+# are: a pooled client amortises the handshake and, more importantly, bounds the
+# sockets a fanned-out run may open.
+#
+# Two clients rather than one, because `trust_env` is the difference between them
+# and it is a *constructor* argument. That is the point. It used to be passed on
+# each individual local call, which meant the guarantee held only as long as every
+# future call site remembered it; a client that was built with proxies off cannot
+# forget. `test_ollama_traffic_never_transits_a_proxy` pins it — see that test for
+# the failure it comes from, a system proxy answering 502 for a loopback address.
+
+
+_LIMITS = httpx.Limits(max_connections=32, max_keepalive_connections=16)
+
+#: Every client built so far. A plain dict rather than `lru_cache` so shutdown can
+#: enumerate it — `lru_cache` offers no way to reach its values.
+_CLIENTS: dict[tuple[str, float], httpx.Client] = {}
+
+
+def api_client() -> httpx.Client:
+    """Pooled client for the API provider.
+
+    Keeps httpx's default proxy handling: reaching a remote API may be exactly what
+    a configured proxy is for.
+    """
+    return _client("api", 120.0, trust_env=True)
+
+
+def local_client(timeout_s: float) -> httpx.Client:
+    """Pooled client for a local model, with proxies off in the constructor.
+
+    Keyed on the timeout as well as the kind, because `ollama_timeout_s` is a
+    setting and one process may legitimately see more than one value.
+    """
+    return _client("local", timeout_s, trust_env=False)
+
+
+def _client(kind: str, timeout_s: float, *, trust_env: bool) -> httpx.Client:
+    existing = _CLIENTS.get((kind, timeout_s))
+    if existing is not None and not existing.is_closed:
+        return existing
+    built = httpx.Client(
+        timeout=httpx.Timeout(timeout_s, connect=10.0), limits=_LIMITS, trust_env=trust_env
+    )
+    _CLIENTS[(kind, timeout_s)] = built
+    return built
+
+
+@atexit.register
+def close_clients() -> None:
+    """Close what was opened.
+
+    Not required for correctness — the process is ending — but it keeps a
+    long-lived `tracker serve` from accumulating a pool it will never use again,
+    and stops the test suite emitting unclosed-socket warnings.
+    """
+    for client in list(_CLIENTS.values()):
+        try:
+            client.close()
+        except Exception:  # pragma: no cover - shutdown is best-effort
+            log.debug("could not close an HTTP client", exc_info=True)
+    _CLIENTS.clear()
+
+
+def _backoff(attempt: int, *, settings: Settings, after: float | None = None) -> float:
+    """Seconds to wait before retrying, with jitter.
+
+    `after` is the server's own `Retry-After` and wins on magnitude — it is an
+    instruction, not an estimate — but still gets the jitter, because the point of
+    the jitter is that N workers told the same thing must not act in unison.
+    """
+    base = after if after is not None else min(2**attempt, 30)
+    spread = settings.llm_retry_jitter
+    return base * (1 + random.random() * spread) if spread else base
 
 
 class LLMUnavailable(RuntimeError):
@@ -509,12 +591,11 @@ class DeepSeekExtractor:
         }
         filter_ = _ThinkFilter()
         try:
-            with httpx.stream(
+            with api_client().stream(
                 "POST",
                 self.endpoint,
                 json=payload,
                 headers=headers,
-                timeout=httpx.Timeout(120.0, connect=10.0),
             ) as response:
                 if response.status_code >= 400:
                     response.read()
@@ -539,18 +620,17 @@ class DeepSeekExtractor:
         last: Exception | None = None
         for attempt in range(1, attempts + 1):
             try:
-                response = httpx.post(
+                response = api_client().post(
                     self.endpoint,
                     json=payload,
                     headers=headers,
-                    timeout=httpx.Timeout(120.0, connect=10.0),
                 )
             except httpx.RequestError as exc:
                 last = exc
                 log.warning("LLM request error (attempt %d/%d): %s", attempt, attempts, exc)
             else:
                 if response.status_code in RETRYABLE_STATUS and attempt < attempts:
-                    delay = _retry_after(response) or min(2**attempt, 30)
+                    delay = _backoff(attempt, settings=self.settings, after=_retry_after(response))
                     log.warning(
                         "LLM HTTP %d, retrying in %.1fs (attempt %d/%d)",
                         response.status_code,
@@ -575,7 +655,7 @@ class DeepSeekExtractor:
                     )
                 return response.json()
             if attempt < attempts:
-                time.sleep(min(2**attempt, 30))
+                time.sleep(_backoff(attempt, settings=self.settings))
         raise LLMError(f"LLM request failed after {attempts} attempts: {last}")
 
     def check(self) -> dict[str, Any]:
@@ -672,9 +752,11 @@ class OllamaExtractor:
         #: as the string so the factories apply ONE tier policy to both providers.
         self.effort = effort
         try:
-            httpx.get(
-                f"{self.base_url}/api/version", timeout=5.0, trust_env=False
-            ).raise_for_status()
+            # 5.0 rather than the run timeout: this is a liveness probe, and a
+            # server that has not answered in five seconds is not up. It gets its
+            # own client for that reason, and inherits `trust_env=False` from the
+            # constructor like every other local call.
+            local_client(5.0).get(f"{self.base_url}/api/version").raise_for_status()
         except (httpx.RequestError, httpx.HTTPStatusError) as exc:
             probe = f"(probe failed: {exc})"
             raise OllamaUnavailable(f"{self._help()}{probe}") from exc
@@ -745,12 +827,10 @@ class OllamaExtractor:
         payload = self._payload(system=system, user=user, max_tokens=max_tokens, stream=True)
         filter_ = _ThinkFilter()
         try:
-            with httpx.stream(
+            with local_client(self.settings.ollama_timeout_s).stream(
                 "POST",
                 self.endpoint,
                 json=payload,
-                timeout=httpx.Timeout(self.settings.ollama_timeout_s, connect=10.0),
-                trust_env=False,
             ) as response:
                 if response.status_code >= 400:
                     response.read()
@@ -781,18 +861,16 @@ class OllamaExtractor:
         last: Exception | None = None
         for attempt in range(1, attempts + 1):
             try:
-                response = httpx.post(
+                response = local_client(self.settings.ollama_timeout_s).post(
                     self.endpoint,
                     json=payload,
-                    timeout=httpx.Timeout(self.settings.ollama_timeout_s, connect=10.0),
-                    trust_env=False,
                 )
             except httpx.RequestError as exc:
                 last = exc
                 log.warning("Ollama request error (attempt %d/%d): %s", attempt, attempts, exc)
             else:
                 if response.status_code in RETRYABLE_STATUS and attempt < attempts:
-                    delay = _retry_after(response) or min(2**attempt, 30)
+                    delay = _backoff(attempt, settings=self.settings, after=_retry_after(response))
                     log.warning(
                         "Ollama HTTP %d, retrying in %.1fs (attempt %d/%d)",
                         response.status_code,
@@ -815,7 +893,7 @@ class OllamaExtractor:
                     )
                 return response.json()
             if attempt < attempts:
-                time.sleep(min(2**attempt, 30))
+                time.sleep(_backoff(attempt, settings=self.settings))
         tail = f"(last error: {last})"
         raise OllamaUnavailable(f"{self._help()}{tail}")
 

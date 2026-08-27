@@ -56,6 +56,20 @@ def _fast_and_keyless_settings(monkeypatch):
     monkeypatch.setenv("TRACKER_POLITENESS_DELAY_S", "0")
     monkeypatch.setenv("TRACKER_RETRY_BACKOFF_BASE_S", "0")
 
+    # **One LLM call at a time, unless a test asks otherwise.** Same reasoning as
+    # the two lines above: a setting whose whole purpose is to change timing has no
+    # business changing it under the suite. `parallel.map_ordered` runs inline at 1,
+    # so every existing test takes the path it always took, and the tests that are
+    # *about* concurrency set the value themselves.
+    #
+    # Not merely tidiness. The canned-reply fakes here hand out replies with
+    # `replies.pop(0)`, so with several articles in flight which reply lands on
+    # which article stops being defined — a test would pass or fail on thread
+    # scheduling. The fakes are locked as well (see `FakeLLM`), but a lock cannot
+    # make a queue of positional replies order-deterministic; only serialising can.
+    monkeypatch.setenv("TRACKER_LLM_CONCURRENCY", "1")
+    monkeypatch.setenv("TRACKER_LLM_RETRY_JITTER", "0")
+
     # Deleting the environment variables is not enough: `.env` is also read, and
     # once a real one exists on the developer's machine the suite silently starts
     # depending on it — a test asserting "no key configured" passed on CI and

@@ -265,6 +265,42 @@ operator (154 false hits for one project), and treating "campus" or a repeat of 
 company name as distinctive matched every Sabey article to the Sabey *Ashburn*
 project, including sites in other states.
 
+## How long a run takes, and the one knob that changes it
+
+The model is most of the elapsed time. A fetch is seconds and an insert is
+milliseconds; an extraction with reasoning on is tens of seconds, and until
+recently they went out strictly one at a time — while the fetches ahead of them
+already ran four abreast.
+
+`TRACKER_LLM_CONCURRENCY` (default 6) is how many extractions are in flight at
+once. One article's extraction knows nothing about another's, so this changes how
+long a run takes and **nothing about what it stores**:
+
+- The prompts are untouched, so every quote is still checked against the article it
+  came from.
+- The token spend is identical. These are the same calls overlapped, not a bigger
+  batch.
+- Results are consumed in input order, so the run's log reads as it always did.
+- Writes stay on one thread, keeping the commit-per-article checkpoint — so an
+  interrupted run still resumes where it stopped.
+
+**Putting several articles in one prompt would be cheaper and is not on offer.**
+The evidence gate verifies a quoted sentence against the source it is filed under;
+with five articles in one call the model can attribute article 3's sentence to
+article 1's project, producing a quote that checks out against the batch and not
+against the citation. That is a silent failure in the one mechanism the whole
+dataset rests on.
+
+Two things to know before raising it:
+
+- **The ceiling is the provider's rate limit**, not this process. Every worker that
+  meets a 429 pays the backoff, so past some point more workers is slower. Measure
+  with `scripts/measure_extraction.py` rather than guessing.
+- **A local model wants 1**, which is what `TRACKER_OLLAMA_CONCURRENCY` defaults
+  to. Local inference is compute-bound: a second concurrent request queues behind
+  the first and competes for the same VRAM. At 1 the code takes its original serial
+  path, with no thread pool at all.
+
 ## Reaching back for older projects — no API key
 
 A feed only shows what published in the last few days, so a project announced in

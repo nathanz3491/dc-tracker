@@ -61,6 +61,7 @@ from tracker.normalize import (
     norm_text,
     soft,
 )
+from tracker.parallel import map_ordered
 from tracker.prompts import Prompt, load_prompt
 from tracker.upsert import upsert_record
 from tracker.vocab import (
@@ -2208,10 +2209,22 @@ def run(
     # reason about than N.
     published = published_dates(session, [r.url for r in [*cached, *fetched] if r.ok])
 
-    for result in [*cached, *fetched]:
+    def outcome_for(result: FetchResult) -> ExtractionOutcome:
+        """One article's outcome, with no database in sight.
+
+        Pulled out of the loop so it can run on a worker thread. Everything it
+        touches is a plain value — a `FetchResult` in, an `ExtractionOutcome` out —
+        which is the precondition `parallel.map_ordered` documents: a SQLAlchemy
+        session is not thread-safe, and a lazy load from a worker is a race that
+        surfaces as wrong data rather than as an error.
+
+        A failed fetch is handled here rather than in the loop below so the loop
+        keeps iterating `[*cached, *fetched]` in one pass and in its original
+        order. It costs a worker slot for the microseconds it takes to build a
+        dataclass and spends nothing.
+        """
         if not result.ok:
-            report.fetch_error += 1
-            outcome = ExtractionOutcome(
+            return ExtractionOutcome(
                 url=result.url,
                 status="fetch_error",
                 error=result.error,
@@ -2219,18 +2232,33 @@ def run(
                 via=result.via,
                 attempts=result.attempts,
             )
-            log.warning("fetch failed: %s (%s)", result.url, result.error)
-            record_url(session, run_id, outcome)
-            _checkpoint(session, dry_run)
-            continue
-
-        outcome = extract_one(
+        return extract_one(
             result,
             prompt=prompt,
             extractor=extractor,
             settings=settings,
             published_date=published.get(result.url, "unknown"),
         )
+
+    # The model is most of this loop's elapsed time and one article's extraction
+    # knows nothing about another's, so the calls overlap while the writes below
+    # stay single-threaded and keep their commit-per-article checkpoint. Results
+    # arrive in input order, so the run's log reads the same as it always did.
+    # `llm_workers()` is 1 for a local model, which restores the serial path
+    # exactly — see `Settings.ollama_concurrency`.
+    for result, outcome in map_ordered(
+        [*cached, *fetched],
+        outcome_for,
+        limit=settings.llm_workers(),
+        label="extract",
+    ):
+        if not result.ok:
+            report.fetch_error += 1
+            log.warning("fetch failed: %s (%s)", result.url, result.error)
+            record_url(session, run_id, outcome)
+            _checkpoint(session, dry_run)
+            continue
+
         if outcome.status == "parse_error":
             report.parse_error += 1
             log.warning("could not parse a reply for %s: %s", result.url, outcome.error)
