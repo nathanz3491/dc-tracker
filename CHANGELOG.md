@@ -12,6 +12,45 @@ initial build of the v1 PRD.
 
 ### Changed
 
+- **A notification has to be about something that happened recently, not merely
+  something we learned recently** (`tracker/feed.py`, `tracker/cli.py`).
+
+  `notable` had three gates — quote-backed, not future-dated, material — and the
+  second only ever excluded the *future*. Nothing excluded the deep past. The
+  digest window is on `created_at`, and a crawl reads one article and imports a
+  project's whole back-history, so every milestone in it arrived "today".
+
+  Measured on the live database over thirty days, of 354 signals that would have
+  notified: **107 described something more than three years old**, 162 more than
+  one year. A nightly mailer would have paged somebody about a 2021 groundbreaking
+  because an article mentioning it was read yesterday. This is the README's own
+  "new means new to us" distinction, which the *page* honours by printing both
+  dates and which a notification cannot honour by printing anything — an
+  interruption is read after it has already interrupted.
+
+  `feed.stale` is the fourth gate, at 90 days. Same thirty days: 354 signals
+  become 129, the nightly average falls from 11.8 to 4.3, and the worst night — a
+  large sync on 2026-08-11 — falls from **135 to 21**. An *undated* signal is kept,
+  because `happened` is None for an obstacle nobody dated and an open obstacle is
+  a statement about now.
+
+  **`--notify` now refuses an empty watchlist.** `digest` shows the whole database
+  when no list is set, which is right for a page — a blank page teaches nobody what
+  it is for — and wrong for mail, which arrives uninvited. Measured: two accounts,
+  zero watch rows, 193 projects that had moved. `--whole-database` says you meant
+  it, so the capability survives as a choice rather than a default. The refusal
+  writes to stderr and exits 2, so a cron piped into a mailer sends nothing rather
+  than mailing its own error.
+
+  **A burst is capped** at `NOTIFY_MAX_ITEMS` (20), with the remainder counted in a
+  final line naming the command that shows them. Ingest arrives in bursts by
+  nature and the recency gate reduces the worst night rather than flattening it; a
+  cap that hid its own effect would read as "that was everything", which is the one
+  thing a notification must not imply. `--json` is uncapped — a program can page,
+  and truncating a payload is how a consumer silently under-reports.
+
+### Changed
+
 - **`tracker point` identifies each article after reading it, and acts on the
   answer** (`tracker/point.py`, `tracker/prompts/point-v2.txt`,
   `tracker/upsert.py`, `tracker/ingest/crawl.py`, `tracker/cli.py`).

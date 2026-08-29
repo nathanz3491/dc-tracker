@@ -595,3 +595,111 @@ def test_the_page_limit_does_not_shrink_the_tally(session, account):
 
     assert len(got.signals) == 1
     assert {e.entry: e for e in got.entities}["xAI"].total == 3
+
+
+# --- the recency gate: it has to have happened recently, not just been learned ---
+#
+# The window is on `created_at`, and a crawl imports a project's whole back-history
+# at once, so "we learned it last night" says nothing about when it happened.
+# Measured on the live database over 30 days: of 354 signals that would have
+# notified, 107 described something more than three years old.
+
+
+def _notifiable(**kw):
+    """A signal that clears the other three gates, so each test moves one thing."""
+    base = {
+        "kind": "milestone",
+        "sign": "good",
+        "project_id": 1,
+        "company": "Nscale",
+        "project": "Monarch Compute Campus",
+        "label": "energized",
+        "detail": "Powered up.",
+        "weight": feed.NOTIFY_WEIGHT,
+    }
+    base.update(kw)
+    return feed.Signal(**base)
+
+
+def test_a_milestone_from_years_ago_does_not_interrupt_anybody():
+    """The defect this gate exists for: an article read last night carrying a 2021
+    groundbreaking cleared confirmed, not-future and material, and paged somebody
+    about 2021."""
+    old = _notifiable(happened=dt.date.today() - dt.timedelta(days=1100))
+    assert feed.stale(old)
+    assert not feed.notable(old)
+
+
+def test_a_recent_milestone_still_does():
+    fresh = _notifiable(happened=dt.date.today() - dt.timedelta(days=3))
+    assert not feed.stale(fresh)
+    assert feed.notable(fresh)
+
+
+def test_the_horizon_is_where_it_says_it_is():
+    """A boundary worth pinning: the constant is the documented contract, and the
+    measurement that chose 90 was made against this comparison."""
+    day = dt.timedelta(days=1)
+    edge = dt.date.today() - dt.timedelta(days=feed.NOTIFY_MAX_AGE_DAYS)
+    assert feed.notable(_notifiable(happened=edge))
+    assert not feed.notable(_notifiable(happened=edge - day))
+
+
+def test_an_undated_signal_is_kept():
+    """`happened` is None for an obstacle nobody dated, and an open obstacle is a
+    statement about now. Treating "no date" as "old" would silently drop the live
+    risks this channel exists to carry — 25 of the 354 measured."""
+    undated = _notifiable(kind="obstacle_opened", sign="bad", happened=None)
+    assert not feed.stale(undated)
+    assert feed.notable(undated)
+
+
+def test_the_horizon_is_overridable_without_touching_the_others():
+    """So a caller can tighten or widen it without reimplementing the gate."""
+    old = _notifiable(happened=dt.date.today() - dt.timedelta(days=200))
+    assert not feed.notable(old)
+    assert feed.notable(old, max_age_days=365)
+
+
+def test_the_gate_does_not_rescue_what_the_other_three_refused():
+    """Recency is a fourth gate, not a replacement. A fresh but unconfirmed or
+    immaterial signal still says nothing."""
+    today = dt.date.today()
+    assert not feed.notable(_notifiable(happened=today, unconfirmed="no_quote"))
+    assert not feed.notable(_notifiable(happened=today, weight=feed.NOTIFY_WEIGHT - 1))
+    assert not feed.notable(_notifiable(happened=today + dt.timedelta(days=400), expected=True))
+
+
+def test_the_page_still_shows_what_notification_now_withholds(session):
+    """The split this rests on. `digest` carries everything with both dates on it,
+    because a reader sees them before deciding to care; a notification is read
+    after it has already interrupted."""
+    project = Project(
+        name="Monarch Compute Campus",
+        company="Nscale",
+        county="Mason",
+        state="WV",
+        dedup_key="nscale|county:mason|WV",
+        phase="construction",
+        confidence=2,
+    )
+    session.add(project)
+    session.flush()
+    session.add(
+        Event(
+            project_id=project.id,
+            event_date=dt.date.today() - dt.timedelta(days=1200),
+            event_type="groundbreaking",
+            description="Ground was broken.",
+            created_at=dt.datetime.now(),
+        )
+    )
+    session.flush()
+
+    brief = feed.digest(session, days=7)
+    assert any(s.project_id == project.id for s in brief.signals), (
+        "the page must still carry it — this is history, not a secret"
+    )
+    assert not any(s.project_id == project.id for s in brief.notifying), (
+        "but nothing three years old may interrupt anybody"
+    )

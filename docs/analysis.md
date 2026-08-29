@@ -399,6 +399,7 @@ tracker watch rm "xAI"
 tracker digest --days 1                # what moved yesterday, signed good or bad
 tracker digest --notify --days 1        # only what is worth interrupting you for
 tracker digest --notify --markdown      # the nightly note, silent on a quiet night
+tracker digest --notify --whole-database # ...without a watchlist, deliberately
 tracker digest --held                  # including what nobody could quote
 ```
 
@@ -426,19 +427,46 @@ hyperscaler is routinely filed under a developer's name.
 
 **Showing and notifying are different bars.** The page and a plain `digest` carry
 everything; `--notify` prints only what `feed.notable` admits, and prints nothing at
-all when nothing does, so a scheduled job sends on the nights that earn it. Three
+all when nothing does, so a scheduled job sends on the nights that earn it. Four
 gates: the signal has to be quote-backed (an unconfirmed one never notifies,
 whatever it says), it has to have actually happened (a future-dated milestone is a
-schedule), and it has to be material — which means the blocker moving, a decisive
-milestone, a dated slip, or an obstacle at `material` severity or worse opening or
-clearing. An announcement, a filed permit, earthworks and a new row in the tracker
-are all on the page and none of them is worth an interruption.
+schedule), it has to have happened **recently**, and it has to be material — which
+means the blocker moving, a decisive milestone, a dated slip, or an obstacle at
+`material` severity or worse opening or clearing. An announcement, a filed permit,
+earthworks and a new row in the tracker are all on the page and none of them is
+worth an interruption.
 
-It exits 1 when it printed nothing, so a shell can tell a quiet night from a
-failure:
+**The recency gate is "new means new to us" applied to interruption**, and it is
+the one the other three could not cover. The window is on when we *learned* a
+fact, and a crawl reads one article and imports a project's whole back-history, so
+without it a 2021 groundbreaking read last night is this morning's alarm. Measured
+on the live database over thirty days:
+
+| | signals that would notify | worst single night |
+| --- | --- | --- |
+| no recency gate | 354 | 135 |
+| happened within a year | 192 | 52 |
+| **happened within 90 days** (`NOTIFY_MAX_AGE_DAYS`) | **129** | **21** |
+
+107 of that original 354 described something more than three years old. An
+*undated* signal is kept — `happened` is None for an obstacle nobody dated, and an
+open obstacle is a statement about now.
+
+**An empty watchlist is refused.** Showing the whole database until somebody
+configures a list is right for a page, which is opened deliberately, and wrong for
+mail, which arrives uninvited. `--whole-database` says you meant it.
+
+**A burst is capped** at `NOTIFY_MAX_ITEMS` (20) and the remainder is counted in a
+final line, never silently dropped — ingest arrives in bursts by nature and the
+recency gate reduces the worst night rather than flattening it.
+
+It exits 1 when it printed nothing and 2 when it refused, so a shell can tell a
+quiet night from a misconfiguration:
 
 ```bash
-tracker digest --notify --markdown --days 1 | mail -s "dc-tracker" you@example.com
+tracker watch add "Nscale" --user you@example.com
+tracker digest --notify --markdown --days 1 --user you@example.com \
+  | mail -s "dc-tracker" you@example.com
 ```
 
 Nothing records what was already sent, and nothing needs to: the window is on when

@@ -37,9 +37,15 @@ fact, and a digest is the last place to abandon it.
 **4. Notifying is a higher bar than showing.** The page carries everything; a
 notification interrupts a person, and a channel that interrupts too often gets
 muted, at which point it protects nobody. :func:`notable` is that bar — checkable,
-already happened, and material — and it admits five things: the blocker moving, a
-decisive milestone, a dated slip, and an obstacle of `material` severity or worse
-opening or clearing. An announcement is not one of them.
+already happened, **recent**, and material — and it admits five things: the blocker
+moving, a decisive milestone, a dated slip, and an obstacle of `material` severity
+or worse opening or clearing. An announcement is not one of them.
+
+That third gate is idea 1 applied to interruption, and it was missing. The window
+is on `created_at`, so back-history imported by a crawl arrived "today" and paged
+somebody about 2021. The page can afford to carry it because it prints both dates
+and a reader sees them before caring; a notification is read *after* it has already
+interrupted. :func:`stale` carries the measurement.
 """
 
 from __future__ import annotations
@@ -141,6 +147,20 @@ OBSTACLE_OFFSET: Final[int] = 2
 
 #: What is worth interrupting somebody for. See :func:`notable`.
 NOTIFY_WEIGHT: Final[int] = 3
+
+#: How old the thing itself may be and still interrupt somebody, in days.
+#:
+#: Separate from the window, which is on `created_at` and asks "did we learn this
+#: recently". This asks "did it *happen* recently", and the two diverge every time
+#: a crawl imports a project's back-history. See :func:`stale` for the measurement
+#: that chose 90.
+NOTIFY_MAX_AGE_DAYS: Final[int] = 90
+
+#: Most notifications one run will send before it stops listing and starts
+#: counting. A backstop rather than a filter: ingest arrives in bursts by nature,
+#: and the recency gate reduces the worst night without flattening it. The
+#: remainder is always *reported*, never silently dropped.
+NOTIFY_MAX_ITEMS: Final[int] = 20
 
 
 @dataclass(frozen=True)
@@ -545,7 +565,7 @@ def signals_for(
     return out
 
 
-def notable(signal: Signal) -> bool:
+def notable(signal: Signal, *, max_age_days: int = NOTIFY_MAX_AGE_DAYS) -> bool:
     """Whether this is worth a notification, as against a line on the page.
 
     The page shows everything; a notification interrupts somebody, and a channel
@@ -586,7 +606,40 @@ def notable(signal: Signal) -> bool:
     """
     if not signal.confirmed or signal.expected:
         return False
-    return signal.weight >= NOTIFY_WEIGHT
+    if signal.weight < NOTIFY_WEIGHT:
+        return False
+    return not stale(signal, max_age_days=max_age_days)
+
+
+def stale(signal: Signal, *, max_age_days: int = NOTIFY_MAX_AGE_DAYS) -> bool:
+    """Whether the thing itself happened too long ago to interrupt anybody.
+
+    **The gate the other three could not be.** "It has to have happened" only ever
+    excluded the *future* — a milestone dated 2028 is a schedule. Nothing excluded
+    the deep past, and the window is on `created_at`, so a crawl that reads one
+    article and imports a project's whole back-history makes every milestone in it
+    today's news. Measured on the live database over thirty days: of 354 signals
+    that would have notified, **107 described something more than three years old**
+    and 162 more than one year. A nightly mailer would have paged somebody about a
+    2021 groundbreaking because an article mentioning it was read yesterday.
+
+    This is the README's own "**New means new to us**" distinction, which `digest`
+    already honours on the page by printing both dates — and which notification
+    cannot honour by printing anything, because the whole point of an interruption
+    is that nobody reads it before deciding whether to care.
+
+    Measured effect of the 90-day default, same thirty days: 354 signals become
+    129, the nightly average falls from 11.8 to 4.3, and the worst night — a large
+    sync on 2026-08-11 — falls from **135 to 21**.
+
+    **An undated signal is kept.** `happened` is None for an obstacle nobody put a
+    date on, and an open obstacle is a statement about now: treating "no date" as
+    "old" would silently drop the live risks this channel exists to carry. 25 of
+    the 354 were undated.
+    """
+    if signal.happened is None:
+        return False
+    return (dt.date.today() - signal.happened).days > max_age_days
 
 
 def fold(signals: list[Signal]) -> list[Signal]:
@@ -754,6 +807,8 @@ __all__ = [
     "EVENT_SIGN",
     "EVENT_TRACK",
     "KINDS",
+    "NOTIFY_MAX_AGE_DAYS",
+    "NOTIFY_MAX_ITEMS",
     "NOTIFY_WEIGHT",
     "OBSTACLE_OFFSET",
     "SCALE",
@@ -765,4 +820,5 @@ __all__ = [
     "notable",
     "rank",
     "signals_for",
+    "stale",
 ]

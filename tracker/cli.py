@@ -9295,6 +9295,13 @@ def digest(
             help="Only what is worth interrupting somebody for, and nothing at all if nothing is.",
         ),
     ] = False,
+    whole_database: Annotated[
+        bool,
+        typer.Option(
+            "--whole-database",
+            help="With --notify, allow an empty watchlist to mean every project.",
+        ),
+    ] = False,
     markdown: Annotated[
         bool, typer.Option("--markdown", help="Emit Markdown, for pasting or mailing.")
     ] = False,
@@ -9322,6 +9329,19 @@ def digest(
     when none of that happened, so a nightly job piped into a mailer sends on the
     nights that earn it and stays quiet otherwise. Silence is the useful default
     for a channel somebody is meant to keep trusting.
+
+    Three things bound what it can send, and all three exist because a mailer is
+    read *after* it has interrupted somebody:
+
+    * **It must have happened recently**, not merely been learned recently
+      (`feed.NOTIFY_MAX_AGE_DAYS`). The window is on `created_at`, and a crawl
+      imports a whole back-history at once — measured live, 107 of 354 notifiable
+      signals in a month described something over three years old.
+    * **An empty watchlist is refused**, because the fallback that makes the *page*
+      useful — show everything until somebody configures it — makes the mail a
+      firehose. `--whole-database` says you meant it.
+    * **A burst is capped** at `feed.NOTIFY_MAX_ITEMS` and the remainder is
+      counted, never silently dropped. One sync produced 135 in a night.
 
     It also exits 1 when it printed nothing, so a shell can tell "quiet night"
     from "we sent something" without parsing the output:
@@ -9352,15 +9372,43 @@ def digest(
     if notify:
         # Nothing printed on a quiet night, in any format: an empty digest that
         # still prints a header is exactly the mail somebody starts filtering.
+        # **A mailer may not fall back to the whole database.** `digest` shows
+        # everything when no watchlist is set, which is right for a page — a blank
+        # page teaches nobody what it is for — and wrong for a channel that arrives
+        # uninvited. Measured on the live database: no watch rows at all, so every
+        # account would have been mailed about all 193 projects that moved.
+        #
+        # Nothing goes to stdout, so a cron piped into a mailer sends no mail
+        # rather than sending an explanation nobody asked for; the reason goes to
+        # stderr, where a person running it by hand still sees it.
+        if brief.watching_everything and not whole_database:
+            err.print(
+                "[yellow]--notify with an empty watchlist[/yellow] would mail about every "
+                f"project that moved ({brief.projects_watched} are being read).\n"
+                "Name what you want to hear about:\n"
+                '  tracker watch add "Nscale" --user you@example.com\n'
+                "Or say you meant it: --whole-database"
+            )
+            raise typer.Exit(2)
+
         sending = brief.notifying
         if json_mode():
+            # Not capped: a program can page, and truncating a payload is how a
+            # consumer silently under-reports.
             emit({"notify": [s.as_json() for s in sending], "since": brief.since.isoformat()})
         elif sending:
-            lines = (
-                _notify_markdown(brief, sending) if markdown else [_signal_line(s) for s in sending]
-            )
+            shown, held_back = sending[: feed.NOTIFY_MAX_ITEMS], sending[feed.NOTIFY_MAX_ITEMS :]
+            lines = _notify_markdown(brief, shown) if markdown else [_signal_line(s) for s in shown]
             for line in lines:
                 print(line)
+            if held_back:
+                # Counted, never silently dropped. A cap that hides its own effect
+                # reads as "that was everything", which is the one thing a
+                # notification must not imply.
+                print(
+                    f"\n…and {len(held_back)} more this window, not listed. "
+                    f"See them all with `tracker digest --days {days}`."
+                )
         if not sending:
             raise typer.Exit(1)
         return

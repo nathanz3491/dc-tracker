@@ -1715,7 +1715,7 @@ def test_digest_notify_prints_nothing_and_exits_1_on_a_quiet_night(seeded: Path)
     The seed carries no milestone anywhere near the notification bar, so this is
     also the assertion that the bar is not accidentally letting everything past.
     """
-    result = invoke(seeded, "digest", "--notify", "--days", "36500")
+    result = invoke(seeded, "digest", "--notify", "--whole-database", "--days", "36500")
     assert result.exit_code == 1
     assert result.output.strip() == ""
 
@@ -1742,11 +1742,13 @@ def test_digest_notify_prints_what_crosses_the_bar(initialized: Path):
             )
         )
 
-    result = invoke(initialized, "digest", "--notify", "--days", "2")
+    result = invoke(initialized, "digest", "--notify", "--whole-database", "--days", "2")
     assert result.exit_code == 0
     assert "energized" in result.output
 
-    as_markdown = invoke(initialized, "digest", "--notify", "--markdown", "--days", "2")
+    as_markdown = invoke(
+        initialized, "digest", "--notify", "--whole-database", "--markdown", "--days", "2"
+    )
     assert as_markdown.exit_code == 0
     assert as_markdown.output.startswith("# 1 update(s) worth telling you about")
     # A notification says the thing and gets out of the way: no scope line, no
@@ -2076,3 +2078,59 @@ def test_full_does_not_overrule_a_number_given_beside_it(initialized: Path, monk
     )
     assert result.exit_code == 0, result.output
     assert "chasing 1 operator(s)" in result.output
+
+
+def test_digest_notify_refuses_an_empty_watchlist(seeded: Path):
+    """The fallback that makes the page useful makes the mail a firehose.
+
+    A page is opened deliberately, so showing everything until somebody configures
+    a list teaches them what it is for. Mail arrives uninvited. Measured on the live
+    database at the time this was written: two accounts, zero watch rows, 193
+    projects that had moved in the window.
+
+    Nothing may reach stdout, or a cron piped into a mailer sends the refusal.
+    """
+    result = invoke(seeded, "digest", "--notify", "--days", "36500")
+    assert result.exit_code == 2
+    assert result.stdout.strip() == "", "a refusal must not become the mail"
+
+
+def test_digest_notify_caps_a_burst_and_says_how_many_it_held(initialized: Path):
+    """Ingest arrives in bursts by nature — one sync produced 135 notifiable
+    signals in a night — so the recency gate reduces the worst night without
+    flattening it. What the cap holds back is counted, never silently dropped: a
+    cap that hides its own effect reads as "that was everything"."""
+    import datetime as when
+
+    from tracker import feed
+    from tracker.db import open_db, session_scope
+    from tracker.models import Event, Project
+
+    over = feed.NOTIFY_MAX_ITEMS + 5
+    with session_scope(open_db(initialized, readonly=False)) as session:
+        for n in range(over):
+            project = Project(
+                name=f"Site {n}",
+                company=f"Operator {n}",
+                city="Memphis",
+                state="TN",
+                dedup_key=f"k{n}",
+            )
+            session.add(project)
+            session.flush()
+            session.add(
+                Event(
+                    project_id=project.id,
+                    event_date=when.date.today() - when.timedelta(days=1),
+                    event_type="energized",
+                    description=f"Site {n} energized.",
+                    quote=f"Site {n} was energized on Friday.",
+                    created_at=when.datetime.now(),
+                )
+            )
+
+    result = invoke(initialized, "digest", "--notify", "--whole-database", "--days", "2")
+    assert result.exit_code == 0
+    assert result.output.count("energized") >= feed.NOTIFY_MAX_ITEMS
+    assert f"and {over - feed.NOTIFY_MAX_ITEMS} more this window" in result.output
+    assert "tracker digest --days" in result.output, "and it has to say how to see them"
