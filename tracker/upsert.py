@@ -733,6 +733,7 @@ def upsert_record(
     *,
     force_new: bool = False,
     existing_only: bool = False,
+    route_to: int | None = None,
 ) -> UpsertResult:
     """Insert or update one project and its citations.
 
@@ -751,16 +752,54 @@ def upsert_record(
             to track. A repair pass that quietly adds rows is no longer a repair;
             it is an ingest with no worklist and no review. What it refuses is
             *reported*, so those names remain candidates to add deliberately.
+
+        route_to: attach this record to that project, whatever its dedup key would
+            have said. For a caller that has identified the campus from the
+            *article's own* extracted identity rather than from a typed name — see
+            `point.identify_extracted`.
+
+            The dedup key cannot express "this town is in that county", so an
+            article naming Point Pleasant minted a second row beside the one stored
+            under Mason County. `is_cross_granularity_match` already *notices* that
+            pair and files a note; this is how a caller confident enough to act on
+            it says so.
+
+            Identity fields are FILL_ONLY, so a routed record contributes its
+            claims without rewriting the target's name, company or locality — the
+            same property that makes `project_alias` routing safe. Ignored, with a
+            warning, if the id does not exist: a stale id should cost the run a
+            merge, never its evidence.
     """
     payload = dict(rec.project)
     key = dedup_key(
         payload.get("company"), payload.get("city"), payload.get("county"), payload.get("state")
     )
 
-    project = session.scalar(select(Project).where(Project.dedup_key == key))
+    project = None
     action = "update"
     duplicate_of: int | None = None
     routed_from: str | None = None
+    #: How the record got here, when not by its own key: "alias" is a remembered
+    #: merge, "caller" is a decision made this run. The two need different notes —
+    #: only one of them is written down anywhere else.
+    routed_by: str | None = None
+
+    if route_to is not None:
+        if force_new:
+            raise ValueError("route_to and force_new contradict each other")
+        project = session.get(Project, route_to)
+        if project is None:
+            log.warning("route_to #%d does not exist; falling back to the dedup key", route_to)
+        elif project.dedup_key != key:
+            # Only worth disclosing when it actually overrode something. Routing a
+            # record whose key already points at that row is a no-op, and a note
+            # saying so would be noise on every re-read.
+            routed_from = key
+            routed_by = "caller"
+            log.info("routing %s to project #%d as instructed by the caller", key, project.id)
+
+    if project is None:
+        project = session.scalar(select(Project).where(Project.dedup_key == key))
 
     if project is None and not force_new:
         # A merged-away identity. `tracker merge` records each folded row's key in
@@ -774,6 +813,7 @@ def upsert_record(
             project = session.get(Project, alias.to_project_id)
             if project is not None:
                 routed_from = key
+                routed_by = "alias"
                 log.info("routing %s to project #%d per project_alias", key, project.id)
 
     if project is None and existing_only:
@@ -950,10 +990,20 @@ def upsert_record(
             "and state, locality differs only by city/county granularity. Confirm or reject in "
             "`tracker review`."
         )
-    if routed_from is not None:
+    if routed_from is not None and routed_by == "alias":
         derived.append(
             f"{NOTE_PREFIX} a record arriving as `{routed_from}` was routed here: that "
             "identity was merged into this row, and `project_alias` remembers the decision."
+        )
+    elif routed_from is not None:
+        # Deliberately not the sentence above. Nothing remembers this one: it was a
+        # judgement made while reading one article, so the note has to say that the
+        # key still disagrees, or a later reader would assume a merge had happened.
+        derived.append(
+            f"{NOTE_PREFIX} a record arriving as `{routed_from}` was routed here by the "
+            "command that read it, from what the article said about the operator and the "
+            "place. No merge was recorded, so that identity is still unclaimed — confirm "
+            "with `tracker review`, or fold it properly with `tracker merge`."
         )
 
     tag = record_tag([s.url for s in rec.sources])

@@ -22,7 +22,7 @@ import time
 from pathlib import Path
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from tracker.config import get_settings
 from tracker.db import init_db, session_scope
@@ -2683,3 +2683,120 @@ def test_concurrent_extraction_writes_the_same_rows_as_serial(tmp_path, monkeypa
     serial = snapshot("1", "serial.db")
     assert serial, "the fixture reply must actually produce a row"
     assert serial == snapshot("3", "concurrent.db")
+
+
+# --- routing an article to the campus it is actually about -----------------------
+
+
+def test_route_sends_a_town_article_to_the_row_stored_under_its_county(session):
+    """The live failure this exists to stop.
+
+    #1301 was stored as Mason County, WV. An article naming Point Pleasant went
+    through the ordinary write path, produced a different dedup key, and became
+    #1352 — one campus, two rows, and a duplicate pair for somebody to settle.
+    With a router the article lands where it belongs and no second row appears.
+    """
+    seed = Project(
+        name="Monarch Compute Campus",
+        company="Nscale",
+        county="Mason",
+        state="WV",
+        dedup_key="nscale|county:mason|WV",
+        phase="announced",
+        confidence=1,
+    )
+    session.add(seed)
+    session.flush()
+    before = session.scalar(select(func.count()).select_from(Project))
+
+    url = "https://example.test/point-pleasant"
+    reply = json.dumps(
+        {
+            "projects": [
+                {
+                    "name": "Monarch Compute Campus",
+                    "company": "Nscale",
+                    "city": "Point Pleasant",
+                    "state": "WV",
+                    "phase": "construction",
+                    "evidence": [
+                        {
+                            "field": "phase",
+                            "quote": "Site preparation work began north of Point Pleasant in April.",
+                        }
+                    ],
+                }
+            ]
+        }
+    )
+    markdown = (
+        "Site preparation work began north of Point Pleasant in April. " * 12
+    ) + "Nscale is building the Monarch Compute Campus in Mason County, West Virginia."
+
+    crawl.run(
+        session,
+        [url],
+        fetcher=FakeFetcher({url: fetched(url=url, markdown=markdown)}),
+        extractor=FakeLLM([reply]),
+        run_id="t",
+        route=lambda record: seed.id,
+    )
+
+    assert session.scalar(select(func.count()).select_from(Project)) == before, (
+        "the routed article must not create a second row for one campus"
+    )
+    assert session.scalar(
+        select(func.count()).select_from(Source).where(Source.project_id == seed.id)
+    ), "and its citation must land on the row it was routed to"
+
+
+def test_without_a_router_the_same_article_still_splits(session):
+    """The control. Nothing about the default path changed — batch crawls have
+    nobody asking about a particular campus, so the dedup key still decides and
+    the split is still detected and disclosed rather than silently resolved.
+    """
+    seed = Project(
+        name="Monarch Compute Campus",
+        company="Nscale",
+        county="Mason",
+        state="WV",
+        dedup_key="nscale|county:mason|WV",
+        phase="announced",
+        confidence=1,
+    )
+    session.add(seed)
+    session.flush()
+    before = session.scalar(select(func.count()).select_from(Project))
+
+    url = "https://example.test/point-pleasant-2"
+    reply = json.dumps(
+        {
+            "projects": [
+                {
+                    "name": "Monarch Compute Campus",
+                    "company": "Nscale",
+                    "city": "Point Pleasant",
+                    "state": "WV",
+                    "phase": "construction",
+                    "evidence": [
+                        {
+                            "field": "phase",
+                            "quote": "Site preparation work began north of Point Pleasant in April.",
+                        }
+                    ],
+                }
+            ]
+        }
+    )
+    markdown = (
+        "Site preparation work began north of Point Pleasant in April. " * 12
+    ) + "Nscale is building the Monarch Compute Campus in Mason County, West Virginia."
+
+    crawl.run(
+        session,
+        [url],
+        fetcher=FakeFetcher({url: fetched(url=url, markdown=markdown)}),
+        extractor=FakeLLM([reply]),
+        run_id="t",
+    )
+    assert session.scalar(select(func.count()).select_from(Project)) == before + 1

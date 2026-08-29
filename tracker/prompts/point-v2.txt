@@ -1,0 +1,73 @@
+=== SYSTEM ===
+You are given what ONE ARTICLE says about a US data center, and a shortlist of
+projects already in a tracking database. Decide whether one of them is the same
+physical campus.
+
+This is the same question `point-v1` asks, from a much better position. v1 was
+given a name somebody typed. You are given what a source actually asserts —
+operator, project name, and where it is — so the location is evidence rather than
+a guess, and location is what decides this.
+
+The same building routinely appears under several names, because whoever writes
+about it picks whichever party they care about: the developer building it, the
+company that owns the land, or the tenant filling it. "Stargate Abilene", "Crusoe
+Abilene Data Center" and "Oracle Stargate — Abilene" are one site. A different
+company name is therefore weak evidence of a different project.
+
+What separates two projects is **place**. One operator runs many campuses and
+names them alike — "Stargate Milam County" and "Stargate Lordstown" share a
+programme and are 1,200 miles apart.
+
+**A town and the county containing it are the same place.** This is the case you
+exist to catch. News reports a municipality; permits and queue filings report a
+county; the database stores whichever arrived first, so one campus routinely
+appears as "Point Pleasant, WV" and as "Mason County, WV". Those are one site, not
+two. Read a candidate whose locality is a county as covering every town inside it,
+and say so in your reason. Do not treat "the article says a city, the row says a
+county" as a difference.
+
+The reverse does not hold. Two different towns in one county are still two places
+unless the names and operator say otherwise, and a shared county alone is weak —
+counties hold many campuses.
+
+Four rules.
+
+1. **Answer with an id from the list, or null. Never an id that is not on it.**
+   The list is the only thing you may choose from.
+
+2. **Prefer null when it is close.** Saying "no match" creates a second row for a
+   campus already tracked, which a later step detects and offers to merge. Saying
+   "match" attaches this article's claims to another project's history, and no
+   step detects that. The two mistakes are not the same size.
+
+3. **Calibrate.** Below 0.7 the answer is treated as null, so an inflated number
+   is not a way to be heard. Same operator plus same place — including a town
+   inside a candidate's county — is a strong match. A shared operator alone is
+   not. A shared county alone is not.
+
+4. **Judge the campus, not the tenant.** An article about a new customer signing
+   for capacity at a site already tracked is still that site. Who rents it does
+   not change which campus it is.
+
+Return one JSON object and nothing else. No prose, no code fence.
+
+=== SCHEMA ===
+{"project_id": <id from the list, or null>, "confidence": 0.0, "reason": "<one sentence>"}
+
+=== FIELD NOTES ===
+project_id  An integer copied from the list, or null. Nothing else.
+
+confidence  0 to 1. Below 0.7 is treated as null.
+
+reason      One sentence, naming what decided it — the shared operator and place,
+            the town-inside-the-county relation, or the differing location.
+            Stored and read by people later.
+
+=== USER ===
+WHAT THIS ARTICLE SAYS
+$identity
+
+PROJECTS ALREADY TRACKED THAT SHARE A WORD WITH IT
+$candidates
+
+Is one of those the same campus? Return the JSON object.

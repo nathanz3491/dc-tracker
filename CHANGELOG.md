@@ -10,6 +10,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 First working version. Nothing has been released yet, so everything below is the
 initial build of the v1 PRD.
 
+### Changed
+
+- **`tracker point` identifies each article after reading it, and acts on the
+  answer** (`tracker/point.py`, `tracker/prompts/point-v2.txt`,
+  `tracker/upsert.py`, `tracker/ingest/crawl.py`, `tracker/cli.py`).
+
+  `point --url` asked which row a *typed name* looked like, printed the answer, and
+  then discarded it — `_point_read` handed the links to `crawl.run` and let the
+  dedup key decide alone, saying so on screen: *"expected to land on #1301; the
+  dedup key decides, not this."*
+
+  A dedup key cannot express **this town is in that county**. Measured live on the
+  Nscale Monarch campus: the row already held `nscale|county:mason|WV`, the
+  herald-dispatch article named Point Pleasant, the key came out
+  `nscale|city:point pleasant|WV`, and one campus became rows #1301 and #1352 —
+  plus a duplicate pair for somebody to settle by hand. The name-shaped question
+  could not have caught it. The article names the operator *and* the place, which
+  is the evidence that settles it.
+
+  So the order is reversed: fetch → extract → identify from the record → route.
+  `point.Identity` reads an `IngestRecord`, feeds both the prefilter and a new
+  `point-v2` prompt built around place rather than name, and `crawl.run` gained a
+  `route` hook it calls **per record** — one URL list can describe several campuses,
+  and the question is only answerable once each article has been read. `--url` no
+  longer pays for the up-front call at all.
+
+  **The rails did not move**, because the asymmetry they protect has not changed.
+  The shortlist is still deterministic, an id off it is still refused
+  (`_read_match` is now shared by both entry points so the two prompts cannot drift
+  apart on that), and anything below `MIN_CONFIDENCE` still builds a new row — the
+  recoverable mistake. Every failure lands there too: no candidates, a dead
+  provider, an unparseable reply.
+
+  **Routing is not merging.** `upsert_record(route_to=...)` attaches the article's
+  claims to that row and discloses it in the notes, in a sentence deliberately
+  different from the `project_alias` one — nothing recorded this decision, so the
+  note says the other identity is still unclaimed and names `tracker merge`. A
+  stale id costs the run its merge, never its evidence. `route_to` with `force_new`
+  raises rather than picking one.
+
+  Batch ingestion is untouched and a test pins that: with no router the same
+  article still splits, because `ingest crawl` and `sync` have nobody asking about
+  a particular campus and the disclosed split is the right outcome there.
+
 ### Added
 
 - **Extractions overlap, so a crawl is no longer paced by one LLM call at a time**

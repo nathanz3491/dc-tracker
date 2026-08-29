@@ -24,6 +24,7 @@ import difflib
 import logging
 import re
 import unicodedata
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
@@ -2122,6 +2123,7 @@ def run(
     existing_only: bool = False,
     policy: Any = None,
     run_id: str | None = None,
+    route: Callable[[IngestRecord], int | None] | None = None,
 ) -> IngestReport:
     """Fetch, extract and upsert a list of article URLs.
 
@@ -2279,7 +2281,13 @@ def run(
             report.completion_tokens += outcome.completion_tokens
 
         for record in outcome.records:
-            upsert = upsert_record(session, record, existing_only=existing_only)
+            # Asked per record, not per run: one URL list can describe several
+            # campuses, and the question "which project is this?" is only
+            # answerable once the article has been read. A hook rather than a
+            # project id for the same reason — the caller decides per article,
+            # from what that article turned out to say.
+            target = route(record) if route is not None else None
+            upsert = upsert_record(session, record, existing_only=existing_only, route_to=target)
             if upsert.action == "refused":
                 # Named, not merely counted: a refused campus is a candidate to
                 # add deliberately later, and a run that reported only a number

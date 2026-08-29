@@ -155,7 +155,7 @@ def identify(query: str, candidates: list[Candidate], *, extractor, prompt_name:
     what every failure returns: an unreachable model, an unparseable reply and a
     hedged answer all mean "do not fold this into an existing row".
     """
-    from tracker.llm import LLMError, LLMJsonError, parse_json_object
+    from tracker.llm import LLMError
     from tracker.prompts import load_prompt
 
     if not candidates:
@@ -172,9 +172,21 @@ def identify(query: str, candidates: list[Candidate], *, extractor, prompt_name:
     except LLMError as exc:
         log.warning("could not identify %r: %s", query, exc)
         return Match(None, 0.0, "", rejected=f"call failed: {exc}")
+    return _read_match(reply.text, candidates)
+
+
+def _read_match(text: str, candidates: list[Candidate]) -> Match:
+    """Validate one reply into a `Match`.
+
+    Shared by both entry points so the *rails* cannot diverge from the prompt that
+    happened to be used: an id must come off the shortlist, and the confidence
+    floor is enforced here rather than trusted to the model. Every rejection
+    returns no match, which builds a new row.
+    """
+    from tracker.llm import LLMJsonError, parse_json_object
 
     try:
-        payload = parse_json_object(reply.text)
+        payload = parse_json_object(text)
     except (LLMJsonError, ValueError):
         return Match(None, 0.0, "", rejected="unusable reply")
 
@@ -206,6 +218,108 @@ def identify(query: str, candidates: list[Candidate], *, extractor, prompt_name:
     return Match(chosen, confidence, reason)
 
 
+@dataclass(frozen=True)
+class Identity:
+    """What one article turned out to be about, as the write path sees it.
+
+    The whole reason this exists: identification used to run on a *typed name*,
+    before anything was fetched, and its answer was then thrown away — `--url`
+    read the links and let the dedup key decide alone. So an article naming a town
+    could not be recognised as describing a campus already stored under its county,
+    and the run minted a second row for one site.
+
+    An extracted record knows the operator and the locality, which is the evidence
+    that settles exactly that case. Same shape as the shortlist query, so one
+    string feeds both the prefilter and the prompt.
+    """
+
+    company: str
+    name: str
+    city: str | None = None
+    county: str | None = None
+    state: str | None = None
+
+    @classmethod
+    def from_record(cls, rec) -> Identity:
+        """Read an `IngestRecord`'s project payload. Absent fields stay None."""
+        payload = getattr(rec, "project", None) or {}
+        return cls(
+            company=str(payload.get("company") or "").strip(),
+            name=str(payload.get("name") or "").strip(),
+            city=(payload.get("city") or None),
+            county=(payload.get("county") or None),
+            state=(payload.get("state") or None),
+        )
+
+    @property
+    def locality(self) -> str | None:
+        return self.city or self.county
+
+    def as_query(self) -> str:
+        """The prefilter's input: every identifying word this article supplied.
+
+        Deliberately more than the name. `shortlist` scores token overlap, so
+        handing it the operator and the locality is what puts a row stored under
+        the *county* on a list built from an article naming the *town* — the
+        candidate a name-only query cannot reach.
+        """
+        parts = [self.company, self.name, self.city or "", self.county or "", self.state or ""]
+        return " ".join(p for p in parts if p)
+
+    def as_block(self) -> str:
+        """The prompt's input, one labelled fact per line.
+
+        Labelled rather than run together because the model is being asked to
+        weigh *place* above *name*, and a blob of words hides which is which.
+        """
+        rows = [
+            ("operator", self.company or "—"),
+            ("project name", self.name or "—"),
+            ("city", self.city or "—"),
+            ("county", self.county or "—"),
+            ("state", self.state or "—"),
+        ]
+        return "\n".join(f"  {label:<13}{value}" for label, value in rows)
+
+
+def identify_extracted(
+    identity: Identity,
+    candidates: list[Candidate],
+    *,
+    extractor,
+    prompt_name: str = "point-v2",
+) -> Match:
+    """Same question as :func:`identify`, asked from what an article actually said.
+
+    Separate entry point rather than an argument on `identify`, because the two
+    take different prompts and mean different things: one is "somebody typed this
+    name", the other is "a source asserts this operator at this place". Collapsing
+    them would put a name-shaped prompt in front of location-shaped evidence.
+
+    Every failure returns no match, which routes to the ordinary write path and a
+    new row — the recoverable mistake. See the asymmetry note at the top of this
+    module.
+    """
+    if not candidates:
+        return Match(None, 1.0, "nothing in the database shares a distinctive word with it")
+
+    from tracker.llm import LLMError
+    from tracker.prompts import load_prompt
+
+    prompt = load_prompt(prompt_name)
+    listing = "\n".join(f"  {c.project_id}  {c.label}" for c in candidates)
+    try:
+        reply = extractor.complete(
+            system=prompt.system,
+            user=prompt.render_user(identity=identity.as_block(), candidates=listing),
+            max_tokens=2048,
+        )
+    except LLMError as exc:
+        log.warning("could not identify %r: %s", identity.as_query(), exc)
+        return Match(None, 0.0, "", rejected=f"call failed: {exc}")
+    return _read_match(reply.text, candidates)
+
+
 def queries_for(name: str) -> list[str]:
     """Searches aimed at one campus rather than at the sector.
 
@@ -226,8 +340,10 @@ __all__ = [
     "MIN_CONFIDENCE",
     "SHORTLIST",
     "Candidate",
+    "Identity",
     "Match",
     "identify",
+    "identify_extracted",
     "queries_for",
     "shortlist",
     "tokens",

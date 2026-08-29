@@ -462,6 +462,47 @@ tracker queue --failed        # what could not be read, grouped by host
 tracker sync --retry-failed   # re-attempt them
 ```
 
+## Going and getting one named campus
+
+```bash
+tracker point "Monarch Compute Campus"                 # search for it, read what turns up
+tracker point "Monarch Compute Campus" --url URL ...   # read links you already have
+tracker point "Monarch Compute Campus" --dry-run       # say what it would do; costs one call
+```
+
+Matched to a row we already hold, it runs `enrich` on that row. Not matched, it
+searches for that name specifically and the ordinary write path builds the row
+with its citations.
+
+**Identification happens after reading, not before.** With `--url` there is no
+point paying to ask "which row does this typed string look like" when the article
+is about to state the operator and the town outright — so each article is
+identified from *its own extracted identity*, once it has been read, and the
+answer is acted on rather than printed.
+
+That reversal fixes a real failure. A dedup key cannot express *this town is in
+that county*, so an article naming Point Pleasant produced a different key from
+the row already stored under Mason County, and one campus became two rows —
+`nscale|city:point pleasant|WV` beside `nscale|county:mason|WV`. Asking the
+question from a name could not have caught it; asking it from the article, which
+names both the operator and the place, can.
+
+The rails did not move. The model still chooses from a deterministic shortlist,
+still cannot answer with an id it was not offered, and anything below the
+confidence floor still means a new row — because a wrong "no" makes a duplicate
+that `tracker duplicates` finds and `tracker merge` fixes, while a wrong "yes"
+attaches an article to another campus's history and nothing detects that.
+
+Routing is **not** a merge. It attaches this article's claims to that row and says
+so in the notes; the other identity stays unclaimed, and `tracker merge` is still
+what makes the decision permanent. Identity fields are `FILL_ONLY`, so a routed
+article cannot rename a row or move it — though it can fill a field that was
+empty, which is how the county row learns which town it is in.
+
+Batch crawls are unchanged: `ingest crawl` and `sync` have nobody asking about a
+particular campus, so the dedup key still decides alone and a cross-granularity
+split is still detected and disclosed rather than resolved.
+
 ## Completing one project, cost no object
 
 ```bash

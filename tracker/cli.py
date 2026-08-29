@@ -5181,27 +5181,41 @@ def point(
     else:
         console.print("[dim]nothing in the database shares a distinctive word with it[/dim]")
 
-    match = point_mod.identify(name, candidates, extractor=extractor)
-    if match.rejected:
-        console.print(f"[yellow]could not identify it:[/yellow] {escape(match.rejected)}")
-        console.print("[dim]treating it as new, which is the recoverable mistake[/dim]")
-    elif match.matched:
-        console.print(
-            f"[green]already tracked[/green] as [bold]#{match.project_id}[/bold] "
-            f"[dim](confidence {match.confidence:.2f})[/dim]"
-        )
-    else:
-        console.print(
-            f"[yellow]not in the database[/yellow] [dim](confidence {match.confidence:.2f})[/dim]"
-        )
-    if match.reason:
-        console.print(f"[dim]{escape(match.reason)}[/dim]")
-
     links = [u.strip() for u in (url or []) if u and u.strip()]
+
+    # **With links in hand, this is the wrong question to pay for.** Identifying
+    # from the name typed here answers "which row does this string look like",
+    # when the articles are about to say the operator and the town outright.
+    # That answer used to be printed and then discarded anyway — `--url` let the
+    # dedup key decide alone, which is how one campus became two rows. So the
+    # question is deferred to `_article_router`, once per article, on evidence.
+    match = None
+    if links:
+        console.print("[dim]each article is identified from what it says, not from this name[/dim]")
+    else:
+        match = point_mod.identify(name, candidates, extractor=extractor)
+        if match.rejected:
+            console.print(f"[yellow]could not identify it:[/yellow] {escape(match.rejected)}")
+            console.print("[dim]treating it as new, which is the recoverable mistake[/dim]")
+        elif match.matched:
+            console.print(
+                f"[green]already tracked[/green] as [bold]#{match.project_id}[/bold] "
+                f"[dim](confidence {match.confidence:.2f})[/dim]"
+            )
+        else:
+            console.print(
+                f"[yellow]not in the database[/yellow] "
+                f"[dim](confidence {match.confidence:.2f})[/dim]"
+            )
+        if match.reason:
+            console.print(f"[dim]{escape(match.reason)}[/dim]")
+
     if dry_run:
         if links:
-            plan = f"read the {len(links)} link(s) given"
-            plan += f" and merge into #{match.project_id}" if match.matched else " as a new row"
+            plan = (
+                f"read the {len(links)} link(s) given and file each one against the row its "
+                "own operator and locality name, or a new row"
+            )
         elif match.matched:
             plan = f"enrich #{match.project_id}"
         else:
@@ -5211,11 +5225,11 @@ def point(
 
     console.print()
     if links:
-        _point_read(name, point_mod, links, match)
+        _point_read(name, point_mod, links, extractor=extractor)
     elif match.matched:
         _point_enrich(match.project_id)
     else:
-        _point_build(name, point_mod, settings, max_articles)
+        _point_build(name, point_mod, settings, max_articles, extractor=extractor)
 
 
 def _h200_cell(project) -> str:
@@ -5237,19 +5251,74 @@ def _h200_cell(project) -> str:
     return f"{count:,}"
 
 
-def _point_read(name: str, point_mod, urls: list[str], match) -> None:
-    """`--url`: read exactly these links, whoever they turn out to be about.
+def _article_router(session, point_mod, extractor):
+    """Build the per-article identification `crawl.run` calls before each write.
 
-    No special write path. The links go through `crawl.run` like any other article,
-    so the evidence gate, the dedup key and the merge policies all apply unchanged —
-    which is what makes this safe to point at a page for a campus we already track.
+    **This is the step `--url` used to skip.** The links went through `crawl.run`
+    like any other article and the dedup key decided alone — correct for a batch
+    crawl, where nobody has asked about a particular campus, and wrong here. A
+    dedup key cannot express "this town is in that county", so an article naming
+    Point Pleasant minted a second row beside the one already stored under Mason
+    County, and `tracker duplicates` inherited a pair somebody now has to settle.
 
-    The identification above is therefore advisory here rather than load-bearing:
-    it tells the operator which row to expect the article to land on, and if the
-    article turns out to be about something else, the dedup key sends it there
-    instead. Overriding that with the matched id would be worse — it would let a
-    mistyped name file a filing under the wrong campus, which is the one error
-    nothing downstream detects.
+    Identifying from the *record* rather than from the typed name is what makes
+    acting on the answer safe. The old objection to overriding the key — a
+    mistyped name would file a filing under the wrong campus — was about a name
+    somebody guessed. This asks about the operator and the locality the article
+    itself asserts, which is the same evidence a person would use, and it is asked
+    per article so a mixed URL list still lands in several places.
+
+    Returning None means "no confident match", which is the ordinary write path
+    and a new row. Every failure lands there too.
+    """
+
+    def route(record) -> int | None:
+        identity = point_mod.Identity.from_record(record)
+        if not identity.company or not identity.locality:
+            # The write path will refuse this record anyway — it needs a company,
+            # a state and a locality — so spending a call to identify it would buy
+            # nothing. Saying so is worth a line: two of the four URLs in the run
+            # that prompted all this were dropped exactly here, silently enough
+            # that the row ended up without the tenant they named.
+            console.print(
+                f"  [dim]{escape(identity.name or identity.company or 'a record')}: "
+                "no locality in the article, so nothing to identify against[/dim]"
+            )
+            return None
+
+        candidates = point_mod.shortlist(session, identity.as_query())
+        if not candidates:
+            console.print(
+                f"  [dim]{escape(identity.name)}: nothing similar tracked — new row[/dim]"
+            )
+            return None
+
+        found = point_mod.identify_extracted(identity, candidates, extractor=extractor)
+        where = ", ".join(x for x in (identity.locality, identity.state) if x)
+        if found.matched:
+            console.print(
+                f"  [green]{escape(identity.name)}[/green] [dim]({escape(where)})[/dim] → "
+                f"[bold]#{found.project_id}[/bold] [dim](confidence {found.confidence:.2f})[/dim]"
+            )
+        else:
+            console.print(
+                f"  [yellow]{escape(identity.name)}[/yellow] [dim]({escape(where)})[/dim] → "
+                f"new row [dim]({escape(found.rejected or 'no confident match')})[/dim]"
+            )
+        if found.reason:
+            console.print(f"    [dim]{escape(found.reason)}[/dim]")
+        return found.project_id
+
+    return route
+
+
+def _point_read(name: str, point_mod, urls: list[str], *, extractor) -> None:
+    """`--url`: read exactly these links, and file each where the article says.
+
+    The evidence gate, the merge policies and the write path all apply unchanged;
+    the only addition is that identification now happens *after* extraction, per
+    article, and its answer is acted on rather than printed. See
+    :func:`_article_router` for why that reversal is the whole point of this path.
     """
     from tracker.ingest import crawl as crawl_mod
 
@@ -5264,14 +5333,15 @@ def _point_read(name: str, point_mod, urls: list[str], match) -> None:
     console.rule("[bold]read[/bold]", align="left")
     for link in urls:
         console.print(f"  [dim]{escape(link)}[/dim]")
-    if match.matched:
-        console.print(
-            f"[dim]expected to land on #{match.project_id}; the dedup key decides, not this.[/dim]"
-        )
 
     cache_dir = install_root() / ".cache" / "articles"
     with _explain_db_locks(), session_scope(engine) as session:
-        report = crawl_mod.run(session, urls, cache_dir=cache_dir)
+        report = crawl_mod.run(
+            session,
+            urls,
+            cache_dir=cache_dir,
+            route=_article_router(session, point_mod, extractor),
+        )
     _print_report(report, title="read")
 
     with session_scope(engine, commit=False) as session:
@@ -5306,8 +5376,8 @@ def _point_enrich(project_id: int) -> None:
     _print_report(report, title=f"enrich #{project_id}")
 
 
-def _point_build(name: str, point_mod, settings, max_articles: int) -> None:
-    """The unmatched branch: search for this name only, read the hits, let upsert build the row.
+def _point_build(name: str, point_mod, settings, max_articles: int, *, extractor) -> None:
+    """The unmatched branch: search for this name only, read the hits, file what comes back.
 
     The queries are hand-built rather than model-written. `search --from-llm` asks
     a model for queries and steers them *away* from projects already tracked,
@@ -5355,7 +5425,16 @@ def _point_build(name: str, point_mod, settings, max_articles: int) -> None:
     console.rule("[bold]read[/bold]", align="left")
     cache_dir = install_root() / ".cache" / "articles"
     with _explain_db_locks(), session_scope(engine) as session:
-        crawl_report = crawl_mod.run(session, urls, cache_dir=cache_dir)
+        # Routed too, for the same reason as `--url`. "Not matched" was decided
+        # from the typed name before anything was read; the articles search just
+        # found may well name a campus already tracked under another spelling or
+        # at county granularity, and the write path cannot see that on its own.
+        crawl_report = crawl_mod.run(
+            session,
+            urls,
+            cache_dir=cache_dir,
+            route=_article_router(session, point_mod, extractor),
+        )
     _print_report(crawl_report, title="read")
 
     with session_scope(engine, commit=False) as session:

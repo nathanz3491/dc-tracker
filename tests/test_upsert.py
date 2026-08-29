@@ -1910,3 +1910,148 @@ def test_a_recompute_lets_first_announced_move_later(session):
     recompute_from_sources(session, row)
     assert row.first_announced == dt.date(2024, 3, 1)
     assert isinstance(row.first_announced, dt.date)
+
+
+# --- route_to: attaching a record the dedup key would have split off -------------
+
+
+def test_route_to_attaches_the_record_instead_of_minting_a_row(session):
+    """The Monarch case at the write path.
+
+    A row exists under the county; an article names the town. Their dedup keys
+    differ, so without routing this is a second project for one campus — which is
+    exactly what happened live, and what `tracker duplicates` then inherits.
+    """
+    county = upsert_record(
+        session,
+        rec(company="Nscale", name="Monarch Compute Campus", city=None, county="Mason", state="WV"),
+    )
+    before = session.scalar(select(func.count()).select_from(Project))
+
+    town = upsert_record(
+        session,
+        rec(
+            company="Nscale",
+            name="Monarch Compute Campus",
+            city="Point Pleasant",
+            county=None,
+            state="WV",
+            sources=[manual_source(url="https://example.test/point-pleasant", mw_planned=2000.0)],
+        ),
+        route_to=county.project_id,
+    )
+
+    assert town.project_id == county.project_id
+    assert session.scalar(select(func.count()).select_from(Project)) == before, (
+        "routing must not create a row"
+    )
+    row = session.get(Project, county.project_id)
+    assert row.mw_planned == 2000.0, "the routed article's claims still land"
+
+
+def test_a_routed_record_does_not_rewrite_the_target_identity(session):
+    """The property that makes routing safe: identity fields are FILL_ONLY, so an
+    article filed against a row contributes its claims without *renaming* it or
+    moving it to another campus.
+
+    Filling a field that was empty is the point rather than a leak — the county row
+    learning which town it is in is strictly better data about the same place — so
+    what is pinned here is that nothing already set gets overwritten, and that the
+    row keeps the identity its key was built from.
+    """
+    county = upsert_record(
+        session,
+        rec(
+            company="Nscale",
+            name="Monarch Compute Campus",
+            city=None,
+            county="Mason",
+            state="WV",
+            sources=[
+                manual_source(
+                    url="https://example.test/mason",
+                    name="Monarch Compute Campus",
+                    company="Nscale",
+                    city=None,
+                    county="Mason",
+                    state="WV",
+                )
+            ],
+        ),
+    )
+    key_before = session.get(Project, county.project_id).dedup_key
+
+    upsert_record(
+        session,
+        rec(
+            company="Nscale",
+            name="Monarch Data Center",
+            city="Point Pleasant",
+            county=None,
+            state="WV",
+            sources=[
+                manual_source(
+                    url="https://example.test/other",
+                    name="Monarch Data Center",
+                    company="Nscale",
+                    city="Point Pleasant",
+                    state="WV",
+                )
+            ],
+        ),
+        route_to=county.project_id,
+    )
+    row = session.get(Project, county.project_id)
+    assert row.name == "Monarch Compute Campus", "a routed article must not rename the row"
+    assert row.county == "Mason", "nor move it out of the county it was filed under"
+    assert row.city == "Point Pleasant", "but an empty field may be filled — same place, finer"
+    assert row.dedup_key == key_before, "and identity itself does not move"
+
+
+def test_routing_says_so_in_the_notes_and_does_not_claim_a_merge(session):
+    """A reader has to be able to tell this from an alias route. Nothing recorded
+    this decision anywhere else, so the note must not imply a merge happened."""
+    county = upsert_record(
+        session,
+        rec(company="Nscale", name="Monarch Compute Campus", city=None, county="Mason", state="WV"),
+    )
+    upsert_record(
+        session,
+        rec(
+            company="Nscale",
+            name="Monarch Compute Campus",
+            city="Point Pleasant",
+            county=None,
+            state="WV",
+            sources=[manual_source(url="https://example.test/pp")],
+        ),
+        route_to=county.project_id,
+    )
+    notes = session.get(Project, county.project_id).notes or ""
+    assert "routed here by the command that read it" in notes
+    assert "project_alias" not in notes, "no merge was recorded; the note must not say one was"
+    assert "tracker merge" in notes, "it has to say how to make the decision permanent"
+
+
+def test_routing_to_a_row_the_key_already_finds_is_silent(session):
+    """Re-reading the same article must not accumulate a disclosure every run."""
+    first = upsert_record(session, rec())
+    upsert_record(session, rec(), route_to=first.project_id)
+    notes = session.get(Project, first.project_id).notes or ""
+    assert "routed here" not in notes
+
+
+def test_a_stale_route_target_costs_the_merge_not_the_evidence(session):
+    """An id that no longer exists — merged away between reading and writing — must
+    fall back to the ordinary key rather than dropping the article."""
+    result = upsert_record(session, rec(), route_to=999999)
+    assert result.project_id
+    row = session.get(Project, result.project_id)
+    assert row.name == "Fairwater"
+
+
+def test_route_to_and_force_new_are_refused_together(session):
+    """They say opposite things; silently honouring one would be a coin toss."""
+    existing = upsert_record(session, rec())
+    with pytest.raises(ValueError, match="contradict"):
+        upsert_record(session, rec(), route_to=existing.project_id, force_new=True)

@@ -150,3 +150,136 @@ def test_the_queries_name_the_campus_rather_than_the_sector():
     assert all('"Nautilus Stockton"' in q for q in queries), "quoted, or it matches anything"
     assert any("MW" in q or "megawatt" in q for q in queries)
     assert any("permit" in q or "interconnection" in q for q in queries)
+
+
+# --- identifying from what an article said, not from a typed name ----------------
+#
+# The reversal these cover: `--url` used to identify from the name before fetching
+# anything, print the answer and discard it, leaving the dedup key to decide alone.
+# A key cannot express "this town is in that county", so an article naming Point
+# Pleasant minted a second row beside the one stored under Mason County.
+
+
+def _record(company="Nscale", name="Monarch Compute Campus", city=None, county=None, state="WV"):
+    from tracker.ingest.records import IngestRecord
+
+    return IngestRecord(
+        project={
+            "company": company,
+            "name": name,
+            "city": city,
+            "county": county,
+            "state": state,
+        },
+        sources=[],
+    )
+
+
+def test_identity_reads_the_extracted_record():
+    identity = point.Identity.from_record(_record(city="Point Pleasant"))
+    assert identity.company == "Nscale"
+    assert identity.locality == "Point Pleasant"
+    # The query carries operator and place, not just the name. That is what puts a
+    # row filed under the county on a shortlist built from an article naming the town.
+    assert "nscale" in identity.as_query().lower()
+    assert "point pleasant" in identity.as_query().lower()
+    assert "WV" in identity.as_query()
+
+
+def test_identity_survives_a_record_with_almost_nothing_in_it():
+    """`county` is None for a news row and `city` is None for a queue row, and a
+    dropped extraction can be missing both. None of that may raise."""
+    identity = point.Identity.from_record(_record(company="", name="", state=None))
+    assert identity.locality is None
+    assert identity.as_query() == ""
+    assert "—" in identity.as_block()
+
+
+def test_a_town_is_matched_to_the_row_stored_under_its_county(session):
+    """The Monarch case, which is why this path exists.
+
+    #1301 was stored as Mason County, WV. The herald-dispatch article says Point
+    Pleasant. Two dedup keys, one campus — and the model is now given the operator
+    and the locality rather than a bare name, so it can say so.
+    """
+    county_row = _project(session, "Monarch Compute Campus", "Nscale", city="Mason", state="WV")
+    identity = point.Identity.from_record(_record(city="Point Pleasant"))
+
+    candidates = point.shortlist(session, identity.as_query())
+    assert county_row.id in {c.project_id for c in candidates}, (
+        "the county row must reach the shortlist from a query naming the town"
+    )
+
+    answer = _Answer(
+        f'{{"project_id": {county_row.id}, "confidence": 0.93, '
+        f'"reason": "Point Pleasant is in Mason County and the operator matches"}}'
+    )
+    match = point.identify_extracted(identity, candidates, extractor=answer)
+    assert match.project_id == county_row.id
+    # The prompt must actually carry the evidence it is being asked to weigh.
+    assert "Point Pleasant" in answer.user
+    assert "Nscale" in answer.user
+
+
+def test_an_id_that_was_never_offered_is_refused_on_the_article_path(session):
+    """Same rail as the name path, and it has to hold on this one too: a model
+    returning a plausible id it was not shown would attach an article to an
+    unrelated campus, which nothing downstream detects."""
+    row = _project(session, "Monarch Compute Campus", "Nscale", city="Mason", state="WV")
+    identity = point.Identity.from_record(_record(city="Point Pleasant"))
+    candidates = point.shortlist(session, identity.as_query())
+
+    match = point.identify_extracted(
+        identity,
+        candidates,
+        extractor=_Answer('{"project_id": 999999, "confidence": 0.99, "reason": "sure"}'),
+    )
+    assert match.project_id is None
+    assert "not on the shortlist" in (match.rejected or "")
+    assert row.id  # the real row was never touched
+
+
+def test_a_hedged_answer_builds_a_new_row(session):
+    _project(session, "Monarch Compute Campus", "Nscale", city="Mason", state="WV")
+    identity = point.Identity.from_record(_record(city="Point Pleasant"))
+    candidates = point.shortlist(session, identity.as_query())
+
+    match = point.identify_extracted(
+        identity,
+        candidates,
+        extractor=_Answer('{"project_id": 1, "confidence": 0.55, "reason": "maybe"}'),
+    )
+    assert match.project_id is None
+    assert "below the" in (match.rejected or "")
+
+
+def test_an_unreachable_model_builds_a_new_row(session):
+    """Every failure routes to the recoverable mistake."""
+    from tracker.llm import LLMError
+
+    _project(session, "Monarch Compute Campus", "Nscale", city="Mason", state="WV")
+    identity = point.Identity.from_record(_record(city="Point Pleasant"))
+    candidates = point.shortlist(session, identity.as_query())
+
+    class Dead:
+        def complete(self, **_):
+            raise LLMError("provider down")
+
+    match = point.identify_extracted(identity, candidates, extractor=Dead())
+    assert match.project_id is None
+    assert "call failed" in (match.rejected or "")
+
+
+def test_nothing_similar_tracked_costs_no_call():
+    """An empty shortlist is answerable without the model, and paying for it would
+    be paying to be told the database is empty."""
+
+    class Never:
+        def complete(self, **_):  # pragma: no cover - must not be reached
+            raise AssertionError("the model was asked about an empty shortlist")
+
+    match = point.identify_extracted(
+        point.Identity.from_record(_record(city="Point Pleasant")), [], extractor=Never()
+    )
+    assert match.project_id is None
+    assert match.confidence == 1.0
