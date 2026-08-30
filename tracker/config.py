@@ -336,6 +336,27 @@ class Settings(BaseSettings):
     #: because a machine with headroom is a measurement away from wanting 2.
     ollama_concurrency: int = Field(default=1, ge=1, le=8)
 
+    # --- Email notification -----------------------------------------------
+    #: Resend API key. Absent means `tracker notify send` refuses to start, which
+    #: is the right failure: a notification run that silently sends nothing is
+    #: indistinguishable from a quiet night.
+    resend_api_key: SecretStr | None = None
+
+    #: The address notifications are sent from.
+    #:
+    #: **No default, deliberately, and it is not only about typos.** This repo is
+    #: public, and a real sending address is a real domain — the same rule that
+    #: keeps the production hostname out of every tracked file (`CLAUDE.md` §6)
+    #: applies to it. The value lives in `.env` on the machine that sends.
+    #:
+    #: Resend also refuses an unverified domain with a 403, so a wrong value here
+    #: fails loudly rather than quietly delivering from somewhere unexpected.
+    notify_from: str = ""
+
+    #: Where a notification's button points. Same reasoning as `notify_from`: it is
+    #: the public console's URL, so it has no default in a public repo.
+    notify_console_url: str = ""
+
     #: Random fraction added to an LLM retry's backoff. 0 restores the old fixed
     #: delay.
     #:

@@ -113,6 +113,12 @@ BLOCKED: dict[str, str] = {
     # can widen its own audience. `users` and `users rm` need no stdin at all and
     # are blocked anyway, because "which of these five can I run from here?" is a
     # worse rule to hold than "none of them".
+    # The same argument `cloudflare` makes, one step further out. That command puts
+    # the page on the internet; this one puts a message in somebody's inbox, which
+    # is the only thing in the palette whose effect leaves the machine and cannot
+    # be taken back. A misfire is not a wasted run slot, it is mail everybody
+    # received. `notify preview` is beside it, unblocked, because it sends nothing.
+    "notify send": "it emails people — run it from a terminal",
     "users": "accounts are managed at a terminal",
     "users add": "it prompts for a password — run it in a terminal",
     "users passwd": "it prompts for a password — run it in a terminal",
@@ -222,6 +228,9 @@ GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
             # what changed on it.
             "watch",
             "digest",
+            # Renders the email `notify send` would post, and sends nothing. A
+            # read, so it belongs here rather than beside the command that mails.
+            "notify preview",
         ),
     ),
     ("Judge", ("review", "verify", "infer", "logic check", "audit", "audit check")),
@@ -247,7 +256,11 @@ GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ),
     # `watch add`/`watch rm` write, but what they write is a preference rather than
     # a fact about a project, which is why they sit here and not under Repair.
-    ("Maintain", ("init", "backfill", "export", "watch add", "watch rm")),
+    #
+    # `notify send` writes nothing to the database at all — it reads a digest and
+    # posts email. It is here because it is the one command whose effect leaves the
+    # machine, which makes it maintenance of the channel rather than of the data.
+    ("Maintain", ("init", "backfill", "export", "watch add", "watch rm", "notify send")),
     # Every one of these is in BLOCKED as well. They are listed so their argv can
     # be copied into a terminal, which is the only place they can run.
     ("Accounts", ("users", "users add", "users passwd", "users rm", "users invite")),

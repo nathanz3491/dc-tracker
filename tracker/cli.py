@@ -112,6 +112,16 @@ app.add_typer(risks_app)
 watch_app = typer.Typer(name="watch", invoke_without_command=True)
 app.add_typer(watch_app)
 
+#: Delivering a digest by email. Its own group rather than a flag on `digest`,
+#: because the unit is different: `digest` answers for one watchlist and prints,
+#: this one loops over people and sends at most one message each.
+notify_app = typer.Typer(
+    name="notify",
+    help="Send each person one email with everything on their watchlist that moved.",
+    no_args_is_help=True,
+)
+app.add_typer(notify_app)
+
 #: Who may sign in to the console. Accounts are made here and nowhere else — a
 #: browser can only create one by redeeming an invite that was minted here.
 users_app = typer.Typer(name="users", invoke_without_command=True)
@@ -8773,6 +8783,24 @@ def verify_coverage(
                 console.print(f"  [red]missing[/red] {m.entry}")
 
 
+def _print_notify_rows(rows: list[tuple[str, str, str]], *, title: str) -> None:
+    """One line per account: who, how much, what happened to it.
+
+    Its own renderer rather than `_print_report_rows`, which counts outcomes of a
+    single run in two columns. This is a roster — every account appears, including
+    the ones that got nothing, because "who was skipped and why" is most of what
+    an operator needs from a send.
+    """
+    table = Table(title=title, box=box.SIMPLE_HEAVY, title_style="bold")
+    table.add_column("account")
+    table.add_column("updates", justify="right")
+    table.add_column("outcome")
+    for account, count, outcome in rows:
+        style = "green" if outcome.startswith("sent") else "dim"
+        table.add_row(escape(account), count, f"[{style}]{escape(outcome)}[/{style}]")
+    console.print(table)
+
+
 def _print_report_rows(
     rows: list[tuple[str, int]], *, title: str, warn: set[str] | None = None
 ) -> None:
@@ -9551,6 +9579,177 @@ def digest_markdown(brief, *, held: bool = False) -> list[str]:
         lines += [f"- {_signal_line(s)} ({s.unconfirmed})" for s in brief.held]
         lines.append("")
     return lines
+
+
+@notify_app.command("preview")
+def notify_preview(
+    user: Annotated[
+        str | None,
+        typer.Option("--user", help="Render this account's message.", show_default=False),
+    ] = None,
+    days: Annotated[int, typer.Option("--days", help="Window, in days.")] = 1,
+    out: Annotated[
+        Path | None,
+        typer.Option("--out", help="Write the HTML here instead of to stdout."),
+    ] = None,
+) -> None:
+    """Render what would be sent, and send nothing.
+
+    Free and offline: no key, no network, no write lock. The template is a pure
+    function of the digest, so this is the *same* HTML `notify send` would post to
+    Resend rather than an approximation of it — which is the only kind of preview
+    worth having.
+    """
+    from tracker import accounts
+    from tracker import notify as notify_mod
+    from tracker.feed import digest as build_digest
+
+    engine = _read_engine()
+    with session_scope(engine, commit=False) as session:
+        people = accounts.listing(session)
+        if user:
+            wanted = accounts.normalize_email(user)
+            people = [a for a in people if a.email_key == wanted]
+            if not people:
+                _fail(f"no account for {user!r}. `tracker users` lists them.")
+                return
+        if not people:
+            _fail("no accounts yet. Make one with `tracker users add you@example.com`.")
+            return
+
+        account = people[0]
+        brief = build_digest(session, days=days, account_id=account.id)
+        if brief.watching_everything:
+            _fail(
+                f"{account.email} has no watchlist, so there is nothing to be "
+                'selective about. Add one: tracker watch add "Nscale" '
+                f"--user {account.email}"
+            )
+            return
+
+        sending = brief.notifying
+        if not sending:
+            console.print(
+                f"[yellow]nothing worth sending to {escape(account.email)}[/yellow] "
+                f"[dim]in the last {days} day(s). Widen it with --days.[/dim]"
+            )
+            raise typer.Exit(1)
+
+        # Every update, never a truncated preview: this has to be the same bytes
+        # `notify send` would post, or it is not a preview of anything.
+        body = notify_mod.render(
+            brief,
+            sending,
+            name=account.name,
+            console_url=get_settings().notify_console_url or None,
+        )
+        subject = notify_mod.subject_for(brief, sending)
+        # Read off the row before the session closes. An ORM instance is detached
+        # at that point and touching it raises DetachedInstanceError — which is
+        # the same hazard `parallel.map_ordered` documents about worker threads,
+        # arriving here through scope rather than through concurrency.
+        recipient, cards = account.email, len(sending)
+
+    if out:
+        out.write_text(body, encoding="utf-8")
+        console.print(f"[green]wrote[/green] {escape(str(out))} [dim]({len(body):,} bytes)[/dim]")
+        console.print(f"[dim]subject:[/dim] {escape(subject)}")
+        console.print(f"[dim]to:[/dim] {escape(recipient)}  [dim]cards:[/dim] {cards}")
+    else:
+        print(body)
+
+
+@notify_app.command("send")
+def notify_send(
+    days: Annotated[int, typer.Option("--days", help="Window, in days.")] = 1,
+    user: Annotated[
+        str | None,
+        typer.Option("--user", help="Only this account. Everyone, by default.", show_default=False),
+    ] = None,
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Say who would get what, and send nothing."),
+    ] = False,
+) -> None:
+    """Send each person one email carrying everything on their watchlist that moved.
+
+    **One message per person, never one per change.** Fourteen updates is one
+    email with fourteen cards; a channel that sends fourteen separate messages is
+    one people filter away, and a filtered channel protects nobody.
+
+    Silence is the default: an account whose window is quiet gets nothing, and an
+    account with no watchlist is skipped rather than mailed the whole database —
+    the same rule `digest --notify` enforces, for the same reason. A page is
+    opened deliberately; mail arrives uninvited.
+
+    What crosses the bar is `feed.notable`: quote-backed, already happened,
+    recently, and material. `notify preview` shows the exact message first, for
+    free.
+    """
+    from tracker import notify as notify_mod
+
+    settings = get_settings()
+    engine = _read_engine()
+
+    if dry_run:
+        # A recorder rather than the real transport, so a dry run cannot need a
+        # key and cannot reach the network — the two ways a "safe" preview
+        # historically stops being safe.
+        planned: list[tuple[str, str, int]] = []
+
+        class Recorder:
+            def send(self, *, to, subject, html_body, text_body):
+                planned.append((to, subject, len(html_body)))
+                return ""
+
+        with session_scope(engine, commit=False) as session:
+            outcomes = notify_mod.send_all(
+                session, transport=Recorder(), days=days, only_email=user
+            )
+        rows = [
+            (
+                o.email,
+                str(o.signals),
+                o.skipped or "would send",
+            )
+            for o in outcomes
+        ]
+        _print_notify_rows(rows, title="notify (dry run)")
+        for to, subject, size in planned:
+            console.print(f"  [dim]{escape(to)}[/dim] — {escape(subject)} [dim]({size:,} b)[/dim]")
+        if not planned:
+            console.print("[dim]nothing would be sent[/dim]")
+        return
+
+    try:
+        transport = notify_mod.ResendTransport(settings)
+    except notify_mod.EmailError as exc:
+        _fail(str(exc))
+        return
+
+    with session_scope(engine, commit=False) as session:
+        try:
+            outcomes = notify_mod.send_all(
+                session,
+                transport=transport,
+                days=days,
+                console_url=settings.notify_console_url or None,
+                only_email=user,
+            )
+        except notify_mod.EmailError as exc:
+            _fail(str(exc))
+            return
+
+    sent = [o for o in outcomes if o.sent]
+    rows = [
+        (o.email, str(o.signals), o.skipped or f"sent {o.message_id or ''}".strip())
+        for o in outcomes
+    ]
+    _print_notify_rows(rows, title="notify")
+    if not sent:
+        # Exit 1 on "nothing to say", matching `digest --notify`, so a scheduled
+        # job can tell a quiet night from a failure.
+        raise typer.Exit(1)
 
 
 def main(argv: list[str] | None = None) -> int:

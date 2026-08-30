@@ -10,6 +10,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 First working version. Nothing has been released yet, so everything below is the
 initial build of the v1 PRD.
 
+### Added
+
+- **`tracker notify` sends each person one email carrying everything on their
+  watchlist that moved** (`tracker/notify.py`, `tracker/prompts` untouched,
+  `tracker/cli.py`, `tracker/config.py`).
+
+  Delivery through Resend. The unit is **a person and a window, never a signal**:
+  fourteen updates is one message with fourteen cards, because a channel that
+  sends fourteen separate emails is one people filter into a folder, and a
+  filtered channel protects nobody — the same argument `feed.notable` makes about
+  the bar for interrupting somebody, one layer out.
+
+  **The message is never truncated.** `digest --notify` caps its *terminal* output
+  at `NOTIFY_MAX_ITEMS` and counts the rest, which suits a stream scrolling past.
+  An email is a document somebody works, and one ending "…and 3 more, not listed"
+  sends them somewhere else to find the remainder — so the email lists every
+  update, however long that makes it. Measured on the template: a card is 2.2 KB,
+  twenty-five render to 54.8 KB, and Gmail clips past ~102 KB, so the outside
+  boundary is about **46 updates in one window**. A nightly run averages 4.3;
+  a `--days 30` catch-up would cross it, which is an argument for nightly.
+
+  **Rendering is pure and separate from sending.** `render` takes a digest and
+  returns a string — no socket, no settings — so the whole template is tested
+  offline and `notify preview` shows the exact bytes `send` would post, with no
+  key configured and nothing leaving the machine.
+
+  **Meridian, inlined rather than imported.** The design system is React 19 plus
+  Tailwind v4 and an email client runs neither, so the token *values* are
+  transcribed into `TOKENS` and applied inline — the one place in this codebase
+  where a literal hex is correct rather than forbidden, with its source named so
+  the two can be diffed. `good`/`bad`/`neutral` are keyed on `feed.EVENT_SIGN`, a
+  closed vocabulary, so the palette cannot disagree with the digest about which
+  way a signal cuts. Tables and inline styles throughout; no image, no script, no
+  web font, because clients block remote content by default and a message that
+  depends on it is broken on first open. There is always a plain-text part.
+
+  **The same two refusals as `digest --notify`.** An account with no watchlist is
+  skipped rather than mailed the whole database, and a quiet window sends nothing.
+  Missing key or missing sender fails at construction, before a single message is
+  built.
+
+  `TRACKER_NOTIFY_FROM` has **no default**, deliberately: a sending address is a
+  real domain, this repo is public, and the rule that keeps the production
+  hostname out of tracked files (`CLAUDE.md` §6) applies to it too.
+
 ### Changed
 
 - **A notification has to be about something that happened recently, not merely

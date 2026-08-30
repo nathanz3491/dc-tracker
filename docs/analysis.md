@@ -460,6 +460,38 @@ mail, which arrives uninvited. `--whole-database` says you meant it.
 final line, never silently dropped — ingest arrives in bursts by nature and the
 recency gate reduces the worst night rather than flattening it.
 
+### Sending it: `tracker notify`
+
+```bash
+tracker notify preview --user you@example.com --out /tmp/mail.html  # free, offline
+tracker notify send --dry-run                                       # who would get what
+tracker notify send --days 1                                        # the nightly run
+```
+
+**One email per person, containing everything.** The loop is over people, not
+signals: fourteen updates on your watchlist is one message with fourteen cards,
+and a quiet window sends nothing at all. An account with no watchlist is skipped
+rather than mailed the whole database — the same rule `digest --notify` enforces.
+
+**The message is never truncated.** `digest --notify` caps its terminal output and
+counts the remainder, which suits a stream scrolling past; an email is a document
+somebody works, and one ending "…and 3 more, not listed" sends them elsewhere to
+find the rest. So every update is listed. Measured: a card is 2.2 KB, twenty-five
+render to 54.8 KB, and **Gmail clips past ~102 KB — about 46 updates**. A nightly
+run averages 4.3. A `--days 30` catch-up after an outage would cross it, which is
+an argument for running it nightly.
+
+It carries the Meridian palette inlined — cream canvas, espresso ink, honey
+primary, with `good`/`bad` taken from `feed.EVENT_SIGN` so the colour cannot
+disagree with the digest about which way a signal cuts. Tables and inline styles
+throughout, no image, no script, no web font: clients block remote content by
+default, so a message depending on any of it is broken on first open. There is
+always a plain-text part — what a screen reader reads and what a spam filter
+scores.
+
+`preview` renders the exact bytes `send` would post, needs no key and opens no
+socket.
+
 It exits 1 when it printed nothing and 2 when it refused, so a shell can tell a
 quiet night from a misconfiguration:
 

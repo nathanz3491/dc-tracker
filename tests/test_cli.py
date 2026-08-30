@@ -2134,3 +2134,98 @@ def test_digest_notify_caps_a_burst_and_says_how_many_it_held(initialized: Path)
     assert result.output.count("energized") >= feed.NOTIFY_MAX_ITEMS
     assert f"and {over - feed.NOTIFY_MAX_ITEMS} more this window" in result.output
     assert "tracker digest --days" in result.output, "and it has to say how to see them"
+
+
+# --- notify: the commands exist, and reach the template ------------------------
+
+
+def _seed_watcher(db: Path, *, email: str = "reader@example.com", events: int = 3) -> None:
+    """One account watching Nscale, with `events` energisations on its projects."""
+    import datetime as when
+
+    from tracker import accounts, watchlist
+    from tracker.db import open_db, session_scope
+    from tracker.models import Event, Project
+
+    with session_scope(open_db(db, readonly=False)) as session:
+        account = accounts.create(session, email, "correct horse battery", name="Reader")
+        watchlist.add(session, "Nscale", account_id=account.id)
+        for n in range(events):
+            project = Project(
+                name=f"Monarch {n}",
+                company="Nscale",
+                city=f"Town{n}",
+                state="WV",
+                dedup_key=f"nscale|city:town{n}|WV",
+                phase="construction",
+                confidence=2,
+            )
+            session.add(project)
+            session.flush()
+            session.add(
+                Event(
+                    project_id=project.id,
+                    event_date=when.date.today() - when.timedelta(days=1),
+                    event_type="energized",
+                    description=f"Monarch {n} energized.",
+                    quote=f"Monarch {n} was energized on Friday.",
+                    created_at=when.datetime.now(),
+                )
+            )
+
+
+def test_notify_commands_are_registered(initialized: Path):
+    """The gap that let a broken build pass: `tracker/notify.py` was fully tested
+    while `tracker notify send` did not exist as a command at all — the functions
+    had been defined below `if __name__ == "__main__"`, so `python -m tracker.cli`
+    ran `main()` before the decorators had executed. Module tests cannot see that;
+    only invoking the CLI can.
+    """
+    result = invoke(initialized, "notify", "--help")
+    assert result.exit_code == 0, result.output
+    assert "preview" in result.output
+    assert "send" in result.output
+
+
+def test_notify_preview_renders_every_update_and_sends_nothing(initialized: Path, tmp_path: Path):
+    _seed_watcher(initialized, events=3)
+    out = tmp_path / "mail.html"
+
+    result = invoke(initialized, "notify", "preview", "--days", "2", "--out", str(out))
+
+    assert result.exit_code == 0, result.output
+    body = out.read_text(encoding="utf-8")
+    for n in range(3):
+        assert f"Monarch {n}" in body
+    assert "not listed" not in body, "the email is never truncated"
+
+
+def test_notify_send_dry_run_names_the_recipient_and_sends_nothing(initialized: Path):
+    """A dry run needs no key and opens no socket — the two ways a "safe" preview
+    stops being safe."""
+    _seed_watcher(initialized, events=2)
+
+    result = invoke(initialized, "notify", "send", "--dry-run", "--days", "2")
+
+    assert result.exit_code == 0, result.output
+    assert "reader@example.com" in result.output
+    assert "would send" in result.output
+
+
+def test_notify_send_without_a_key_says_which_variable(initialized: Path):
+    _seed_watcher(initialized, events=1)
+    result = invoke(initialized, "notify", "send", "--days", "2")
+    assert result.exit_code == 2
+    assert "TRACKER_RESEND_API_KEY" in result.output
+
+
+def test_notify_preview_refuses_an_account_with_no_watchlist(initialized: Path):
+    from tracker import accounts
+    from tracker.db import open_db, session_scope
+
+    with session_scope(open_db(initialized, readonly=False)) as session:
+        accounts.create(session, "nolist@example.com", "correct horse battery")
+
+    result = invoke(initialized, "notify", "preview", "--days", "2")
+    assert result.exit_code == 2
+    assert "no watchlist" in result.output
