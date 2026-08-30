@@ -10,6 +10,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 First working version. Nothing has been released yet, so everything below is the
 initial build of the v1 PRD.
 
+### Changed
+
+- **An empty watchlist watches nothing** (`migrations/0022_watch_all.sql`,
+  `tracker/feed.py`, `tracker/webui/`, `tracker/cli.py`).
+
+  `feed.digest` read `watching_everything = not entities`: an account that had
+  named nothing was shown every project. The argument for it was that a blank page
+  teaches nobody what the console is for, and that argument is real — it lost to a
+  worse one. "Watching" then depended on a row count nobody could see, so on the
+  live database two accounts that had asked for nothing were both shown all 456
+  projects, and the two pages were **indistinguishable from a watchlist that had
+  leaked between them**. Reported as exactly that.
+
+  Wanting the whole database is legitimate, so it stopped being a state people
+  fall into and became one they choose: `account.watch_all`, off by default, with
+  a toggle in the console's watchlist panel and `tracker watch all --on/--off` for
+  the terminal. Per account, so turning it on touches nobody else's page.
+
+  **`tracker digest` with no `--user` is unchanged**, and it is a different
+  question rather than an exception: it asks for every account's entries and falls
+  back to the whole database only when there are none anywhere. A console with no
+  accounts behaves the same way, because there is nobody whose preference to read.
+  In neither case has a person said "nothing" — there is no person.
+
+  One consequence worth stating: `notify send` no longer needs to *refuse* an
+  empty watchlist, because the digest is now genuinely empty and the run is quiet
+  by arithmetic. The refusal stays for an account that has turned `watch_all` on,
+  which is the case it was really written for — a page somebody opens deliberately
+  is not mail that arrives uninvited.
+
+  No CHECK constraint on the column, and that is a SQLite limitation rather than a
+  preference: it cannot be added with ALTER, rebuilding `account` would drop the
+  foreign key `watch.account_id` points at, and a trigger is not available either
+  because the migration loader splits on semicolons and documents that it can do
+  so as long as there are no procedural blocks. `Account.watch_all` is
+  `Mapped[bool]`, so the type is the guarantee.
+
 ### Added
 
 - **`tracker notify` sends each person one email carrying everything on their

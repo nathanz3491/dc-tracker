@@ -119,9 +119,15 @@ def test_a_quiet_window_sends_nothing(session):
     assert not outcomes[0].sent
 
 
-def test_an_account_with_no_watchlist_is_skipped_not_mailed_everything(session):
-    """`digest` falls back to the whole database when nobody has said what they
-    care about. Right for a page, wrong for mail."""
+def test_an_account_with_no_watchlist_is_mailed_nothing(session):
+    """An empty list means nothing is watched, so this is quiet by arithmetic.
+
+    It used to need a *refusal*: an empty list meant the whole database, so
+    without a guard every account would have been mailed about every project that
+    moved. Migration 0022 removed the reason — the digest is now genuinely empty —
+    and the guard stayed, because an account that has turned `watch_all` on still
+    needs it. See `test_an_account_watching_everything_is_still_refused`.
+    """
     accounts.create(session, "unconfigured@example.com", "correct horse")
     _energized(
         session,
@@ -135,7 +141,30 @@ def test_an_account_with_no_watchlist_is_skipped_not_mailed_everything(session):
     post = Recorder()
     outcomes = notify.send_all(session, transport=post, days=2)
 
-    assert post.sent == [], "an empty watchlist must not become a firehose"
+    assert post.sent == [], "nothing is watched, so nothing is sent"
+    assert outcomes[0].skipped == "nothing worth sending"
+
+
+def test_an_account_watching_everything_is_still_refused(session):
+    """The guard that survives 0022. Wanting the whole database on a *page* is a
+    reasonable thing to turn on; having it mailed to you is a firehose, and mail
+    arrives uninvited."""
+    account = accounts.create(session, "all@example.com", "correct horse")
+    account.watch_all = True
+    session.flush()
+    _energized(
+        session,
+        company="xAI",
+        city="Memphis",
+        state="TN",
+        name="Colossus",
+        key="xai|city:memphis|TN",
+    )
+
+    post = Recorder()
+    outcomes = notify.send_all(session, transport=post, days=2)
+
+    assert post.sent == []
     assert outcomes[0].skipped == "no watchlist"
 
 

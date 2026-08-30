@@ -695,6 +695,17 @@ def rank(signals: list[Signal]) -> list[Signal]:
     )
 
 
+def watches_all(session: Session, account_id: int) -> bool:
+    """Whether this account asked for the whole database.
+
+    A missing account reads as False rather than raising: a stale session cookie
+    should show an empty page and send them to sign in, not 500 the console.
+    """
+    from tracker.models import Account
+
+    return bool(session.scalar(select(Account.watch_all).where(Account.id == account_id)))
+
+
 def digest(
     session: Session,
     *,
@@ -705,16 +716,20 @@ def digest(
 ) -> Digest:
     """The whole page, for the watchlist as it stands.
 
-    With no watchlist the whole database is read and `watching_everything` says so.
-    That is the useful default rather than an empty page: a digest that shows
-    nothing until somebody configures it teaches nobody what it is for.
+    **An empty watchlist means nothing is watched.** It used to mean *everything*,
+    on the argument that a blank page teaches nobody what the console is for. That
+    argument is real and it lost to a worse problem: "watching" then depended on a
+    row count nobody could see, so two accounts that had asked for nothing were
+    shown all 456 projects and their pages were indistinguishable from a watchlist
+    that had leaked between them. Wanting the whole database is a legitimate thing
+    to want, so it became a thing somebody turns on — `account.watch_all`, off by
+    default, migration 0022.
 
-    `account_id` names whose list to read; None is every account's, which is what
-    the CLI wants (`tracker digest` without `--user`). The existing
-    `watching_everything` fallback is what covers the console's *other* empty case
-    — a visitor to a console with no accounts at all, who has no list to read and
-    gets the whole database rather than a blank page. No new branch was needed for
-    it, which is why the anonymous path is worth having at all.
+    `account_id` names whose list to read. **None keeps the old fallback**, and it
+    is a different question rather than an exception: `tracker digest` with no
+    `--user` is asking for every account's view, and a console with no accounts at
+    all has nobody whose preference to read. In neither case has a person said
+    "nothing" — there is no person.
     """
     if since is None:
         since = dt.datetime.combine(
@@ -747,7 +762,20 @@ def digest(
     digests: list[EntityDigest] = []
     watched_ids: set[int] = set()
 
-    if not entities:
+    # **An empty list means nothing is watched.** It used to mean *everything*,
+    # which made "watching" depend on a row count nobody could see: two accounts
+    # that had asked for nothing were shown all 456 projects and their pages were
+    # indistinguishable from a watchlist that had leaked between them. Wanting the
+    # whole database is legitimate and is now `account.watch_all` — a thing
+    # somebody turns on, off by default (migration 0022).
+    #
+    # `account_id is None` keeps the old fallback, and it is a different question:
+    # the CLI's `tracker digest` with no `--user` is asking *every* account's view,
+    # and a console with no accounts at all has nobody whose preference to read. In
+    # neither case has a person said "nothing"; there is simply no person.
+    everything = not entities if account_id is None else watches_all(session, account_id)
+
+    if everything:
         for project in projects:
             collected.extend(signals_for(project, since=since, sources=sources))
         watched_ids = set(by_id)
@@ -797,7 +825,7 @@ def digest(
         held=tuple(held),
         entities=tuple(digests),
         last_crawl=last_crawl,
-        watching_everything=not entities,
+        watching_everything=everything,
         projects_watched=len(watched_ids),
     )
 
@@ -821,4 +849,5 @@ __all__ = [
     "rank",
     "signals_for",
     "stale",
+    "watches_all",
 ]

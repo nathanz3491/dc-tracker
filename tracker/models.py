@@ -577,6 +577,16 @@ class Account(Base):
     #: `project.last_verified_at` is distinct from `updated_at`.
     last_seen_at: Mapped[dt.datetime | None] = mapped_column(DateTime)
 
+    #: Read the whole database rather than only what `watches` names.
+    #:
+    #: **Off by default, and that is the whole point of migration 0022.** An empty
+    #: watchlist used to mean "everything", so two people who had asked for nothing
+    #: saw identical pages and neither had chosen it. Wanting all 456 projects is a
+    #: legitimate thing to want; it is now a thing somebody turns on.
+    watch_all: Mapped[bool] = mapped_column(
+        Integer, nullable=False, server_default=text("0"), default=0
+    )
+
     watches: Mapped[list[Watch]] = relationship(
         back_populates="account", cascade="all, delete-orphan", passive_deletes=True
     )

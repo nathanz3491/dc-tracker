@@ -1609,12 +1609,15 @@ def test_digest_scopes_to_one_account(seeded: Path):
     assert hers["watching_everything"] is False
     assert hers["projects_watched"] == 1
 
-    # Bob is watching nothing, so his page is the whole database — the same
-    # fallback an empty list has always had.
+    # Bob is watching nothing, so his page is empty. It used to be the whole
+    # database, which made two people who had both named nothing look identical —
+    # indistinguishable from a list leaking between them. Migration 0022 inverted
+    # it; `tracker watch all --on` is how somebody asks for all of it.
     his = json.loads(
         invoke(seeded, "--json", "digest", "--days", "36500", "--user", "bob@example.com").output
     )
-    assert his["watching_everything"] is True
+    assert his["watching_everything"] is False
+    assert his["projects_watched"] == 0
 
 
 # --- accounts ---------------------------------------------------------------
@@ -2219,12 +2222,34 @@ def test_notify_send_without_a_key_says_which_variable(initialized: Path):
     assert "TRACKER_RESEND_API_KEY" in result.output
 
 
-def test_notify_preview_refuses_an_account_with_no_watchlist(initialized: Path):
+def test_notify_preview_is_quiet_for_an_account_watching_nothing(initialized: Path):
+    """Exit 1, not a refusal. An empty list now means nothing is watched, so there
+    is simply nothing to preview — the digest is empty by arithmetic rather than
+    by a guard."""
     from tracker import accounts
     from tracker.db import open_db, session_scope
 
     with session_scope(open_db(initialized, readonly=False)) as session:
         accounts.create(session, "nolist@example.com", "correct horse battery")
+
+    result = invoke(initialized, "notify", "preview", "--days", "2")
+    assert result.exit_code == 1
+    assert "nothing worth sending" in result.output
+
+
+def test_notify_preview_refuses_an_account_watching_everything(initialized: Path):
+    """The guard that survives 0022, and the case it was really written for.
+
+    Wanting the whole database on a page is a reasonable thing to turn on; having
+    it rendered as mail is a firehose, so `preview` says so rather than building a
+    message about every project that moved.
+    """
+    from tracker import accounts
+    from tracker.db import open_db, session_scope
+
+    with session_scope(open_db(initialized, readonly=False)) as session:
+        account = accounts.create(session, "all@example.com", "correct horse battery")
+        account.watch_all = True
 
     result = invoke(initialized, "notify", "preview", "--days", "2")
     assert result.exit_code == 2

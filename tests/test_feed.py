@@ -703,3 +703,66 @@ def test_the_page_still_shows_what_notification_now_withholds(session):
     assert not any(s.project_id == project.id for s in brief.notifying), (
         "but nothing three years old may interrupt anybody"
     )
+
+
+# --- an empty watchlist means nothing, not everything ---------------------------
+
+
+def test_an_empty_watchlist_watches_nothing(session, account):
+    """The default 0022 inverted.
+
+    It used to mean *everything*, so "watching" depended on a row count nobody
+    could see: two accounts that had asked for nothing were shown all 456 projects
+    and their pages were indistinguishable from a watchlist that had leaked
+    between them.
+    """
+    _project(session, created_at=NOW)
+    _project(session, company="Meta", name="Hyperion", state="LA", dedup_key="m", created_at=NOW)
+
+    result = feed.digest(session, since=SINCE, account_id=account.id)
+
+    assert not result.watching_everything
+    assert result.projects_watched == 0
+    assert result.signals == ()
+
+
+def test_watch_all_takes_the_whole_database_back(session, account):
+    """And the button that turns it on is the point: wanting all of it is a
+    legitimate thing to want, it just has to be asked for."""
+    _project(session, created_at=NOW)
+    _project(session, company="Meta", name="Hyperion", state="LA", dedup_key="m", created_at=NOW)
+    account.watch_all = True
+    session.flush()
+
+    result = feed.digest(session, since=SINCE, account_id=account.id)
+
+    assert result.watching_everything
+    assert result.projects_watched == 2
+    assert result.signals
+
+
+def test_two_accounts_with_empty_lists_both_see_nothing(session):
+    """The symptom that prompted the change: two people who had asked for nothing
+    saw identical full pages, which reads exactly like a leak."""
+    from tracker import accounts
+
+    a = accounts.create(session, "a@example.com", "correct horse battery")
+    b = accounts.create(session, "b@example.com", "correct horse battery")
+    _project(session, created_at=NOW)
+
+    for who in (a, b):
+        result = feed.digest(session, since=SINCE, account_id=who.id)
+        assert result.projects_watched == 0, f"{who.email} should watch nothing"
+        assert not result.watching_everything
+
+
+def test_no_account_named_keeps_the_old_fallback(session, account):
+    """`tracker digest` with no `--user` asks for every account's view, and a
+    console with no accounts has nobody whose preference to read. Neither is a
+    person saying "nothing"; there is simply no person."""
+    _project(session, created_at=NOW)
+
+    result = feed.digest(session, since=SINCE)
+
+    assert result.watching_everything
+    assert result.projects_watched == 1

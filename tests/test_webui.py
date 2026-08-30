@@ -2585,3 +2585,79 @@ def test_the_one_write_is_still_a_write(seeded_db):
     finally:
         httpd.shutdown()
         httpd.server_close()
+
+
+def test_watch_all_is_off_by_default_and_toggles_per_account(seeded_db):
+    """The button behind "watch everything", and the default 0022 inverted.
+
+    An empty watchlist used to mean the whole database, so two accounts that had
+    asked for nothing saw identical full pages — indistinguishable from a list
+    that had leaked between them. Now it means nothing, and wanting all of it is a
+    thing one person turns on without touching anybody else's page.
+    """
+    import threading
+    from http.server import ThreadingHTTPServer
+
+    _account(seeded_db, "alice@example.com")
+    _account(seeded_db, "bob@example.com")
+    console = Console(seeded_db)
+    handler = type("Bound", (Handler,), {"console": console})
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    httpd.daemon_threads = True
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        address = httpd.server_address
+        _, alice = sign_in(address, email="alice@example.com")
+        _, bob = sign_in(address, email="bob@example.com")
+
+        _status, before = as_reader(address, alice, "/api/updates?days=36500")
+        assert before["watch_all"] is False, "off by default"
+        assert before["watching_everything"] is False, "an empty list watches nothing"
+        assert before["projects_watched"] == 0
+
+        _status, on = as_reader(
+            address, alice, "/api/watch", "POST", {"action": "watch_all", "value": True}
+        )
+        assert on["watch_all"] is True
+
+        _status, hers = as_reader(address, alice, "/api/updates?days=36500")
+        assert hers["watching_everything"] is True
+        assert hers["projects_watched"] > 0, "she asked for all of them"
+
+        # Bob's page is untouched — the whole point of storing it per account.
+        _status, his = as_reader(address, bob, "/api/updates?days=36500")
+        assert his["watch_all"] is False
+        assert his["projects_watched"] == 0
+
+        _status, off = as_reader(
+            address, alice, "/api/watch", "POST", {"action": "watch_all", "value": False}
+        )
+        assert off["watch_all"] is False
+        _status, after = as_reader(address, alice, "/api/updates?days=36500")
+        assert after["projects_watched"] == 0, "and it goes back"
+    finally:
+        httpd.shutdown()
+
+
+def test_watch_all_refuses_a_value_that_is_not_a_boolean(seeded_db):
+    """It decides which rows the server reads, so it takes true or false and
+    nothing that has to be guessed at."""
+    import threading
+    from http.server import ThreadingHTTPServer
+
+    _account(seeded_db, "alice@example.com")
+    console = Console(seeded_db)
+    handler = type("Bound", (Handler,), {"console": console})
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    httpd.daemon_threads = True
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        address = httpd.server_address
+        _, alice = sign_in(address, email="alice@example.com")
+        status, body = as_reader(
+            address, alice, "/api/watch", "POST", {"action": "watch_all", "value": "yes"}
+        )
+        assert status == 400
+        assert "true or false" in body["error"]
+    finally:
+        httpd.shutdown()

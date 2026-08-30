@@ -996,10 +996,45 @@ class Handler(BaseHTTPRequestHandler):
                 session, since=since, days=days, limit=limit, account_id=account_id
             ).as_json()
             payload["watchlist"] = self._watchlist_json(session, account_id)
+            # So the toggle can show its own state. `watching_everything` in the
+            # digest says what this *view* is; this says what the person asked for,
+            # and with no account there is nobody to have asked.
+            payload["watch_all"] = (
+                bool(feed.watches_all(session, account_id)) if account_id is not None else False
+            )
 
         payload["days"] = days
         payload["allow_watch"] = self.console.allow_watch and account_id is not None
         self._json(payload)
+
+    def _set_watch_all(self, account_id: int, value: bool) -> None:
+        """Turn "read the whole database" on or off for the signed-in account.
+
+        Stored rather than held in the page, because it decides what the *server*
+        reads: `feed.digest` consults it, and a preference the browser kept would
+        be a second opinion about which rows a person watches.
+        """
+        from tracker.models import Account
+
+        engine = open_db(self.console.db_path, readonly=False)
+        try:
+            with session_scope(engine) as session:
+                account = session.get(Account, account_id)
+                if account is None:
+                    return self._error(404, "that account no longer exists; sign in again")
+                account.watch_all = bool(value)
+                session.flush()
+                result = {
+                    "watch_all": bool(account.watch_all),
+                    "watchlist": self._watchlist_json(session, account_id),
+                }
+        except OperationalError as exc:
+            if "locked" not in str(exc).lower():
+                raise
+            return self._error(503, "the database is busy writing; try again in a moment")
+        finally:
+            engine.dispose()
+        return self._json(result)
 
     def _watchlist_json(self, session: Any, account_id: int | None) -> list[dict[str, Any]]:
         """One account's watchlist as the page renders it, against today's projects.
@@ -1056,8 +1091,17 @@ class Handler(BaseHTTPRequestHandler):
         action = str(body.get("action") or "").strip()
         entry = str(body.get("entry") or "").strip()
         note = body.get("note")
-        if action not in {"add", "remove"}:
-            return self._error(400, "action must be 'add' or 'remove'")
+        if action not in {"add", "remove", "watch_all"}:
+            return self._error(400, "action must be 'add', 'remove' or 'watch_all'")
+        if action == "watch_all":
+            # The toggle behind "watch everything". Same gate and same owner as an
+            # entry edit, because it is the same kind of statement: which rows this
+            # person's page reads. It grants nothing — the Projects page already
+            # shows every row to anybody signed in.
+            wanted = body.get("value")
+            if not isinstance(wanted, bool):
+                return self._error(400, "value must be true or false")
+            return self._set_watch_all(account_id, wanted)
         if not entry:
             return self._error(400, "entry is required")
         if len(entry) > 200:

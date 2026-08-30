@@ -381,7 +381,22 @@ __all__ = [
     "redeem",
     "require",
     "set_password",
+    "set_watch_all",
     "touch",
     "verify",
     "verify_password",
 ]
+
+
+def set_watch_all(session: Session, email: str, value: bool) -> Account:
+    """Turn "read the whole database" on or off for one account.
+
+    Off is the default and the honest reading of an empty watchlist: this person
+    has said what they want, and it is nothing yet. On is for somebody who has
+    decided they want all of it — see migration 0022 for why that stopped being
+    what an empty list implied.
+    """
+    account = require(session, email)
+    account.watch_all = bool(value)
+    session.flush()
+    return account

@@ -101,6 +101,12 @@ BLOCKED: dict[str, str] = {
     # somebody at a terminal, not a button on the page.
     "cloudflare": "run it from a terminal — publishing this page is not a click",
     "version": "shown in the header",
+    # The same argument `cloudflare` makes, one step further out. That command puts
+    # the page on the internet; this one puts a message in somebody's inbox, which
+    # is the only thing in the palette whose effect leaves the machine and cannot
+    # be taken back. A misfire is not a wasted run slot, it is mail everybody
+    # received. `notify preview` is beside it, unblocked, because it sends nothing.
+    "notify send": "it emails people — run it from a terminal",
     # Credentials are made at a terminal, and there are two independent reasons.
     #
     # The mechanical one: `users add` and `users passwd` read their password with
@@ -113,12 +119,6 @@ BLOCKED: dict[str, str] = {
     # can widen its own audience. `users` and `users rm` need no stdin at all and
     # are blocked anyway, because "which of these five can I run from here?" is a
     # worse rule to hold than "none of them".
-    # The same argument `cloudflare` makes, one step further out. That command puts
-    # the page on the internet; this one puts a message in somebody's inbox, which
-    # is the only thing in the palette whose effect leaves the machine and cannot
-    # be taken back. A misfire is not a wasted run slot, it is mail everybody
-    # received. `notify preview` is beside it, unblocked, because it sends nothing.
-    "notify send": "it emails people — run it from a terminal",
     "users": "accounts are managed at a terminal",
     "users add": "it prompts for a password — run it in a terminal",
     "users passwd": "it prompts for a password — run it in a terminal",
@@ -260,7 +260,20 @@ GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     # `notify send` writes nothing to the database at all — it reads a digest and
     # posts email. It is here because it is the one command whose effect leaves the
     # machine, which makes it maintenance of the channel rather than of the data.
-    ("Maintain", ("init", "backfill", "export", "watch add", "watch rm", "notify send")),
+    (
+        "Maintain",
+        (
+            "init",
+            "backfill",
+            "export",
+            "watch add",
+            "watch rm",
+            # Beside the two that edit the list, because it is the same statement
+            # about which rows one person's page reads — see migration 0022.
+            "watch all",
+            "notify send",
+        ),
+    ),
     # Every one of these is in BLOCKED as well. They are listed so their argv can
     # be copied into a terminal, which is the only place they can run.
     ("Accounts", ("users", "users add", "users passwd", "users rm", "users invite")),

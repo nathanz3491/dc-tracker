@@ -1,0 +1,44 @@
+-- 0022_watch_all: an empty watchlist means nothing is watched, and wanting the
+-- whole database is a choice somebody makes rather than a state they fall into.
+--
+-- **The behaviour this replaces.** `feed.digest` read `watching_everything = not
+-- entities`: an account with no watch rows was shown every project. The argument
+-- for it was that a blank page teaches nobody what the console is for, and that
+-- argument is real — but it makes "watching" mean two opposite things depending
+-- on a row count nobody sees. Observed on the live database with three accounts
+-- and five watch rows between them: two accounts were "watching" all 456 projects
+-- without either person having asked for anything, and the two pages were
+-- indistinguishable from a watchlist that had leaked between them. It is also why
+-- an empty list had to be special-cased in three places — `digest --notify` and
+-- `notify send` both refuse it, because a fallback that means "everything" is a
+-- firehose the moment anything sends mail.
+--
+-- So the fallback becomes a *stored preference*. Off by default, which is the
+-- honest reading of an empty list: this person has said what they want, and it
+-- is nothing yet.
+--
+-- **DEFAULT 0 changes what existing accounts see, deliberately.** Every account
+-- that was implicitly watching everything now watches nothing until it either
+-- names an entry or turns this on. That is the point of the change; recording it
+-- here so the behaviour change is not mistaken for a bug the first time somebody
+-- signs in to an empty Updates page.
+--
+-- **Not a role or a permission.** It says which rows one person's page reads, in
+-- exactly the way `watch` does, and it lives on `account` for the same reason
+-- `watch.account_id` does — see 0021. Every account can still set it, and setting
+-- it grants nothing that reading the Projects page did not already give.
+--
+-- INTEGER rather than BOOLEAN because SQLite has no boolean type; the CHECK is
+-- what stops anything but 0 or 1 landing in it.
+
+-- **No CHECK on it, and that is a limitation rather than a preference.** SQLite
+-- cannot add one with ALTER, rebuilding `account` would drop the foreign key
+-- `watch.account_id` points at, and a trigger is not available either: the
+-- migration loader splits statements on semicolons and says in `db.split_sql`
+-- that it can do so because "SQLite has no procedural blocks" — a trigger body is
+-- exactly the procedural block that assumption excludes. Rather than complicate
+-- the loader for one column, the type is the guarantee: `Account.watch_all` is
+-- `Mapped[bool]`, so every write through the ORM coerces, and raw SQL against
+-- this column has the same exposure as against any other integer here.
+
+ALTER TABLE account ADD COLUMN watch_all INTEGER NOT NULL DEFAULT 0;

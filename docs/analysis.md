@@ -393,6 +393,7 @@ inviting you to add the column up.
 
 ```bash
 tracker watch                          # the companies and projects the digest is about
+tracker watch all --on --user you@…    # or take the whole database, deliberately
 tracker watch add "xAI"                # or "xAI | Colossus" for one campus
 tracker watch add "Meta" --note "Q3"   # the note is shown on the page
 tracker watch rm "xAI"
@@ -459,6 +460,19 @@ mail, which arrives uninvited. `--whole-database` says you meant it.
 **A burst is capped** at `NOTIFY_MAX_ITEMS` (20) and the remainder is counted in a
 final line, never silently dropped — ingest arrives in bursts by nature and the
 recency gate reduces the worst night rather than flattening it.
+
+**An empty watchlist watches nothing.** It used to mean *everything*, on the
+argument that a blank page teaches nobody what the console is for. That lost to a
+worse problem: "watching" then depended on a row count nobody could see, so two
+accounts that had named nothing saw identical full pages — which reads exactly
+like one person's list leaking into another's. Wanting all of it is legitimate, so
+it became `account.watch_all`: off by default, and one button in the watchlist
+panel (or `tracker watch all --on`) turns it on for that account alone.
+
+`tracker digest` with no `--user` is unchanged, and it is a different question:
+it asks for every account's entries and falls back to the whole database only when
+there are none anywhere. A console with no accounts behaves the same way, because
+there is nobody whose preference to read.
 
 ### Sending it: `tracker notify`
 

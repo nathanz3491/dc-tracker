@@ -3710,11 +3710,21 @@ function Watchlist({ payload, projects, allowWatch, filter, onFilter, onChanged 
                         onRemove=${(entry) => send({ action: "remove", entry })} />`)}
         ${!entities.length &&
         html`<span style=${{ fontSize: 13, color: "var(--muted-foreground)" }}>
-          ${editable
-            ? html`Watching everything — ${payload?.projects_watched ?? 0} projects. Name a company to narrow it.`
-            : html`Everything — ${payload?.projects_watched ?? 0} projects. A watchlist belongs to
-                   an account; sign in to keep one.`}
+          ${!editable
+            ? html`Everything — ${payload?.projects_watched ?? 0} projects. A watchlist belongs to
+                   an account; sign in to keep one.`
+            : payload?.watch_all
+              ? html`Watching everything — ${payload?.projects_watched ?? 0} projects.
+                     Name a company to narrow it.`
+              : html`Watching nothing yet. Name a company below, or take
+                     all ${projects?.length ?? 0} of them.`}
         </span>`}
+        ${editable &&
+        html`<button type="button" class="dc-linkish" style=${{ fontSize: 12 }}
+                     disabled=${busy}
+                     onClick=${() => send({ action: "watch_all", value: !payload?.watch_all })}>
+          ${payload?.watch_all ? "watch only my list" : "watch everything"}
+        </button>`}
         ${filter &&
         html`<button type="button" class="dc-linkish" style=${{ fontSize: 12 }}
                      onClick=${() => onFilter(null)}>show all watches</button>`}
@@ -3855,7 +3865,18 @@ function UpdatesView({ data, onOpen }) {
                       allowWatch=${data.allow_watch}
                       filter=${only} onFilter=${setOnly}
                       onChanged=${(body) => {
-                        setPayload((p) => (p ? { ...p, watchlist: body.watchlist } : p));
+                        /* `watch_all` rides along only when the toggle sent it, so
+                           an add/remove must not reset it to undefined. */
+                        setPayload((p) =>
+                          p
+                            ? {
+                                ...p,
+                                watchlist: body.watchlist,
+                                watch_all:
+                                  body.watch_all === undefined ? p.watch_all : body.watch_all,
+                              }
+                            : p,
+                        );
                         setOnly(null);
                         setNonce((n) => n + 1);
                       }} />

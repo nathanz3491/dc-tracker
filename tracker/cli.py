@@ -9042,6 +9042,58 @@ def watch_rm(
         )
 
 
+@watch_app.command("all")
+def watch_all_cmd(
+    on: Annotated[
+        bool,
+        typer.Option("--on/--off", help="Read the whole database, or only this list."),
+    ] = True,
+    user: Annotated[str | None, _USER_OPTION] = None,
+) -> None:
+    """Watch every project, or go back to watching only what is on the list.
+
+    **Off is the default and an empty list means nothing.** It used to mean
+    *everything*: an account that had named nothing was shown all 456 projects, so
+    "watching" depended on a row count nobody could see and two people who had
+    asked for nothing saw identical pages. Wanting all of it is a legitimate thing
+    to want, so it became a thing somebody turns on. Migration 0022 has the
+    argument.
+
+    The console's watchlist panel has the same toggle; this is the terminal's.
+    """
+    from tracker import watchlist
+    from tracker.models import Account
+
+    engine = _watch_engine()
+    with _explain_db_locks(), session_scope(engine) as session:
+        account_id = _account_id(session, user, for_write=True)
+        account = session.get(Account, account_id)
+        if account is None:  # pragma: no cover - _account_id resolved it a line ago
+            _fail("that account no longer exists")
+            return
+        account.watch_all = bool(on)
+        session.flush()
+        # Read off the row before the session closes; a detached instance raises.
+        email = account.email
+        watching = len(watchlist.entries(session, account_id=account_id))
+
+    if json_mode():
+        emit({"user": email, "watch_all": bool(on), "entries": watching})
+        return
+    if on:
+        console.print(f"[green]{escape(email)} now watches every project[/green]")
+    elif watching:
+        console.print(
+            f"[green]{escape(email)} now watches only its {watching} entr"
+            f"{'y' if watching == 1 else 'ies'}[/green]"
+        )
+    else:
+        console.print(
+            f"[yellow]{escape(email)} now watches nothing[/yellow] "
+            '[dim]— name something with `tracker watch add "Nscale"`[/dim]'
+        )
+
+
 # --- Accounts ----------------------------------------------------------------
 
 
