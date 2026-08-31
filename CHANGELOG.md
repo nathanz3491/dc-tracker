@@ -12,6 +12,37 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **A console runner for the two families that need a judgement**
+  (`scripts/resolve.sh`, `README.md`).
+
+  Logic collisions and suspected duplicates are the two reports where the question
+  is "which of these two claims is right", and the answer costs an LLM call.
+  `settle.sh` runs them inside the whole loop; this runs only them, for when that
+  is what you want answered.
+
+  Ordered logic first, because a collision settled on a row changes the claim set
+  the duplicate judgement is then made against, and duplicates last because it is
+  the only step that deletes anything. It prints what is open before spending, asks
+  once before folding when there is a terminal, declines to fold when there is not
+  and `--yes` was not given, and takes a `VACUUM INTO` snapshot regardless.
+
+  Two things it is honest about rather than quiet about. `logic resolve --auto
+  --apply` is **currently a no-op**: it reports 48 rows whose `phase` drifted, then
+  applies the repair via `recompute_from_sources`, which re-derives `phase` and
+  lands back on the stored value — so it prints 48 repairs and writes none, every
+  run. `check_collisions`'s winner and `_resolve`'s answer for `phase` disagree.
+  Verified on the live database: #14 and #9 are still `operational` after a run
+  that claimed to move both to `construction`, the phase histogram is unchanged,
+  and a re-run reports the same 48. And of 47 suspected duplicate groups, 28 are
+  city-vs-county and 8 are name-overlap, so `merge_blocked` will refuse roughly
+  three quarters unattended — which is the rails working, not failing.
+
+  One bug caught while writing it, worth recording because it would have been
+  invisible: `set -o pipefail` plus `head` is a trap. `head` closes the pipe once
+  it has its lines, `tracker` takes SIGPIPE, and the pipeline reports failure — so
+  the preflight summary would have killed the script through its own ERR trap.
+  Measured directly: the `head` form exits 1, the `sed -n '1,12p'` form exits 0.
+
 - **One command that settles, because `sync` only recomputes**
   (`scripts/settle.sh`, `README.md`).
 

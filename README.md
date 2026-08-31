@@ -122,6 +122,24 @@ scripts/settle.sh --refetch-dates  # and ask publishers for the missing dates
 60 publication dates are readable straight out of the URL path and 965 need one
 HTTP request each. It goes in tranches and is resumable.
 
+[`scripts/resolve.sh`](scripts/resolve.sh) is the narrow companion, for the two
+report families where the question is "which of these two claims is right" and the
+answer costs an LLM call: logic collisions and suspected duplicates. It prints what
+is open before spending anything, and asks once before folding duplicates — the one
+step no re-crawl recovers — behind a `VACUUM INTO` snapshot it takes regardless.
+
+```bash
+scripts/resolve.sh --no-merge      # decide and park; deletes nothing
+scripts/resolve.sh                 # and fold, after one confirmation
+scripts/resolve.sh --yes --limit 200
+```
+
+Both scripts are resumable: every phase skips findings already answered on their
+row, so running one again works the backlog down rather than re-asking. Expect
+roughly a quarter of suspected duplicate groups to fold and the rest to be parked
+or left — of the 47 measured, 28 are city-vs-county and 8 are name-overlap, and
+`dupresolve.merge_blocked` refuses both unattended by design.
+
 ## The three ideas
 
 Everything on screen is shaped by these, and they are also in the console's own
