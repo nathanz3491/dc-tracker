@@ -101,6 +101,27 @@ every phase, because the two that hunt for what is absent — `--prospect` for
 operators we have no rows for, `--enrich` for rows that are thin — are the two that
 can spend without a ceiling in sight. See [Ingesting](docs/ingesting.md).
 
+`sync`'s own `settle` phase only recomputes — `derive` plus a confidence rescore.
+Everything that *settles an open question* is a separate command, and
+[`scripts/settle.sh`](scripts/settle.sh) is the one that runs them in dependency
+order: dates before derive (a merge tiebreak falls back to crawl order without
+them), geo before duplicates (a merge rail needs coordinates to fire at all), and
+the one step that deletes rows last, behind a `VACUUM INTO` snapshot. Free by
+default; `--llm` adds the model-decided phases, `--merge` adds the folding. It ends
+with `tracker clean --snapshot --since 1`, so consecutive runs are comparable.
+
+```bash
+scripts/settle.sh                  # free: dates, geo, derive, logic --auto
+scripts/settle.sh --llm            # and risks, audit, logic --llm
+scripts/settle.sh --merge          # and fold suspected duplicates
+scripts/settle.sh --merge --dry-run
+scripts/settle.sh --refetch-dates  # and ask publishers for the missing dates
+```
+
+`--refetch-dates` is separate because it is the one free phase that is not cheap:
+60 publication dates are readable straight out of the URL path and 965 need one
+HTTP request each. It goes in tranches and is resumable.
+
 ## The three ideas
 
 Everything on screen is shaped by these, and they are also in the console's own

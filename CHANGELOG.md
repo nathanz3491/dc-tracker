@@ -10,6 +10,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 First working version. Nothing has been released yet, so everything below is the
 initial build of the v1 PRD.
 
+### Added
+
+- **One command that settles, because `sync` only recomputes**
+  (`scripts/settle.sh`, `README.md`).
+
+  `tracker sync` names its sixth phase `settle`, and that phase is `derive.run()`
+  plus `recompute_confidence()` — two pure recomputations. Every command that
+  actually settles an open question is a separate one, and nothing chained them.
+  Measured on the live database: 471 projects, **27 at T2 COMPLETE and 0 at T3
+  SETTLED**, with `warnings_settled` failing on 253 rows and `duplicates_answered`
+  on 103.
+
+  The automation was never the missing piece. `duplicates resolve` already defaults
+  to `--llm` on and `--ask` off, `risks confirm` has no `--ask` at all, and `audit
+  resolve` goes straight to the model when there is no terminal. What was missing
+  was an order to run them in, and the order carries the whole argument: **dates
+  before derive**, because 64% of queued URLs have no publication date and a merge
+  tiebreak silently falls back to crawl order — settling collisions first records
+  the wrong winner as settled; **geo before duplicates**, because a merge rail
+  refuses a pair whose stored coordinates are over 25 km apart and coordinates
+  exist on 39% of rows, so on most pairs that rail cannot fire at all; **duplicates
+  last**, because it is the only step that deletes rows.
+
+  `--refetch-dates` is its own flag rather than part of the free tier, because the
+  free tier is cheap and this is not: 60 dates are readable out of the URL path and
+  **965 need one HTTP request each**. Tranched and resumable, so repeated runs walk
+  the backlog down.
+
+  Three tiers, following the convention `sync` already sets: free by default,
+  `--llm` for the model-decided phases, `--merge` for the folding. `--merge` takes
+  a `VACUUM INTO` snapshot first — never a `cp`, for the WAL reason
+  `scripts/sync_db.py` documents. Every model phase runs with stdin on
+  `/dev/null`, so an unexpected prompt hits EOF and stops rather than hanging a
+  scheduled run while holding the write lock. It closes on `tracker clean
+  --snapshot --since 1`, which makes consecutive runs comparable instead of each
+  one being a fresh opinion.
+
+  Not in it: `tracker blocks` finds 110 mergeable tranche groups across 69
+  projects and there is no `blocks fold` to run. That one needs code.
+
 ### Changed
 
 - **An empty watchlist watches nothing** (`migrations/0022_watch_all.sql`,
