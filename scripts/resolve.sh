@@ -73,6 +73,7 @@ running it again works through the backlog rather than repeating itself.
                The LLM calls are still paid for -- that is what makes it honest.
 
 Before spending anything it prints what is open, so you can Ctrl-C.
+Everything is appended to data/runs/resolve.log ($RESOLVE_LOG to move it).
 
 A merge is the one thing here no re-crawl recovers, so a VACUUM INTO snapshot is
 taken first, unconditionally, and its path is printed.
@@ -107,10 +108,20 @@ on_error() {
 }
 trap 'on_error $?' ERR
 
-# Bold only when stdout is a terminal, so `resolve.sh | tee run.log` does not
-# collect escape sequences.
+# Bold only when stdout is a terminal. Decided BEFORE the tee below replaces
+# stdout with a pipe, or it would always be false.
 if [ -t 1 ]; then BOLD=$'\033[1m'; PLAIN=$'\033[0m'; else BOLD=""; PLAIN=""; fi
-phase() { PHASE="$1"; printf '\n%s=== %s%s\n' "$BOLD" "$1" "$PLAIN"; }
+
+# Append everything to a log as well as the terminal. This spends money on
+# judgements, and a run whose only record was terminal scrollback could not
+# answer "did the logic phase settle anything, or decline everything?" -- which
+# is exactly the question the first real run raised. The confirmation prompt
+# still works: it reads from /dev/tty, not stdin.
+LOG="${RESOLVE_LOG:-$REPO/data/runs/resolve.log}"
+mkdir -p "$(dirname "$LOG")"
+exec > >(tee -a "$LOG") 2>&1
+
+phase() { PHASE="$1"; printf '\n%s=== %s  %s%s\n' "$BOLD" "$(date '+%H:%M:%S')" "$1" "$PLAIN"; }
 
 # --- what is open, before anything is spent -------------------------------
 
