@@ -213,12 +213,38 @@ class ResponseTruncated(LLMError):
 
 
 @dataclass(frozen=True)
+class ToolCall:
+    """One request from the model to run one tool.
+
+    `arguments` is already parsed. The provider sends it as a JSON *string* and a
+    model that emits malformed JSON is a normal event rather than an exception —
+    the agent runner turns a parse failure into a tool result saying so, which the
+    model can read and correct. Raising here would end the run instead.
+    """
+
+    id: str
+    name: str
+    arguments: dict[str, Any]
+    #: The raw string, kept for the error path: a tool result that says "your
+    #: arguments were not JSON" is only useful if it can show what arrived.
+    raw_arguments: str = ""
+    #: Set when `raw_arguments` would not parse. Explicit rather than inferred
+    #: from `not arguments`, because `{}` is both what a failed parse falls back
+    #: to *and* what a correct call to a no-argument tool looks like — reading
+    #: emptiness as failure broke every such tool.
+    parse_failed: bool = False
+
+
+@dataclass(frozen=True)
 class LLMReply:
     text: str
     finish_reason: str | None = None
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
     model: str = "unknown"
+    #: Tools the model asked to run, in the order it asked. Empty on every reply
+    #: from `complete`, which sends no tools and so can never receive a call.
+    tool_calls: tuple[ToolCall, ...] = ()
 
 
 class Extractor(Protocol):
@@ -230,6 +256,27 @@ class Extractor(Protocol):
     """
 
     def complete(self, *, system: str, user: str, max_tokens: int | None = None) -> LLMReply: ...
+
+
+class ToolExtractor(Extractor, Protocol):
+    """An extractor that can also run a multi-turn conversation with tools.
+
+    Separate from `Extractor` rather than widening it, for the reason `Extractor`
+    is narrow in the first place: every existing caller sends one prompt and wants
+    one answer, and a dozen fakes in the test suite implement exactly that. A
+    caller that needs tools asks for this protocol and gets a clear failure from a
+    provider that cannot do it, instead of a silent one where the tools were
+    quietly dropped from the request and the model answered without them.
+    """
+
+    def converse(
+        self,
+        *,
+        system: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        max_tokens: int | None = None,
+    ) -> LLMReply: ...
 
 
 class StreamingExtractor(Extractor, Protocol):
@@ -569,6 +616,98 @@ class DeepSeekExtractor:
             prompt_tokens=usage.get("prompt_tokens"),
             completion_tokens=usage.get("completion_tokens"),
             model=data.get("model") or self.model,
+        )
+
+    def converse(
+        self,
+        *,
+        system: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        max_tokens: int | None = None,
+    ) -> LLMReply:
+        """One turn of a tool-using conversation.
+
+        `messages` is the whole history after the system prompt — user turns, the
+        assistant's own tool requests, and the `tool` results answering them. The
+        caller owns that list, because the caller is the loop: this method keeps no
+        memory between calls and cannot know when the conversation should end.
+
+        Deliberately not folded into `complete`. That promises "one prompt, one
+        answer", and a dozen fakes in the test suite implement exactly that
+        signature; widening it would have made every one of them wrong to satisfy
+        the two callers that need tools.
+
+        Reasoning is *not* folded into `text` here, unlike `complete`. There the
+        `<think>` wrapper exists so `split_thinking` keeps working for callers that
+        parse a JSON object out of the answer. Here the answer is `tool_calls`,
+        and prepending a think block to `content` would corrupt the assistant turn
+        the next request has to echo back.
+        """
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "messages": [{"role": "system", "content": system}, *messages],
+            "temperature": 0.1,
+            "top_p": 0.9,
+            "max_tokens": self._budget(max_tokens),
+            "stream": False,
+            "thinking": (
+                {"type": "enabled", "reasoning_effort": self.effort}
+                if self.effort is not None
+                else {"type": "disabled"}
+            ),
+        }
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = "auto"
+        # No `response_format` even when `deepseek_json_mode` is set: a request
+        # carrying tools must be free to answer with a tool call, and forcing a
+        # JSON object is how you get a model that describes the call it wanted to
+        # make instead of making it.
+
+        data = self._post(payload)
+        try:
+            choice = data["choices"][0]
+            message = choice["message"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise LLMError(f"unexpected response shape from {self.endpoint}: {data!r}") from exc
+
+        calls: list[ToolCall] = []
+        for raw in message.get("tool_calls") or ():
+            function = raw.get("function") or {}
+            arguments = function.get("arguments")
+            failed = False
+            if isinstance(arguments, dict):
+                parsed, as_text = arguments, json.dumps(arguments)
+            else:
+                as_text = str(arguments or "")
+                try:
+                    parsed = json.loads(as_text) if as_text.strip() else {}
+                except ValueError:
+                    # Handed on unparsed. The runner answers with a tool result
+                    # saying the arguments were not JSON, which the model can fix
+                    # on its next turn — a recoverable event, not a failed run.
+                    parsed, failed = {}, True
+                if not isinstance(parsed, dict):
+                    parsed, failed = {}, True
+            calls.append(
+                ToolCall(
+                    id=str(raw.get("id") or ""),
+                    name=str(function.get("name") or ""),
+                    arguments=parsed,
+                    raw_arguments=as_text,
+                    parse_failed=failed,
+                )
+            )
+
+        usage = data.get("usage") or {}
+        return LLMReply(
+            text=message.get("content") or "",
+            finish_reason=choice.get("finish_reason"),
+            prompt_tokens=usage.get("prompt_tokens"),
+            completion_tokens=usage.get("completion_tokens"),
+            model=data.get("model") or self.model,
+            tool_calls=tuple(calls),
         )
 
     def stream(self, *, system: str, user: str, max_tokens: int | None = None) -> Iterator[str]:
