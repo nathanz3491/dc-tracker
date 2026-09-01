@@ -111,6 +111,10 @@ done
 
 LOG="${OVERNIGHT_LOG:-$REPO/data/runs/overnight.log}"
 mkdir -p "$(dirname "$LOG")"
+# Where this run's output starts, so the token tally below reads only its own
+# lines. Summing the whole file made the second night start at the first night's
+# total and trip `--tokens` on round one.
+LOG_FROM=$(( $(wc -l < "$LOG" 2>/dev/null || echo 0) + 1 ))
 exec > >(tee -a "$LOG") 2>&1
 
 # One at a time. `mkdir` is the atomic primitive available everywhere; macOS has
@@ -239,8 +243,8 @@ for round in $(seq 1 "$ROUNDS"); do
 
   # Tokens are read back out of this log, which is the only place both commands
   # report them. Approximate on purpose: it steers a ceiling, not a bill.
-  SPENT=$(grep -oE '~[0-9,]+ tokens' "$LOG" 2>/dev/null \
-    | tr -d '~, tokens' | awk '{t+=$1} END {print t+0}')
+  SPENT=$(tail -n "+$LOG_FROM" "$LOG" 2>/dev/null \
+    | grep -oE '~[0-9,]+ tokens' | tr -d '~, tokens' | awk '{t+=$1} END {print t+0}')
 
   read -r F1 D1 <<<"$(counts)"
   printf '\n  round %s: findings %s -> %s (%+d)   groups %s -> %s (%+d)\n' \
