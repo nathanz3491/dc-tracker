@@ -19,6 +19,11 @@
 #   dates before derive      64% of queued URLs carry no publication date, so a
 #                            merge tiebreak falls back to crawl order. Settling
 #                            collisions first records the wrong winner as settled.
+#                            NOTE: latent today. The tiebreak ranks on `fetched_at`
+#                            until TRACKER_MERGE_BY_PUBLICATION_DATE=1, which is off
+#                            on purpose. The dates are still worth storing —
+#                            `logic conflicts` shows them to a model — but this
+#                            ordering buys nothing until that flag is turned on.
 #   geo before duplicates    a merge rail refuses a pair whose stored coordinates
 #                            are more than 25 km apart. With coordinates on 39% of
 #                            rows that rail cannot fire on most pairs at all.

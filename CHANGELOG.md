@@ -12,6 +12,65 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **A model that can go and look, and say what it concluded** (`tracker/agent.py`,
+  `tracker/llm.py`, `tests/test_agent.py`).
+
+  Four commands ask a model to check a claim against the sources — `logic
+  resolve`, `duplicates resolve`, `audit resolve`, `risks confirm` — and each was
+  one `complete()` call with a hand-built context block and a hand-written menu of
+  answers. Both halves of that shape were the ceiling, and both are measured.
+
+  **The menu.** `logic.decide` returns "nothing to choose between" *before it calls
+  the model at all* whenever `ACTIONS[code]` is empty, and it is empty for 11 of
+  the 16 rule codes — **432 of 526 findings** on the live database, 334 of them
+  block problems. Measured against that: of the 94 findings the model *was* shown,
+  it acted on 52 and declined 10. It was never the cautious party; the list of
+  things it was permitted to say was the constraint.
+
+  **The context.** `_triage_context` shows a 280-character excerpt per field while
+  the article behind it sits in the cache or one request away, and nothing asked
+  for it.
+
+  So this is one loop rather than a better prompt in four places. A caller passes
+  tools and a terminal tool; the model reads articles, searches the web, pulls up
+  neighbouring rows, and answers by calling the terminal tool with its own
+  conclusion. `evidence_toolkit` ships the five reads every such caller wants, so
+  `enrich` and the two `resolve` commands compose rather than each growing a
+  context builder.
+
+  `llm.ToolExtractor` is a **new protocol beside** `Extractor`, not a widening of
+  it: a dozen fakes in the suite implement `complete` and none needed changing, and
+  a provider without tool support now fails loudly instead of silently answering
+  with the tools dropped — which would read as a cautious model and be a dropped
+  request.
+
+  **What it deliberately does not do is decide whether an answer is believed.**
+  That bar differs per caller: a duplicate verdict wants a distance check, a field
+  edit wants a quote. One policy serving four questions is exactly how
+  `check_collisions` and `_resolve` came to disagree about `phase` and report 48
+  repairs that never landed. `verbatim()` is offered for the quote half, because
+  the evidence tier decides whether `capex` sums the value at all — an agent
+  writing without quotes would do correct work that reaches no published total.
+
+  **Budgets.** 20,000 tokens a turn, retried once at 50,000 on `finish_reason ==
+  "length"`, and only when no tool call came back — a truncated reply that still
+  produced a complete call is usable as it stands. The escalation does not carry
+  into the next step, so one long deliberation does not reprice the run. The old
+  8,000 was measured truncating replies mid-reasoning: one unusable answer in a
+  63-finding run, and a duplicates verdict lost outright to "the reply was cut off
+  while reasoning".
+
+  **Articles are fetched lazily, not pre-warmed.** The cache holds 498 of 2,103
+  cited urls, and filling the rest would be ~1,600 speculative requests at hosts
+  that have already answered this database with 634 403s. `read_article` fetches
+  what a run actually asks for and caches it, so every run makes the next cheaper.
+  Measured on a 150-url tranche: 145 succeeded.
+
+  One bug the tests caught before it shipped: `{}` is both what a failed argument
+  parse falls back to *and* what a correct call to a no-argument tool looks like,
+  so reading emptiness as failure broke every such tool. `ToolCall.parse_failed`
+  now says which happened.
+
 - **A console runner for the two families that need a judgement**
   (`scripts/resolve.sh`, `README.md`).
 

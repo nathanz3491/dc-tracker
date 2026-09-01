@@ -118,9 +118,18 @@ scripts/settle.sh --merge --dry-run
 scripts/settle.sh --refetch-dates  # and ask publishers for the missing dates
 ```
 
-`--refetch-dates` is separate because it is the one free phase that is not cheap:
+`--refetch-dates` is separate because it is the one free phase that is not cheap —
 60 publication dates are readable straight out of the URL path and 965 need one
-HTTP request each. It goes in tranches and is resumable.
+HTTP request each — and **measured on the live database it is not worth running**:
+a 150-page tranche fetched 150 and wrote **0** dates, because 145 of those pages
+state no date this tool can read. It stays for the day that parser improves; do not
+reach for it expecting dates.
+
+Two things about dates that are easy to assume and wrong. Filling them does not
+change a single merge outcome until `TRACKER_MERGE_BY_PUBLICATION_DATE=1` — the
+tiebreak still ranks on `fetched_at`, deliberately, until `logic conflicts` has run
+and been measured. And refetching does **not** warm the article cache: only the
+crawl path writes it.
 
 [`scripts/resolve.sh`](scripts/resolve.sh) is the narrow companion, for the two
 report families where the question is "which of these two claims is right" and the
