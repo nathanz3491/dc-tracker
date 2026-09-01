@@ -123,6 +123,24 @@ scripts/settle.sh --merge --dry-run
 scripts/settle.sh --refetch-dates  # and ask publishers for the missing dates
 ```
 
+[`scripts/resolve.sh`](scripts/resolve.sh) is the narrow version — logic and
+duplicates only, with a confirmation before anything is folded.
+[`scripts/overnight.sh`](scripts/overnight.sh) is the wide one: it loops both
+until two consecutive rounds fail to reduce either count, because neither is a
+queue that drains — ruling a claim out re-derives a row and can raise a finding
+the old value hid, and merging changes the survivor's claim set and can match a
+third row. Ceilings on hours, rounds and tokens, a `VACUUM INTO` snapshot before
+the first merge, and one run at a time:
+
+```bash
+caffeinate -i nohup scripts/overnight.sh > /dev/null 2>&1 &
+```
+
+Sized from measurement: the agent reads whole articles at ~45k tokens a finding,
+so the first sweep over 495 unanswered findings is ~22M tokens and about ten
+hours. Later rounds cost far less — an answered *or declined* finding is recorded
+and never re-offered.
+
 `--refetch-dates` is separate because it is the one free phase that is not cheap —
 60 publication dates are readable straight out of the URL path and 965 need one
 HTTP request each — and **measured on the live database it is not worth running**:

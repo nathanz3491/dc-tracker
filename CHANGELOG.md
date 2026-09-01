@@ -12,6 +12,33 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **A loop that runs until the backlogs stop moving** (`scripts/overnight.sh`,
+  `README.md`).
+
+  Neither backlog is a queue that drains, which is why every other script here
+  does one pass and this one does rounds. Ruling a claim out re-derives the row and
+  a re-derived row can raise a finding the old value hid — 52 resolutions took the
+  total from 530 to 529. Merging changes the survivor's claim set, which can match
+  a third row that did not match before — answering 13 pairs took the group count
+  from 47 to 48. So the target is a fixed point, and the stop condition is two
+  consecutive rounds with no reduction in either count.
+
+  It steers on two numbers from one process — logic findings not yet answered, and
+  duplicate *groups* rather than pairs, because nine rows for one campus make 36
+  pairs and one group and a loop counting pairs would read a single merge as huge
+  progress.
+
+  **Sized against measurement, not hope.** The agent reads whole articles: ~45,000
+  tokens per finding, 495 unanswered, so ~22M tokens and roughly ten hours for the
+  first sweep. `--tokens` caps it at 25M by default and `--hours` at 8. Later
+  rounds are far cheaper because a finding the agent answered *or declined* is
+  recorded and never re-offered.
+
+  Honest about its own ceiling: `block_label_ambiguous` and its relatives — ~250
+  findings — are about tranche identity, and superseding a claim about a field
+  cannot fix them. The agent will read the sources and decline, once each. The
+  header says so, so a stubborn residue is not read as a failure.
+
 - **`logic resolve` and `duplicates resolve` now settle by ruling on claims, and
   the agent is the default** (`tracker/triage.py`, `tracker/cli.py`,
   `tests/test_triage.py`, `tests/test_triage_pairs.py`).
