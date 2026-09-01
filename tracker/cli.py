@@ -3153,6 +3153,21 @@ def duplicates_resolve(
             help="Also fold the pairs it rules are one campus. Deletes rows; read the rails first.",
         ),
     ] = False,
+    agent: Annotated[
+        bool,
+        typer.Option(
+            "--agent/--no-agent",
+            help=(
+                "Default. A model reads both rows' articles, searches if it must, and "
+                "rules. Drops the cross-granularity refusal, which 28 of 47 live groups "
+                "hit. Suppressed by --ask and by --no-llm."
+            ),
+        ),
+    ] = True,
+    min_confidence: Annotated[
+        float,
+        typer.Option("--min-confidence", help="With --agent and --merge: the floor a fold needs."),
+    ] = 0.85,
     weak: Annotated[
         bool,
         typer.Option("--weak", help="Also ask about pairs raised only by a shared name word."),
@@ -3215,17 +3230,28 @@ def duplicates_resolve(
     if not path.is_file():
         _fail(f"database not found: {path}\nRun `tracker init` first.")
 
+    interactive = ask and _sys.stdin.isatty() and not json_mode()
+    keyboard = _dupe_prompt if interactive else None
+
+    # `--ask` means a person is deciding, so the agent stands down: paying for a
+    # run whose answer is then overridden at the keyboard buys nothing. `--no-llm`
+    # suppresses it too — the agent *is* a model, so "no model" has to mean no
+    # model, or `--no-llm --no-ask` would spend calls instead of saying that
+    # nothing can decide.
+    use_agent = agent and llm and not interactive
+
     extractor = None
-    if llm:
+    if llm or use_agent:
         from tracker.llm import LLMUnavailable, reasoning_extractor
 
         try:
             extractor = reasoning_extractor()
         except LLMUnavailable as exc:
-            _fail(str(exc))
+            if keyboard is None:
+                _fail(str(exc))
+            err.print(f"[yellow]no model available, so deciding at the keyboard[/yellow]\n{exc}")
+            use_agent = False
 
-    interactive = ask and _sys.stdin.isatty() and not json_mode()
-    keyboard = _dupe_prompt if interactive else None
     if extractor is None and keyboard is None:
         _fail("nothing can decide: pass --llm with a key configured, or --ask at a terminal.")
 
@@ -3237,14 +3263,26 @@ def duplicates_resolve(
     # rows and belongs under the same discipline as the merge it performs.
     engine = _writable("duplicates resolve")
     with _explain_db_locks(), session_scope(engine, commit=not dry_run) as session:
-        decisions = dupresolve.resolve(
-            session,
-            extractor=extractor,
-            limit=limit,
-            allow_merge=merge_them,
-            weak=weak,
-            ask=keyboard,
-        )
+        if use_agent:
+            from tracker import triage as triage_mod
+
+            decisions = triage_mod.resolve_pairs(
+                session,
+                extractor=extractor,
+                limit=limit,
+                allow_merge=merge_them,
+                weak=weak,
+                min_confidence=min_confidence,
+            )
+        else:
+            decisions = dupresolve.resolve(
+                session,
+                extractor=extractor,
+                limit=limit,
+                allow_merge=merge_them,
+                weak=weak,
+                ask=keyboard,
+            )
 
     if json_mode():
         emit(
@@ -4706,8 +4744,27 @@ def logic_resolve(
     ] = False,
     llm: Annotated[
         bool,
-        typer.Option("--llm", help="Let a model choose, one call each. It skips when unsure."),
+        typer.Option(
+            "--llm",
+            help="The old fixed-menu path: one call, one letter from a hand-written list.",
+        ),
     ] = False,
+    agent: Annotated[
+        bool,
+        typer.Option(
+            "--agent/--no-agent",
+            help=(
+                "Default. A model reads the articles, searches if it must, and rules "
+                "wrong claims out of the merge. Suppressed by --auto and --llm."
+            ),
+        ),
+    ] = True,
+    min_confidence: Annotated[
+        float,
+        typer.Option(
+            "--min-confidence", help="With --agent: refuse a ruling below this. 0 allows any."
+        ),
+    ] = 0.75,
     code: Annotated[
         str | None,
         typer.Option("--code", help="Work through one kind of finding only.", show_default=False),
@@ -4784,17 +4841,33 @@ def logic_resolve(
     if not path.is_file():
         _fail(f"database not found: {path}\nRun `tracker init` first.")
 
+    # `--agent` is the default and the other two paths are the opt-outs, because
+    # the menu was the ceiling: `decide` declines 432 of 526 findings before it
+    # calls a model at all. `--auto` (mechanical only) and `--llm` (the old menu)
+    # both suppress it, so a script pinned to either keeps its behaviour.
+    use_agent = agent and not auto_only and not llm
+
     extractor = None
-    if llm:
+    if llm or use_agent:
         from tracker.llm import LLMUnavailable, reasoning_extractor
 
         try:
             extractor = reasoning_extractor(get_settings())
         except LLMUnavailable as exc:
-            _fail(str(exc))
+            # A bare `logic resolve` used to be the interactive walkthrough, and
+            # making the agent the default must not take that away from somebody
+            # with no key. Fall back where a person is watching; fail where one is
+            # not, because a script that asked for the agent and silently got
+            # nothing is worse than a script that stops.
+            if not use_agent or not _sys.stdin.isatty() or json_mode():
+                _fail(str(exc))
+            err.print(f"[yellow]no model available, so answering by hand instead[/yellow]\n{exc}")
+            use_agent = False
 
-    interactive = not auto_only and not llm and _sys.stdin.isatty() and not json_mode()
-    writing = interactive or apply or llm
+    interactive = (
+        not auto_only and not llm and not use_agent and _sys.stdin.isatty() and not json_mode()
+    )
+    writing = interactive or apply or llm or use_agent
 
     if writing:
         engine, _ = init_db(path)
@@ -4900,6 +4973,21 @@ def logic_resolve(
             console.print("[green]nothing left to decide[/green]")
             return
 
+        if use_agent:
+            # No `logic_mod.resolvable` filter, unlike the path below. That filter
+            # exists because `decide` can only answer with a key from
+            # `ACTIONS[code]`, and 11 of 16 codes have none — it is a property of
+            # the menu, not of the finding. An agent rules claims out of the merge,
+            # which is available on every code, so the 334 tranche findings the
+            # menu could never touch reach a model here for the first time.
+            _triage_by_agent(
+                session,
+                findings[:limit],
+                extractor,
+                min_confidence=min_confidence,
+            )
+            return
+
         if llm:
             # The whole list, not `[:limit]`: the limit is a budget for *calls*,
             # and slicing before the unanswerable ones are filtered out spent it
@@ -4917,6 +5005,97 @@ def logic_resolve(
             return
 
         _triage(session, findings[:limit], logic_mod)
+
+
+def _triage_by_agent(session, findings: list, extractor, *, min_confidence: float = 0.75) -> None:
+    """Let a model read the sources and rule wrong claims out, one finding at a time.
+
+    Prints what each run *looked at* as well as what it concluded. That is not
+    decoration: the difference between "declined after reading three articles" and
+    "declined after reading nothing" is the difference between a considered answer
+    and a broken tool, and only the trail distinguishes them.
+
+    Committed per finding, so a provider failure on row 40 keeps the first 39.
+    """
+    from tracker import triage as triage_mod
+    from tracker.logic import record_decision
+    from tracker.models import Project
+
+    ruled = left = unusable = errored = 0
+    spent = 0
+
+    for index, finding in enumerate(findings, start=1):
+        project = session.get(Project, finding.project_id)
+        if project is None:
+            continue
+
+        head = f"[dim]{index}/{len(findings)}[/dim] #{project.id} {escape(project.name[:32])}"
+        # `remedy` is included because it is where the codebase records what a
+        # reader should look at, and withholding it makes the model rediscover
+        # what a rule already knows. `subject` names what the finding is *about*
+        # — the prompt was measurably blind without it.
+        question = "\n".join(
+            part
+            for part in (
+                f"Finding `{finding.code}`: {finding.summary}",
+                f"About: {finding.subject}" if getattr(finding, "subject", "") else "",
+                f"Where to look: {finding.remedy}" if finding.remedy else "",
+                f"Fields involved: {', '.join(finding.fields)}" if finding.fields else "",
+            )
+            if part
+        )
+
+        outcome = triage_mod.triage(
+            session,
+            project,
+            question=question,
+            extractor=extractor,
+            min_confidence=min_confidence,
+        )
+        spent += outcome.prompt_tokens + outcome.completion_tokens
+        trail = " → ".join(outcome.steps) or "nothing"
+
+        if outcome.verdict == "ruled":
+            record_decision(
+                project,
+                finding.code,
+                "; ".join(outcome.changes),
+                by=f"agent ({outcome.confidence:.2f})",
+                detail=outcome.note,
+            )
+            session.commit()
+            ruled += 1
+            console.print(f"{head}  [green]{escape(outcome.changes[0])}[/green]")
+            console.print(f"      [dim]{escape(outcome.note[:150])}[/dim]")
+        elif outcome.verdict == "left":
+            # Recorded, so the next run does not pay to be told the same thing.
+            record_decision(project, finding.code, "left alone", by="agent", detail=outcome.note)
+            session.commit()
+            left += 1
+            console.print(f"{head}  [dim]left alone[/dim]")
+            console.print(f"      [dim]{escape(outcome.note[:200])}[/dim]")
+        elif outcome.verdict == "unusable":
+            session.rollback()
+            unusable += 1
+            console.print(f"{head}  [yellow]unusable[/yellow] [dim]— {escape(outcome.note)}[/dim]")
+        else:
+            session.rollback()
+            errored += 1
+            console.print(f"{head}  [red]error[/red] [dim]— {escape(outcome.note[:120])}[/dim]")
+
+        console.print(f"      [dim]looked at: {escape(trail)}[/dim]")
+
+    console.print(
+        f"\n[bold]{ruled}[/bold] ruled, [bold]{left}[/bold] left alone"
+        + (f", [yellow]{unusable}[/yellow] unusable" if unusable else "")
+        + (f", [red]{errored}[/red] errored" if errored else "")
+        + f"  [dim]~{spent:,} tokens[/dim]"
+    )
+    console.print(
+        "\n[dim]A ruling supersedes a claim and re-derives the field, so it survives "
+        "the next `backfill derive` — unlike the column assignments `--llm` makes. "
+        "Recorded as `agent`, never as `operator`: nobody has read these sources.[/dim]"
+    )
 
 
 def _triage_by_model(session, findings: list, logic_mod, extractor, *, limit: int = 30) -> None:

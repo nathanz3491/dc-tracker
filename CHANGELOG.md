@@ -12,6 +12,44 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **`logic resolve` and `duplicates resolve` now settle by ruling on claims, and
+  the agent is the default** (`tracker/triage.py`, `tracker/cli.py`,
+  `tests/test_triage.py`, `tests/test_triage_pairs.py`).
+
+  **The repair was never durable, and that is the headline.** A project scalar is a
+  cache of the claim set. `recompute_from_sources` re-derives it on the next
+  ingest, merge or `backfill derive` — and the deployer runs `tracker init`, so a
+  recompute happens on **every deploy**. Every field-assigning action in `logic.py`
+  is therefore transient: `_clear_built`, `_clear_expected_online`,
+  `_clear_first_announced`, `_raise_planned_to_built`. Measured directly on the
+  live database — clear `mw_built` on #14, commit, derive, and 230.0 comes back.
+  That is why a run resolving `built_exceeds_planned` **18 times** left
+  `no_inversions` at exactly 30 failures, and why 52 resolutions moved 2 rows.
+  `audit.py` had already learned this and reshaped every action around
+  `conflicts.supersede`; `logic.py` never did. `test_assigning_the_column_does_not_survive` pins the old behaviour so the new path cannot drift back into it.
+
+  So the model is no longer asked what a field should be. It is asked **which
+  citations are wrong about it** — a question about evidence it can answer from the
+  article — and the claim is superseded, which survives every recompute because the
+  merge policy then derives the field from what is left. The field is emptied
+  before the recompute rather than assigned after, so a field whose every claim has
+  been ruled out stays empty without this code ever choosing a number.
+
+  **For duplicates, one rail is deliberately gone.** `merge_blocked` refuses a
+  cross-granularity pair categorically because "a model is not a person with a
+  map". True of a model shown two rows and nothing else — and 28 of 47 live groups
+  are exactly that shape, with the model already reasoning containment unprompted
+  (*"El Mirage is a city within that county"*, 0.80–0.85, all 45 left
+  unactionable, holding **78 rows** out of T1). An agent that can read the articles
+  and search can be given a map. The rails that are *fact checks* rather than menus
+  all stay, each with a test: distance beyond `FAR_APART_KM`, ordinal siblings,
+  a confidence floor, and a quote verbatim from something the run actually read.
+
+  `--agent` is the default; `--auto`, `--llm` and `--no-llm` all suppress it, so a
+  script pinned to the old behaviour keeps it. A bare `logic resolve` with no key
+  falls back to the interactive walkthrough rather than failing, because making the
+  agent the default must not take that away from somebody without one.
+
 - **A model that can go and look, and say what it concluded** (`tracker/agent.py`,
   `tracker/llm.py`, `tests/test_agent.py`).
 

@@ -35,7 +35,12 @@ one campus; it is the only command here that deletes anything. `tracker point
 existing row (then `enrich`ing it) or building a fresh profile — instead of
 waiting for the batch; add `--url` (repeatable) to read a link you already have
 rather than searching for one. `tracker logic check` finds values that contradict
-each other or themselves; `tracker logic resolve` walks through fixing them.
+each other or themselves; `tracker logic resolve` settles them — by default a model
+reads the articles behind the row, searches if they cannot settle it, and rules the
+wrong citations out of the merge. It never assigns a field: a scalar is a cache of
+the claim set, so an assignment is undone by the next `backfill derive`, and
+superseding the claim is what survives. `--no-agent` gives you the keyboard,
+`--auto` the mechanical repairs only.
 
 `h200_equivalent` restates a site's capacity as accelerators, because megawatts
 is what gets reported and compute is what people are actually asking about. It is
