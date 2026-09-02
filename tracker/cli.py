@@ -1115,6 +1115,18 @@ def ingest_crawl(
             help="Never create a project. Refusals are reported. Pair with --stale-prompt.",
         ),
     ] = False,
+    verify_identity: Annotated[
+        bool,
+        typer.Option(
+            "--verify-identity/--no-verify-identity",
+            help=(
+                "Default. Before creating a row that has a near-match, a model reads "
+                "the article and says whether it is the same site — preventing the "
+                "duplicate instead of reporting it. Fires only on ambiguous inserts, "
+                "and falls back to creating the row whenever it is unsure."
+            ),
+        ),
+    ] = True,
     llm_provider: Annotated[
         str | None,
         typer.Option(
@@ -1286,7 +1298,9 @@ def ingest_crawl(
             cache_dir=cache_dir,
             cached_only=cached_only,
             existing_only=existing_only,
+            arbiter=_identity_arbiter(verify_identity, label="ingest crawl"),
         )
+    _report_arbiter("ingest crawl")
 
     from tracker import runlog
 
@@ -4073,14 +4087,16 @@ def enrich(
     agent: Annotated[
         bool,
         typer.Option(
-            "--agent",
+            "--agent/--no-agent",
             help=(
-                "After the harvest rounds, let a model go after whatever is STILL "
-                "missing: it picks its own searches, reads the pages, and cites what "
-                "it finds. Off by default because it is the expensive rung."
+                "Default. After the harvest rounds, a model goes after whatever is "
+                "STILL missing: it picks its own searches, reads the pages, and cites "
+                "what it finds. It is the expensive rung — ~77,000 tokens a row — so "
+                "it runs last, only on the residue. `--no-agent` for the cheap pass "
+                "alone."
             ),
         ),
-    ] = False,
+    ] = True,
     skip_archive: Annotated[
         bool, typer.Option("--skip-archive", help="Do not sweep the sitemap archives.")
     ] = False,
@@ -4253,6 +4269,62 @@ def enrich(
     # With no target enforced, still measure against the PRD's nine: it is the bar
     # a reader cares about even when the run was told not to stop there.
     _render_batch(batch, target=target_fields or enrich_mod.DEFAULT_TARGET_FIELDS, dry_run=dry_run)
+
+
+def _identity_arbiter(enabled: bool, *, label: str):
+    """The write-time duplicate gate, or None.
+
+    Shared by `ingest crawl` and `sync` so the two cannot drift into different
+    rules about when a row may be created. Returns None — the old behaviour —
+    whenever it is off or no model is configured, because an ingest that refuses
+    to run for want of an optional check is worse than one that makes a duplicate.
+    """
+    if not enabled:
+        return None
+    from tracker.gatekeeper import same_site_arbiter
+    from tracker.llm import LLMUnavailable, agent_extractor
+
+    try:
+        extractor = agent_extractor(get_settings())
+    except LLMUnavailable as exc:
+        err.print(f"[yellow]--verify-identity skipped: {exc}[/yellow]")
+        return None
+
+    seen = {"asked": 0, "routed": 0, "tokens": 0}
+
+    def note(decision: dict) -> None:
+        seen["asked"] += 1
+        seen["tokens"] += decision["prompt_tokens"] + decision["completion_tokens"]
+        if decision["routed"]:
+            seen["routed"] += 1
+            console.print(
+                f"  [green]routed[/green] an arriving record onto "
+                f"#{decision['candidate_id']} instead of creating a row "
+                f"[dim]— {escape(str(decision.get('note', ''))[:90])}[/dim]"
+            )
+        else:
+            console.print(
+                f"  [dim]{label}: kept #{decision['candidate_id']} separate "
+                f"({escape(str(decision['outcome'])[:60])})[/dim]"
+            )
+
+    _ARBITER_TALLY[label] = seen
+    return same_site_arbiter(extractor, on_decision=note)
+
+
+#: What each run's arbiter did, so the summary can report it. Keyed by label
+#: because `sync` runs more than one crawl phase.
+_ARBITER_TALLY: dict[str, dict] = {}
+
+
+def _report_arbiter(label: str) -> None:
+    seen = _ARBITER_TALLY.pop(label, None)
+    if not seen or not seen["asked"]:
+        return
+    console.print(
+        f"[dim]identity: {seen['asked']} ambiguous insert(s) checked, "
+        f"{seen['routed']} duplicate(s) prevented, ~{seen['tokens']:,} tokens[/dim]"
+    )
 
 
 def _gapfill_batch(session, project_ids: list[int]) -> None:
@@ -7362,6 +7434,29 @@ def clean(
 
 @app.command()
 def sync(
+    verify_identity: Annotated[
+        bool,
+        typer.Option(
+            "--verify-identity/--no-verify-identity",
+            help=(
+                "Default. Before a phase creates a row that has a near-match, a model "
+                "reads the article and says whether it is the same site — preventing "
+                "the duplicate rather than reporting it afterwards. Fires only on "
+                "ambiguous inserts and creates the row whenever it is unsure."
+            ),
+        ),
+    ] = True,
+    agent: Annotated[
+        bool,
+        typer.Option(
+            "--agent/--no-agent",
+            help=(
+                "Default. In the enrich phase, after the harvest rounds, a model goes "
+                "after the fields the query templates could not reach and cites what "
+                "it finds. Only reached when `--enrich` asked for that phase at all."
+            ),
+        ),
+    ] = True,
     since_days: Annotated[
         int, typer.Option("--since-days", help="Discover articles no older than this.")
     ] = 45,
@@ -7831,7 +7926,11 @@ def sync(
                 dry_run=dry_run,
                 force=True,
                 cache_dir=cache_dir,
+                # The phase that creates rows, so the phase that creates
+                # duplicates. Checked here rather than reported later.
+                arbiter=_identity_arbiter(verify_identity, label="extract"),
             )
+        _report_arbiter("extract")
         totals["new"] = new_report.inserted
         totals["failed"] += new_report.fetch_error + new_report.parse_error
         _print_report(new_report, title="new projects")
@@ -7865,7 +7964,14 @@ def sync(
                     dry_run=dry_run,
                     force=True,
                     cache_dir=None,
+                    # A refresh re-reads urls already attached, so these match by
+                    # key and the arbiter almost never fires. It is passed anyway
+                    # because `force=True` means this path *can* still create a
+                    # row, and a duplicate born in the refresh phase would be no
+                    # less expensive than one born in extract.
+                    arbiter=_identity_arbiter(verify_identity, label="refresh"),
                 )
+            _report_arbiter("refresh")
             totals["refreshed"] = ref_report.updated
             totals["failed"] += ref_report.fetch_error + ref_report.parse_error
             _print_report(ref_report, title="refreshed projects")
@@ -7907,6 +8013,12 @@ def sync(
                 )
                 totals["enriched"] = len(batch.reports)
                 _render_batch(batch, target=enrich_mod2.DEFAULT_TARGET_FIELDS, dry_run=dry_run)
+                # Same helper the `enrich` command uses, so the two cannot drift
+                # into different rules about what the agent is pointed at. It runs
+                # after the harvest for the same reason there: the templates are
+                # cheap and this is not, so it should only see what they missed.
+                if agent and not dry_run:
+                    _gapfill_batch(session, list(chosen))
 
     # --- settle -------------------------------------------------------------
     # Two recomputations, both pure functions of what the rows now cite, and both

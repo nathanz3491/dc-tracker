@@ -42,6 +42,16 @@ the claim set, so an assignment is undone by the next `backfill derive`, and
 superseding the claim is what survives. `--no-agent` gives you the keyboard,
 `--auto` the mechanical repairs only.
 
+Two of those commands now check their own work before writing. `sync` and `ingest
+crawl` consult a model at the one moment a duplicate can be prevented rather than
+reported: a row is about to be created, and a near-match already exists. It reads
+the arriving article — the evidence no string comparison has — and routes the
+citations onto the existing row when it is the same site. Unsure, or unable to quote
+what it read, and the row is created exactly as before; `--no-verify-identity` turns
+it off. And `enrich --agent` goes after the fields the harvest templates could not
+reach, reporting a sentence in a document rather than a value, so what it finds
+scores as `reported` and `capex` counts it.
+
 `h200_equivalent` restates a site's capacity as accelerators, because megawatts
 is what gets reported and compute is what people are actually asking about. It is
 derived from MW at **1.3 kW per H200** (~770 per MW) and tiered `derived` — the

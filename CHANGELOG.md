@@ -59,6 +59,60 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **A duplicate is now stopped at the write path, not reported after it**
+  (`tracker/gatekeeper.py`, `tracker/upsert.py`, `tracker/ingest/crawl.py`,
+  `tracker/cli.py`, `tests/test_gatekeeper.py`).
+
+  The arithmetic. A duplicate created at ingest costs a row nobody wanted, then one
+  side of the pair held out of every `capex` total until somebody settles it, then
+  either a person reading two sets of citations or a merge that deletes a row and
+  cannot be undone. Measured here: **47 groups holding 22,012 MW twice**, and
+  clearing most of them took a ten-hour agent run. The same judgement made *before*
+  the insert costs one call and deletes nothing.
+
+  `_find_duplicate_candidate` already finds the near-misses — the city row against
+  its own county, the campus stored under its builder as well as its tenant. It
+  simply ran *after* the insert, where all it could do was attach a warning.
+  `upsert_record` now takes an `arbiter`, consulted only when a row would be
+  created and a candidate exists; returning an id routes the citations onto that
+  row instead. `upsert.py` itself stays free of any model — the arbiter is a
+  callable the caller supplies, so the write path keeps one job.
+
+  This answers `dedup.py`'s founding invariant on its own terms. It says a county
+  row and a city row are never merged automatically because "no string comparison
+  can tell whether 'Racine County' and 'Mount Pleasant' are one project" — which is
+  true, and the evidence that *would* tell is in the article being ingested, and
+  nothing was reading it.
+
+  **It fails open, and every test is about that.** Unsure, errored, under
+  0.9 confidence, or unable to quote the article it read: all of them insert, which
+  is exactly today's behaviour, and the duplicate report still runs. The bar is
+  higher than the 0.85 a merge of two stored rows needs, because two different
+  campuses sharing one row cannot be un-merged whereas a duplicate can always be
+  folded later. The routing is written into the row's notes, so it is auditable
+  rather than invisible.
+
+  On by default in `sync` and `ingest crawl` (`--no-verify-identity` to turn it
+  off), because it fires only on ambiguous inserts — rare, bounded, and the case
+  where it costs nothing is the overwhelming majority.
+
+- **Every agent path is now the default, and `sync` reaches all of them**
+  (`tracker/cli.py`).
+
+  `logic resolve`, `duplicates resolve`, `enrich` and both of `sync`'s
+  row-creating phases now use an agent unless told not to, each with a
+  `--no-agent` or `--no-verify-identity` escape. `sync`'s enrich phase calls the
+  same `_gapfill_batch` the `enrich` command does, so the two cannot drift into
+  different rules about what the agent is pointed at.
+
+  What that costs, stated plainly because the default now spends it: the gap-fill
+  rung is ~77,000 tokens a row and runs only on rows the query templates left
+  short, after they have run. The identity check is ~one call per *ambiguous*
+  insert and nothing at all otherwise. `--no-agent` on `enrich` restores the cheap
+  pass alone.
+
+### Added
+
 - **`enrich --agent`: a model that goes and finds the missing field, and cites it**
   (`tracker/gapfill.py`, `tracker/cli.py`, `tests/test_gapfill.py`).
 

@@ -734,6 +734,7 @@ def upsert_record(
     force_new: bool = False,
     existing_only: bool = False,
     route_to: int | None = None,
+    arbiter: Any = None,
 ) -> UpsertResult:
     """Insert or update one project and its citations.
 
@@ -752,6 +753,21 @@ def upsert_record(
             to track. A repair pass that quietly adds rows is no longer a repair;
             it is an ingest with no worklist and no review. What it refuses is
             *reported*, so those names remain candidates to add deliberately.
+
+        arbiter: consulted before a NEW project is inserted, and only when
+            `_find_duplicate_candidate` found a near-match. Called as
+            `arbiter(session=, record=, payload=, key=, candidate=)` and returns a
+            project id to route the citations onto, or None to insert as usual.
+
+            This is the only place a duplicate can be stopped instead of reported.
+            Without it the row is created and the pair becomes a warning, `capex`
+            holds one of them out of its totals, and settling it costs a person or
+            a merge that deletes a row. An arbiter has the arriving article, which
+            is the evidence no string comparison has.
+
+            Fails open by design: an exception or a None inserts, so the worst an
+            arbiter can do is leave today's behaviour in place. See
+            `gatekeeper.same_site_arbiter`.
 
         route_to: attach this record to that project, whatever its dedup key would
             have said. For a caller that has identified the campus from the
@@ -822,6 +838,42 @@ def upsert_record(
         # for a project that does not exist.
         log.info("existing_only: no project matches %s; refused", key)
         return UpsertResult(project_id=0, action="refused")
+
+    if project is None and arbiter is not None and not force_new:
+        # **The last moment a duplicate can be prevented rather than reported.**
+        #
+        # `_find_duplicate_candidate` already knows how to find the near-misses —
+        # a city row against its own county, a campus stored under its builder as
+        # well as its tenant. It just runs thirty lines below this, *after* the
+        # insert, and all it can do there is attach a warning. By then the row
+        # exists, `capex` is holding one of the pair out of its totals, and
+        # settling it costs a person or a merge that deletes something.
+        #
+        # An arbiter is handed the same candidate before the insert, with the
+        # arriving record in hand — so it can read the article, which is the thing
+        # no string comparison has. Returning an id routes the citations onto that
+        # row; returning None inserts as before. Failing open is deliberate: the
+        # duplicate report is still there, and an arbiter that is unsure must land
+        # on today's behaviour rather than on a guess.
+        #
+        # This module stays free of any model. The arbiter is a callable the caller
+        # supplies, so the write path keeps one job and the judgement lives with
+        # the code that can pay for it.
+        candidate = _find_duplicate_candidate(session, key, payload)
+        if candidate is not None:
+            try:
+                routed_to = arbiter(
+                    session=session, record=rec, payload=payload, key=key, candidate=candidate
+                )
+            except Exception:
+                log.warning("identity arbiter failed for %s; inserting", key, exc_info=True)
+                routed_to = None
+            if routed_to is not None:
+                project = session.get(Project, int(routed_to))
+                if project is not None:
+                    routed_from = key
+                    routed_by = "arbiter"
+                    log.info("arbiter routed %s to project #%d", key, project.id)
 
     if project is None:
         project = Project(

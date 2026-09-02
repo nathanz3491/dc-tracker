@@ -2124,6 +2124,7 @@ def run(
     policy: Any = None,
     run_id: str | None = None,
     route: Callable[[IngestRecord], int | None] | None = None,
+    arbiter: Any = None,
 ) -> IngestReport:
     """Fetch, extract and upsert a list of article URLs.
 
@@ -2287,7 +2288,17 @@ def run(
             # project id for the same reason — the caller decides per article,
             # from what that article turned out to say.
             target = route(record) if route is not None else None
-            upsert = upsert_record(session, record, existing_only=existing_only, route_to=target)
+            upsert = upsert_record(
+                session,
+                record,
+                existing_only=existing_only,
+                route_to=target,
+                # Only consulted when this record would create a NEW row and a
+                # near-match already exists — so on a normal crawl it costs
+                # nothing, and on the ambiguous inserts it is the one chance to
+                # not make the duplicate. See `gatekeeper`.
+                arbiter=arbiter,
+            )
             if upsert.action == "refused":
                 # Named, not merely counted: a refused campus is a candidate to
                 # add deliberately later, and a run that reported only a number

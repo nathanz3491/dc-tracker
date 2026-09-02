@@ -595,9 +595,7 @@ def test_cache_tokens_are_totalled_across_turns():
                     prompt_tokens=1000,
                     cache_hit_tokens=0,
                     cache_miss_tokens=1000,
-                    tool_calls=(
-                        ToolCall(id="a", name="noop", arguments={}, raw_arguments="{}"),
-                    ),
+                    tool_calls=(ToolCall(id="a", name="noop", arguments={}, raw_arguments="{}"),),
                 )
             return LLMReply(
                 text="",
