@@ -63,7 +63,25 @@ MAX_TOKENS_ESCALATED: int = 50_000
 #: Characters of any single tool result handed back to the model. An uncapped
 #: article is ~9,300 characters median and 24,000 at the top of the range, and a
 #: run that reads six of them would spend its whole context on one row.
-MAX_RESULT_CHARS: int = 12000
+MAX_RESULT_CHARS: int = 8000
+
+#: **The history is APPEND-ONLY, and that is a cost decision, not laziness.**
+#:
+#: The obvious optimisation is to shorten old tool results, since the whole
+#: conversation is re-sent every turn and an article read on turn 3 goes over the
+#: wire again on turns 4 through 10. That optimisation is WRONG on this provider.
+#: DeepSeek caches on the message *prefix*: turn N's request is turn N-1's plus an
+#: append, an exact prefix match, so everything re-sent bills at the cache-hit
+#: rate. Editing an old message changes the prefix and makes every later turn a
+#: full-price miss — the trim would raise the bill it was written to lower. This
+#: was implemented, measured against the docs, and reverted.
+#:
+#: What follows, and must not be broken:
+#:   * never mutate `messages`, only append;
+#:   * keep the system prompt and tool schemas byte-identical across findings, so
+#:     even the first turn of the next finding hits on that prefix;
+#:   * put variable content — the project, the question — LAST.
+#: `AgentResult.cache_hit_tokens` is what proves it is working.
 
 
 @dataclass(frozen=True)
@@ -121,10 +139,23 @@ class AgentResult:
     completion_tokens: int = 0
     #: Turns that were retried at the bigger budget after being cut off.
     escalations: int = 0
+    #: Prompt tokens the provider served from its prefix cache, and those it did
+    #: not. A healthy agent run is mostly hits after turn one — the loop appends
+    #: and never edits precisely so that holds. A low rate here means either the
+    #: prefix is being disturbed or `cache_counts` does not know the provider's
+    #: field names; `--verbose` shows the raw usage object either way.
+    cache_hit_tokens: int = 0
+    cache_miss_tokens: int = 0
 
     @property
     def answered(self) -> bool:
         return self.outcome == "answered"
+
+    @property
+    def cache_rate(self) -> float | None:
+        """Share of prompt tokens served from cache, or None if unreported."""
+        total = self.cache_hit_tokens + self.cache_miss_tokens
+        return self.cache_hit_tokens / total if total else None
 
     @property
     def tool_names(self) -> list[str]:
@@ -183,6 +214,8 @@ def run(
             )
             result.prompt_tokens += reply.prompt_tokens or 0
             result.completion_tokens += reply.completion_tokens or 0
+            result.cache_hit_tokens += reply.cache_hit_tokens or 0
+            result.cache_miss_tokens += reply.cache_miss_tokens or 0
             if reply.finish_reason == "length" and not reply.tool_calls:
                 # It had the answer and ran out of room saying it. Retrying at the
                 # same budget stops in the same place, so buy the bigger one once.

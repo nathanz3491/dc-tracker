@@ -245,6 +245,40 @@ class LLMReply:
     #: Tools the model asked to run, in the order it asked. Empty on every reply
     #: from `complete`, which sends no tools and so can never receive a call.
     tool_calls: tuple[ToolCall, ...] = ()
+    #: Prompt tokens served from the provider's prefix cache, and those that were
+    #: not. DeepSeek bills a hit at a fraction of a miss, which is the whole reason
+    #: `agent.run` only ever appends to its history: an edited prefix cannot hit.
+    #: None when the provider reported nothing, which is not the same as zero.
+    cache_hit_tokens: int | None = None
+    cache_miss_tokens: int | None = None
+
+
+def cache_counts(usage: dict[str, Any]) -> tuple[int | None, int | None]:
+    """`(hit, miss)` prompt tokens out of a provider `usage` object.
+
+    Several field spellings are accepted deliberately. The names belong to the
+    provider and have not been stable; picking one and reading nothing would
+    report a 0% cache rate, which is indistinguishable from caching being broken —
+    and that is the exact number this exists to watch. `--verbose` logs the whole
+    usage object, so an unrecognised spelling is visible rather than silent.
+    """
+    hit = miss = None
+    for key in ("prompt_cache_hit_tokens", "prompt_cached_tokens", "cached_tokens"):
+        value = usage.get(key)
+        if isinstance(value, int):
+            hit = value
+            break
+    details = usage.get("prompt_tokens_details")
+    if hit is None and isinstance(details, dict) and isinstance(details.get("cached_tokens"), int):
+        hit = details["cached_tokens"]
+    for key in ("prompt_cache_miss_tokens", "prompt_uncached_tokens"):
+        value = usage.get(key)
+        if isinstance(value, int):
+            miss = value
+            break
+    if hit is not None and miss is None and isinstance(usage.get("prompt_tokens"), int):
+        miss = max(usage["prompt_tokens"] - hit, 0)
+    return hit, miss
 
 
 class Extractor(Protocol):
@@ -701,6 +735,10 @@ class DeepSeekExtractor:
             )
 
         usage = data.get("usage") or {}
+        # Logged whole, because `cache_counts` guesses among field spellings and a
+        # spelling it does not know looks exactly like a 0% cache rate.
+        log.debug("converse usage: %s", usage)
+        hit, miss = cache_counts(usage)
         return LLMReply(
             text=message.get("content") or "",
             finish_reason=choice.get("finish_reason"),
@@ -708,6 +746,8 @@ class DeepSeekExtractor:
             completion_tokens=usage.get("completion_tokens"),
             model=data.get("model") or self.model,
             tool_calls=tuple(calls),
+            cache_hit_tokens=hit,
+            cache_miss_tokens=miss,
         )
 
     def stream(self, *, system: str, user: str, max_tokens: int | None = None) -> Iterator[str]:
@@ -1138,6 +1178,25 @@ def reasoning_extractor(settings: Settings | None = None) -> Extractor:
         settings,
         model=settings.deepseek_reasoning_model,
         effort=settings.deepseek_infer_effort,
+    )
+
+
+def agent_extractor(settings: Settings | None = None) -> Extractor:
+    """The tier for a tool-using loop: same reasoning model, effort paid per turn.
+
+    Split from `reasoning_extractor` because the argument for `max` there is
+    "**one call per project**", and an agent makes nine to twelve calls per
+    finding. Reusing that factory meant paying the `max` tier on every turn of
+    every loop — measured at ~264,000 tokens a finding against an estimated
+    45,000. See `Settings.deepseek_agent_effort`.
+    """
+    settings = settings or get_settings()
+    if settings.llm_provider == "ollama":
+        return OllamaExtractor(settings, effort=settings.deepseek_agent_effort)
+    return DeepSeekExtractor(
+        settings,
+        model=settings.deepseek_reasoning_model,
+        effort=settings.deepseek_agent_effort,
     )
 
 

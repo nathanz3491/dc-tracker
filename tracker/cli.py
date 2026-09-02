@@ -3242,10 +3242,11 @@ def duplicates_resolve(
 
     extractor = None
     if llm or use_agent:
-        from tracker.llm import LLMUnavailable, reasoning_extractor
+        from tracker.llm import LLMUnavailable, agent_extractor, reasoning_extractor
 
         try:
-            extractor = reasoning_extractor()
+            build = agent_extractor if use_agent else reasoning_extractor
+            extractor = build()
         except LLMUnavailable as exc:
             if keyboard is None:
                 _fail(str(exc))
@@ -4849,10 +4850,13 @@ def logic_resolve(
 
     extractor = None
     if llm or use_agent:
-        from tracker.llm import LLMUnavailable, reasoning_extractor
+        from tracker.llm import LLMUnavailable, agent_extractor, reasoning_extractor
 
         try:
-            extractor = reasoning_extractor(get_settings())
+            # The agent pays its effort per turn across nine to twelve calls, so it
+            # gets its own tier. `--llm` is one call and keeps `max`.
+            build = agent_extractor if use_agent else reasoning_extractor
+            extractor = build(get_settings())
         except LLMUnavailable as exc:
             # A bare `logic resolve` used to be the interactive walkthrough, and
             # making the agent the default must not take that away from somebody
@@ -5023,6 +5027,7 @@ def _triage_by_agent(session, findings: list, extractor, *, min_confidence: floa
 
     ruled = left = unusable = errored = 0
     spent = 0
+    cache_hit = cache_miss = 0
 
     for index, finding in enumerate(findings, start=1):
         project = session.get(Project, finding.project_id)
@@ -5045,14 +5050,28 @@ def _triage_by_agent(session, findings: list, extractor, *, min_confidence: floa
             if part
         )
 
-        outcome = triage_mod.triage(
-            session,
-            project,
-            question=question,
-            extractor=extractor,
-            min_confidence=min_confidence,
-        )
+        # One finding must never end the batch. `triage` already turns a provider
+        # failure into an outcome, but a database error raised while *applying* a
+        # ruling escapes — and on the first overnight run an IntegrityError on
+        # `phase` did exactly that, killing the logic phase of three rounds out of
+        # five after a single bad finding. The session is rolled back so the next
+        # finding starts from a clean transaction rather than a poisoned one.
+        try:
+            outcome = triage_mod.triage(
+                session,
+                project,
+                question=question,
+                extractor=extractor,
+                min_confidence=min_confidence,
+            )
+        except Exception as exc:
+            session.rollback()
+            errored += 1
+            console.print(f"{head}  [red]failed[/red] [dim]— {escape(str(exc)[:140])}[/dim]")
+            continue
         spent += outcome.prompt_tokens + outcome.completion_tokens
+        cache_hit += outcome.cache_hit_tokens
+        cache_miss += outcome.cache_miss_tokens
         trail = " → ".join(outcome.steps) or "nothing"
 
         if outcome.verdict == "ruled":
@@ -5091,6 +5110,15 @@ def _triage_by_agent(session, findings: list, extractor, *, min_confidence: floa
         + (f", [red]{errored}[/red] errored" if errored else "")
         + f"  [dim]~{spent:,} tokens[/dim]"
     )
+    if cache_hit or cache_miss:
+        # The number that decides what a night costs. DeepSeek bills a cached
+        # prompt token at a fraction of an uncached one, and an agent loop is the
+        # ideal shape for it: every turn re-sends the previous turn's history
+        # verbatim. A low rate here means the prefix is being disturbed.
+        rate = cache_hit / (cache_hit + cache_miss)
+        console.print(
+            f"  [dim]prompt cache: {rate:.0%} hit ({cache_hit:,} cached, {cache_miss:,} not)[/dim]"
+        )
     console.print(
         "\n[dim]A ruling supersedes a claim and re-derives the field, so it survives "
         "the next `backfill derive` — unlike the column assignments `--llm` makes. "

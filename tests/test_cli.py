@@ -1840,7 +1840,10 @@ def test_duplicates_resolve_dry_run_writes_nothing(initialized: Path, monkeypatc
 
     monkeypatch.setattr("tracker.llm.reasoning_extractor", lambda *a, **k: _Model())
 
-    result = invoke(initialized, "duplicates", "resolve", "--dry-run")
+    # `--no-agent` names the path this test exercises. `_Model` offers only
+    # `complete`, which is the fixed-menu judge; the agent path needs `converse`
+    # and is covered by the test below.
+    result = invoke(initialized, "duplicates", "resolve", "--dry-run", "--no-agent")
     assert result.exit_code == 0, result.output
     assert "ruled out" in result.output
     assert "nothing was written" in result.output

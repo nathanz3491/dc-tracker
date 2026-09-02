@@ -106,6 +106,22 @@ class Settings(BaseSettings):
     #: `max` while extraction does not.
     deepseek_infer_effort: Literal["low", "high", "max"] = "max"
 
+    #: The agent loop, which is neither of the two above and was billed as though it
+    #: were the second one.
+    #:
+    #: `deepseek_infer_effort` is `max` because `infer` is **one call per project** —
+    #: that is the whole argument for paying for depth there. `logic resolve --agent`
+    #: reuses the same reasoning extractor and makes **nine to twelve calls per
+    #: finding**, so it inherited `max` and paid it on every turn of every loop.
+    #: Measured on the first overnight run: 10,557,219 tokens for 40 findings, about
+    #: 264,000 each, against an estimate of 45,000.
+    #:
+    #: `high` because the depth is still wanted — the judgement is "does this
+    #: sentence support this figure", which is the same shape extraction asks at
+    #: `high` — but paid once per turn rather than at the `max` tier. `low` is the
+    #: next lever if the bill still bites, ahead of shortening what it may read.
+    deepseek_agent_effort: Literal["low", "high", "max"] = "high"
+
     #: Model for the drawer's written briefing — the one call a person waits for.
     #:
     #: A third setting, because this job's constraint is neither volume nor depth

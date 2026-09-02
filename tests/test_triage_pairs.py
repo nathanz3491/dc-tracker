@@ -183,7 +183,9 @@ def test_rows_too_far_apart_are_not_merged_whatever_the_model_says(session, pair
 
 
 def test_names_differing_only_by_an_ordinal_are_not_merged(session, cached):
-    a = _project(session, name="Polaris Forge 1", city="Ellendale", dedup_key="ad|city:ellendale|ND")
+    a = _project(
+        session, name="Polaris Forge 1", city="Ellendale", dedup_key="ad|city:ellendale|ND"
+    )
     b = _project(session, name="Polaris Forge 2", city="Harwood", dedup_key="ad|city:harwood|ND")
     pair = DuplicatePair(
         a_id=a.id,

@@ -355,3 +355,39 @@ def test_a_provider_without_tools_is_an_error_not_a_silent_decline(session, row)
 
     assert outcome.verdict == "error"
     assert "cannot use tools" in outcome.note
+
+
+# --- the NOT NULL column, which cost three rounds of an overnight run --------
+
+
+def test_ruling_out_a_phase_claim_does_not_violate_not_null(session, row):
+    """`phase` is the one NOT NULL field in RULEABLE_FIELDS.
+
+    Blanking it before the recompute raised IntegrityError on the flush, and
+    because the exception escaped mid-batch it killed the whole logic phase of
+    rounds 1, 2 and 3 of the first overnight run — three of five rounds did no
+    logic work at all.
+    """
+    import json as _json
+
+    project, campus, _building = row
+    campus.claims = _json.dumps({"mw_built": 230.0, "phase": "operational"})
+    campus.fields = "mw_built,phase"
+    session.flush()
+
+    acted, sentence, refusal = triage.apply_rule_out(
+        session,
+        project,
+        {
+            "field": "phase",
+            "source_ids": [campus.id],
+            "reason": "that article describes a different building",
+            "confidence": 0.95,
+        },
+        articles={},
+        require_quote=False,
+    )
+
+    assert acted, refusal
+    assert project.phase is not None, sentence
+    session.flush()  # the flush that used to raise

@@ -8,6 +8,10 @@ loop rests on and the one a live call cannot demonstrate.
 
 from __future__ import annotations
 
+import copy
+import itertools
+import json
+
 import pytest
 
 from tracker import agent
@@ -500,3 +504,126 @@ def test_search_can_be_withheld(session):
     names = {t.name for t in agent.evidence_toolkit(session, allow_search=False)}
     assert "search_web" not in names
     assert "search_web" in {t.name for t in agent.evidence_toolkit(session, allow_search=True)}
+
+
+# --- the cost property -------------------------------------------------------
+
+
+def test_the_history_is_append_only_so_the_prefix_stays_cacheable():
+    """The whole cost argument for the loop.
+
+    DeepSeek bills a prompt token served from its prefix cache at a fraction of an
+    uncached one, and turn N's request is turn N-1's plus an append — an exact
+    prefix match. Editing any earlier message changes the prefix and makes every
+    later turn a full-price miss. Shortening stale tool results was implemented for
+    exactly the opposite reason and reverted; this stops it coming back.
+    """
+    prefixes: list[list[dict]] = []
+
+    def _read(url):
+        return "The campus totals 230 MW. " * 200
+
+    tools = [
+        agent.Tool(
+            name="read_article",
+            description="read",
+            parameters={
+                "type": "object",
+                "properties": {"url": {"type": "string"}},
+                "required": ["url"],
+            },
+            run=_read,
+        ),
+        agent.Tool(
+            name="done",
+            description="finish",
+            parameters={"type": "object", "properties": {}},
+            terminal=True,
+        ),
+    ]
+
+    class _Model:
+        def __init__(self):
+            self.turn = 0
+
+        def converse(self, *, system, messages, tools=None, max_tokens=None):
+            # Deep-copied: we are asserting about what was sent, and the caller
+            # keeps mutating the same list by appending.
+            prefixes.append(copy.deepcopy(messages))
+            self.turn += 1
+            if self.turn <= 4:
+                args = {"url": f"https://example.test/{self.turn}"}
+                return LLMReply(
+                    text="",
+                    tool_calls=(
+                        ToolCall(
+                            id=str(self.turn),
+                            name="read_article",
+                            arguments=args,
+                            raw_arguments=json.dumps(args),
+                        ),
+                    ),
+                )
+            return LLMReply(
+                text="",
+                tool_calls=(ToolCall(id="z", name="done", arguments={}, raw_arguments="{}"),),
+            )
+
+    result = agent.run("check it", tools=tools, extractor=_Model(), system="stable system prompt")
+
+    assert result.answered
+    assert len(prefixes) >= 3
+    # Every send must begin with the previous send, byte for byte.
+    for earlier, later in itertools.pairwise(prefixes):
+        assert later[: len(earlier)] == earlier, (
+            "an earlier message was edited — the prefix cache cannot hit on this"
+        )
+
+
+def test_cache_tokens_are_totalled_across_turns():
+    """A run reports its own cache rate, so the next night is measured not guessed."""
+
+    class _Model:
+        def __init__(self):
+            self.turn = 0
+
+        def converse(self, *, system, messages, tools=None, max_tokens=None):
+            self.turn += 1
+            if self.turn == 1:
+                return LLMReply(
+                    text="",
+                    prompt_tokens=1000,
+                    cache_hit_tokens=0,
+                    cache_miss_tokens=1000,
+                    tool_calls=(
+                        ToolCall(id="a", name="noop", arguments={}, raw_arguments="{}"),
+                    ),
+                )
+            return LLMReply(
+                text="",
+                prompt_tokens=1200,
+                cache_hit_tokens=1000,
+                cache_miss_tokens=200,
+                tool_calls=(ToolCall(id="b", name="done", arguments={}, raw_arguments="{}"),),
+            )
+
+    tools = [
+        agent.Tool(
+            name="noop",
+            description="n",
+            parameters={"type": "object", "properties": {}},
+            run=lambda: "ok",
+        ),
+        agent.Tool(
+            name="done",
+            description="d",
+            parameters={"type": "object", "properties": {}},
+            terminal=True,
+        ),
+    ]
+
+    result = agent.run("t", tools=tools, extractor=_Model(), system="s")
+
+    assert result.cache_hit_tokens == 1000
+    assert result.cache_miss_tokens == 1200
+    assert result.cache_rate == pytest.approx(1000 / 2200)

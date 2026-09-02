@@ -10,6 +10,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 First working version. Nothing has been released yet, so everything below is the
 initial build of the v1 PRD.
 
+### Fixed
+
+- **`phase` was the one NOT NULL field the agent could rule on, and it cost three
+  rounds of a ten-hour run** (`tracker/triage.py`, `tracker/cli.py`,
+  `tests/test_triage.py`).
+
+  `apply_rule_out` blanks a field before re-deriving it — `audit._rule_against`'s
+  trick, and correct for every nullable column. `phase` is not nullable, so `= None`
+  plus a flush raised `IntegrityError`, and the exception escaped mid-batch: the
+  **entire logic phase of rounds 1, 2 and 3 died** after the first phase ruling. All
+  the finding reduction in those rounds came from the duplicate half instead. Blank
+  to `DEFAULT_PHASE`, which is what `recompute_from_sources` falls back to two lines
+  from its own end.
+
+  The runner now isolates each finding too: a database error while *applying* a
+  ruling is reported against that row and rolled back rather than ending the batch.
+  One bad finding at 3am must not cost the night.
+
+### Changed
+
+- **The agent stopped paying `max` reasoning effort on every turn of every loop**
+  (`tracker/config.py`, `tracker/llm.py`, `tracker/cli.py`).
+
+  `logic resolve --agent` reused `reasoning_extractor`, whose whole argument for
+  `max` is that `infer` is **one call per project**. The agent makes nine to twelve
+  calls per finding, so it inherited an effort tier chosen on the opposite premise.
+  New `agent_extractor` and `Settings.deepseek_agent_effort`, defaulting to `high`;
+  `--llm` is one call and keeps `max`.
+
+- **The loop's history is append-only, and now says why** (`tracker/agent.py`,
+  `tracker/llm.py`, `tests/test_agent.py`).
+
+  Shortening stale tool results looks like the obvious saving — the conversation is
+  re-sent every turn, so an article read on turn 3 goes over the wire again on turns
+  4 through 10. It was implemented and then reverted, because it is wrong on this
+  provider: DeepSeek bills on the message *prefix*, turn N's request is turn N-1's
+  plus an append, and an edited prefix cannot hit the cache. The trim would have
+  raised the bill it was written to lower.
+  `test_the_history_is_append_only_so_the_prefix_stays_cacheable` asserts every
+  request begins with the previous one byte for byte, so it cannot come back.
+
+  `LLMReply.cache_hit_tokens` / `cache_miss_tokens` are read out of the provider's
+  `usage` — several field spellings accepted, because they have not been stable and
+  an unrecognised one is indistinguishable from a 0% cache rate — and totalled onto
+  `AgentResult`. `logic resolve` prints the hit rate, so the next run measures what
+  the cache is worth rather than assuming it.
+
 ### Added
 
 - **A loop that runs until the backlogs stop moving** (`scripts/overnight.sh`,

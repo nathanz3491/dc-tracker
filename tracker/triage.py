@@ -70,6 +70,8 @@ class Outcome:
     steps: list[str] = dc_field(default_factory=list)
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    cache_hit_tokens: int = 0
+    cache_miss_tokens: int = 0
 
     @property
     def acted(self) -> bool:
@@ -242,9 +244,22 @@ def apply_rule_out(
         if not accepted:
             return False, "", "the quote is not in any article this run read"
 
+    from tracker.upsert import DEFAULT_PHASE
+
     was = getattr(project, name, None)
     marked = sum(1 for source in claiming if supersede(source, name))
-    setattr(project, name, None)
+    # Blanked before the recompute, not assigned after: `upsert.resolve` returns
+    # the existing value when no claim participates, so a field whose every claim
+    # is ruled out stays empty without this code choosing a value.
+    #
+    # `phase` is the exception and it cost three of five rounds on the first
+    # overnight run. It is the one NOT NULL column here, so `= None` and a flush
+    # raised IntegrityError before the recompute could refill it — and because the
+    # exception escaped mid-batch, the whole logic phase of rounds 1, 2 and 3 died
+    # after the first `phase` ruling. `DEFAULT_PHASE` is what `recompute_from_
+    # sources` itself falls back to two lines from the end, so this is the same
+    # answer arrived at without going through an illegal state.
+    setattr(project, name, DEFAULT_PHASE if name == "phase" else None)
     session.flush()
     recompute_from_sources(session, project)
     now = getattr(project, name, None)
@@ -324,6 +339,8 @@ def triage(
         steps=result.tool_names,
         prompt_tokens=result.prompt_tokens,
         completion_tokens=result.completion_tokens,
+        cache_hit_tokens=result.cache_hit_tokens,
+        cache_miss_tokens=result.cache_miss_tokens,
     )
     if not result.answered:
         # "stopped" and "exhausted" are not errors in the provider sense, and the
