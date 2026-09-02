@@ -57,6 +57,62 @@ initial build of the v1 PRD.
   `AgentResult`. `logic resolve` prints the hit rate, so the next run measures what
   the cache is worth rather than assuming it.
 
+### Changed
+
+- **`this_site` has to be earned, and a misread is no longer filed as staleness**
+  (`tracker/ingest/crawl.py`, `tracker/vocab.py`, `tracker/upsert.py`,
+  `tracker/conflicts.py`, `tracker/triage.py`, `tracker/capex.py`,
+  `tracker/audit.py`, `tracker/prompts/extract-v1.txt`).
+
+  Two defects with one cause: the merge compares figures that are not figures of the
+  same thing. A building's 19.2 MW and a campus's 230 MW are rival claims about one
+  quantity as far as `recompute_from_sources` is concerned, so
+  built-exceeds-planned is an obedient output of the policy rather than a bug in it.
+
+  **The scope axis existed and could not work.** `axis_gate` licenses `programme`,
+  `region` and `portfolio` by marker wording and `block:<label>` by resolving against
+  the record's own blocks. `this_site` had no check at all — it fell through every
+  branch and was written verbatim, making it the one value the gate could not refuse
+  and therefore the model's cheapest safe answer. `docs/data-quality.md` had already
+  failed the axis on exactly that number (`this_site` 96.9%, against a
+  pre-registered "modal value over 95% is reporting a default") and deliberately
+  built nothing on it. Measured again two months later: 96.96%.
+
+  So `this_site` now has to be licensed like everything else. A sentence must name
+  this campus — its name, city or county — or name one of the record's blocks, in
+  which case it is that block's figure. Otherwise it degrades to `unnamed`, which the
+  vocabulary already calls "the honest answer". Generic words are refused on purpose:
+  an article about a programme says "the campus" too. **Replaying the gate over 9,226
+  stored claims takes `this_site` from 98.30% to 55.02%, and `block:*` from 93 to
+  1,403** — the campus-versus-building discrimination appearing for the first time.
+  The prompt's promise that "each is checked against the quote" was false for
+  precisely the dominant value, and now is not.
+
+  Nothing reads the axis to choose a value yet. That gate stays shut until the stored
+  labels are re-gated, and it is deliberately a separate change.
+
+  **The second defect is one decision reason doing two jobs.** `superseded` is
+  documented as "correct when written, and since restated" — staleness, a fact about
+  the world that can change back. `triage.apply_rule_out` was recording *scope
+  misreads* under it: project #14's source 2790 claims `mw_planned = 19.2`, which is
+  Building K's figure, filed as though the campus had once planned 19.2 MW and grown.
+  A misread is a fact about a *sentence* and cannot stop being true. Collapsing them
+  is what made an agent's ruling look like it bound forever on a mutable question.
+
+  `misread` joins `superseded` in `DECIDED_REASONS`, so both leave the merge and both
+  survive a re-crawl — `_decided_against` and `_carried_reasons` were already keyed
+  off that set "so a second decision reason added there is honoured here without a
+  second edit". `supersede()` takes a `reason=`, defaulting to today's value so all
+  three callers are unchanged, and re-labels rather than skipping when a claim was
+  already ruled out for the other reason.
+
+  Two things that would have broken quietly, both now tested: `capex`'s
+  `_demoted_investment` classified any unrecognised reason into the excluded bucket by
+  an `else`, so every future decision reason would silently join a published total —
+  now a deliberate membership test on both sides. And `audit`'s claim detail hardcoded
+  the word "superseded" for anything ruled against, so a reader could not tell the two
+  apart; it reads the stored reason.
+
 ### Added
 
 - **A duplicate is now stopped at the write path, not reported after it**

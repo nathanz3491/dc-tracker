@@ -286,6 +286,27 @@ UNCONFIRMED_REASONS: Final[tuple[str, ...]] = (
     #: wins on every recompute, forever — and the superseded one stays visible,
     #: attributed, and labelled, rather than being deleted.
     "superseded",
+    #: Quoted, verified, and about something else — one building of the campus, one
+    #: phase of a programme, a regional total. The article is not wrong; it was
+    #: never talking about this row's quantity.
+    #:
+    #: The second reason that records a DECISION rather than a measurement, and it
+    #: is split from `superseded` because the two have opposite lifetimes.
+    #: `superseded` says "true in 2024, restated since" — a fact about the world,
+    #: which can change again: a campus descoped back to its 2024 figure makes the
+    #: mark wrong. `misread` says "this sentence is about a different object" — a
+    #: fact about the sentence, which cannot change, because the article will
+    #: always have been describing what it described.
+    #:
+    #: Recording a misread as a supersession is what made "the decision holds
+    #: forever" look like an overreach. Measured: project #14's source 2790 claims
+    #: `mw_planned = 19.2`, which is Building K's figure, and was filed
+    #: `superseded` as though the campus had once planned 19.2 MW and grown.
+    #:
+    #: Both are in `upsert.DECIDED_REASONS`, so both leave the merge and both
+    #: survive a re-crawl. The difference is what a reader — or a future rule about
+    #: expiry — can tell about them afterwards.
+    "misread",
 )
 
 # --- the claim envelope ----------------------------------------------------

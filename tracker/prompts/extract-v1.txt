@@ -113,6 +113,13 @@ evidence[]       Four qualifiers beside each quote. Each is checked against the
                  dropped and the value is kept regardless — you gain nothing by
                  guessing and lose nothing by leaving a default.
 
+                 That now includes "this_site", which for a long time was the one
+                 label nothing checked. A sentence must NAME this campus — its
+                 name, its city or its county — or name one of the blocks you
+                 listed, or "this_site" is replaced with "unnamed". "the campus"
+                 and "the site" do not count: an article about a programme says
+                 those too.
+
   scope          What the figure is a figure OF. This matters more than any other
                  field here. One article can carry three investment numbers that
                  are not in conflict:

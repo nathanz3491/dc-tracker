@@ -189,7 +189,7 @@ def apply_rule_out(
     been ruled out stays empty — durably, and without this function ever choosing a
     number.
     """
-    from tracker.conflicts import supersede
+    from tracker.conflicts import MISREAD, supersede
     from tracker.upsert import recompute_from_sources
 
     name = str(answer.get("field") or "").strip()
@@ -247,7 +247,14 @@ def apply_rule_out(
     from tracker.upsert import DEFAULT_PHASE
 
     was = getattr(project, name, None)
-    marked = sum(1 for source in claiming if supersede(source, name))
+    # `misread`, not `superseded`, because that is the question this module's prompt
+    # actually puts to the model: "which citations are WRONG about it" — a scope or
+    # unit error, a figure about another building. `superseded` means the opposite
+    # about time ("right in 2024, restated since"), and filing a misread under it is
+    # what made these rulings look like they bound forever on a mutable question.
+    # Both leave the merge and both survive a re-crawl; only a reader can tell them
+    # apart, and now can.
+    marked = sum(1 for source in claiming if supersede(source, name, reason=MISREAD))
     # Blanked before the recompute, not assigned after: `upsert.resolve` returns
     # the existing value when no claim participates, so a field whose every claim
     # is ruled out stays empty without this code choosing a value.

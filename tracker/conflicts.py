@@ -66,10 +66,18 @@ MAX_CALLS_PER_FIELD = 2
 #: is worse than no answer, because nothing downstream can see the hedge.
 MIN_CONFIDENCE = 0.6
 
-#: The reason code written on a claim this pass ruled against. One of
-#: `vocab.UNCONFIRMED_REASONS`, and the only one that records a *decision* rather
-#: than a measurement — which is why it survives a re-crawl of the same article.
+#: The reason code written on a claim this pass ruled against: the figure was right
+#: when written and the project has since restated it. One of two members of
+#: `vocab.UNCONFIRMED_REASONS` that record a *decision* rather than a measurement,
+#: which is why both survive a re-crawl of the same article.
 SUPERSEDED = "superseded"
+
+#: The other decision reason: the claim is about a different object — one building,
+#: one phase, a whole programme — so it never described this row's quantity. Also in
+#: `upsert.DECIDED_REASONS`, so it leaves the merge and survives a re-crawl the same
+#: way; the difference is that a misread cannot stop being true, where a
+#: supersession can.
+MISREAD = "misread"
 
 #: What each contested field means, so the prompt does not have to guess. Only the
 #: ones a disagreement actually arises on; anything else falls back to its name.
@@ -406,11 +414,20 @@ def _challenge(dispute: Dispute, chosen: Option, reason: str, *, extractor: Any)
 # --- writing -----------------------------------------------------------------
 
 
-def supersede(source: Source, field: str) -> bool:
-    """Mark one citation's claim about one field as superseded. Idempotent.
+def supersede(source: Source, field: str, *, reason: str = SUPERSEDED) -> bool:
+    """Rule one citation's claim about one field out of the merge. Idempotent.
 
     Two columns move: `unconfirmed_reasons` records *why*, and `unconfirmed_fields`
     is what `claims_by_field` reads to demote the claim out of the merge.
+
+    `reason` must be a member of `upsert.DECIDED_REASONS`, and which one matters to
+    a reader even though it does not change what this function writes. `superseded`
+    (the default, so every existing caller is unchanged) says the figure was right
+    when written and has since been restated — a fact about the world. `misread`
+    says the sentence was always about something else, one building or one
+    programme — a fact about the sentence. The first could in principle stop
+    applying; the second cannot. Collapsing them is why an agent's ruling appeared
+    to bind forever on a question that changes.
 
     **`source.fields` is deliberately left alone**, which looks wrong for a second
     and is what the ingest path does. That column means "a verbatim quote supports
@@ -430,10 +447,14 @@ def supersede(source: Source, field: str) -> bool:
         reasons = {}
     if not isinstance(reasons, dict):
         reasons = {}
-    if reasons.get(field) == SUPERSEDED:
+    # Idempotent against *this* reason. A claim already ruled out for a different
+    # decision is re-labelled rather than skipped: `misread` is the more specific
+    # finding and should replace a `superseded` mark that was standing in for it,
+    # which is the correction project #14's source 2790 needs.
+    if reasons.get(field) == reason:
         return False
 
-    reasons[field] = SUPERSEDED
+    reasons[field] = reason
     source.unconfirmed_reasons = json.dumps(reasons, sort_keys=True, ensure_ascii=False)
 
     unconfirmed = {f.strip() for f in (source.unconfirmed_fields or "").split(",") if f.strip()}

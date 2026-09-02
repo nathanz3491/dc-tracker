@@ -173,7 +173,13 @@ def claim_value(raw: Any) -> Any:
 #: text, whether it states this value. `superseded` is not: the article has not
 #: changed, the world has. Re-crawling the page that reported $10B would otherwise
 #: clear the mark and hand the merge straight back to crawl order.
-DECIDED_REASONS: frozenset[str] = frozenset({"superseded"})
+#: `misread` joins it because it is the same *kind* of thing — a decision about the
+#: claim that a re-read of the article cannot re-derive — even though it means the
+#: opposite about time. `superseded` says the world moved; `misread` says the
+#: sentence was always about something else. Both must leave the merge and survive
+#: a re-crawl; only their lifetimes differ, and nothing here depends on that. See
+#: `vocab.UNCONFIRMED_REASONS`.
+DECIDED_REASONS: frozenset[str] = frozenset({"superseded", "misread"})
 
 
 def _decided_against(row: Source) -> frozenset[str]:

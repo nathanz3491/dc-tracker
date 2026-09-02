@@ -28,8 +28,14 @@ from tracker.ingest import crawl
 from tracker.vocab import BOUND_MARKERS, CLAIM_AXIS_DEFAULTS, bound_from_quote
 
 
-def gate(entry: dict, quote: str, *, blocks: frozenset[str] = frozenset()) -> dict:
-    return crawl.axis_gate(entry, quote, block_labels=blocks)
+def gate(
+    entry: dict,
+    quote: str,
+    *,
+    blocks: frozenset[str] = frozenset(),
+    site: frozenset[str] = frozenset(),
+) -> dict:
+    return crawl.axis_gate(entry, quote, block_labels=blocks, site_names=site)
 
 
 # --- bound -------------------------------------------------------------------
@@ -127,10 +133,18 @@ def test_a_hedged_report_is_recorded_as_speculation():
 
 
 def test_the_three_hyperion_figures_take_three_different_scopes():
-    """Verbatim from the row's own stored quotes."""
+    """Verbatim from the row's own stored quotes.
+
+    The site figure needs `site=` now: its sentence says "the buildout" without
+    naming Hyperion or Richland Parish, and `this_site` is no longer a value the
+    gate will pass through unlicensed. With the row's own name in the sentence it
+    reads `this_site`; without it the honest answer is `unnamed`, and the two are
+    separated in `test_this_site_must_be_licensed_by_the_sentence` below.
+    """
     site = gate(
         {"scope": "this_site"},
-        "the buildout of the infrastructure itself is expected cost in the $10 billion range",
+        "the Hyperion buildout itself is expected cost in the $10 billion range",
+        site=frozenset({"hyperion"}),
     )
     region = gate({"scope": "region"}, "will bring more than $50B of investment to the region")
     programme = gate({"scope": "programme"}, "OpenAI's $500 billion Stargate programme")
@@ -196,8 +210,11 @@ def test_an_entry_neutral_on_every_axis_is_not_stored():
     campus" is the distinction Hyperion needed, and it is a different statement
     from "the article did not say".
     """
-    kept = {"mw_planned": 350.0}
-    quotes = {"mw_planned": "the campus will draw 350 megawatts"}
+    # `city` is in the payload so the sentence below can license `this_site` —
+    # without an identity to match, an unlicensed `this_site` degrades to
+    # `unnamed`, which IS neutral and so would not be stored either.
+    kept = {"mw_planned": 350.0, "city": "Ashburn"}
+    quotes = {"mw_planned": "the Ashburn campus will draw 350 megawatts"}
     bare = [{"field": "mw_planned", "quote": quotes["mw_planned"]}]
     assert crawl._claim_axes(bare, quotes, kept, []) == {}
 
@@ -341,3 +358,94 @@ class TestBoundFromQuote:
     def test_exceeds_is_licensed(self):
         """It was missing, and it is the commonest hedge in this corpus."""
         assert "exceeds" in BOUND_MARKERS["at_least"]
+
+
+# --- `this_site` has to be earned --------------------------------------------
+#
+# The axis failed its own kill criterion at `this_site` 96.9% — "an axis whose modal
+# value exceeds 95% is reporting a default rather than the article" — and the reason
+# was structural. `_SCOPE_MARKERS` licenses `programme`, `region` and `portfolio` by
+# wording, and `block:` by resolving against the record. `this_site` had no check at
+# all, so it fell through every branch and was written verbatim: the one value the
+# gate could not refuse, and therefore the model's cheapest safe answer. Replaying
+# the gate over 9,226 stored claims takes it from 98.30% to 55.02%.
+
+
+def test_this_site_must_be_licensed_by_the_sentence():
+    """Naming the site licenses it; not naming it is `unnamed`, the honest answer."""
+    named = gate(
+        {"scope": "this_site"},
+        "the Fairwater campus will draw 350 megawatts at full build",
+        site=frozenset({"fairwater"}),
+    )
+    unnamed = gate(
+        {"scope": "this_site"},
+        "the buildout is expected to cost in the $10 billion range",
+        site=frozenset({"fairwater"}),
+    )
+
+    assert named["scope"] == "this_site"
+    assert unnamed["scope"] == "unnamed"
+
+
+def test_a_sentence_naming_a_tranche_is_that_tranche_not_the_site():
+    """Project #14's live defect: source 2790 claims `mw_planned = 19.2` labelled
+    `this_site`, and an agent that read six articles proved it is Building K's
+    figure. The label is the campus-versus-building discrimination the axis exists
+    for, and it was being handed out for free."""
+    got = gate(
+        {"scope": "this_site"},
+        "The new Building K itself is rated at 19.2 MW.",
+        blocks=frozenset({"building k"}),
+        site=frozenset({"ashburn"}),
+    )
+
+    assert got["scope"] == "block:building k"
+
+
+def test_a_tranche_name_wins_even_when_the_site_is_also_named():
+    """An article says both. The narrower object is the one the figure is of."""
+    got = gate(
+        {"scope": "this_site"},
+        "At the Ashburn campus, ACC10 is rated at 70 MW.",
+        blocks=frozenset({"acc10"}),
+        site=frozenset({"ashburn"}),
+    )
+
+    assert got["scope"] == "block:acc10"
+
+
+def test_generic_words_do_not_license_this_site():
+    """An article about a programme says "the campus" and "the site" too, so
+    accepting them would put `this_site` straight back to unrefusable."""
+    for quote in (
+        "the campus will cost $10 billion",
+        "the site is expected to draw 350 MW",
+        "the data center project will be built in phases",
+    ):
+        got = gate({"scope": "this_site"}, quote, site=frozenset({"fairwater", "ashburn"}))
+        assert got["scope"] == "unnamed", quote
+
+
+def test_refusing_this_site_never_costs_the_value():
+    """The gate's founding promise, restated for the value it now refuses: axes are
+    labels and the figure is untouched, so this pass cannot reduce coverage."""
+    kept = {"mw_planned": 350.0}
+    quotes = {"mw_planned": "the buildout will draw 350 megawatts"}
+    evidence = [{"field": "mw_planned", "quote": quotes["mw_planned"], "scope": "this_site"}]
+
+    crawl._claim_axes(evidence, quotes, kept, [])
+
+    assert kept["mw_planned"] == 350.0
+
+
+def test_site_names_drops_the_words_every_article_contains():
+    """A name is matched whole and by word, but "data", "center" and "campus"
+    would match almost any sentence in the corpus."""
+    got = crawl.site_names({"name": "Digital Ashburn Data Center Campus", "city": "Ashburn"})
+
+    assert "ashburn" in got
+    assert "digital" in got
+    assert "center" not in got
+    assert "campus" not in got
+    assert not any(len(word) < 4 for word in got)

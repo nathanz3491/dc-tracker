@@ -713,23 +713,37 @@ def _label_states_mw(block: Any) -> float | None:
     return stated if abs(block.mw - stated * 1000.0) <= stated else None
 
 
-def _claims_detail(project: Project, field: str) -> list[tuple[float, str, str, bool]]:
-    """(value, quote, url, ruled_out) for every numeric claim made for one field.
+def _claims_detail(project: Project, field: str) -> list[tuple[float, str, str, str]]:
+    """(value, quote, url, ruled_out_because) for every numeric claim for one field.
 
     Includes the claims a decision has ruled against, flagged rather than hidden:
     this feeds what a person and a model *read*, and a superseded figure with its
     quote beside it is the record of why the row says what it says.
+
+    The fourth element is the reason *string*, empty when the claim is live. It was
+    a bool until there were two decision reasons that mean opposite things about
+    time — `superseded` (right once, restated since) and `misread` (always about
+    another object). A reader told only "ruled against" cannot tell which, and the
+    empty string keeps every `if ruled_out` caller working unchanged.
     """
     from tracker.upsert import _decided_against
 
-    out: list[tuple[float, str, str, bool]] = []
+    out: list[tuple[float, str, str, str]] = []
     for source, value in _claim_rows(project, field, live_only=False):
         quote = ""
         try:
             quote = str((json.loads(source.quotes or "{}") or {}).get(field) or "").strip()
         except (TypeError, ValueError):
             quote = ""
-        out.append((value, quote, source.url or "", field in _decided_against(source)))
+        because = ""
+        if field in _decided_against(source):
+            try:
+                reasons = json.loads(source.unconfirmed_reasons or "{}")
+                because = str((reasons or {}).get(field) or "") if isinstance(reasons, dict) else ""
+            except (TypeError, ValueError):
+                because = ""
+            because = because or "ruled against"
+        out.append((value, quote, source.url or "", because))
     return out
 
 
@@ -770,7 +784,7 @@ def evidence_block(project: Project, finding: UnitFinding) -> str:
             continue
         lines.append(f"  {name} = {stored if stored is not None else 'unknown'}")
         for value, quote, url, ruled_out in sorted(detail, key=lambda d: -d[0]):
-            tag = " (superseded — ruled against, not in the merge)" if ruled_out else ""
+            tag = f" ({ruled_out} — ruled against, not in the merge)" if ruled_out else ""
             lines.append(f"      claim {value:g}{tag} — {url[:110] or 'no url'}")
             if quote:
                 lines.append(f'        "{quote[:280]}"')

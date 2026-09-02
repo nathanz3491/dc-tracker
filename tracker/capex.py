@@ -538,11 +538,26 @@ def _demoted_investment(session: Session) -> tuple[set[int], set[int]]:
         # out_of_scale, which is exactly the behaviour this split replaced: the
         # old code excluded every unconfirmed figure, so treating the unknown as
         # excluded cannot change any number that was already being reported.
-        (
-            unquoted
-            if why in {"no_quote", "quote_unverified", "quote_off_target"}
-            else out_of_scale
-        ).add(pid)
+        #
+        # The two buckets are "excluded from the sum" (out_of_scale) and "counted
+        # even though nothing quotes it" (unquoted), so the classification decides
+        # a published number.
+        #
+        # `misread` is listed on the excluded side deliberately rather than by
+        # falling through: a figure about a different building or a whole programme
+        # must not be summed as this site's capex, which is exactly what
+        # out_of_scale means. The bucket's *wording* is loose for it — a source
+        # confirmed the figure perfectly well, just about another object — and that
+        # is a reporting nicety, not a number.
+        #
+        # Spelled out as a membership test on both sides so that the next decision
+        # reason added to `DECIDED_REASONS` has to be classified here on purpose.
+        # Left as an else-branch it would join the excluded pile silently, and the
+        # silence is the danger, not the destination.
+        if why in {"no_quote", "quote_unverified", "quote_off_target"}:
+            unquoted.add(pid)
+        else:  # out_of_scale, misread, superseded, or a pre-0013 source with none
+            out_of_scale.add(pid)
     return out_of_scale - confirmed, unquoted - confirmed - out_of_scale
 
 

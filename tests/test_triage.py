@@ -391,3 +391,73 @@ def test_ruling_out_a_phase_claim_does_not_violate_not_null(session, row):
     assert acted, refusal
     assert project.phase is not None, sentence
     session.flush()  # the flush that used to raise
+
+
+# --- misread is not the same statement as superseded -------------------------
+
+
+def test_a_ruling_is_recorded_as_misread_not_superseded(session, row):
+    """The two decision reasons mean opposite things about time.
+
+    `superseded` is documented as "correct when written, and since restated" — a
+    fact about the world, which can change back. `misread` is "this sentence was
+    always about another object" — a fact about the sentence, which cannot. This
+    module's prompt asks the model which citations are WRONG, so its rulings are
+    the second kind. Filing them as the first is what made an agent's decision look
+    like it bound forever on a mutable question.
+    """
+    import json as _json
+
+    from tracker.conflicts import MISREAD
+
+    project, campus, _building = row
+    acted, _sentence, refusal = triage.apply_rule_out(
+        session,
+        project,
+        {
+            "field": "mw_built",
+            "source_ids": [campus.id],
+            "reason": "the 230 MW figure is the campus, not this expansion",
+            "confidence": 0.95,
+        },
+        articles={},
+        require_quote=False,
+    )
+
+    assert acted, refusal
+    assert _json.loads(campus.unconfirmed_reasons)["mw_built"] == MISREAD
+
+
+def test_a_misread_claim_leaves_the_merge_like_a_superseded_one(session, row):
+    """Both are in `DECIDED_REASONS`, so the repair is just as durable."""
+    from tracker.upsert import recompute_from_sources
+
+    project, campus, _building = row
+    triage.apply_rule_out(
+        session,
+        project,
+        {"field": "mw_built", "source_ids": [campus.id], "confidence": 0.95},
+        articles={},
+        require_quote=False,
+    )
+    assert project.mw_built == 19.2
+
+    recompute_from_sources(session, project)
+    assert project.mw_built == 19.2, "a misread claim came back into the merge"
+
+
+def test_a_misread_relabels_a_claim_previously_filed_as_superseded(session, row):
+    """The correction project #14's source 2790 needs: it is marked `superseded`
+    when the article was never right about that row."""
+    import json as _json
+
+    from tracker.conflicts import MISREAD, SUPERSEDED, supersede
+
+    _project, campus, _building = row
+    assert supersede(campus, "mw_built", reason=SUPERSEDED)
+    session.flush()
+
+    assert supersede(campus, "mw_built", reason=MISREAD), "a relabel must not be skipped"
+    assert _json.loads(campus.unconfirmed_reasons)["mw_built"] == MISREAD
+    # Still idempotent against its own reason.
+    assert not supersede(campus, "mw_built", reason=MISREAD)

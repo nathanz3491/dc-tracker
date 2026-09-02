@@ -1154,3 +1154,52 @@ def test_two_spellings_of_one_company_are_not_party_evidence(session):
         if {a.id, b.id} == {pair.a_id, pair.b_id}:
             assert "party" not in pair.kinds
             assert not pair.shared_parties
+
+
+# --- a new decision reason must be classified on purpose ---------------------
+
+
+def test_a_misread_investment_is_excluded_from_the_sum_not_counted(session):
+    """`_demoted_investment` splits into "excluded" and "counted anyway".
+
+    A figure about another building or a whole programme must not be summed as this
+    site's capex, so `misread` belongs on the excluded side. This test exists
+    because the classification is an `else`-branch over reason strings: a decision
+    reason added to `DECIDED_REASONS` without being considered here silently lands
+    in one of two buckets, and both of them are published numbers.
+    """
+    import datetime as dt
+    import json as _json
+
+    from tracker.capex import _demoted_investment
+    from tracker.conflicts import MISREAD
+    from tracker.models import Project, Source
+
+    project = Project(
+        name="Programme Total Campus",
+        company="Vantage Data Centers",
+        city="Port Washington",
+        state="WI",
+        dedup_key="vantage|city:port washington|WI",
+        phase="construction",
+        investment_usd=2_500_000_000,
+    )
+    session.add(project)
+    session.flush()
+    session.add(
+        Source(
+            project_id=project.id,
+            url="https://example.test/programme",
+            source_type="trade_press",
+            fetched_at=dt.datetime(2026, 1, 1),
+            claims=_json.dumps({"investment_usd": 500_000_000_000}),
+            unconfirmed_fields="investment_usd",
+            unconfirmed_reasons=_json.dumps({"investment_usd": MISREAD}),
+        )
+    )
+    session.flush()
+
+    excluded, counted = _demoted_investment(session)
+
+    assert project.id in excluded, "a misread figure was not excluded from the total"
+    assert project.id not in counted, "a misread figure was counted as this site's capex"

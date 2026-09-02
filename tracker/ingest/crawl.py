@@ -810,6 +810,49 @@ _MODALITY_MARKERS: Final[dict[str, tuple[str, ...]]] = {
     ),
 }
 
+#: Words too generic to tie a sentence to one campus. An article about a programme
+#: says "the campus" and "the site" as readily as an article about a campus does, so
+#: accepting them would put `this_site` straight back to being unrefusable.
+_GENERIC_SITE_WORDS: Final[frozenset[str]] = frozenset(
+    {
+        "campus",
+        "center",
+        "centre",
+        "data",
+        "datacenter",
+        "facility",
+        "park",
+        "project",
+        "site",
+        "the",
+    }
+)
+
+
+def site_names(payload: dict[str, Any]) -> frozenset[str]:
+    """Normalised strings a quote can use to name this campus.
+
+    The project's own name, city and county, minus the words every data centre
+    article contains. Used by :func:`axis_gate` to decide whether a sentence
+    claiming `this_site` actually says which site — the check that value never had.
+
+    A name is kept whole *and* split into its distinctive words, because a quote
+    routinely says "the Fairwater campus" rather than the stored "Fairwater Data
+    Center". Words under four characters are dropped: "VA2" is a real name but a
+    three-letter token matches far too much prose.
+    """
+    out: set[str] = set()
+    for raw in (payload.get("name"), payload.get("city"), payload.get("county")):
+        text = _normalize_for_match(str(raw or ""))
+        if not text:
+            continue
+        out.add(text)
+        for word in text.split():
+            if len(word) >= 4 and word not in _GENERIC_SITE_WORDS:
+                out.add(word)
+    return frozenset(w for w in out if len(w) >= 4)
+
+
 #: Wording that licenses a scope other than `this_site` or a resolvable block.
 _SCOPE_MARKERS: Final[dict[str, tuple[str, ...]]] = {
     "programme": ("programme", "program", "across all", "in total", "nationwide", "overall"),
@@ -819,7 +862,11 @@ _SCOPE_MARKERS: Final[dict[str, tuple[str, ...]]] = {
 
 
 def axis_gate(
-    entry: dict[str, Any], quote: str, *, block_labels: frozenset[str] = frozenset()
+    entry: dict[str, Any],
+    quote: str,
+    *,
+    block_labels: frozenset[str] = frozenset(),
+    site_names: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
     """Keep the claim-envelope axes the quote actually licenses.
 
@@ -848,6 +895,37 @@ def axis_gate(
         scope = scope if label and label in block_labels else CLAIM_AXIS_DEFAULTS["scope"]
     elif scope in _SCOPE_MARKERS:
         if not any(marker in low for marker in _SCOPE_MARKERS[scope]):
+            scope = CLAIM_AXIS_DEFAULTS["scope"]
+    elif scope == "this_site":
+        # **`this_site` has to be earned like every other value.**
+        #
+        # It used to fall through every branch above and be written verbatim,
+        # because there is no marker wording that says "this is about this site" —
+        # absence of a programme marker is not evidence of site scope. So it was
+        # the one value the gate could not refuse, and therefore the model's
+        # cheapest safe answer: measured at 96.9% of populated claims when the axis
+        # was first assessed, and 96.96% two months later. `docs/data-quality.md`
+        # failed the axis on exactly that number and built nothing on it, and the
+        # prompt's promise that "each is checked against the quote" was false for
+        # precisely the value that dominates.
+        #
+        # Two checks, both referential rather than judgement, in the spirit of the
+        # `block:` branch above:
+        named_block = next((label for label in block_labels if label and label in low), "")
+        if named_block:
+            # The sentence names a tranche this record described, so it is a figure
+            # about that tranche whatever the model said. This is the campus-versus
+            # -building discrimination the whole axis exists for — project #14's
+            # source 2790 claims `mw_planned = 19.2` labelled `this_site`, and it is
+            # Building K's figure.
+            scope = f"block:{named_block}"
+        elif not (site_names and any(name in low for name in site_names)):
+            # The sentence does not name this site either. `unnamed` is then the
+            # documented honest answer — "the article states the figure and does not
+            # say what it is a figure of" — and it costs no coverage: `unnamed` is a
+            # last resort in the merge, not an exclusion. Generic wording is
+            # deliberately not accepted here, because "the campus" is exactly what
+            # an article about a programme says too.
             scope = CLAIM_AXIS_DEFAULTS["scope"]
     elif scope not in CLAIM_SCOPES:
         scope = CLAIM_AXIS_DEFAULTS["scope"]
@@ -1798,6 +1876,10 @@ def _claim_axes(
     closed for values.
     """
     labels = frozenset(b.label.strip().lower() for b in blocks if getattr(b, "label", None))
+    # What a sentence can say to tie itself to THIS row: the campus's own name, its
+    # city, its county. Taken from the record's own extracted identity, so the gate
+    # needs no session and stays a pure function of what it was handed.
+    names = site_names(kept)
     out: dict[str, dict[str, Any]] = {}
     for item in evidence:
         if not isinstance(item, dict):
@@ -1805,7 +1887,7 @@ def _claim_axes(
         field = str(item.get("field") or "").strip()
         if field not in kept or field not in quotes:
             continue
-        axes = axis_gate(item, quotes[field], block_labels=labels)
+        axes = axis_gate(item, quotes[field], block_labels=labels, site_names=names)
         # An entry that is neutral on every axis says nothing, and storing it
         # would inflate coverage with rows carrying no information — the exact
         # measurement `axis_census` exists to catch, so it must not be gamed here.
