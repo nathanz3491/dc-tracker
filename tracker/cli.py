@@ -4070,6 +4070,17 @@ def enrich(
     skip_search: Annotated[
         bool, typer.Option("--skip-search", help="Do not use the web-search backend.")
     ] = False,
+    agent: Annotated[
+        bool,
+        typer.Option(
+            "--agent",
+            help=(
+                "After the harvest rounds, let a model go after whatever is STILL "
+                "missing: it picks its own searches, reads the pages, and cites what "
+                "it finds. Off by default because it is the expensive rung."
+            ),
+        ),
+    ] = False,
     skip_archive: Annotated[
         bool, typer.Option("--skip-archive", help="Do not sweep the sitemap archives.")
     ] = False,
@@ -4228,12 +4239,87 @@ def enrich(
         _fail(str(exc))
         raise
 
+    if agent and not dry_run:
+        # After the cheap rung, not instead of it. `_FIELD_QUERIES` finds the
+        # fields somebody wrote a query template for, and finds them for a few
+        # hundred tokens; the agent costs ~77,000 a row. So it is pointed only at
+        # what the templates could not reach — "where it is needed" literally.
+        with _explain_db_locks(), session_scope(engine) as session:
+            _gapfill_batch(session, wanted)
+
     if len(batch.reports) == 1:
         _render_enrich(batch.reports[0], dry_run=dry_run)
         return
     # With no target enforced, still measure against the PRD's nine: it is the bar
     # a reader cares about even when the run was told not to stop there.
     _render_batch(batch, target=target_fields or enrich_mod.DEFAULT_TARGET_FIELDS, dry_run=dry_run)
+
+
+def _gapfill_batch(session, project_ids: list[int]) -> None:
+    """Let a model find and cite what the harvest rounds left empty.
+
+    Committed per project, so a provider failure on row 20 keeps the first 19.
+    Rows with nothing left to fill cost nothing at all — `gapfill.fill` returns
+    before making a call.
+    """
+    from tracker import gapfill
+    from tracker.llm import LLMUnavailable, agent_extractor
+    from tracker.models import Project
+
+    try:
+        extractor = agent_extractor(get_settings())
+    except LLMUnavailable as exc:
+        err.print(f"[yellow]--agent skipped: {exc}[/yellow]")
+        return
+
+    console.print("\n[bold]agent pass[/bold] — what the harvest could not find")
+    filled = nothing = errored = 0
+    spent = cache_hit = cache_miss = 0
+
+    for project_id in project_ids:
+        project = session.get(Project, project_id)
+        if project is None:
+            continue
+        head = f"#{project.id} {escape(project.name[:34])}"
+        try:
+            out = gapfill.fill(session, project, extractor=extractor)
+        except Exception as exc:
+            session.rollback()
+            errored += 1
+            console.print(f"  {head}  [red]failed[/red] [dim]— {escape(str(exc)[:110])}[/dim]")
+            continue
+
+        spent += out.prompt_tokens + out.completion_tokens
+        cache_hit += out.cache_hit_tokens
+        cache_miss += out.cache_miss_tokens
+
+        if out.verdict == "filled":
+            session.commit()
+            filled += 1
+            for line in out.stored:
+                console.print(f"  {head}  [green]{escape(line)}[/green]")
+        elif out.verdict == "nothing":
+            nothing += 1
+            console.print(f"  {head}  [dim]nothing published — {escape(out.note[:90])}[/dim]")
+        else:
+            session.rollback()
+            errored += 1
+            console.print(f"  {head}  [yellow]{out.verdict}[/yellow]")
+        # Printed even on success: a refusal is the evidence gate working, and a
+        # run that quietly dropped four of five facts should look different from
+        # one that stored them all.
+        for line in out.refused:
+            console.print(f"      [dim]refused: {escape(line[:120])}[/dim]")
+
+    console.print(
+        f"\n[bold]{filled}[/bold] row(s) gained a cited fact, "
+        f"[bold]{nothing}[/bold] had nothing published"
+        + (f", [red]{errored}[/red] failed" if errored else "")
+        + f"  [dim]~{spent:,} tokens[/dim]"
+    )
+    if cache_hit or cache_miss:
+        rate = cache_hit / (cache_hit + cache_miss)
+        console.print(f"  [dim]prompt cache: {rate:.0%} hit[/dim]")
 
 
 def _render_batch(batch, *, target: int, dry_run: bool) -> None:

@@ -59,6 +59,42 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **`enrich --agent`: a model that goes and finds the missing field, and cites it**
+  (`tracker/gapfill.py`, `tracker/cli.py`, `tests/test_gapfill.py`).
+
+  `fields_present` is the **sole** condition holding 283 of 437 rows at T1 — every
+  other T2 condition passes on all of them. So after a night of settlement work,
+  nothing in `logic resolve` or `duplicates resolve` can move a single one of those
+  rows: they are not wrong, they are empty. That is a different job and it needed a
+  different tool.
+
+  `enrich`'s existing harvest searches from a fixed table: `_FIELD_QUERIES` maps
+  `mw_planned` to the literal phrases "megawatts capacity" and "MW data center
+  campus". That is the same fixed-menu shape that capped `logic.decide` at 94 of 526
+  findings — it can only ask what somebody wrote down in advance. The agent looks at
+  the actual row, picks its own searches, reads the pages and reports what it found.
+
+  **The fact arrives as a citation, never as a column**, which is `triage`'s lesson
+  reached from the other side: a scalar is a cache of the claim set, so an assignment
+  is undone by the next `backfill derive`. The terminal tool reports a *sentence in a
+  document at a URL*; `upsert_record` attaches it as a source whose `claims` carry the
+  value and whose `quotes` carry the sentence, and the merge policy derives the field.
+  That is also what makes it count: a quote-backed value is `reported` rather than
+  `inferred`, and **`capex` does not sum `inferred`**.
+
+  Five refusals, each with a test, because this must not become `infer` with a search
+  engine bolted on: a quote that is not in the text, a quote from a URL the run never
+  opened (a search snippet is not a document), a quote under 40 characters, a value
+  that will not coerce, and a field that is not actually a gap. `existing_only=True`
+  plus `route_to` mean a run can only ever add citations to the row it was asked
+  about — never create one.
+
+  `--agent` runs *after* the harvest rounds, on what they could not reach. The cheap
+  rung costs a few hundred tokens and the agent costs ~77,000 a row, so pointing it
+  only at the residue is the whole point.
+
+### Added
+
 - **A loop that runs until the backlogs stop moving** (`scripts/overnight.sh`,
   `README.md`).
 
