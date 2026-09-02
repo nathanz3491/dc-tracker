@@ -136,10 +136,13 @@ the first merge, and one run at a time:
 caffeinate -i nohup scripts/overnight.sh > /dev/null 2>&1 &
 ```
 
-Sized from measurement: the agent reads whole articles at ~45k tokens a finding,
-so the first sweep over 495 unanswered findings is ~22M tokens and about ten
-hours. Later rounds cost far less — an answered *or declined* finding is recorded
-and never re-offered.
+Sized from measurement, and re-measured after the first run: ~77k tokens a
+finding, with **70% of the prompt served from the provider's prefix cache**. That
+last number is why `agent.run` only ever appends to its conversation — an edited
+prefix cannot hit, so the obvious "shorten old messages" saving reverses. The
+first run cost ~221k a finding before the reasoning-effort tier was split out
+(`TRACKER_DEEPSEEK_AGENT_EFFORT`). Later rounds cost less again: an answered *or
+declined* finding is recorded and never re-offered.
 
 `--refetch-dates` is separate because it is the one free phase that is not cheap —
 60 publication dates are readable straight out of the URL path and 965 need one

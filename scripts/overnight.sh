@@ -15,13 +15,25 @@
 # So "solve all of it" is a fixed point, not a pass. This runs rounds until two
 # consecutive ones fail to reduce either count, then stops and says what is left.
 #
-# WHAT IT COSTS, because this is the part to decide before starting it. The agent
-# reads whole articles: measured at ~45,000 tokens per logic finding and ~89,000
-# for two. With 495 findings unanswered that is ~22M tokens for the first sweep,
-# and roughly 10 hours at ~75s each. Later rounds are far cheaper — a finding the
-# agent has answered or declined is recorded on the row and never re-offered, so
-# round two only pays for what round one created. `--tokens` is a hard ceiling and
-# defaults to one; raise it deliberately.
+# WHAT IT COSTS, because this is the part to decide before starting it. Measured,
+# twice, and the second number is the one that holds:
+#
+#   first run   ~221,000 tokens per finding, at `max` reasoning effort on every
+#               turn of a nine-to-twelve turn loop. 28.3M tokens for one night,
+#               which processed 80 findings and 32 merges.
+#   now         ~77,000 per finding, with 70% of the prompt served from the
+#               provider's prefix cache and billed at the cached rate. The loop
+#               appends and never edits its history, which is what makes that
+#               possible -- see tracker/agent.py before "optimising" it.
+#
+# So the same spend now buys roughly three times the findings. `--tokens` is a
+# hard ceiling; the whole remaining backlog is about one night at this rate. Later
+# rounds are cheaper again because a finding the agent answered OR declined is
+# recorded and never re-offered.
+#
+# The dominant remaining cost is reasoning output on the final turn -- 17,586
+# tokens on the measured run. `TRACKER_DEEPSEEK_AGENT_EFFORT=low` is the next
+# lever if the bill still bites.
 #
 # WHAT IT CANNOT DO. `block_label_ambiguous` (92 findings) and its relatives are
 # about tranche identity, and the only repair this agent has is superseding a
