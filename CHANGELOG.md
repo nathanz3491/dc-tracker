@@ -28,6 +28,28 @@ initial build of the v1 PRD.
   ruling is reported against that row and rolled back rather than ending the batch.
   One bad finding at 3am must not cost the night.
 
+### Added
+
+- **`tracker backfill scope` — re-gate 9,000 stored labels for nothing**
+  (`tracker/backfill.py`, `tracker/cli.py`, `tests/test_backfill.py`).
+
+  `axis_gate` is a pure function of the entry, the stored quote and the record's own
+  block labels — and all three are already in the database. So every stored
+  `this_site` can be rechecked without re-reading a single article and without one
+  model call, exactly the way `backfill derive` recomputes derived values. The plan
+  for this work assumed an agent would have to re-read the sources at ~77,000 tokens
+  a row; it does not.
+
+  Only `this_site` is re-gated, and that is the point: every other value was licensed
+  by wording or by resolving against a tranche when it was written, so a stored
+  `region` carries the information that it was checked. `this_site` was the value the
+  gate could not refuse, so a stored one carries none.
+
+  Measured on the live database, dry: **3,993 of 9,069 relabelled — 2,683 to
+  `unnamed` and 1,310 to `block:*`.** Reports before it writes, and `--apply` writes.
+  It cannot move a published figure today, because nothing reads the axis to choose a
+  value yet; it makes the axis worth reading.
+
 ### Changed
 
 - **The agent stopped paying `max` reasoning effort on every turn of every loop**

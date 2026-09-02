@@ -205,3 +205,130 @@ def test_a_contested_project_and_a_shared_article_both_raise_the_score():
     base = backfill._yield_score("trade_press", (1,), set())
     assert backfill._yield_score("trade_press", (1,), {1}) > base
     assert backfill._yield_score("trade_press", (1, 2), set()) > base
+
+
+# --- re-gating the claim envelope, for free ---------------------------------
+#
+# `axis_gate` is a pure function of the entry, the stored quote and the record's
+# labels, and all three are already in the database. So 9,069 stored `this_site`
+# labels can be rechecked without re-reading one article — where an agent doing the
+# same judgement costs ~77,000 tokens a row. Measured on the live snapshot: 3,993 of
+# 9,069 relabelled, 2,683 to `unnamed` and 1,310 to `block:*`.
+
+
+def _enveloped(session, *, quote: str, scope: str = "this_site", label: str | None = None):
+    """A project with one claim carrying a stored scope, and optionally a tranche."""
+    import datetime as dt
+    import json
+
+    from tracker.models import CapacityBlock, Project, Source
+
+    project = Project(
+        name="Digital Ashburn Campus",
+        company="Digital Realty",
+        city="Ashburn",
+        state="VA",
+        dedup_key="digital realty|city:ashburn|VA",
+        phase="construction",
+    )
+    session.add(project)
+    session.flush()
+    if label:
+        session.add(
+            CapacityBlock(
+                project_id=project.id,
+                label=label,
+                block_key=label.lower().replace(" ", "-"),
+                mw=19.2,
+            )
+        )
+    source = Source(
+        project_id=project.id,
+        url="https://example.test/ashburn",
+        source_type="trade_press",
+        fetched_at=dt.datetime(2026, 1, 1),
+        claims=json.dumps({"mw_planned": 19.2}),
+        quotes=json.dumps({"mw_planned": quote}),
+        claim_meta=json.dumps({"mw_planned": {"scope": scope}}),
+    )
+    session.add(source)
+    session.flush()
+    return project, source
+
+
+def _scope_of(source, field="mw_planned"):
+    import json
+
+    return json.loads(source.claim_meta)[field]["scope"]
+
+
+def test_a_this_site_label_the_sentence_does_not_support_is_relabelled(session):
+    from tracker.backfill import regate_scope
+
+    _project, source = _enveloped(
+        session, quote="the buildout is expected to cost in the $10 billion range"
+    )
+
+    report = regate_scope(session, apply=True)
+
+    assert report.changed == 1
+    assert _scope_of(source) == "unnamed"
+
+
+def test_a_sentence_naming_a_tranche_is_relabelled_to_that_tranche(session):
+    """The #14 correction, done for free: source 2790's 19.2 MW is Building K's."""
+    from tracker.backfill import regate_scope
+
+    _project, source = _enveloped(
+        session,
+        quote="The new Building K itself is rated at 19.2 MW.",
+        label="Building K",
+    )
+
+    report = regate_scope(session, apply=True)
+
+    assert report.changed == 1
+    assert _scope_of(source) == "block:building k"
+
+
+def test_a_licensed_this_site_label_is_left_alone(session):
+    from tracker.backfill import regate_scope
+
+    _project, source = _enveloped(
+        session, quote="the Ashburn campus will draw 19.2 megawatts at full build"
+    )
+
+    report = regate_scope(session, apply=True)
+
+    assert report.changed == 0
+    assert _scope_of(source) == "this_site"
+
+
+def test_a_scope_that_was_already_licensed_is_never_touched(session):
+    """`region` and `programme` were checked against wording when written, and the
+    gate has not changed for them. Only `this_site` was unrefusable."""
+    from tracker.backfill import regate_scope
+
+    _project, source = _enveloped(
+        session,
+        quote="will bring more than $50B of investment to the region",
+        scope="region",
+    )
+
+    report = regate_scope(session, apply=True)
+
+    assert report.claims == 0, "a licensed scope was re-gated"
+    assert _scope_of(source) == "region"
+
+
+def test_without_apply_nothing_is_written(session):
+    from tracker.backfill import regate_scope
+
+    _project, source = _enveloped(
+        session, quote="the buildout is expected to cost in the $10 billion range"
+    )
+
+    report = regate_scope(session, apply=False)
+
+    assert report.changed == 1, "the report must still say what it would do"
+    assert _scope_of(source) == "this_site", "a dry run wrote to the database"

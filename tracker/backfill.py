@@ -454,3 +454,89 @@ def run(
 
 
 __all__ = ["BackfillReport", "Candidate", "candidates", "run"]
+
+
+# --- re-gating the claim envelope ------------------------------------------
+
+
+@dataclass
+class ScopeReport:
+    """What a re-gate of the stored claim envelopes changed."""
+
+    sources: int = 0
+    claims: int = 0
+    changed: int = 0
+    #: old scope -> new scope -> count, for the only summary that matters.
+    moved: dict[str, dict[str, int]] = field(default_factory=dict)
+
+    def note(self, old: str, new: str) -> None:
+        bucket = "block:*" if new.startswith("block:") else new
+        was = "block:*" if old.startswith("block:") else old
+        self.moved.setdefault(was, {}).setdefault(bucket, 0)
+        self.moved[was][bucket] += 1
+
+
+def regate_scope(session: Session, *, apply: bool = False) -> ScopeReport:
+    """Re-run `axis_gate` over every stored claim envelope. No LLM, no network.
+
+    **Why this is free, which is the whole reason it exists.** `axis_gate` is a pure
+    function of the entry, the stored quote and the record's own labels — and all
+    three are already in the database. So the labels can be recomputed the way
+    `backfill derive` recomputes derived values, without re-reading a single
+    article. An agent re-scoping the same claims would cost ~77,000 tokens a row.
+
+    Only `this_site` is re-gated. Every other value was licensed by wording or by
+    resolving against a block when it was written, and the gate has not changed for
+    those; `this_site` is the one that used to be unrefusable, so it is the only one
+    whose stored value carries no information about whether it was checked.
+
+    Site identity comes from the *project* rather than from the arriving record,
+    which is the one way this differs from the ingest path — and it is the right
+    source here: the row's name, city and county are what a stored claim is a claim
+    about, and 92.9% of sources state at least one of them anyway.
+    """
+    import json
+
+    from tracker.ingest.crawl import axis_gate, site_names
+
+    report = ScopeReport()
+    for project in session.scalars(select(Project)).all():
+        labels = frozenset(
+            (b.label or "").strip().lower()
+            for b in (project.blocks or ())
+            if (b.label or "").strip()
+        )
+        names = site_names({"name": project.name, "city": project.city, "county": project.county})
+        for source in project.sources:
+            if not source.claim_meta:
+                continue
+            try:
+                meta = json.loads(source.claim_meta)
+                quotes = json.loads(source.quotes or "{}")
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(meta, dict) or not isinstance(quotes, dict):
+                continue
+            report.sources += 1
+            touched = False
+            for name, entry in meta.items():
+                if not isinstance(entry, dict) or entry.get("scope") != "this_site":
+                    continue
+                report.claims += 1
+                got = axis_gate(
+                    {"scope": "this_site"},
+                    quotes.get(name) or "",
+                    block_labels=labels,
+                    site_names=names,
+                )["scope"]
+                if got == "this_site":
+                    continue
+                report.changed += 1
+                report.note("this_site", got)
+                entry["scope"] = got
+                touched = True
+            if touched and apply:
+                source.claim_meta = json.dumps(meta, sort_keys=True, ensure_ascii=False)
+    if apply:
+        session.flush()
+    return report

@@ -6372,6 +6372,54 @@ def feeds_cmd(
     )
 
 
+def _backfill_scope(*, apply: bool, dry_run: bool) -> None:
+    """Re-gate every stored `this_site` claim, and say what moved.
+
+    Reports before it writes, like `dates`, because this changes what a label
+    *means* on 9,000 claims: `this_site` used to be the value the gate could not
+    refuse, so a stored one carries no information about whether it was ever
+    checked. Nothing reads the axis to choose a value yet, so a re-gate cannot move
+    a published figure today — it makes the axis worth reading tomorrow.
+    """
+    from tracker.backfill import regate_scope
+
+    engine = _writable("backfill scope") if (apply and not dry_run) else _read_engine()
+    with _explain_db_locks(), session_scope(engine, commit=apply and not dry_run) as session:
+        report = regate_scope(session, apply=apply and not dry_run)
+
+    if json_mode():
+        emit(
+            {
+                "sources": report.sources,
+                "claims": report.claims,
+                "changed": report.changed,
+                "moved": report.moved,
+                "applied": apply and not dry_run,
+            }
+        )
+        return
+
+    table = Table(title="backfill scope", box=box.SIMPLE_HEAD)
+    table.add_column("outcome")
+    table.add_column("count", justify="right")
+    table.add_row("sources with an envelope", f"{report.sources:,}")
+    table.add_row("`this_site` claims re-gated", f"{report.claims:,}")
+    table.add_row("relabelled", f"{report.changed:,}")
+    console.print(table)
+
+    for was, went in sorted(report.moved.items()):
+        for now, count in sorted(went.items(), key=lambda kv: -kv[1]):
+            console.print(f"  {was} -> [bold]{now}[/bold]  {count:,}")
+
+    if not (apply and not dry_run):
+        console.print("\n[dim]Nothing written. `--apply` writes the labels.[/dim]")
+    else:
+        console.print(
+            "\n[dim]Written. `this_site` now means the sentence named this campus, "
+            "and `block:*` means it named a tranche instead.[/dim]"
+        )
+
+
 def _backfill_dates(*, limit: int, refetch: bool, apply: bool, yes: bool, everything: bool) -> None:
     """`tracker backfill dates`. No LLM, no API key, one column.
 
@@ -6513,7 +6561,7 @@ def _backfill_derive(*, project_id: int | None, dry_run: bool) -> None:
 
 @app.command("backfill")
 def backfill(
-    what: Annotated[str, typer.Argument(help="`blocks`, `dates` or `derive`.")] = "blocks",
+    what: Annotated[str, typer.Argument(help="`blocks`, `dates`, `derive` or `scope`.")] = "blocks",
     limit: Annotated[
         int, typer.Option("--limit", help="Articles to read. 0 reads every one selected.")
     ] = 25,
@@ -6607,8 +6655,20 @@ def backfill(
                 _fail(f"{name} applies to `backfill blocks`, not to `dates`.")
         _backfill_dates(limit=limit, refetch=refetch, apply=apply, yes=yes, everything=all_urls)
         return
+    if what == "scope":
+        # Free, like `derive`, and for the same reason: `axis_gate` is a pure
+        # function of the entry, the stored quote and the record's labels, and all
+        # three are already in the database. No article is re-read and no model is
+        # called, so no extractor is constructed above this point.
+        for flag, name in ((refetch, "--refetch"), (force, "--force"), (all_urls, "--all")):
+            if flag:
+                _fail(f"{name} applies to `backfill blocks` or `dates`, not to `scope`.")
+        _backfill_scope(apply=apply, dry_run=dry_run)
+        return
     if what != "blocks":
-        _fail(f"nothing to backfill called {what!r}. Expected `blocks`, `dates` or `derive`.")
+        _fail(
+            f"nothing to backfill called {what!r}. Expected `blocks`, `dates`, `derive` or `scope`."
+        )
 
     settings = get_settings()
     cache_dir = install_root() / ".cache" / "articles"
