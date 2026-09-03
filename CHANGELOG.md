@@ -52,6 +52,31 @@ initial build of the v1 PRD.
 
 ### Changed
 
+- **`overnight.sh` runs every phase, not two of them** (`scripts/overnight.sh`,
+  `README.md`).
+
+  It looped logic and duplicates and skipped the two biggest levers in the database.
+  `audit_clear` is a **T1** gate failing 68 rows and the **sole** blocker on 54 — and
+  it is cheap, one call per finding on the fixed-menu path. And every one of the 283
+  rows sitting at T1 is held there by `fields_present` alone, which no amount of
+  logic or duplicate work can move: those rows are not wrong, they are empty. Only
+  `enrich` touches them.
+
+  So the round is now the whole loop, ordered cheapest-and-most-blocking first: free
+  phases (dates, geo, scope, derive, `logic --auto`), then `audit`, then `risks`,
+  then the logic and duplicate agents, then `enrich` last with its own article
+  budget because it is the most expensive rung at ~77,000 tokens a row.
+
+  The convergence test now watches three numbers instead of two — findings,
+  duplicate groups, and **rows below T2** — because the third is what the enrich
+  phase moves and neither of the others can see it.
+
+  Built for tmux: `--status` prints where a running one has got to from any other
+  shell, and the header carries the two-line recipe. `caffeinate -i` is part of it,
+  since a ten-hour job on a Mac needs the machine not to idle-sleep.
+
+
+
 - **The agent stopped paying `max` reasoning effort on every turn of every loop**
   (`tracker/config.py`, `tracker/llm.py`, `tracker/cli.py`).
 

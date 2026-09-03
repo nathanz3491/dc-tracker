@@ -143,8 +143,15 @@ third row. Ceilings on hours, rounds and tokens, a `VACUUM INTO` snapshot before
 the first merge, and one run at a time:
 
 ```bash
-caffeinate -i nohup scripts/overnight.sh > /dev/null 2>&1 &
+tmux new -s tracker
+caffeinate -i scripts/overnight.sh --hours 10
+# ctrl-b then d to detach; `tmux attach -t tracker` to come back
 ```
+
+`scripts/overnight.sh --status` prints where a running one has got to, from any
+other shell. Each round runs the free phases, then `audit` (a T1 gate, and cheap),
+`risks`, the logic and duplicate agents, and `enrich` last — the most expensive rung
+and the only one that can move a row held at T1 by `fields_present`.
 
 Sized from measurement, and re-measured after the first run: ~77k tokens a
 finding, with **70% of the prompt served from the provider's prefix cache**. That
