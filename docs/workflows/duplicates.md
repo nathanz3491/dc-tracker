@@ -157,7 +157,10 @@ Measured here: 47 suspected groups holding 22,012 MW twice, and clearing most of
 them took a ten-hour agent run.
 
 The same judgement made *before* the insert costs one call and deletes nothing —
-that is [`sync`'s identity arbiter](sync.md#the-identity-arbiter).
+that is [`sync`'s identity arbiter](sync.md#the-identity-arbiter). It now rules from
+the article extraction already read, rather than fetching it again, and is handed the
+suspected row's full details so it answers the same question `resolve` asks here, one
+call earlier and with nothing yet to undo.
 
 ## Source map
 
@@ -174,5 +177,5 @@ Touching any of these means the poster is in scope. Re-render with
 | The one-call path and its rails | `tracker/dupresolve.py` — `resolve`, `resolve_one`, `merge_blocked`, `survivor`, `ask_model`, `MERGE_CONFIDENCE`, `FAR_APART_KM` |
 | The agent path | `tracker/triage.py` — `resolve_pairs`, `pair_triage`, `pair_verdict_tools`, `PAIR_SYSTEM` |
 | The merge itself | `tracker/merge.py` — `merge_projects` |
-| Prevention at write time | `tracker/gatekeeper.py` — `same_site_arbiter` |
+| Prevention at write time | `tracker/gatekeeper.py` — `same_site_arbiter`, `_warm_verdict`, `_cold_verdict`, `_rejection`, `RULES`; `tracker/ingest/crawl.py` — `ExtractionContext` |
 | CLI, printers, keyboard prompt | `tracker/cli.py` — `duplicates`, `duplicates_park`, `duplicates_unpark`, `duplicates_resolve`, `duplicates_parked`, `_print_parked`, `_dupe_prompt` |

@@ -30,6 +30,49 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **The identity gate now rules from the article extraction already read, instead
+  of fetching it again** (`tracker/gatekeeper.py`, `tracker/ingest/crawl.py`,
+  `tests/test_gatekeeper.py`, `tests/test_ingest_crawl.py`).
+
+  Extraction reads one article and knows nothing about the database; `upsert_record`
+  then decides insert-versus-update from a `dedup_key` string. So the only party that
+  had read the evidence was gone by the time the duplicate question was asked — and
+  the arbiter's own instructions began by telling it to `read_article` the arriving
+  URL, re-fetching, over a corpus that answers 403 often enough to matter, the page
+  extraction had just finished reading.
+
+  A successful extraction now carries an `ExtractionContext` — the article by
+  reference, and the budget it was truncated to. `crawl.run` binds it into the
+  arbiter per URL, so `upsert.py` still calls one opaque callable with the arguments
+  it always used and stays free of any model. When the write path stops a row that
+  resembles one we hold, that proposal is rejected back to a model in a single turn
+  carrying the article, the arriving row named by company and locality rather than by
+  position, the suspected row's own details, and which of `_find_duplicate_candidate`'s
+  three branches matched. Three or four turns become one, and the whole "no quote from
+  an article it read" refusal class disappears.
+
+  Extraction and adjudication stay on different model tiers, which is right: they are
+  different steps. What crosses between them is the evidence, not a conversation, so
+  nothing here depends on a shared prompt prefix.
+
+  Every rail is unchanged and now shared by one code path rather than copied: the 0.9
+  floor, the 25 km geography check, the audit line, fail-open. The quote gate is
+  checked against the text the model was *shown*, not the full stored article —
+  extraction truncates head-marker-tail, and verifying against the whole thing would
+  pass a sentence from the omitted middle and leave a gate that proved nothing. Had
+  that not been fixed, the warm path would have refused every verdict while printing
+  "0 duplicates prevented", which reads exactly like a careful model.
+
+  Two latent bugs fixed in passing. A raising `on_decision` callback used to propagate
+  into `upsert_record`, which inserts the row — leaving a note on the candidate
+  claiming a route that never happened; telemetry can no longer reach the decision.
+  And a multi-line `reason` defeated `record_decision`'s line dedupe, so the row's
+  notes grew on every re-crawl; reasons are flattened and capped.
+
+  `--verify-identity` had no end-to-end test at all, because the crawl suite's fake
+  model only speaks `complete` and the arbiter needs `converse`. It has one now, with
+  the control that proves it measures something.
+
 - **`docs/workflows/` — a diagram per staged command, and a rule that keeps it
   true** (`docs/workflows/`, `scripts/render_workflow_diagrams.py`, `CLAUDE.md`
   §7, `docs/README.md`).

@@ -148,6 +148,45 @@ class CrawlError(RuntimeError):
     """The run cannot proceed."""
 
 
+@dataclass(frozen=True)
+class ExtractionContext:
+    """What the extractor was shown, kept for a write-time identity decision.
+
+    **Why this exists.** Extraction reads one article and knows nothing about the
+    database; `upsert_record` then decides insert-versus-update from a `dedup_key`
+    string. So when the write path is about to create a row that resembles one we
+    already hold, the only party that has read the evidence is long gone — and the
+    gate that adjudicates it used to go and fetch the article again over HTTP, on a
+    corpus where that answers 403 often enough to matter.
+
+    Extraction and adjudication are deliberately different steps on different model
+    tiers, so what travels between them is *information*, not a conversation. Three
+    fields are enough for that, and all three are free:
+
+    * `markdown` is a reference to the string `FetchResult` already holds, not a
+      copy. `parallel.map_ordered` keeps every outcome of a run alive at once, so a
+      copy here would be a second article per URL — tens of MB on a large re-crawl.
+    * `body()` re-derives the truncated text lazily, because an arbitration is rare
+      and `truncate` is pure.
+    * `url` is what proves this context belongs to the record being judged. One
+      arbiter closure serves a whole run, and judging article B's record against
+      article A's text would be invisible from the outside.
+
+    Deliberately absent: the model's own reply. The identity question is answered
+    from the article and the normalized payload — the raw JSON adds up to five
+    projects of noise about capacity and dates, and echoing it would drag a
+    `<think>` block along with it.
+    """
+
+    url: str
+    markdown: str
+    max_input_chars: int
+
+    def body(self) -> str:
+        """The article as the extractor saw it — the same truncation, recomputed."""
+        return truncate(self.markdown, self.max_input_chars)
+
+
 @dataclass
 class ExtractionOutcome:
     """What one URL produced, for both the report and the ingest_url row."""
@@ -165,6 +204,10 @@ class ExtractionOutcome:
     #: Carried through from the fetch so `record_url` can persist it. None for a
     #: cache hit, which serves text with the metadata already stripped out.
     published_at: dt.datetime | None = None
+    #: Set only on a successful extraction, for a write-time arbiter that would
+    #: otherwise re-fetch this article to answer a question about it. None on every
+    #: refusal and every failure: there is nothing to hand on.
+    context: ExtractionContext | None = None
 
 
 def classify_source_type(url: str, *, operator_hosts: frozenset[str] | None = None) -> str:
@@ -2024,6 +2067,14 @@ def extract_one(
             continue
 
         outcome.status = "ok" if outcome.records else "no_project"
+        if outcome.records:
+            # Only where there is something to arbitrate. `markdown` is the same
+            # object the FetchResult holds, so this costs one small dataclass.
+            outcome.context = ExtractionContext(
+                url=result.url,
+                markdown=result.markdown,
+                max_input_chars=settings.max_input_chars,
+            )
         return outcome
 
     outcome.status = "parse_error"
@@ -2363,6 +2414,17 @@ def run(
             report.prompt_tokens += outcome.prompt_tokens
             report.completion_tokens += outcome.completion_tokens
 
+        # Hand the arbiter what this article said, so an identity question about
+        # it is answered from the text already in hand rather than by fetching the
+        # page again. Bound per URL and only when the arbiter accepts it, so a
+        # hand-built arbiter — or one from a provider that cannot hold a
+        # conversation — keeps working untouched.
+        record_arbiter = arbiter
+        if arbiter is not None and outcome.context is not None:
+            bind = getattr(arbiter, "for_article", None)
+            if bind is not None:
+                record_arbiter = bind(outcome.context)
+
         for record in outcome.records:
             # Asked per record, not per run: one URL list can describe several
             # campuses, and the question "which project is this?" is only
@@ -2379,7 +2441,7 @@ def run(
                 # near-match already exists — so on a normal crawl it costs
                 # nothing, and on the ambiguous inserts it is the one chance to
                 # not make the duplicate. See `gatekeeper`.
-                arbiter=arbiter,
+                arbiter=record_arbiter,
             )
             if upsert.action == "refused":
                 # Named, not merely counted: a refused campus is a candidate to

@@ -2800,3 +2800,155 @@ def test_without_a_router_the_same_article_still_splits(session):
         run_id="t",
     )
     assert session.scalar(select(func.count()).select_from(Project)) == before + 1
+
+
+# --- the identity gate, end to end ------------------------------------------
+#
+# Nothing covered `--verify-identity` through `crawl.run` before, because
+# `FakeLLM` only speaks `complete` and the arbiter needs `converse`. `VerdictLLM`
+# below closes that, which is what lets these three tests exist at all.
+
+
+class VerdictLLM(FakeLLM):
+    """A `FakeLLM` that can also answer the identity question.
+
+    Extraction and adjudication are different steps on different tiers in
+    production; here one fake wears both hats so a single `crawl.run` exercises
+    the whole path.
+    """
+
+    def __init__(
+        self,
+        replies: list[str],
+        *,
+        tool: str = "same_site",
+        confidence: float = 0.95,
+        quote: str = "",
+    ) -> None:
+        super().__init__(replies)
+        self.tool, self.confidence, self.quote = tool, confidence, quote
+        self.verdicts: list[dict] = []
+
+    def converse(self, *, system, messages, tools=None, max_tokens=None) -> LLMReply:
+        from tracker.llm import ToolCall
+
+        with self._lock:
+            self.verdicts.append({"system": system, "messages": messages, "tools": tools})
+        args: dict = {"reason": "one campus, filed twice"}
+        if self.tool != "unsure":
+            args["confidence"] = self.confidence
+        if self.quote:
+            args["quote"] = self.quote
+        return LLMReply(
+            text="",
+            tool_calls=(
+                ToolCall(id="v", name=self.tool, arguments=args, raw_arguments=json.dumps(args)),
+            ),
+        )
+
+
+def _county_twin_reply() -> str:
+    """An extraction reply that would create the county twin of the stored row."""
+    return json.dumps(
+        {
+            "projects": [
+                {
+                    "name": "Racine County Data Center",
+                    "company": "Microsoft",
+                    "county": "Racine",
+                    "state": "WI",
+                    "mw_planned": 1030.0,
+                    "quotes": {"mw_planned": "1,030 acres"},
+                }
+            ]
+        }
+    )
+
+
+@pytest.fixture
+def _city_row(session):
+    """The row the arriving article duplicates, filed under the city."""
+    project = Project(
+        name="Fairwater",
+        company="Microsoft",
+        city="Mount Pleasant",
+        county="Racine",
+        state="WI",
+        dedup_key="microsoft|city:mount pleasant|WI",
+        phase="construction",
+    )
+    session.add(project)
+    session.flush()
+    return project
+
+
+def test_verify_identity_prevents_a_duplicate_end_to_end(session, _city_row):
+    """The whole point, through the real `crawl.run`: the second row is never made."""
+    from tracker import gatekeeper
+
+    body = article()
+    llm = VerdictLLM([_county_twin_reply()], quote=body.split(".")[0][:80])
+    fetcher = FakeFetcher({URL: fetched(markdown=body)})
+
+    report = crawl.run(
+        session,
+        [URL],
+        fetcher=fetcher,
+        extractor=llm,
+        arbiter=gatekeeper.same_site_arbiter(llm),
+    )
+
+    assert report.inserted == 0, "a duplicate row was created anyway"
+    assert session.scalar(select(func.count()).select_from(Project)) == 1
+    assert len(llm.verdicts) == 1, "the arbiter was not consulted exactly once"
+    assert "routed an arriving record" in (_city_row.notes or "")
+
+
+def test_verify_identity_off_creates_the_duplicate(session, _city_row):
+    """The control. Without it the test above proves nothing about the arbiter."""
+    fetcher = FakeFetcher({URL: fetched()})
+    llm = FakeLLM([_county_twin_reply()])
+
+    report = crawl.run(session, [URL], fetcher=fetcher, extractor=llm)
+
+    assert report.inserted == 1
+    assert session.scalar(select(func.count()).select_from(Project)) == 2
+
+
+def test_the_arbiter_is_handed_the_article_the_crawl_already_read(session, _city_row):
+    """No second fetch: the fetcher is asked for the URL once, for extraction."""
+    from tracker import gatekeeper
+
+    body = article()
+    llm = VerdictLLM([_county_twin_reply()], tool="unsure")
+    fetcher = FakeFetcher({URL: fetched(markdown=body)})
+
+    crawl.run(
+        session,
+        [URL],
+        fetcher=fetcher,
+        extractor=llm,
+        arbiter=gatekeeper.same_site_arbiter(llm),
+    )
+
+    assert fetcher.calls == [URL], "the article was fetched more than once"
+    sent = llm.verdicts[0]["messages"][0]["content"]
+    assert body[:200] in sent, "the arbiter was not given the text already in hand"
+
+
+def test_an_unambiguous_article_costs_no_arbitration(session):
+    """With no stored row to collide with there is no question, so no second call."""
+    from tracker import gatekeeper
+
+    llm = VerdictLLM([canned("llm_response_microsoft_wi.json")])
+    fetcher = FakeFetcher({URL: fetched()})
+
+    crawl.run(
+        session,
+        [URL],
+        fetcher=fetcher,
+        extractor=llm,
+        arbiter=gatekeeper.same_site_arbiter(llm),
+    )
+
+    assert llm.verdicts == [], "paid for a verdict nobody needed"

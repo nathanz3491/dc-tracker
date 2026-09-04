@@ -4290,11 +4290,15 @@ def _identity_arbiter(enabled: bool, *, label: str):
         err.print(f"[yellow]--verify-identity skipped: {exc}[/yellow]")
         return None
 
-    seen = {"asked": 0, "routed": 0, "tokens": 0}
+    seen = {"asked": 0, "routed": 0, "tokens": 0, "warm": 0}
 
     def note(decision: dict) -> None:
         seen["asked"] += 1
         seen["tokens"] += decision["prompt_tokens"] + decision["completion_tokens"]
+        # Counted so a run can be asked which path actually decided. The warm one
+        # rules from the article the crawl already read; the cold one goes and
+        # fetches it again, which is what this change exists to stop.
+        seen["warm"] += 1 if decision.get("via") == "warm" else 0
         if decision["routed"]:
             seen["routed"] += 1
             console.print(
@@ -4321,9 +4325,11 @@ def _report_arbiter(label: str) -> None:
     seen = _ARBITER_TALLY.pop(label, None)
     if not seen or not seen["asked"]:
         return
+    cold = seen["asked"] - seen.get("warm", 0)
+    how = f", {cold} needed a re-read" if cold else ""
     console.print(
         f"[dim]identity: {seen['asked']} ambiguous insert(s) checked, "
-        f"{seen['routed']} duplicate(s) prevented, ~{seen['tokens']:,} tokens[/dim]"
+        f"{seen['routed']} duplicate(s) prevented{how}, ~{seen['tokens']:,} tokens[/dim]"
     )
 
 

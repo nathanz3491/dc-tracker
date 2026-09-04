@@ -92,16 +92,17 @@
 <polyline points="224.0,679.0 280.0,679.0" fill="none" stroke="#5C6B73" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#a5C6B73)"/>
 <polyline points="224.0,753.0 280.0,753.0" fill="none" stroke="#5C6B73" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#a5C6B73)"/>
 <rect x="520.0" y="560.0" width="206.0" height="164.0" rx="7" fill="#F7EBE9" stroke="#A83E33" stroke-width="1.3"/>
-<text x="623.0" y="585.3" font-size="13" fill="#A83E33" text-anchor="middle" font-weight="700">Identity arbiter</text>
-<text x="623.0" y="602.3" font-size="10" fill="#5C6B73" text-anchor="middle">--verify-identity, on by default</text>
-<text x="623.0" y="615.9" font-size="10" fill="#5C6B73" text-anchor="middle"></text>
-<text x="623.0" y="629.5" font-size="10" fill="#5C6B73" text-anchor="middle">Before a row is created for a</text>
-<text x="623.0" y="643.1" font-size="10" fill="#5C6B73" text-anchor="middle">near-match, one model reads the</text>
-<text x="623.0" y="656.7" font-size="10" fill="#5C6B73" text-anchor="middle">arriving article and says whether</text>
-<text x="623.0" y="670.3" font-size="10" fill="#5C6B73" text-anchor="middle">it is the same site.</text>
-<text x="623.0" y="683.9" font-size="10" fill="#5C6B73" text-anchor="middle"></text>
-<text x="623.0" y="697.5" font-size="10" fill="#5C6B73" text-anchor="middle">Unsure, erroring or short of 0.9?</text>
-<text x="623.0" y="711.1" font-size="10" fill="#5C6B73" text-anchor="middle">The row is created — it fails open</text>
+<text x="623.0" y="578.5" font-size="13" fill="#A83E33" text-anchor="middle" font-weight="700">Identity arbiter</text>
+<text x="623.0" y="595.5" font-size="10" fill="#5C6B73" text-anchor="middle">--verify-identity, on by default</text>
+<text x="623.0" y="609.1" font-size="10" fill="#5C6B73" text-anchor="middle"></text>
+<text x="623.0" y="622.7" font-size="10" fill="#5C6B73" text-anchor="middle">A row resembling one we already hold</text>
+<text x="623.0" y="636.3" font-size="10" fill="#5C6B73" text-anchor="middle">is rejected back to a model with the</text>
+<text x="623.0" y="649.9" font-size="10" fill="#5C6B73" text-anchor="middle">article extraction just read, and the</text>
+<text x="623.0" y="663.5" font-size="10" fill="#5C6B73" text-anchor="middle">suspected row's own details.</text>
+<text x="623.0" y="677.1" font-size="10" fill="#5C6B73" text-anchor="middle">One call, and nothing re-fetched.</text>
+<text x="623.0" y="690.7" font-size="10" fill="#5C6B73" text-anchor="middle"></text>
+<text x="623.0" y="704.3" font-size="10" fill="#5C6B73" text-anchor="middle">Unsure, erroring or short of 0.9?</text>
+<text x="623.0" y="717.9" font-size="10" fill="#5C6B73" text-anchor="middle">The row is created — it fails open</text>
 <polyline points="470.0,642.0 520.0,642.0" fill="none" stroke="#5C6B73" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#a5C6B73)"/>
 <rect x="470.2" y="625.0" width="49.5" height="15" fill="#FFFFFF" opacity="0.94"/>
 <text x="495.0" y="636.0" font-size="10" fill="#5C6B73" text-anchor="middle" font-weight="700">extract</text>

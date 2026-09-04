@@ -82,11 +82,30 @@ them, so the number has to be attributable.
 near-match, one model reads the arriving article and says whether it is the same
 site — preventing the duplicate rather than reporting it afterwards.
 
+**It judges from the article extraction already read.** The proposed row is rejected
+back to a model with everything needed in one turn: the article as the extractor saw
+it, the row we think it duplicates (name, company, locality, phase, capacity and its
+citations), and which of `_find_duplicate_candidate`'s three branches matched. It
+answers `same_site`, `different_site` or `unsure`, and nothing else.
+
+That is one call. The older path needed three or four, because its instructions began
+by telling the model to `read_article` the arriving URL — re-fetching, over a corpus
+where that answers 403 often enough to matter, the article that had just been read.
+Extraction and adjudication stay different steps on different model tiers, which is
+right; what crosses between them is the evidence, not a conversation. The cold path
+remains for callers with no extraction context and for providers with no multi-turn
+call.
+
 **It fails open, always.** Unsure, erroring, or short of the 0.9 floor and the row
 is created exactly as it would have been. The worst case is the status quo, which
 is what makes it safe to leave on. The floor is deliberately higher than the 0.85 a
 *merge* of two stored rows needs: a merge is reviewed against two full rows of
 citations, while this is decided from one arriving article.
+
+**A `same_site` must quote the article**, and the quote is checked against the text
+the model was *shown* rather than the full stored article. Extraction truncates —
+head, marker, tail — so verifying against the whole thing would pass a sentence from
+the omitted middle and leave a gate that proves nothing.
 
 It is passed to both the extract and refresh phases through one helper
 (`_identity_arbiter`), so the two cannot drift into different rules about when a
@@ -168,7 +187,7 @@ Touching any of these means the poster is in scope. Re-render with
 | Queue ordering and counts | `tracker/ingest/discover.py` — `pending`, `pending_split`, `pending_risk_count`, `failed`, `failure_summary` |
 | Prospect | `tracker/prospect.py`; `tracker/roster.py` — `hunt_order`, `measure` |
 | Extract and refresh | `tracker/ingest/crawl.py` — `run`, `stale_sources` |
-| Identity arbiter | `tracker/cli.py` — `_identity_arbiter`, `_report_arbiter`; `tracker/gatekeeper.py` — `same_site_arbiter`, `MIN_CONFIDENCE` |
+| Identity arbiter | `tracker/cli.py` — `_identity_arbiter`, `_report_arbiter`; `tracker/gatekeeper.py` — `same_site_arbiter`, `_warm_verdict`, `_cold_verdict`, `_rejection`, `_suspicion`, `RULES`, `MIN_CONFIDENCE`; `tracker/ingest/crawl.py` — `ExtractionContext` |
 | Enrich phase | `tracker/ingest/enrich.py` — `select_projects`, `run_many`; and [enrich](enrich.md) |
 | Settle | `tracker/derive.py` — `run`; `tracker/upsert.py` — `recompute_confidence` |
 | Source ignore list | `tracker/policy.py` — `load`, `partition` |

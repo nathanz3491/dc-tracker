@@ -515,7 +515,7 @@ def sync() -> Canvas:
 
     gate = c.box(
         520, 560, 206, 164, "Identity arbiter",
-        ["--verify-identity, on by default", "", "Before a row is created for a", "near-match, one model reads the", "arriving article and says whether", "it is the same site.", "", "Unsure, erroring or short of 0.9?", "The row is created — it fails open"],
+        ["--verify-identity, on by default", "", "A row resembling one we already hold", "is rejected back to a model with the", "article extraction just read, and the", "suspected row's own details.", "One call, and nothing re-fetched.", "", "Unsure, erroring or short of 0.9?", "The row is created — it fails open"],
         role="red", title_size=13,
     )
     c.arrow([queue.right(), (520, 642)], label="extract", label_dy=-6)
