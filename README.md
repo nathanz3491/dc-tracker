@@ -238,6 +238,7 @@ This file is the tour. The detail lives in [`docs/`](docs/README.md):
 | [Analysis](docs/analysis.md) | Who is buying the capacity, what could stop these projects, slippage |
 | [The terminal interface](docs/tui.md) | `tracker tui` — the six panes, why the run pane cannot fall behind the CLI, verifying it over ssh |
 | [The console, and exporting](docs/console-and-export.md) | The live console, accounts and invites, driving it without a browser, publishing it |
+| [Command workflows](docs/workflows/README.md) | The four commands that are pipelines, not operations — `enrich`, `sync`, `duplicates`, `logic` — each with a full-page diagram of its stages |
 | [Architecture](docs/architecture.md) | How the CLI, the database and the console fit together |
 | [Design decisions](docs/design-decisions.md) | Why it works the way it does, and where it diverges from the PRD |
 | [Government sources](docs/government-sources.md) | Four routes to bulk permit data, all measured, all rejected — read before going looking |
@@ -335,7 +336,7 @@ directory, which is what lets `tracker init` work from anywhere.
 .venv/Scripts/python -m pytest
 ```
 
-2,621 tests, about twelve minutes. **A fresh clone with no API key and no network access
+2,745 tests, about twelve minutes. **A fresh clone with no API key and no network access
 must produce a green run.** Tests that would hit the network or spend DeepSeek
 tokens are marked `network` / `llm` and deselected by default; run them
 explicitly with `-m network` or `-m llm`.
