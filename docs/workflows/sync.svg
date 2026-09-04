@@ -1,0 +1,144 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="920" viewBox="0 0 1500 920" font-family="system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue','DejaVu Sans',Arial,sans-serif">
+<defs><marker id="a0F6E75" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M 0 1 L 10 5 L 0 9 z" fill="#0F6E75"/></marker><marker id="a5C6B73" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M 0 1 L 10 5 L 0 9 z" fill="#5C6B73"/></marker></defs>
+<rect width="1500" height="920" fill="#FFFFFF"/>
+<g font-family="system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue','DejaVu Sans',Arial,sans-serif" xml:space="preserve">
+<text x="48.0" y="54.0" font-size="25" fill="#16242E" text-anchor="start" font-weight="700">tracker sync — the whole loop, in seven phases</text>
+<text x="48.0" y="82.0" font-size="13" fill="#5C6B73" text-anchor="start">Five phases run by default. The two that spend the most are off until asked for, and every phase that costs calls has its own cap.</text>
+<rect x="48.0" y="100.0" width="11" height="11" rx="2.5" fill="#0F6E75"/>
+<text x="65.0" y="109.0" font-size="10" fill="#5C6B73" text-anchor="start">free · deterministic</text>
+<rect x="198.0" y="100.0" width="11" height="11" rx="2.5" fill="#B9C6CC"/>
+<text x="215.0" y="109.0" font-size="10" fill="#5C6B73" text-anchor="start">one fetch or query</text>
+<rect x="337.7" y="100.0" width="11" height="11" rx="2.5" fill="#D9891F"/>
+<text x="354.7" y="109.0" font-size="10" fill="#5C6B73" text-anchor="start">costs a model call</text>
+<rect x="477.4" y="100.0" width="11" height="11" rx="2.5" fill="#A83E33"/>
+<text x="494.4" y="109.0" font-size="10" fill="#5C6B73" text-anchor="start">a refusal, rail or stop</text>
+<line x1="48" y1="128" x2="1452" y2="128" stroke="#B9C6CC" stroke-width="1"/>
+<text x="48.0" y="162.0" font-size="10.5" fill="#5C6B73" text-anchor="start" font-weight="700" letter-spacing="2.4">THE PHASES</text>
+<text x="163.6" y="162.0" font-size="11" fill="#5C6B73" text-anchor="start">numbered within the plan this run actually chose — a phase not asked for is absent, not 'skipped'</text>
+<rect x="48.0" y="200.0" width="178.0" height="106.0" rx="7" fill="#EDF1F2" stroke="#B9C6CC" stroke-width="1.3"/>
+<text x="137.0" y="243.9" font-size="12.5" fill="#16242E" text-anchor="middle" font-weight="700">1 · discover</text>
+<text x="137.0" y="260.9" font-size="10" fill="#5C6B73" text-anchor="middle">poll the feeds, sweep</text>
+<text x="137.0" y="274.5" font-size="10" fill="#5C6B73" text-anchor="middle">archives, run searches</text>
+<text x="137.0" y="328.0" font-size="10" fill="#5C6B73" text-anchor="middle" font-weight="700">--since-days 45</text>
+<rect x="246.0" y="200.0" width="178.0" height="106.0" rx="7" fill="#FBF2E4" stroke="#D9891F" stroke-width="1.3" stroke-dasharray="5 4"/>
+<text x="335.0" y="243.9" font-size="12.5" fill="#16242E" text-anchor="middle" font-weight="700">2 · prospect</text>
+<text x="335.0" y="260.9" font-size="10" fill="#5C6B73" text-anchor="middle">chase operators the</text>
+<text x="335.0" y="274.5" font-size="10" fill="#5C6B73" text-anchor="middle">roster says we lack</text>
+<text x="335.0" y="328.0" font-size="10" fill="#D9891F" text-anchor="middle" font-weight="700">--prospect · off</text>
+<rect x="444.0" y="200.0" width="178.0" height="106.0" rx="7" fill="#FBF2E4" stroke="#D9891F" stroke-width="1.3"/>
+<text x="533.0" y="243.9" font-size="12.5" fill="#16242E" text-anchor="middle" font-weight="700">3 · extract</text>
+<text x="533.0" y="260.9" font-size="10" fill="#5C6B73" text-anchor="middle">crawl the queue into</text>
+<text x="533.0" y="274.5" font-size="10" fill="#5C6B73" text-anchor="middle">new project rows</text>
+<text x="533.0" y="328.0" font-size="10" fill="#D9891F" text-anchor="middle" font-weight="700">--limit 15</text>
+<rect x="642.0" y="200.0" width="178.0" height="106.0" rx="7" fill="#FBF2E4" stroke="#D9891F" stroke-width="1.3"/>
+<text x="731.0" y="243.9" font-size="12.5" fill="#16242E" text-anchor="middle" font-weight="700">4 · refresh</text>
+<text x="731.0" y="260.9" font-size="10" fill="#5C6B73" text-anchor="middle">re-read sources nobody</text>
+<text x="731.0" y="274.5" font-size="10" fill="#5C6B73" text-anchor="middle">has looked at lately</text>
+<text x="731.0" y="328.0" font-size="10" fill="#D9891F" text-anchor="middle" font-weight="700">--refresh-limit 15</text>
+<rect x="840.0" y="200.0" width="178.0" height="106.0" rx="7" fill="#FBF2E4" stroke="#D9891F" stroke-width="1.3" stroke-dasharray="5 4"/>
+<text x="929.0" y="243.9" font-size="12.5" fill="#16242E" text-anchor="middle" font-weight="700">5 · enrich</text>
+<text x="929.0" y="260.9" font-size="10" fill="#5C6B73" text-anchor="middle">every method at the</text>
+<text x="929.0" y="274.5" font-size="10" fill="#5C6B73" text-anchor="middle">thinnest rows we hold</text>
+<text x="929.0" y="328.0" font-size="10" fill="#D9891F" text-anchor="middle" font-weight="700">--enrich · off</text>
+<rect x="1038.0" y="200.0" width="178.0" height="106.0" rx="7" fill="#E7F0F0" stroke="#0F6E75" stroke-width="1.3"/>
+<text x="1127.0" y="243.9" font-size="12.5" fill="#0F6E75" text-anchor="middle" font-weight="700">6 · settle</text>
+<text x="1127.0" y="260.9" font-size="10" fill="#5C6B73" text-anchor="middle">re-derive, then</text>
+<text x="1127.0" y="274.5" font-size="10" fill="#5C6B73" text-anchor="middle">rescore confidence</text>
+<text x="1127.0" y="328.0" font-size="10" fill="#5C6B73" text-anchor="middle" font-weight="700">free · pure functions</text>
+<rect x="1236.0" y="200.0" width="178.0" height="106.0" rx="7" fill="#EDF1F2" stroke="#B9C6CC" stroke-width="1.3"/>
+<text x="1325.0" y="243.9" font-size="12.5" fill="#16242E" text-anchor="middle" font-weight="700">7 · projects</text>
+<text x="1325.0" y="260.9" font-size="10" fill="#5C6B73" text-anchor="middle">list the result, and</text>
+<text x="1325.0" y="274.5" font-size="10" fill="#5C6B73" text-anchor="middle">what is still unread</text>
+<text x="1325.0" y="328.0" font-size="10" fill="#5C6B73" text-anchor="middle" font-weight="700">--rows 30</text>
+<polyline points="226.0,253.0 246.0,253.0" fill="none" stroke="#5C6B73" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#a5C6B73)"/>
+<polyline points="424.0,253.0 444.0,253.0" fill="none" stroke="#5C6B73" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#a5C6B73)"/>
+<polyline points="622.0,253.0 642.0,253.0" fill="none" stroke="#5C6B73" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#a5C6B73)"/>
+<polyline points="820.0,253.0 840.0,253.0" fill="none" stroke="#5C6B73" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#a5C6B73)"/>
+<polyline points="1018.0,253.0 1038.0,253.0" fill="none" stroke="#5C6B73" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#a5C6B73)"/>
+<polyline points="1216.0,253.0 1236.0,253.0" fill="none" stroke="#5C6B73" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#a5C6B73)"/>
+<text x="48.0" y="366.0" font-size="10.5" fill="#5C6B73" text-anchor="start">--full turns on both dashed phases (prospect 5, enrich 10) and adds --deep and --retry-failed. It never overrides a number you gave: --full --prospect 1 means one operator.</text>
+<text x="48.0" y="388.0" font-size="10.5" fill="#5C6B73" text-anchor="start">Four caps and not one budget, because they buy different things: --limit buys breadth, --refresh-limit buys currency, --prospect buys coverage of operators we are blind to, --enrich buys depth.</text>
+<line x1="48" y1="414" x2="1452" y2="414" stroke="#B9C6CC" stroke-width="1"/>
+<text x="48.0" y="454.0" font-size="10.5" fill="#5C6B73" text-anchor="start" font-weight="700" letter-spacing="2.4">WHERE THE ROWS COME FROM</text>
+<text x="303.0" y="454.0" font-size="11" fill="#5C6B73" text-anchor="start">three phases end in one queue, and one gate stands between the queue and a new row</text>
+<rect x="48.0" y="500.0" width="176.0" height="62.0" rx="7" fill="#EDF1F2" stroke="#B9C6CC" stroke-width="1.3"/>
+<text x="136.0" y="528.7" font-size="11.5" fill="#16242E" text-anchor="middle" font-weight="700">Feeds</text>
+<text x="136.0" y="545.7" font-size="10" fill="#5C6B73" text-anchor="middle">what was published lately</text>
+<rect x="48.0" y="574.0" width="176.0" height="62.0" rx="7" fill="#FBF2E4" stroke="#D9891F" stroke-width="1.3"/>
+<text x="136.0" y="602.7" font-size="11.5" fill="#16242E" text-anchor="middle" font-weight="700">Search</text>
+<text x="136.0" y="619.7" font-size="10" fill="#5C6B73" text-anchor="middle">reaches back past the feeds</text>
+<rect x="48.0" y="648.0" width="176.0" height="62.0" rx="7" fill="#EDF1F2" stroke="#B9C6CC" stroke-width="1.3"/>
+<text x="136.0" y="676.7" font-size="11.5" fill="#16242E" text-anchor="middle" font-weight="700">Roster</text>
+<text x="136.0" y="693.7" font-size="10" fill="#5C6B73" text-anchor="middle">who we hold no rows for</text>
+<rect x="48.0" y="722.0" width="176.0" height="62.0" rx="7" fill="#EDF1F2" stroke="#B9C6CC" stroke-width="1.3"/>
+<text x="136.0" y="750.7" font-size="11.5" fill="#16242E" text-anchor="middle" font-weight="700">Archives (--deep)</text>
+<text x="136.0" y="767.7" font-size="10" fill="#5C6B73" text-anchor="middle">sitemaps, no key needed</text>
+<rect x="280.0" y="500.0" width="190.0" height="284.0" rx="7" fill="#F7F9F9" stroke="#B9C6CC" stroke-width="1.3"/>
+<text x="375.0" y="564.9" font-size="12.5" fill="#16242E" text-anchor="middle" font-weight="700">The queue</text>
+<text x="375.0" y="581.9" font-size="10" fill="#5C6B73" text-anchor="middle">ingest_url rows,</text>
+<text x="375.0" y="595.5" font-size="10" fill="#5C6B73" text-anchor="middle">status = discovered</text>
+<text x="375.0" y="609.1" font-size="10" fill="#5C6B73" text-anchor="middle"></text>
+<text x="375.0" y="622.7" font-size="10" fill="#5C6B73" text-anchor="middle">Ordered before the limit</text>
+<text x="375.0" y="636.3" font-size="10" fill="#5C6B73" text-anchor="middle">bites, never after:</text>
+<text x="375.0" y="649.9" font-size="10" fill="#5C6B73" text-anchor="middle"></text>
+<text x="375.0" y="663.5" font-size="10" fill="#5C6B73" text-anchor="middle">· rows covering a project</text>
+<text x="375.0" y="677.1" font-size="10" fill="#5C6B73" text-anchor="middle">  we already track go first</text>
+<text x="375.0" y="690.7" font-size="10" fill="#5C6B73" text-anchor="middle">· among those, the ones</text>
+<text x="375.0" y="704.3" font-size="10" fill="#5C6B73" text-anchor="middle">  reporting an obstacle</text>
+<text x="375.0" y="717.9" font-size="10" fill="#5C6B73" text-anchor="middle">· prospect finds jump the</text>
+<text x="375.0" y="731.5" font-size="10" fill="#5C6B73" text-anchor="middle">  whole queue</text>
+<polyline points="224.0,531.0 280.0,531.0" fill="none" stroke="#5C6B73" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#a5C6B73)"/>
+<polyline points="224.0,605.0 280.0,605.0" fill="none" stroke="#5C6B73" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#a5C6B73)"/>
+<polyline points="224.0,679.0 280.0,679.0" fill="none" stroke="#5C6B73" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#a5C6B73)"/>
+<polyline points="224.0,753.0 280.0,753.0" fill="none" stroke="#5C6B73" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#a5C6B73)"/>
+<rect x="520.0" y="560.0" width="206.0" height="164.0" rx="7" fill="#F7EBE9" stroke="#A83E33" stroke-width="1.3"/>
+<text x="623.0" y="585.3" font-size="13" fill="#A83E33" text-anchor="middle" font-weight="700">Identity arbiter</text>
+<text x="623.0" y="602.3" font-size="10" fill="#5C6B73" text-anchor="middle">--verify-identity, on by default</text>
+<text x="623.0" y="615.9" font-size="10" fill="#5C6B73" text-anchor="middle"></text>
+<text x="623.0" y="629.5" font-size="10" fill="#5C6B73" text-anchor="middle">Before a row is created for a</text>
+<text x="623.0" y="643.1" font-size="10" fill="#5C6B73" text-anchor="middle">near-match, one model reads the</text>
+<text x="623.0" y="656.7" font-size="10" fill="#5C6B73" text-anchor="middle">arriving article and says whether</text>
+<text x="623.0" y="670.3" font-size="10" fill="#5C6B73" text-anchor="middle">it is the same site.</text>
+<text x="623.0" y="683.9" font-size="10" fill="#5C6B73" text-anchor="middle"></text>
+<text x="623.0" y="697.5" font-size="10" fill="#5C6B73" text-anchor="middle">Unsure, erroring or short of 0.9?</text>
+<text x="623.0" y="711.1" font-size="10" fill="#5C6B73" text-anchor="middle">The row is created — it fails open</text>
+<polyline points="470.0,642.0 520.0,642.0" fill="none" stroke="#5C6B73" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#a5C6B73)"/>
+<rect x="470.2" y="625.0" width="49.5" height="15" fill="#FFFFFF" opacity="0.94"/>
+<text x="495.0" y="636.0" font-size="10" fill="#5C6B73" text-anchor="middle" font-weight="700">extract</text>
+<rect x="776.0" y="560.0" width="190.0" height="76.0" rx="7" fill="#E7EDEE" stroke="#B9C6CC" stroke-width="1.3"/>
+<text x="871.0" y="588.9" font-size="12.5" fill="#16242E" text-anchor="middle" font-weight="700">New rows</text>
+<text x="871.0" y="605.9" font-size="10" fill="#5C6B73" text-anchor="middle">with their citations</text>
+<text x="871.0" y="619.5" font-size="10" fill="#5C6B73" text-anchor="middle">and a confidence score</text>
+<rect x="776.0" y="656.0" width="190.0" height="68.0" rx="7" fill="#E7F0F0" stroke="#0F6E75" stroke-width="1.3"/>
+<text x="871.0" y="680.9" font-size="12.5" fill="#0F6E75" text-anchor="middle" font-weight="700">Routed instead</text>
+<text x="871.0" y="697.9" font-size="10" fill="#5C6B73" text-anchor="middle">citations land on the row</text>
+<text x="871.0" y="711.5" font-size="10" fill="#5C6B73" text-anchor="middle">we already had</text>
+<polyline points="726.0,608.0 776.0,598.0" fill="none" stroke="#5C6B73" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#a5C6B73)"/>
+<polyline points="726.0,698.0 776.0,690.0" fill="none" stroke="#0F6E75" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#a0F6E75)"/>
+<rect x="1016.0" y="560.0" width="200.0" height="164.0" rx="7" fill="#E7F0F0" stroke="#0F6E75" stroke-width="1.3"/>
+<text x="1116.0" y="585.3" font-size="13" fill="#0F6E75" text-anchor="middle" font-weight="700">6 · settle</text>
+<text x="1116.0" y="602.3" font-size="10" fill="#5C6B73" text-anchor="middle">derive reapplies every derived</text>
+<text x="1116.0" y="615.9" font-size="10" fill="#5C6B73" text-anchor="middle">value — county, coordinates,</text>
+<text x="1116.0" y="629.5" font-size="10" fill="#5C6B73" text-anchor="middle">capacity rollups — because those</text>
+<text x="1116.0" y="643.1" font-size="10" fill="#5C6B73" text-anchor="middle">only move when something</text>
+<text x="1116.0" y="656.7" font-size="10" fill="#5C6B73" text-anchor="middle">writes to the row.</text>
+<text x="1116.0" y="670.3" font-size="10" fill="#5C6B73" text-anchor="middle"></text>
+<text x="1116.0" y="683.9" font-size="10" fill="#5C6B73" text-anchor="middle">confidence is a cache of a pure</text>
+<text x="1116.0" y="697.5" font-size="10" fill="#5C6B73" text-anchor="middle">function of the citations, so it is</text>
+<text x="1116.0" y="711.1" font-size="10" fill="#5C6B73" text-anchor="middle">stale the moment one lands</text>
+<polyline points="966.0,598.0 1016.0,598.0" fill="none" stroke="#5C6B73" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#a5C6B73)"/>
+<polyline points="966.0,690.0 1016.0,690.0" fill="none" stroke="#5C6B73" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#a5C6B73)"/>
+<rect x="1266.0" y="560.0" width="186.0" height="164.0" rx="7" fill="#FDF6E9" stroke="#D9891F" stroke-width="1.3"/>
+<text x="1359.0" y="598.9" font-size="12" fill="#16242E" text-anchor="middle" font-weight="700">Refresh, separately</text>
+<text x="1359.0" y="615.9" font-size="10" fill="#5C6B73" text-anchor="middle">phase 4 re-reads stale sources</text>
+<text x="1359.0" y="629.5" font-size="10" fill="#5C6B73" text-anchor="middle">with the cache turned off.</text>
+<text x="1359.0" y="643.1" font-size="10" fill="#5C6B73" text-anchor="middle"></text>
+<text x="1359.0" y="656.7" font-size="10" fill="#5C6B73" text-anchor="middle">The point is finding out whether</text>
+<text x="1359.0" y="670.3" font-size="10" fill="#5C6B73" text-anchor="middle">the article changed, and serving</text>
+<text x="1359.0" y="683.9" font-size="10" fill="#5C6B73" text-anchor="middle">it from the local cache would</text>
+<text x="1359.0" y="697.5" font-size="10" fill="#5C6B73" text-anchor="middle">guarantee the answer is no</text>
+<text x="48.0" y="826.0" font-size="10.5" fill="#A83E33" text-anchor="start" font-weight="700">Not this command: scripts/sync_db.py moves the database file between machines. It shares only the word. See docs/workflows/sync.md.</text>
+<line x1="48" y1="858" x2="1452" y2="858" stroke="#B9C6CC" stroke-width="1"/>
+<text x="48.0" y="886.0" font-size="12.5" fill="#16242E" text-anchor="start">One write lock is held for the whole run, because SQLite takes one writer and two overlapping syncs fail partway — after the second has already paid for its model calls.</text>
+</g>
+</svg>

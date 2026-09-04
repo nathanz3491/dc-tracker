@@ -1,0 +1,181 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="1090" viewBox="0 0 1500 1090" font-family="system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue','DejaVu Sans',Arial,sans-serif">
+<defs><marker id="a5C6B73" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M 0 1 L 10 5 L 0 9 z" fill="#5C6B73"/></marker></defs>
+<rect width="1500" height="1090" fill="#FFFFFF"/>
+<g font-family="system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue','DejaVu Sans',Arial,sans-serif" xml:space="preserve">
+<text x="48.0" y="54.0" font-size="25" fill="#16242E" text-anchor="start" font-weight="700">tracker logic — do the supported values agree?</text>
+<text x="48.0" y="82.0" font-size="13" fill="#5C6B73" text-anchor="start">Every other check asks whether a value is cited. These ask whether the cited values contradict each other, which a perfectly sourced row can still do.</text>
+<rect x="48.0" y="100.0" width="11" height="11" rx="2.5" fill="#0F6E75"/>
+<text x="65.0" y="109.0" font-size="10" fill="#5C6B73" text-anchor="start">free · deterministic</text>
+<rect x="198.0" y="100.0" width="11" height="11" rx="2.5" fill="#B9C6CC"/>
+<text x="215.0" y="109.0" font-size="10" fill="#5C6B73" text-anchor="start">one fetch or query</text>
+<rect x="337.7" y="100.0" width="11" height="11" rx="2.5" fill="#D9891F"/>
+<text x="354.7" y="109.0" font-size="10" fill="#5C6B73" text-anchor="start">costs a model call</text>
+<rect x="477.4" y="100.0" width="11" height="11" rx="2.5" fill="#A83E33"/>
+<text x="494.4" y="109.0" font-size="10" fill="#5C6B73" text-anchor="start">a refusal, rail or stop</text>
+<line x1="48" y1="128" x2="1452" y2="128" stroke="#B9C6CC" stroke-width="1"/>
+<text x="48.0" y="162.0" font-size="10.5" fill="#5C6B73" text-anchor="start" font-weight="700" letter-spacing="2.4">LOGIC CHECK</text>
+<text x="173.6" y="162.0" font-size="11" fill="#5C6B73" text-anchor="start">four layers, and only the last two cost anything. Nothing here writes</text>
+<rect x="48.0" y="196.0" width="250.0" height="118.0" rx="7" fill="#E7F0F0" stroke="#0F6E75" stroke-width="1.3"/>
+<text x="62.0" y="225.5" font-size="12.5" fill="#0F6E75" text-anchor="left" font-weight="700">Rules · always, free</text>
+<text x="62.0" y="242.5" font-size="10.2" fill="#5C6B73" text-anchor="left">energised before operational, built above</text>
+<text x="62.0" y="256.1" font-size="10.2" fill="#5C6B73" text-anchor="left">planned, online before announced, a</text>
+<text x="62.0" y="269.7" font-size="10.2" fill="#5C6B73" text-anchor="left">milestone dated next year counted as</text>
+<text x="62.0" y="283.3" font-size="10.2" fill="#5C6B73" text-anchor="left">already reached. Each states its reasoning,</text>
+<text x="62.0" y="296.9" font-size="10.2" fill="#5C6B73" text-anchor="left">so you can disagree without reading code</text>
+<rect x="48.0" y="330.0" width="250.0" height="104.0" rx="7" fill="#E7F0F0" stroke="#0F6E75" stroke-width="1.3"/>
+<text x="62.0" y="359.3" font-size="12.5" fill="#0F6E75" text-anchor="left" font-weight="700">Collisions · always, free</text>
+<text x="62.0" y="376.3" font-size="10.2" fill="#5C6B73" text-anchor="left">two sources, one field, two values. The</text>
+<text x="62.0" y="389.9" font-size="10.2" fill="#5C6B73" text-anchor="left">winner is read back from the same</text>
+<text x="62.0" y="403.5" font-size="10.2" fill="#5C6B73" text-anchor="left">per-field policy the write path used, with</text>
+<text x="62.0" y="417.1" font-size="10.2" fill="#5C6B73" text-anchor="left">its reason — not re-decided here</text>
+<rect x="48.0" y="450.0" width="250.0" height="104.0" rx="7" fill="#FBF2E4" stroke="#D9891F" stroke-width="1.3"/>
+<text x="62.0" y="479.3" font-size="12.5" fill="#16242E" text-anchor="left" font-weight="700">Judgement · --read N</text>
+<text x="62.0" y="496.3" font-size="10.2" fill="#5C6B73" text-anchor="left">one call per row, for what no rule can</text>
+<text x="62.0" y="509.9" font-size="10.2" fill="#5C6B73" text-anchor="left">phrase: a blocker describing a problem</text>
+<text x="62.0" y="523.5" font-size="10.2" fill="#5C6B73" text-anchor="left">the milestones say is solved. Off unless</text>
+<text x="62.0" y="537.1" font-size="10.2" fill="#5C6B73" text-anchor="left">you name a number</text>
+<rect x="48.0" y="570.0" width="250.0" height="104.0" rx="7" fill="#FBF2E4" stroke="#D9891F" stroke-width="1.3"/>
+<text x="62.0" y="599.3" font-size="12.5" fill="#16242E" text-anchor="left" font-weight="700">Evidence audit · --audit N</text>
+<text x="62.0" y="616.3" font-size="10.2" fill="#5C6B73" text-anchor="left">the prior question: does the value's own</text>
+<text x="62.0" y="629.9" font-size="10.2" fill="#5C6B73" text-anchor="left">sentence state it, or is it a programme</text>
+<text x="62.0" y="643.5" font-size="10.2" fill="#5C6B73" text-anchor="left">total quoted as one campus's money?</text>
+<text x="62.0" y="657.1" font-size="10.2" fill="#5C6B73" text-anchor="left">Costliest rows read first</text>
+<rect x="344.0" y="196.0" width="200.0" height="478.0" rx="7" fill="#F7F9F9" stroke="#B9C6CC" stroke-width="1.3"/>
+<text x="444.0" y="330.7" font-size="13" fill="#16242E" text-anchor="middle" font-weight="700">Findings</text>
+<text x="444.0" y="347.7" font-size="10" fill="#5C6B73" text-anchor="middle">error or warning,</text>
+<text x="444.0" y="361.3" font-size="10" fill="#5C6B73" text-anchor="middle">each with a remedy</text>
+<text x="444.0" y="374.9" font-size="10" fill="#5C6B73" text-anchor="middle">line naming what</text>
+<text x="444.0" y="388.5" font-size="10" fill="#5C6B73" text-anchor="middle">to look at</text>
+<text x="444.0" y="402.1" font-size="10" fill="#5C6B73" text-anchor="middle"></text>
+<text x="444.0" y="415.7" font-size="10" fill="#5C6B73" text-anchor="middle">plus every collision:</text>
+<text x="444.0" y="429.3" font-size="10" fill="#5C6B73" text-anchor="middle">the kept value, the</text>
+<text x="444.0" y="442.9" font-size="10" fill="#5C6B73" text-anchor="middle">loser, and which</text>
+<text x="444.0" y="456.5" font-size="10" fill="#5C6B73" text-anchor="middle">rule settled it</text>
+<text x="444.0" y="470.1" font-size="10" fill="#5C6B73" text-anchor="middle"></text>
+<text x="444.0" y="483.7" font-size="10" fill="#5C6B73" text-anchor="middle">A model finding is</text>
+<text x="444.0" y="497.3" font-size="10" fill="#5C6B73" text-anchor="middle">tagged as one, and</text>
+<text x="444.0" y="510.9" font-size="10" fill="#5C6B73" text-anchor="middle">must name two fields</text>
+<text x="444.0" y="524.5" font-size="10" fill="#5C6B73" text-anchor="middle">and quote its</text>
+<text x="444.0" y="538.1" font-size="10" fill="#5C6B73" text-anchor="middle">evidence or it is</text>
+<text x="444.0" y="551.7" font-size="10" fill="#5C6B73" text-anchor="middle">dropped</text>
+<polyline points="298.0,255.0 344.0,255.0" fill="none" stroke="#5C6B73" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#a5C6B73)"/>
+<polyline points="298.0,382.0 344.0,382.0" fill="none" stroke="#5C6B73" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#a5C6B73)"/>
+<polyline points="298.0,502.0 344.0,502.0" fill="none" stroke="#5C6B73" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#a5C6B73)"/>
+<polyline points="298.0,622.0 344.0,622.0" fill="none" stroke="#5C6B73" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#a5C6B73)"/>
+<rect x="576.0" y="196.0" width="432.0" height="232.0" rx="7" fill="#E7F0F0" stroke="#0F6E75" stroke-width="1.3"/>
+<text x="590.0" y="241.7" font-size="13" fill="#0F6E75" text-anchor="left" font-weight="700">Five fields do not use credibility</text>
+<text x="590.0" y="258.7" font-size="10.2" fill="#5C6B73" text-anchor="left">Assuming the better source always won is the mistake this</text>
+<text x="590.0" y="272.3" font-size="10.2" fill="#5C6B73" text-anchor="left">module was built on: re-deriving that way reported 73 of 221</text>
+<text x="590.0" y="285.9" font-size="10.2" fill="#5C6B73" text-anchor="left">live rows as drifted, and none had.</text>
+<text x="590.0" y="299.5" font-size="10.2" fill="#5C6B73" text-anchor="left"></text>
+<text x="590.0" y="313.1" font-size="10.2" fill="#5C6B73" text-anchor="left">· mw_built takes the largest figure — energised megawatts</text>
+<text x="590.0" y="326.7" font-size="10.2" fill="#5C6B73" text-anchor="left">   only go up, and a better source describing an earlier</text>
+<text x="590.0" y="340.3" font-size="10.2" fill="#5C6B73" text-anchor="left">   state must not walk it back</text>
+<text x="590.0" y="353.9" font-size="10.2" fill="#5C6B73" text-anchor="left">· first_announced takes the earliest — that is what 'first' means</text>
+<text x="590.0" y="367.5" font-size="10.2" fill="#5C6B73" text-anchor="left">· phase takes the furthest along, unless a source says it stopped</text>
+<text x="590.0" y="381.1" font-size="10.2" fill="#5C6B73" text-anchor="left">· name, company and location are never overwritten once set:</text>
+<text x="590.0" y="394.7" font-size="10.2" fill="#5C6B73" text-anchor="left">   churn in an identity field is worse than staleness</text>
+<rect x="576.0" y="442.0" width="432.0" height="232.0" rx="7" fill="#FBF2E4" stroke="#D9891F" stroke-width="1.3"/>
+<text x="590.0" y="487.7" font-size="13" fill="#16242E" text-anchor="left" font-weight="700">What the paid layers may never do</text>
+<text x="590.0" y="504.7" font-size="10.2" fill="#5C6B73" text-anchor="left">A model is not allowed to pick a collision winner. Which of two</text>
+<text x="590.0" y="518.3" font-size="10.2" fill="#5C6B73" text-anchor="left">cited numbers is right is a question about sources, and sources</text>
+<text x="590.0" y="531.9" font-size="10.2" fill="#5C6B73" text-anchor="left">carry weights and dates precisely so that nobody has to guess.</text>
+<text x="590.0" y="545.5" font-size="10.2" fill="#5C6B73" text-anchor="left"></text>
+<text x="590.0" y="559.1" font-size="10.2" fill="#5C6B73" text-anchor="left">So --read looks only for contradictions no rule can phrase, and</text>
+<text x="590.0" y="572.7" font-size="10.2" fill="#5C6B73" text-anchor="left">--audit asks only whether a value's own sentence supports it.</text>
+<text x="590.0" y="586.3" font-size="10.2" fill="#5C6B73" text-anchor="left">Its verdicts are a closed set: unsupported, misattributed, hedged.</text>
+<text x="590.0" y="599.9" font-size="10.2" fill="#5C6B73" text-anchor="left"></text>
+<text x="590.0" y="613.5" font-size="10.2" fill="#5C6B73" text-anchor="left">A truncated reply is said out loud rather than left in a table row:</text>
+<text x="590.0" y="627.1" font-size="10.2" fill="#5C6B73" text-anchor="left">that call was paid for and returned nothing, which is not the</text>
+<text x="590.0" y="640.7" font-size="10.2" fill="#5C6B73" text-anchor="left">same as finding no contradictions.</text>
+<rect x="1032.0" y="196.0" width="420.0" height="478.0" rx="7" fill="#F7F9F9" stroke="#B9C6CC" stroke-width="1.3"/>
+<text x="1046.0" y="283.1" font-size="13" fill="#16242E" text-anchor="left" font-weight="700">Nothing in check is written</text>
+<text x="1046.0" y="300.1" font-size="10.2" fill="#5C6B73" text-anchor="left">A contradiction is a question for a person. The</text>
+<text x="1046.0" y="313.7" font-size="10.2" fill="#5C6B73" text-anchor="left">report says so in its last line, and names where</text>
+<text x="1046.0" y="327.3" font-size="10.2" fill="#5C6B73" text-anchor="left">an answer goes.</text>
+<text x="1046.0" y="340.9" font-size="10.2" fill="#5C6B73" text-anchor="left"></text>
+<text x="1046.0" y="354.5" font-size="10.2" fill="#5C6B73" text-anchor="left">That is not timidity. Whether 100 MW built against</text>
+<text x="1046.0" y="368.1" font-size="10.2" fill="#5C6B73" text-anchor="left">32 MW planned means the plan was revised, or that</text>
+<text x="1046.0" y="381.7" font-size="10.2" fill="#5C6B73" text-anchor="left">the two figures describe different phases of one</text>
+<text x="1046.0" y="395.3" font-size="10.2" fill="#5C6B73" text-anchor="left">campus, is not in the row — and a tool that picked</text>
+<text x="1046.0" y="408.9" font-size="10.2" fill="#5C6B73" text-anchor="left">one would be inventing a fact.</text>
+<text x="1046.0" y="422.5" font-size="10.2" fill="#5C6B73" text-anchor="left"></text>
+<text x="1046.0" y="436.1" font-size="10.2" fill="#5C6B73" text-anchor="left">Measured on the live database: 0 of 149 findings</text>
+<text x="1046.0" y="449.7" font-size="10.2" fill="#5C6B73" text-anchor="left">were mechanically resolvable.</text>
+<text x="1046.0" y="463.3" font-size="10.2" fill="#5C6B73" text-anchor="left"></text>
+<text x="1046.0" y="476.9" font-size="10.2" fill="#5C6B73" text-anchor="left">Where answers go:</text>
+<text x="1046.0" y="490.5" font-size="10.2" fill="#5C6B73" text-anchor="left"></text>
+<text x="1046.0" y="504.1" font-size="10.2" fill="#5C6B73" text-anchor="left">tracker review · confirm or demote a value</text>
+<text x="1046.0" y="517.7" font-size="10.2" fill="#5C6B73" text-anchor="left">tracker merge · fold rows that are one campus</text>
+<text x="1046.0" y="531.3" font-size="10.2" fill="#5C6B73" text-anchor="left">logic conflicts · settle a contested field</text>
+<text x="1046.0" y="544.9" font-size="10.2" fill="#5C6B73" text-anchor="left">logic resolve · work through the findings</text>
+<text x="1046.0" y="558.5" font-size="10.2" fill="#5C6B73" text-anchor="left"></text>
+<text x="1046.0" y="572.1" font-size="10.2" fill="#5C6B73" text-anchor="left">An unconfirmed investment figure already stays out</text>
+<text x="1046.0" y="585.7" font-size="10.2" fill="#5C6B73" text-anchor="left">of the capex sums, so the repair path exists before</text>
+<text x="1046.0" y="599.3" font-size="10.2" fill="#5C6B73" text-anchor="left">the audit ever runs.</text>
+<line x1="48" y1="716" x2="1452" y2="716" stroke="#B9C6CC" stroke-width="1"/>
+<text x="48.0" y="752.0" font-size="10.5" fill="#5C6B73" text-anchor="start" font-weight="700" letter-spacing="2.4">THE TWO THAT CAN SETTLE SOMETHING</text>
+<text x="392.7" y="752.0" font-size="11" fill="#5C6B73" text-anchor="start">and the sharp difference between what each of them writes</text>
+<rect x="48.0" y="792.0" width="340.0" height="204.0" rx="7" fill="#FBF2E4" stroke="#D9891F" stroke-width="1.3"/>
+<text x="62.0" y="810.1" font-size="13" fill="#16242E" text-anchor="left" font-weight="700">logic conflicts · proposes</text>
+<text x="62.0" y="827.1" font-size="10.2" fill="#5C6B73" text-anchor="left">A field with two quote-backed claims that genuinely</text>
+<text x="62.0" y="840.7" font-size="10.2" fill="#5C6B73" text-anchor="left">disagree. Narrow on purpose: identity fields are excluded,</text>
+<text x="62.0" y="854.3" font-size="10.2" fill="#5C6B73" text-anchor="left">and 174 of 666 contested fields were name or company.</text>
+<text x="62.0" y="867.9" font-size="10.2" fill="#5C6B73" text-anchor="left"></text>
+<text x="62.0" y="881.5" font-size="10.2" fill="#5C6B73" text-anchor="left">One reasoning call sees every claim at once — value, stored</text>
+<text x="62.0" y="895.1" font-size="10.2" fill="#5C6B73" text-anchor="left">quote, publisher, date — and picks a key from a closed list.</text>
+<text x="62.0" y="908.7" font-size="10.2" fill="#5C6B73" text-anchor="left">It cannot type a value: every option is a figure a publisher</text>
+<text x="62.0" y="922.3" font-size="10.2" fill="#5C6B73" text-anchor="left">actually printed, shown with the quote already stored.</text>
+<text x="62.0" y="935.9" font-size="10.2" fill="#5C6B73" text-anchor="left"></text>
+<text x="62.0" y="949.5" font-size="10.2" fill="#5C6B73" text-anchor="left">Then one adversarial call tries to knock the answer down.</text>
+<text x="62.0" y="963.1" font-size="10.2" fill="#5C6B73" text-anchor="left">Two calls a field, hard: an unbounded argument is</text>
+<text x="62.0" y="976.7" font-size="10.2" fill="#5C6B73" text-anchor="left">unbounded spend, and a refusal carrying the objection is a</text>
+<text x="62.0" y="990.3" font-size="10.2" fill="#5C6B73" text-anchor="left">better outcome than a third call arguing with itself.</text>
+<rect x="412.0" y="792.0" width="300.0" height="204.0" rx="7" fill="#E7F0F0" stroke="#0F6E75" stroke-width="1.3"/>
+<text x="426.0" y="816.9" font-size="13" fill="#0F6E75" text-anchor="left" font-weight="700">--apply writes claims, not fields</text>
+<text x="426.0" y="833.9" font-size="10.2" fill="#5C6B73" text-anchor="left">It marks the losing citations superseded on their</text>
+<text x="426.0" y="847.5" font-size="10.2" fill="#5C6B73" text-anchor="left">own source rows, then re-derives the project.</text>
+<text x="426.0" y="861.1" font-size="10.2" fill="#5C6B73" text-anchor="left"></text>
+<text x="426.0" y="874.7" font-size="10.2" fill="#5C6B73" text-anchor="left">The field is never assigned. That is what keeps the</text>
+<text x="426.0" y="888.3" font-size="10.2" fill="#5C6B73" text-anchor="left">one guarantee this database rests on: every value</text>
+<text x="426.0" y="901.9" font-size="10.2" fill="#5C6B73" text-anchor="left">equals what its citations imply. An assignment</text>
+<text x="426.0" y="915.5" font-size="10.2" fill="#5C6B73" text-anchor="left">would make the row a thing somebody typed, and</text>
+<text x="426.0" y="929.1" font-size="10.2" fill="#5C6B73" text-anchor="left">the next backfill derive would put it back.</text>
+<text x="426.0" y="942.7" font-size="10.2" fill="#5C6B73" text-anchor="left"></text>
+<text x="426.0" y="956.3" font-size="10.2" fill="#5C6B73" text-anchor="left">A refusal writes nothing and is a recorded answer:</text>
+<text x="426.0" y="969.9" font-size="10.2" fill="#5C6B73" text-anchor="left">the disagreement stays disclosed in the notes with</text>
+<text x="426.0" y="983.5" font-size="10.2" fill="#5C6B73" text-anchor="left">both citations intact.</text>
+<rect x="736.0" y="792.0" width="380.0" height="204.0" rx="7" fill="#FBF2E4" stroke="#D9891F" stroke-width="1.3"/>
+<text x="750.0" y="810.1" font-size="13" fill="#16242E" text-anchor="left" font-weight="700">logic resolve · settles what it can, then asks</text>
+<text x="750.0" y="827.1" font-size="10.2" fill="#5C6B73" text-anchor="left">1  drift repair, free. A row whose stored value its own sources no</text>
+<text x="750.0" y="840.7" font-size="10.2" fill="#5C6B73" text-anchor="left">   longer support: re-running the declared policy is arithmetic, not</text>
+<text x="750.0" y="854.3" font-size="10.2" fill="#5C6B73" text-anchor="left">   an opinion. The only mechanical fix in the whole report.</text>
+<text x="750.0" y="867.9" font-size="10.2" fill="#5C6B73" text-anchor="left"></text>
+<text x="750.0" y="881.5" font-size="10.2" fill="#5C6B73" text-anchor="left">2  answered by comparison, free. A read of data already stored,</text>
+<text x="750.0" y="895.1" font-size="10.2" fill="#5C6B73" text-anchor="left">   never a judgement between two sourced figures. Two codes clear</text>
+<text x="750.0" y="908.7" font-size="10.2" fill="#5C6B73" text-anchor="left">   that bar, and they were 448 of 536 resolvable findings.</text>
+<text x="750.0" y="922.3" font-size="10.2" fill="#5C6B73" text-anchor="left"></text>
+<text x="750.0" y="935.9" font-size="10.2" fill="#5C6B73" text-anchor="left">3  what is left goes to the agent (default), the older fixed menu</text>
+<text x="750.0" y="949.5" font-size="10.2" fill="#5C6B73" text-anchor="left">   (--llm), or to you at the keyboard. --auto stops after step 2,</text>
+<text x="750.0" y="963.1" font-size="10.2" fill="#5C6B73" text-anchor="left">   for scripts and for the console, which has no keyboard.</text>
+<text x="750.0" y="976.7" font-size="10.2" fill="#5C6B73" text-anchor="left"></text>
+<text x="750.0" y="990.3" font-size="10.2" fill="#5C6B73" text-anchor="left">A finding already answered on its row is not offered again.</text>
+<rect x="1140.0" y="792.0" width="312.0" height="204.0" rx="7" fill="#F7EBE9" stroke="#A83E33" stroke-width="1.3"/>
+<text x="1154.0" y="810.1" font-size="13" fill="#A83E33" text-anchor="left" font-weight="700">Why an agent, and its two limits</text>
+<text x="1154.0" y="827.1" font-size="10.2" fill="#5C6B73" text-anchor="left">The fixed menu could only answer with a key from</text>
+<text x="1154.0" y="840.7" font-size="10.2" fill="#5C6B73" text-anchor="left">ACTIONS[code], and 11 of 16 codes have none — a</text>
+<text x="1154.0" y="854.3" font-size="10.2" fill="#5C6B73" text-anchor="left">property of the menu, not of the finding. It declined</text>
+<text x="1154.0" y="867.9" font-size="10.2" fill="#5C6B73" text-anchor="left">432 of 526 findings before calling a model at all.</text>
+<text x="1154.0" y="881.5" font-size="10.2" fill="#5C6B73" text-anchor="left"></text>
+<text x="1154.0" y="895.1" font-size="10.2" fill="#5C6B73" text-anchor="left">An agent rules claims out of the merge instead, which</text>
+<text x="1154.0" y="908.7" font-size="10.2" fill="#5C6B73" text-anchor="left">is available on every code. That is how 334 tranche</text>
+<text x="1154.0" y="922.3" font-size="10.2" fill="#5C6B73" text-anchor="left">findings reached a model for the first time, and why a</text>
+<text x="1154.0" y="935.9" font-size="10.2" fill="#5C6B73" text-anchor="left">ruling survives the next backfill derive.</text>
+<text x="1154.0" y="949.5" font-size="10.2" fill="#5C6B73" text-anchor="left"></text>
+<text x="1154.0" y="963.1" font-size="10.2" fill="#5C6B73" text-anchor="left">It may never mark a row verified: that means an</text>
+<text x="1154.0" y="976.7" font-size="10.2" fill="#5C6B73" text-anchor="left">operator says so, and it feeds confidence. And its</text>
+<text x="1154.0" y="990.3" font-size="10.2" fill="#5C6B73" text-anchor="left">edits are recorded as 'agent', never as 'operator'.</text>
+<line x1="48" y1="1028" x2="1452" y2="1028" stroke="#B9C6CC" stroke-width="1"/>
+<text x="48.0" y="1056.0" font-size="12.5" fill="#16242E" text-anchor="start">The layers are ordered by cost, and the free ones are not a warm-up: rules and collisions settle most of what is wrong, and only what survives them is worth a model call.</text>
+</g>
+</svg>

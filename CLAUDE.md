@@ -171,6 +171,47 @@ remain in earlier commits. The rule governs what goes out from here.
 
 ---
 
+## 7. Change a staged command, change its workflow page in the same commit.
+
+`docs/workflows/` documents the four commands that are pipelines rather than
+operations — `enrich`, `sync`, `duplicates` (with `park`, `unpark`, `parked`,
+`resolve`) and `logic` (with `check`, `conflicts`, `resolve`). Each has a page and a
+full-page diagram of its stages.
+
+| you touched | update |
+| --- | --- |
+| `enrich`, `tracker/ingest/enrich.py`, `gapfill` | `docs/workflows/enrich.md` + `enrich.svg` |
+| `sync`, `discover`, `prospect`, `crawl`, `gatekeeper`, `derive`, `scripts/sync_db.py` | `docs/workflows/sync.md` + `sync.svg` |
+| `duplicates*`, `pairs`, `dupresolve`, `triage.pair_*`, `capex.suspected_duplicates`, `merge` | `docs/workflows/duplicates.md` + `duplicates.svg` |
+| `logic*`, `tracker/logic.py`, `conflicts`, `triage.triage`, `audit.free_answer` | `docs/workflows/logic.md` + `logic.svg` |
+
+**The source map at the foot of each page is the checklist.** It names the
+functions the diagram was drawn from; if your change touched one of them, that page
+is in scope. This is narrower than "update the docs" — a rename inside a harvester
+does not move a box, but adding a harvester, reordering phases, changing a default
+or adding a rail does.
+
+The diagrams are generated, so updating one is an edit to a declarative block plus
+a command:
+
+```bash
+python scripts/render_workflow_diagrams.py enrich   # or: no argument for all four
+```
+
+Commit the regenerated `.svg` with the code. It is checked in deliberately, against
+the usual rule about build output: GitHub renders `![](enrich.svg)` and does not run
+a build step, so a diagram that is not committed is a diagram nobody reading the
+repo can see.
+
+**Why the rule is worth its weight.** These four commands spend money and delete
+rows, and every stage in them exists because of something that went wrong once — a
+budget consumed by the first five of thirty projects, an archive swept for a row
+already finished, a merge that destroyed two rows. A stale diagram of that is not a
+neutral omission; it is read as the current design, and the next person plans a
+change around a pipeline that no longer exists.
+
+---
+
 `deploy/README.md` — local, not in the repo — is the runbook: what to do when
 something breaks, how to read the logs, how to publish or unpublish. This file is
 the rules; that one is the procedures.

@@ -19,6 +19,7 @@ detail behind it.
 
 | | What it covers |
 | --- | --- |
+| [Command workflows](workflows/README.md) | The four commands that are pipelines rather than operations — `enrich`, `sync`, `duplicates`, `logic` — each with a full-page diagram of its stages, what each stage may write, and where a run stops |
 | [Architecture](architecture.md) | How the CLI, the database and the console fit together — and why the browser never computes a judgement of its own |
 | [Data quality](data-quality.md) | Numbers that cannot be true, one tranche wearing several names, values that contradict each other, what each stored value rests on, and why crawl order is not publication order |
 | [Design decisions](design-decisions.md) | The reasoning that is not obvious from the code, and where this diverges from the PRD — the evidence gate, provenance per field, confidence, the schema additions, the seed file |
