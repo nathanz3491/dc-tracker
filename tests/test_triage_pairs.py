@@ -505,7 +505,7 @@ def test_the_decision_names_both_rows(session, pair_rows, cached):
 # --- what the judge checked, and the question it was asked ----------------------
 #
 # Framing the question as a search for contradictions is borrowed from OpenSanctions
-# Pairs (arXiv 2603.11051). It is worth measuring here because six of the seven pairs
+# Pairs (arXiv 2603.11051). It is worth measuring here because 24 of the 38 pairs
 # a judge has ruled `different` on this database have no rail refusing them at all —
 # see `docs/duplicate-shapes.md`. On that population the judgement is the whole
 # decision, so what the judge is asked, and what it says it checked, are the product.

@@ -90,19 +90,25 @@ initial build of the v1 PRD.
   `dedup_key` — and the only thing replayable against it is the question the write
   path asks, which exercises the *key* path and not the name path. The script says
   so rather than quoting its own number as recall. **Who wrote a label decides what
-  it is worth**: here all 37 aliases were written by `tracker merge` with a person
-  at the keyboard, and all 7 parked pairs by a model during an unattended run, so
-  every count is reported per `decided_by` and replaying a model against the
+  it is worth**: on production all 90 aliases were written by `tracker merge` with
+  a person at the keyboard, and all 38 parked pairs by a model during an unattended
+  run, so every count is reported per `decided_by` and replaying a model against the
   negatives measures agreement rather than accuracy.
 
-  It found two things worth acting on. **A duplicate here is one campus under
-  different company names** — only 3 of 37 folded identities share a company stem
-  with their survivor — which is the axis every key comparison holds fixed. And of
-  the 7 pairs ruled `different`, **6 have no rail that refuses a merge**, so on that
-  population the judgement is the entire decision and the rails contribute nothing.
-  `docs/duplicate-shapes.md` records both, with the measurement that refuted
-  deriving a county at the write path: it would have connected **0 of 37** folds,
-  while `ingest geo` has already left just 1 of 300 live rows with a fillable county.
+  It found two things worth acting on. Duplicates come in two shapes and neither
+  dominates: **43 of 90** folded identities share a company stem with their survivor,
+  so the locality is the only axis that disagrees, while the rest are one campus under
+  several company names, which no key comparison can reach because every one of them
+  holds the company fixed. And of the 38 pairs ruled `different`, **24 have no rail
+  that refuses a merge**, so on nearly two thirds of that population the judgement is
+  the entire decision and the rails contribute nothing.
+
+  `docs/duplicate-shapes.md` records both, and carries a warning earned the hard way:
+  these numbers were first taken from a development copy holding 300 projects against
+  production's 437, and on that smaller corpus the headline conclusion came out
+  backwards — "a derived county would connect 0 of 37 folds" became **11 of 90** when
+  asked of the real database. A copy pulled weeks earlier is a different corpus, not a
+  smaller view of the same one. The script is read-only and runs on the host.
 
 - **The identity gate now rules from the article extraction already read, instead
   of fetching it again** (`tracker/gatekeeper.py`, `tracker/ingest/crawl.py`,
@@ -217,8 +223,8 @@ initial build of the v1 PRD.
   contradictions took an open 14B model from a 91.3% rule baseline to 98.2% F1.
 
   It is worth changing here because of what `scripts/eval_pairs.py` found on the
-  live labels: of the pairs a judge has ruled `different`, **six of seven have no
-  rail in `evidence_blocks_merge` that refuses them**. On that population the rails
+  live labels: of the pairs a judge has ruled `different`, **24 of 38 have no rail
+  in `evidence_blocks_merge` that refuses them**. On that population the rails
   contribute nothing and the wording of the question is the entire decision — which
   is also why further work on the rails would have had nowhere to land.
 
@@ -239,11 +245,13 @@ initial build of the v1 PRD.
   growing on every re-crawl, and it now delegates to the module whose dedupe depends
   on it.
 
-  Deliberately **not** shipped alongside it: telling the judge whether the Census
-  places one row's town inside the other's county. It reads like free evidence and
-  is double-edged — Stargate is filed under Abilene and under Shackelford County,
-  is genuinely one campus, and a containment fact would argue against the true
-  answer. Unmeasured and able to cut the wrong way is not a change worth making.
+  Deliberately **not** shipped alongside it: telling the *judge* whether the Census
+  places one row's town inside the other's county. It reads like free evidence and is
+  double-edged — Stargate is filed under Abilene and under Shackelford County, is
+  genuinely one campus, and a containment fact would argue against the true answer.
+  Unmeasured and able to cut the wrong way is not a change worth making. Using the
+  same table at the *write path*, where it is a lookup rather than an argument, is a
+  separate and measured question: 11 of 90 folds, and not yet built.
 
 - **`tracker` installs and runs from anywhere** (`tracker/config.py`,
   `tracker/db.py`, `tracker/migrations/`, `tracker/seed/`, `pyproject.toml`,

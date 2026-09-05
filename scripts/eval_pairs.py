@@ -26,13 +26,18 @@ the companies are. A folded identity has no name left, so this cannot replay tha
 branch and does not pretend to: the score below is what the keys alone achieve. That
 is the right yardstick for a change to the keys, and an understatement of the gate.
 
-**Who wrote a label decides what it is worth.** On the database this was written
-against, all 37 aliases were written by `tracker merge` — a person typing two ids,
-after the review in `docs/merge-review-2026-08-05.md` — and all 7 parked pairs were
-written by a model during an unattended run. So the positives are gold and the
-negatives are a model's own past answers: replaying a model against them measures
-agreement, not accuracy. Every count here is therefore reported per `decided_by`,
-and a run that quotes the totals without that split is quoting the wrong number.
+**Who wrote a label decides what it is worth.** On production, all 90 aliases were
+written by `tracker merge` — a person typing two ids — and all 38 parked pairs by a
+model during an unattended run. So the positives are gold and the negatives are a
+model's own past answers: replaying a model against them measures agreement, not
+accuracy. Every count here is therefore reported per `decided_by`, and a run that
+quotes the totals without that split is quoting the wrong number.
+
+**Run it on production.** It opens the database read-only and writes nothing, so it
+is safe on the host, and the host is where the labels are. A copy pulled earlier is a
+different corpus rather than a smaller view of the same one: measured against a
+development copy of 300 projects and 37 aliases, this script's headline finding came
+out backwards from the same question asked of production's 437 and 90.
 
 Nothing here writes. The database is opened read-only and the arriving records are
 built in memory.

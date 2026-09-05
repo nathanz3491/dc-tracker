@@ -102,7 +102,7 @@ That framing is borrowed rather than invented — OpenSanctions Pairs (arXiv
 2603.11051) measured it over 755,540 labelled pairs, taking an open 14B model from a
 91.3% rule baseline to 98.2% F1. It is worth changing *here* because of what
 `scripts/eval_pairs.py` found: of the pairs a judge has ruled `different` on the live
-database, **six of seven have no rail that refuses them**. On that population the
+database, **24 of 38 have no rail that refuses them**. On that population the
 rails contribute nothing and the wording of the question is the whole decision. See
 [duplicate shapes](../duplicate-shapes.md).
 

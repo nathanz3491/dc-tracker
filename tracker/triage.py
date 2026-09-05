@@ -398,12 +398,12 @@ def triage(
 #: invites a similarity judgement, and two data centre rows in one town always
 #: resemble each other.
 #:
-#: **Why it is worth changing here specifically.** Measured on this database
-#: (`scripts/eval_pairs.py`, recorded in `docs/duplicate-shapes.md`): of the seven
-#: pairs a judge has ruled `different`, six have no rail in
-#: `dupresolve.evidence_blocks_merge` that refuses them. On that population the rails
-#: contribute nothing and the judgement is the whole decision, so the wording of the
-#: question is not a detail.
+#: **Why it is worth changing here specifically.** Measured on production
+#: (`scripts/eval_pairs.py`, recorded in `docs/duplicate-shapes.md`): of the 38 pairs
+#: a judge has ruled `different`, 24 have no rail in
+#: `dupresolve.evidence_blocks_merge` that refuses them. On nearly two thirds of that
+#: population the rails contribute nothing and the judgement is the whole decision, so
+#: the wording of the question is not a detail.
 #:
 #: Deliberately tool-agnostic: the three sites end in `rule_same`, `same_site` and a
 #: JSON `"same"` respectively, so this names neither.

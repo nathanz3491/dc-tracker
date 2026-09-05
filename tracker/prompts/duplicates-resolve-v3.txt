@@ -15,7 +15,7 @@ rule baseline to 98.2% F1, within two points of a frontier model.
 
 It is worth changing on this database specifically. Measured by
 `scripts/eval_pairs.py` and recorded in `docs/duplicate-shapes.md`: of the pairs a
-judge has ruled `different`, six of seven have no rail in
+judge has ruled `different`, 24 of 38 have no rail in
 `dupresolve.evidence_blocks_merge` that refuses them. On that population the rails
 contribute nothing and the wording of the question is the whole decision.
 
