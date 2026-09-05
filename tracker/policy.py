@@ -46,7 +46,7 @@ from pathlib import Path
 from typing import Any, Final
 
 from tracker.confidence import registrable_domain
-from tracker.config import install_root
+from tracker.config import home, seed_path
 from tracker.funnel import LOW_YIELD as IGNORE_BELOW
 
 log = logging.getLogger(__name__)
@@ -66,10 +66,10 @@ class PolicyError(ValueError):
 def default_path() -> Path:
     """`seed/sources.toml`, beside `seed/feeds.toml`.
 
-    `install_root()` rather than the CWD, for the reason `discover` uses it: the
+    `config.seed_path` rather than the CWD, for the reason `discover` uses it: the
     file ships with the code and `tracker` is routinely run from another directory.
     """
-    return install_root() / "seed" / "sources.toml"
+    return seed_path("sources.toml")
 
 
 @dataclass(frozen=True)
@@ -436,7 +436,11 @@ def write(policy: Policy, path: Path | None = None) -> Path:
     import os
     import tempfile
 
-    path = path or default_path()
+    # Never into the package. `default_path` returns the packaged copy when this
+    # installation has no override, and writing there would edit a file inside
+    # site-packages that the next reinstall discards — and that every database on
+    # the machine shares. An edited policy belongs to this installation.
+    path = path or (home() / "seed" / "sources.toml")
     path.parent.mkdir(parents=True, exist_ok=True)
     handle, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".toml")
     try:

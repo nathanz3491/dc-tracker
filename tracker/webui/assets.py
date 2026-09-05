@@ -1,7 +1,7 @@
 """Where the static files live, and how a request path maps onto them.
 
 Resolved from ``Path(__file__).parent``, deliberately not from
-``config.install_root()``. That helper returns the *repository root* — correct for
+``config.install_root()``. That helper returned the *repository root* — correct for
 an editable checkout and wrong from site-packages, which is a latent bug
 `export.template_path` already carries. Anchoring on this module's own location is
 right in both layouts.

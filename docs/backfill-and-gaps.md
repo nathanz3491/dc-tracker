@@ -107,7 +107,7 @@ tracker ingest crawl --check
 tracker ingest crawl --from-queue --limit 10
 ```
 
-`discover` polls the feeds in [seed/feeds.toml](../seed/feeds.toml), keyword-filters
+`discover` polls the feeds in [tracker/seed/feeds.toml](../tracker/seed/feeds.toml), keyword-filters
 the headlines and queues what matches. Nothing is fetched or sent to an LLM at
 that point — `queue` shows you the headlines so you can drop the noise before
 paying for extraction:
@@ -137,7 +137,7 @@ it is worth an LLM call, and two things break that promise quietly:
   newsroom answering 403 to a non-browser is what `ingest crawl --browser` is for,
   and on the live queue that was 55 URLs across seven publishers, which is to say
   the best-defended sources. `--drop` removes the dead ones and nothing else.
-* **`prune`** re-applies the filter in `seed/feeds.toml` to rows that were queued
+* **`prune`** re-applies the filter in `tracker/seed/feeds.toml` to rows that were queued
   under an earlier version of it. The filter is data and data gets edited; nothing
   ever re-applied it, so the queue accumulated everything that passed any *past*
   filter. On the live database that was 417 of 1,241 queued candidates — NTT

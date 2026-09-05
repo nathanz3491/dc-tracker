@@ -278,6 +278,97 @@ def test_a_merged_away_key_routes_the_next_crawl_to_the_survivor(session):
     assert arrived.duplicate_of != keep.id
 
 
+def test_an_alias_records_who_decided_the_merge(session):
+    """The alias is the only trace of a folded row that survives its deletion.
+
+    `decided_by` was never written, so it took the column's server default and
+    every agent merge was filed as `operator` — while the survivor's own notes
+    said `agent (0.91)` about the same fold. A regression set built from these
+    rows would have scored a model's answers as a person's.
+    """
+    from tracker.models import ProjectAlias
+
+    keep = _project(session, "Stargate Abilene", "Crusoe")
+    dupe = _project(session, "Stargate", "Oracle")
+    dupe.dedup_key = _crawl_key("Oracle")
+    session.flush()
+
+    merge_projects(session, keep.id, [dupe.id], by="agent (0.91)")
+
+    alias = session.scalar(
+        select(ProjectAlias).where(ProjectAlias.from_dedup_key == _crawl_key("Oracle"))
+    )
+    assert alias is not None and alias.decided_by == "agent (0.91)"
+
+
+def test_flattening_a_chain_keeps_the_decider_of_the_judgement_it_follows(session):
+    """Repointing is bookkeeping, not a second opinion.
+
+    `oracle -> first` moves to `final` because `first` was folded, and that follows
+    the model's judgement rather than replacing it. Overwriting `decided_by` here
+    would credit a later merge with a decision it never made.
+    """
+    from tracker.models import ProjectAlias
+
+    first = _project(session, "Stargate A", "Crusoe")
+    folded = _project(session, "Stargate B", "Oracle")
+    final = _project(session, "Stargate C", "Vantage")
+    first.dedup_key = _crawl_key("Crusoe")
+    folded.dedup_key = _crawl_key("Oracle")
+    session.flush()
+
+    merge_projects(session, first.id, [folded.id], by="model (0.87)")
+    merge_projects(session, final.id, [first.id], by="operator")
+
+    by_key = {alias.from_dedup_key: alias for alias in session.scalars(select(ProjectAlias)).all()}
+    carried = by_key[_crawl_key("Oracle")]
+    assert carried.to_project_id == final.id, "the chain must still be flat"
+    assert carried.decided_by == "model (0.87)", "the model judged this key, not the operator"
+    assert by_key[_crawl_key("Crusoe")].decided_by == "operator"
+
+
+def test_re_recording_a_folded_key_takes_the_new_decision(session):
+    """The other retarget, and it *is* a fresh judgement.
+
+    A key folded once, re-created by a later crawl, and folded somewhere else is
+    somebody deciding about that identity a second time.
+    """
+    from tracker.models import ProjectAlias
+
+    first = _project(session, "Stargate A", "Crusoe")
+    dupe = _project(session, "Stargate B", "Oracle")
+    dupe.dedup_key = _crawl_key("Oracle")
+    session.flush()
+    merge_projects(session, first.id, [dupe.id], by="model (0.87)")
+
+    again = _project(session, "Stargate B again", "Oracle")
+    again.dedup_key = _crawl_key("Oracle")
+    other = _project(session, "Stargate C", "Vantage")
+    session.flush()
+    merge_projects(session, other.id, [again.id], by="operator")
+
+    alias = session.scalar(
+        select(ProjectAlias).where(ProjectAlias.from_dedup_key == _crawl_key("Oracle"))
+    )
+    assert alias.to_project_id == other.id
+    assert alias.decided_by == "operator"
+
+
+def test_the_merge_command_still_records_a_person(session):
+    """`tracker merge` is a person typing two ids, so the default must stay `operator`."""
+    from tracker.models import ProjectAlias
+
+    keep = _project(session, "Stargate Abilene", "Crusoe")
+    dupe = _project(session, "Stargate", "Oracle")
+    dupe.dedup_key = _crawl_key("Oracle")
+    session.flush()
+
+    merge_projects(session, keep.id, [dupe.id])
+
+    alias = session.scalar(select(ProjectAlias))
+    assert alias.decided_by == "operator"
+
+
 def test_alias_chains_are_flattened_when_the_survivor_is_merged(session):
     from tracker.models import ProjectAlias
 

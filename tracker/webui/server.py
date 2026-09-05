@@ -36,7 +36,7 @@ from urllib.parse import parse_qs, urlsplit
 from sqlalchemy.exc import OperationalError
 
 from tracker import __version__
-from tracker.config import install_root
+from tracker.config import home
 from tracker.db import MigrationError, open_db, schema_version, session_scope
 from tracker.webui import assets
 from tracker.webui.auth import COOKIE, Gate, cookie_value
@@ -88,15 +88,15 @@ def deployed_commit() -> str | None:
     because the answer cannot change without the process restarting — the
     deployer restarts it precisely so that it does.
     """
-    head = install_root() / ".git" / "HEAD"
+    head = home() / ".git" / "HEAD"
     try:
         ref = head.read_text(encoding="utf-8").strip()
         if ref.startswith("ref: "):
-            target = install_root() / ".git" / ref[5:]
+            target = home() / ".git" / ref[5:]
             if target.is_file():
                 return target.read_text(encoding="utf-8").strip()[:8]
             # A packed ref: the loose file is gone once `git gc` has run.
-            packed = install_root() / ".git" / "packed-refs"
+            packed = home() / ".git" / "packed-refs"
             name = ref[5:]
             for line in packed.read_text(encoding="utf-8").splitlines():
                 if line.endswith(f" {name}"):
@@ -871,10 +871,10 @@ class Handler(BaseHTTPRequestHandler):
         if urlsplit(url).scheme not in {"http", "https"}:
             return self._error(400, "url must be http or https")
 
-        from tracker.config import install_root
+        from tracker.config import home
         from tracker.webui import article as article_mod
 
-        root = install_root() / ".cache"
+        root = home() / ".cache"
         with self.console.read_session() as session:
             found = article_mod.load(
                 session, url, cache_dir=root / "articles", reader_dir=root / "reader"

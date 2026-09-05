@@ -1807,6 +1807,18 @@ def _triage_context(project: Project, finding: Finding, actions) -> dict[str, st
     }
 
 
+def one_line(text: Any, limit: int = 400) -> str:
+    """Collapse a model's prose to a single bounded line.
+
+    `record_decision` writes one line and dedupes with `if line not in lines`, so a
+    multi-line detail never matches itself on the next read and the row's notes grow
+    on every re-crawl. `gatekeeper` learned that the hard way and grew a private
+    copy; this is that function, living in the module whose dedupe depends on it, so
+    a park reason and a decision note cannot disagree about what "one line" means.
+    """
+    return " ".join(str(text or "").split())[:limit]
+
+
 def record_decision(
     project: Project, code: str, what: str, *, by: str = "operator", detail: str = ""
 ) -> None:
@@ -1826,9 +1838,9 @@ def record_decision(
     """
     from tracker.models import utcnow
 
-    line = f"{utcnow().date()} {by} resolved `{code}`: {what}"
+    line = f"{utcnow().date()} {by} resolved `{code}`: {one_line(what)}"
     if detail:
-        line += f" — {detail}"
+        line += f" — {one_line(detail)}"
     lines = [ln for ln in (project.notes or "").splitlines() if ln.strip()]
     if line not in lines:
         lines.append(line)
@@ -2009,6 +2021,7 @@ __all__ = [
     "decide",
     "dedupe",
     "examine",
+    "one_line",
     "parse_contradictions",
     "parse_evidence_findings",
     "record_decision",

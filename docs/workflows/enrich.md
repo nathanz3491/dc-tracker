@@ -119,15 +119,15 @@ Touching any of these means the poster is in scope. Re-render with
 
 | Concern | Where |
 | --- | --- |
-| Options, defaults, target defaulting, lock | `tracker/cli.py` — `enrich` |
+| Options, defaults, target defaulting, lock | `tracker/cli/enrich.py` — `enrich` |
 | Round loop and stop reasons | `tracker/ingest/enrich.py` — `run` |
 | Batch budget, one-time sweep | `tracker/ingest/enrich.py` — `run_many`, `sweep_archives`, `will_harvest` |
 | Row selection order | `tracker/ingest/enrich.py` — `select_projects`, `DEFAULT_TARGET_FIELDS` |
 | Harvesters | `tracker/ingest/enrich.py` — `harvest_queue`, `harvest_retry`, `harvest_archive`, `harvest_search`, `harvest_refresh`, `_derive` |
 | Ignore-list filtering | `tracker/ingest/enrich.py` — `Round.urls`; `tracker/policy.py` |
 | Settle stage | `tracker/ingest/enrich.py` — `_settle`; `tracker/conflicts.py` — `disputes`, `solve`, `apply_outcome` |
-| Agent pass | `tracker/cli.py` — `_gapfill_batch`; `tracker/gapfill.py` |
-| Scoring and reporting | `tracker/ingest/enrich.py` — `report_score`, `EnrichReport`, `BatchReport`; `tracker/cli.py` — `_render_enrich`, `_render_batch` |
+| Agent pass | `tracker/cli/enrich.py` — `_gapfill_batch`; `tracker/gapfill.py` |
+| Scoring and reporting | `tracker/ingest/enrich.py` — `report_score`, `EnrichReport`, `BatchReport`; `tracker/cli/enrich.py` — `_render_enrich`, `_render_batch` |
 
 See also: [sync](sync.md), whose phase 5 is this command with `--enrich-budget` in
 place of `--budget`; and [logic](logic.md), whose `conflicts` command is the settle

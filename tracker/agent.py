@@ -456,10 +456,11 @@ def _read_article(url: str, *, cache_dir: Any = None) -> str:
     import asyncio
     from pathlib import Path
 
-    from tracker.config import get_settings, install_root
+    from tracker.config import cache_dir as config_cache_dir
+    from tracker.config import get_settings
     from tracker.ingest.fetch import HttpxFetcher, cache_path, fetch_with_retry
 
-    root = Path(cache_dir) if cache_dir else install_root() / ".cache" / "articles"
+    root = Path(cache_dir) if cache_dir else config_cache_dir("articles")
     path = cache_path(url, root)
     if path.is_file():
         try:

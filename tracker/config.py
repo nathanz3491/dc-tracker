@@ -8,6 +8,8 @@ operator might paste into a bug report.
 
 from __future__ import annotations
 
+import os
+import sys
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -23,9 +25,9 @@ _ROOT_MARKER = "pyproject.toml"
 def find_project_root(start: Path | None = None) -> Path:
     """Nearest ancestor of the CWD containing pyproject.toml, else the CWD.
 
-    Use this for things that should follow the *user* — where to put a database
-    when none is configured. For things that ship with the code, use
-    :func:`install_root`.
+    A component of :func:`home` rather than something to call directly: what
+    follows the *user* is `home()`, and what ships with the code is found under
+    :func:`package_root`.
     """
     here = (start or Path.cwd()).resolve()
     for candidate in (here, *here.parents):
@@ -34,17 +36,102 @@ def find_project_root(start: Path | None = None) -> Path:
     return here
 
 
-def install_root() -> Path:
-    """The directory containing the `tracker` package.
+def package_root() -> Path:
+    """The `tracker` package directory itself — where the data that SHIPS lives.
 
-    Distinct from :func:`find_project_root` on purpose. Repo assets that ship
-    with the code — `migrations/`, and the article cache — must be found relative
-    to the installed package, not relative to wherever the operator happens to be
-    standing. Once the CLI is on PATH, `tracker init` is routinely run from
-    another directory, and a CWD-relative lookup sends it hunting for a
-    `migrations/` folder in the home directory.
+    Migrations, the seed files, the prompts, the dashboard template and the console's
+    static assets are all inputs the code cannot run without, so they live inside the
+    package and are found relative to this file. That is the whole reason they were
+    moved under `tracker/`: a wheel contains the package and nothing else, so anything
+    anchored a directory above it exists only in a checkout.
     """
-    return Path(__file__).resolve().parent.parent
+    return Path(__file__).resolve().parent
+
+
+def install_root() -> Path:
+    """Deprecated alias for :func:`home`. Kept for one release.
+
+    It used to mean "the directory containing the package", which is the repo root in
+    an editable install and `site-packages/` in a wheel — one name for two unrelated
+    things, and the reason `tracker init` could not run outside a checkout. The two
+    meanings are now :func:`package_root` and :func:`home`.
+    """
+    return home()
+
+
+def _user_data_dir() -> Path:
+    """Where this platform expects an application to keep its own data."""
+    if sys.platform == "win32":
+        base = os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData" / "Local")
+        return Path(base) / "tracker"
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "tracker"
+    base = os.environ.get("XDG_DATA_HOME") or (Path.home() / ".local" / "share")
+    return Path(base) / "tracker"
+
+
+@lru_cache(maxsize=1)
+def home() -> Path:
+    """Where THIS INSTALLATION keeps its data: the database, `.env`, caches, backups.
+
+    Distinct from :func:`package_root`, which is where the code and its shipped inputs
+    live. Conflating the two is what made an installed `tracker` unusable — every
+    command died looking for `migrations/` beside `site-packages/tracker`, and the
+    database landed wherever the operator happened to be standing.
+
+    Four rules, in order, and the second is the one that matters for everybody already
+    running this:
+
+    1. **`TRACKER_HOME`**, when set. The only way to say it outright.
+    2. **The checkout the installed package sits in**, when there is one — an editable
+       install (`pip install -e .`) leaves the package inside the repo, so the parent
+       carrying `pyproject.toml` is the project. This is what every existing developer
+       and the production host have, and it resolves to exactly the directory
+       `install_root()` used to return. Nothing moves for them.
+    3. **The nearest checkout above the current directory**, for a non-editable install
+       used from inside a project — the old `find_project_root()` behaviour, kept
+       because running `tracker` in a checkout should use that checkout's data.
+    4. Otherwise **the platform's user-data directory**, which is what makes
+       `pipx install` and `cd anywhere` work at all.
+
+    Cached: it cannot change while a process runs, and it is consulted per settings
+    read. `home.cache_clear()` in tests.
+    """
+    told = os.environ.get("TRACKER_HOME")
+    if told and told.strip():
+        return Path(told).expanduser().resolve()
+    beside = Path(__file__).resolve().parent.parent
+    if (beside / _ROOT_MARKER).is_file():
+        return beside
+    here = find_project_root()
+    if (here / _ROOT_MARKER).is_file():
+        return here
+    return _user_data_dir()
+
+
+def cache_dir(kind: str = "articles") -> Path:
+    """A cache directory under :func:`home`, created on demand.
+
+    One function rather than twelve copies of `cache_dir("articles")`,
+    and under `home` rather than beside the package: a wheel install would otherwise
+    write fetched articles into `site-packages`, where they are shared by every
+    database on the machine and destroyed by the next `pipx reinstall`.
+    """
+    path = home() / ".cache" / kind
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def seed_path(name: str) -> Path:
+    """A seed file: this installation's copy if it has one, else the packaged default.
+
+    The seed files are inputs a person edits — which operators to chase, which feeds to
+    poll, which publishers to trust — so they ship with sensible defaults and can be
+    overridden per installation without touching the package. `tracker paths` prints
+    which of the two is live for each of them.
+    """
+    override = home() / "seed" / name
+    return override if override.is_file() else package_root() / "seed" / name
 
 
 class Settings(BaseSettings):
@@ -59,7 +146,7 @@ class Settings(BaseSettings):
     # project's file.
     model_config = SettingsConfigDict(
         env_prefix="TRACKER_",
-        env_file=(install_root() / ".env", ".env"),
+        env_file=(home() / ".env", ".env"),
         env_file_encoding="utf-8",
         extra="ignore",
         case_sensitive=False,
@@ -415,9 +502,15 @@ class Settings(BaseSettings):
     merge_by_publication_date: bool = False
 
     def resolve_db(self, override: Path | None = None) -> Path:
-        """Absolute DB path. Precedence: --db > TRACKER_DB > data/tracker.db."""
+        """Absolute DB path. Precedence: --db > TRACKER_DB > `home()`/data/tracker.db.
+
+        Resolved against :func:`home` rather than the current directory. It used to
+        follow the CWD, so an installed `tracker` created a fresh empty database in
+        whatever directory it was run from — or, worse, silently adopted an unrelated
+        project's `data/` because that project had a `pyproject.toml` above it.
+        """
         chosen = override or self.db
-        return chosen if chosen.is_absolute() else (find_project_root() / chosen).resolve()
+        return chosen if chosen.is_absolute() else (home() / chosen).resolve()
 
     def has_api_key(self) -> bool:
         return bool(self.deepseek_api_key and self.deepseek_api_key.get_secret_value().strip())

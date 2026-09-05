@@ -72,7 +72,7 @@ prioritising after would reorder a batch that was already chosen:
    never satisfy — so left to the ordinary ordering it sits behind a permanent
    supply of better candidates and is never read.
 
-Publishers that `seed/sources.toml` ignores are partitioned out and **named**, not
+Publishers that `tracker/seed/sources.toml` ignores are partitioned out and **named**, not
 merely subtracted: the queue still holds those rows and `tracker queue` still lists
 them, so the number has to be attributable.
 
@@ -95,6 +95,14 @@ Extraction and adjudication stay different steps on different model tiers, which
 right; what crosses between them is the evidence, not a conversation. The cold path
 remains for callers with no extraction context and for providers with no multi-turn
 call.
+
+**It is asked the same question as the two pair judges.** `triage.CONTRADICTIONS` is
+one checklist shared verbatim by all three, so the judgement made at ingest and the
+judgement made a week later on the stored rows cannot drift apart; a test pins the
+copies together. It asks what would rule the match out, not whether the rows look
+alike, and it reports what it checked alongside its verdict — that list is written
+into the row's notes with the routing decision. See
+[duplicates](duplicates.md#which-judge).
 
 **It fails open, always.** Unsure, erroring, or short of the 0.9 floor and the row
 is created exactly as it would have been. The worst case is the status quo, which
@@ -182,12 +190,12 @@ Touching any of these means the poster is in scope. Re-render with
 
 | Concern | Where |
 | --- | --- |
-| Phase order, plan numbering, `--full`, the lock | `tracker/cli.py` — `sync`, its `plan` list and `step` |
+| Phase order, plan numbering, `--full`, the lock | `tracker/cli/sync.py` — `sync`, its `plan` list and `step` |
 | Discover, archives, search | `tracker/ingest/discover.py` — `run`, `load_sitemaps`, `sweep_sitemaps`, `queue_candidates`; `tracker/ingest/search.py` |
 | Queue ordering and counts | `tracker/ingest/discover.py` — `pending`, `pending_split`, `pending_risk_count`, `failed`, `failure_summary` |
 | Prospect | `tracker/prospect.py`; `tracker/roster.py` — `hunt_order`, `measure` |
 | Extract and refresh | `tracker/ingest/crawl.py` — `run`, `stale_sources` |
-| Identity arbiter | `tracker/cli.py` — `_identity_arbiter`, `_report_arbiter`; `tracker/gatekeeper.py` — `same_site_arbiter`, `_warm_verdict`, `_cold_verdict`, `_rejection`, `_suspicion`, `RULES`, `MIN_CONFIDENCE`; `tracker/ingest/crawl.py` — `ExtractionContext` |
+| Identity arbiter | `tracker/cli/ingest.py` — `_identity_arbiter`, `_report_arbiter`; `tracker/gatekeeper.py` — `same_site_arbiter`, `_warm_verdict`, `_cold_verdict`, `_rejection`, `_suspicion`, `_verdict_tools`, `RULES`, `MIN_CONFIDENCE`; `tracker/triage.py` — `CONTRADICTIONS`; `tracker/ingest/crawl.py` — `ExtractionContext` |
 | Enrich phase | `tracker/ingest/enrich.py` — `select_projects`, `run_many`; and [enrich](enrich.md) |
 | Settle | `tracker/derive.py` — `run`; `tracker/upsert.py` — `recompute_confidence` |
 | Source ignore list | `tracker/policy.py` — `load`, `partition` |

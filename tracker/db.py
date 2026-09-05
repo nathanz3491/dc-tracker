@@ -23,7 +23,7 @@ from pathlib import Path
 from sqlalchemy import Engine, create_engine, event, text
 from sqlalchemy.orm import Session, sessionmaker
 
-from tracker.config import find_project_root, install_root
+from tracker.config import package_root
 
 log = logging.getLogger(__name__)
 
@@ -64,15 +64,15 @@ class Migration:
 
 
 def migrations_dir() -> Path:
-    """Locate `migrations/`, preferring the copy that ships with the package.
+    """The migrations that ship with the package.
 
-    Package-relative first so `tracker init` works from any directory once the
-    CLI is on PATH; CWD-relative as a fallback for an unusual layout.
+    One answer, not a search. They live at `tracker/migrations/` precisely so this
+    can be a single path: the previous version looked beside the package and then
+    fell back to the current directory, which worked only in a checkout — a wheel
+    carries the package alone, so `site-packages/migrations` never existed and every
+    command died here with "migrations directory not found".
     """
-    beside_package = install_root() / "migrations"
-    if beside_package.is_dir():
-        return beside_package
-    return find_project_root() / "migrations"
+    return package_root() / "migrations"
 
 
 def discover_migrations(directory: Path | None = None) -> list[Migration]:

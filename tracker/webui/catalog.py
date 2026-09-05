@@ -224,6 +224,10 @@ GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "blocks",
             "sources",
             "feeds",
+            # Where this installation keeps its code and its data. A read, and the
+            # first thing to look at when the console and a terminal disagree about
+            # which database they are talking to.
+            "paths",
             # The two reads behind the landing page: what is being watched, and
             # what changed on it.
             "watch",

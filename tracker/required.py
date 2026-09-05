@@ -14,12 +14,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from tracker.config import install_root
+from tracker.config import seed_path
 from tracker.dedup import company_key
 
 
 def default_path() -> Path:
-    return install_root() / "seed" / "required-projects.txt"
+    return seed_path("required-projects.txt")
 
 
 def load(path: Path | None = None) -> list[str]:

@@ -23,6 +23,7 @@ detail behind it.
 | [Architecture](architecture.md) | How the CLI, the database and the console fit together — and why the browser never computes a judgement of its own |
 | [Data quality](data-quality.md) | Numbers that cannot be true, one tranche wearing several names, values that contradict each other, what each stored value rests on, and why crawl order is not publication order |
 | [Design decisions](design-decisions.md) | The reasoning that is not obvious from the code, and where this diverges from the PRD — the evidence gate, provenance per field, confidence, the schema additions, the seed file |
+| [Duplicate shapes](duplicate-shapes.md) | What a duplicate in this database actually is, measured on 37 hand-made merges: one campus under several companies, not one place at two precisions. Read it before improving duplicate detection — it refutes the obvious idea |
 | [Government sources](government-sources.md) | Four routes to bulk permit and docket data, all measured, all rejected, and what to do instead. Read it before going looking; it is a day you do not have to spend |
 
 ## Not documented here

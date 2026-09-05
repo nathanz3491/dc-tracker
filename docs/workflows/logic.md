@@ -209,9 +209,9 @@ Touching any of these means the poster is in scope. Re-render with
 | Drift repair | `tracker/logic.py` — `resolve_drift`; `tracker/upsert.py` — `recompute_from_sources` |
 | Contested fields, the two calls, the write | `tracker/conflicts.py` — `disputes`, `solve`, `_challenge`, `supersede`, `apply_outcome`, `MAX_CALLS_PER_FIELD`, `MIN_CONFIDENCE`, `SUPERSEDED`, `MISREAD` |
 | The agent path | `tracker/triage.py` — `triage`, `apply_rule_out`, `rule_out_tool`, `leave_alone_tool`, `RULEABLE_FIELDS`, `SYSTEM` |
-| The fixed menu and the keyboard walk | `tracker/logic.py` — `decide`, `TRIAGE_MIN_CONFIDENCE`; `tracker/cli.py` — `_triage_by_agent`, `_triage_by_model`, `_triage` |
+| The fixed menu and the keyboard walk | `tracker/logic.py` — `decide`, `TRIAGE_MIN_CONFIDENCE`; `tracker/cli/logic.py` — `_triage_by_agent`, `_triage_by_model`, `_triage` |
 | Settled-finding bookkeeping | `tracker/audit.py` — `settled_codes`, `free_answer` |
-| CLI | `tracker/cli.py` — `logic_check`, `logic_conflicts`, `logic_resolve` |
+| CLI | `tracker/cli/logic.py` — `logic_check`, `logic_conflicts`, `logic_resolve` |
 
 See also: [enrich](enrich.md), whose settle stage is `logic conflicts` with
 `--apply` already implied and run automatically after every harvest.

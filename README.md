@@ -15,14 +15,14 @@ Three ingest paths converge on one normalizer and one write path:
 
 | Path | Command | What it is good for |
 |---|---|---|
-| Hand-curated JSON | `tracker ingest manual --json seed/sample-projects.json` | Projects you know about that no feed carries |
+| Hand-curated JSON | `tracker ingest manual --json sample-projects.json` | Projects you know about that no feed carries |
 | ISO queue export | `tracker ingest pjm --csv FILE --iso pjm` | Candidate generation and corroborating citations — **not** a project feed ([why](docs/design-decisions.md)) |
 | News extraction | `tracker ingest crawl --urls urls.txt` | The 12 tracked fields, pulled from articles by an LLM and gated on quoted evidence |
 | SEC filings | `tracker ingest edgar` | Investment, in-service dates and named tenants, from the one publisher that cannot refuse us |
 
 Articles to extract from come from `tracker discover`, which polls news feeds and
 queues candidates for triage — and from `tracker prospect`, which starts from the
-opposite end: `seed/operators.toml` names the operators this database is supposed
+opposite end: `tracker/seed/operators.toml` names the operators this database is supposed
 to know about, `tracker coverage` says which of them have no rows, and `prospect`
 goes and looks for those specifically.
 
@@ -73,7 +73,7 @@ citations that support each of them.
 
 ```bash
 tracker init
-tracker ingest manual --json seed/sample-projects.json --allow-placeholders
+tracker ingest manual --json sample-projects.json --allow-placeholders
 tracker list
 ```
 
@@ -88,7 +88,7 @@ tracker list
 +----+-----------+------------------+--------------------+--------------+----+------------+------+-----+
 ```
 
-The MW and investment columns are empty because `seed/sample-projects.json` ships
+The MW and investment columns are empty because `tracker/seed/sample-projects.json` ships
 with every figure as the literal string `PLACEHOLDER`. That is deliberate — see
 [The seed file](docs/design-decisions.md#the-seed-file). The confidence column is
 `0` for the same reason: a placeholder URL is not a citation, so it earns nothing,
@@ -222,7 +222,7 @@ different claim than the evidence supports.
 **Coverage is a question the sources cannot answer.** Discovery finds what was
 published, so an operator nobody wrote about last month is indistinguishable from
 one that does not exist. Measured here: 300 projects, 102 company spellings, and no
-Nebius row at all. `seed/operators.toml` is the checked-in opinion about who ought
+Nebius row at all. `tracker/seed/operators.toml` is the checked-in opinion about who ought
 to be here, and it is the only thing in the system capable of noticing an absence.
 
 ## Documentation
@@ -246,6 +246,29 @@ This file is the tour. The detail lives in [`docs/`](docs/README.md):
 ## Install
 
 Requires Python 3.11+. Developed and tested on 3.13.2 on Windows 11.
+
+**To use it**, from anywhere — the migrations, the seed files and the prompts all
+ship inside the package, so there is nothing to be standing next to:
+
+```bash
+pipx install "git+<this repository>"
+tracker init
+tracker paths          # where it put the database, and why there
+```
+
+Data goes in a home directory this installation owns: the checkout, if the package
+was installed from one, and otherwise the platform's user-data directory
+(`%LOCALAPPDATA%\tracker`, `~/.local/share/tracker`, `~/Library/Application
+Support/tracker`). `TRACKER_HOME` overrides it, and two homes are two databases:
+
+```bash
+TRACKER_HOME=~/dc-data tracker list
+```
+
+**To work on it**, an editable install, which is what the production host runs. The
+package then sits inside the checkout, so `tracker paths` reports that checkout as
+home and the database is the one already in `data/` — unchanged from before this was
+a package.
 
 PowerShell:
 
@@ -326,7 +349,7 @@ relative to the current directory and create a stray empty database instead of
 showing your data. An exported `TRACKER_DB` wins over that default, and `--db`
 wins over both.
 
-Assets that ship with the code (`migrations/`, the prompt files, the article
+Assets that ship with the code (`tracker/migrations/`, the prompt files, the article
 cache) are located relative to the installed package rather than the current
 directory, which is what lets `tracker init` work from anywhere.
 
@@ -366,7 +389,7 @@ Both modules sit above 90%. Lint and format:
   writes about it again. `tracker prospect` and `--deep` reach back for it;
   otherwise backfilling older projects needs hand-supplied URLs or the ISO queue
   path.
-- **The roster is hand-written, so it goes stale by itself.** `seed/operators.toml`
+- **The roster is hand-written, so it goes stale by itself.** `tracker/seed/operators.toml`
   covers the operators known when it was written; a company founded next quarter is
   absent until somebody adds it. `tracker coverage` prints the reverse gap —
   companies in the database that no entry claims — which is the mechanism for

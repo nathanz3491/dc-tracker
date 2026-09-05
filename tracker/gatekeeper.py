@@ -41,6 +41,11 @@ from typing import Any
 
 log = logging.getLogger(__name__)
 
+#: Imported rather than restated. `triage` is stdlib-only at module level and never
+#: imports this module, so there is no cycle and no import weight — and the pair
+#: judges and the arbiter cannot end up asking different questions.
+from tracker.triage import CONTRADICTIONS as _CONTRADICTIONS  # noqa: E402
+
 #: Below this a route is refused and the row inserts. Deliberately higher than the
 #: 0.85 a *merge* of two stored rows needs: a merge is reviewed against two full
 #: rows of citations, while this is decided from one arriving article.
@@ -68,7 +73,11 @@ How to work:
 #: different-company branch of `upsert._find_duplicate_candidate` is exactly the
 #: builder/landlord/occupier case, and a path that lost this warning would route
 #: three legitimate rows into one.
-RULES = """One real campus routinely has a builder, a landlord and an occupier, and each name
+#: The judgement put to the arbiter, ending in the checklist
+#: `tracker.triage.CONTRADICTIONS` — the same words the two pair judges are given, so
+#: one question is asked at the three moments it can be asked rather than three that
+#: drift. A test pins the three copies together.
+RULES = f"""One real campus routinely has a builder, a landlord and an occupier, and each name
 makes its own legitimate row. Two rows are the same site only when they are the same
 PHYSICAL PLACE — the same address, parcel, substation or building count.
 
@@ -79,11 +88,14 @@ than assuming it from the names.
 `unsure` is a good answer and costs almost nothing: the row is created and the pair
 is reported for review, which is what happens today anyway. Saying `same_site`
 wrongly puts two different campuses in one row and cannot be undone. When the
-article does not settle it, say `unsure`."""
+article does not settle it, say `unsure`.
 
-#: Byte-identical to what the cold path has always sent. `agent.run` re-sends the
-#: system message on every turn, so a change here moves a cache prefix.
-SYSTEM = f"{_COLD_INTRO}\n\n{RULES}"
+{_CONTRADICTIONS}"""
+
+#: `agent.run` re-sends the system message on every turn, so an edit here moves the
+#: provider's cache prefix once. That cost was paid deliberately when the
+#: contradiction checklist was adopted; see `tracker.triage.CONTRADICTIONS`.
+SYSTEM = _COLD_INTRO + "\n\n" + RULES
 
 #: The warm path has no tool loop and nothing to fetch: the article, the proposal
 #: and the stored row are all in the one message it gets. It must therefore not
@@ -99,7 +111,7 @@ The database's suspicion is a suspicion, not a finding. Saying it is wrong is a
 useful answer and costs nothing."""
 
 #: Same judgement, same words, different preamble.
-SYSTEM_WARM = f"{_WARM_INTRO}\n\n{RULES}"
+SYSTEM_WARM = _WARM_INTRO + "\n\n" + RULES
 
 
 @dataclass
@@ -138,6 +150,17 @@ def _verdict_tools(candidate_id: int) -> list[Any]:
     from tracker.agent import Tool
 
     confidence = {"type": "number", "description": "0 to 1."}
+    #: Optional, exactly as on the pair judges: the rails decide what may happen, this
+    #: only records the account. See `triage.pair_verdict_tools`.
+    contradictions = {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": (
+            "What you checked for and what you found, one short phrase each — either a "
+            "contradiction ('article names Loudoun, the row is Prince William') or the "
+            "check coming back clean ('checked addresses — neither names one')."
+        ),
+    }
     return [
         Tool(
             name="same_site",
@@ -158,6 +181,7 @@ def _verdict_tools(candidate_id: int) -> list[Any]:
                         ),
                     },
                     "confidence": confidence,
+                    "contradictions": contradictions,
                 },
                 "required": ["reason", "confidence"],
             },
@@ -168,7 +192,11 @@ def _verdict_tools(candidate_id: int) -> list[Any]:
             description="A different campus. A new row is created, as it would be anyway.",
             parameters={
                 "type": "object",
-                "properties": {"reason": {"type": "string"}, "confidence": confidence},
+                "properties": {
+                    "reason": {"type": "string"},
+                    "confidence": confidence,
+                    "contradictions": contradictions,
+                },
                 "required": ["reason", "confidence"],
             },
             terminal=True,
@@ -189,6 +217,16 @@ def _verdict_tools(candidate_id: int) -> list[Any]:
     ]
 
 
+def _checked(answer: dict[str, Any]) -> list[str]:
+    """The `contradictions` the arbiter reported. Same tolerance as the pair judges."""
+    raw = answer.get("contradictions") or []
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, list):
+        return []
+    return [" ".join(str(item).split())[:120] for item in raw if str(item).strip()][:6]
+
+
 def _incoming_urls(record: Any) -> list[str]:
     return [s.url for s in (getattr(record, "sources", None) or ()) if getattr(s, "url", None)]
 
@@ -197,8 +235,9 @@ def _incoming_urls(record: Any) -> list[str]:
 #: and dedupes with `if line not in lines`, so a multi-line reason never matches
 #: itself on the next read and the row's notes grow on every re-crawl.
 def _one_line(text: str, limit: int = 400) -> str:
-    flat = " ".join(str(text or "").split())
-    return flat[:limit]
+    from tracker.logic import one_line
+
+    return one_line(text, limit)
 
 
 def _where(payload: dict[str, Any]) -> str:
@@ -528,12 +567,16 @@ def same_site_arbiter(
         # indistinguishable later from the row having always been this way.
         from tracker.logic import record_decision
 
+        checked = _checked(answer)
+        told = str(decision["note"])
+        if checked:
+            told += f" — checked: {'; '.join(checked)}"
         record_decision(
             candidate,
             "identity",
             f"routed an arriving record (`{key}`) here instead of creating a row",
             by=f"agent ({confidence:.2f})",
-            detail=_one_line(decision["note"]),
+            detail=_one_line(told),
         )
         return finish(candidate.id)
 

@@ -67,7 +67,7 @@ drawn as absence.
 
 The list is read out of the live Typer app through `webui.catalog` — which now
 serves only this pane, the console's palette having been deleted with the rest of
-its runner — so a command added to `cli.py` appears here on the next start with
+its runner — so a command added to the `tracker/cli` package appears here on the next start with
 its real flags, types, defaults, choices and help.
 Nothing in `tracker/tui/` holds a list of commands that could fall behind, and
 `tests/test_tui.py` asserts the pane offers exactly what the catalog does.

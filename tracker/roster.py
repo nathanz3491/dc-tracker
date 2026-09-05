@@ -36,7 +36,7 @@ from typing import Any, Final
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from tracker.config import install_root
+from tracker.config import seed_path
 from tracker.dedup import company_key
 from tracker.models import Project
 
@@ -150,7 +150,7 @@ class Operator:
 
 
 def default_path() -> Path:
-    return install_root() / "seed" / "operators.toml"
+    return seed_path("operators.toml")
 
 
 def load(path: Path | None = None) -> list[Operator]:

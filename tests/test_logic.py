@@ -1474,3 +1474,36 @@ def test_an_unquoted_obstacle_says_so_in_the_evidence(session):
     )
     text = "\n".join(logic._subject_evidence(project, finding))
     assert "NOT QUOTED (no_quote)" in text
+
+
+def test_a_multi_line_detail_does_not_grow_the_notes(session):
+    """`record_decision` dedupes on the exact line, so a detail carrying a newline
+    never matches itself and the row's notes grow on every re-crawl. `gatekeeper`
+    found that and grew a private flattener; `one_line` is that function, here.
+    """
+    from tracker import logic as logic_mod
+    from tracker.models import Project
+
+    project = Project(
+        name="Campus",
+        company="Someone",
+        city="Abilene",
+        state="TX",
+        dedup_key="someone|city:abilene|TX",
+        phase="construction",
+    )
+    session.add(project)
+    session.flush()
+
+    for _ in range(3):
+        logic_mod.record_decision(
+            project,
+            "duplicate",
+            "folded #9 into this row",
+            by="agent (0.91)",
+            detail="two addresses\nand two substations",
+        )
+
+    lines = [ln for ln in (project.notes or "").splitlines() if ln.strip()]
+    assert len(lines) == 1, lines
+    assert "and two substations" in lines[0]

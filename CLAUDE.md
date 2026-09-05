@@ -124,6 +124,14 @@ went. These are the agreed exceptions:
 Everything else lives under `~/dev/tracker/` — `repo/` (the checkout), `ops/`
 (the deployer and its logs), `backups/`.
 
+**Where the tool itself thinks its data lives** is `tracker paths`, and on the host
+the answer is unchanged: the deployer installs editable inside `repo/`, so the
+package sits in the checkout and that checkout is `home()` — the same directory the
+old `install_root()` returned, holding the same `data/tracker.db` and the same
+`.env`. `TRACKER_HOME` can move it and is not set there. Run `ssh $PROD 'tracker
+paths'` after deploying anything that touches path resolution; it is one command and
+it answers the question directly.
+
 `ops/` sits beside the checkout, not inside it, so a bad commit cannot replace
 the deployer that would deploy the fix.
 

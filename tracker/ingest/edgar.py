@@ -45,7 +45,7 @@ from typing import Any
 
 import httpx
 
-from tracker.config import Settings, get_settings, install_root
+from tracker.config import Settings, get_settings, seed_path
 from tracker.ingest.crawl import _DATE_EXPR, _MONEY_EXPR, _MW_EXPR
 from tracker.ingest.fetch import cache_path, html_to_text
 
@@ -125,7 +125,7 @@ class Filing:
 
 
 def default_companies_path() -> Path:
-    return install_root() / "seed" / "edgar-companies.toml"
+    return seed_path("edgar-companies.toml")
 
 
 def load_companies(path: Path | None = None) -> tuple[list[Company], list[str], list[str]]:

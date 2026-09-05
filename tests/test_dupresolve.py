@@ -770,3 +770,46 @@ def test_a_market_sequence_beside_a_named_tranche_still_merges(session):
     got = dupresolve.resolve_one(session, found[0], extractor=model, allow_merge=True)
 
     assert got.action == "merged"
+
+
+# --- what the one-call judge checked ---------------------------------------------
+
+
+def test_the_one_call_judge_records_what_it_ruled_out(session):
+    _a, _b, pair = _tranche_pair(session)
+    reply = json.dumps(
+        {
+            "verdict": "different",
+            "confidence": 0.9,
+            "reason": "two separate developments",
+            "contradictions": ["checked substations - none named", "two addresses"],
+        }
+    )
+
+    got = dupresolve.resolve_one(session, pair, extractor=_Model(reply))
+
+    assert got.action == "parked", got.detail
+    assert got.judgement.contradictions == (
+        "checked substations - none named",
+        "two addresses",
+    )
+    assert "ruled out:" in pairs.listing(session)[0].reason
+
+
+def test_the_one_call_judge_may_omit_what_it_checked(session):
+    """Optional, and its absence is not a refusal."""
+    _a, _b, pair = _tranche_pair(session)
+
+    got = dupresolve.resolve_one(session, pair, extractor=_Model(says("different")))
+
+    assert got.action == "parked", got.detail
+    assert got.judgement.contradictions == ()
+
+
+def test_v3_is_what_the_one_call_judge_loads(session):
+    """v2 is kept for the A/B and must not be what a run reaches for."""
+    import inspect
+
+    assert inspect.signature(dupresolve.ask_model).parameters["prompt_name"].default == (
+        "duplicates-resolve-v3"
+    )

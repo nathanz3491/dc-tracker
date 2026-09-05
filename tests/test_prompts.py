@@ -108,3 +108,31 @@ def test_the_context_forbids_itself_as_a_source_of_values():
     system = load_prompt("extract-v1").system
     assert "It is not a source of values." in system
     assert "THE DOCUMENT WINS" in system
+
+
+def test_one_question_is_asked_at_all_three_moments():
+    """The same pair question is put by the agent judge, the one-call judge and the
+    ingest-time arbiter. Three copies of a prompt are three prompts, and they drift:
+    that is how v1's "answer unclear on granularity" outlived the change that made
+    granularity answerable. `triage.CONTRADICTIONS` is the single copy.
+    """
+    from tracker import gatekeeper, triage
+
+    checklist = triage.CONTRADICTIONS
+    assert checklist in triage.PAIR_SYSTEM, "the agent judge"
+    assert checklist in gatekeeper.RULES, "the ingest-time arbiter"
+    assert checklist in gatekeeper.SYSTEM and checklist in gatekeeper.SYSTEM_WARM
+    assert checklist in load_prompt("duplicates-resolve-v3").system, "the one-call judge"
+
+
+def test_the_superseded_pair_prompt_is_kept_and_is_not_the_default():
+    """v2 stays so the two can be run against each other on the same pairs. It must
+    not be what a run reaches for."""
+    import inspect
+
+    from tracker import dupresolve
+
+    assert load_prompt("duplicates-resolve-v2").system, "v2 must still load"
+    assert "duplicates-resolve-v2" not in load_prompt("duplicates-resolve-v3").system
+    default = inspect.signature(dupresolve.ask_model).parameters["prompt_name"].default
+    assert default == "duplicates-resolve-v3"

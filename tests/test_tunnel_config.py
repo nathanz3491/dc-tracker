@@ -20,7 +20,10 @@ runner = CliRunner()
 def configured(monkeypatch):
     """A machine with a named tunnel set up, as `.env` would supply it."""
     settings = Settings(tunnel_name="dc-console", tunnel_hostname="console.example")
-    for module in ("tracker.cli", "tracker.config"):
+    # `tracker.cli.serve` binds `get_settings` at import, so patching the definition in
+    # `tracker.config` alone leaves it holding the real one. Both are named, and
+    # `raising=False` keeps this working if the command moves modules again.
+    for module in ("tracker.cli.serve", "tracker.config"):
         monkeypatch.setattr(f"{module}.get_settings", lambda: settings, raising=False)
     return settings
 
@@ -32,7 +35,7 @@ def _plan(monkeypatch) -> dict:
     def fake_run_console(**kwargs):
         seen.update(kwargs)
 
-    monkeypatch.setattr("tracker.cli._run_console", fake_run_console)
+    monkeypatch.setattr("tracker.cli.serve._run_console", fake_run_console)
     monkeypatch.setattr("tracker.webui.tunnel.find_cloudflared", lambda: "cloudflared")
     return seen
 
@@ -86,7 +89,7 @@ def test_flags_override_both(configured, monkeypatch):
 def test_with_nothing_configured_it_is_still_a_quick_tunnel(monkeypatch):
     """The behaviour every checkout without a domain keeps."""
     settings = Settings()
-    monkeypatch.setattr("tracker.cli.get_settings", lambda: settings)
+    monkeypatch.setattr("tracker.cli.serve.get_settings", lambda: settings)
     seen = _plan(monkeypatch)
     assert runner.invoke(app, ["cloudflare"]).exit_code == 0
     assert seen["publish"] == "quick"
@@ -96,7 +99,7 @@ def test_with_nothing_configured_it_is_still_a_quick_tunnel(monkeypatch):
 def test_a_hostname_without_a_tunnel_name_is_refused(monkeypatch):
     """Half-configured is a mistake worth naming rather than quietly ignoring."""
     settings = Settings(tunnel_hostname="console.example")
-    monkeypatch.setattr("tracker.cli.get_settings", lambda: settings)
+    monkeypatch.setattr("tracker.cli.serve.get_settings", lambda: settings)
     _plan(monkeypatch)
     result = runner.invoke(app, ["cloudflare"])
     assert result.exit_code != 0

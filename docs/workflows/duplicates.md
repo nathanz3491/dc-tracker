@@ -90,6 +90,28 @@ on a person to open two rows and read their citations.
 
 ### Which judge
 
+All three ask **one question, in one wording**. `triage.CONTRADICTIONS` is the
+checklist, and the agent judge, the one-call prompt file and
+[`sync`'s identity arbiter](sync.md#the-identity-arbiter) all end in it; a test pins
+the three copies together. It asks what would rule the match *out* rather than
+whether the rows look alike, and permits `same` only when that search came back empty
+and one tie can be quoted. Two data centre rows in one town always look alike, so
+resemblance was never the question.
+
+That framing is borrowed rather than invented — OpenSanctions Pairs (arXiv
+2603.11051) measured it over 755,540 labelled pairs, taking an open 14B model from a
+91.3% rule baseline to 98.2% F1. It is worth changing *here* because of what
+`scripts/eval_pairs.py` found: of the pairs a judge has ruled `different` on the live
+database, **six of seven have no rail that refuses them**. On that population the
+rails contribute nothing and the wording of the question is the whole decision. See
+[duplicate shapes](../duplicate-shapes.md).
+
+Each judge also reports **what it checked** — `contradictions`, a short phrase per
+check, either something it found or a check that came back clean. It is optional and
+its absence changes no verdict, because the rails decide what may happen and this
+only records the account. It travels into the park reason, so `duplicates parked`
+answers "what was already ruled out" instead of only "different sites".
+
 | Flag | Judge | Recorded as |
 | --- | --- | --- |
 | `--agent` (default) | reads both rows' articles, searches if it must, then rules | `agent (0.91)` |
@@ -105,14 +127,23 @@ saying that nothing can decide.
 
 * **different** parks the pair, with the evidence classes travelling in the reason.
   Reversible by `unpark`, and it is the useful half: it puts a real campus's
-  capacity back into the buyer table.
+  capacity back into the buyer table. Both judges refuse a park under
+  `MIN_CONFIDENCE` (0.6): releasing capacity into a published total on an answer
+  the model itself rates a coin toss is not caution, and the agent path used to do
+  exactly that.
 * **same** merges, but only with `--merge` and only past every rail below.
 * **unclear** leaves the pair in the report, which is a real answer.
 
 ### What `--merge` still refuses
 
 Every branch is a rule stated elsewhere in the codebase, restated as a refusal the
-run prints per pair. The poster lists all seven; the two worth expanding:
+run prints per pair. The poster lists all seven. **They are one function for both
+judges** — `dupresolve.evidence_blocks_merge` — with a single flag for the one rail
+the agent may pass. It was two hand-written copies until the agent's copy was found
+to keep two of six: its docstring promised the market-sequence refusal and the code
+never checked it, and with `--weak` a pair raised by nothing but a shared name word
+could be folded. A rail is a fact about the pair, not about the judge, and two
+copies of a fact are free to disagree. The two worth expanding:
 
 * **A cross-granularity key match alone.** `dedup.py`'s founding invariant: a
   county-level row and a city-level row are never merged automatically, because no
@@ -120,7 +151,10 @@ run prints per pair. The poster lists all seven; the two worth expanding:
   are one project. The **agent path drops this one**, and that is deliberate — a
   model shown two rows and nothing else is not a person with a map, but one that can
   read the articles and search can be, and 28 of 47 live groups are exactly this
-  shape, with the model already reasoning containment unprompted.
+  shape, with the model already reasoning containment unprompted. A market-sequence
+  key beside the granularity match does not take that permission away: the key is
+  struck from the hard evidence first, whoever is judging, and what is left is then
+  weighed.
 * **Ordinal siblings.** `Polaris Forge 1` in Ellendale and `Polaris Forge 2` in
   Harwood both hold `forge-2.polaris`, because one article listed the pair. Two real
   campuses, every signal in agreement, one digit between them.
@@ -174,8 +208,11 @@ Touching any of these means the poster is in scope. Re-render with
 | Grouping and the MW figure | `tracker/capex.py` — `duplicate_groups`, `double_counted_mw` |
 | Key comparison primitives | `tracker/dedup.py` — `all_keys`, `is_cross_granularity_match`, `is_market_sequence`, `sibling_ordinals`, `exact_identity`, `shared_parties_across_companies` |
 | Parking | `tracker/pairs.py` — `park`, `unpark`, `listing`, `parked_keys`, `canonical` |
-| The one-call path and its rails | `tracker/dupresolve.py` — `resolve`, `resolve_one`, `merge_blocked`, `survivor`, `ask_model`, `MERGE_CONFIDENCE`, `FAR_APART_KM` |
-| The agent path | `tracker/triage.py` — `resolve_pairs`, `pair_triage`, `pair_verdict_tools`, `PAIR_SYSTEM` |
+| The rails, shared by both judges | `tracker/dupresolve.py` — `evidence_blocks_merge`, `merge_blocked`, `MIN_CONFIDENCE`, `MERGE_CONFIDENCE`, `FAR_APART_KM` |
+| The one-call path | `tracker/dupresolve.py` — `resolve`, `resolve_one`, `survivor`, `ask_model`, `pair_label`, `_checked` |
+| Scoring a change to any of it | `scripts/eval_pairs.py`; `docs/duplicate-shapes.md` |
+| The question all three judges are asked | `tracker/triage.py` — `CONTRADICTIONS`, `PAIR_SYSTEM`, `PAIR_SYSTEM_BASE`; `tracker/prompts/duplicates-resolve-v3.txt` |
+| The agent path | `tracker/triage.py` — `resolve_pairs`, `pair_triage`, `pair_verdict_tools`, `_checked` |
 | The merge itself | `tracker/merge.py` — `merge_projects` |
 | Prevention at write time | `tracker/gatekeeper.py` — `same_site_arbiter`, `_warm_verdict`, `_cold_verdict`, `_rejection`, `RULES`; `tracker/ingest/crawl.py` — `ExtractionContext` |
-| CLI, printers, keyboard prompt | `tracker/cli.py` — `duplicates`, `duplicates_park`, `duplicates_unpark`, `duplicates_resolve`, `duplicates_parked`, `_print_parked`, `_dupe_prompt` |
+| CLI, printers, keyboard prompt | `tracker/cli/duplicates.py` — `merge`, `duplicates`, `duplicates_park`, `duplicates_unpark`, `duplicates_resolve`, `duplicates_parked`, `_print_parked`, `_dupe_prompt` |

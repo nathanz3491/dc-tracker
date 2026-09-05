@@ -36,7 +36,7 @@ from urllib.parse import urlsplit
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from tracker.config import Settings, get_settings, install_root
+from tracker.config import Settings, get_settings, seed_path
 from tracker.ingest.fetch import (
     MIN_USEFUL_CHARS,
     Fetcher,
@@ -209,7 +209,7 @@ class DiscoverReport:
 
 
 def default_feeds_path() -> Path:
-    return install_root() / "seed" / "feeds.toml"
+    return seed_path("feeds.toml")
 
 
 def load_config(path: Path | None = None) -> tuple[list[FeedSpec], FilterSpec]:

@@ -161,9 +161,9 @@ def article_for(source: Source | None, *, cache_dir: Path | None = None) -> str:
     if source is None:
         return ""
     if cache_dir is None:
-        from tracker.config import install_root
+        from tracker.config import cache_dir
 
-        cache_dir = install_root() / ".cache" / "articles"
+        cache_dir = cache_dir("articles")
     from tracker.ingest.fetch import cache_path
 
     path = cache_path(source.url, Path(cache_dir))

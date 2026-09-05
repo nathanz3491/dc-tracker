@@ -760,9 +760,9 @@ _HTML_DATA_TOKEN = "__DATA__"
 
 def template_path() -> Path:
     """The dashboard template, resolved next to the installed package."""
-    from tracker.config import install_root
+    from tracker.config import package_root
 
-    return install_root() / "tracker" / "templates" / "dashboard.html"
+    return package_root() / "templates" / "dashboard.html"
 
 
 def render_html(projects: Sequence[Project], *, generated_at: str | None = None) -> str:

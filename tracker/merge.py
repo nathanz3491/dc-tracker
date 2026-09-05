@@ -69,12 +69,19 @@ class MergeResult:
         ]
 
 
-def merge_projects(session: Session, keep_id: int, dupe_ids: list[int]) -> MergeResult:
+def merge_projects(
+    session: Session, keep_id: int, dupe_ids: list[int], *, by: str = "operator"
+) -> MergeResult:
     """Fold `dupe_ids` into `keep_id`. Returns what moved.
 
     Ordering matters and is not arbitrary: sources move first so that events and
     obstacles can be repointed at the citation they came from, and the field
     recompute runs last so it sees the complete set.
+
+    `by` names who decided, in `logic.record_decision`'s vocabulary — "operator",
+    "model (0.87)", "agent (0.91)" — and reaches the `project_alias` rows this
+    writes. It defaults to "operator" because the command of that name is a person
+    typing two ids; the two automated callers pass what they already print.
     """
     keep = session.get(Project, keep_id)
     if keep is None:
@@ -138,8 +145,11 @@ def merge_projects(session: Session, keep_id: int, dupe_ids: list[int]) -> Merge
         for alias in session.scalars(
             select(ProjectAlias).where(ProjectAlias.to_project_id == dupe.id)
         ).all():
+            # Target only. `decided_by` stays with whoever judged *that* key: this
+            # is a chain being flattened, not a fresh opinion about the folded
+            # identity. See `_record_alias`, where a re-recorded key is different.
             alias.to_project_id = keep.id
-        result.aliases_recorded += _record_alias(session, dupe.dedup_key, keep)
+        result.aliases_recorded += _record_alias(session, dupe.dedup_key, keep, by=by)
 
         # Read the decision history off before the row goes. Sources, events,
         # risks and the identity are all carried across; the record of what a
@@ -171,20 +181,35 @@ def _repoint(session: Session, old_source_id: int, new_source_id: int) -> None:
             row.source_id = new_source_id
 
 
-def _record_alias(session: Session, from_key: str | None, keep: Project) -> int:
+def _record_alias(session: Session, from_key: str | None, keep: Project, *, by: str) -> int:
     """Remember that a folded identity belongs to the survivor. Returns rows written.
 
     An existing alias for the key is retargeted rather than duplicated — the
     latest human decision wins. A key equal to the survivor's own is not
     recorded: the exact-key lookup already answers it.
+
+    **`decided_by` was never written**, so every alias took the column's server
+    default and an agent's merge was recorded as `operator` — while the survivor's
+    own notes said `agent (0.91)` about the same fold. The two halves of one
+    decision disagreed about who made it, and `project_alias` is the half a
+    regression set reads, because it is the only trace of the folded row that
+    survives its deletion.
+
+    The retarget *here* takes the new decider, because it is a new judgement: the
+    key was folded once, a row was re-created under it, and somebody has now folded
+    it somewhere else. The chain-flattening in `merge_projects` is the opposite and
+    deliberately leaves `decided_by` alone — repointing `oracle -> first` at `final`
+    because `first` was folded is bookkeeping that follows a judgement rather than
+    making one, and whoever decided `oracle` was `first` still decided it.
     """
     if not from_key or from_key == keep.dedup_key:
         return 0
     existing = session.scalar(select(ProjectAlias).where(ProjectAlias.from_dedup_key == from_key))
     if existing is not None:
         existing.to_project_id = keep.id
+        existing.decided_by = by
         return 1
-    session.add(ProjectAlias(from_dedup_key=from_key, to_project_id=keep.id))
+    session.add(ProjectAlias(from_dedup_key=from_key, to_project_id=keep.id, decided_by=by))
     return 1
 
 

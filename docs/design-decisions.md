@@ -635,18 +635,18 @@ clone" and gitignoring `data/tracker.db`. Resolved in favour of treating the
 database as a **build artifact**: it is binary, it rewrites on every command, it
 spawns `-wal`/`-shm` siblings, and it produces unresolvable merge conflicts.
 
-The *inputs* are version-controlled instead — `seed/*.json` and `data/raw/*.csv`,
+The *inputs* are version-controlled instead — `tracker/seed/*.json` and `data/raw/*.csv`,
 which is the literal evidence — and reproducibility is a documented replay:
 
 ```bash
 tracker init
-tracker ingest manual --json seed/sample-projects.json
+tracker ingest manual --json sample-projects.json
 tracker ingest pjm --csv data/raw/pjm_2025q3.csv --iso pjm
 ```
 
 ## Other decisions worth recording
 
-- **SQL is authoritative at runtime.** `migrations/*.sql` is what `init` applies;
+- **SQL is authoritative at runtime.** `tracker/migrations/*.sql` is what `init` applies;
   `models.py` mirrors it for typed queries. `test_models_match_migrations`
   compares column types, defaults, indexes, foreign keys and CHECK constraint
   names, and fails the build on any drift. That test is what makes defining the
@@ -711,7 +711,7 @@ CoreWeave had no row under its own name either, appearing only as a tenant insid
 two Core Scientific projects. Both were invisible to `gaps`, `verify` and `stats`,
 because all three measure the rows that exist.
 
-`seed/operators.toml` is the expectation, written down. It is deliberately:
+`tracker/seed/operators.toml` is the expectation, written down. It is deliberately:
 
 - **hand-written and checked in**, not generated. A model asked each run which
   operators exist would answer differently each time, and nothing would tell you
@@ -781,7 +781,7 @@ campus wastes one prospecting round rather than being silently right.
 
 ## The seed file
 
-`seed/sample-projects.json` names three real, widely-reported projects —
+`tracker/seed/sample-projects.json` names three real, widely-reported projects —
 Microsoft Fairwater (Mount Pleasant, WI), xAI Colossus (Memphis, TN) and Stargate
 Abilene (Abilene, TX, where the operator is Crusoe and the customer is OpenAI).
 The three were chosen because each exercises something: the first is the PRD's own
@@ -795,7 +795,7 @@ file until they are replaced; `--allow-placeholders` ingests it for a smoke test
 storing each placeholder as NULL. A seed file that quietly became fabricated data
 is the exact failure this system exists to prevent, so it ships unfilled.
 
-`seed/required-projects.txt` ships empty for the same reason. The PRD's definition
+`tracker/seed/required-projects.txt` ships empty for the same reason. The PRD's definition
 of done names 30 specific projects, but that list is not in the PRD text and is
 not on disk. `tracker verify` reports progress against a target count today, and
 gives a present/missing breakdown the moment the real list is pasted in.

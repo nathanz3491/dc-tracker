@@ -29,7 +29,7 @@ database, so attribution is three rules in order:
    how much is being built for nobody we can name is itself worth knowing.
 
 Who counts as an end user comes from the `kind` column in
-[seed/edgar-companies.toml](../seed/edgar-companies.toml), plus a short list of
+[tracker/seed/edgar-companies.toml](../tracker/seed/edgar-companies.toml), plus a short list of
 private companies that file nothing with the SEC — without which OpenAI and xAI,
 two of the largest positions in the table, would have been invisible. Only
 `hyperscaler` and `neocloud` count; a utility connects capacity and a contractor

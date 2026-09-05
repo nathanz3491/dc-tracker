@@ -5,7 +5,7 @@ constraints from these tuples and `migrations/*.sql` spells the same values out
 literally; `tests/test_db.py` asserts the two agree, so adding a value here
 without migrating is caught by the drift test rather than at runtime.
 
-Kept import-free on purpose — normalize.py, models.py and cli.py all depend on
+Kept import-free on purpose — normalize.py, models.py and the cli package all depend on
 this module, so it must not depend on any of them.
 """
 

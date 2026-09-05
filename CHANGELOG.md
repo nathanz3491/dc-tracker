@@ -12,6 +12,52 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **A merge recorded the wrong decider on the identity it folded away**
+  (`tracker/merge.py`, `tracker/dupresolve.py`, `tracker/triage.py`,
+  `tests/test_merge.py`).
+
+  `_record_alias` never wrote `decided_by`, so every `project_alias` row took the
+  column's server default and an agent's merge was filed as `operator` — while the
+  survivor's own notes said `agent (0.91)` about the same fold. The two halves of
+  one decision disagreed about who made it.
+
+  That is worse than untidy. The alias is the **only trace of a folded row that
+  survives its deletion**, so it is what any later evaluation of these judgements
+  has to read, and it was quietly labelling a model's answers as a person's.
+  `merge_projects` now takes `by=` in `record_decision`'s vocabulary and both
+  automated callers pass what they already print; `tracker merge` keeps the default,
+  because that command is a person typing two ids.
+
+  Chain-flattening deliberately does not take the new decider: repointing
+  `oracle -> first` at `final` because `first` was folded follows a judgement rather
+  than making one, and whoever decided `oracle` was `first` still decided it.
+  Re-recording a key that was folded, re-created by a later crawl, and folded
+  somewhere else *is* a second judgement, and that one does take it.
+
+- **The agent's duplicate judge had drifted from the rails the docs promised**
+  (`tracker/dupresolve.py`, `tracker/triage.py`, `tests/test_triage_pairs.py`,
+  `docs/workflows/duplicates.md`).
+
+  `pair_triage` restated `merge_blocked`'s rails by hand and kept two of six. Its
+  own docstring said the market-sequence refusal stayed; the code never checked
+  it, so an agent could fold Flexential's Hillsboro site into NTT's on
+  `hillsboro-1`. With `--weak`, a pair raised by nothing but a shared name word
+  could be folded, which `dupresolve` has refused since it was written. And a
+  `different` verdict was parked at any confidence — the one-call path has refused
+  a park under 0.6 from the start, because a park releases a row into a published
+  total.
+
+  The rails are now one function, `evidence_blocks_merge`, called by both judges
+  with a single flag for the one refusal the agent is allowed past: a
+  cross-granularity key match alone, because it read the articles. A rail is a
+  fact about the pair rather than about the judge, and two copies of a fact are
+  free to disagree — which is what they did.
+
+  Also fixed in passing: `DuplicatePair` has no `label`, and the agent path read one
+  with `getattr(..., "")`, so every line a `duplicates resolve` run printed showed
+  its verdict against an empty string. Both paths now build the label from one
+  helper.
+
 - **`phase` was the one NOT NULL field the agent could rule on, and it cost three
   rounds of a ten-hour run** (`tracker/triage.py`, `tracker/cli.py`,
   `tests/test_triage.py`).
@@ -29,6 +75,34 @@ initial build of the v1 PRD.
   One bad finding at 3am must not cost the night.
 
 ### Added
+
+- **`scripts/eval_pairs.py` — score duplicate detection against the answers
+  somebody already gave** (`scripts/eval_pairs.py`, `docs/duplicate-shapes.md`,
+  `docs/README.md`).
+
+  The labels have been in the database all along and nothing had ever replayed
+  them: every `project_alias` row is a recorded "this identity is that row" and
+  every parked pair a recorded "these are different sites". So every change to
+  detection had been argued from examples. This re-asks the questions and compares.
+
+  Two properties of the label set shape it, and both are measurements. **A merge
+  deletes a row**, so a positive is not a pair — all that survives is the folded
+  `dedup_key` — and the only thing replayable against it is the question the write
+  path asks, which exercises the *key* path and not the name path. The script says
+  so rather than quoting its own number as recall. **Who wrote a label decides what
+  it is worth**: here all 37 aliases were written by `tracker merge` with a person
+  at the keyboard, and all 7 parked pairs by a model during an unattended run, so
+  every count is reported per `decided_by` and replaying a model against the
+  negatives measures agreement rather than accuracy.
+
+  It found two things worth acting on. **A duplicate here is one campus under
+  different company names** — only 3 of 37 folded identities share a company stem
+  with their survivor — which is the axis every key comparison holds fixed. And of
+  the 7 pairs ruled `different`, **6 have no rail that refuses a merge**, so on that
+  population the judgement is the entire decision and the rails contribute nothing.
+  `docs/duplicate-shapes.md` records both, with the measurement that refuted
+  deriving a county at the write path: it would have connected **0 of 37** folds,
+  while `ingest geo` has already left just 1 of 300 live rows with a fillable county.
 
 - **The identity gate now rules from the article extraction already read, instead
   of fetching it again** (`tracker/gatekeeper.py`, `tracker/ingest/crawl.py`,
@@ -127,6 +201,130 @@ initial build of the v1 PRD.
   value yet; it makes the axis worth reading.
 
 ### Changed
+
+- **The three duplicate judges now ask one question, and it is the other question**
+  (`tracker/triage.py`, `tracker/dupresolve.py`, `tracker/gatekeeper.py`,
+  `tracker/prompts/duplicates-resolve-v3.txt`, `docs/workflows/duplicates.md`).
+
+  All three asked some form of "are these the same site". A model answering that
+  compares two rows for resemblance, and two data centre rows in one town always
+  resemble each other — same industry, same vocabulary, usually the same metro in
+  the name. They now ask what would rule the match **out**, and permit `same` only
+  when that search came back empty and one tie can be quoted.
+
+  The framing is borrowed, not invented: OpenSanctions Pairs (arXiv 2603.11051)
+  measured it over 755,540 labelled pairs, and instructing a model to hunt
+  contradictions took an open 14B model from a 91.3% rule baseline to 98.2% F1.
+
+  It is worth changing here because of what `scripts/eval_pairs.py` found on the
+  live labels: of the pairs a judge has ruled `different`, **six of seven have no
+  rail in `evidence_blocks_merge` that refuses them**. On that population the rails
+  contribute nothing and the wording of the question is the entire decision — which
+  is also why further work on the rails would have had nowhere to land.
+
+  `triage.CONTRADICTIONS` is one copy of the checklist, shared verbatim by the agent
+  judge, the v3 prompt file and the ingest-time arbiter, with a test pinning the
+  three together. Three copies of a prompt are three prompts, and they drift: that
+  is how v1's "answer unclear on granularity" outlived the change that made
+  granularity answerable. v2 is kept, unreferenced, so the two wordings can be run
+  against each other on the same pairs — `pair_triage` takes a `system=` override
+  for exactly that, so the baseline arm is not a stale duplicate string.
+
+  Each judge also reports **what it checked**, as a short phrase per check, and it
+  travels into the park reason and the merge note. `duplicates parked` now answers
+  "what was already ruled out" rather than only "different sites". The field is
+  optional and its absence changes no verdict: the rails decide what may happen, and
+  this records the account. `logic.one_line` is the flattener that keeps such a note
+  on one line — `gatekeeper` had grown a private copy after the row's notes started
+  growing on every re-crawl, and it now delegates to the module whose dedupe depends
+  on it.
+
+  Deliberately **not** shipped alongside it: telling the judge whether the Census
+  places one row's town inside the other's county. It reads like free evidence and
+  is double-edged — Stargate is filed under Abilene and under Shackelford County,
+  is genuinely one campus, and a containment fact would argue against the true
+  answer. Unmeasured and able to cut the wrong way is not a change worth making.
+
+- **`tracker` installs and runs from anywhere** (`tracker/config.py`,
+  `tracker/db.py`, `tracker/migrations/`, `tracker/seed/`, `pyproject.toml`,
+  `tests/test_config.py`, `tests/test_install.py`, `README.md`, `CLAUDE.md` §5).
+
+  A wheel contains the package and nothing else. `migrations/` and `seed/` sat at the
+  repository root, *outside* it, so a non-editable install carried neither — and
+  every command, `tracker init` first, died in `discover_migrations` with
+  "migrations directory not found". The database was no better: it resolved against
+  the current directory, so an installed CLI made a fresh empty one wherever it was
+  standing, or silently adopted an unrelated project's `data/` because that project
+  had a `pyproject.toml` above it.
+
+  One function was doing both jobs. `install_root()` meant "the directory containing
+  the package" — the repository root in an editable install, `site-packages/` in a
+  wheel — so it was simultaneously where the shipped data lives and where the user's
+  data lives, and those are only the same directory by accident.
+
+  They are now two. **`package_root()`** is the package itself, and everything that
+  ships moved inside it: `tracker/migrations/`, `tracker/seed/`, beside the prompts
+  and static assets that were already there. **`home()`** is what this installation
+  owns — database, caches, `.env`, backups — resolved in four steps: `TRACKER_HOME`;
+  else the checkout the package was installed from; else the nearest checkout above
+  the current directory; else the platform's user-data directory.
+
+  **Nothing moves for anybody already running this.** Rule two is the whole reason it
+  is written that way: an editable install leaves the package inside the repository,
+  so `home()` returns exactly the directory `install_root()` did. The production
+  host's deployer installs editable inside its checkout, and `ssh $PROD 'tracker
+  paths'` says so in one line.
+
+  Falling out of the split: the article cache moves under `home()` instead of being
+  written into `site-packages` and shared by every database on the machine; the seed
+  files become defaults an installation can override in `<home>/seed/` without
+  editing the package, which is also where `sources apply` now writes; `ingest
+  manual --json sample-projects.json` resolves a bare seed name to the packaged copy,
+  so the README quick start works from any directory; and `tracker paths` prints all
+  of it, including *which* of the four rules decided home.
+
+  `tests/test_install.py` is the test that could have caught this and did not exist:
+  it builds a real wheel, installs it into a throwaway virtualenv and runs the CLI
+  from a directory that is not a checkout. Every other test runs from the repository,
+  where the broken arrangement works. It is opt-in — `TRACKER_TEST_INSTALL=1` —
+  because it costs about a minute, and anyone touching path resolution or
+  `pyproject.toml` should run it.
+
+  `install_root()` survives as a deprecated alias for `home()` for one release.
+
+- **`tracker/cli.py` is a package** (`tracker/cli/`, `tests/test_cli_package.py`,
+  `docs/workflows/*.md`).
+
+  One module held 63 commands in 10,292 lines. A dependency graph of it — every
+  top-level name, which commands reach it — showed the shape: about thirty names
+  used by every command (the app and its sub-groups, the two consoles, `_fail`,
+  `emit`, `json_mode`, the database openers, the lock, the formatters), a couple of
+  dozen printers shared by everything that renders a project row, and otherwise
+  families that touch nothing outside themselves.
+
+  So: `_shared.py` is the kernel, `_render.py` the printers, and eleven family
+  modules hold the commands — `ingest`, `sync`, `enrich`, `projects`, `capacity`,
+  `quality`, `logic`, `duplicates`, `serve`, `people`. Nothing exceeds 1,900 lines.
+
+  Mechanical: the split is driven by the AST so a comment block travels with the
+  definition below it, function bodies are byte-identical, and imports are pruned
+  to the names each module uses. Every one of the 63 commands is still registered
+  and `from tracker.cli import app, main` still works, which is what `__main__`,
+  the console script, the TUI and the web console rely on.
+
+  What did change is the order `tracker --help` lists top-level commands, because
+  Typer lists them in registration order and that is now the order the families are
+  imported. It is chosen rather than inherited: set the database up, put data in
+  it, read it, settle what is wrong with it, then publish it and say who may read
+  it. The block is fenced from the import sorter so it stays that way.
+
+  Three things are pinned by `tests/test_cli_package.py`, because all three fail
+  silently: the full command tree (drop a line from the registration block and nine
+  commands vanish from `--help` with nothing raising), the direction of the imports
+  (a family importing `tracker.cli` back is a cycle whose outcome depends on which
+  module Python reached first), and a size ceiling, so the split cannot quietly
+  undo itself. A new command goes in the family that owns its subject, or starts
+  one; the `__init__` docstring says so, and says it does not go there.
 
 - **`overnight.sh` runs every phase, not two of them** (`scripts/overnight.sh`,
   `README.md`).

@@ -18,7 +18,9 @@ from tracker.cli import app
 
 runner = CliRunner()
 
-SEED = Path(__file__).resolve().parent.parent / "seed" / "sample-projects.json"
+#: The seed files ship inside the package, so a wheel carries them and an installed
+#: CLI can find them. See `tracker.config.seed_path`.
+SEED = Path(__file__).resolve().parent.parent / "tracker" / "seed" / "sample-projects.json"
 
 
 def invoke(db: Path, *args: str):

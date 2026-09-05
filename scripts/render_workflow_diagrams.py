@@ -638,11 +638,11 @@ def duplicates() -> Canvas:
 
     who = c.box(
         48, 640, 226, 200, "Who decides",
-        ["--agent   default. Reads both rows'", "          articles, searches, then rules", "", "--ask     a person at the keyboard,", "          trusted for a merge outright", "", "--no-agent  the older one-call path,", "          shown two rows and nothing else"],
+        ["--agent   default. Reads both rows'", "          articles, searches, then rules", "", "--ask     a person at the keyboard,", "          trusted for a merge outright", "", "--no-agent  the older one-call path,", "          shown two rows and nothing else", "", "all three are asked one question:", "what would rule this match OUT?"],
         role="cool", title_size=13, align="left", sub_size=10.2,
     )
 
-    diff = c.box(320, 630, 190, 58, "different sites", ["parks the pair"], role="teal", title_size=12.5)
+    diff = c.box(320, 630, 190, 58, "different sites", ["parks the pair, at 0.6 or above"], role="teal", title_size=12.5)
     same = c.box(320, 706, 190, 58, "same site", ["merges — behind --merge"], role="red", title_size=12.5)
     unclear = c.box(
         320, 782, 190, 84, "unclear",
@@ -661,8 +661,8 @@ def duplicates() -> Canvas:
     c.arrow([diff.right(), (700, diff.cy), (700, notdup.cy), (936, notdup.cy)], colour=TEAL)
 
     rails = c.box(
-        556, 696, 356, 198, "Rails · what --merge still refuses",
-        ["· confidence under the floor — 0.85 for the agent, 0.9 for", "   the one-call path, far above what a park needs", "· evidence is only a shared name word", "· evidence is only a cross-granularity key match — the old", "   path refuses outright; the agent may rule, because it", "   can read the articles and be a person with a map", "· the only shared tranche names a market and a sequence:", "   iad-3, hillsboro-1, held by two operators 60 km apart", "· the names differ by an ordinal — Polaris Forge 1 and 2", "· the coordinates are over 25 km apart. Geography wins", "· the agent quoted no sentence from an article it read"],
+        556, 696, 356, 198, "Rails · what --merge still refuses, one function for both judges",
+        ["· confidence under the floor — 0.85 for the agent, 0.9 for", "   the one-call path, far above what a park needs", "· evidence is only a shared name word, even with --weak", "· evidence is only a cross-granularity key match — the old", "   path refuses outright; the agent may rule, because it", "   can read the articles and be a person with a map", "· the only shared tranche names a market and a sequence:", "   iad-3, hillsboro-1, held by two operators 60 km apart", "· the names differ by an ordinal — Polaris Forge 1 and 2", "· the coordinates are over 25 km apart. Geography wins", "· the agent quoted no sentence from an article it read"],
         role="red", title_size=13, align="left", sub_size=10.2,
     )
     c.arrow([same.right(), (533, same.cy), (533, rails.cy), (556, rails.cy)], colour=RED)

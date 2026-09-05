@@ -148,6 +148,11 @@ class Judgement:
     #: "decided" | "declined" | "rejected"
     outcome: str = "decided"
     note: str = ""
+    #: What the model checked for and what it found. Optional, and last so every
+    #: positional construction in the tests and in `scripts/measure_duplicates.py`
+    #: keeps working. The rails decide what may happen to a pair; this only records
+    #: the account, which is what a reader of `duplicates parked` wanted and never had.
+    contradictions: tuple[str, ...] = ()
 
     @property
     def decided(self) -> bool:
@@ -178,6 +183,7 @@ class Decision:
             "verdict": self.judgement.verdict if self.judgement else None,
             "confidence": round(self.judgement.confidence, 2) if self.judgement else None,
             "reason": self.judgement.reason if self.judgement else "",
+            "contradictions": list(self.judgement.contradictions) if self.judgement else [],
             "detail": self.detail,
             "kept_id": self.kept_id,
             "removed_ids": list(self.removed_ids),
@@ -306,7 +312,7 @@ def ask_model(
     pair: Any,
     *,
     extractor,
-    prompt_name: str = "duplicates-resolve-v2",
+    prompt_name: str = "duplicates-resolve-v3",
 ) -> Judgement:
     """Ask a reasoning model whether two rows are one site. One call.
 
@@ -357,6 +363,7 @@ def ask_model(
 
     verdict = str(payload.get("verdict") or "").strip().lower()
     reason = str(payload.get("reason") or "").strip()
+    checked = _checked(payload)
     try:
         confidence = float(payload.get("confidence", 0))
     except (TypeError, ValueError):
@@ -377,24 +384,71 @@ def ask_model(
             reason,
             outcome="declined",
             note=f"confidence {confidence:.2f} is below the {MIN_CONFIDENCE} floor",
+            contradictions=checked,
         )
-    return Judgement(verdict, confidence, reason)
+    return Judgement(verdict, confidence, reason, contradictions=checked)
 
 
-def merge_blocked(pair: Any, judgement: Judgement, a: Project, b: Project) -> str | None:
-    """Why this pair may not be merged automatically, or None if it may.
+def pair_label(pair: Any) -> str:
+    """One line naming both rows, for every printer and the `--json` payload.
 
-    Every branch is a rule stated somewhere else in this codebase, restated here as
-    a refusal a run can print. Read this before trusting `--merge`.
+    Built here rather than in each judge because `DuplicatePair` has no `label`
+    attribute: the agent path read one with `getattr(pair, "label", "")`, got the
+    empty string every time, and every line of a `duplicates resolve` run printed
+    the verdict against nothing.
     """
-    if judgement.confidence < MERGE_CONFIDENCE:
-        return (
-            f"confidence {judgement.confidence:.2f} is below the {MERGE_CONFIDENCE} "
-            "a merge needs — parked nothing, left for a person"
-        )
+    return (
+        f"#{pair.a_id} {pair.a_company} — {pair.a_name} / "
+        f"#{pair.b_id} {pair.b_company} — {pair.b_name}"
+    )
+
+
+def evidence_blocks_merge(
+    pair: Any, a: Project, b: Project, *, judge_read_the_sources: bool = False
+) -> str | None:
+    """Why the *evidence* forbids folding this pair, or None. The confidence floor is
+    the caller's, because it differs by judge; everything else about a merge that
+    does not depend on the judge is here, once.
+
+    **One function for both judges, and the reason is a drift that was found rather
+    than imagined.** `pair_triage` re-implemented these rails by hand and kept two
+    of six: its docstring promised the market-sequence refusal stayed and the code
+    never checked it, and with `--weak` a pair raised by nothing but a shared name
+    word could be folded. Every rail below is a fact about the pair, not about the
+    model, so the two paths cannot be allowed to disagree about them.
+
+    `judge_read_the_sources` is the one difference the agent path is *allowed*: a
+    cross-granularity key match alone is refused when the judge saw two rows and
+    nothing else, and permitted when it read the articles and searched — "a model
+    is not a person with a map" was true of the first and is not of the second.
+    Nothing else varies. A market-sequence tranche carries no merge authority for
+    either judge, because the key is the same key whoever reads it; what it may do
+    is stand *beside* evidence that does, and for a reading judge granularity is
+    such evidence.
+    """
     kinds = set(pair.kinds)
-    if not (kinds & HARD_EVIDENCE):
-        if "identity" in kinds:
+    # `iad-3`, `hillsboro-1`, `chicago-2`: a market and a sequence number, and the
+    # sequence restarts at one for every operator. The key is worth showing a reader
+    # — it is how IREN's Sweetwater campus, stored twice across a rename, is
+    # connected at all — and it is not worth deleting a row over: `hillsboro-1` is
+    # held by Flexential's Hillsboro site and NTT's. So it is struck from the hard
+    # evidence before anything is weighed, rather than refused only when it is alone.
+    market_only = bool(pair.shared_blocks) and all(
+        is_market_sequence(key, localities={a.city, a.county, b.city, b.county})
+        for key in pair.shared_blocks
+    )
+    hard = kinds & HARD_EVIDENCE
+    if market_only:
+        hard.discard("tranche")
+    if not hard:
+        if "identity" in kinds and judge_read_the_sources:
+            pass  # the one refusal a judge that read the articles may pass
+        elif market_only:
+            return (
+                f"the only shared tranche is {', '.join(pair.shared_blocks)}, which names a "
+                "market and a sequence number rather than a building"
+            )
+        elif "identity" in kinds:
             # dedup.py: a county-level row and a city-level row are never merged
             # automatically, because no comparison can tell whether "Racine County"
             # and "Mount Pleasant" are one project.
@@ -402,20 +456,8 @@ def merge_blocked(pair: Any, judgement: Judgement, a: Project, b: Project) -> st
                 "the only evidence is a cross-granularity key match; "
                 "dedup refuses to merge a county row into a city row unattended"
             )
-        return "the only evidence is a shared name word, which is not identity"
-    if kinds & HARD_EVIDENCE == {"tranche"} and all(
-        is_market_sequence(key, localities={a.city, a.county, b.city, b.county})
-        for key in pair.shared_blocks
-    ):
-        # `iad-3`, `hillsboro-1`, `chicago-2`: a market and a sequence number, and
-        # the sequence restarts at one for every operator. The key is worth showing
-        # a reader — it is how IREN's Sweetwater campus, stored twice across a
-        # rename, is connected at all — and it is not worth deleting a row over:
-        # `hillsboro-1` is held by Flexential's Hillsboro site and NTT's.
-        return (
-            f"the only shared tranche is {', '.join(pair.shared_blocks)}, which names a "
-            "market and a sequence number rather than a building"
-        )
+        else:
+            return "the only evidence is a shared name word, which is not identity"
     if sibling_ordinals(a.name, b.name):
         # The failure this exists for, found while measuring the change that made
         # a shared tranche carry a merge across localities: Applied Digital's
@@ -430,6 +472,34 @@ def merge_blocked(pair: Any, judgement: Judgement, a: Project, b: Project) -> st
     if distance is not None and distance > FAR_APART_KM:
         return f"the stored coordinates are {distance:.0f} km apart, further than one campus spans"
     return None
+
+
+def _checked(payload: dict[str, Any]) -> tuple[str, ...]:
+    """The `contradictions` a one-call judge reported. Absent is not a refusal.
+
+    Same shape and same tolerance as `triage._checked`, because the two judges answer
+    one question and a reader should not have to know which of them wrote a line.
+    """
+    raw = payload.get("contradictions") or []
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, list):
+        return ()
+    return tuple(" ".join(str(item).split())[:120] for item in raw if str(item).strip())[:6]
+
+
+def merge_blocked(pair: Any, judgement: Judgement, a: Project, b: Project) -> str | None:
+    """Why this pair may not be merged by the one-call judge, or None if it may.
+
+    The confidence floor, then :func:`evidence_blocks_merge` with the judge that
+    was shown two rows and nothing else. Read both before trusting `--merge`.
+    """
+    if judgement.confidence < MERGE_CONFIDENCE:
+        return (
+            f"confidence {judgement.confidence:.2f} is below the {MERGE_CONFIDENCE} "
+            "a merge needs — parked nothing, left for a person"
+        )
+    return evidence_blocks_merge(pair, a, b, judge_read_the_sources=False)
 
 
 def survivor(a: Project, b: Project) -> tuple[Project, Project]:
@@ -484,11 +554,11 @@ def resolve_one(
     :func:`resolve`.
     """
     from tracker import pairs as pairs_mod
+    from tracker.logic import one_line
 
     folded = folded if folded is not None else {}
     a_id, b_id = _surviving(pair.a_id, folded), _surviving(pair.b_id, folded)
-    label = f"#{pair.a_id} {pair.a_company} — {pair.a_name} / #{pair.b_id} {pair.b_company} — {pair.b_name}"
-    got = Decision(a_id=pair.a_id, b_id=pair.b_id, label=label)
+    got = Decision(a_id=pair.a_id, b_id=pair.b_id, label=pair_label(pair))
     if a_id == b_id:
         got.detail = f"already one row — both sides are now #{a_id}"
         return got
@@ -527,7 +597,10 @@ def resolve_one(
         # "these are different sites" reads differently when what raised the pair
         # was a shared tranche key than when it was a word.
         classes = "+".join(pair.kinds) or "locality"
-        pairs_mod.park(session, [a.id, b.id], reason=f"{judged.reason} [{classes}]", by=by)
+        told = f"{judged.reason} [{classes}]"
+        if judged.contradictions:
+            told += f" ruled out: {'; '.join(judged.contradictions)}"
+        pairs_mod.park(session, [a.id, b.id], reason=one_line(told), by=by)
         got.action = "parked"
         got.detail = "ruled out — capex will stop holding one of these rows back"
         return got
@@ -545,7 +618,7 @@ def resolve_one(
     from tracker.merge import merge_projects
 
     keep, gone = survivor(a, b)
-    result = merge_projects(session, keep.id, [gone.id])
+    result = merge_projects(session, keep.id, [gone.id], by=by)
     record_decision(
         keep,
         "duplicate",
@@ -630,8 +703,10 @@ __all__ = [
     "Judgement",
     "ask_model",
     "evidence_block",
+    "evidence_blocks_merge",
     "km_apart",
     "merge_blocked",
+    "pair_label",
     "resolve",
     "resolve_one",
     "survivor",

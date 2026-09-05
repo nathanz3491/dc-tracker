@@ -69,7 +69,7 @@ evidence for doing so, and `--json` is the machine-readable form.
 
 ```bash
 tracker sources policy               # propose; writes nothing
-tracker sources policy --apply       # write seed/sources.toml
+tracker sources policy --apply       # write <home>/seed/sources.toml
 ```
 
 The ranking above could only ever be *printed*. This turns it into a file that
@@ -175,7 +175,7 @@ utilitydive-archive            73     0     0      0     0   never read it
 ```
 
 Only the first is a candidate. The second is behind Cloudflare and is kept on
-purpose — `seed/feeds.toml` carries ten lines saying so, because the headlines
+purpose — `tracker/seed/feeds.toml` carries ten lines saying so, because the headlines
 still tell you which projects exist. The third has never been read, so retiring
 it would be deciding on a sample of nothing. A queued-versus-cited ratio ranks
 all three the same and puts the deliberately-kept one at the top of the kill
@@ -188,7 +188,7 @@ quotes the *queued* count rather than the calls already made, because calls
 already made are sunk and what retiring buys is not making the next ones.
 
 It prints the `tracker queue --drop --feed X` line and stops. **It does not edit
-`seed/feeds.toml`** — that file is mostly hand-written justification, including
+`tracker/seed/feeds.toml`** — that file is mostly hand-written justification, including
 the comment that stops someone deleting DataCenterDynamics, and a command that
 rewrote it would strip the reasoning that prevents the mistake.
 
@@ -197,7 +197,7 @@ One number is printed with every run, because it bounds the whole exercise:
 sweeps. Retiring feeds can address the other 10%. If you want the 49% down, the
 filter and the search templates are where the volume is.
 
-`seed/feeds.toml` is hand-maintained, which is the wrong way round: the database
+`tracker/seed/feeds.toml` is hand-maintained, which is the wrong way round: the database
 already knows which publishers decide stored values. Candidates are the hosts
 `tracker sources` ranks highest that the config does not list. No LLM — the answer
 is in the data, and `docs/plan-scale-with-sources.md` already measured what asking

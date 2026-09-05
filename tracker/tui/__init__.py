@@ -10,7 +10,7 @@ place the data actually lives.
 **It offers every command the CLI does, and that is structural rather than
 maintained.** The command surface is read out of the live Typer app through
 `webui.catalog`, the same introspection the console's palette uses, so a command
-added to `cli.py` appears here on the next start with its real flags, types,
+added to the `tracker/cli` package appears here on the next start with its real flags, types,
 defaults and help. Nothing here holds a hand-written list of commands that could
 fall behind — see `tracker/tui/commands.py`.
 

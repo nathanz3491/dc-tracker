@@ -168,7 +168,7 @@ distinct company spellings, and **no Nebius row at all** — a top-five AI cloud
 a Kansas City campus. CoreWeave had none under its own name either, appearing only
 as a tenant inside two Core Scientific projects.
 
-[`seed/operators.toml`](../seed/operators.toml) is the missing half of that
+[`tracker/seed/operators.toml`](../tracker/seed/operators.toml) is the missing half of that
 comparison: the operators this database is supposed to know about, hand-written and
 checked in, including the private ones that can never appear in
 `edgar-companies.toml` because they have no CIK.
@@ -315,7 +315,7 @@ tracker sync --deep
 One measured run: **799 matching URLs across an archive going back to 2015, of
 which 477 were new.** They queue up as a backlog, and each subsequent `tracker
 sync` crawls `--limit` of them. Add more archives as `[[sitemap]]` entries in
-[seed/feeds.toml](../seed/feeds.toml).
+[tracker/seed/feeds.toml](../tracker/seed/feeds.toml).
 
 This is the recommended way to fill the database. Search (below) is optional.
 
@@ -355,7 +355,7 @@ gets 200 and httpx 403 on the same URL, a TLS-fingerprint rule. Their robots.txt
 explicitly permits crawling and advertises the sitemap, so this is an over-broad
 WAF rule rather than a policy; `--browser` reaches them once the `[crawl]` extra is
 installed. They are listed with their status in
-[seed/feeds.toml](../seed/feeds.toml) rather than failing every run.
+[tracker/seed/feeds.toml](../tracker/seed/feeds.toml) rather than failing every run.
 
 ## Search: an optional alternative that needs keys
 
@@ -609,7 +609,7 @@ Utilities and contractors are sources, never buyers — only `hyperscaler` and
 `neocloud` count as end users in `capex.attribute`, so adding forty companies
 cannot quietly move anybody's attributed capacity.
 
-Which companies are read is [seed/edgar-companies.toml](../seed/edgar-companies.toml),
+Which companies are read is [tracker/seed/edgar-companies.toml](../tracker/seed/edgar-companies.toml),
 and that file **is** the precision mechanism. Full-text search scoped by CIK
 returns only that company's filings; unscoped, `"data center campus"` returns
 1,066 hits led by shell companies. The `sics` parameter is accepted and silently

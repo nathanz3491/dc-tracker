@@ -387,7 +387,60 @@ def triage(
 
 # --- the same question, asked about a pair of rows --------------------------
 
-PAIR_SYSTEM = """You decide whether two rows in a data centre database are the same site.
+#: The judgement, framed as a search for contradictions rather than for resemblance.
+#: Shared verbatim by both pair judges and by the ingest-time arbiter, which is why it
+#: is a constant and not three paragraphs that drift.
+#:
+#: **Why this framing.** OpenSanctions Pairs (arXiv 2603.11051) measured entity
+#: matching by prompt shape over 755,540 labelled pairs: asking a model to look for
+#: CONTRADICTORY evidence and to answer positive only when it found none took an open
+#: 14B model from a 91.3% rule baseline to 98.2% F1. Asking "are these the same"
+#: invites a similarity judgement, and two data centre rows in one town always
+#: resemble each other.
+#:
+#: **Why it is worth changing here specifically.** Measured on this database
+#: (`scripts/eval_pairs.py`, recorded in `docs/duplicate-shapes.md`): of the seven
+#: pairs a judge has ruled `different`, six have no rail in
+#: `dupresolve.evidence_blocks_merge` that refuses them. On that population the rails
+#: contribute nothing and the judgement is the whole decision, so the wording of the
+#: question is not a detail.
+#:
+#: Deliberately tool-agnostic: the three sites end in `rule_same`, `same_site` and a
+#: JSON `"same"` respectively, so this names neither.
+CONTRADICTIONS = """HOW TO DECIDE: look for what makes these two DIFFERENT, not for what makes them
+look alike. Two data centre rows in one town always look alike — same industry, same
+vocabulary, often the same metro in the name. Resemblance is not evidence.
+
+Work through what would rule a match OUT:
+  * the stored coordinates are far apart — the distance is given to you, and a large
+    one is decisive on its own;
+  * the articles name two different street addresses, parcels, substations or
+    serving utilities;
+  * one article describes both as separate developments, or lists them side by side;
+  * the operator, the named customer AND the tranche names all differ — any one of
+    those alone is weak, because one campus has several parties attached;
+  * the names differ only by a trailing number. `Polaris Forge 1` and `Polaris
+    Forge 2` are two campuses, not one stored twice.
+
+And what would tie them together. Only these count:
+  * a street address, parcel or substation in common;
+  * a "formerly known as", "also known as", or a rename;
+  * the same tranche or building name;
+  * one row's company named in the other's article as the builder, landlord or
+    tenant of the same site.
+
+A campus can sit outside the town it is named for, and often does — a site called
+after the nearest city may be filed under the next county along. So a town and a
+county that do not contain each other is NOT by itself a contradiction; look for a
+street address or a substation before concluding anything from place names.
+
+Then answer. Same site: only when you searched for contradictions, found none, and
+can quote one tie from the list above. Different sites: when you can quote or were
+given one contradiction. Anything else: say you cannot settle it, which is a real
+answer and is recorded as one."""
+
+
+PAIR_SYSTEM_BASE = """You decide whether two rows in a data centre database are the same site.
 
 One real campus often has a builder, a landlord and an occupier, and each name
 makes its own row — those are three legitimate rows, not duplicates. Two rows are
@@ -411,12 +464,31 @@ names sounding related.
 whole sentence that ties the two to one place. If you cannot, use `leave_alone`:
 a pair left open costs a report line, and a wrong merge costs two rows."""
 
+#: What the judges actually run. Split from the text above so `scripts/eval_pairs.py`
+#: can put the two side by side on the same pairs without keeping a stale copy of the
+#: old wording — a measured prompt change needs its own baseline, and a baseline that
+#: is a duplicate string goes out of date the first time somebody edits one of them.
+PAIR_SYSTEM = PAIR_SYSTEM_BASE + "\n\n" + CONTRADICTIONS
+
 
 def pair_verdict_tools() -> list[Any]:
     """The three ways a pair judgement can end."""
     from tracker.agent import Tool
 
     confidence = {"type": "number", "description": "0 to 1."}
+    #: Optional on purpose. The rails decide what may happen, not this field, so a
+    #: model that omits it is not refused — it simply leaves no account of what it
+    #: ruled out, which is what a reader of `duplicates parked` most wants six months
+    #: later and never had.
+    contradictions = {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": (
+            "What you checked for and what you found, one short phrase each — either a "
+            "contradiction ('two addresses: 100 Innovation Dr vs 4500 Beaumont Rd') or "
+            "the check coming back clean ('checked substations — none named')."
+        ),
+    }
     return [
         Tool(
             name="rule_same",
@@ -437,6 +509,7 @@ def pair_verdict_tools() -> list[Any]:
                         ),
                     },
                     "confidence": confidence,
+                    "contradictions": contradictions,
                 },
                 "required": ["reason", "confidence"],
             },
@@ -451,13 +524,32 @@ def pair_verdict_tools() -> list[Any]:
             ),
             parameters={
                 "type": "object",
-                "properties": {"reason": {"type": "string"}, "confidence": confidence},
+                "properties": {
+                    "reason": {"type": "string"},
+                    "confidence": confidence,
+                    "contradictions": contradictions,
+                },
                 "required": ["reason", "confidence"],
             },
             terminal=True,
         ),
         leave_alone_tool(),
     ]
+
+
+def _checked(answer: dict[str, Any]) -> list[str]:
+    """The `contradictions` a judge reported, cleaned. Absent is not an error.
+
+    Optional by design: the rails decide what may happen to a pair, so a model that
+    omits the field is not refused. What it loses is the account of what it ruled
+    out, and nothing else.
+    """
+    raw = answer.get("contradictions") or []
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, list):
+        return []
+    return [" ".join(str(item).split())[:120] for item in raw if str(item).strip()][:6]
 
 
 def pair_triage(
@@ -470,6 +562,7 @@ def pair_triage(
     require_quote: bool = True,
     allow_search: bool = True,
     folded: dict[int, int] | None = None,
+    system: str = "",
     on_step: Any = None,
 ) -> Any:
     """Let a model read both rows' sources and rule on the pair.
@@ -485,28 +578,34 @@ def pair_triage(
     it *can* be a person with a map — and 28 of 47 live groups are exactly this
     shape, with the model already reasoning containment unprompted.
 
-    **What it keeps.** Geography still outranks the model: two rows with real
-    coordinates more than `FAR_APART_KM` apart are not one site whatever it
-    concludes, because that is a fact check rather than a menu. The ordinal-sibling
-    and market-sequence refusals stay for the same reason — `Polaris Forge 1` and
-    `Polaris Forge 2` are two campuses that share every other signal. A confidence
-    floor stays because a merge is irreversible.
+    **What it keeps — and it is not this function's to decide.** Every other rail
+    is a fact about the pair rather than about the judge, so it lives in
+    `dupresolve.evidence_blocks_merge` and both judges call it: geography outranks
+    the model, `Polaris Forge 1` and `Polaris Forge 2` are two campuses that share
+    every other signal, a market-sequence tranche carries no merge authority, and a
+    shared name word is a word. This function used to restate two of those by hand
+    and silently lacked the other two — its own docstring promised the
+    market-sequence refusal and the code never checked it. A confidence floor stays
+    because a merge is irreversible, and the *park* has the same floor the one-call
+    path has always had: an answer under `dupresolve.MIN_CONFIDENCE` is a shrug,
+    and a shrug must not release a row from the capex hold.
     """
     from tracker import agent
-    from tracker.dedup import sibling_ordinals
     from tracker.dupresolve import (
+        MIN_CONFIDENCE,
         Decision,
         Judgement,
         _surviving,
-        km_apart,
+        evidence_blocks_merge,
+        pair_label,
         survivor,
     )
+    from tracker.logic import one_line
     from tracker.models import Project
 
     folded = folded if folded is not None else {}
     a_id, b_id = _surviving(pair.a_id, folded), _surviving(pair.b_id, folded)
-    label = getattr(pair, "label", "") or ""
-    got = Decision(a_id=pair.a_id, b_id=pair.b_id, label=label)
+    got = Decision(a_id=pair.a_id, b_id=pair.b_id, label=pair_label(pair))
     if a_id == b_id:
         got.detail = "one of the rows is gone — merged by an earlier pair in this run"
         return got
@@ -527,13 +626,16 @@ def pair_triage(
         + (f"\nShared tranche keys: {', '.join(pair.shared_blocks)}" if pair.shared_blocks else "")
     )
 
-    result = agent.run(task, tools=tools, extractor=extractor, system=PAIR_SYSTEM, on_step=on_step)
+    result = agent.run(
+        task, tools=tools, extractor=extractor, system=system or PAIR_SYSTEM, on_step=on_step
+    )
     if not result.answered:
         got.detail = result.note or f"the run ended as {result.outcome} without deciding"
         return got
 
     answer = result.answer or {}
     reason = str(answer.get("reason") or "").strip()
+    checked = _checked(answer)
     try:
         confidence = float(answer.get("confidence") or 0)
     except (TypeError, ValueError):
@@ -547,11 +649,28 @@ def pair_triage(
     got.judgement = Judgement(verdict, confidence, reason)
     by = f"agent ({confidence:.2f})"
 
+    if confidence < MIN_CONFIDENCE:
+        # The same floor `ask_model` applies, for the same reason: a park releases a
+        # row from the capex hold, and an answer the model itself rates a coin toss
+        # must not be the thing that does it. Left in the report, not parked.
+        got.judgement = Judgement(
+            verdict, confidence, reason, outcome="declined", note="below the floor"
+        )
+        got.detail = f"confidence {confidence:.2f} is below the {MIN_CONFIDENCE} floor"
+        return got
+
     if verdict == "different":
         from tracker import pairs as pairs_mod
 
         classes = "+".join(pair.kinds) or "locality"
-        pairs_mod.park(session, [a.id, b.id], reason=f"{reason} [{classes}]", by=by)
+        # What it ruled out travels with the decision. `duplicates parked` is read
+        # months later by somebody deciding whether to reopen the question, and
+        # "different sites" is a far weaker thing to inherit than "different sites;
+        # checked substations - none named; two addresses".
+        told = f"{reason} [{classes}]"
+        if checked:
+            told += f" ruled out: {'; '.join(checked)}"
+        pairs_mod.park(session, [a.id, b.id], reason=one_line(told), by=by)
         got.action = "parked"
         got.detail = "ruled out — capex will stop holding one of these rows back"
         return got
@@ -563,17 +682,12 @@ def pair_triage(
         got.detail = f"confidence {confidence:.2f} is below the {min_confidence:.2f} a merge needs"
         return got
 
-    distance = km_apart(a, b)
-    from tracker.dupresolve import FAR_APART_KM
-
-    if distance is not None and distance > FAR_APART_KM:
-        got.detail = f"the stored coordinates are {distance:.0f} km apart, further than one campus"
-        return got
-    if sibling_ordinals(a.name, b.name):
-        got.detail = (
-            f"{a.name!r} and {b.name!r} differ only by an ordinal — neighbouring phases, "
-            "not one site stored twice"
-        )
+    # Every rail that is a fact about the pair, shared with the one-call path. The
+    # one this judge is allowed past is the cross-granularity refusal, because it
+    # read the articles; see `evidence_blocks_merge`.
+    blocked = evidence_blocks_merge(pair, a, b, judge_read_the_sources=True)
+    if blocked:
+        got.detail = blocked
         return got
     if require_quote:
         from tracker.agent import verbatim
@@ -588,8 +702,9 @@ def pair_triage(
     from tracker.merge import merge_projects
 
     keep, gone = survivor(a, b)
-    merged = merge_projects(session, keep.id, [gone.id])
-    record_decision(keep, "duplicate", f"folded #{gone.id} into this row", by=by, detail=reason)
+    merged = merge_projects(session, keep.id, [gone.id], by=by)
+    note = reason + (f" — checked: {'; '.join(checked)}" if checked else "")
+    record_decision(keep, "duplicate", f"folded #{gone.id} into this row", by=by, detail=note)
     folded[gone.id] = keep.id
     got.action = "merged"
     got.kept_id = keep.id
@@ -611,6 +726,7 @@ def resolve_pairs(
     min_confidence: float = 0.85,
     require_quote: bool = True,
     allow_search: bool = True,
+    system: str = "",
     on_step: Any = None,
 ) -> list[Any]:
     """Work the suspected pairs with an agent. Returns `dupresolve.Decision` list.
@@ -650,6 +766,7 @@ def resolve_pairs(
                 require_quote=require_quote,
                 allow_search=allow_search,
                 folded=folded,
+                system=system,
                 on_step=on_step,
             )
         )
@@ -657,7 +774,9 @@ def resolve_pairs(
 
 
 __all__ = [
+    "CONTRADICTIONS",
     "PAIR_SYSTEM",
+    "PAIR_SYSTEM_BASE",
     "RULEABLE_FIELDS",
     "SYSTEM",
     "Outcome",

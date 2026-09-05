@@ -1,7 +1,7 @@
 """Every command the CLI has, and the output of the one you ran.
 
 **The list is read out of the CLI, never written down here.** `webui.catalog`
-introspects the live Typer app, so a command added to `cli.py` — with its real
+introspects the live Typer app, so a command added to the `tracker/cli` package — with its real
 flags, types, defaults, choices and help — appears in this pane the next time the
 TUI starts. That is the same argument the console's palette rests on, and a test
 asserts the two offer the same set: a hand-maintained list is one that silently
