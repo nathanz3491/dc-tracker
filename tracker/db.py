@@ -318,12 +318,21 @@ def _pid_alive(pid: int) -> bool:
 
 
 def acquire_write_lock(db_path: Path | str, *, command: str = "sync") -> Callable[[], None]:
-    """Take the write lock and return a release function.
+    """Refuse to start a second writing run against the same database.
 
-    The non-context form exists for CLI commands with several early returns, where
-    wrapping the whole body in `with` would mean re-indenting it. Callers register
-    the returned function with `atexit` so every exit path releases, including
-    `typer.Exit`. Releasing twice is harmless.
+    SQLite allows one writer, so two overlapping `tracker sync` runs produce a raw
+    "database is locked" traceback partway through — after the second run has
+    already paid for its LLM calls. Observed live: a 100-article run was still
+    going when another was started, and the newcomer died on its first insert
+    having spent a call to get there.
+
+    The lock is a file holding the owning pid, and a lock whose process has died
+    is reclaimed rather than blocking forever.
+
+    A release function rather than a context manager: CLI commands have several
+    early returns, and wrapping the whole body in `with` would mean re-indenting
+    it. Callers register the returned function with `atexit` so every exit path
+    releases, including `typer.Exit`. Releasing twice is harmless.
     """
     path = _lock_path(db_path)
     _claim(path, command)
@@ -351,44 +360,6 @@ def _claim(path: Path, command: str) -> None:
         log.warning("reclaiming a stale lock from pid %s", pid_text or "?")
         path.unlink(missing_ok=True)
     path.write_text(f"{os.getpid()} {command} {utcnow_text()}", encoding="utf-8")
-
-
-@contextmanager
-def write_lock(db_path: Path | str, *, command: str = "sync") -> Iterator[None]:
-    """Refuse to start a second writing run against the same database.
-
-    SQLite allows one writer, so two overlapping `tracker sync` runs produce a raw
-    "database is locked" traceback partway through — after the second run has
-    already paid for its LLM calls. Observed live: a 100-article run was still
-    going when another was started, and the newcomer died on its first insert
-    having spent a call to get there.
-
-    The lock is a file holding the owning pid, and a lock whose process has died
-    is reclaimed rather than blocking forever.
-    """
-    path = _lock_path(db_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-
-    if path.exists():
-        raw = path.read_text(encoding="utf-8", errors="replace").strip()
-        pid_text = raw.split()[0] if raw else ""
-        if pid_text.isdigit() and _pid_alive(int(pid_text)):
-            raise AlreadyRunning(
-                f"another tracker run is already writing to this database.\n"
-                f"  lock:    {path}\n"
-                f"  holder:  {raw}\n\n"
-                "Wait for it to finish, or stop that process. Running two writing "
-                "commands at once fails partway through and wastes the LLM calls "
-                "the second one already paid for."
-            )
-        log.warning("reclaiming a stale lock from pid %s", pid_text or "?")
-        path.unlink(missing_ok=True)
-
-    path.write_text(f"{os.getpid()} {command} {utcnow_text()}", encoding="utf-8")
-    try:
-        yield
-    finally:
-        path.unlink(missing_ok=True)
 
 
 def utcnow_text() -> str:
