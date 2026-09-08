@@ -86,8 +86,11 @@ def home() -> Path:
     2. **The checkout the installed package sits in**, when there is one — an editable
        install (`pip install -e .`) leaves the package inside the repo, so the parent
        carrying `pyproject.toml` is the project. This is what every existing developer
-       and the production host have, and it resolves to exactly the directory
-       `install_root()` used to return. Nothing moves for them.
+       and the production checkout have, and it resolves to exactly the directory
+       `install_root()` used to return. Nothing moves for them. It is also what
+       makes an agent's worktree safe, and what makes a `tracker` borrowed from
+       another checkout's venv dangerous: the answer follows the package source,
+       never the working directory. See `CLAUDE.md` §2.
     3. **The nearest checkout above the current directory**, for a non-editable install
        used from inside a project — the old `find_project_root()` behaviour, kept
        because running `tracker` in a checkout should use that checkout's data.
@@ -363,6 +366,33 @@ class Settings(BaseSettings):
     #: every checkout trying to publish to one person's domain.
     tunnel_name: str | None = None
     tunnel_hostname: str | None = None
+
+    #: Which machine is production, and what the console service is called there.
+    #:
+    #: `prod_host` is an ssh alias, and **empty on the production host itself**,
+    #: where it means "here". That distinction is the whole point:
+    #: `scripts/prod.py` reads it and either runs a command locally or sends it
+    #: over ssh, so one documented command form — `python scripts/prod.py tracker
+    #: …` — is correct from every checkout on every machine. Before this existed,
+    #: every doc and every workflow page hard-coded `ssh $PROD '…'`, which is
+    #: wrong the moment you are already standing on the host, and agents now are.
+    #:
+    #: Neither is a secret, and both follow `tunnel_*` above in living in `.env`
+    #: rather than in the repo — but here the reason is sharper than one person's
+    #: domain. This repo is public, and `CLAUDE.md` §6 forbids naming the
+    #: production host in any tracked file: no hostname, no ssh alias, no launchd
+    #: label. Reading them from configuration is how a committed instruction can
+    #: talk about the host without naming it.
+    #: `prod_checkout` is the path, on that machine, of the checkout that serves
+    #: the console and owns the authoritative database — the one carrying the
+    #: `.production` marker. `scripts/prod.py` runs every command inside it,
+    #: which is what makes the two safeguards compose rather than fight: an ssh
+    #: hop lands in the home directory, where the host's `tracker` wrapper
+    #: rightly refuses to write production, so a script that did not `cd` would
+    #: make the documented form for a write the one form that cannot work.
+    prod_host: str | None = None
+    prod_checkout: str | None = None
+    serve_label: str | None = None
 
     #: Facility power per H200-equivalent accelerator, in kilowatts, used to
     #: restate a site's megawatts as compute. See `tracker/compute.py` for how

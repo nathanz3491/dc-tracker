@@ -1,15 +1,15 @@
 """Move the database between this machine and the production host.
 
-**The mini is the writer.** It is always on, which is what a job measured in
+**Production is the writer.** It is always on, which is what a job measured in
 hours wants, and it already serves the console from the live file. Every command
 that writes — `ingest`, `enrich`, `merge`, `infer`, `backfill` — runs there.
-This machine develops against a copy.
+Every other checkout develops against a copy.
 
 So the default direction is **pull**, and that is a reversal: `ship_db.py`, which
 this replaces, pushed dev to prod because prod held no keys and never wrote.
-Once the mini started ingesting, pushing meant overwriting the only copy of work
-that existed. There is no merge — a whole file replaces a whole file — so the
-direction has to be a decision, not a habit.
+Once production started ingesting, pushing meant overwriting the only copy of
+work that existed. There is no merge — a whole file replaces a whole file — so
+the direction has to be a decision, not a habit.
 
 `--push` still exists for seeding a new host or restoring one from a backup. It
 refuses when the far end holds rows this database does not, because that is what
@@ -46,7 +46,14 @@ from pathlib import Path
 #: Both directions now refuse outright when no table is recognised.
 _COUNTED = ("project", "source", "event", "risk", "capacity_block", "ingest_url")
 
-DEFAULT_HOST = "mm"
+#: Where the far end is. The host is deliberately NOT a literal here: this repo
+#: is public, and `CLAUDE.md` §6 forbids naming the production host in a tracked
+#: file — no hostname, no ssh alias. One used to sit right here as this module's
+#: default host, for weeks, in the one script whose whole job is talking to that
+#: host, while the pre-push guard looked for the alias only in `ssh <alias>` form
+#: and so never said a word about it. The alias is read from `.env` now — the
+#: same value `scripts/prod.py` reads — and `scripts/check_no_host_names.py`
+#: carries a pattern for the shape it used to take.
 DEFAULT_REMOTE = "~/dev/tracker/repo/data/tracker.db"
 
 
@@ -160,7 +167,7 @@ def pull(args, local: Path) -> int:
             for table, n in ahead.items():
                 print(f"    {table}: {n} here, {theirs.get(table, 0)} there")
             print(
-                "  The mini is the writer; work here was not expected. Use --force to discard it."
+                "  Production is the writer; work here was not expected. Use --force to discard it."
             )
             return 1
 
@@ -173,7 +180,7 @@ def pull(args, local: Path) -> int:
         subprocess.run(["ssh", args.host, f"rm -rf {shlex.quote(os.path.dirname(there))}"])
         print(
             f"snapshot {incoming.stat().st_size / 1e6:.1f} MB "
-            f"in {time.perf_counter() - started:.1f}s (VACUUM INTO on the mini)"
+            f"in {time.perf_counter() - started:.1f}s (VACUUM INTO on production)"
         )
 
         problems = verify(incoming, theirs)
@@ -220,7 +227,7 @@ def push(args, local: Path) -> int:
         print("  REFUSED: the remote holds rows this database does not.")
         for table, n in ahead.items():
             print(f"    {table}: {n} there, {mine.get(table, 0)} here")
-        print("  The mini is the writer. Pull first, or --force to overwrite its work.")
+        print("  Production is the writer. Pull first, or --force to overwrite its work.")
         return 1
 
     work = Path(tempfile.mkdtemp(prefix="sync-db-"))
@@ -253,7 +260,7 @@ def push(args, local: Path) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--host", default=DEFAULT_HOST, help="ssh host alias")
+    parser.add_argument("--host", default=None, help="ssh host alias (default: TRACKER_PROD_HOST)")
     parser.add_argument("--remote", default=DEFAULT_REMOTE, help="path on that host")
     parser.add_argument("--db", type=Path, default=None, help="database on this machine")
     parser.add_argument(
@@ -268,10 +275,22 @@ def main() -> int:
     args = parser.parse_args()
 
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    if args.db is None:
-        from tracker.config import get_settings
+    from tracker.config import get_settings
 
-        args.db = get_settings().resolve_db()
+    settings = get_settings()
+    if args.db is None:
+        args.db = settings.resolve_db()
+    if args.host is None:
+        args.host = (settings.prod_host or "").strip()
+    if not args.host:
+        raise SystemExit(
+            "no production host to talk to.\n"
+            "  Set TRACKER_PROD_HOST in .env to the ssh alias, or pass --host.\n\n"
+            "  It is EMPTY on the production host itself, which is why this refuses\n"
+            "  rather than defaulting: both directions of this script move a whole\n"
+            "  file over the other one, and 'here' on both ends would mean copying\n"
+            "  the authoritative database onto itself."
+        )
     local = Path(args.db)
     return push(args, local) if args.push else pull(args, local)
 
