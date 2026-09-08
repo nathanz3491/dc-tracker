@@ -2363,6 +2363,98 @@ def test_health_reports_the_commit_it_is_serving(server):
         assert body["commit"] == expected == deployed_commit()
 
 
+# --- reading HEAD out of the four shapes a checkout comes in ----------------
+#
+# `deployed_commit` parses `.git` by hand rather than shelling out to git, so the
+# layouts git can produce are this function's real input surface. A linked
+# worktree was the one it did not know about: `.git` is a file there, opening
+# `.git/HEAD` raised NotADirectoryError, and the health endpoint answered `None`
+# — indistinguishable from "no checkout at all", on the one endpoint whose whole
+# job is saying which commit is live.
+
+
+def _worktree_layout(tmp_path, sha: str, *, packed: bool) -> Path:
+    """What `git worktree add` leaves on disk, built by hand.
+
+    Fabricated rather than shelled out because the point is the parsing: a real
+    `git worktree add` needs a repository with a commit in it, and would test
+    git's behaviour rather than ours. The shape is the contract — a `.git` *file*
+    pointing at a per-worktree directory that holds HEAD and a `commondir`, with
+    the refs left behind in the shared directory.
+    """
+    common = tmp_path / "main.git"
+    (common / "refs" / "heads").mkdir(parents=True)
+    linked = common / "worktrees" / "wt"
+    linked.mkdir(parents=True)
+    (linked / "HEAD").write_text("ref: refs/heads/feature\n", encoding="utf-8")
+    (linked / "commondir").write_text("../..\n", encoding="utf-8")
+    if packed:
+        (common / "packed-refs").write_text(
+            f"# pack-refs with: peeled fully-peeled sorted \n{sha} refs/heads/feature\n",
+            encoding="utf-8",
+        )
+    else:
+        (common / "refs" / "heads" / "feature").write_text(sha + "\n", encoding="utf-8")
+    root = tmp_path / "checkout"
+    root.mkdir()
+    (root / ".git").write_text(f"gitdir: {linked}\n", encoding="utf-8")
+    return root
+
+
+@pytest.fixture
+def uncached_commit(monkeypatch):
+    """`home` and `deployed_commit` are both `lru_cache`d for the life of a process."""
+    from tracker.config import home as home_fn
+    from tracker.webui.server import deployed_commit as fn
+
+    def at(root):
+        monkeypatch.setenv("TRACKER_HOME", str(root))
+        home_fn.cache_clear()
+        fn.cache_clear()
+        return fn()
+
+    yield at
+    home_fn.cache_clear()
+    fn.cache_clear()
+
+
+def test_a_worktree_reports_its_own_head(tmp_path, uncached_commit):
+    """The bug: `.git` is a file in a linked worktree, so this reported nothing."""
+    sha = "1234567890abcdef1234567890abcdef12345678"
+
+    assert uncached_commit(_worktree_layout(tmp_path, sha, packed=False)) == sha[:8]
+
+
+def test_a_worktree_finds_a_packed_ref_in_the_shared_directory(tmp_path, uncached_commit):
+    """`refs/heads/*` belongs to the common directory, not the worktree's own.
+
+    Reading `packed-refs` beside the worktree's HEAD would find no file — which is
+    the state every worktree is in after a `git gc` on the main repository.
+    """
+    sha = "fedcba0987654321fedcba0987654321fedcba09"
+
+    assert uncached_commit(_worktree_layout(tmp_path, sha, packed=True)) == sha[:8]
+
+
+def test_an_ordinary_clone_is_unchanged(tmp_path, uncached_commit):
+    """Production runs an ordinary clone, so this is the path that must not move."""
+    sha = "0f0f0f0f1e1e1e1e2d2d2d2d3c3c3c3c4b4b4b4b"
+    root = tmp_path / "clone"
+    (root / ".git" / "refs" / "heads").mkdir(parents=True)
+    (root / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+    (root / ".git" / "refs" / "heads" / "main").write_text(sha + "\n", encoding="utf-8")
+
+    assert uncached_commit(root) == sha[:8]
+
+
+def test_no_checkout_still_reports_nothing(tmp_path, uncached_commit):
+    """A wheel or tarball install has no `.git`, and None is the honest answer."""
+    root = tmp_path / "installed"
+    root.mkdir()
+
+    assert uncached_commit(root) is None
+
+
 # --- the watchlist, the one write on the reading console --------------------
 #
 # **Every test here needs somebody signed in**, which is the change: a watchlist

@@ -12,6 +12,26 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **`/api/health` reported no commit at all when served from a linked worktree**
+  (`tracker/webui/server.py`, `tests/test_webui.py`).
+
+  `deployed_commit` opened `home()/.git/HEAD` directly. In a worktree `.git` is a
+  *file* holding `gitdir: <path>`, so that raised `NotADirectoryError`, the
+  `except OSError` swallowed it, and the endpoint answered `None` — which already
+  meant "a tarball install, no checkout here". The one endpoint whose entire job
+  is answering "which commit is live?" could not distinguish "none" from "I could
+  not read it", on the one question the deploy pipeline created.
+
+  It now resolves the `gitdir:` pointer, and reads refs from the **common**
+  directory that `commondir` names rather than from beside the worktree's HEAD —
+  `refs/heads/*` and `packed-refs` live in the shared directory, so the packed
+  path would otherwise have missed after any `git gc` on the main repository. An
+  ordinary clone takes the identical path it always did, both directories being
+  the same one; that is what production runs and it does not move.
+
+  This is also why `test_health_reports_the_commit_it_is_serving` failed for
+  anyone working in a worktree. It passes there now.
+
 - **A merge recorded the wrong decider on the identity it folded away**
   (`tracker/merge.py`, `tracker/dupresolve.py`, `tracker/triage.py`,
   `tests/test_merge.py`).

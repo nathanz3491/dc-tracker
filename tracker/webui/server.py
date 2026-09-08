@@ -73,6 +73,39 @@ AUTH_CACHE_S = 5.0
 READ_VIEWS: frozenset[str] = frozenset({"updates", "projects", "sources", "map", "capex", "help"})
 
 
+def _git_dirs(root: Path) -> tuple[Path, Path] | None:
+    """`(git dir, common dir)` for a checkout, or None when there is no `.git`.
+
+    The two are the same directory in an ordinary clone, and that is the case
+    production runs. They differ in a **linked worktree**, where `.git` is a
+    *file* holding `gitdir: <path>`: that directory carries the worktree's own
+    HEAD, but not its refs. `refs/heads/*` and `packed-refs` stay in the shared
+    directory, which the `commondir` file beside HEAD names.
+
+    Worth the two extra reads because the alternative is what this used to do —
+    try to open `.git/HEAD`, get NotADirectoryError, and report no commit at all.
+    """
+    dot = root / ".git"
+    if dot.is_dir():
+        return dot, dot
+    try:
+        pointer = dot.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if not pointer.startswith("gitdir: "):
+        return None
+    git_dir = Path(pointer[len("gitdir: ") :].strip())
+    if not git_dir.is_absolute():
+        git_dir = (root / git_dir).resolve()
+    try:
+        shared = Path((git_dir / "commondir").read_text(encoding="utf-8").strip())
+    except OSError:
+        return git_dir, git_dir  # a `.git` file that is not a worktree's
+    if not shared.is_absolute():
+        shared = (git_dir / shared).resolve()
+    return git_dir, shared
+
+
 @lru_cache(maxsize=1)
 def deployed_commit() -> str | None:
     """The commit this process is serving, or None when there is no checkout.
@@ -87,17 +120,25 @@ def deployed_commit() -> str | None:
     health check, and a subprocess per request is a cost with no return. Cached,
     because the answer cannot change without the process restarting — the
     deployer restarts it precisely so that it does.
+
+    None means "no checkout here", which a tarball or wheel install genuinely is.
+    It must not also mean "checkout I failed to read": that is a health endpoint
+    saying it does not know what it is serving, in the one situation the endpoint
+    exists for.
     """
-    head = home() / ".git" / "HEAD"
+    found = _git_dirs(home())
+    if found is None:
+        return None
+    git_dir, common = found
     try:
-        ref = head.read_text(encoding="utf-8").strip()
+        ref = (git_dir / "HEAD").read_text(encoding="utf-8").strip()
         if ref.startswith("ref: "):
-            target = home() / ".git" / ref[5:]
+            name = ref[5:]
+            target = common / name
             if target.is_file():
                 return target.read_text(encoding="utf-8").strip()[:8]
             # A packed ref: the loose file is gone once `git gc` has run.
-            packed = home() / ".git" / "packed-refs"
-            name = ref[5:]
+            packed = common / "packed-refs"
             for line in packed.read_text(encoding="utf-8").splitlines():
                 if line.endswith(f" {name}"):
                     return line.split()[0][:8]
