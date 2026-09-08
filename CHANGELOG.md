@@ -44,6 +44,43 @@ initial build of the v1 PRD.
   workflow file would commit those names to a public repository — the disclosure
   it exists to prevent. It stays local, beside the names.
 
+- **Four settings reached `.env.example`, and a test that keeps it that way**
+  (`.env.example`, `tests/test_config.py`).
+
+  `TRACKER_BOCHA_API_KEY`, `TRACKER_RETRY_BACKOFF_BASE_S`,
+  `TRACKER_RETRY_BACKOFF_MAX_S` and `TRACKER_MERGE_BY_PUBLICATION_DATE` were live
+  in `Settings` and named nowhere a reader would look. The search section also
+  still described the automatic order as "google, brave, serper", which stopped
+  being the whole list when bocha was added.
+
+  `test_env_example_names_every_setting` compares `Settings.model_fields` against
+  the file in **both** directions, so a setting added without a line fails at the
+  moment it is written, and a variable left behind after a field is deleted fails
+  too. It skips outside a checkout, where there is no `.env.example` to read.
+
+- **`.DS_Store` is ignored** (`.gitignore`). Public repository, developed on
+  macOS, and Finder writes them beside the files rather than at the root, so one
+  `git add -A` catches several. None has ever been committed here — that was luck
+  rather than a rule, and one is sitting untracked in the production checkout now.
+
+### Changed
+
+- **The console's documentation describes the console that exists**
+  (`docs/console-and-export.md`, `docs/analysis.md`, `tracker/webui/server.py`).
+
+  `POST /api/run` and the Commands, Runs and Routines views went when the console
+  became public and account-gated. That removal was recorded in one paragraph and
+  nowhere else, so the same file went on to call the console "able to execute the
+  commands that change the data", spend a page on flag pickers and the routine
+  table, and list the runner's three security properties as the reason the page is
+  safe to leave open — two sections below "nothing on the page can start one".
+
+  Now: the only write is `POST /api/watch`, the only spend is `/api/infer` behind
+  its confirmation string, and the loopback rule survives for the reason CLAUDE.md
+  gives. The no-shell and typed-name rules are not gone and the doc says where
+  they went. `analysis.md` no longer describes the duplicate panel as carrying the
+  merge, and the CSRF note in `server.py` names two POSTs that exist.
+
 ### Removed
 
 - **The console's named routines, and the runner that still executed them**
@@ -65,6 +102,20 @@ initial build of the v1 PRD.
   TUI and keep their tests.
 
   If routines come back, the run pane is where they belong.
+
+- **`db.write_lock`, a context manager with no callers** (`tracker/db.py`).
+
+  Every writing command takes the lock through `acquire_write_lock`, which returns
+  a release function because a CLI command with several early returns cannot wrap
+  its body in `with`. `write_lock` was the earlier form, kept after the switch and
+  never called again — and its body was a verbatim copy of `_claim` plus the
+  unlink `release` already does, so the locking rules were written down twice and
+  only one copy could be right. Its rationale, which was the better of the two,
+  moved onto `acquire_write_lock`.
+
+- **The `fixtures_dir` fixture** (`tests/conftest.py`). Three test modules read
+  `tests/fixtures/` and all three build the path themselves; nothing ever
+  requested the fixture by name.
 
 ### Fixed
 
@@ -111,6 +162,24 @@ initial build of the v1 PRD.
 
   This is also why `test_health_reports_the_commit_it_is_serving` failed for
   anyone working in a worktree. It passes there now.
+
+- **A config test that could not pass on macOS** (`tests/test_config.py`).
+
+  `test_without_a_checkout_it_is_the_platform_data_directory` redirected
+  `LOCALAPPDATA` and `XDG_DATA_HOME` into `tmp_path`, covering the Windows and
+  Linux branches of `_user_data_dir`. The darwin branch reads `Path.home()` and
+  consults no variable at all, so the assertion compared against the real
+  `~/Library` and could not hold however the environment was arranged. `Path.home`
+  moves with the other two now; Windows and Linux take the same path as before.
+
+- **The documented replay did not run** (`docs/design-decisions.md`).
+
+  "Reproducibility is a documented replay" is the whole argument for treating the
+  database as a build artifact, and both ingest lines in it were wrong: the CSV is
+  `pjm_2025q3_sample.csv`, not `pjm_2025q3.csv`, and `ingest manual` refuses the
+  seed without `--allow-placeholders` because every figure in it is the literal
+  string `PLACEHOLDER`. Corrected and run end to end against an empty
+  `TRACKER_HOME`: 22 migrations, 3 seed rows, 9 more from the queue export.
 
 - **A merge recorded the wrong decider on the identity it folded away**
   (`tracker/merge.py`, `tracker/dupresolve.py`, `tracker/triage.py`,
