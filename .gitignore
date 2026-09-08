@@ -50,6 +50,12 @@ venv/
 htmlcov/
 coverage.xml
 
+# macOS. Finder writes one into any directory it has been asked to display, so
+# they appear beside the files rather than at the root — and `git add -A` from a
+# repository root is how one reaches a public repo. Never committed here so far;
+# this is the line that keeps it that way, same reasoning as `work/` below.
+.DS_Store
+
 # Claude Code local state — machine-specific launch config and session locks
 .claude/
 
