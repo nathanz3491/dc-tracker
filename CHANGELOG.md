@@ -10,6 +10,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 First working version. Nothing has been released yet, so everything below is the
 initial build of the v1 PRD.
 
+### Added
+
+- **Continuous integration** (`.github/workflows/ci.yml`, `README.md`).
+
+  `pyproject.toml` and the README both state that a fresh clone with no API key
+  and no network must produce a green run, and nothing checked it — every test in
+  this repository ran on somebody's machine, configured by somebody, or not at
+  all. Five jobs, each pinned to a claim the repository already makes:
+
+  * `lint` — `ruff check` and `ruff format --check`.
+  * `test` — the suite on **3.11 and 3.12**, the ends of the supported range.
+    `requires-python` promises 3.11 and `target-version = "py311"` only stops ruff
+    suggesting newer syntax; it does not stop the interpreter accepting it.
+  * `coverage gate` — the command the README prints, `--cov-fail-under=80` over
+    `normalize` and `confidence`. Both sit above 90%, so it is a floor.
+  * `wheel install` — `tests/test_install.py` with `TRACKER_TEST_INSTALL=1`. Five
+    tests that build a real wheel and run `tracker` from outside any checkout,
+    skipped by default because they cost a minute, which meant they ran for
+    nobody — and they cover the failure that split `package_root` from `home`.
+  * `tracked files are not ignored` — `git ls-files | git check-ignore --stdin
+    --no-index`. `.gitignore` is what keeps the database, working documents and
+    anything naming the production host out of a public repository, and a file
+    can be tracked in spite of it; a `git reset` restoring one to the index has
+    happened here before.
+
+  **No secrets are configured for the workflow, deliberately.** A key available
+  there would let a `network` or `llm` test start passing for the wrong reason,
+  and the guarantee would stop being tested at the point it began to matter.
+
+  The deploy procedure's host-name leak guard is **not** in CI and should not be:
+  it greps for the production host's alias and domain, so putting it in a public
+  workflow file would commit those names to a public repository — the disclosure
+  it exists to prevent. It stays local, beside the names.
+
 ### Removed
 
 - **The console's named routines, and the runner that still executed them**

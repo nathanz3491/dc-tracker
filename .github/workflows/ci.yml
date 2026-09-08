@@ -1,0 +1,133 @@
+# What this repository already promises, enforced instead of remembered.
+#
+# `pyproject.toml` says it outright — "a fresh clone with no API key and no
+# network must produce a green run" — and until now nothing checked it. Every
+# job here starts from a clone and installs what the README tells a newcomer to
+# install, so the run that passes is the run they would get.
+#
+# **No secrets are configured for this workflow, and none should be.** The tests
+# that would spend tokens or reach the internet are marked `llm` and `network`
+# and deselected by `addopts`; a key available here would let one of them start
+# passing for the wrong reason, and the guarantee would stop being tested at the
+# moment it began to matter.
+#
+# The host-name leak guard from the deploy procedure is deliberately *not* here.
+# It works by grepping for the production host's alias and domain, so running it
+# in a public workflow file would mean committing those names to a public
+# repository — the exact disclosure it exists to prevent. It stays local, next
+# to the names, in the deploy runbook. `tracked-files-are-not-ignored` below is
+# the part that can be checked without naming anything, and it catches the
+# failure that guard was written after: a `git reset` quietly returning an
+# ignored file to the index.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: pip install -e ".[dev]"
+      - run: ruff check .
+      - run: ruff format --check .
+
+  test:
+    name: tests (py${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      # Both versions report. A failure on the floor version is a different
+      # piece of information from a failure on the current one, and cancelling
+      # the other leg throws that away.
+      fail-fast: false
+      matrix:
+        # The ends of the supported range. `requires-python = ">=3.11"` is a
+        # promise to anyone on 3.11, and `target-version = "py311"` only stops
+        # ruff suggesting newer syntax — it does not stop the interpreter
+        # accepting it, so the floor needs running rather than declaring.
+        python: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: pip install -e ".[dev]"
+      - run: pytest
+
+  coverage:
+    name: coverage gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: pip install -e ".[dev]"
+      # The gate the PRD asks for, and the exact command the README prints.
+      # Both modules sit above 90%, so 80 is a floor rather than a target.
+      - run: pytest --cov=tracker.normalize --cov=tracker.confidence --cov-fail-under=80
+
+  packaging:
+    name: wheel install
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: pip install -e ".[dev]"
+      # `tests/test_install.py` builds a real wheel, installs it into a fresh
+      # environment and runs `tracker` from outside any checkout. It is skipped
+      # by default because it costs about a minute, which means in practice it
+      # ran for nobody — and it covers the failure that split `package_root`
+      # from `home` in the first place: an installed CLI that cannot find its
+      # own migrations. A minute on a runner is the right place to spend it.
+      - run: pytest tests/test_install.py
+        env:
+          TRACKER_TEST_INSTALL: "1"
+
+  hygiene:
+    name: tracked files are not ignored
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # `.gitignore` is load-bearing here: it is what keeps working documents,
+      # client deliverables, the database and anything naming the production
+      # host out of a public repository. A file can still be tracked in spite of
+      # it — `git add -f`, or a `git reset` restoring one to the index, which has
+      # happened. `--no-index` is what makes check-ignore answer for files git
+      # already tracks; without it, tracked files are the ones it stays quiet
+      # about, which is exactly backwards for this question.
+      - name: no tracked file matches an ignore rule
+        run: |
+          leaked=$(git ls-files | git check-ignore --stdin --no-index || true)
+          if [ -n "$leaked" ]; then
+            echo "::error::these files are tracked but .gitignore says they should not be:"
+            echo "$leaked"
+            exit 1
+          fi
+          echo "clean: nothing tracked is ignored"

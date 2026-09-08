@@ -359,10 +359,16 @@ directory, which is what lets `tracker init` work from anywhere.
 .venv/Scripts/python -m pytest
 ```
 
-2,788 tests, about twelve minutes. **A fresh clone with no API key and no network access
+2,785 tests, about twelve minutes. **A fresh clone with no API key and no network access
 must produce a green run.** Tests that would hit the network or spend DeepSeek
 tokens are marked `network` / `llm` and deselected by default; run them
 explicitly with `-m network` or `-m llm`.
+
+That claim is checked rather than remembered: `.github/workflows/ci.yml` runs the
+suite on 3.11 and 3.12 from a clean clone with **no secrets configured**, which is
+the only way the "no API key" half of it stays true. It also runs the coverage
+gate below, and `tests/test_install.py` — the wheel build that is skipped locally
+because it costs a minute, and therefore ran for nobody.
 
 The coverage gate the PRD asks for:
 
