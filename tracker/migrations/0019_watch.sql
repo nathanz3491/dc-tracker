@@ -11,7 +11,7 @@
 -- current interest, expected to turn over monthly ("this month I care about
 -- these two, next month maybe another"), and it is edited by the person reading
 -- the console rather than by whoever is editing the code. That makes it data,
--- and data is made in the production checkout and travels in the database.
+-- and data is made on the host and travels in the database.
 --
 -- **Matching is by normalized key, kept beside the text as typed.** `entry` is
 -- what somebody wrote — "xAI" or "xAI | Colossus" — and is what gets shown back
