@@ -10,6 +10,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 First working version. Nothing has been released yet, so everything below is the
 initial build of the v1 PRD.
 
+### Removed
+
+- **The console's named routines, and the runner that still executed them**
+  (`tracker/webui/workflows.py`, `tracker/webui/runner.py`,
+  `tests/test_workflows.py`, `docs/console-and-export.md`).
+
+  `webui/workflows.py` defined six sequences — catch up on the news, tidy the
+  database, raise rows to T1 — for the Routines strip above the console's command
+  list. That strip went with `POST /api/run`; the module, `Runner.start_workflow`
+  and `Runner._execute_workflow` did not, and no interface has offered a routine
+  since. `tracker tui`'s run pane takes a typed command line instead.
+
+  Deleted rather than left waiting for a caller. Dead code that spawns
+  subprocesses and spends LLM tokens is not the harmless kind: its guarantees —
+  argv never a string, spending confirmed by name, one writer at a time — have to
+  keep holding while nothing exercises them, and the only thing still exercising
+  them was its own test file. Nothing else used it: `catalog.by_name`,
+  `catalog.build_argv` and `catalog.InvalidRequest` all have live callers in the
+  TUI and keep their tests.
+
+  If routines come back, the run pane is where they belong.
+
 ### Fixed
 
 - **`tracker tui --check` reported success for a read it had given up on**

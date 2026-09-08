@@ -233,12 +233,15 @@ live CLI and `webui/runner.py` still spawns without a shell, and both now serve
 the TUI's run pane, which is why they are still filed under `webui/`. See
 [The terminal interface](tui.md).
 
-The one loose end is `webui/workflows.py`, which defines the named sequences the
-old Routines strip ran — catch up on the news, tidy the database, raise rows to
-T1. `Runner.start_workflow` still validates and executes one, and **nothing calls
-it outside the test suite**: the TUI's run pane takes a typed command line and
-offers no routines. Re-expose them there or delete the module; it is recorded here
-so the choice is made rather than defaulted into.
+The Routines themselves are gone too, and that took a second decision.
+`webui/workflows.py` defined six named sequences — catch up on the news, tidy the
+database, raise rows to T1 — and `Runner.start_workflow` outlived the strip that
+called them by some months, still validating and executing a sequence that no
+interface offered. Dead code that spawns subprocesses and spends LLM tokens is
+worse than dead code that computes a number, because its guarantees have to stay
+correct while nobody is exercising them. Deleted rather than left waiting for a
+caller. If routines return, the run pane in `tracker tui` is where they belong,
+and the reasoning is in this file's history.
 
 **The AI overview** in each project drawer is the one thing in the console that
 is a *reading* of the values rather than one of them. It is a card in the stats
