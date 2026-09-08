@@ -10,7 +10,7 @@ ruled out, replayed by `scripts/eval_pairs.py --detection` on the production dat
 > the moment it was asked of the real database. A copy pulled weeks earlier is a
 > different corpus, not a smaller view of the same one, and a conclusion drawn from
 > one is worth what its sample is worth. `scripts/eval_pairs.py` runs read-only, so
-> it can be run on the host: `ssh $PROD 'cd ~/dev/tracker/repo && .venv/bin/python
+> it can be run against production: `python scripts/prod.py '.venv/bin/python
 > scripts/eval_pairs.py --detection'`.
 
 ## The shape

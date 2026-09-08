@@ -45,8 +45,12 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO"
 
 # launchd and cron hand a process a minimal PATH, and the `tracker` shim lives in
-# ~/.local/bin which is not on it. Go through the venv interpreter, as ops/serve.sh
-# does, so this behaves the same run by hand and run by a scheduler.
+# ~/.local/bin which is not on it. Go through the venv interpreter, as the
+# deployer's own scripts in ops/ do, so this behaves the same run by hand and run
+# by a scheduler. On the production machine that shim is also the guard from
+# CLAUDE.md §2, which refuses a write from outside the production checkout --
+# this would pass it, having just cd'd there, but naming the interpreter says
+# which database is meant rather than relying on where the process stands.
 export PATH="/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 PY="$REPO/.venv/bin/python"
 tracker() { "$PY" -m tracker "$@"; }

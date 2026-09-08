@@ -56,7 +56,9 @@ cd "$REPO"
 # launchd hands a process a minimal PATH, and the `tracker` shim lives in
 # ~/.local/bin which is not on it. The venv interpreter is reachable because we
 # just resolved the repo, so go through it rather than the shim -- the same
-# reasoning ops/serve.sh uses for the same reason.
+# reasoning the deployer's own scripts in ops/ use. It also says which database
+# is meant outright, rather than depending on the shim's guard (CLAUDE.md §2)
+# reading the working directory.
 export PATH="/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 PY="$REPO/.venv/bin/python"
 tracker() { "$PY" -m tracker "$@"; }

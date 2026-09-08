@@ -617,10 +617,11 @@ def digest(
 
     The same reading the console's landing page renders, in a form that can be
     sent: `tracker digest --markdown --days 1` is the nightly note. Reads only, so
-    it is safe on either machine.
+    it is safe in any checkout.
 
     **`--user` is what makes it the same reading.** Without it this runs over every
-    account's watchlist at once, which is what a terminal on the host wants;
+    account's watchlist at once, which is what a terminal in the production checkout
+    wants;
     `--user alice@example.com` reproduces exactly the page alice sees, which is the
     form to schedule if the nightly note is going to *her*.
 

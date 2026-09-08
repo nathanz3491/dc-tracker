@@ -104,8 +104,8 @@ def tui(
 #: cannot any more — the runner is gone — so the flag does nothing.
 #:
 #: **It is still accepted, and that is a deploy-safety decision rather than
-#: politeness.** The host's `serve.sh` lives outside the repo (`deploy/` is
-#: gitignored, per CLAUDE.md §5), so the poller does not update it: it will keep
+#: politeness.** Production's `serve.sh` lives outside the repo (`ops/` is not
+#: tracked, per CLAUDE.md §5), so the poller does not update it: it will keep
 #: passing `--no-run` after this commit lands. A flag that errored would turn the
 #: next launchd restart into an argument-parsing failure with nothing serving the
 #: console — an outage caused by a *removal*, which is the worst kind to debug.

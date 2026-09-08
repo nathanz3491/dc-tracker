@@ -58,15 +58,19 @@ rows, a single-writer check because SQLite takes one writer, and the rule that t
 console assembles an **argument list** and never a command string. All three were
 correct.
 
-The reasoning is that **nobody used it**. The database is changed from the CLI, by
-one person, on the host — that is what `CLAUDE.md` has said all along. So the
+The reasoning is that **nobody used it**. The database is changed from the CLI, in
+the production checkout — that is what `CLAUDE.md` §2 has said all along. So the
 runner was three security properties that had to stay correct forever, behind a
 public URL, in exchange for a feature with no users. Deleting it removes the whole
 class of question rather than answering it again each time the page changes.
 
 `tracker tui` is where the buttons live now, and it is the better home for them:
 it runs in a terminal on the machine that owns the database, so "who may start
-this?" is answered by ssh rather than by a cookie. It still shares
+this?" is answered by a shell there rather than by a cookie. That answer used to
+be "by ssh", and it was shorter: reaching the machine at all was the whole gate,
+because the only other machine could not touch this data. Agents now run on this
+one, so the gate is a shell **plus** standing in the production checkout, which
+is what §2's `tracker` wrapper checks. It still shares
 `webui/catalog.py` and `webui/runner.py` with what used to be here — the
 introspection and the process handling were never the problem — which is why
 those modules survive a change that deleted their only HTTP caller.
@@ -138,8 +142,8 @@ always had for an empty list.
 ### The terminal reads across everybody
 
 `tracker watch` and `tracker digest` default to **every** account's entries,
-because a terminal on the host is looking at the database rather than at one
-person's slice of it; the listing carries an owner column so the rows stay
+because a terminal in the production checkout is looking at the database rather
+than at one person's slice of it; the listing carries an owner column so the rows stay
 distinguishable. `--user alice@example.com` narrows either to one person, and
 `digest --user` is what reproduces exactly the page that person sees — the form to
 schedule if the nightly note is going to *her*.

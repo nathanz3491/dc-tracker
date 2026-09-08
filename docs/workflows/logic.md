@@ -10,7 +10,8 @@ it can be sound.
 
 `logic check` never writes and runs anywhere. `logic conflicts` writes only with
 `--apply`; `logic resolve` writes on every path except a non-interactive run with
-no flags. Per `CLAUDE.md` §2, the writing forms run on the production host.
+no flags. Per `CLAUDE.md` §2, the writing forms run in the production checkout, by way of
+`python scripts/prod.py tracker …`.
 
 ![The logic workflow: four layers of check ordered by cost, then the two commands that can settle something](logic.svg)
 

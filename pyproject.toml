@@ -18,7 +18,7 @@ dependencies = [
     "httpx>=0.27",
     # `tracker tui`. A required dependency rather than an extra, because the TUI is
     # one of the three interfaces this project offers and an interface behind an
-    # install flag is one nobody on the host has. It brings four small pure-Python
+    # install flag is one nobody running production has. It brings four small pure-Python
     # packages and Rich, which was already here.
     #
     # `tracker/tui/__init__.py` still imports it lazily: the deployer refuses a

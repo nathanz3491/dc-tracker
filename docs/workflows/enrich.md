@@ -7,11 +7,11 @@
 filled fields out of twelve, using six harvesters cheapest-first so an expensive
 method never runs for a field a free one would have filled.
 
-It **writes**, it takes the single-writer lock, and per `CLAUDE.md` §2 it runs on
-the production host:
+It **writes**, it takes the single-writer lock, and per `CLAUDE.md` §2 it runs in
+the production checkout:
 
 ```bash
-ssh $PROD 'tracker enrich --select 30'
+python scripts/prod.py tracker enrich --select 30
 ```
 
 ![The enrich workflow: choosing rows, the six harvesters and the round loop, then the settle and agent passes](enrich.svg)

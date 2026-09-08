@@ -34,5 +34,6 @@ is the one worth reading if you care about how per-field evidence works.
 judgement they encode, and those are the two modules where the reasoning matters
 more than the code.
 
-`CLAUDE.md` at the repo root is the operating rules — which machine may write data,
-how code reaches production, and what must never be committed.
+`CLAUDE.md` at the repo root is the operating rules — which *checkout* may write
+data, how code reaches production, and what must never be committed. `/deploy`
+(`.claude/commands/deploy.md`) is the procedure that follows from them.

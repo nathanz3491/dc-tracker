@@ -18,8 +18,8 @@ sends it over ssh:
 
 **Why not just tell people to omit the ssh.** Because the repo is public and
 `CLAUDE.md` §6 forbids naming the production host in any tracked file — no
-hostname, no ssh alias, no launchd label. A committed page cannot say `ssh mm`,
-and `ssh $PROD` only works if every reader has exported `$PROD`. Reading the
+hostname, no ssh alias, no launchd label. A committed page cannot name the alias
+at all, and `ssh $PROD` only works if every reader has exported it. Reading the
 alias from configuration is what lets a committed instruction talk about the host
 without naming it, and lets the same line be run by an agent on the host and by a
 person on a laptop.
