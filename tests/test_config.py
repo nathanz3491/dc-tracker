@@ -156,3 +156,30 @@ def test_the_policy_writer_never_writes_into_the_package(monkeypatch, tmp_path):
 
     assert written == tmp_path / "seed" / "sources.toml"
     assert package_root() not in written.parents
+
+
+def test_env_example_names_every_setting():
+    """`.env.example` is the only list of what can be configured, so a setting
+    missing from it is a setting nobody finds.
+
+    Four had gone missing by the time this was written — a search backend and
+    three tuning knobs — each added to `Settings` without the file being touched,
+    and nothing said so. Checked in both directions: a name here that is no longer
+    a field sends the reader looking for a variable that does nothing.
+
+    Skipped rather than failed when the file is absent, because a wheel carries the
+    package and not the repository.
+    """
+    import re
+
+    example = package_root().parent / ".env.example"
+    if not example.is_file():
+        pytest.skip("not a checkout")
+
+    named = set(
+        re.findall(r"^#?\s*(TRACKER_[A-Z0-9_]+)=", example.read_text(encoding="utf-8"), re.M)
+    )
+    fields = {f"TRACKER_{name.upper()}" for name in Settings.model_fields}
+
+    assert fields - named == set(), "in Settings, undocumented in .env.example"
+    assert named - fields == set(), "named in .env.example, not a Settings field"
