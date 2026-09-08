@@ -17,8 +17,6 @@ from sqlalchemy import Engine
 from tracker.config import Settings, get_settings
 from tracker.db import init_db, session_scope
 
-FIXTURES = Path(__file__).parent / "fixtures"
-
 
 @pytest.fixture(autouse=True)
 def _fast_and_keyless_settings(monkeypatch):
@@ -98,11 +96,6 @@ def engine(db_path: Path) -> Engine:
 def session(engine: Engine):
     with session_scope(engine) as s:
         yield s
-
-
-@pytest.fixture
-def fixtures_dir() -> Path:
-    return FIXTURES
 
 
 #: The password every test account is created with. Long enough to clear
