@@ -81,8 +81,33 @@ def console_url() -> str:
 
 
 def describe() -> str:
+    """Where a command would run, said honestly.
+
+    **Unset and empty are the same value**, and that is a trap worth spending
+    code on: `TRACKER_PROD_HOST` is deliberately EMPTY on production to mean
+    "here", so a checkout that was never configured at all reports the same
+    thing, and claims to be production. That is exactly wrong in the place it
+    matters most — a fresh agent worktree, which has no `.env` of its own — and
+    this function is the diagnostic somebody runs to find out where they stand.
+
+    So "here" is only believed when the marker backs it up.
+    """
+    checkout = (settings().prod_checkout or "").strip()
+    if not checkout:
+        return (
+            "nowhere: TRACKER_PROD_CHECKOUT is not set, so this checkout does not\n"
+            "  know where production is. It is per-machine config, not a secret"
+        )
     host = prod_host()
-    return f"over ssh, on `{host}`" if host else "locally - this machine is production"
+    if host:
+        return f"over ssh, on `{host}`, in {checkout}"
+    if (Path(checkout).expanduser() / ".production").is_file():
+        return f"locally, in {checkout} - this machine is production"
+    return (
+        f"nowhere reachable: TRACKER_PROD_HOST is empty, which means 'here', but\n"
+        f"  {checkout} carries no .production marker. Either this is not the\n"
+        "  production machine and the alias is simply unset, or the marker is missing"
+    )
 
 
 def prod_checkout() -> str:
@@ -114,6 +139,19 @@ def run_there(command: str) -> int:
     caches the command is meant to be using.
     """
     host = prod_host()
+    checkout = prod_checkout()
+    if not host and not (Path(checkout).expanduser() / ".production").is_file():
+        # Empty means "here", and "here" has to be provable. Without this, an
+        # unconfigured workspace -- a fresh worktree with no .env -- would read
+        # unset as empty, believe it was production, and run a writing command
+        # against whatever `cd` landed on.
+        raise SystemExit(
+            f"refusing to treat this machine as production: {checkout} carries no\n"
+            "  .production marker, and TRACKER_PROD_HOST is empty.\n\n"
+            "  Empty means 'here', so an unset alias looks identical to being\n"
+            "  production. Set TRACKER_PROD_HOST to the ssh alias if this is not\n"
+            "  the production machine."
+        )
     line = f"cd {_cd_target()} && {command}"
     argv = ["ssh", host, line] if host else ["sh", "-c", line]
     return subprocess.run(argv).returncode
