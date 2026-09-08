@@ -216,9 +216,9 @@ run did without re-exporting anything. Reload to pick up a run that finished whi
 you were reading; nothing on the page can start one.
 
 **Different from `tracker export html`, and both are worth having.** The export is
-one self-contained file you can email; it is frozen at the moment it was written
-and cannot run anything. The console is a server: live, and able to execute the
-commands that change the data.
+one self-contained file you can email; it is frozen at the moment it was written.
+The console is a server: it reads the database on every request, so it is live —
+which is the whole difference. Neither one runs a command.
 
 Hovering any value shows the sentence behind it. That works because the evidence
 gate's per-field quotes are now stored (`source.quotes`, migration 0007) rather
@@ -227,41 +227,18 @@ below. Citations recorded before that migration fall back to the source excerpt
 and the page says so rather than passing a paragraph off as the sentence behind
 one number.
 
-**Running commands from the browser.** The Commands view is built by introspecting
-the CLI itself, so it cannot fall behind: every flag appears with its real type,
-default and help. Output streams into the Runs view and is kept per run under
-`data/runs/`.
+**What went with the Commands and Runs views** — see "One console, and it reads"
+above for why they went. The machinery did not: `webui/catalog.py` still reads the
+live CLI and `webui/runner.py` still spawns without a shell, and both now serve
+the TUI's run pane, which is why they are still filed under `webui/`. See
+[The terminal interface](tui.md).
 
-Flags are rendered for someone who has not used a terminal — a plain-language
-label with the real flag beside it, a picker listing the actual projects instead
-of an id you have to go and look up, presets around the CLI's own default rather
-than an empty number box, and the thirteen flags on `sync` folded down to the ones
-you might change. The argv preview stays: it is the honest record of what will
-run, it is what you paste into a terminal on a read-only console, and matching it
-against the labels is how someone graduates to the CLI.
-
-**Routines** sit above the command list, because for most visits the question
-"what do I run to catch up" has one right answer and it is three commands in a
-particular order:
-
-| Routine | Steps |
-| --- | --- |
-| Catch up on the news | `sync` → `ingest geo` → `logic check` |
-| Deepen what we already have | `enrich` → `ingest geo` → `gaps` |
-| Tidy the database | `duplicates` → `logic check` → `stats` |
-| Raise rows to T1, free | `duplicates` → `backfill blocks` → `backfill derive` → `logic resolve --auto` → `blocks` → `clean` |
-| Raise rows to T3, with a model | `audit resolve` → `risks confirm` → `logic resolve --llm` → `logic conflicts` → `clean` |
-| Prepare a report | `stats` → `capex` → `verify` |
-
-The order carries reasons the page now states: geography is a free lookup, so
-deriving it *after* the read locates the rows that just arrived; contradictions
-come from new values, so checking logic before the read reports problems the run
-was about to fix. Each runs as **one job with one log and one entry in the
-history** — not chained by the browser, where a closed tab would abandon the
-sequence halfway. It stops at the first real failure, except for steps like
-`duplicates` that exit non-zero when they *find* something, which is an answer
-rather than a breakage. Adding a seventh routine is eight lines in
-`webui/workflows.py`; a node editor would have been a builder nobody asked for.
+The one loose end is `webui/workflows.py`, which defines the named sequences the
+old Routines strip ran — catch up on the news, tidy the database, raise rows to
+T1. `Runner.start_workflow` still validates and executes one, and **nothing calls
+it outside the test suite**: the TUI's run pane takes a typed command line and
+offers no routines. Re-expose them there or delete the module; it is recorded here
+so the choice is made rather than defaulted into.
 
 **The AI overview** in each project drawer is the one thing in the console that
 is a *reading* of the values rather than one of them. It is a card in the stats
@@ -323,35 +300,32 @@ The reply is markdown — one sentence, then two or three bullets — rendered t
 React elements by a small parser in `app.js`. Deliberately **not** `innerHTML`:
 this text is written by a model out of articles fetched from the open web, which
 makes it the least trustworthy string in the product, and turning it into markup
-would run a path from someone else's page into a console that executes commands.
+would run a path from someone else's page into a session cookie on this one.
 Links are flattened to their text for the same reason. Verified by feeding the
 panel a briefing containing `<script>` and an `onerror` attribute: both render as
 characters, nothing executes.
 
-Three things bound what that can do, and they are the reason it is safe to leave
-open:
+Three things bound what the console can do, and they are the reason it is safe to
+leave open:
 
 * **The bind address.** Loopback only. `--host` anything else is refused without
-  `--allow-remote`, because anyone who can reach the port can start a run.
-* **No shell, ever.** A request names a command and a flag object; the server
-  validates both against the catalog and builds an argument *list*. Nothing is
-  concatenated into a command line, so `;`, backticks and `&&` are inert. An
-  unknown flag is an error rather than something passed through — which is how a
-  `--db` or an `--out` would otherwise arrive.
-* **Spending is confirmed.** `sync`, `enrich`, `infer`, `search`, `point`,
-  `logic check`, `ingest crawl` and `ingest edgar` spend real LLM tokens, and no
-  single click can start one — the UI asks a second time and says what it will
-  cost. A routine containing any of them is confirmed the same way, so wrapping a
-  command in a sequence is not the way around this.
-* **Destruction is confirmed too**, on its own axis, and more heavily. `merge`
-  spends nothing and is the only command here that cannot be undone, so it still
-  takes the command name typed out — proportionate friction in front of an
-  irreversible act, where a second click is proportionate to spending money you
-  can decide to spend again. The check is on the command name, not its flags, so
-  no argument combination talks its way past it.
-* **A routine is not a back door.** Its steps are validated against the same
-  catalog, so a blocked command — `cloudflare`, which publishes this page to a
-  public URL — cannot be reached by putting it in a sequence.
+  `--allow-remote`. A tunnel bypasses that check by design — every request
+  arrives from 127.0.0.1 — which is why publishing with no accounts is refused
+  outright: the sign-in is what replaces the bind rule, not an addition to it.
+* **Nothing on the page changes a project.** `POST /api/watch` is the only write
+  there is and it acts on the signed-in account's own list. No route edits a
+  project, a citation or a figure, and none deletes one — `merge`, the only
+  command in this tool that cannot be undone, is a CLI job.
+* **Spending is confirmed.** `/api/infer` and the two overview streams are the
+  routes that call a model. `infer` is a POST gated on a confirmation string
+  rather than something a drawer runs when it opens, so the cost is paid on a
+  deliberate click and a back button cannot re-issue it. `serve --no-ai` turns
+  all three off.
+
+The no-shell, typed-name and single-writer rules that used to be listed here went
+with the runner. They are not gone — `webui/catalog.py` and `webui/runner.py`
+still enforce every one of them for the caller that still exists, which is the
+TUI's run pane. See [The terminal interface](tui.md).
 
 `--ai/--no-ai` governs the panels that call a model — the project briefing,
 `infer`, the capex overview. They *read* a row and spend tokens, and `tracker

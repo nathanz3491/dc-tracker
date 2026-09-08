@@ -102,10 +102,16 @@ words* and the numbers stay where they are correct — on the card above the pro
 and in the table behind it.
 
 The duplicate review also lives on that page rather than under Coverage: the
-repair belongs next to the figure it protects. Reviewing a group by eye is also the one thing a browser does
-better than the CLI — the candidate rows sit side by side with their capacity,
-citation count and dates, a radio picks the survivor, and the merge runs through
-the same `/api/run` path as everything else, behind the typed confirmation.
+reading belongs next to the figure it protects. Reviewing a group by eye is the
+one thing a browser does better than the CLI — the candidate rows sit side by side
+with their capacity, citation count and dates, and the panel says how much capacity
+is claimed twice between them and why the backend raised the pair.
+
+**It reports; it does not repair.** The survivor radio and the typed confirmation
+went with the console's runner, so folding the rows is `tracker duplicates` and
+then `tracker merge`. The panel stayed anyway: a duplicate is how a number gets
+counted twice, and a reader looking at a capex total deserves to know one is
+suspected even on a page that cannot fix it.
 
 Which id survives decides more than a row number: quantitative fields are
 recomputed from the combined citations, but identity fields — name, company,

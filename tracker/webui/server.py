@@ -349,8 +349,9 @@ class Handler(BaseHTTPRequestHandler):
             value = f"{COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"
         else:
             # SameSite=Lax is doing real work: it is what stops another site
-            # POSTing to /api/run with this cookie attached. HttpOnly keeps it
-            # out of reach of any script that gets injected into the page.
+            # POSTing to /api/watch or /api/infer with this cookie attached — the
+            # one that writes a row and the one that spends a token. HttpOnly
+            # keeps it out of reach of any script injected into the page.
             value = f"{COOKIE}={token}; Path=/; Max-Age={self.console.gate.session_ttl}; HttpOnly; SameSite=Lax"
         if self._https():
             value += "; Secure"

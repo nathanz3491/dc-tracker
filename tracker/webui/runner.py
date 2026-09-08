@@ -44,7 +44,12 @@ class Busy(RuntimeError):
 
 
 class Runner:
-    """The single-slot executor behind /api/run."""
+    """The single-slot executor behind the TUI's command palette.
+
+    It was the console's `/api/run` first; that route is gone and `tracker tui` is
+    the only caller now. What the console dropped was the *spawning*, not this —
+    the three properties above are the reason the palette is safe to keep.
+    """
 
     def __init__(self, db_path: str | Path) -> None:
         self.db_path = str(db_path)
