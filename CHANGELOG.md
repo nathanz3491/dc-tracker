@@ -12,6 +12,30 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **`tracker tui --check` reported success for a read it had given up on**
+  (`tracker/tui/__init__.py`, `tests/test_tui.py`).
+
+  The headless check waits for the worker thread to deliver a snapshot, and
+  recorded "the database was still being read" in `app.startup_problems` when the
+  wait ran out. `TrackerApp._loaded` **replaces** that list rather than adding to
+  it — correct for a reload, which should show its own problems — so a read that
+  finally arrived while the panes were being walked erased the record on its way
+  past, and the check exited 0. That is precisely the bug the wait was added to
+  prevent, arriving by the slow path instead of the fast one.
+
+  Measured: with the wait set to 0.3s, a read taking 0.4s to 0.8s exits 0 every
+  time. It is also why `test_a_check_that_never_gets_the_data_fails_instead_of_
+  passing` failed about two runs in six — at 2s the read normally lands after the
+  walk, but under a full-suite load each `pilot.pause()` stretches until the walk
+  is still running when it arrives. The check now keeps the timeout in a local and
+  combines it at the end, so nothing the app does to its own state can erase it.
+
+  The wait is also a real clock now. It subtracted 0.05 per iteration of
+  `await asyncio.sleep(0.05)`, which returns after *at least* 50ms — so it counted
+  loop turns, called them seconds, and on a loaded machine ran several times
+  `LOAD_TIMEOUT_S` before reporting that number as the deadline. Sub-second
+  timeouts also printed as "0s"; the message names the real figure now.
+
 - **`/api/health` reported no commit at all when served from a linked worktree**
   (`tracker/webui/server.py`, `tests/test_webui.py`).
 

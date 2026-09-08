@@ -131,6 +131,7 @@ def run(
         return 0
 
     import asyncio
+    import time
 
     async def _headless() -> int:
         app = TrackerApp(db_path)
@@ -139,14 +140,25 @@ def run(
             # moment after mount. Without waiting for it, this reported "every pane
             # filled" having filled none of them — the check passing precisely
             # because it had not happened yet.
-            deadline = LOAD_TIMEOUT_S
-            while deadline > 0 and not app.snapshot.payload and not app.startup_problems:
+            #
+            # A real clock, not a count of sleeps. `asyncio.sleep(0.05)` returns
+            # after *at least* 50ms, so subtracting 0.05 per iteration measured
+            # loop turns and called them seconds — on a loaded machine the wait
+            # ran several times `LOAD_TIMEOUT_S` and then reported that number.
+            deadline = time.monotonic() + LOAD_TIMEOUT_S
+            while (
+                time.monotonic() < deadline
+                and not app.snapshot.payload
+                and not app.startup_problems
+            ):
                 await asyncio.sleep(0.05)
-                deadline -= 0.05
-            if not app.snapshot.payload and not app.startup_problems:
-                app.startup_problems.append(
-                    f"the database was still being read after {LOAD_TIMEOUT_S:.0f}s"
-                )
+            # Held here rather than appended to `app.startup_problems`, which is
+            # the app's own state and is *replaced* wholesale when a load lands
+            # (`TrackerApp._loaded`). A read that finally arrived during the pane
+            # walk below therefore erased the timeout just recorded, and the check
+            # exited 0 — the exact failure this wait was added to prevent, now
+            # arriving by the slow path instead of the fast one.
+            timed_out = not app.snapshot.payload and not app.startup_problems
             # Every pane, not just the one that opens: a broken query in the capex
             # view is exactly the kind of thing this is meant to catch. The loop
             # variable is not `pane` — shadowing the argument left every screenshot
@@ -163,7 +175,9 @@ def run(
                 Path(screenshot).write_text(
                     _local_fonts(app.export_screenshot(title=app.title)), encoding="utf-8"
                 )
-            problems = app.startup_problems
+            problems = list(app.startup_problems)
+        if timed_out:
+            problems.insert(0, f"the database was still being read after {LOAD_TIMEOUT_S:g}s")
         for problem in problems:
             print(f"error {problem}")
         return 1 if problems else 0

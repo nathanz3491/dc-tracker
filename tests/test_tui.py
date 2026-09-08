@@ -639,3 +639,65 @@ def test_a_check_that_never_gets_the_data_fails_instead_of_passing(curated: Path
     result = invoke(curated, "tui", "--check")
     assert result.exit_code == 1
     assert "still being read" in result.output
+
+
+def test_a_read_that_lands_late_does_not_erase_the_timeout(curated: Path, monkeypatch):
+    """The same bug again, arriving by the slow path — and the flake above it.
+
+    `TrackerApp._loaded` *replaces* `startup_problems` rather than adding to it,
+    because a reload should show the problems of the load it just did. The check
+    used to record its timeout in that same list, so a read that finally arrived
+    while the panes were being walked wiped the record on its way past and
+    `--check` exited 0 — reporting success for a read it had already given up on.
+
+    That is what made the test above fail roughly two runs in six: at 2s the read
+    normally lands after the walk has finished, but under a full-suite load each
+    `pilot.pause()` stretches until the walk is still going when it arrives. Here
+    the timeout is short and the read deliberately lands mid-walk, so the ordering
+    is the test rather than the weather.
+    """
+    import time
+
+    from tracker import tui as tui_mod
+    from tracker.tui import data as data_mod
+
+    monkeypatch.setattr(tui_mod, "LOAD_TIMEOUT_S", 0.1)
+
+    def late(_cls, _db):
+        time.sleep(0.6)
+        return data_mod.Snapshot()
+
+    monkeypatch.setattr(data_mod.Snapshot, "load", classmethod(late))
+    result = invoke(curated, "tui", "--check")
+
+    assert result.exit_code == 1, "a read that beat the walk erased the timeout"
+    assert "still being read" in result.output
+
+
+def test_the_timeout_message_names_the_timeout_that_was_set(curated: Path, monkeypatch):
+    """`{LOAD_TIMEOUT_S:.0f}` rendered every sub-second timeout as "0s".
+
+    Cosmetic on production's 60s, and not cosmetic at all when reading a failure
+    from a test run or a shortened check: "still being read after 0s" names a
+    deadline nobody set and sends the reader looking for a zero somewhere.
+
+    This pins the reported number, not the length of the wait. Total runtime is
+    not the wait: `run_test()` cannot leave until the worker thread returns, so a
+    slow read is paid for on the way out whatever the check decided.
+    """
+    import time
+
+    from tracker import tui as tui_mod
+    from tracker.tui import data as data_mod
+
+    monkeypatch.setattr(tui_mod, "LOAD_TIMEOUT_S", 0.25)
+
+    def slow(_cls, _db):
+        time.sleep(2)
+        return data_mod.Snapshot()
+
+    monkeypatch.setattr(data_mod.Snapshot, "load", classmethod(slow))
+    result = invoke(curated, "tui", "--check")
+
+    assert result.exit_code == 1
+    assert "still being read after 0.25s" in result.output, result.output
