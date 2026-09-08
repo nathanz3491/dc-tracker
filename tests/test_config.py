@@ -74,9 +74,16 @@ def test_without_a_checkout_it_is_the_platform_data_directory(monkeypatch, tmp_p
 
     Faked by pointing the package somewhere with no `pyproject.toml` above it, since
     the suite itself always runs from a checkout.
+
+    `Path.home` is moved as well, not just the two environment variables. Windows
+    and Linux read LOCALAPPDATA and XDG_DATA_HOME, so redirecting those covers both;
+    the macOS branch of `_user_data_dir` reads `~/Library/Application Support` and
+    consults no variable at all, which left `tmp_path in got.parents` unsatisfiable
+    on darwin however the environment was arranged.
     """
     monkeypatch.delenv("TRACKER_HOME", raising=False)
     monkeypatch.setattr("tracker.config.Path.cwd", staticmethod(lambda: tmp_path))
+    monkeypatch.setattr("tracker.config.Path.home", staticmethod(lambda: tmp_path))
     monkeypatch.setattr("tracker.config.__file__", str(tmp_path / "nowhere" / "config.py"))
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "share"))
