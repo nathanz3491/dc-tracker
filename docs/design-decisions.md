@@ -640,9 +640,14 @@ which is the literal evidence — and reproducibility is a documented replay:
 
 ```bash
 tracker init
-tracker ingest manual --json sample-projects.json
-tracker ingest pjm --csv data/raw/pjm_2025q3.csv --iso pjm
+tracker ingest manual --json sample-projects.json --allow-placeholders
+tracker ingest pjm --csv data/raw/pjm_2025q3_sample.csv --iso pjm
 ```
+
+`--allow-placeholders` is required, not optional: the seed ships every figure as
+the literal string `PLACEHOLDER` — see [The seed file](#the-seed-file) — and
+`ingest manual` refuses the file without it rather than storing a placeholder as
+a value.
 
 ## Other decisions worth recording
 
