@@ -10,75 +10,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 First working version. Nothing has been released yet, so everything below is the
 initial build of the v1 PRD.
 
-### Changed
-
-- **The operating rules are about checkouts now, not machines** (`CLAUDE.md`,
-  `.claude/commands/deploy.md`, `scripts/prod.py`,
-  `scripts/check_no_host_names.py`, `scripts/sync_db.py`, `tracker/config.py`,
-  `.gitignore`, `docs/workflows/*.md`, `docs/architecture.md`, `docs/tui.md`).
-
-  `CLAUDE.md` opened with "Two machines run this project. Which one you are on
-  decides what you may do," and §2 read "Data is made on the production host.
-  Ingest here writes nothing that survives." That was never advice — it was a
-  statement about distance. The dev machine *could not* reach production's
-  database, so no rule had to stop it.
-
-  Agents now run on the production machine, in git worktrees of this repo. The
-  distance is gone, and the rule as written inverted into an instruction to go
-  and write production. What decides permission is what a checkout *is*: one
-  carries a `.production` marker, serves the console and owns the authoritative
-  database; every other checkout — a worktree, a laptop's clone — writes only its
-  own. Three mechanisms replace the distance, and only the first is in this repo:
-  `tracker` on `PATH` there is a wrapper that allows reads from anywhere and
-  refuses writes from outside the production checkout; a workspace's own `.venv`
-  resolves `home()` to itself; a workspace never receives production's `.env`, so
-  it holds no keys to spend.
-
-  **`.claude/commands/` and `.claude/skills/` are committed as part of this**, and
-  that is the change with the most leverage. The whole directory was ignored as
-  machine-specific state, which quietly cost us the thing it was protecting: a
-  worktree contains exactly what is committed, so the only real deploy procedure
-  this project had lived on one laptop and no agent had ever read it. Two machines
-  were following different rules because only one had been given any.
-
-  Committing it required getting the host's identity out of the prose first, since
-  §6 forbids naming it in a tracked file. `scripts/prod.py` reads
-  `TRACKER_PROD_HOST` from `.env` — an ssh alias, and **empty on production
-  itself, meaning "here"** — and either runs a command locally or sends it over
-  ssh, then `cd`s into the production checkout so the wrapper permits the write.
-  One documented form, `python scripts/prod.py tracker …`, is now correct from
-  every checkout on every machine, replacing an `ssh $PROD '…'` that was wrong
-  the moment you were already standing on the host.
-
-- **The §6 leak check is a script, and it caught a real leak** (`CLAUDE.md`,
-  `scripts/check_no_host_names.py`, `scripts/sync_db.py`, `CHANGELOG.md`).
-
-  The rule was enforced by a one-line grep pinned in `CLAUDE.md`, which excluded
-  `CLAUDE.md` because the line named the patterns it forbids. It had already
-  failed silently: it looked for the production host's ssh alias only in
-  `ssh <alias>` form, so that alias sat in a tracked file for weeks as this
-  module's default host — in `scripts/sync_db.py`, the one script whose whole job
-  is talking to that host — and the check passed every time. Six more references
-  to the machine's nickname sat beside it, and one in `CHANGELOG.md`.
-
-  The script carries the pattern list, exempts itself and `CLAUDE.md`, prints the
-  reason for each hit, and exits non-zero. `sync_db.py` reads the alias from
-  configuration now and **refuses when it is empty**, which is what it is on
-  production: this moves a whole file over another whole file, and "here" on both
-  ends would mean copying the authoritative database over itself.
-
-- **The deployer defers to a running writer instead of racing it** (`ops/poll.sh`,
-  not in this repo; `CLAUDE.md` §2).
-
-  `tracker init` runs on every deploy and needs the single write lock.
-  `scripts/overnight.sh` has long asked an operator not to push during a long run
-  — a courtesy that cannot bind an agent now that both happen on one machine. The
-  poller checks the lock before it touches the checkout and defers to the next
-  cycle when a live process holds it. Before the `reset --hard`, deliberately:
-  deferring after the checkout had moved would leave new code on disk with the old
-  console serving it, and the next cycle would find local and remote equal and
-  deploy nothing, ever.
-
 ### Fixed
 
 - **A merge recorded the wrong decider on the identity it folded away**
@@ -2530,7 +2461,7 @@ initial build of the v1 PRD.
   empty dict and reported "verified". It now refuses outright when it recognises
   no table.
 
-  Production pulls with a read-only deploy key, and the running copy of the poller
+  The mini pulls with a read-only deploy key, and the running copy of the poller
   sits outside the repository — a deployer that deploys itself can be bricked by
   one bad commit, since the broken version is what runs next.
 

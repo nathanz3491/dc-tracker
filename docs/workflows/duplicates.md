@@ -8,7 +8,7 @@ building is one.
 
 Bare `tracker duplicates` and `duplicates parked` are **read-only**. `park`,
 `unpark` and `resolve` write and take the single-writer lock, so per `CLAUDE.md` §2
-they run in the production checkout, by way of `python scripts/prod.py tracker …`.
+they run on the production host.
 
 ![The duplicates workflow: three detection passes, the ranked evidence classes, and the three answers with every rail that refuses a merge](duplicates.svg)
 

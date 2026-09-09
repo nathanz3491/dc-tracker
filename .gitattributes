@@ -1,8 +1,6 @@
-# Shell scripts run on macOS and reach it verbatim through a checkout, so a CRLF
+# Shell scripts run on macOS and are shipped to it verbatim by scp, so a CRLF
 # working tree breaks them at the shebang: `/bin/zsh` is not a file that
 # exists, and the error blames the interpreter rather than the line ending.
-# Observed exactly that way after a Python rewrite of the deploy scripts on
-# Windows, back when they were shipped by scp -- which CLAUDE.md §1 now forbids,
-# though the hazard is identical for a script git checks out.
+# Observed exactly that way after a Python rewrite of deploy/*.sh on Windows.
 *.sh text eol=lf
 *.plist text eol=lf

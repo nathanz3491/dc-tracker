@@ -6,10 +6,10 @@ Seven phases. Five run on a bare `tracker sync`, which is the cheap keep-current
 run it has always been; the two that spend the most are off until asked for.
 
 It **writes**, holds one write lock for the whole run, and per `CLAUDE.md` §2 runs
-in the production checkout:
+on the production host:
 
 ```bash
-python scripts/prod.py tracker sync --full
+ssh $PROD 'tracker sync --full'
 ```
 
 > **Not `scripts/sync_db.py`.** That moves the database *file* between machines and
@@ -157,18 +157,12 @@ a clean sync cannot see, so a run without `--prospect` points at `tracker covera
 
 `scripts/sync_db.py` is a different tool with a colliding name: it moves the
 whole database file between this machine and the production host. Reads run
-anywhere; **the production checkout is the writer**, so the default direction is
-*pull*.
+anywhere; **the host is the writer**, so the default direction is *pull*.
 
 ```bash
 python scripts/sync_db.py            # pull the authoritative database down here
-python scripts/sync_db.py --push     # only to seed a host or restore one
+python scripts/sync_db.py --push     # only to seed or restore a host
 ```
-
-It takes the host from `TRACKER_PROD_HOST` and **refuses when that is empty**,
-which is what it is on the production machine itself. Deliberate, not a missing
-default: this replaces a whole file with another whole file, and "here" on both
-ends would mean copying the authoritative database over itself.
 
 Both directions **refuse when the destination holds rows the source does not**,
 which is what losing an ingest looks like from the other end. `--force` overrides

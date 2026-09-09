@@ -14,18 +14,17 @@ There are now three, and each answers something the others cannot.
 |---|---|---|
 | the CLI | one question, scriptable, pipeable | a shell |
 | the console (`tracker serve`) | showing somebody, from anywhere | a browser, an account, a tunnel |
-| the TUI (`tracker tui`) | working the data where it lives | a shell in the production checkout |
+| the TUI (`tracker tui`) | working the data where it lives | an ssh session |
 
 The CLI prints a snapshot and forgets it: comparing two projects is two commands
 and a scroll, and a filter worth keeping is a shell history entry. The console
-keeps state and draws properly, but the machine that owns the database is usually
-reached by ssh — and a browser is not what you have there.
+keeps state and draws properly, but the machine that owns the database is reached
+by ssh — and a browser is not what you have there.
 
 **The console cannot run commands at all**, which sharpens the split rather than
 blurring it: it is for reading, and this is where the buttons are. That is the
-right way round, because a terminal in the production checkout answers "who may
-start this?" with a shell and a working directory rather than with a cookie —
-see `CLAUDE.md` §2 for why the working directory is now part of that answer.
+right way round, because a terminal on the host answers "who may start this?" with
+ssh rather than with a cookie.
 
 ```bash
 tracker tui
@@ -199,8 +198,8 @@ frame it rendered as an SVG, which is what makes a remote check something you ca
 actually look at.
 
 ```bash
-python scripts/prod.py tracker tui --check
-python scripts/prod.py tracker tui --screenshot /tmp/frame.svg --pane overview
+ssh $PROD 'tracker tui --check'
+ssh $PROD 'tracker tui --screenshot /tmp/frame.svg --pane overview'
 ```
 
 ## Installing

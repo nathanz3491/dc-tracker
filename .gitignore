@@ -50,38 +50,8 @@ venv/
 htmlcov/
 coverage.xml
 
-# Claude Code: instructions are COMMITTED, machine state is not.
-#
-# This whole directory used to be ignored, and that quietly cost us the thing it
-# was protecting. Agents now run on the production host, in worktrees of this
-# repo — and a worktree contains exactly what is committed, so an ignored
-# `.claude/` meant the one real deploy procedure we had lived on a single laptop
-# and no agent had ever seen it. Two machines were following different rules
-# because only one of them had been given any.
-#
-# So the split is by kind rather than by directory. `commands/` and `skills/` are
-# instructions: they describe this project and belong to every checkout of it.
-# The rest is per-machine state — which server a preview starts, which
-# permissions one person granted, a session lock — and would only ever conflict.
-.claude/*
-!.claude/commands/
-!.claude/skills/
-.claude/settings.local.json
-.claude/launch.json
-.claude/scheduled_tasks.lock
-.claude/worktrees/
-
-# Multica injects its own platform skill and a task-context file into each agent
-# workdir as a sidecar. They belong to the run, not to the repo, and without
-# these lines every agent would see them as untracked changes to commit.
-.claude/skills/multica-platform/
-.multica/
-
-# The marker that says a checkout IS production: it serves the console and owns
-# the authoritative database. Untracked on purpose — exactly one checkout in the
-# world may carry it, so a committed copy would tell every clone it was the
-# writer. See CLAUDE.md §2.
-.production
+# Claude Code local state — machine-specific launch config and session locks
+.claude/
 
 # Working documents and client deliverables. Only *technical* docs are committed —
 # the ones a person reading this codebase needs. See CLAUDE.md §6 for the rule.
