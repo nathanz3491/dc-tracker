@@ -1203,3 +1203,195 @@ def test_a_misread_investment_is_excluded_from_the_sum_not_counted(session):
 
     assert project.id in excluded, "a misread figure was not excluded from the total"
     assert project.id not in counted, "a misread figure was counted as this site's capex"
+
+
+# --- the scope axis, finally read -------------------------------------------
+#
+# `scope` has been stored since migration 0015 and `capex` never consulted it, so
+# a figure the gate had already labelled `programme` still counted in a buyer's
+# position unless the `$/MW` ratio ceiling happened to fire.
+
+
+def _moneyed(session, *, scope, money=27_000_000_000, company="Meta", key=None):
+    import datetime as dt
+    import json
+
+    from tracker.models import Project, Source
+
+    project = Project(
+        name="Hyperion",
+        company=company,
+        city="Holly Ridge",
+        state="LA",
+        dedup_key=key or f"{company.lower()}|city:holly ridge|LA",
+        investment_usd=money,
+    )
+    session.add(project)
+    session.flush()
+    session.add(
+        Source(
+            project_id=project.id,
+            url=f"https://example.test/hyperion-{project.id}",
+            source_type="trade_press",
+            fetched_at=dt.datetime(2026, 1, 1),
+            claims=json.dumps({"investment_usd": money}),
+            fields="investment_usd",
+            quotes=json.dumps({"investment_usd": f"The project will cost ${money}."}),
+            claim_meta=json.dumps({"investment_usd": {"scope": scope}}),
+        )
+    )
+    session.flush()
+    session.refresh(project)
+    return project
+
+
+def test_a_programme_scoped_figure_leaves_the_sum_and_is_disclosed(session):
+    from tracker import capex
+
+    _moneyed(session, scope="programme")
+
+    positions = capex.rollup(session)
+    assert sum(p.investment_usd for p in positions) == 0
+    assert sum(p.investment_out_of_scope_usd for p in positions) == 27_000_000_000
+
+
+def test_a_regional_impact_figure_is_not_this_sites_capex(session):
+    """Meta's "more than $50B to the region" includes roads, water and sewage."""
+    from tracker import capex
+
+    _moneyed(session, scope="region", money=50_000_000_000)
+
+    positions = capex.rollup(session)
+    assert sum(p.investment_usd for p in positions) == 0
+    assert sum(p.investment_out_of_scope_usd for p in positions) == 50_000_000_000
+
+
+def test_an_unnamed_scope_still_counts(session):
+    """The distinction that decides most of the table.
+
+    `unnamed` is the envelope's *default* — "the article states the figure and
+    does not say what it is a figure of" — so excluding it would drop the majority
+    of the database's capex because nobody wrote a qualifier.
+    """
+    from tracker import capex
+
+    _moneyed(session, scope="unnamed")
+
+    positions = capex.rollup(session)
+    assert sum(p.investment_usd for p in positions) == 27_000_000_000
+    assert sum(p.investment_out_of_scope_usd for p in positions) == 0
+
+
+def test_a_this_site_figure_counts(session):
+    from tracker import capex
+
+    _moneyed(session, scope="this_site")
+
+    positions = capex.rollup(session)
+    assert sum(p.investment_usd for p in positions) == 27_000_000_000
+
+
+def test_the_out_of_scope_scopes_exclude_the_default(session):
+    from tracker import capex
+    from tracker.vocab import CLAIM_AXIS_DEFAULTS
+
+    assert CLAIM_AXIS_DEFAULTS["scope"] not in capex.OUT_OF_SCOPE_SCOPES
+    assert "this_site" not in capex.OUT_OF_SCOPE_SCOPES
+
+
+# --- the repeated-figure test -----------------------------------------------
+#
+# The mechanism that replaces the `programme` label, which never fired once: zero
+# `programme` and zero `region` across the whole corpus.
+
+
+def test_one_figure_on_two_of_an_operators_sites_is_flagged(session):
+    """A site's own cost cannot be identical to another site's by construction."""
+    from tracker import capex
+
+    for locality in ("abilene", "milam"):
+        _moneyed(
+            session,
+            scope="this_site",
+            money=500_000_000_000,
+            company="OpenAI",
+            key=f"openai|city:{locality}|TX",
+        )
+
+    found = capex.programme_figures(session)
+    assert len(found) == 1
+    assert found[0].sites == 2
+    assert found[0].investment_usd == 500_000_000_000
+
+
+def test_a_small_repeated_figure_is_a_coincidence_not_a_programme(session):
+    """Two $50M fit-outs by one operator in one year is unremarkable."""
+    from tracker import capex
+
+    _moneyed(session, scope="this_site", money=50_000_000, key="meta|city:a|LA")
+    _moneyed(session, scope="this_site", money=50_000_000, key="meta|city:b|LA")
+
+    assert capex.programme_figures(session) == []
+
+
+def test_one_figure_on_one_site_is_not_flagged(session):
+    from tracker import capex
+
+    _moneyed(session, scope="this_site", money=500_000_000_000)
+
+    assert capex.programme_figures(session) == []
+
+
+def test_two_operators_sharing_a_figure_are_not_one_programme(session):
+    """Grouping is by operator: a coincidence across companies is not a pledge."""
+    from tracker import capex
+
+    _moneyed(session, scope="this_site", money=5_000_000_000, key="meta|city:a|LA", company="Meta")
+    _moneyed(
+        session, scope="this_site", money=5_000_000_000, key="google|city:b|LA", company="Google"
+    )
+
+    assert capex.programme_figures(session) == []
+
+
+# --- the basis census -------------------------------------------------------
+
+
+def test_the_basis_census_counts_a_recorded_basis_against_an_absent_one(session):
+    """One bucket for absent, because a default basis is never stored.
+
+    `unspecified` is the answer for most capacity figures, so writing it would
+    attach an envelope to nearly all of them and make the measured coverage of
+    every other axis look near-total — the measurement that decides whether an
+    axis survives. `tracker backfill basis` reports the split that separates
+    "did not say" from "not yet read"; the stored column cannot.
+    """
+    from tracker import capex
+    from tracker.models import Project
+
+    session.add(
+        Project(
+            name="Unread",
+            company="Vantage",
+            city="Ashburn",
+            state="VA",
+            dedup_key="vantage|city:ashburn|VA",
+            mw_planned=100.0,
+        )
+    )
+    session.add(
+        Project(
+            name="Examined",
+            company="Aligned",
+            city="Phoenix",
+            state="AZ",
+            dedup_key="aligned|city:phoenix|AZ",
+            mw_planned=200.0,
+            mw_planned_basis="unspecified",
+        )
+    )
+    session.flush()
+
+    got = capex.basis_census(session)
+    assert got.get(capex.BASIS_UNRECORDED) == 1
+    assert got.get("unspecified") == 1

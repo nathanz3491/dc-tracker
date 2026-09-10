@@ -67,6 +67,25 @@ operator, end customer, planned investment, planned and built MW, first announce
 current phase, latest progress, biggest blocker, expected online date — plus the
 citations that support each of them.
 
+Two of those twelve could not say enough on their own, and each now has a table or
+an axis beside it rather than a wider column.
+
+**`operator` is one string and a campus has several parties.** One party builds a
+site, one owns it, one occupies it and one sells it power, and every article names
+whichever it cares about — so the Abilene campus was stored four times, under
+Crusoe, Oracle, OpenAI and "OpenAI/Oracle", each spelling minting its own dedup
+key. `project_party` records who plays which role, with a quote for each, and
+`tracker capex` attributes on it. `company` still means "who runs it": it is the
+UNIQUE dedup key and nothing moves it.
+
+**`mw_planned` is one number and there are three kinds of megawatt.** The
+computing load, the whole site's draw (10-30% higher), and a generator's nameplate
+(several times higher) all arrive in one column. Each capacity claim now records
+which one its own sentence says it is — read from the quote, never asked of a
+model — and `unspecified` is both the honest majority answer and the point:
+`tracker capex` discloses what share of the database has never said. See
+[data quality](docs/data-quality.md).
+
 ---
 
 ## Quick start
@@ -233,7 +252,8 @@ This file is the tour. The detail lives in [`docs/`](docs/README.md):
 | --- | --- |
 | [Ingesting](docs/ingesting.md) | The API key, the one-command loop, the operators we are missing, depth versus breadth, operator press releases, optional search, SEC filings |
 | [Sources and feeds](docs/sources-and-feeds.md) | Which publishers are worth crawling, what discovery costs, and the command that acts on the measurement |
-| [Data quality](docs/data-quality.md) | Numbers that cannot be true, contradictions, and what each stored value actually rests on |
+| [Data quality](docs/data-quality.md) | Numbers that cannot be true, contradictions, three kinds of megawatt, and what each stored value actually rests on |
+| [Known limitations](docs/known-limitations.md) | What this gets wrong or cannot yet say, each dated and marked open or fixed. Read it before trusting a number |
 | [Backfill and gaps](docs/backfill-and-gaps.md) | Finding thin data and filling it — capacity blocks, county and coordinates |
 | [Analysis](docs/analysis.md) | Who is buying the capacity, what could stop these projects, slippage |
 | [The terminal interface](docs/tui.md) | `tracker tui` — the six panes, why the run pane cannot fall behind the CLI, verifying it over ssh |

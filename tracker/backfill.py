@@ -540,3 +540,245 @@ def regate_scope(session: Session, *, apply: bool = False) -> ScopeReport:
     if apply:
         session.flush()
     return report
+
+
+@dataclass
+class PartySeedReport:
+    """What seeding `source.parties` from the two existing columns touched."""
+
+    projects: int = 0
+    #: Sources that gained at least one party entry.
+    sources: int = 0
+    #: Entries written, by role.
+    written: dict[str, int] = field(default_factory=dict)
+    #: Projects already carrying parties from a crawl, left alone.
+    already: int = 0
+    #: Projects whose `company` no source claims — hand-entered rows, and the
+    #: reason this is counted rather than skipped silently: on a database where
+    #: the number is large, the seed is not reaching most of the table.
+    unsourced: int = 0
+
+    def note(self, role: str) -> None:
+        self.written[role] = self.written.get(role, 0) + 1
+
+    def as_rows(self) -> list[tuple[str, int]]:
+        return [
+            ("projects considered", self.projects),
+            ("already had parties", self.already),
+            ("no source claims the company", self.unsourced),
+            ("sources given parties", self.sources),
+            ("party entries written", sum(self.written.values())),
+        ]
+
+
+def seed_parties(session: Session, *, apply: bool = False) -> PartySeedReport:
+    """Give migration 0023 something to rebuild from. No LLM, no network.
+
+    The table it added is a cache of `source.parties`, and nothing had ever
+    written that column — so until every article is re-read with the new prompt,
+    `project_party` is empty and `capex.attribute` has nothing to attribute with.
+    This closes that gap using only what is already on disk.
+
+    **It writes `source.parties`, never `project_party` directly.** That is the one
+    thing this function must get right. The rows are rebuilt wholesale from the
+    source column on every upsert, so party rows written straight into the table
+    would be deleted by the next `recompute_parties` — silently, and only on rows
+    that had been re-derived since, which is the worst shape a bug can have.
+
+    **What it can honestly claim.** `company` means "who builds and operates the
+    site", and the half of that this can defend is `operator`: it is what every
+    reader has taken the column to mean, it is what `capex.attribute` already
+    treated it as, and `parties.operator_party` falls back through the same order.
+    It does NOT invent a `developer`, an `owner` or a `utility` — those are the
+    roles the column was collapsing, they are recoverable only from the article
+    text, and guessing one would manufacture a claim no source made. A re-crawl is
+    what fills them.
+
+    The quote and the 待确认 state come from the source that actually won the
+    merge, asked of `gaps.provenance` rather than re-derived — the same discipline
+    `capex` follows, and the mistake that once reported 73 rows as drifted when
+    nothing had drifted.
+    """
+    import json
+
+    from tracker.gaps import REPORTED, provenance
+    from tracker.upsert import claims_by_field
+
+    report = PartySeedReport()
+
+    for project in session.scalars(select(Project)).all():
+        report.projects += 1
+        if any(getattr(s, "parties", None) for s in project.sources):
+            report.already += 1
+            continue
+
+        by_field = claims_by_field(list(project.sources))
+        # Keyed on the URL, because that is what `provenance` reports — it
+        # carries `source_url`, not an id, and looking the row up here keeps the
+        # winning-source question in the one place that answers it.
+        pending: dict[str, list[dict[str, Any]]] = {}
+        saw_company = False
+
+        for column, role in (("company", "operator"), ("customer", "customer")):
+            name = getattr(project, column, None)
+            if not name:
+                continue
+            got = provenance(project, column, by_field)
+            if got is None or not got.source_url:
+                continue
+            if column == "company":
+                saw_company = True
+            entry: dict[str, Any] = {"name": name, "role": role}
+            # `REPORTED` is the one tier that means a verbatim sentence in a
+            # fetched article supports it. Everything else — 待确认, derived,
+            # inferred, defaulted — is not a quote and must not be written as one.
+            if got.tier == REPORTED and got.quote and got.quote_is_exact:
+                entry["quote"] = got.quote
+            else:
+                entry["unconfirmed"] = "no_quote"
+            pending.setdefault(got.source_url, []).append(entry)
+            report.note(role)
+
+        if not saw_company:
+            report.unsourced += 1
+        if not pending:
+            continue
+
+        for source in project.sources:
+            entries = pending.get(source.url)
+            if not entries:
+                continue
+            report.sources += 1
+            if apply:
+                source.parties = json.dumps(
+                    sorted(entries, key=lambda e: (e["role"], e["name"])),
+                    ensure_ascii=False,
+                )
+
+    if apply:
+        session.flush()
+    return report
+
+
+# --- deriving the basis axis ------------------------------------------------
+
+
+@dataclass
+class BasisReport:
+    """What deriving the `basis` axis found in the quotes already on disk."""
+
+    sources: int = 0
+    #: Capacity claims examined — only `mw_planned` and `mw_built` carry a basis.
+    claims: int = 0
+    #: Claims that gained a basis they did not have.
+    changed: int = 0
+    #: basis -> how many claims ended up there, **including the default**, which
+    #: is counted here and deliberately not stored. `unspecified` dominating is
+    #: the finding rather than a failure: it is the share of the database whose
+    #: article never said which kind of megawatt it meant. Counting it here is how
+    #: that share stays visible without an envelope on every capacity claim — see
+    #: `derive_basis` for why storing it would break the coverage measurement.
+    found: dict[str, int] = field(default_factory=dict)
+    #: Projects whose cached `mw_*_basis` moved.
+    projects_touched: int = 0
+
+    def note(self, basis: str) -> None:
+        self.found[basis] = self.found.get(basis, 0) + 1
+
+    def as_rows(self) -> list[tuple[str, int]]:
+        return [
+            ("sources with an envelope", self.sources),
+            ("capacity claims read", self.claims),
+            ("claims given a basis", self.changed),
+            ("projects whose cache moved", self.projects_touched),
+        ]
+
+
+def derive_basis(session: Session, *, apply: bool = False) -> BasisReport:
+    """Fill the `basis` axis from the quotes already stored. No LLM, no network.
+
+    **Why this one is backfillable when 0015's axes were not.** That migration
+    said its axes "cannot" be backfilled and was right about `bound`, `modality`
+    and `as_of`: each is a fact about how an article was worded that only a
+    re-read can recover. This axis is different in exactly one way that matters —
+    it is derived from the *stored quote*, and the stored quote is on disk. So
+    reading it is the same free operation `regate_scope` performs, not an
+    inference about an article nobody re-opened.
+
+    Nothing is guessed from the number. A figure whose sentence says nothing about
+    IT load, gross power or nameplate stays `unspecified`, and the share of the
+    database in that position is the measurement this axis was added to make.
+    Inferring a basis from a plausible-looking `$/MW` ratio would manufacture a
+    qualifier no publisher wrote, which is the line `0015` drew and this keeps.
+    """
+    import json
+
+    from tracker.ingest.crawl import axis_gate
+    from tracker.upsert import apply_mw_basis, claims_by_field
+    from tracker.vocab import BASIS_FIELDS, CLAIM_AXIS_DEFAULTS
+
+    report = BasisReport()
+    for project in session.scalars(select(Project)).all():
+        touched_project = False
+        for source in project.sources:
+            if not source.claim_meta and not source.quotes:
+                continue
+            try:
+                meta = json.loads(source.claim_meta or "{}")
+                quotes = json.loads(source.quotes or "{}")
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(meta, dict) or not isinstance(quotes, dict):
+                continue
+            report.sources += 1
+            touched = False
+            for name in sorted(BASIS_FIELDS):
+                quote = quotes.get(name)
+                if not quote:
+                    continue
+                report.claims += 1
+                got = axis_gate({}, quote, field=name)["basis"]
+                report.note(got)
+                entry = meta.get(name)
+                if not isinstance(entry, dict):
+                    entry = {}
+                # A default basis is counted and not stored, matching what the
+                # ingest path does and for the same reason: `unspecified` is the
+                # answer for most capacity figures, so writing it would attach an
+                # envelope to nearly every one and make the measured coverage of
+                # every *other* axis look near-total. See `crawl._claim_axes`.
+                #
+                # `pop` rather than skip, so a run after this rule changed clears
+                # the defaults an earlier one wrote instead of leaving the two
+                # paths permanently disagreeing about the same claim.
+                wanted = None if got == CLAIM_AXIS_DEFAULTS["basis"] else got
+                if entry.get("basis") == wanted:
+                    continue
+                report.changed += 1
+                if wanted is None:
+                    entry.pop("basis", None)
+                    # An entry emptied of every axis is an envelope with nothing
+                    # in it, which is what the neutrality rule refuses.
+                    if entry:
+                        meta[name] = entry
+                    else:
+                        meta.pop(name, None)
+                else:
+                    entry["basis"] = wanted
+                    meta[name] = entry
+                touched = True
+            if touched and apply:
+                source.claim_meta = json.dumps(meta, sort_keys=True, ensure_ascii=False)
+                touched_project = True
+        if touched_project and apply:
+            # The cached column is a function of the winning claim, so it has to
+            # be recomputed after the envelope moves rather than guessed from the
+            # last claim read — `apply_mw_basis` asks the write path's own merge
+            # order, which is the discipline `gaps.provenance` exists to keep.
+            before = (project.mw_planned_basis, project.mw_built_basis)
+            apply_mw_basis(project, claims_by_field(list(project.sources)))
+            if (project.mw_planned_basis, project.mw_built_basis) != before:
+                report.projects_touched += 1
+    if apply:
+        session.flush()
+    return report

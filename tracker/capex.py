@@ -132,6 +132,14 @@ class Position:
     #: because a sum whose composition a reader cannot see is one they must trust.
     #: See `unquoted_investment_ids`.
     investment_unquoted_usd: int = 0
+    #: Dollars left out because the winning claim's `scope` says they are not this
+    #: site's money — a programme this campus belongs to, a region's economic
+    #: impact, or the operator's whole estate. Its own field rather than folded
+    #: into `investment_excluded_usd`, because the two are refused by different
+    #: mechanisms and a reader settling a row needs to know which: that one is the
+    #: `$/MW` ratio ceiling catching an implausible figure, this one is the article
+    #: saying in words what the figure is a figure of.
+    investment_out_of_scope_usd: int = 0
     #: What the rows set aside as suspected duplicates would have added. The rollup
     #: counts one representative per suspected campus (`suspected_duplicates`);
     #: the others are skipped, never merged, and what they held is disclosed here —
@@ -187,13 +195,49 @@ class Position:
 
 
 def attribute(project: Project) -> tuple[str, str, bool]:
-    """Who is buying this project's capacity. Returns ``(name, key, self_built)``."""
+    """Who is buying this project's capacity. Returns ``(name, key, self_built)``.
+
+    Four rules now, and the first is new: **a party in the `customer` role wins.**
+
+    The three below it read `project.customer` and `project.company`, two columns
+    that between them had to carry four roles — the prompt's definition of
+    `company` is "who builds AND operates the site" — so a campus with a developer,
+    an owner, an operator and a tenant arrived as at most two names and the rest
+    were lost. `project_party` is where they live now, and the `customer` role is
+    an *evidenced* statement that somebody occupies the site, where
+    `project.customer` is whichever tenant name reached the column first.
+
+    Only a confirmed party is allowed to decide this. An unconfirmed one is a
+    company the article names with a role no sentence licenses, and attributing a
+    buyer's whole position to an unevidenced role would be exactly the guess the
+    待确认 tier exists to refuse. Such a row still raises duplicates, which is a
+    question about identity and not about who is buying.
+
+    `PARTY_ROLES_BUYING` keeps the utility and the contractor out. Entergy
+    Louisiana is a party on Meta's Richland Parish campus and buys none of it.
+    """
+    from tracker import parties as parties_mod
+
+    tenant = parties_mod.customer_party(list(getattr(project, "parties", ()) or ()))
+    if tenant is not None and tenant.unconfirmed is None:
+        key = customer_key(tenant.name)
+        if key:
+            return tenant.name, key, False
+
     key = customer_key(project.customer)
     if key:
         return project.customer or key, key, False
 
-    operator = company_key(project.company)
     end_users = end_user_keys()
+    # The operator party, then the column. Same ladder as before once the party
+    # set is empty, so a row nothing has re-crawled attributes exactly as it did.
+    operator_row = parties_mod.operator_party(
+        [p for p in (getattr(project, "parties", ()) or ()) if p.unconfirmed is None]
+    )
+    if operator_row is not None and operator_row.party_key in end_users:
+        return end_users[operator_row.party_key], operator_row.party_key, True
+
+    operator = company_key(project.company)
     if operator in end_users:
         return end_users[operator], operator, True
 
@@ -331,6 +375,7 @@ def rollup(session: Session, *, include_terminal: bool = False) -> list[Position
 
     demoted_investment = unconfirmed_investment_ids(session)
     unquoted_investment = unquoted_investment_ids(session)
+    out_of_scope_investment = out_of_scope_investment_ids(session)
 
     positions: dict[str, Position] = {}
     for project in projects:
@@ -371,6 +416,10 @@ def rollup(session: Session, *, include_terminal: bool = False) -> list[Position
             # Asserted by a source, confirmed by none — read back from what the
             # ingest gate decided rather than re-judging the figure here.
             bucket.investment_excluded_usd += money
+        elif money and project.id in out_of_scope_investment:
+            # Perfectly quoted, and about something else. The `scope` axis has
+            # said so since migration 0015 and nothing read it until now.
+            bucket.investment_out_of_scope_usd += money
         else:
             bucket.investment_usd += money
             if money and project.id in unquoted_investment:
@@ -514,6 +563,48 @@ def unquoted_investment_ids(session: Session) -> set[int]:
     undifferentiated set. See its docstring for why the split matters.
     """
     return _demoted_investment(session)[1]
+
+
+#: Scopes that mean an investment figure is not this site's money.
+#:
+#: `unnamed` is deliberately NOT here, and the distinction decides most of the
+#: table. It is the envelope's default — "the article states the figure and does
+#: not say what it is a figure of" — so excluding it would drop the majority of
+#: the database's capex on the grounds that nobody wrote a qualifier. The three
+#: listed are positive statements that the money is somebody else's object: a
+#: programme this campus belongs to, a region's economic impact, an operator's
+#: whole estate.
+OUT_OF_SCOPE_SCOPES: frozenset[str] = frozenset({"programme", "region", "portfolio"})
+
+
+def out_of_scope_investment_ids(session: Session) -> set[int]:
+    """Projects whose *winning* investment claim is about something else.
+
+    **This axis has been stored and unread since migration 0015.** That migration
+    added `scope` for exactly this case — Hyperion holding $10B for the buildout,
+    $27B for the campus joint venture and $50B of regional impact including roads
+    and sewage — and closed by saying nothing would consult it "until the
+    measurements say they carry information". Meanwhile `capex` excluded only
+    `out_of_scale`, the `$/MW` ratio ceiling, so a figure the gate had already
+    labelled `programme` still counted in a buyer's position whenever the ratio
+    happened not to fire.
+
+    The scope is asked of `gaps.provenance` rather than re-derived here. For a
+    field two sources disagree on, "the strongest source" and "the source whose
+    number won" are different rows, and reading the loser's envelope would exclude
+    a figure the project does not hold. Re-deriving that order once reported 73
+    rows as drifted when nothing had drifted.
+    """
+    from tracker.gaps import provenance
+
+    out: set[int] = set()
+    for project in session.scalars(select(Project)).all():
+        if project.investment_usd is None:
+            continue
+        got = provenance(project, "investment_usd")
+        if got is not None and got.scope in OUT_OF_SCOPE_SCOPES:
+            out.add(project.id)
+    return out
 
 
 def _demoted_investment(session: Session) -> tuple[set[int], set[int]]:
@@ -725,7 +816,10 @@ class DuplicatePair:
     #: readings of one building rather than two similarly-named campuses. Three rows
     #: in Andrews, TX each ended up holding the same 70 MW AWS tranche.
     shared_blocks: tuple[str, ...] = ()
-    #: Operators both company strings name — "OpenAI/Oracle" against "Oracle".
+    #: Parties both rows name, from two sources unioned: the company strings
+    #: themselves — "OpenAI/Oracle" against "Oracle" — and each row's
+    #: `project_party` rows, which reach the case a string comparison cannot,
+    #: where four articles each named one of the four parties on one campus.
     shared_parties: tuple[str, ...] = ()
     #: Name words that survive the generic and locality filters.
     shared_tokens: tuple[str, ...] = ()
@@ -946,6 +1040,7 @@ def suspected_duplicates(session: Session, *, include_parked: bool = False) -> l
     is what `tracker duplicates --parked` uses to let somebody review their own
     past decisions.
     """
+    from tracker import parties as parties_mod
     from tracker.dedup import exact_identity, shared_parties_across_companies
     from tracker.pairs import canonical, parked_keys
 
@@ -975,7 +1070,18 @@ def suspected_duplicates(session: Session, *, include_parked: bool = False) -> l
         return {
             "exact": exact_identity(a.name, a.company, b.name, b.company),
             "shared_blocks": shared_identity_keys(a, b, keys, where),
-            "shared_parties": tuple(sorted(shared_parties_across_companies(a.company, b.company))),
+            # Two sources for one signal, unioned. The string form reads the two
+            # `company` values, which is the only place a party lives on a row
+            # nothing has re-crawled since migration 0023; the party rows reach
+            # the shape it structurally cannot — four articles each naming one
+            # party, which `docs/duplicate-shapes.md` measures as 48 of 90 folds.
+            # Both keep the same-company guard; see `parties.shared_across_companies`.
+            "shared_parties": tuple(
+                sorted(
+                    shared_parties_across_companies(a.company, b.company)
+                    | parties_mod.shared_across_companies(a, b)
+                )
+            ),
             "shared_tokens": _shared_name_tokens(a, b),
         }
 
@@ -1198,12 +1304,152 @@ def as_of() -> _dt.date:
     return utcnow().date()
 
 
+#: The bucket for a capacity figure whose basis nothing records.
+#:
+#: One bucket rather than two, and the reason is a rule in `crawl._claim_axes`: a
+#: default `basis` is counted and never stored, because `unspecified` is the
+#: answer for most capacity figures and writing it would attach an envelope to
+#: nearly all of them, making the measured coverage of every *other* axis look
+#: near-total. So a NULL here means either "the sentence was read and did not say"
+#: or "nothing has read it yet", and the stored column cannot tell them apart.
+#:
+#: The number that separates them is `backfill.derive_basis`'s report, which
+#: counts `unspecified` without storing it — which is why the disclosure points a
+#: reader at that command rather than at a second bucket here.
+BASIS_UNRECORDED = "unrecorded"
+
+
+def basis_census(session: Session) -> dict[str, int]:
+    """How many stored capacity figures sit at each `basis`. Read-only, free.
+
+    The number this axis was added to put on the table. Three quantities arrive in
+    `mw_planned` — the computing load, the whole facility's draw, and a
+    generator's nameplate — and they differ by 30% and more, so a column that
+    cannot say which it holds is a column whose sums are not comparable across
+    rows.
+
+    `unrecorded` will dominate, and that is the finding rather than a defect in
+    the measurement: most articles write "a 200 MW campus" and never say which of
+    the three they mean. `tracker backfill basis` reports the breakdown that
+    separates "did not say" from "not yet read", for free.
+
+    Reported in the `capex` footer and deliberately **not** a `tracker clean` tier
+    condition: adding one would move every row's tier in a single commit and bury
+    the signal it exists to raise.
+    """
+    counts: dict[str, int] = {}
+    for project in session.scalars(select(Project)).all():
+        for name in ("mw_planned", "mw_built"):
+            if getattr(project, name, None) is None:
+                continue
+            got = getattr(project, f"{name}_basis", None) or BASIS_UNRECORDED
+            counts[got] = counts.get(got, 0) + 1
+    return dict(sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])))
+
+
+#: How many distinct projects must carry one operator's identical figure before it
+#: reads as a programme total rather than a site cost.
+#:
+#: Two, and the reason it is not three: the shape being caught is a pledge quoted
+#: in an article about each campus it covers, and a programme with exactly two
+#: named sites is the ordinary small case, not an edge one.
+PROGRAMME_FIGURE_MIN_SITES: int = 2
+
+#: Dollars below which a repeated figure is a coincidence rather than a pledge.
+#:
+#: Two $50M fit-outs by one operator in one year is unremarkable and would be
+#: reported as a false positive on a report nobody can act on. A repeated figure
+#: at this scale is not a coincidence: there are only so many round numbers above
+#: a billion, and an operator quoting the same one about two different campuses is
+#: describing a programme in both.
+PROGRAMME_FIGURE_MIN_USD: int = 1_000_000_000
+
+
+@dataclass(frozen=True)
+class ProgrammeFigure:
+    """One dollar figure standing as the cost of several of one operator's sites."""
+
+    operator: str
+    investment_usd: int
+    project_ids: tuple[int, ...]
+
+    @property
+    def sites(self) -> int:
+        return len(self.project_ids)
+
+
+def programme_figures(session: Session) -> list[ProgrammeFigure]:
+    """Identical money on several of one operator's campuses. No LLM, no network.
+
+    **Why this exists at all, given `scope` already has a `programme` value.**
+    Because that value never fired. `docs/plan-claim-envelope.md` records the
+    measurement and it is unambiguous: across the whole corpus `investment_usd`
+    came back "44 `this_site`, 4 `unnamed`, 1 `block:VA13` — and zero `region`,
+    zero `programme`." The two labels that would have solved the case were never
+    produced once, on the very example the axis was designed for. The conclusion
+    on record is that the distinction "needs a different mechanism than asking the
+    model for a label", and this is that mechanism.
+
+    The mechanism is arithmetic over what is already stored, which is the other
+    thing that has been shown to work here — `quotes` works because a string is
+    either in the article or it is not, and `block:VA13` was the one `scope` value
+    that held because it resolved against a real tranche. So: **the same rounded
+    figure, for the same operator, standing as the winning `investment_usd` on two
+    or more distinct projects.** "OpenAI's $500 billion Stargate" gets quoted in a
+    piece about each campus it covers, and each of those pieces is about one site.
+    A site's own cost cannot be identical to another site's by construction.
+
+    Reported, never applied. It names rows for a person to look at, on the same
+    terms as `suspected_duplicates`: the repair is correcting the figure or
+    superseding the claim, and neither is arithmetic's to decide.
+
+    **Pre-registered kill criterion, recorded here before the first run rather
+    than after it.** If this returns nothing on the production database it is
+    decoration and must not become load-bearing — it should stay a disclosure, or
+    be deleted, and no reader should be told it is protecting them from anything.
+    That is exactly the discipline that caught `scope` before it was built on, and
+    the reason that failure cost a measurement instead of a published number.
+    """
+    projects = session.scalars(select(Project)).all()
+    by_figure: dict[tuple[str, int], set[int]] = {}
+    names: dict[str, str] = {}
+    for project in projects:
+        # The operator, not the buyer: a programme is announced by whoever is
+        # spending, and `attribute` would fold several operators' campuses onto
+        # one tenant and manufacture a match.
+        key = company_key(project.company)
+        if not key:
+            continue
+        names.setdefault(key, project.company)
+        money = int(project.investment_usd or 0)
+        if money < PROGRAMME_FIGURE_MIN_USD:
+            continue
+        by_figure.setdefault((key, money), set()).add(project.id)
+
+    out = [
+        ProgrammeFigure(
+            operator=names.get(key, key),
+            investment_usd=money,
+            project_ids=tuple(sorted(ids)),
+        )
+        for (key, money), ids in by_figure.items()
+        if len(ids) >= PROGRAMME_FIGURE_MIN_SITES
+    ]
+    return sorted(out, key=lambda f: (-f.investment_usd * f.sites, f.operator))
+
+
 __all__ = [
+    "BASIS_UNRECORDED",
     "MAX_YEAR_COLUMNS",
+    "OUT_OF_SCOPE_SCOPES",
+    "PROGRAMME_FIGURE_MIN_SITES",
+    "PROGRAMME_FIGURE_MIN_USD",
     "UNATTRIBUTED",
     "Position",
+    "ProgrammeFigure",
     "as_of",
     "attribute",
+    "basis_census",
     "blocking_risk",
     "coverage",
     "date_precision",
@@ -1211,6 +1457,8 @@ __all__ = [
     "duplicate_groups",
     "end_user_keys",
     "horizon",
+    "out_of_scope_investment_ids",
+    "programme_figures",
     "quarter_columns",
     "quarters",
     "rollup",

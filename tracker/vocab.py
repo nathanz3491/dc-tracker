@@ -91,6 +91,64 @@ BLOCK_LIVE: Final[frozenset[str]] = frozenset({"energized", "serving"})
 #: the row to `tracker review` instead of silently asserting "announced".
 DEFAULT_PHASE: Final[str] = "announced"
 
+# --- project_party.role ----------------------------------------------------
+#: What a company *does* on a site. A closed vocabulary for the reason
+#: `RISK_CATEGORIES` is one: the point of the table is to be able to ask "how much
+#: capacity does this party build for somebody else", and free text cannot answer
+#: it.
+#:
+#: Ordered from the party furthest from the compute to the party closest to it,
+#: which is also the order `parties.derive_company` falls back through — a site's
+#: `company` has always meant "who runs it", so `operator` answers first and the
+#: parties that merely built or own it answer only when nobody named an operator.
+#:
+#: Why six and not three. `developer`/`owner`/`operator` is the split the
+#: extraction prompt was collapsing ("who builds AND operates the site"), and
+#: `customer` already existed as its own column. The last two are here because
+#: they arrive whether or not there is a role for them:
+#:
+#: * `utility` — Richland Parish is in the live database twice, as Meta and as
+#:   Entergy Louisiana. The prompt carries a standing instruction that `company`
+#:   is "NOT the electric utility" precisely because utilities keep turning up in
+#:   the sentence that names the site, and a filing by the utility reads as though
+#:   the utility runs the campus. A role they belong in beats an exclusion rule
+#:   that has already failed.
+#: * `contractor` — same shape, same standing instruction ("NOT the general
+#:   contractor"), and the general contractor is often the only party a
+#:   groundbreaking story names.
+#:
+#: Neither buys capacity, so `capex.attribute` must never attribute to them; that
+#: is asserted rather than remembered. See `PARTY_ROLES_BUYING`.
+PARTY_ROLES: Final[tuple[str, ...]] = (
+    "developer",  # builds it, and may hand it over
+    "owner",  # holds the asset or the land
+    "operator",  # runs it — what `project.company` has always meant
+    "customer",  # occupies it and buys the compute
+    "utility",  # sells it power
+    "contractor",  # builds it under contract to somebody else
+)
+
+PartyRole = Literal[
+    "developer",
+    "owner",
+    "operator",
+    "customer",
+    "utility",
+    "contractor",
+]
+
+#: Roles that can hold a position in the capex table. A utility connects capacity
+#: and a contractor pours the concrete; neither buys it, which is the same
+#: distinction `seed/edgar-companies.toml`'s `kind` column already draws for
+#: whether an operator is its own end user.
+PARTY_ROLES_BUYING: Final[frozenset[str]] = frozenset({"customer", "operator", "owner"})
+
+#: The role `parties.derive_company` reads first, then in order. `project.company`
+#: is NOT NULL, so this ladder must be total over any non-empty party set that
+#: contains one of these — `derive_company` falls back to the stored value
+#: otherwise rather than inventing one.
+COMPANY_ROLE_ORDER: Final[tuple[str, ...]] = ("operator", "developer", "owner")
+
 # --- risk.category ---------------------------------------------------------
 #: What is obstructing a project. Grouped by what an analyst reads through to:
 #: power, government, supply chain, capital, demand, and the site's neighbours.
@@ -474,6 +532,33 @@ CLAIM_SCOPES: Final[tuple[str, ...]] = (
     "unnamed",
 )
 
+# --- claim_meta.basis ------------------------------------------------------
+#: What KIND of megawatt a capacity figure is. `scope` says which *thing* a figure
+#: describes; this says which *quantity* was measured, and they are independent —
+#: a figure can be unambiguously about this campus and still be the wrong kind of
+#: megawatt for the column it lands in.
+#:
+#: Three quantities, routinely differing by 30-40% and occasionally by 10x:
+#:
+#:   it_load    the computing load. What `mw_planned` is defined as, and what the
+#:              extraction prompt asks for.
+#:   facility   the whole site's draw — IT load times PUE, plus cooling, plus
+#:              everything else behind the meter. `_industry.txt` puts modern
+#:              hyperscale PUE at 1.1-1.3, so this runs 10-30% above `it_load`.
+#:   nameplate  a generator's rated output. Not a data center quantity at all:
+#:              `iso_maps.py` opens by saying so, and `ingest/pjm.py` already
+#:              refuses to put one in `mw_planned` for that reason.
+#:
+#: `unspecified` is the honest majority answer and the default. An article that
+#: writes "a 200 MW campus" has not said which of the three it means, and the
+#: whole point of recording the axis is that it stops that being invisible.
+CLAIM_BASES: Final[tuple[str, ...]] = (
+    "it_load",
+    "facility",
+    "nameplate",
+    "unspecified",
+)
+
 #: The neutral value of each axis — what a claim degrades to when the gate cannot
 #: license what the model asserted. Never a rejection of the *value*: the figure
 #: survives exactly as it did before the envelope existed.
@@ -481,9 +566,16 @@ CLAIM_AXIS_DEFAULTS: Final[dict[str, str]] = {
     "bound": "exact",
     "modality": "planned",
     "scope": "unnamed",
+    "basis": "unspecified",
 }
 
-CLAIM_AXES: Final[tuple[str, ...]] = ("scope", "bound", "modality", "as_of")
+CLAIM_AXES: Final[tuple[str, ...]] = ("scope", "bound", "modality", "as_of", "basis")
+
+#: Fields a `basis` can qualify. Money has a `scope`, not a basis; a date has
+#: neither. Restricting it is what keeps the coverage measurement honest — an
+#: axis reported over fields it cannot apply to reads as 90% `unspecified` and
+#: says nothing about the fields where it matters.
+BASIS_FIELDS: Final[frozenset[str]] = frozenset({"mw_planned", "mw_built"})
 
 # --- project fields --------------------------------------------------------
 #: Canonical order for the 12 tracked PRD fields. Used to render `source.fields`

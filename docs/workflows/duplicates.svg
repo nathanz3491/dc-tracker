@@ -16,10 +16,11 @@
 <text x="48.0" y="162.0" font-size="10.5" fill="#5C6B73" text-anchor="start" font-weight="700" letter-spacing="2.4">HOW A PAIR IS RAISED</text>
 <text x="263.2" y="162.0" font-size="11" fill="#5C6B73" text-anchor="start">three passes, unioned — each reaches duplicates the others structurally cannot</text>
 <rect x="48.0" y="196.0" width="236.0" height="108.0" rx="7" fill="#EDF1F2" stroke="#B9C6CC" stroke-width="1.3"/>
-<text x="166.0" y="234.1" font-size="12" fill="#16242E" text-anchor="middle" font-weight="700">1 · same locality</text>
-<text x="166.0" y="251.1" font-size="10" fill="#5C6B73" text-anchor="middle">rows sharing (city or county, state).</text>
-<text x="166.0" y="264.7" font-size="10" fill="#5C6B73" text-anchor="middle">Finds what made capex need this:</text>
-<text x="166.0" y="278.3" font-size="10" fill="#5C6B73" text-anchor="middle">one campus, four companies</text>
+<text x="166.0" y="227.3" font-size="12" fill="#16242E" text-anchor="middle" font-weight="700">1 · same locality</text>
+<text x="166.0" y="244.3" font-size="10" fill="#5C6B73" text-anchor="middle">rows sharing (city or county, state).</text>
+<text x="166.0" y="257.9" font-size="10" fill="#5C6B73" text-anchor="middle">Compares company strings AND the</text>
+<text x="166.0" y="271.5" font-size="10" fill="#5C6B73" text-anchor="middle">party rows: 48 of 90 folds had</text>
+<text x="166.0" y="285.1" font-size="10" fill="#5C6B73" text-anchor="middle">no key signal at all</text>
 <rect x="48.0" y="318.0" width="236.0" height="108.0" rx="7" fill="#EDF1F2" stroke="#B9C6CC" stroke-width="1.3"/>
 <text x="166.0" y="356.1" font-size="12" fill="#16242E" text-anchor="middle" font-weight="700">2 · dedup keys</text>
 <text x="166.0" y="373.1" font-size="10" fill="#5C6B73" text-anchor="middle">bucketed on company, not locality —</text>
@@ -57,26 +58,27 @@
 <text x="576.0" y="330.0" font-size="10.5" fill="#5C6B73" text-anchor="start">The order is what a reader can act on. 'city vs county' led it on the strength of being structural, so the report opened</text>
 <text x="576.0" y="346.0" font-size="10.5" fill="#5C6B73" text-anchor="start">with 31 of 49 pairs of the one class no automated path can settle. A shared name word is a word: it sorts last, and it</text>
 <text x="576.0" y="362.0" font-size="10.5" fill="#5C6B73" text-anchor="start">can never carry a merge on its own.</text>
-<rect x="576.0" y="386.0" width="216.0" height="104.0" rx="7" fill="#E7EDEE" stroke="#B9C6CC" stroke-width="1.3"/>
-<text x="684.0" y="415.3" font-size="12" fill="#16242E" text-anchor="middle" font-weight="700">Grouped</text>
-<text x="684.0" y="432.3" font-size="10" fill="#5C6B73" text-anchor="middle">pairs sharing an id are the</text>
-<text x="684.0" y="445.9" font-size="10" fill="#5C6B73" text-anchor="middle">same building, so they are</text>
-<text x="684.0" y="459.5" font-size="10" fill="#5C6B73" text-anchor="middle">unioned. Four rows make six</text>
-<text x="684.0" y="473.1" font-size="10" fill="#5C6B73" text-anchor="middle">pairs and one decision, not six</text>
-<polyline points="530.0,374.0 553.0,374.0 553.0,438.0 576.0,438.0" fill="none" stroke="#5C6B73" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#a5C6B73)"/>
-<rect x="832.0" y="386.0" width="216.0" height="104.0" rx="7" fill="#FDF6E9" stroke="#D9891F" stroke-width="1.3"/>
-<text x="940.0" y="415.3" font-size="12" fill="#16242E" text-anchor="middle" font-weight="700">Read by capex</text>
-<text x="940.0" y="432.3" font-size="10" fill="#5C6B73" text-anchor="middle">rollup counts one row per</text>
-<text x="940.0" y="445.9" font-size="10" fill="#5C6B73" text-anchor="middle">group and discloses the rest,</text>
-<text x="940.0" y="459.5" font-size="10" fill="#5C6B73" text-anchor="middle">so a false pair holds a real</text>
-<text x="940.0" y="473.1" font-size="10" fill="#5C6B73" text-anchor="middle">campus out of a quoted number</text>
-<polyline points="792.0,438.0 832.0,438.0" fill="none" stroke="#5C6B73" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#a5C6B73)"/>
-<rect x="1096.0" y="386.0" width="356.0" height="104.0" rx="7" fill="#F7F9F9" stroke="#B9C6CC" stroke-width="1.3"/>
-<text x="1110.0" y="415.3" font-size="12.5" fill="#16242E" text-anchor="left" font-weight="700">Which is why the answer matters</text>
-<text x="1110.0" y="432.3" font-size="10.2" fill="#5C6B73" text-anchor="left">Parking is not cosmetic: it puts a real campus's</text>
-<text x="1110.0" y="445.9" font-size="10.2" fill="#5C6B73" text-anchor="left">capacity back into the buyer table. Merging is the</text>
-<text x="1110.0" y="459.5" font-size="10.2" fill="#5C6B73" text-anchor="left">only repair for a real duplicate, and it deletes rows.</text>
-<text x="1110.0" y="473.1" font-size="10.2" fill="#5C6B73" text-anchor="left">Leaving it keeps one row out of every capex total.</text>
+<text x="576.0" y="378.0" font-size="10.5" fill="#5C6B73" text-anchor="start">'shared operator' reads project_party as well as the two company strings — the case where four articles each named one party.</text>
+<rect x="576.0" y="408.0" width="216.0" height="104.0" rx="7" fill="#E7EDEE" stroke="#B9C6CC" stroke-width="1.3"/>
+<text x="684.0" y="437.3" font-size="12" fill="#16242E" text-anchor="middle" font-weight="700">Grouped</text>
+<text x="684.0" y="454.3" font-size="10" fill="#5C6B73" text-anchor="middle">pairs sharing an id are the</text>
+<text x="684.0" y="467.9" font-size="10" fill="#5C6B73" text-anchor="middle">same building, so they are</text>
+<text x="684.0" y="481.5" font-size="10" fill="#5C6B73" text-anchor="middle">unioned. Four rows make six</text>
+<text x="684.0" y="495.1" font-size="10" fill="#5C6B73" text-anchor="middle">pairs and one decision, not six</text>
+<polyline points="530.0,374.0 553.0,374.0 553.0,460.0 576.0,460.0" fill="none" stroke="#5C6B73" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#a5C6B73)"/>
+<rect x="832.0" y="408.0" width="216.0" height="104.0" rx="7" fill="#FDF6E9" stroke="#D9891F" stroke-width="1.3"/>
+<text x="940.0" y="437.3" font-size="12" fill="#16242E" text-anchor="middle" font-weight="700">Read by capex</text>
+<text x="940.0" y="454.3" font-size="10" fill="#5C6B73" text-anchor="middle">rollup counts one row per</text>
+<text x="940.0" y="467.9" font-size="10" fill="#5C6B73" text-anchor="middle">group and discloses the rest,</text>
+<text x="940.0" y="481.5" font-size="10" fill="#5C6B73" text-anchor="middle">so a false pair holds a real</text>
+<text x="940.0" y="495.1" font-size="10" fill="#5C6B73" text-anchor="middle">campus out of a quoted number</text>
+<polyline points="792.0,460.0 832.0,460.0" fill="none" stroke="#5C6B73" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#a5C6B73)"/>
+<rect x="1096.0" y="408.0" width="356.0" height="104.0" rx="7" fill="#F7F9F9" stroke="#B9C6CC" stroke-width="1.3"/>
+<text x="1110.0" y="437.3" font-size="12.5" fill="#16242E" text-anchor="left" font-weight="700">Which is why the answer matters</text>
+<text x="1110.0" y="454.3" font-size="10.2" fill="#5C6B73" text-anchor="left">Parking is not cosmetic: it puts a real campus's</text>
+<text x="1110.0" y="467.9" font-size="10.2" fill="#5C6B73" text-anchor="left">capacity back into the buyer table. Merging is the</text>
+<text x="1110.0" y="481.5" font-size="10.2" fill="#5C6B73" text-anchor="left">only repair for a real duplicate, and it deletes rows.</text>
+<text x="1110.0" y="495.1" font-size="10.2" fill="#5C6B73" text-anchor="left">Leaving it keeps one row out of every capex total.</text>
 <line x1="48" y1="574" x2="1452" y2="574" stroke="#B9C6CC" stroke-width="1"/>
 <text x="48.0" y="608.0" font-size="10.5" fill="#5C6B73" text-anchor="start" font-weight="700" letter-spacing="2.4">THE THREE ANSWERS</text>
 <text x="233.3" y="608.0" font-size="11" fill="#5C6B73" text-anchor="start">duplicates proposes; a person, a model or an agent disposes</text>

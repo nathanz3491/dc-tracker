@@ -41,6 +41,7 @@ from tracker.ingest.records import (
     EventRecord,
     IngestRecord,
     IngestReport,
+    PartyRecord,
     RiskRecord,
     SourceRecord,
 )
@@ -66,6 +67,7 @@ from tracker.parallel import map_ordered
 from tracker.prompts import Prompt, load_prompt
 from tracker.upsert import upsert_record
 from tracker.vocab import (
+    BASIS_FIELDS,
     BOUND_MARKERS,
     CLAIM_AXIS_DEFAULTS,
     CLAIM_BOUNDS,
@@ -73,6 +75,7 @@ from tracker.vocab import (
     CLAIM_SCOPES,
     DEFAULT_RISK_SEVERITY,
     EVENT_TYPES,
+    PARTY_ROLES,
     TRACKED_FIELDS,
     risk_precedence,
 )
@@ -903,6 +906,48 @@ _SCOPE_MARKERS: Final[dict[str, tuple[str, ...]]] = {
     "portfolio": ("portfolio", "its data centers", "all of its", "company-wide", "fleet"),
 }
 
+#: Wording that licenses each non-default `basis` — which KIND of megawatt a
+#: capacity figure is. Same rule as `_BOUND_MARKERS`: the sentence has to say it.
+#:
+#: **Why this is a marker check and not a question for the model.** `scope` was
+#: the model's to label and it failed its own pre-registered kill criterion —
+#: 96.9% `this_site`, and `programme` and `region` never produced once across the
+#: corpus. `docs/plan-claim-envelope.md` concludes that the distinction "needs a
+#: different mechanism than asking the model for a label". So this axis never
+#: asks. It reads the sentence already stored beside the figure and looks for the
+#: words a publisher uses when they mean one quantity rather than another.
+#:
+#: `unspecified` therefore has no markers and needs none: it is what a figure gets
+#: when the article wrote "a 200 MW campus", which is most of them. That is the
+#: measurement this axis exists to make rather than a gap in it.
+_BASIS_MARKERS: Final[dict[str, tuple[str, ...]]] = {
+    "it_load": (
+        "it load",
+        "it capacity",
+        "critical load",
+        "critical it",
+        "critical power",
+        "compute load",
+    ),
+    "facility": (
+        "gross",
+        "utility power",
+        "total power",
+        "facility load",
+        "connected load",
+        "grid connection",
+        "interconnection capacity",
+        "behind the meter",
+    ),
+    "nameplate": (
+        "nameplate",
+        "generating capacity",
+        "generation capacity",
+        "power plant",
+        "turbines",
+    ),
+}
+
 
 def axis_gate(
     entry: dict[str, Any],
@@ -910,6 +955,7 @@ def axis_gate(
     *,
     block_labels: frozenset[str] = frozenset(),
     site_names: frozenset[str] = frozenset(),
+    field: str | None = None,
 ) -> dict[str, Any]:
     """Keep the claim-envelope axes the quote actually licenses.
 
@@ -926,6 +972,13 @@ def axis_gate(
     have with a modality: something `achieved` cannot be dated in the future. It
     is deliberately not checked against the article's own publication date, which
     would refuse every correct backward reference.
+
+    `basis` is the one axis **nothing asks the model for**. It is read out of the
+    quote alone, because that is the correction `scope` earned: a label the model
+    volunteers drifts to whatever is cheapest to say, and 96.9% `this_site` with
+    zero `programme` is what that looks like. `field` is what restricts it to the
+    two capacity columns — a basis on a date is noise, and reporting one would
+    make the coverage figure meaningless.
     """
     low = _normalize_for_match(quote or "")
     out: dict[str, Any] = {}
@@ -1008,6 +1061,26 @@ def axis_gate(
     out["modality"] = modality
     if as_of:
         out["as_of"] = as_of
+
+    # `basis` — which kind of megawatt, read from the sentence and never asked for.
+    #
+    # Ordered `nameplate`, then `facility`, then `it_load`, and the order is the
+    # claim being made: a sentence carrying generation wording is about a
+    # generator whatever else it also says, and "gross" beats "IT load" because
+    # an article writing both is contrasting them and the figure being qualified
+    # is the one the hedge attaches to. That last case is the `bound` positional
+    # bug in a new place (`docs/known-limitations.md` #11), so the ordering is a
+    # deliberate floor rather than a solution: it prefers the reading that keeps a
+    # figure OUT of `it_load`, which is the direction that cannot inflate a
+    # capacity total.
+    if field in BASIS_FIELDS:
+        basis = CLAIM_AXIS_DEFAULTS["basis"]
+        for candidate in ("nameplate", "facility", "it_load"):
+            if any(m in low for m in _BASIS_MARKERS[candidate]):
+                basis = candidate
+                break
+        out["basis"] = basis
+
     return out
 
 
@@ -1567,6 +1640,177 @@ def vague_block_note(kept: list[BlockRecord]) -> list[str]:
     ]
 
 
+#: Hard ceiling on parties taken from one article for one project. A campus has a
+#: developer, an owner, an operator, a tenant, a utility and a builder; a list
+#: longer than that is the model enumerating every company the article mentions.
+MAX_PARTIES_PER_PROJECT = 8
+
+#: Wording that licenses each `role`, on exactly the terms `_BOUND_MARKERS` sets:
+#: the sentence has to say it, or the role is not evidenced.
+#:
+#: **Why a role needs a marker at all.** `docs/plan-claim-envelope.md` records the
+#: axis that rotted and why: `severity` sat at `watch` on every risk in the
+#: database because no article ever states a severity, so nothing could ever check
+#: it; and `scope` failed its own kill criterion at 96.9% `this_site` because
+#: `this_site` was the one value the gate could not refuse. An unverifiable label
+#: does not stay neutral, it drifts to whatever is cheapest for the model to say.
+#: A role IS checkable — an article that means "Oracle leases it" says leases —
+#: so the check is the thing that keeps this axis from becoming decoration.
+#:
+#: A party whose role no marker licenses is kept and marked 待确认, never dropped
+#: and never silently re-roled: the company really is named in the article, which
+#: is itself the fact that raises a duplicate, and only the *role* is unevidenced.
+_ROLE_MARKERS: Final[dict[str, tuple[str, ...]]] = {
+    "developer": (
+        "develop",
+        "developer",
+        "will build",
+        "is building",
+        "building a",
+        "construction of",
+        "broke ground",
+        "breaking ground",
+    ),
+    "owner": (
+        "owns",
+        "owner",
+        "owned by",
+        "acquired",
+        "purchased",
+        "bought",
+        "landowner",
+        "joint venture",
+    ),
+    "operator": (
+        "will operate",
+        "operated by",
+        "operator",
+        "operating",
+        "will run",
+        "runs the",
+        "manages",
+    ),
+    "customer": (
+        "lease",
+        "leased to",
+        "leases",
+        "tenant",
+        "will serve",
+        "customer",
+        "client",
+        "occupied by",
+        "offtake",
+        "capacity to",
+        "contracted with",
+        "for use by",
+    ),
+    "utility": (
+        "utility",
+        "electric",
+        "power provider",
+        "will supply",
+        "supply power",
+        "interconnection",
+        "substation",
+        "grid",
+    ),
+    "contractor": (
+        "contractor",
+        "construction firm",
+        "engineering firm",
+        "was awarded",
+        "has been awarded",
+        "general contractor",
+        "epc",
+    ),
+}
+
+
+def _parties(raw: dict[str, Any], article_text: str, company: str | None) -> list[PartyRecord]:
+    """The companies one article named on one site, and what each does there.
+
+    The axis `project.company` was collapsing. The prompt's own definition of that
+    column is "who builds AND operates the site", so two roles arrive in one
+    string, `customer` carries a third, and the utility and the landowner have
+    nowhere to go — which is why Richland Parish is in the live database twice, as
+    Meta and as Entergy Louisiana, and Abilene four times.
+
+    Three checks, in the order they can refuse something:
+
+    * **The name must be in the article.** This is the only thing here that drops
+      a party outright, and it is the anti-fabrication guarantee `evidence_gate`
+      makes about values: unlike a risk's `summary`, which is allowed to be the
+      model's paraphrase because the *quote* beside it carries the evidence, a
+      party's name IS the claim. A company nobody published has nothing left worth
+      keeping.
+    * **The quote must be real, and must name the party.** A verified sentence
+      that does not contain the company is a real sentence filed against the wrong
+      party — `quote_off_target`, the same reason code the field gate uses for
+      exactly this shape.
+    * **The role must be licensed by wording in that quote.** Failing this keeps
+      the party and marks it 待确认; see `_ROLE_MARKERS` for why an unchecked role
+      would rot rather than stay neutral.
+
+    Nothing here is allowed to write `project.company`, so a wrong role cannot
+    move a `dedup_key`. See `tracker/parties.py`.
+    """
+    haystack = _normalize_for_match(article_text)
+    stated = _normalize_for_match(company or "")
+    kept: list[PartyRecord] = []
+    seen: set[tuple[str, str]] = set()
+
+    for entry in raw.get("parties") or []:
+        if not isinstance(entry, dict):
+            continue
+
+        name = norm_text(entry.get("name"))
+        role = str(entry.get("role") or "").strip().lower().replace(" ", "_")
+        if not name or role not in PARTY_ROLES:
+            continue
+
+        low_name = _normalize_for_match(name)
+        # The company the extraction already resolved is exempt from the
+        # in-article check, because `evidence_gate` has already ruled on it: it is
+        # either quote-backed or already 待确认 in `claims`, and re-refusing it
+        # here would delete the one party every article has.
+        if low_name != stated and low_name not in haystack:
+            log.debug("party %r is not named in %s; dropped", _for_log(name), "the article")
+            continue
+
+        slot = (low_name, role)
+        if slot in seen:
+            continue
+        seen.add(slot)
+
+        offered = norm_text(entry.get("quote"))
+        unconfirmed: str | None = None
+        quote: str | None = None
+        if not offered:
+            unconfirmed = "no_quote"
+        else:
+            recovered = _verbatim_run(offered, article_text)
+            if recovered.text is None:
+                unconfirmed = "quote_unverified"
+            else:
+                # The sentence is real. Two things it still has to do, and both
+                # land on `quote_off_target` — a real sentence filed against the
+                # wrong thing, which is what that reason code means everywhere
+                # else in this module. The quote is kept either way: a reader
+                # settling the row needs to see what was offered.
+                said = _normalize_for_match(recovered.text)
+                names_it = low_name in said
+                says_the_role = any(m in said for m in _ROLE_MARKERS[role])
+                quote = recovered.text
+                if not (names_it and says_the_role):
+                    unconfirmed = "quote_off_target"
+
+        kept.append(PartyRecord(name=name, role=role, quote=quote, unconfirmed=unconfirmed))
+        if len(kept) >= MAX_PARTIES_PER_PROJECT:
+            break
+
+    return kept
+
+
 def _risks(raw: dict[str, Any], article_text: str, url: str) -> tuple[list[RiskRecord], list[str]]:
     """Obstacles from one extracted project. Returns ``(kept, disclosure notes)``.
 
@@ -1883,6 +2127,11 @@ def build_records(
                     # nothing supports.
                     claim_meta=_claim_axes(evidence, quotes, kept, blocks, precisions),
                     blocks=blocks,
+                    # Given the resolved `company` rather than the raw reply, so
+                    # the one party every article has is exempted from the
+                    # in-article name check by the value the field gate already
+                    # ruled on — see `_parties`.
+                    parties=_parties(raw, result.markdown, claims.get("company")),
                     extractor=f"crawl:{prompt.stamp}:{reply.model}:{result.via}",
                 )
             ],
@@ -1930,7 +2179,20 @@ def _claim_axes(
         field = str(item.get("field") or "").strip()
         if field not in kept or field not in quotes:
             continue
-        axes = axis_gate(item, quotes[field], block_labels=labels, site_names=names)
+        axes = axis_gate(item, quotes[field], block_labels=labels, site_names=names, field=field)
+        # A default `basis` is dropped rather than stored, and the neutrality test
+        # below is the reason it has to be. That test keeps `axis_census` honest —
+        # an envelope carrying no information would report coverage the axes have
+        # not earned — and `unspecified` is the answer for most capacity figures,
+        # so storing it would attach an envelope to nearly every one of them and
+        # make the measured coverage of *every* axis look near-total.
+        #
+        # Nothing is lost by dropping it. A quoted capacity claim with no stored
+        # basis means "the sentence was read and did not say", because this path
+        # and `backfill.derive_basis` both evaluate every one of them. The
+        # distinction is preserved; it is just not written down.
+        if axes.get("basis") == CLAIM_AXIS_DEFAULTS["basis"]:
+            axes.pop("basis")
         # An entry that is neutral on every axis says nothing, and storing it
         # would inflate coverage with rows carrying no information — the exact
         # measurement `axis_census` exists to catch, so it must not be gamed here.

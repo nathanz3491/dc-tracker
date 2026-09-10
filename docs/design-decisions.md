@@ -628,6 +628,63 @@ table exists to make possible. It is reachable only from a hand-curated `blocker
 string and from the 0004 backfill, both of which are a human asserting an obstacle
 without saying which kind.
 
+## Parties are a table, for the four reasons risk is
+
+The extraction prompt had to say what `company` means, and the answer it settled
+on is the problem written down: **"who builds *and* operates the site."** Two
+roles in one string, `customer` carrying a third, and the utility and the
+landowner with nowhere to go — while the prompt carried standing instructions to
+refuse both, precisely because they keep turning up in the sentence that names the
+site.
+
+The measured cost is in [duplicate shapes](duplicate-shapes.md). Replaying the 90
+folds an operator performed by hand, **48 had no key-level signal connecting the
+two rows**, because every key comparison holds the company fixed. Abilene was
+stored four times — Crusoe builds it, Oracle leases it, OpenAI occupies it, and
+one source wrote "OpenAI/Oracle" — and each name is correct, mints its own
+`dedup_key`, and contributed its full capacity to a buyer's position.
+
+Every reason `risk` is a table applies here unchanged:
+
+- **Hold more than one.** A developer *and* an owner *and* an operator *and* a
+  tenant is the normal case for an AI campus, not an edge one. One column has to
+  pick.
+- **Ever be cleared.** A campus is sold and a tenant signs. `upsert._resolve`
+  returns the existing value when a field has no claims, so a scalar could be
+  replaced but never set back to NULL.
+- **Be counted.** "How much capacity does Crusoe build for somebody else" is the
+  question that carries the read-through, and free text cannot answer it. A closed
+  `role` vocabulary can.
+- **Be evidenced separately.** The sentence naming the tenant is not the sentence
+  naming the builder, so one `source.excerpt` cannot stand behind both.
+
+**`project.company` survives as a derived column, and is deliberately *not*
+derived from the parties.** This is the one place the analogy to `blocker` breaks,
+and the reason is the invariant two sections above: `dedup_key` is
+`company|locality|state`, it is UNIQUE, and it is computed once at insert. Nothing
+re-keys it — deliberately, since re-keying means colliding with whatever already
+holds the new key. So a `company` that moved after insert would leave the key
+naming a company the row no longer names, and the duplicate gate would compare a
+stale key on every subsequent crawl. `company` is `FILL_ONLY` for exactly this
+reason, documented as "churn is worse than staleness". The roles are recorded
+*beside* it. `customer` is filled when null, because it is nullable and nothing
+keys on it.
+
+**A role is gated against its quote, because an ungated label rots.** `severity`
+is the cautionary case in this repo: it sits at `watch` on every risk in the
+database, because no article ever states a severity and so nothing could ever
+check it. `scope` is the second: it failed its own pre-registered kill criterion
+at 96.9% `this_site`. A role *is* checkable — an article that means "Oracle leases
+it" says leases — so `crawl._ROLE_MARKERS` requires the wording, and a party whose
+role nothing licenses is kept as 待确认 rather than dropped or silently re-roled.
+The company is named in the article, which is itself what raises a duplicate; only
+the role is unevidenced.
+
+The one thing that *is* dropped outright is a party the article never names. A
+risk's `summary` may be the model's paraphrase because the quote beside it carries
+the evidence; a party's **name is the claim**, so a company nobody published has
+nothing left worth keeping.
+
 ## The database is not committed
 
 The PRD asks for both "SQLite under version control, reproducible from a fresh

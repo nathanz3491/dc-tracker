@@ -412,6 +412,16 @@ def to_record(
             claims[logical] = value
 
     excerpt = _excerpt(row, iso_map, ext_id)
+    # `basis` by construction, which is the one place in this codebase it can be
+    # asserted without reading a sentence. A queue row's MW *is* generator
+    # nameplate — that is what the queue is a queue of — so when `--trust-gen-mw`
+    # puts one into `mw_planned` the column is holding a quantity it is not
+    # defined as, and migration 0024's whole purpose is that this stops being
+    # invisible. Everywhere else the axis is read out of a quote; here the file
+    # format is the evidence.
+    claim_meta: dict[str, dict[str, Any]] = {}
+    if claims.get("mw_planned") is not None:
+        claim_meta["mw_planned"] = {"basis": "nameplate"}
     source = SourceRecord(
         # A fragment per queue id keeps the URL row-unique (so the
         # (project_id, url) constraint does not collapse many rows into one)
@@ -421,6 +431,7 @@ def to_record(
         fetched_at=fetched_at,
         excerpt=excerpt,
         claims=claims,
+        claim_meta=claim_meta,
         extractor=f"{iso_map.iso}:{MAPS_VERSION}:sha256={file_digest}:row={lineno}",
     )
 

@@ -63,7 +63,12 @@ def version() -> None:
 @app.command()
 def init() -> None:
     """Create or upgrade the database, then recompute the cached derived values."""
-    from tracker.upsert import recompute_blocks, recompute_confidence, recompute_h200
+    from tracker.upsert import (
+        recompute_blocks,
+        recompute_confidence,
+        recompute_h200,
+        recompute_parties,
+    )
 
     path = _db_path()
     engine, applied = init_db(path)
@@ -74,6 +79,7 @@ def init() -> None:
         # settings and a SQL backfill would freeze one copy of it here.
         resized = recompute_h200(session)
         reblocked = recompute_blocks(session)
+        reparted = recompute_parties(session)
 
     console.print(f"database: [bold]{path}[/bold]")
     if applied:
@@ -85,6 +91,8 @@ def init() -> None:
         console.print(f"recomputed confidence on {rescored} project(s)")
     if reblocked:
         console.print(f"rebuilt capacity blocks on {reblocked} project(s)")
+    if reparted:
+        console.print(f"rebuilt parties on {reparted} project(s)")
     if resized:
         from tracker.compute import kw_per_h200
 
@@ -1015,6 +1023,108 @@ def _backfill_scope(*, apply: bool, dry_run: bool) -> None:
         )
 
 
+def _backfill_basis(*, apply: bool, dry_run: bool) -> None:
+    """Derive which kind of megawatt each capacity figure is, and report the split.
+
+    Free, like `scope` and for the same reason: the axis is read out of the quote
+    already stored beside the figure, so no article is re-opened and no model is
+    called.
+
+    **The report is the point even when nothing changes.** `unspecified`
+    dominating is the finding — it is the share of the database whose article
+    wrote "a 200 MW campus" and never said whether that was the computing load,
+    the whole site's draw, or a generator's rating. Those differ by 30% and more,
+    and until migration 0024 the column could not say which it held.
+    """
+    from tracker.backfill import derive_basis
+
+    writing = apply and not dry_run
+    engine = _writable("backfill basis") if writing else _read_engine()
+    with _explain_db_locks(), session_scope(engine, commit=writing) as session:
+        report = derive_basis(session, apply=writing)
+
+    if json_mode():
+        emit(
+            {
+                "sources": report.sources,
+                "claims": report.claims,
+                "changed": report.changed,
+                "found": report.found,
+                "projects_touched": report.projects_touched,
+                "applied": writing,
+            }
+        )
+        return
+
+    _print_report_rows(report.as_rows(), title="backfill basis" + ("" if writing else " (preview)"))
+    total = sum(report.found.values()) or 1
+    for basis, count in sorted(report.found.items(), key=lambda kv: -kv[1]):
+        console.print(f"  {basis:<12} {count:>6,}  [dim]{count / total:.1%}[/dim]")
+
+    if not writing:
+        console.print("\n[dim]Nothing written. `--apply` writes the axis.[/dim]")
+    else:
+        console.print(
+            "\n[dim]Written. `unspecified` means the article stated a capacity and "
+            "never said which kind — that share is the measurement, not a gap in "
+            "it.[/dim]"
+        )
+
+
+def _backfill_parties(*, apply: bool, dry_run: bool) -> None:
+    """Seed `source.parties` from `company` and `customer`, and say what it wrote.
+
+    Free — no LLM, no network — because it reads only what is already stored, the
+    same reason `derive` and `scope` are free.
+
+    Reports before it writes, and the report is the interesting half: it says how
+    many rows the two existing columns can account for at all. Everything beyond
+    `operator` and `customer` is in the article text and needs a re-crawl, so a
+    large `no source claims the company` count is the honest measure of how much
+    of this axis is still missing rather than a failure of the run.
+    """
+    from tracker.backfill import seed_parties
+    from tracker.upsert import recompute_parties
+
+    writing = apply and not dry_run
+    engine = _writable("backfill parties") if writing else _read_engine()
+    with _explain_db_locks(), session_scope(engine, commit=writing) as session:
+        report = seed_parties(session, apply=writing)
+        rebuilt = recompute_parties(session) if writing else 0
+
+    if json_mode():
+        emit(
+            {
+                "projects": report.projects,
+                "already": report.already,
+                "unsourced": report.unsourced,
+                "sources": report.sources,
+                "written": report.written,
+                "rebuilt": rebuilt,
+                "applied": writing,
+            }
+        )
+        return
+
+    _print_report_rows(
+        report.as_rows(),
+        title="backfill parties" + ("" if writing else " (preview)"),
+    )
+    for role, count in sorted(report.written.items(), key=lambda kv: -kv[1]):
+        console.print(f"  {role:<10} {count:,}")
+    if rebuilt:
+        console.print(f"\nrebuilt parties on [bold]{rebuilt}[/bold] project(s)")
+
+    if not writing:
+        console.print("\n[dim]Nothing written. `--apply` writes them.[/dim]")
+    else:
+        console.print(
+            "\n[dim]Written. `operator` and `customer` only — every other role is in "
+            "the article text, so `tracker ingest crawl --stale-prompt` is what fills "
+            "developer, owner and utility.[/dim]"
+        )
+
+
 def _backfill_dates(*, limit: int, refetch: bool, apply: bool, yes: bool, everything: bool) -> None:
     """`tracker backfill dates`. No LLM, no API key, one column.
 
@@ -1156,7 +1266,10 @@ def _backfill_derive(*, project_id: int | None, dry_run: bool) -> None:
 
 @app.command("backfill")
 def backfill(
-    what: Annotated[str, typer.Argument(help="`blocks`, `dates`, `derive` or `scope`.")] = "blocks",
+    what: Annotated[
+        str,
+        typer.Argument(help="`blocks`, `dates`, `derive`, `scope`, `parties` or `basis`."),
+    ] = "blocks",
     limit: Annotated[
         int, typer.Option("--limit", help="Articles to read. 0 reads every one selected.")
     ] = 25,
@@ -1206,6 +1319,10 @@ def backfill(
       is only applied when something writes to the row.
     * `dates` — fill in when each article was actually published, so a merge tie
       is broken by publication order rather than by crawl order.
+    * `parties` — seed the party table from `company` and `customer`, so migration
+      0023's axis has rows before every article has been re-read. Free.
+    * `basis` — derive which KIND of megawatt each capacity figure is, out of the
+      quote already stored beside it. Free.
     * `blocks` — re-read stored articles to fill in capacity blocks. The default,
       and the only one that spends anything.
 
@@ -1260,9 +1377,26 @@ def backfill(
                 _fail(f"{name} applies to `backfill blocks` or `dates`, not to `scope`.")
         _backfill_scope(apply=apply, dry_run=dry_run)
         return
+    if what == "basis":
+        # Free, like `derive`, `scope` and `parties`: the axis comes out of the
+        # stored quote, so no extractor is constructed above this point.
+        for flag, name in ((refetch, "--refetch"), (force, "--force"), (all_urls, "--all")):
+            if flag:
+                _fail(f"{name} applies to `backfill blocks` or `dates`, not to `basis`.")
+        _backfill_basis(apply=apply, dry_run=dry_run)
+        return
+    if what == "parties":
+        # Free, like `derive` and `scope`: it reads `company`, `customer` and the
+        # quotes already on disk, so no extractor is constructed above this point.
+        for flag, name in ((refetch, "--refetch"), (force, "--force"), (all_urls, "--all")):
+            if flag:
+                _fail(f"{name} applies to `backfill blocks` or `dates`, not to `parties`.")
+        _backfill_parties(apply=apply, dry_run=dry_run)
+        return
     if what != "blocks":
         _fail(
-            f"nothing to backfill called {what!r}. Expected `blocks`, `dates`, `derive` or `scope`."
+            f"nothing to backfill called {what!r}. Expected `blocks`, `dates`, "
+            "`derive`, `scope`, `parties` or `basis`."
         )
 
     settings = get_settings()

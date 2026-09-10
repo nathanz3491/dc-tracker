@@ -41,6 +41,7 @@ from tracker.dedup import (
     is_cross_granularity_match,
     looks_like_the_same_site,
 )
+from tracker.dedup import company_key as _party_key
 from tracker.ingest.records import IngestRecord
 from tracker.models import Event, Project, ProjectAlias, Risk, Source, utcnow
 from tracker.pairs import is_parked
@@ -987,6 +988,21 @@ def upsert_record(
             if sr.blocks
             else None
         )
+        # Ordered by (role, key) rather than by the order the model listed them,
+        # for the same byte-identical re-ingest reason as `blocks` above. The key
+        # rather than the name, so "AWS" and "Amazon Web Services" sort together
+        # and a source rewording one party cannot reorder the array.
+        row.parties = (
+            json.dumps(
+                [
+                    p.as_json()
+                    for p in sorted(sr.parties, key=lambda p: (p.role, _party_key(p.name), p.name))
+                ],
+                ensure_ascii=False,
+            )
+            if sr.parties
+            else None
+        )
         row.extractor = sr.extractor
         # fetched_at is only advanced, never rewound: a cached re-read must not
         # make an old citation look newer than a genuinely newer one.
@@ -1031,9 +1047,18 @@ def upsert_record(
     # Blocks first, then the rollup, then h200 — so `apply_h200_equivalent` sees a
     # `mw_built` that already reflects the energised tranches.
     from tracker import blocks as blocks_mod
+    from tracker import parties as parties_mod
 
     blocks_written = blocks_mod.rebuild(session, project)
     block_notes = blocks_mod.reconcile(project)
+    # Parties after the block reconcile, because both may fill a null `customer`
+    # and a tranche naming its own tenant is the more specific statement. Same
+    # ordering and same reason as in `recompute_from_sources`.
+    parties_mod.rebuild(session, project)
+    party_notes = parties_mod.reconcile(project)
+    # After the rollup, which may have filled a null capacity from the tranches —
+    # so the basis describes the figure the row ends up holding.
+    apply_mw_basis(project, by_field)
     apply_h200_equivalent(project, by_field)
 
     # --- Notes: conflicts, path disclosures, duplicate proposals ------------
@@ -1068,6 +1093,7 @@ def upsert_record(
     marker = f"{SOURCE_NOTE_PREFIX}[{tag}]"
     contributed = [f"{marker} {line}" for line in rec.notes]
     derived.extend(f"{NOTE_PREFIX} {line}" for line in block_notes)
+    derived.extend(f"{NOTE_PREFIX} {line}" for line in party_notes)
     project.notes = _merge_notes(project.notes, derived, contributed, tag=tag)
 
     # --- Events -------------------------------------------------------------
@@ -1466,6 +1492,12 @@ def blocker_rationale(project: Project, risks: list[Risk] | None = None) -> dict
 #: Date columns whose stated precision is cached on the project.
 _DATE_PRECISION_FIELDS: tuple[str, ...] = ("first_announced", "expected_online")
 
+#: Capacity columns whose basis is cached on the project. A tuple rather than
+#: `vocab.BASIS_FIELDS` directly, because the column suffix is built from these
+#: names and a frozenset has no order — so a report iterating them would list the
+#: two capacities differently from one run to the next.
+BASIS_FIELDS_ORDERED: tuple[str, ...] = ("mw_planned", "mw_built")
+
 
 def apply_date_precision(project: Project, by_field: dict[str, list] | None = None) -> None:
     """Cache how precisely each date was stated, from the claim that won.
@@ -1512,6 +1544,17 @@ def _same(claim_value_: Any, target: Any) -> bool:
 
 def _recorded_precision(source: Source | None, field: str) -> str | None:
     """The `date_precision` this source recorded for one field, if any."""
+    return _recorded_axis(source, field, "date_precision")
+
+
+def _recorded_axis(source: Source | None, field: str, axis: str) -> str | None:
+    """One axis of one field's stored envelope, or None.
+
+    Shared by `date_precision` and `basis` rather than written twice: both ask the
+    same question of the same JSON and a second copy of the parse is a second
+    place for the "malformed envelope is not a reason to fail a read" rule to be
+    forgotten.
+    """
     if source is None or not getattr(source, "claim_meta", None):
         return None
     try:
@@ -1523,8 +1566,42 @@ def _recorded_precision(source: Source | None, field: str) -> str | None:
     entry = meta.get(field)
     if not isinstance(entry, dict):
         return None
-    value = entry.get("date_precision")
+    value = entry.get(axis)
     return str(value) if value else None
+
+
+def apply_mw_basis(project: Project, by_field: dict[str, list] | None = None) -> None:
+    """Cache which KIND of megawatt each capacity figure is.
+
+    Exactly `apply_date_precision`'s shape, and for the same reasons. The basis
+    belongs to the **winning** claim rather than to the field: two sources can
+    state one campus at 200 MW gross and 150 MW of IT load, and the row must
+    report the basis of the number it actually holds rather than the best-labelled
+    one anybody offered.
+
+    NULL means no claim records a basis, which covers two cases the column cannot
+    separate: a source predating migration 0024 or with no quote to read, and a
+    sentence that was read and did not say. The second is not stored on purpose —
+    `crawl._claim_axes` drops a default `basis` so an envelope does not end up on
+    nearly every capacity claim and inflate the coverage measurement that decides
+    whether these axes are worth keeping. `tracker backfill basis` counts
+    `unspecified` explicitly, which is where the split is visible.
+    """
+    sources = {s.url: s for s in (getattr(project, "sources", ()) or ())}
+    claims = by_field if by_field is not None else claims_by_field(list(sources.values()))
+
+    for name in BASIS_FIELDS_ORDERED:
+        stored = getattr(project, name, None)
+        basis = None
+        if stored is not None:
+            target = claim_value(stored)
+            for claim in claims.get(name, []):
+                if not _same(claim.value, target):
+                    continue
+                basis = _recorded_axis(sources.get(claim.url), name, "basis")
+                break
+        if getattr(project, f"{name}_basis", None) != basis:
+            setattr(project, f"{name}_basis", basis)
 
 
 def apply_h200_equivalent(project: Project, by_field: dict[str, list] | None = None) -> None:
@@ -1594,14 +1671,24 @@ def recompute_from_sources(session: Session, project: Project) -> list[str]:
         project.phase = DEFAULT_PHASE
 
     from tracker import blocks as blocks_mod
+    from tracker import parties as parties_mod
 
     blocks_mod.rebuild(session, project)
     block_notes = blocks_mod.reconcile(project)
+    # **Parties before the block reconcile would be wrong, and after it is right.**
+    # Both may fill a null `customer`, and a tranche that names its tenant is the
+    # more specific statement — Lake Mariner's 378 MW for Fluidstack beside 60 MW
+    # for Core42 is a fact about a block, not about the campus. So blocks get the
+    # first refusal and this fills only what they left empty.
+    parties_mod.rebuild(session, project)
+    party_notes = parties_mod.reconcile(project)
     apply_date_precision(project, by_field)
+    apply_mw_basis(project, by_field)
     apply_h200_equivalent(project, by_field)
 
     derived, conflict_fields = _conflict_notes(by_field)
     derived.extend(f"{NOTE_PREFIX} {line}" for line in block_notes)
+    derived.extend(f"{NOTE_PREFIX} {line}" for line in party_notes)
     project.notes = _merge_notes(
         project.notes, derived, [], tag=None, preserve_derived=_INGEST_ONLY_NOTES
     )
@@ -1666,6 +1753,25 @@ def recompute_blocks(session: Session) -> int:
     return changed
 
 
+def recompute_parties(session: Session) -> int:
+    """Rebuild every project's parties from its sources. Returns rows changed.
+
+    Same status and same obligation as `recompute_blocks`: parties are a cache of
+    `source.parties`, `tracker init` recomputes them, and
+    `test_parties_cache_is_consistent` asserts a second pass is a no-op.
+    """
+    from tracker import parties as parties_mod
+
+    changed = 0
+    for project in session.scalars(select(Project)).all():
+        touched = parties_mod.rebuild(session, project)
+        notes = parties_mod.reconcile(project)
+        if touched or notes:
+            changed += 1
+    session.flush()
+    return changed
+
+
 def recompute_h200(session: Session) -> int:
     """Restate every project's capacity as accelerators. Returns rows changed.
 
@@ -1705,6 +1811,7 @@ __all__ = [
     "recompute_confidence",
     "recompute_from_sources",
     "recompute_h200",
+    "recompute_parties",
     "record_tag",
     "resolve_field",
     "upsert_record",

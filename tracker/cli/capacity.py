@@ -199,6 +199,8 @@ def capex(
         blockers = {p.key: capex_mod.blocking_risk(session, p.key) for p in positions if p.key}
         suspects = capex_mod.suspect_attributions(session)
         dupes = capex_mod.suspected_duplicates(session)
+        bases = capex_mod.basis_census(session)
+        programmes = capex_mod.programme_figures(session)
 
     if json_mode():
         from tracker.compute import h200_equivalent
@@ -226,6 +228,7 @@ def capex(
                         "investment_usd": p.investment_usd,
                         "investment_excluded_usd": p.investment_excluded_usd,
                         "investment_unquoted_usd": p.investment_unquoted_usd,
+                        "investment_out_of_scope_usd": p.investment_out_of_scope_usd,
                         "duplicate_rows_skipped": p.duplicate_rows_skipped,
                         "mw_duplicate_skipped": p.mw_duplicate_skipped,
                         "investment_duplicate_skipped_usd": p.investment_duplicate_skipped_usd,
@@ -330,6 +333,38 @@ def capex(
             "backs — asserted by a source and never contradicted, unlike the figures above. "
             "Counted, because dropping a figure that is probably right understates the "
             "column.[/dim]"
+        )
+    out_of_scope_usd = sum(p.investment_out_of_scope_usd for p in positions)
+    if out_of_scope_usd:
+        console.print(
+            f"[dim]investment excludes [bold]{_fmt_usd(out_of_scope_usd)}[/bold] the article "
+            "says is a programme, a region's economic impact, or the operator's whole estate "
+            "rather than this site. Quoted correctly, and not this campus's money.[/dim]"
+        )
+    unrecorded = bases.get(capex_mod.BASIS_UNRECORDED, 0)
+    total_capacities = sum(bases.values())
+    if total_capacities and unrecorded:
+        share = unrecorded / total_capacities
+        console.print(
+            f"[dim]{share:.0%} of the stored capacities do not record which kind of megawatt "
+            "they are — the computing load, the whole site's draw and a generator's rating "
+            "differ by 30% and more, so those figures are not comparable with each other. "
+            "`tracker backfill basis` reads what the quotes already say, for free.[/dim]"
+        )
+    if programmes:
+        console.print(
+            f"\n[yellow]{len(programmes)} figure(s)[/yellow] stand as the cost of several of "
+            "one operator's campuses at once, which a site cost cannot be:"
+        )
+        for got in programmes[:5]:
+            ids = ", ".join(f"#{i}" for i in got.project_ids)
+            console.print(
+                f"  [dim]{got.operator}[/dim] {_fmt_usd(got.investment_usd)} "
+                f"on {got.sites} sites — {ids}"
+            )
+        console.print(
+            "[dim]counted in the sums above. Correct the figure or supersede the claim on the "
+            "rows that are not the whole programme.[/dim]"
         )
     vague_risk = sum(p.at_risk_unconfirmed for p in positions)
     if vague_risk:

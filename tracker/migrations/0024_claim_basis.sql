@@ -1,0 +1,76 @@
+-- 0024_claim_basis: which KIND of megawatt.
+--
+-- 0015 asked what a value is a value *of* and answered it with `scope`. This is
+-- the other half of the same question and it is not the same axis: a figure can
+-- be unambiguously about this campus, `scope = this_site`, and still be the wrong
+-- quantity for the column it landed in.
+--
+-- Three quantities arrive in one REAL column:
+--
+--   it_load    the computing load -- what `mw_planned` is defined as
+--   facility   the whole site's draw, IT load times PUE plus everything else
+--              behind the meter. `_industry.txt` puts modern hyperscale PUE at
+--              1.1-1.3, so this runs 10-30% above the IT load.
+--   nameplate  a generator's rated output, which is not a data center quantity
+--              at all. `iso_maps.py` opens by saying so.
+--
+-- The pipeline has known this for as long as it has had a prompt -- `_industry.txt`
+-- explains PUE to the model and `ingest/pjm.py` refuses to write a queue row's
+-- nameplate into `mw_planned` -- and then the schema discarded the distinction on
+-- every path except that one. Two figures 30% apart, both correct, both stored
+-- identically, and nothing on the row saying which is which.
+--
+-- **Nothing asks the model for this label, and that is the correction 0015
+-- earned.** `scope` was the model's to assert and it failed its own
+-- pre-registered kill criterion: 96.9% `this_site` across the corpus, with
+-- `programme` and `region` never produced once, on the very case the axis was
+-- built for. `docs/plan-claim-envelope.md` records the conclusion -- that the
+-- distinction "needs a different mechanism than asking the model for a label" --
+-- and this is that mechanism. `crawl.axis_gate` reads the sentence already stored
+-- beside the figure and looks for the words a publisher writes when they mean one
+-- quantity rather than another: "IT load", "critical load", "gross", "utility
+-- power", "nameplate". Nothing is inferred from the number itself.
+--
+-- So `unspecified` is the majority answer and is the measurement, not a gap in
+-- it: an article writing "a 200 MW campus" has not said which of the three it
+-- means, and the share of the database in that position is the number this axis
+-- exists to put on the table. It is disclosed in the `capex` footer rather than
+-- made a `tracker clean` tier condition, which would move every row's tier in one
+-- commit and drown the signal.
+--
+-- **The default is counted and never stored**, which is the one concession this
+-- axis makes. `claim_meta` refuses an envelope that is neutral on every axis,
+-- because `axis_census` is what decides whether these axes carry information and
+-- an envelope on every row would report coverage none of them had earned -- and
+-- `unspecified` would be on nearly every capacity claim there is. So a quoted
+-- capacity claim with no stored basis *means* "read, and the sentence did not
+-- say", since both the ingest path and `tracker backfill basis` evaluate every
+-- one of them. The column below is therefore NULL for that case as well as for a
+-- claim nothing has read; `capex.basis_census` reports the two as one
+-- `unrecorded` bucket and `tracker backfill basis` is what separates them.
+--
+-- Stored inside `source.claim_meta` as a fifth key beside {scope, bound,
+-- modality, as_of}, so there is no new source column: the envelope already exists
+-- and is already restricted, sorted and re-ingest-stable. Only `mw_planned` and
+-- `mw_built` carry one -- see `vocab.BASIS_FIELDS`. Money has a `scope`; a date
+-- has neither.
+--
+-- **Backfillable, unlike 0015, and the difference is what the axis reads.** The
+-- envelope's other axes are facts about how an article was worded and 0015 could
+-- not recover them without re-reading it. This one is derived from the stored
+-- quote, which is already on disk -- so `tracker backfill basis` fills the whole
+-- table for free, with no LLM call and no fetch, the same way `backfill scope`
+-- re-gates what 0015 wrote. A figure whose sentence says nothing stays
+-- `unspecified`, which is not a failure of the run.
+
+-- Cached on the project for the same reason `first_announced_precision`,
+-- `confidence`, `h200_equivalent` and `blocker` are: a pure function of the
+-- claims that the console and the CLI both need on every render, and a join per
+-- row to recompute it is a cost with no return. Recomputed on every upsert.
+--
+-- Two columns rather than one shared value, matching what 0015 did with the two
+-- date precisions and for the same reason: a campus routinely cites its planned
+-- capacity as gross and its built capacity as IT load, and a reader needs to know
+-- which of the two numbers in front of them is the one that is not comparable.
+ALTER TABLE project ADD COLUMN mw_planned_basis TEXT;
+ALTER TABLE project ADD COLUMN mw_built_basis TEXT;

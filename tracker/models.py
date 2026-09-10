@@ -31,6 +31,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from tracker.vocab import (
     BLOCK_STATUSES,
     EVENT_TYPES,
+    PARTY_ROLES,
     PHASES,
     RISK_CATEGORIES,
     RISK_SEVERITIES,
@@ -98,6 +99,14 @@ class Project(Base):
     #: exactly like `confidence` and `h200_equivalent`.
     first_announced_precision: Mapped[str | None] = mapped_column(Text)
     expected_online_precision: Mapped[str | None] = mapped_column(Text)
+    #: Which KIND of megawatt each capacity figure is — `vocab.CLAIM_BASES`. The
+    #: computing load, the whole facility's draw, or a generator's nameplate:
+    #: three quantities 30% or more apart that all arrived in one column. Read
+    #: from the sentence stored beside the figure, never asked of the model — the
+    #: correction migration 0015's `scope` axis earned. Caches, recomputed on
+    #: every upsert like `first_announced_precision` above.
+    mw_planned_basis: Mapped[str | None] = mapped_column(Text)
+    mw_built_basis: Mapped[str | None] = mapped_column(Text)
     blocker: Mapped[str | None] = mapped_column(Text)
     notes: Mapped[str | None] = mapped_column(Text)
 
@@ -120,6 +129,14 @@ class Project(Base):
     #: `risks`: a block's absence from the sources means the description changed,
     #: whereas a risk's absence from one article is not evidence it cleared.
     blocks: Mapped[list[CapacityBlock]] = relationship(
+        back_populates="project", cascade="all, delete-orphan", passive_deletes=True
+    )
+    #: Who plays which role on this site. A cache rebuilt wholesale from
+    #: `source.parties`, so `delete-orphan` is correct for the same reason it is on
+    #: `blocks` and would be wrong on `risks`: a party's absence from the sources
+    #: means the description changed, whereas a risk's absence from one article is
+    #: not evidence it cleared.
+    parties: Mapped[list[ProjectParty]] = relationship(
         back_populates="project", cascade="all, delete-orphan", passive_deletes=True
     )
 
@@ -201,6 +218,11 @@ class Source(Base):
     #: before migration 0015, and not backfillable: the axes are facts about how an
     #: article was worded, recoverable only by re-reading it.
     claim_meta: Mapped[str | None] = mapped_column(Text)
+    #: JSON array of the parties this source named: `[{name, role, quote}, ...]`.
+    #: A sibling column for the same reason `blocks` is one — see its comment
+    #: above. NULL on every source written before migration 0023, which is what
+    #: `tracker backfill parties` exists to make harmless.
+    parties: Mapped[str | None] = mapped_column(Text)
 
     project: Mapped[Project] = relationship(back_populates="sources")
 
@@ -435,6 +457,67 @@ class CapacityBlock(Base):
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return f"<CapacityBlock {self.block_key} {self.mw}MW {self.status} p={self.project_id}>"
+
+
+class ProjectParty(Base):
+    """One company, and what it does on this site.
+
+    `project.company` was "who builds and operates the site" and `project.customer`
+    was whoever occupies it, which is four roles in two strings and no room for the
+    utility or the landowner. The measured cost is in `docs/duplicate-shapes.md`:
+    48 of 90 hand-folded duplicates had no key-level signal, because one campus
+    arrives under a different company name in every article about it.
+
+    **A cache, not a fact of record.** Rebuilt wholesale from `source.parties` on
+    every upsert, exactly like `CapacityBlock`, `confidence` and
+    `h200_equivalent` — and it carries their obligation that a second pass changes
+    nothing.
+
+    `project.company` and `project.customer` are *derived* from these rows by
+    `tracker/parties.py`, which is what keeps `dedup_key` and its UNIQUE index
+    unchanged by this table's existence.
+    """
+
+    __tablename__ = "project_party"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("project.id", ondelete="CASCADE"), nullable=False
+    )
+
+    #: The words the winning source used. Cosmetic: identity rests on `party_key`.
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    #: `dedup.company_key(name)`, so "Amazon Web Services" and "AWS" converge.
+    party_key: Mapped[str] = mapped_column(Text, nullable=False)
+    #: From `vocab.PARTY_ROLES`.
+    role: Mapped[str] = mapped_column(Text, nullable=False)
+
+    #: The verbatim sentence the gate verified for this party, per party — the
+    #: sentence naming the tenant is not the sentence naming the builder.
+    quote: Mapped[str | None] = mapped_column(Text)
+    #: Why the gate could not confirm it, from `vocab.UNCONFIRMED_REASONS`. NULL
+    #: means confirmed. Kept rather than deleted, as `0012` decided for risks.
+    unconfirmed: Mapped[str | None] = mapped_column(Text)
+
+    source_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("source.id", ondelete="SET NULL")
+    )
+
+    project: Mapped[Project] = relationship(back_populates="parties")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id", "party_key", "role", name="uq_project_party_project_key_role"
+        ),
+        CheckConstraint(sql_in("role", PARTY_ROLES), name="ck_project_party_role"),
+        CheckConstraint("length(name) > 0", name="ck_project_party_name"),
+        CheckConstraint("length(party_key) > 0", name="ck_project_party_key"),
+        Index("ix_project_party_project_id", "project_id"),
+        Index("ix_project_party_party_key", "party_key"),
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return f"<ProjectParty {self.party_key} {self.role} p={self.project_id}>"
 
 
 class BlockAlias(Base):

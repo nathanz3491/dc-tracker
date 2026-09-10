@@ -10,6 +10,123 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 First working version. Nothing has been released yet, so everything below is the
 initial build of the v1 PRD.
 
+### Added
+
+- **Companies have roles, and one campus stops being four rows** (migration
+  `0023`, `tracker/parties.py`, `tracker/vocab.py`, `tracker/ingest/records.py`,
+  `tracker/ingest/crawl.py`, `tracker/capex.py`, `tracker/backfill.py`,
+  `tests/test_parties.py`).
+
+  The extraction prompt defined `company` as "who builds **and** operates the
+  site". Two roles in one string, `customer` carrying a third, and no room at all
+  for the utility or the landowner — so the Abilene campus was stored four times,
+  as Crusoe, as Oracle, as OpenAI and as "OpenAI/Oracle", and Richland Parish
+  twice, as Meta and as Entergy Louisiana. Each name is correct and each minted
+  its own `dedup_key`.
+
+  Measured cost, from `scripts/eval_pairs.py` replaying the 90 folds an operator
+  performed by hand: **48 of them had no key-level signal connecting the two
+  rows**, "because every key comparison holds the company fixed". The one party
+  signal that existed, `dedup.shared_parties_across_companies`, compares tokens
+  *inside* one company string — so it fires on "OpenAI/Oracle" against "Oracle"
+  and cannot fire when four articles each name one party, which is the shape that
+  actually dominates.
+
+  `project_party` is `(project, party_key, role)` with a quote each, and the
+  argument for a table is the one `0004_risk.sql` already made: a site has several
+  parties at once, a party must be able to change, "how much does Crusoe build for
+  somebody else" is a counting question free text cannot answer, and the sentence
+  naming the tenant is not the sentence naming the builder. A cache, rebuilt
+  wholesale from a new `source.parties` column — a sibling, never a key inside
+  `claims`, for the reason `0009` spells out.
+
+  **`project.company` is deliberately not derived from it.** That was the plan and
+  it is wrong: `dedup_key` is `company|locality|state`, it is UNIQUE, and nothing
+  re-keys it, so a `company` that moved after insert would leave the key naming a
+  company the row does not. `customer` *is* filled when null, because it is
+  nullable and nothing keys on it.
+
+  A role has to be quotable or it rots — `severity` sat at `watch` on every risk
+  in the database because no article states a severity. So `_ROLE_MARKERS` gates
+  each role against the stored quote, and a party whose role no wording licenses is
+  kept and marked 待确认 rather than dropped or silently re-roled: the company is
+  named in the article, which is itself what raises a duplicate, and only the role
+  is unevidenced. A party the article never names at all *is* dropped — unlike a
+  risk's paraphrased `summary`, a party's name is the claim.
+
+  `capex.attribute` reads the party set first and only trusts a confirmed one.
+  `tracker backfill parties` seeds `operator` and `customer` from the two existing
+  columns, free, and claims nothing else: `developer`, `owner` and `utility` live
+  in article text and guessing one would manufacture a claim no source made.
+
+- **Which kind of megawatt, and money that is not this site's** (migration
+  `0024`, `tracker/vocab.py`, `tracker/ingest/crawl.py`, `tracker/ingest/pjm.py`,
+  `tracker/capex.py`, `tracker/backfill.py`).
+
+  `mw_planned` received three quantities that differ by 30% and more: the
+  computing load, the whole facility's draw, and a generator's nameplate.
+  `_industry.txt` explains the difference to the model and `ingest/pjm.py` refuses
+  to put a queue row's nameplate in the column — and the schema discarded the
+  distinction on every other path.
+
+  `claim_meta` gains a `basis`, and **nothing asks the model for it.** That is the
+  correction `0015`'s `scope` axis earned by failing its own pre-registered kill
+  criterion: 96.9% `this_site`, with `programme` and `region` never produced once
+  across the corpus, on the very case it was built for. `axis_gate` reads the
+  sentence already stored beside the figure and looks for the words a publisher
+  writes when they mean one quantity — "IT load", "critical load", "gross",
+  "utility power", "nameplate". Nothing is inferred from the number itself.
+  `unspecified` is therefore the majority answer and is the measurement rather
+  than a gap in it; the share is disclosed in the `capex` footer, and deliberately
+  not made a `tracker clean` tier condition, which would move every row's tier in
+  one commit and bury the signal.
+
+  That default is **counted and never stored**, which the neutrality rule in
+  `_claim_axes` forced and which is the right answer anyway: `axis_census` decides
+  whether these axes carry information, and an `unspecified` on nearly every
+  capacity claim would report coverage none of them had earned. A quoted capacity
+  claim with no stored basis therefore *means* "read, and the sentence did not
+  say", because both paths evaluate every one of them.
+
+  Unlike `0015`'s other axes this one **is** backfillable, and the difference is
+  what it reads: the stored quote, already on disk. `tracker backfill basis` fills
+  the table with no LLM call and no fetch. The ISO path asserts `nameplate` by
+  construction, which is the one place a basis can be known without reading a
+  sentence — the file format is the evidence.
+
+  On the money side the `scope` axis has recorded whether a figure is this site's,
+  a programme's, a region's or a portfolio's **since `0015`, and nothing read
+  it**: `capex` excluded only `out_of_scale`, the `$/MW` ratio ceiling, so a figure
+  the gate had already labelled `programme` still counted in a buyer's position
+  whenever the ratio happened not to fire. Now excluded and disclosed as
+  `investment_out_of_scope_usd`. `unnamed` still counts and must — it is the
+  envelope's default, so excluding it would drop most of the database's capex
+  because nobody wrote a qualifier.
+
+  And because the `programme` label itself never fired, `capex.programme_figures`
+  supplies the mechanism that plan asked for instead: the same rounded figure, for
+  the same operator, standing as the winning `investment_usd` on two or more
+  distinct sites. A site's own cost cannot be identical to another site's. Its
+  docstring carries a pre-registered kill criterion — if it flags nothing on
+  production it is decoration and must not become load-bearing.
+
+- **`docs/known-limitations.md` — what the database gets wrong, with dates**
+  (`docs/known-limitations.md`, `docs/README.md`).
+
+  Most of these had been found more than once: measured, written into a plan, then
+  re-derived months later by somebody reading the same rows. One register with a
+  date on every line is cheaper than that. Committed, unlike the plans and reviews
+  `CLAUDE.md` §6 keeps local, because it is a standing statement about the dataset
+  rather than a snapshot of a decision in progress — the same class as
+  `government-sources.md`.
+
+  Nine entries open, four closed. The one worth naming here: the live database's
+  drop from 1,189 rows to 300 on 2026-08-12, which `HANDOFF.md` carried as
+  "unexplained" for eight consecutive daily entries, **was deliberate** — a purge
+  of rows that were one data center stored repeatedly, or a single building inside
+  one stored as its own campus. Problem 1 above is its structural cause, and the
+  reason it was manual work rather than a merge the tool could perform.
+
 ### Fixed
 
 - **A merge recorded the wrong decider on the identity it folded away**

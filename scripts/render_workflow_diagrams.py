@@ -520,14 +520,14 @@ def sync() -> Canvas:
     )
     c.arrow([queue.right(), (520, 642)], label="extract", label_dy=-6)
 
-    rows = c.box(776, 560, 190, 76, "New rows", ["with their citations", "and a confidence score"], role="cool2")
+    rows = c.box(776, 560, 190, 76, "New rows", ["with their citations, parties", "and a confidence score"], role="cool2")
     routed = c.box(776, 656, 190, 68, "Routed instead", ["citations land on the row", "we already had"], role="teal")
     c.arrow([gate.right(-34), (776, 598)])
     c.arrow([gate.right(56), (776, 690)], colour=TEAL)
 
     c.box(
         1016, 560, 200, 164, "6 · settle",
-        ["derive reapplies every derived", "value — county, coordinates,", "capacity rollups — because those", "only move when something", "writes to the row.", "", "confidence is a cache of a pure", "function of the citations, so it is", "stale the moment one lands"],
+        ["derive reapplies every derived", "value — county, coordinates, capacity", "rollups, the party rows and which", "kind of megawatt each figure is —", "because those only move when", "something writes to the row.", "", "confidence is a cache of a pure", "function of the citations, so it is", "stale the moment one lands"],
         role="teal", title_size=13,
     )
     c.arrow([rows.right(), (1016, 598)])
@@ -569,7 +569,7 @@ def duplicates() -> Canvas:
 
     p1 = c.box(
         48, 196, 236, 108, "1 · same locality",
-        ["rows sharing (city or county, state).", "Finds what made capex need this:", "one campus, four companies"],
+        ["rows sharing (city or county, state).", "Compares company strings AND the", "party rows: 48 of 90 folds had", "no key signal at all"],
         role="cool", title_size=12,
     )
     p2 = c.box(
@@ -612,23 +612,28 @@ def duplicates() -> Canvas:
         size=10.5, colour=SLATE,
     )
     c.text(576, 362, "can never carry a merge on its own.", size=10.5, colour=SLATE)
+    c.text(
+        576, 378,
+        "'shared operator' reads project_party as well as the two company strings — the case where four articles each named one party.",
+        size=10.5, colour=SLATE,
+    )
 
     groups = c.box(
-        576, 386, 216, 104, "Grouped",
+        576, 408, 216, 104, "Grouped",
         ["pairs sharing an id are the", "same building, so they are", "unioned. Four rows make six", "pairs and one decision, not six"],
         role="cool2", title_size=12,
     )
     c.arrow([pair.right(), (553, pair.cy), (553, groups.cy), (576, groups.cy)])
 
     c.box(
-        832, 386, 216, 104, "Read by capex",
+        832, 408, 216, 104, "Read by capex",
         ["rollup counts one row per", "group and discloses the rest,", "so a false pair holds a real", "campus out of a quoted number"],
         role="orange2", title_size=12,
     )
     c.arrow([groups.right(), (832, groups.cy)])
 
     c.box(
-        1096, 386, 356, 104, "Which is why the answer matters",
+        1096, 408, 356, 104, "Which is why the answer matters",
         ["Parking is not cosmetic: it puts a real campus's", "capacity back into the buyer table. Merging is the", "only repair for a real duplicate, and it deletes rows.", "Leaving it keeps one row out of every capex total."],
         role="panel", title_size=12.5, align="left", sub_size=10.2,
     )

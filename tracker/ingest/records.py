@@ -66,6 +66,39 @@ class BlockRecord:
 
 
 @dataclass(frozen=True)
+class PartyRecord:
+    """One company and its role on the site, as a single source named it.
+
+    `company` has always meant "who builds and operates the site" — two roles in
+    one string — and `customer` a third. This is the axis those two columns were
+    collapsing. See `tracker/parties.py` for the measured cost.
+
+    Belongs to the *source* rather than the project, on the same reasoning
+    `BlockRecord` does: two articles routinely name different parties on one site
+    and both readings have to survive to be merged.
+    """
+
+    name: str
+    role: str
+    #: The verbatim sentence that got this party through the gate, article's own
+    #: words. None when nothing quotable named them.
+    quote: str | None = None
+    #: Why the gate did not confirm it, from `vocab.UNCONFIRMED_REASONS`; None
+    #: means it did. Kept rather than dropped, which is the call `0012` made for
+    #: risks after this pipeline had spent a while deleting them.
+    unconfirmed: str | None = None
+
+    def as_json(self) -> dict[str, Any]:
+        """The shape stored in `source.parties`. Sorted, so re-ingest is byte-equal."""
+        out: dict[str, Any] = {"name": self.name, "role": self.role}
+        if self.quote:
+            out["quote"] = self.quote
+        if self.unconfirmed:
+            out["unconfirmed"] = self.unconfirmed
+        return out
+
+
+@dataclass(frozen=True)
 class SourceRecord:
     """One citation, plus what it actually asserts.
 
@@ -122,6 +155,10 @@ class SourceRecord:
     #: merged. Empty is the common and correct answer: a campus an article treats
     #: as one thing is one thing.
     blocks: list[BlockRecord] = field(default_factory=list)
+    #: The companies this source named and what each does on the site. Belongs to
+    #: the source for the same reason `blocks` does. Empty is ordinary: most
+    #: articles name one party, and that one is already in `claims["company"]`.
+    parties: list[PartyRecord] = field(default_factory=list)
 
     def tracked_claims(self) -> dict[str, Any]:
         """Claims restricted to real project columns with a non-None value."""

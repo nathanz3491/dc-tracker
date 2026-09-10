@@ -89,6 +89,11 @@ RULES
     "description": string,
     "quote":       "<verbatim sentence from the ARTICLE stating this milestone>"
   }],
+  "parties": [{
+    "name":        "<the company, as the ARTICLE names it>",
+    "role":        "developer"|"owner"|"operator"|"customer"|"utility"|"contractor",
+    "quote":       "<verbatim sentence from the ARTICLE naming this company AND saying what it does here>"
+  }],
   "risks": [{
     "category":    "grid_capacity"|"transmission"|"permitting"|"environmental"|"equipment_supply"|"chip_supply"|"financing"|"offtake"|"community_opposition"|"water",
     "severity":    "watch"|"material"|"blocking",
@@ -160,6 +165,30 @@ company          Who builds and operates the site. NOT the electric utility.
 customer         The end tenant, when different from company. For example
                  company="Crusoe", customer="OpenAI". null if the operator uses
                  the site itself, or if the article does not say.
+parties          EVERY company the article attaches to this site, one entry each,
+                 with what it does here. This is the list "company" and "customer"
+                 cannot hold: a big campus routinely has four or five parties, and
+                 an article names whichever it cares about.
+
+                   developer   builds it, and may hand it over
+                   owner       holds the asset, the land, or the JV that does
+                   operator    runs it — the same thing "company" means
+                   customer    occupies it and buys the compute
+                   utility     sells it power (this is where the electric utility
+                               goes; "company" still refuses it)
+                   contractor  builds it under contract to somebody else
+
+                 Repeat the company from "company" here too, with its role. One
+                 company may appear twice in different roles when the article says
+                 so — Meta both owns and operates its own campuses.
+
+                 The quote must do TWO things: name the company, and say what it
+                 does. "Oracle will lease the entire facility" earns
+                 role="customer". "Oracle is involved in the project" earns
+                 nothing, and no quote at all means the party is kept but marked
+                 unconfirmed. Do not infer a role from a company you happen to
+                 know — if the sentence does not say it, leave the party out or
+                 give the role you can quote.
 city             The municipality — a city, town or village. If the article gives
                  only a county or parish, leave city null and put it in "county"
                  instead. Do NOT copy a county or parish name into city.

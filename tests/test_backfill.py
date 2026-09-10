@@ -332,3 +332,294 @@ def test_without_apply_nothing_is_written(session):
 
     assert report.changed == 1, "the report must still say what it would do"
     assert _scope_of(source) == "this_site", "a dry run wrote to the database"
+
+
+# --- seeding the party table ------------------------------------------------
+#
+# Migration 0023 added the axis and wrote no rows, because the roles live in
+# article text. This closes the gap using the two columns that already exist,
+# and the interesting question is what it refuses to claim.
+
+
+def _sourced_project(session, *, company="Crusoe", customer=None, quote=None):
+    import datetime as dt
+    import json
+
+    from tracker.models import Project, Source
+
+    project = Project(
+        name="Stargate Abilene",
+        company=company,
+        city="Abilene",
+        state="TX",
+        dedup_key=f"{company.lower()}|city:abilene|TX",
+        customer=customer,
+    )
+    session.add(project)
+    session.flush()
+
+    claims = {"company": company}
+    quotes = {}
+    if customer:
+        claims["customer"] = customer
+    if quote:
+        quotes["company"] = quote
+        if customer:
+            quotes["customer"] = quote
+    source = Source(
+        project_id=project.id,
+        url="https://example.test/abilene",
+        source_type="trade_press",
+        fetched_at=dt.datetime(2026, 1, 1),
+        claims=json.dumps(claims),
+        fields=",".join(sorted(claims)) if quote else None,
+        quotes=json.dumps(quotes) if quotes else None,
+    )
+    session.add(source)
+    session.flush()
+    session.refresh(project)
+    return project, source
+
+
+def test_seeding_writes_the_source_column_not_the_table(session):
+    """The trap the wholesale rebuild sets.
+
+    `project_party` is a cache of `source.parties`, so rows written straight into
+    the table are deleted by the next `recompute_parties` — silently, and only on
+    rows re-derived since, which is the worst shape a bug can have.
+    """
+    import json
+
+    from tracker.backfill import seed_parties
+
+    project, source = _sourced_project(
+        session, customer="OpenAI", quote="Crusoe is building it for OpenAI."
+    )
+
+    report = seed_parties(session, apply=True)
+
+    assert report.sources == 1
+    assert source.parties is not None
+    got = {e["role"]: e for e in json.loads(source.parties)}
+    assert set(got) == {"operator", "customer"}
+    assert got["operator"]["name"] == "Crusoe"
+    assert got["customer"]["name"] == "OpenAI"
+
+    # And it survives the rebuild, which is the whole point of writing it there.
+    from tracker.upsert import recompute_parties
+
+    recompute_parties(session)
+    session.refresh(project)
+    assert {(p.party_key, p.role) for p in project.parties} == {
+        ("crusoe", "operator"),
+        ("openai", "customer"),
+    }
+
+
+def test_seeding_claims_operator_and_customer_and_invents_nothing_else(session):
+    """The half of `company` that can be defended, and no more.
+
+    `company` means "who builds AND operates the site". `operator` is what every
+    reader has taken it for and what `capex.attribute` already treated it as.
+    `developer`, `owner` and `utility` are recoverable only from the article text,
+    so guessing one would manufacture a claim no source made.
+    """
+    from tracker.backfill import seed_parties
+
+    _sourced_project(session, customer="OpenAI", quote="Crusoe is building it for OpenAI.")
+
+    report = seed_parties(session, apply=True)
+
+    assert set(report.written) == {"operator", "customer"}
+
+
+def test_seeding_marks_an_unquoted_column_as_unconfirmed(session):
+    """A value with no verified sentence must not be written as a quoted one."""
+    import json
+
+    from tracker.backfill import seed_parties
+
+    _project, source = _sourced_project(session, customer="OpenAI", quote=None)
+
+    seed_parties(session, apply=True)
+
+    for entry in json.loads(source.parties):
+        assert entry.get("unconfirmed") == "no_quote"
+        assert "quote" not in entry
+
+
+def test_seeding_writes_nothing_without_apply(session):
+    from tracker.backfill import seed_parties
+
+    _project, source = _sourced_project(session, quote="Crusoe is building it.")
+
+    report = seed_parties(session, apply=False)
+
+    assert report.sources == 1
+    assert source.parties is None
+
+
+def test_seeding_leaves_a_project_that_already_has_parties_alone(session):
+    """A crawl's parties are richer than anything two columns can seed."""
+    import json
+
+    from tracker.backfill import seed_parties
+
+    _project, source = _sourced_project(session, quote="Crusoe is building it.")
+    source.parties = json.dumps([{"name": "Oracle", "role": "owner", "quote": "Oracle owns it."}])
+    session.flush()
+
+    report = seed_parties(session, apply=True)
+
+    assert report.already == 1
+    assert json.loads(source.parties)[0]["name"] == "Oracle"
+
+
+def test_seeding_is_idempotent(session):
+    from tracker.backfill import seed_parties
+
+    _sourced_project(session, customer="OpenAI", quote="Crusoe is building it for OpenAI.")
+
+    first = seed_parties(session, apply=True)
+    second = seed_parties(session, apply=True)
+
+    assert first.sources == 1
+    # The second pass sees the parties it wrote and declines to redo them.
+    assert second.sources == 0
+    assert second.already == 1
+
+
+# --- deriving the basis axis ------------------------------------------------
+#
+# Backfillable where 0015's axes were not, and the difference is one thing: this
+# axis reads the stored *quote*, which is already on disk.
+
+
+def _capacity_source(session, quote, *, mw=200.0, basis=None):
+    import datetime as dt
+    import json
+
+    from tracker.models import Project, Source
+
+    project = Project(
+        name="Ashburn Campus",
+        company="Digital Realty",
+        city="Ashburn",
+        state="VA",
+        dedup_key="digital realty|city:ashburn|VA",
+        mw_planned=mw,
+    )
+    session.add(project)
+    session.flush()
+    meta = {"mw_planned": {"basis": basis}} if basis else {}
+    source = Source(
+        project_id=project.id,
+        url="https://example.test/ashburn",
+        source_type="trade_press",
+        fetched_at=dt.datetime(2026, 1, 1),
+        claims=json.dumps({"mw_planned": mw}),
+        fields="mw_planned",
+        quotes=json.dumps({"mw_planned": quote}),
+        claim_meta=json.dumps(meta) if meta else None,
+    )
+    session.add(source)
+    session.flush()
+    session.refresh(project)
+    return project, source
+
+
+def test_the_basis_is_read_out_of_the_stored_quote(session):
+    import json
+
+    from tracker.backfill import derive_basis
+
+    project, source = _capacity_source(
+        session, "The campus will draw 200 MW of critical IT load at full build."
+    )
+
+    report = derive_basis(session, apply=True)
+
+    assert report.changed == 1
+    assert json.loads(source.claim_meta)["mw_planned"]["basis"] == "it_load"
+    # And the cached column follows, via the write path's own merge order.
+    assert project.mw_planned_basis == "it_load"
+
+
+def test_a_quote_that_says_nothing_is_counted_and_not_stored(session):
+    """Not guessed from the number — that is the line migration 0015 drew — and
+    not written down either.
+
+    `unspecified` is the answer for most capacity figures, so storing it would
+    attach an envelope to nearly every one and make the measured coverage of every
+    *other* axis look near-total. That measurement is what decides whether an axis
+    survives at all, so it must not be gamed. The share stays visible in the
+    report instead.
+
+    Nothing is lost: a quoted capacity claim with no stored basis means "the
+    sentence was read and did not say", because both this path and the ingest path
+    evaluate every one of them.
+    """
+    from tracker.backfill import derive_basis
+
+    _project, source = _capacity_source(session, "Meta is building a 200 MW campus in Ohio.")
+
+    report = derive_basis(session, apply=True)
+
+    assert report.found.get("unspecified") == 1
+    assert source.claim_meta in (None, "{}")
+
+
+def test_a_default_basis_an_earlier_run_stored_is_cleared(session):
+    """So the two paths cannot disagree permanently about one claim."""
+    import json
+
+    from tracker.backfill import derive_basis
+
+    _project, source = _capacity_source(
+        session, "Meta is building a 200 MW campus in Ohio.", basis="unspecified"
+    )
+
+    derive_basis(session, apply=True)
+
+    assert "basis" not in json.loads(source.claim_meta or "{}").get("mw_planned", {})
+
+
+def test_deriving_the_basis_writes_nothing_without_apply(session):
+    from tracker.backfill import derive_basis
+
+    _project, source = _capacity_source(session, "200 MW of critical IT load.")
+
+    report = derive_basis(session, apply=False)
+
+    assert report.changed == 1
+    assert source.claim_meta is None
+
+
+def test_deriving_the_basis_is_idempotent(session):
+    from tracker.backfill import derive_basis
+
+    _capacity_source(session, "The site's nameplate capacity is 200 MW.")
+
+    first = derive_basis(session, apply=True)
+    second = derive_basis(session, apply=True)
+
+    assert first.changed == 1
+    assert second.changed == 0
+
+
+def test_deriving_the_basis_leaves_the_other_axes_alone(session):
+    """It writes one key into an envelope that other axes share."""
+    import json
+
+    from tracker.backfill import derive_basis
+
+    _project, source = _capacity_source(session, "200 MW of critical IT load.")
+    source.claim_meta = json.dumps({"mw_planned": {"scope": "this_site", "bound": "at_least"}})
+    session.flush()
+
+    derive_basis(session, apply=True)
+
+    entry = json.loads(source.claim_meta)["mw_planned"]
+    assert entry["scope"] == "this_site"
+    assert entry["bound"] == "at_least"
+    assert entry["basis"] == "it_load"

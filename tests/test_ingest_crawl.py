@@ -2952,3 +2952,237 @@ def test_an_unambiguous_article_costs_no_arbitration(session):
     )
 
     assert llm.verdicts == [], "paid for a verdict nobody needed"
+
+
+# --- parties ----------------------------------------------------------------
+#
+# The axis `project.company` was collapsing: the prompt's own definition of that
+# column is "who builds AND operates the site", so two roles arrive in one string
+# and `customer` carries a third. See `tracker/parties.py` for the measured cost.
+
+
+def test_a_quoted_party_with_a_licensed_role_is_confirmed():
+    text = (
+        "Crusoe is building the campus in Abilene, Texas.\n"
+        "Oracle will lease the entire facility and OpenAI will occupy it.\n"
+    )
+    got = crawl._parties(
+        {
+            "parties": [
+                {
+                    "name": "Oracle",
+                    "role": "customer",
+                    "quote": "Oracle will lease the entire facility and OpenAI will occupy it.",
+                }
+            ]
+        },
+        text,
+        "Crusoe",
+    )
+    assert len(got) == 1
+    assert got[0].role == "customer"
+    assert got[0].unconfirmed is None
+    assert "Oracle will lease" in got[0].quote
+
+
+def test_a_party_the_article_never_names_is_dropped_outright():
+    """The one refusal here that deletes something, and the reason it does.
+
+    A risk's `summary` is allowed to be the model's paraphrase because the quote
+    beside it carries the evidence. A party's *name* is the claim, so a company
+    nobody published has nothing left worth keeping.
+    """
+    text = "Crusoe is building the campus in Abilene, Texas.\n"
+    got = crawl._parties(
+        {"parties": [{"name": "Oracle", "role": "customer", "quote": "Oracle will lease it."}]},
+        text,
+        "Crusoe",
+    )
+    assert got == []
+
+
+def test_the_projects_own_company_is_exempt_from_the_in_article_check():
+    """`evidence_gate` has already ruled on it, one way or the other.
+
+    Re-refusing it here would delete the one party every article has — and on a
+    translated repost or a filing whose company name is only in the header, the
+    string genuinely is not in the body.
+    """
+    text = "The Abilene site will draw 1,200 MW when complete.\n"
+    got = crawl._parties(
+        {"parties": [{"name": "Crusoe", "role": "operator"}]},
+        text,
+        "Crusoe",
+    )
+    assert len(got) == 1
+    assert got[0].unconfirmed == "no_quote"
+
+
+def test_a_party_whose_role_no_wording_licenses_is_kept_as_unconfirmed():
+    """`_ROLE_MARKERS` exists because an unchecked label rots.
+
+    `docs/plan-claim-envelope.md` records the two that did: `severity`, at `watch`
+    on every risk in the database, and `scope`, at 96.9% `this_site`. The party is
+    kept, because the company really is named and that is what raises a duplicate;
+    only the role is refused.
+    """
+    text = "Oracle is involved in the Abilene project alongside Crusoe.\n"
+    got = crawl._parties(
+        {
+            "parties": [
+                {
+                    "name": "Oracle",
+                    "role": "customer",
+                    "quote": "Oracle is involved in the Abilene project alongside Crusoe.",
+                }
+            ]
+        },
+        text,
+        "Crusoe",
+    )
+    assert len(got) == 1
+    assert got[0].role == "customer"
+    assert got[0].unconfirmed == "quote_off_target"
+
+
+def test_a_real_sentence_that_does_not_name_the_party_is_off_target():
+    text = (
+        "Crusoe is building the campus in Abilene, Texas.\n"
+        "The site will be leased to an unnamed hyperscaler.\n"
+    )
+    got = crawl._parties(
+        {
+            "parties": [
+                {
+                    "name": "Crusoe",
+                    "role": "customer",
+                    "quote": "The site will be leased to an unnamed hyperscaler.",
+                }
+            ]
+        },
+        text,
+        "Microsoft",
+    )
+    assert len(got) == 1
+    assert got[0].unconfirmed == "quote_off_target"
+
+
+def test_a_fabricated_party_quote_is_refused_but_the_party_survives():
+    text = "Crusoe is building the campus in Abilene, Texas. Oracle is a partner.\n"
+    got = crawl._parties(
+        {
+            "parties": [
+                {
+                    "name": "Oracle",
+                    "role": "customer",
+                    "quote": "Oracle has signed a fifteen-year lease for the whole campus.",
+                }
+            ]
+        },
+        text,
+        "Crusoe",
+    )
+    assert len(got) == 1
+    assert got[0].unconfirmed == "quote_unverified"
+    assert got[0].quote is None
+
+
+def test_an_unknown_role_is_dropped_and_duplicates_collapse():
+    text = "Oracle will lease the facility. Oracle will lease the facility.\n"
+    got = crawl._parties(
+        {
+            "parties": [
+                {"name": "Oracle", "role": "landlord", "quote": "Oracle will lease the facility."},
+                {"name": "Oracle", "role": "customer", "quote": "Oracle will lease the facility."},
+                {"name": "Oracle", "role": "customer", "quote": "Oracle will lease the facility."},
+            ]
+        },
+        text,
+        "Crusoe",
+    )
+    assert [(p.name, p.role) for p in got] == [("Oracle", "customer")]
+
+
+def test_the_party_list_is_capped():
+    names = [f"Company{i}" for i in range(20)]
+    text = " ".join(f"{n} will operate part of the site." for n in names)
+    got = crawl._parties(
+        {"parties": [{"name": n, "role": "operator"} for n in names]},
+        text,
+        "Crusoe",
+    )
+    assert len(got) == crawl.MAX_PARTIES_PER_PROJECT
+
+
+def test_every_role_has_marker_wording():
+    """A role with no markers would be unrefusable, which is how `scope` failed."""
+    from tracker.vocab import PARTY_ROLES
+
+    assert set(crawl._ROLE_MARKERS) == set(PARTY_ROLES)
+    assert all(crawl._ROLE_MARKERS[role] for role in PARTY_ROLES)
+
+
+# --- the basis axis ---------------------------------------------------------
+#
+# Which KIND of megawatt. Read out of the stored quote and never asked of the
+# model, which is the correction `scope` earned: it failed its own kill criterion
+# at 96.9% `this_site` because a label the model volunteers drifts to whatever is
+# cheapest to say.
+
+
+def test_it_load_wording_is_recognised():
+    got = crawl.axis_gate(
+        {},
+        "The campus will draw 200 MW of critical IT load at full build.",
+        field="mw_planned",
+    )
+    assert got["basis"] == "it_load"
+
+
+def test_gross_wording_lands_on_facility():
+    got = crawl.axis_gate({}, "Utility power to the site totals 260 MW gross.", field="mw_planned")
+    assert got["basis"] == "facility"
+
+
+def test_generation_wording_lands_on_nameplate():
+    got = crawl.axis_gate(
+        {}, "The adjacent power plant has a nameplate capacity of 360 MW.", field="mw_planned"
+    )
+    assert got["basis"] == "nameplate"
+
+
+def test_an_unqualified_capacity_stays_unspecified():
+    """The majority answer, and the measurement this axis exists to make."""
+    got = crawl.axis_gate({}, "Meta is building a 200 MW campus in Ohio.", field="mw_planned")
+    assert got["basis"] == "unspecified"
+
+
+def test_a_sentence_contrasting_two_bases_prefers_the_one_that_cannot_inflate():
+    """The `bound` positional bug in a new place, floored rather than solved.
+
+    An article writing both "gross" and "IT load" is contrasting them, and which
+    one the figure attaches to needs a positional check this gate does not have.
+    So the ordering prefers the reading that keeps a figure OUT of `it_load` —
+    the direction that cannot inflate a capacity total.
+    """
+    got = crawl.axis_gate(
+        {},
+        "The 260 MW gross figure corresponds to roughly 200 MW of IT load.",
+        field="mw_planned",
+    )
+    assert got["basis"] == "facility"
+
+
+def test_no_basis_is_recorded_for_a_field_that_cannot_have_one():
+    """Money has a `scope`; a date has neither. Reporting one would be noise."""
+    for field_name in ("investment_usd", "expected_online", None):
+        got = crawl.axis_gate(
+            {}, "The company will invest $2 billion of gross capital.", field=field_name
+        )
+        assert "basis" not in got
+
+
+def test_the_basis_markers_cover_every_non_default_value():
+    from tracker.vocab import CLAIM_AXIS_DEFAULTS, CLAIM_BASES
+
+    assert set(crawl._BASIS_MARKERS) == set(CLAIM_BASES) - {CLAIM_AXIS_DEFAULTS["basis"]}

@@ -384,12 +384,17 @@ one quantity. These are three measurements of three different things, so picking
 winner is the wrong operation — and the row held the oldest and smallest of them
 while its own notes read *"expanded to up to $50 billion"*.
 
-Four qualifiers now travel with each claim, in `source.claim_meta`:
+Five qualifiers now travel with each claim, in `source.claim_meta`:
 
 - **`scope`** — this site, a named tranche (`block:Phase 1`), the programme, the
   region, the operator's portfolio, or `unnamed`. `unnamed` is a correct and
   common answer; guessing `this_site` to be helpful is the error the axis exists
   to prevent.
+- **`basis`** — which *kind* of megawatt: `it_load`, `facility`, `nameplate`, or
+  `unspecified`. A different question from `scope`, which is why it is a fifth
+  axis rather than a value inside the fourth: a figure can be unambiguously about
+  this campus and still be the wrong quantity for the column it landed in. See
+  below.
 - **`bound`** — `exact`, `approximate`, `at_least`, `at_most`. Prompt RULE 4 used
   to say *"500-700 MW → 500 (the LOWER bound; say so in notes)"*, destroying the
   range on purpose and routing it to prose nothing could read back.
@@ -452,6 +457,74 @@ always returned `day|month|quarter|half|year`, and its docstring has always said
 why it matters; nothing outside that module had ever read it, so a year-only
 "in 2024" rendered as `2024-01-01`. It now renders as `2024` — shorter, and
 claiming less.
+
+## Three kinds of megawatt in one column
+
+```bash
+tracker backfill basis            # preview: what the quotes already say
+tracker backfill basis --apply
+```
+
+`mw_planned` is defined as the data center's own IT load. What arrives in it is
+three different quantities:
+
+| basis | what it measures | how far off `it_load` |
+|---|---|---|
+| `it_load` | the computing load — what the column is for | — |
+| `facility` | the whole site's draw, IT load times PUE plus everything behind the meter | 10-30% higher at modern hyperscale PUE |
+| `nameplate` | a generator's rated output, not a data center quantity at all | routinely several times higher |
+
+The pipeline has known this for as long as it has had a prompt — `_industry.txt`
+explains PUE to the model, and `ingest/pjm.py` refuses to write a queue row's
+nameplate into `mw_planned` for exactly this reason. Everywhere else the schema
+discarded the distinction, so two figures 30% apart were stored identically and
+nothing on the row said which was which.
+
+**Nothing asks the model for this label**, and that is the correction `scope`
+earned. Asking failed: measured across the corpus, `scope` came back 96.9%
+`this_site` with `programme` and `region` never produced once, on the case it was
+designed for. A label a model volunteers drifts to whatever is cheapest to say.
+So `axis_gate` reads the sentence already stored beside the figure and looks for
+the words a publisher writes when they mean one quantity rather than another —
+"IT load", "critical load", "gross", "utility power", "nameplate". The number
+itself is never consulted; inferring a basis from a plausible `$/MW` ratio would
+manufacture a qualifier nobody wrote.
+
+Two consequences worth stating plainly:
+
+**`unspecified` will dominate, and that is the measurement.** An article writing
+"a 200 MW campus" has not said which of the three it means. The share of the
+database in that position is the number this axis was added to put on the table,
+and `tracker capex` discloses it in the footer. It is deliberately *not* a
+`tracker clean` tier condition — adding one would move every row's tier in a
+single commit and bury the signal it exists to raise.
+
+**And `unspecified` is counted rather than stored**, which is the one place this
+axis had to give something up. Writing it would attach an envelope to nearly every
+capacity claim in the database, and the neutrality rule above exists precisely to
+stop that: `axis_census` decides whether these axes carry information at all, and
+an envelope on everything would report coverage none of them had earned.
+
+Nothing important is lost. A quoted capacity claim with no stored basis *means*
+"the sentence was read and did not say", because both the ingest path and
+`tracker backfill basis` evaluate every one of them. What the stored column cannot
+distinguish is that case from "nothing has read this yet" — so
+`capex.basis_census` reports a single `unrecorded` bucket, and the command that
+separates the two is `tracker backfill basis`, which counts `unspecified`
+explicitly and costs nothing to run.
+
+Unlike the other envelope axes, this one is **backfillable**, and the difference is
+what it reads. `bound`, `modality` and `as_of` are facts about how an article was
+worded and only a re-read recovers them. `basis` is derived from the stored quote,
+which is already on disk — so `tracker backfill basis` fills the whole table with
+no LLM call and no fetch.
+
+One known weakness, shared with `bound` and floored rather than solved: the check
+asks whether the wording is *in* the sentence, not whether it attaches to *this*
+number. Where a sentence contrasts two bases — *"the 260 MW gross figure
+corresponds to roughly 200 MW of IT load"* — the ordering prefers the reading that
+keeps a figure **out** of `it_load`, because that is the direction that cannot
+inflate a capacity total. See [known limitations](known-limitations.md) #11.
 
 ## Crawl order is not publication order
 
