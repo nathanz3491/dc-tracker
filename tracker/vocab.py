@@ -698,6 +698,89 @@ def bound_from_quote(quote: str | None, value: object) -> str:
     return best[2] if best else "exact"
 
 
+#: How far either side of a figure a basis phrase may sit and still qualify it.
+#:
+#: Wider than `BOUND_WINDOW`, and two-sided rather than one-sided, because the two
+#: read differently in English. A hedge leans on the number from in front — "more
+#: than 50 billion" — while a basis phrase attaches from either side with a unit
+#: and a preposition in between: "200 MW **of critical IT load**", "**gross
+#: utility power** to the site totals 260 MW". Thirty-two characters clears the
+#: first shape and not the second.
+BASIS_WINDOW: Final = 44
+
+#: Tiebreak only, when two basis phrases sit the same distance from one figure.
+#:
+#: Ordered away from `it_load`, which is the direction that cannot inflate a
+#: capacity total: reading a facility figure as IT load overstates the computing
+#: capacity of a site, and reading it the other way understates it. Understating
+#: is the error this project takes everywhere else — every capacity sum is
+#: documented as a floor — so it is the error to take here.
+_BASIS_PRECEDENCE: Final[dict[str, int]] = {"nameplate": 3, "facility": 2, "it_load": 1}
+
+
+def basis_from_quote(quote: str | None, value: object, markers: dict[str, tuple[str, ...]]) -> str:
+    """Which KIND of megawatt a quoted sentence says one figure is.
+
+    `unspecified` when the sentence does not say, which is the common and correct
+    answer: most articles write "a 200 MW campus" and never qualify it.
+
+    **Positional, for the reason `bound_from_quote` is.** A sentence contrasting
+    two bases — *"the 260 MW gross figure corresponds to roughly 200 MW of IT
+    load"* — carries both phrases, so a presence test licenses whichever the model
+    happened to name and gets one of the two figures wrong every time. Each figure
+    now takes the phrase nearest to *it*.
+
+    Reads the **stored** quote, which is verbatim article text. The model's own
+    wording is never consulted: `_verbatim_run` may have repaired it, and checking
+    the repair would let a model license a basis by writing one into a sentence
+    nobody published. Same rule the evidence gate follows for values.
+
+    `markers` is passed in rather than imported so this stays a pure function of
+    its arguments and the extraction module keeps one table of wording. See
+    `crawl._BASIS_MARKERS`.
+    """
+    text = (quote or "").lower()
+    if not text:
+        return "unspecified"
+
+    figures = [
+        (index, index + len(token))
+        for token in _value_spellings(value)
+        for index in _find_all(text, token)
+    ]
+    if not figures:
+        return "unspecified"
+
+    best: tuple[int, int, str] | None = None
+    for basis, phrases in markers.items():
+        rank = _BASIS_PRECEDENCE.get(basis, 0)
+        for phrase in phrases:
+            for start in _find_all(text, phrase):
+                span = (start, start + len(phrase))
+                for figure in figures:
+                    gap = _span_gap(span, figure)
+                    if gap > BASIS_WINDOW:
+                        continue
+                    # Distance first, then the tiebreak — the opposite ordering
+                    # from `bound`, where a stated direction outranks a stated
+                    # imprecision however far away it sits. Nothing here outranks
+                    # proximity: two basis phrases in one sentence are describing
+                    # two different figures, not qualifying one twice.
+                    candidate = (gap, -rank, basis)
+                    if best is None or candidate < best:
+                        best = candidate
+    return best[2] if best else "unspecified"
+
+
+def _span_gap(a: tuple[int, int], b: tuple[int, int]) -> int:
+    """Characters between two spans; 0 when they touch or overlap."""
+    if a[1] <= b[0]:
+        return b[0] - a[1]
+    if b[1] <= a[0]:
+        return a[0] - b[1]
+    return 0
+
+
 def _find_all(text: str, needle: str) -> list[int]:
     out: list[int] = []
     start = text.find(needle)

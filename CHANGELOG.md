@@ -129,6 +129,42 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **A role, and a capacity basis, were licensed by wording anywhere in the
+  sentence** (`tracker/ingest/crawl.py`, `tracker/vocab.py`,
+  `tracker/backfill.py`, `docs/known-limitations.md`).
+
+  Both checks added above asked whether the licensing wording was *present* in the
+  quote, not whether it attached to the thing being qualified. Measured on the
+  obvious cases, and wrong on half of each:
+
+      "Crusoe is building the campus that Oracle will lease in Abilene, Texas."
+
+  licensed **Crusoe as customer** and **Oracle as developer** exactly as readily
+  as the two correct readings, because both names and both role words are present.
+
+      "The 260 MW gross figure corresponds to roughly 200 MW of IT load."
+
+  carries both basis phrases, so whichever way the tiebreak was ordered one of the
+  two figures came out wrong. The first cut shipped an ordering that preferred the
+  reading which cannot inflate a capacity total — a deliberate floor, and still
+  wrong half the time.
+
+  Both are comparative now. A role must sit strictly nearer its own company's name
+  than any other party's in that sentence; a basis phrase must sit nearest the
+  figure it qualifies, inside `BASIS_WINDOW`. Ties fail, which keeps the party or
+  the figure and marks it unproven rather than guessing. Where a sentence names
+  one company, presence is still enough — that is the ordinary case and making it
+  harder would refuse correct roles for nothing.
+
+  This is the third instance of one mistake, which is why it is in the register as
+  #14 rather than only here. `vocab.bound_from_quote` was the first and has been
+  positional since it was written; `basis_from_quote` now sits beside it sharing
+  the window-and-distance machinery. That also removes the obstacle recorded
+  against #11: `axis_gate` was never handed the figure, and now is, so the last
+  presence test in there is a small change rather than a blocked one — left open
+  deliberately, because it moves *stored* bounds and wants its own before-and-after.
+
+
 - **A merge recorded the wrong decider on the identity it folded away**
   (`tracker/merge.py`, `tracker/dupresolve.py`, `tracker/triage.py`,
   `tests/test_merge.py`).

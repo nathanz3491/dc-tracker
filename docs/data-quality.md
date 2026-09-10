@@ -519,12 +519,16 @@ worded and only a re-read recovers them. `basis` is derived from the stored quot
 which is already on disk — so `tracker backfill basis` fills the whole table with
 no LLM call and no fetch.
 
-One known weakness, shared with `bound` and floored rather than solved: the check
-asks whether the wording is *in* the sentence, not whether it attaches to *this*
-number. Where a sentence contrasts two bases — *"the 260 MW gross figure
-corresponds to roughly 200 MW of IT load"* — the ordering prefers the reading that
-keeps a figure **out** of `it_load`, because that is the direction that cannot
-inflate a capacity total. See [known limitations](known-limitations.md) #11.
+**The check is positional**, which it had to be. A sentence contrasting two bases
+— *"the 260 MW gross figure corresponds to roughly 200 MW of IT load"* — contains
+both phrases, so asking merely whether the wording is present gets one of the two
+figures wrong however the tie is broken. Each figure takes the phrase nearest to
+itself, within a window, and a phrase two clauses away qualifies nothing.
+
+This is the same rule `bound` already follows for hedges, and the two now share
+the machinery. Getting the figure to the gate is what unblocks the last place that
+still does a presence test — see [known limitations](known-limitations.md) #11 and
+#14.
 
 ## Crawl order is not publication order
 

@@ -77,6 +77,7 @@ from tracker.vocab import (
     EVENT_TYPES,
     PARTY_ROLES,
     TRACKED_FIELDS,
+    basis_from_quote,
     risk_precedence,
 )
 
@@ -956,6 +957,7 @@ def axis_gate(
     block_labels: frozenset[str] = frozenset(),
     site_names: frozenset[str] = frozenset(),
     field: str | None = None,
+    value: Any = None,
 ) -> dict[str, Any]:
     """Keep the claim-envelope axes the quote actually licenses.
 
@@ -979,6 +981,16 @@ def axis_gate(
     zero `programme` is what that looks like. `field` is what restricts it to the
     two capacity columns — a basis on a date is noise, and reporting one would
     make the coverage figure meaningless.
+
+    `value` is the figure being qualified, and it is what makes `basis`
+    **positional**. This function was deliberately never handed one, on the
+    reasoning that it should stay a pure function of the entry and the quote — and
+    it still is, because the figure is one more argument rather than a lookup. What
+    the old shape could not do is tell which of two basis phrases in one sentence
+    belongs to which of two figures, so *"the 260 MW gross figure corresponds to
+    roughly 200 MW of IT load"* mislabelled one of them whichever way it read. Each
+    figure now takes the phrase nearest to itself. Without a value the axis
+    degrades to `unspecified` rather than guessing.
     """
     low = _normalize_for_match(quote or "")
     out: dict[str, Any] = {}
@@ -1064,22 +1076,12 @@ def axis_gate(
 
     # `basis` — which kind of megawatt, read from the sentence and never asked for.
     #
-    # Ordered `nameplate`, then `facility`, then `it_load`, and the order is the
-    # claim being made: a sentence carrying generation wording is about a
-    # generator whatever else it also says, and "gross" beats "IT load" because
-    # an article writing both is contrasting them and the figure being qualified
-    # is the one the hedge attaches to. That last case is the `bound` positional
-    # bug in a new place (`docs/known-limitations.md` #11), so the ordering is a
-    # deliberate floor rather than a solution: it prefers the reading that keeps a
-    # figure OUT of `it_load`, which is the direction that cannot inflate a
-    # capacity total.
+    # Positional: each figure takes the basis phrase nearest to itself, so a
+    # sentence contrasting two of them gives each number its own. The presence
+    # test this replaced was the `bound` positional bug in a new place, and it got
+    # one of the two figures wrong every time.
     if field in BASIS_FIELDS:
-        basis = CLAIM_AXIS_DEFAULTS["basis"]
-        for candidate in ("nameplate", "facility", "it_load"):
-            if any(m in low for m in _BASIS_MARKERS[candidate]):
-                basis = candidate
-                break
-        out["basis"] = basis
+        out["basis"] = basis_from_quote(quote, value, _BASIS_MARKERS)
 
     return out
 
@@ -1747,41 +1749,55 @@ def _parties(raw: dict[str, Any], article_text: str, company: str | None) -> lis
       that does not contain the company is a real sentence filed against the wrong
       party — `quote_off_target`, the same reason code the field gate uses for
       exactly this shape.
-    * **The role must be licensed by wording in that quote.** Failing this keeps
-      the party and marks it 待确认; see `_ROLE_MARKERS` for why an unchecked role
-      would rot rather than stay neutral.
+    * **The role must be licensed by wording that attaches to that party.** Not
+      merely present in the sentence — see `_role_is_licensed`, which is why this
+      function runs in two passes. Failing it keeps the party and marks it 待确认;
+      see `_ROLE_MARKERS` for why an unchecked role would rot rather than stay
+      neutral.
 
     Nothing here is allowed to write `project.company`, so a wrong role cannot
     move a `dedup_key`. See `tracker/parties.py`.
     """
     haystack = _normalize_for_match(article_text)
     stated = _normalize_for_match(company or "")
-    kept: list[PartyRecord] = []
-    seen: set[tuple[str, str]] = set()
 
+    # --- pass 1: which companies are really in play ------------------------
+    #
+    # Collected before any role is judged, because the role check needs to know
+    # *which other parties* the sentence could be talking about instead. Judging
+    # each entry as it arrives cannot do that — the rivals may not have been read
+    # yet.
+    candidates: list[tuple[str, str, dict[str, Any]]] = []
+    seen: set[tuple[str, str]] = set()
     for entry in raw.get("parties") or []:
         if not isinstance(entry, dict):
             continue
-
         name = norm_text(entry.get("name"))
         role = str(entry.get("role") or "").strip().lower().replace(" ", "_")
         if not name or role not in PARTY_ROLES:
             continue
-
         low_name = _normalize_for_match(name)
         # The company the extraction already resolved is exempt from the
         # in-article check, because `evidence_gate` has already ruled on it: it is
         # either quote-backed or already 待确认 in `claims`, and re-refusing it
         # here would delete the one party every article has.
         if low_name != stated and low_name not in haystack:
-            log.debug("party %r is not named in %s; dropped", _for_log(name), "the article")
+            log.debug("party %r is not named in the article; dropped", _for_log(name))
             continue
-
         slot = (low_name, role)
         if slot in seen:
             continue
         seen.add(slot)
+        candidates.append((name, role, entry))
+        if len(candidates) >= MAX_PARTIES_PER_PROJECT:
+            break
 
+    everyone = {_normalize_for_match(name) for name, _role, _entry in candidates}
+
+    # --- pass 2: what each one's evidence actually supports ----------------
+    kept: list[PartyRecord] = []
+    for name, role, entry in candidates:
+        low_name = _normalize_for_match(name)
         offered = norm_text(entry.get("quote"))
         unconfirmed: str | None = None
         quote: str | None = None
@@ -1798,17 +1814,65 @@ def _parties(raw: dict[str, Any], article_text: str, company: str | None) -> lis
                 # else in this module. The quote is kept either way: a reader
                 # settling the row needs to see what was offered.
                 said = _normalize_for_match(recovered.text)
-                names_it = low_name in said
-                says_the_role = any(m in said for m in _ROLE_MARKERS[role])
                 quote = recovered.text
-                if not (names_it and says_the_role):
+                if not _role_is_licensed(said, low_name, role, everyone - {low_name}):
                     unconfirmed = "quote_off_target"
 
         kept.append(PartyRecord(name=name, role=role, quote=quote, unconfirmed=unconfirmed))
-        if len(kept) >= MAX_PARTIES_PER_PROJECT:
-            break
 
     return kept
+
+
+def _role_is_licensed(said: str, low_name: str, role: str, rivals: set[str]) -> bool:
+    """Does this sentence say that THIS company plays this role?
+
+    **Positional, and the presence test it replaces was measurably wrong.** Asking
+    only whether a role word appears in the sentence accepts every reading of a
+    sentence that names two companies and two roles. Measured on the obvious case:
+
+        "Crusoe is building the campus that Oracle will lease in Abilene, Texas."
+
+    licensed *Crusoe as customer* and *Oracle as developer* as readily as the two
+    correct answers, because both names and both role words are present. That is
+    the same defect `bound` had before `vocab.bound_from_quote` became positional,
+    in a new place.
+
+    So the rule is comparative: some occurrence of the role's wording must sit
+    **strictly nearer this company's name than to any other party's**. Ties fail,
+    which is the conservative direction — an unlicensed role keeps the party and
+    marks it 待确认, and an unconfirmed party cannot decide an attribution.
+
+    With only one company in play there is nothing to confuse it with, so presence
+    is enough and the sentence is taken at its word. That is the ordinary case and
+    it must not be made harder: most articles name one operator.
+    """
+    from tracker.vocab import _find_all, _span_gap
+
+    hits = [
+        (start, start + len(marker))
+        for marker in _ROLE_MARKERS[role]
+        for start in _find_all(said, marker)
+    ]
+    mine = [(start, start + len(low_name)) for start in _find_all(said, low_name)]
+    if not hits or not mine:
+        return False
+
+    # A rival mention that overlaps one of ours is the same mention — "Oracle"
+    # inside "Oracle Cloud" — and must not compete with itself.
+    rival = [
+        span
+        for other in rivals
+        for start in _find_all(said, other)
+        for span in ((start, start + len(other)),)
+        if not any(span[0] < m[1] and m[0] < span[1] for m in mine)
+    ]
+    if not rival:
+        return True
+
+    for hit in hits:
+        if min(_span_gap(hit, m) for m in mine) < min(_span_gap(hit, r) for r in rival):
+            return True
+    return False
 
 
 def _risks(raw: dict[str, Any], article_text: str, url: str) -> tuple[list[RiskRecord], list[str]]:
@@ -2179,7 +2243,14 @@ def _claim_axes(
         field = str(item.get("field") or "").strip()
         if field not in kept or field not in quotes:
             continue
-        axes = axis_gate(item, quotes[field], block_labels=labels, site_names=names, field=field)
+        axes = axis_gate(
+            item,
+            quotes[field],
+            block_labels=labels,
+            site_names=names,
+            field=field,
+            value=kept.get(field),
+        )
         # A default `basis` is dropped rather than stored, and the neutrality test
         # below is the reason it has to be. That test keeps `axis_census` honest —
         # an envelope carrying no information would report coverage the axes have

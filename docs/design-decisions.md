@@ -670,15 +670,26 @@ reason, documented as "churn is worse than staleness". The roles are recorded
 *beside* it. `customer` is filled when null, because it is nullable and nothing
 keys on it.
 
-**A role is gated against its quote, because an ungated label rots.** `severity`
+**A role is gated *positionally* against its quote, because an ungated label
+rots and a merely-present one is wrong half the time.** `severity`
 is the cautionary case in this repo: it sits at `watch` on every risk in the
 database, because no article ever states a severity and so nothing could ever
 check it. `scope` is the second: it failed its own pre-registered kill criterion
 at 96.9% `this_site`. A role *is* checkable — an article that means "Oracle leases
-it" says leases — so `crawl._ROLE_MARKERS` requires the wording, and a party whose
-role nothing licenses is kept as 待确认 rather than dropped or silently re-roled.
-The company is named in the article, which is itself what raises a duplicate; only
-the role is unevidenced.
+it" says leases — so `crawl._ROLE_MARKERS` requires the wording.
+
+But requiring it to be *present* is not enough, and the first version of this was
+measurably wrong: "Crusoe is building the campus that Oracle will lease" contains
+both names and both role words, so it licensed Crusoe-as-customer and
+Oracle-as-developer as readily as the two correct readings. The rule is therefore
+comparative — the wording has to sit strictly nearer its own company than any
+other party's in that sentence — and where only one company is named, presence is
+still enough, because there is nothing to confuse it with. See
+`docs/known-limitations.md` #14.
+
+A party whose role nothing licenses is kept as 待确认 rather than dropped or
+silently re-roled. The company is named in the article, which is itself what
+raises a duplicate; only the role is unevidenced.
 
 The one thing that *is* dropped outright is a party the article never names. A
 risk's `summary` may be the model's paraphrase because the quote beside it carries

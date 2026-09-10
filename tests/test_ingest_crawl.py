@@ -3135,42 +3135,71 @@ def test_it_load_wording_is_recognised():
         {},
         "The campus will draw 200 MW of critical IT load at full build.",
         field="mw_planned",
+        value=200.0,
     )
     assert got["basis"] == "it_load"
 
 
 def test_gross_wording_lands_on_facility():
-    got = crawl.axis_gate({}, "Utility power to the site totals 260 MW gross.", field="mw_planned")
+    got = crawl.axis_gate(
+        {},
+        "Utility power to the site totals 260 MW gross.",
+        field="mw_planned",
+        value=260.0,
+    )
     assert got["basis"] == "facility"
 
 
 def test_generation_wording_lands_on_nameplate():
     got = crawl.axis_gate(
-        {}, "The adjacent power plant has a nameplate capacity of 360 MW.", field="mw_planned"
+        {},
+        "The adjacent power plant has a nameplate capacity of 360 MW.",
+        field="mw_planned",
+        value=360.0,
     )
     assert got["basis"] == "nameplate"
 
 
 def test_an_unqualified_capacity_stays_unspecified():
     """The majority answer, and the measurement this axis exists to make."""
-    got = crawl.axis_gate({}, "Meta is building a 200 MW campus in Ohio.", field="mw_planned")
+    got = crawl.axis_gate(
+        {}, "Meta is building a 200 MW campus in Ohio.", field="mw_planned", value=200.0
+    )
     assert got["basis"] == "unspecified"
 
 
-def test_a_sentence_contrasting_two_bases_prefers_the_one_that_cannot_inflate():
-    """The `bound` positional bug in a new place, floored rather than solved.
+def test_each_figure_in_a_contrasting_sentence_takes_its_own_basis():
+    """The `bound` positional bug in a new place, now fixed rather than floored.
 
-    An article writing both "gross" and "IT load" is contrasting them, and which
-    one the figure attaches to needs a positional check this gate does not have.
-    So the ordering prefers the reading that keeps a figure OUT of `it_load` —
-    the direction that cannot inflate a capacity total.
+    A presence test cannot tell which of two basis phrases belongs to which of
+    two figures, so it got one of the two wrong every time whichever way it was
+    ordered. Each figure now takes the phrase nearest to itself.
     """
+    sentence = "The 260 MW gross figure corresponds to roughly 200 MW of IT load."
+    gross = crawl.axis_gate({}, sentence, field="mw_planned", value=260.0)
+    it_load = crawl.axis_gate({}, sentence, field="mw_planned", value=200.0)
+    assert gross["basis"] == "facility"
+    assert it_load["basis"] == "it_load"
+
+
+def test_a_basis_will_not_be_guessed_without_the_figure():
+    """No anchor means no position, and a guess is what this axis refuses."""
+    got = crawl.axis_gate(
+        {}, "The campus will draw 200 MW of critical IT load.", field="mw_planned"
+    )
+    assert got["basis"] == "unspecified"
+
+
+def test_a_basis_phrase_far_from_the_figure_does_not_qualify_it():
+    """Distance is the whole mechanism; without a window it is a presence test again."""
     got = crawl.axis_gate(
         {},
-        "The 260 MW gross figure corresponds to roughly 200 MW of IT load.",
+        "The site will draw 200 MW. A separate filing describes the county's total "
+        "generating capacity across every power plant in the wider region.",
         field="mw_planned",
+        value=200.0,
     )
-    assert got["basis"] == "facility"
+    assert got["basis"] == "unspecified"
 
 
 def test_no_basis_is_recorded_for_a_field_that_cannot_have_one():
@@ -3186,3 +3215,108 @@ def test_the_basis_markers_cover_every_non_default_value():
     from tracker.vocab import CLAIM_AXIS_DEFAULTS, CLAIM_BASES
 
     assert set(crawl._BASIS_MARKERS) == set(CLAIM_BASES) - {CLAIM_AXIS_DEFAULTS["basis"]}
+
+
+# --- a role has to attach to ITS company, not merely appear ------------------
+#
+# Measured defect, fixed. The presence test this replaced accepted every reading
+# of a sentence naming two companies and two roles, so it licensed the two wrong
+# answers as readily as the two right ones.
+
+_TWO_PARTIES = "Crusoe is building the campus that Oracle will lease in Abilene, Texas."
+
+
+def _role_verdict(name, role):
+    """Ask the gate about one (name, role), with both companies in play."""
+    got = crawl._parties(
+        {
+            "parties": [
+                {"name": "Crusoe", "role": "developer", "quote": _TWO_PARTIES},
+                {"name": "Oracle", "role": "customer", "quote": _TWO_PARTIES},
+                {"name": name, "role": role, "quote": _TWO_PARTIES},
+            ]
+        },
+        _TWO_PARTIES + "\n",
+        "Crusoe",
+    )
+    return next(p for p in got if p.name == name and p.role == role).unconfirmed
+
+
+@pytest.mark.parametrize(("name", "role"), [("Crusoe", "developer"), ("Oracle", "customer")])
+def test_the_correct_reading_of_a_two_party_sentence_is_licensed(name, role):
+    assert _role_verdict(name, role) is None
+
+
+@pytest.mark.parametrize(("name", "role"), [("Crusoe", "customer"), ("Oracle", "developer")])
+def test_the_swapped_reading_of_a_two_party_sentence_is_refused(name, role):
+    """Both names and both role words are present; only position separates them."""
+    assert _role_verdict(name, role) == "quote_off_target"
+
+
+def test_one_company_alone_needs_no_position():
+    """The ordinary case, and it must not get harder — most articles name one.
+
+    With no rival in the sentence there is nothing to confuse the wording with,
+    so presence is enough and the sentence is taken at its word.
+    """
+    text = "Vantage will operate the Ashburn campus."
+    got = crawl._parties(
+        {"parties": [{"name": "Vantage", "role": "operator", "quote": text}]},
+        text + "\n",
+        "Vantage",
+    )
+    assert got[0].unconfirmed is None
+
+
+def test_a_company_named_inside_another_does_not_compete_with_itself():
+    """ "Oracle" inside "Oracle Cloud" is one mention, not a rival."""
+    text = "Oracle Cloud will lease the whole facility from Vantage."
+    got = crawl._parties(
+        {
+            "parties": [
+                {"name": "Oracle Cloud", "role": "customer", "quote": text},
+                {"name": "Vantage", "role": "owner", "quote": text},
+            ]
+        },
+        text + "\n",
+        "Vantage",
+    )
+    verdicts = {p.name: p.unconfirmed for p in got}
+    assert verdicts["Oracle Cloud"] is None
+
+
+def test_two_roles_in_one_sentence_each_land_on_their_own_company():
+    """Three entries, and the gate has to separate all of them by position."""
+    text = "Turner is building the site that Aligned will operate."
+    got = crawl._parties(
+        {
+            "parties": [
+                {"name": "Turner", "role": "developer", "quote": text},
+                {"name": "Aligned", "role": "operator", "quote": text},
+                # Wrong: "is building" sits next to Turner, not Aligned.
+                {"name": "Aligned", "role": "developer", "quote": text},
+            ]
+        },
+        text + "\n",
+        "Aligned",
+    )
+    verdicts = {(p.name, p.role): p.unconfirmed for p in got}
+    assert verdicts[("Turner", "developer")] is None
+    assert verdicts[("Aligned", "operator")] is None
+    assert verdicts[("Aligned", "developer")] == "quote_off_target"
+
+
+def test_a_role_the_sentence_never_states_is_refused_even_with_one_company():
+    """Position is the second check, not a replacement for the first.
+
+    "Turner Construction is building it" says Turner develops the site. It does
+    not say Turner is somebody else's contractor, and the company happening to
+    have "Construction" in its name is not the article saying so.
+    """
+    text = "Turner Construction is building the Ashburn site."
+    got = crawl._parties(
+        {"parties": [{"name": "Turner Construction", "role": "contractor", "quote": text}]},
+        text + "\n",
+        "Turner Construction",
+    )
+    assert got[0].unconfirmed == "quote_off_target"

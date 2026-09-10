@@ -187,7 +187,7 @@ under an older prompt and is declined outright by the current one.
 | | |
 | --- | --- |
 | first observed | 2026-08-07 |
-| status | **open** |
+| status | **open** — and now a small change, because the obstacle is gone |
 
 `crawl.axis_gate` asks whether a hedge word appears in the sentence, not whether
 it attaches to *this* number. Source 12's quote reads *"require more than $50
@@ -196,14 +196,20 @@ hedges — and the gate licensed `approximate` from a "roughly" belonging to the
 other number.
 
 `vocab.bound_from_quote` is positional and is what the display path uses, so the
-two disagree. The gate cannot simply adopt it: `axis_gate` is deliberately never
-handed the figure, which is what keeps it a pure function of the entry and the
-quote.
+two disagree.
 
-The new `basis` axis has the same shape of exposure and floors it rather than
-solving it — where a sentence contrasts two bases, the ordering prefers the
-reading that keeps a figure *out* of `it_load`, because that is the direction
-that cannot inflate a capacity total.
+**What has changed is the reason this was hard.** The gate could not adopt the
+positional version because it was never handed the figure, and that was a
+deliberate choice about keeping it a pure function of the entry and the quote.
+`basis` needed the same anchor, so the figure is now passed in as one more
+argument — purity intact — and `vocab.basis_from_quote` sits beside
+`bound_from_quote` using the same window-and-distance machinery.
+
+So the remaining work is to have the gate call `bound_from_quote` with the value
+it now has, instead of its own presence test. Left open deliberately rather than
+folded into that change: it moves **stored** bounds on existing rows, which is a
+different kind of edit from adding an axis nothing had yet, and it wants its own
+before-and-after.
 
 ### 12 — An operator's sign-off never expires
 
@@ -240,6 +246,47 @@ reason when the suite is run from a worktree. The fix is to follow the
 ---
 
 ## Fixed
+
+### 14 — A role, and a capacity basis, were licensed by wording anywhere in the sentence
+
+| | |
+| --- | --- |
+| first observed | 2026-09-10 |
+| status | **fixed 2026-09-10** — `crawl._role_is_licensed`, `vocab.basis_from_quote` |
+| measured | 2 of the 4 readings of a two-party sentence were accepted wrongly; 1 of 2 figures in a contrasting sentence was mislabelled either way it was ordered |
+
+Recorded even though it was found and fixed inside one day, because it is the
+third instance of one mistake and that is worth being able to point at.
+
+Both new checks from items 1 and 4 asked whether the licensing wording was
+*present* in the quote, not whether it attached to the thing being qualified.
+Measured on the obvious cases:
+
+> "Crusoe is building the campus that Oracle will lease in Abilene, Texas."
+
+Both company names and both role words are in that sentence, so the gate licensed
+**Crusoe as customer** and **Oracle as developer** exactly as readily as the two
+correct readings.
+
+> "The 260 MW gross figure corresponds to roughly 200 MW of IT load."
+
+Both basis phrases are present, so whichever way the tiebreak was ordered, one of
+the two figures came out wrong. The first version of item 4 shipped with an
+ordering that preferred the reading which cannot inflate a capacity total — a
+deliberate floor, and still wrong half the time.
+
+Both are now comparative rather than presence-based. A role must sit strictly
+nearer its own company's name than any other party's in that sentence; a basis
+phrase must sit nearest the figure it qualifies, within a window. Ties fail, which
+keeps the party or the figure and marks it unproven rather than guessing.
+
+Two things this cost, both accepted: the party gate now runs in two passes,
+because judging a role needs to know which *other* companies the sentence could
+mean, and the basis axis needs the figure passed to the gate — which is what
+makes item 11 above a small change rather than a blocked one.
+
+Where a sentence names only one company, presence is still enough. That is the
+ordinary case and making it harder would refuse correct roles for nothing.
 
 ### 1 — One `company` column, no roles, so one campus became four rows
 

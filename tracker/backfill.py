@@ -730,6 +730,12 @@ def derive_basis(session: Session, *, apply: bool = False) -> BasisReport:
                 continue
             if not isinstance(meta, dict) or not isinstance(quotes, dict):
                 continue
+            try:
+                claims = json.loads(source.claims or "{}")
+            except (TypeError, ValueError):
+                claims = {}
+            if not isinstance(claims, dict):
+                claims = {}
             report.sources += 1
             touched = False
             for name in sorted(BASIS_FIELDS):
@@ -737,7 +743,12 @@ def derive_basis(session: Session, *, apply: bool = False) -> BasisReport:
                 if not quote:
                     continue
                 report.claims += 1
-                got = axis_gate({}, quote, field=name)["basis"]
+                # This source's own figure, not the project's. The axis is
+                # positional now, so it has to be anchored on the number *this*
+                # sentence states — and a source that lost the merge states a
+                # different one, which would put the anchor on a figure its quote
+                # does not contain and read `unspecified` off every disagreement.
+                got = axis_gate({}, quote, field=name, value=claims.get(name))["basis"]
                 report.note(got)
                 entry = meta.get(name)
                 if not isinstance(entry, dict):
