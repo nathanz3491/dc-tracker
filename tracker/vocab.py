@@ -365,6 +365,22 @@ UNCONFIRMED_REASONS: Final[tuple[str, ...]] = (
     #: survive a re-crawl. The difference is what a reader — or a future rule about
     #: expiry — can tell about them afterwards.
     "misread",
+    #: `project_party` only. Nobody claimed this role — it is what the column the
+    #: party came from *means*. A citation asserting `company` is asserting an
+    #: operator, because that is what `company` has always meant, so the party is
+    #: derived from the claim rather than read out of a sentence.
+    #:
+    #: Its own reason rather than `no_quote`, and the distinction earns its place:
+    #: `no_quote` on a party means an article offered one and the gate could not
+    #: tie the *role* to a sentence, which is a refusal a reader may want to look
+    #: at. This means nothing was offered and nothing was refused. Collapsing them
+    #: would put a disclosure on every row in the database — every project has a
+    #: company — and bury the refusals that matter among them.
+    #:
+    #: Carries no quote on purpose. A party's `quote` means "the sentence that
+    #: evidences this role", and no sentence does; the citation is on `source_id`
+    #: for a reader who wants to see where the name came from.
+    "role_inferred",
 )
 
 # --- the claim envelope ----------------------------------------------------

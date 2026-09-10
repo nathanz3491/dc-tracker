@@ -126,6 +126,9 @@ def test_csv_column_tuple_is_frozen():
         "source_urls",
         "last_verified_at",
         "risks",
+        "mw_planned_basis",
+        "mw_built_basis",
+        "parties",
     )
 
 

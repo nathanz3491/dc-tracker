@@ -60,6 +60,13 @@ CSV_COLUMNS: tuple[str, ...] = (
     # is a positional contract, and moving `confidence` along by one would break a
     # consumer indexing into the row.
     "risks",
+    # Appended for the same reason. `mw_*_basis` says which kind of megawatt the
+    # column two places left of it holds — the computing load, the whole site's
+    # draw, or a generator's rating — and two rows' capacities are only comparable
+    # when they agree. Empty means no citation recorded one.
+    "mw_planned_basis",
+    "mw_built_basis",
+    "parties",
 )
 
 #: Schema tag on JSON exports, so a downstream consumer can detect a change.
@@ -71,7 +78,12 @@ CSV_COLUMNS: tuple[str, ...] = (
 #: a field, in the merge engine's own order, with the winner marked. Also additive.
 #: 6 adds `sources[].published_at`, which existed on the row but was only exposed
 #: inside `claims_by_field`. Additive.
-JSON_SCHEMA_TAG = "tracker/6"
+#: 7 adds `parties` — who plays which role on the site, with the sentence behind
+#: each role — and `mw_planned_basis`/`mw_built_basis`, which say WHICH KIND of
+#: megawatt a capacity figure is. Both additive, and the second is the one to read
+#: before comparing two campuses' capacities: they are only comparable when the
+#: bases agree.
+JSON_SCHEMA_TAG = "tracker/7"
 
 FORMATS = ("md", "csv", "json", "html")
 
@@ -108,6 +120,7 @@ def fetch_projects(session: Session, flt: ExportFilter | None = None) -> list[Pr
         selectinload(Project.events),
         selectinload(Project.risks),
         selectinload(Project.blocks),
+        selectinload(Project.parties),
     )
     if flt is not None:
         stmt = flt.apply(stmt)
@@ -162,6 +175,26 @@ def _risk_cell(project: Project) -> str:
     )
 
 
+def _party_cell(project: Project) -> str:
+    """Parties as ``role:name`` pairs, for the flat formats.
+
+    Roles whose evidence the gate refused are marked with a trailing ``?``, so a
+    flat cell still distinguishes "an article says Oracle leases it" from "we
+    inferred it from the operator column". Losing that distinction is how a
+    spreadsheet turns an inference into a fact.
+    """
+    from tracker.parties import INFERRED_ROLE
+
+    return ";".join(
+        f"{p.role}:{p.name}" + ("" if p.unconfirmed is None else "?")
+        for p in sorted(project.parties, key=lambda p: (p.role, p.party_key))
+        # An inferred role restates `company`/`customer`, which are already their
+        # own columns in this row. Repeating them here would pad every cell in the
+        # export with what the reader can see two columns to the left.
+        if p.unconfirmed != INFERRED_ROLE
+    )
+
+
 def to_row(project: Project) -> dict[str, Any]:
     """One flat dict per project, for CSV and Markdown."""
     urls = sorted(s.url for s in project.sources)
@@ -183,6 +216,9 @@ def to_row(project: Project) -> dict[str, Any]:
         "expected_online": _iso(project.expected_online),
         "blocker": project.blocker,
         "risks": _risk_cell(project),
+        "mw_planned_basis": project.mw_planned_basis,
+        "mw_built_basis": project.mw_built_basis,
+        "parties": _party_cell(project),
         "confidence": project.confidence,
         "sources": len(urls),
         "source_urls": " ".join(urls),
@@ -531,6 +567,14 @@ def to_json_object(project: Project, *, claims: bool = True) -> dict[str, Any]:
         "lon": project.lon,
         "mw_planned": project.mw_planned,
         "mw_built": project.mw_built,
+        # Which KIND of megawatt each figure is — the computing load, the whole
+        # facility's draw, or a generator's rating. Three quantities 30% or more
+        # apart that all arrive in this one column, so two campuses' capacities
+        # are only comparable when these agree. NULL means no citation recorded
+        # one, which covers both "the sentence did not say" and "nothing has read
+        # it yet"; `tracker backfill basis` separates them. See `vocab.CLAIM_BASES`.
+        "mw_planned_basis": project.mw_planned_basis,
+        "mw_built_basis": project.mw_built_basis,
         "h200_equivalent": project.h200_equivalent,
         "investment_usd": project.investment_usd,
         "phase": project.phase,
@@ -633,6 +677,33 @@ def to_json_object(project: Project, *, claims: bool = True) -> dict[str, Any]:
                 "source_id": b.source_id,
             }
             for b in sorted(project.blocks, key=lambda b: b.block_key)
+        ],
+        # Who plays which role on this site. `company` and `customer` above are
+        # two slots for what is routinely four or five parties — one builds it,
+        # one owns it, one occupies it, one sells it power — which is why one
+        # campus used to arrive as several rows, once per company named.
+        #
+        # `unconfirmed` is the field to read before trusting a role. NULL means a
+        # sentence in the article says this company plays this role, and the
+        # sentence is in `quote`. `role_inferred` means nobody said it: the party
+        # is what a citation's own `company` or `customer` claim *means*, so it
+        # carries no quote and `capex` will not attribute on it. Anything else is
+        # a refusal — the gate read a sentence and would not let it license the
+        # role — and those are worth a reader's attention.
+        #
+        # Sorted by (role, name) so a re-export of an unchanged row is byte-equal.
+        "parties": [
+            {
+                "name": p.name,
+                # The normalised identity, so a consumer can group Meta with
+                # Facebook and AWS with Amazon without reimplementing the folding.
+                "key": p.party_key,
+                "role": p.role,
+                "quote": p.quote,
+                "unconfirmed": p.unconfirmed,
+                "source_id": p.source_id,
+            }
+            for p in sorted(project.parties, key=lambda p: (p.role, p.party_key))
         ],
         # Sent rather than recomputed in the page. The console could add these up
         # itself, and then there would be two definitions of "what is in the campus

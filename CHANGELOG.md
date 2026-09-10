@@ -129,6 +129,47 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **The new axes reached one write path out of five, and no rendering surface at
+  all** (`tracker/parties.py`, `tracker/gapfill.py`, `tracker/export.py`,
+  `tracker/webui/dataset.py`, `tracker/webui/static/app.js`, `tracker/gaps.py`).
+
+  Parties and the capacity basis were built into the article reader and stopped
+  there. Five places create a citation — the reader, the enrichment agent, the
+  hand-curated seed, the ISO loader, the Census geocoder — so `enrich`'s
+  harvesters carried both axes and its `--agent` pass carried neither. Same field,
+  different behaviour depending on which command wrote it.
+
+  Derived in one place rather than four: `parties._inferred_parties` reads any
+  citation's own `company`/`customer` claims as an operator/customer party, marked
+  `role_inferred` with no quote, because nobody asserted the role — it is what the
+  column means. Covers every path including the next one added. `capex` will not
+  attribute on an inferred role, and `reconcile` does not disclose one as a
+  refusal, because every project has a company and that line would then be on
+  every row.
+
+  **`tracker backfill parties` is gone**, subsumed and slightly wrong: it marked a
+  party confirmed when the *company name* was quote-backed, and a quote for a name
+  is not evidence of a role. `gapfill` derives the basis itself from the quote it
+  has already verified.
+
+  **And none of it was visible.** The CLI showed all three new facts; the console
+  and the export showed none — the worst arrangement, since buyer totals would
+  have moved with nothing on the page saying why. `parties` and the two
+  `mw_*_basis` columns are now in the shared JSON shape (schema `tracker/7`) and
+  in the CSV, and the console renders the roles with their sentences, the
+  out-of-scope money, the programme-figure warning, and the share of capacities
+  whose kind is unrecorded.
+
+  Two things only looking at the rendered page could have found. The drawer
+  labelled **both** capacity cards "IT capacity" — what the column is defined as,
+  not what the article measured — so a campus quoted at 1,200 MW of IT load beside
+  200 MW gross presented two different quantities as the same one; each card now
+  takes its label from that figure's own basis. And a `customer` filled from a
+  party read as 待确认, whose own wording is "a source gave this figure and we
+  could not find a sentence proving it", when the party's sentence was right
+  there — `gaps.provenance` now reports those as `derived` and shows the quote.
+
+
 - **A role, and a capacity basis, were licensed by wording anywhere in the
   sentence** (`tracker/ingest/crawl.py`, `tracker/vocab.py`,
   `tracker/backfill.py`, `docs/known-limitations.md`).

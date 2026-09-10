@@ -302,6 +302,49 @@ def _same_value(claim_value_, stored) -> bool:
     return claim_value_ == stored
 
 
+def _reconciled_from(project, field: str, value) -> FieldProvenance | None:
+    """The party or tranche a `reconcile` pass filled this field from, if any.
+
+    Only `customer`, because that is the only column either pass may fill — see
+    `parties.reconcile` and `blocks.reconcile`, both of which fill a null and
+    never overwrite.
+
+    The tier is `DERIVED` rather than `REPORTED`, and the distinction is the point:
+    a sentence does evidence the tenant, but it evidences them *on a tranche* or
+    *in a role*, not as the campus's single `customer` column. Deterministic from
+    stored rows, which is what `DERIVED` means everywhere else here.
+
+    Parties before tranches. A party in the `customer` role is a statement about
+    the whole site; a tranche's tenant is a statement about part of it, so where
+    both exist the broader one is what the campus column is reporting.
+    """
+    if field != "customer" or not isinstance(value, str):
+        return None
+    wanted = value.strip().lower()
+
+    for party in getattr(project, "parties", ()) or ():
+        if party.role != "customer" or party.unconfirmed is not None:
+            continue
+        if (party.name or "").strip().lower() != wanted:
+            continue
+        return FieldProvenance(field, DERIVED, quote=party.quote, quote_is_exact=bool(party.quote))
+
+    for block in getattr(project, "blocks", ()) or ():
+        if (block.customer or "").strip().lower() != wanted:
+            continue
+        quote = None
+        if block.quotes:
+            try:
+                recorded = json.loads(block.quotes)
+            except (TypeError, ValueError):
+                recorded = {}
+            if isinstance(recorded, dict):
+                quote = recorded.get("customer")
+        return FieldProvenance(field, DERIVED, quote=quote, quote_is_exact=bool(quote))
+
+    return None
+
+
 def provenance(project, field: str, by_field=None) -> FieldProvenance | None:
     """Which tier the value rests on, the sentence behind it, and whose it is.
 
@@ -322,6 +365,15 @@ def provenance(project, field: str, by_field=None) -> FieldProvenance | None:
         # an untrue statement about a source.
         if _SCHEMA_DEFAULTS.get(field) == value:
             return FieldProvenance(field, DEFAULTED)
+        # Or a reconcile filled it from something that is not a claim. `customer`
+        # can come from a tranche that names its own tenant or from a party in the
+        # `customer` role, and both carry their own verified sentence — so
+        # reporting 待确认 here told the reader "a source gave this figure and we
+        # could not find a sentence proving it" when a sentence was right there.
+        # Observed on screen, which is why this branch exists.
+        derived = _reconciled_from(project, field, value)
+        if derived is not None:
+            return derived
         return FieldProvenance(field, UNCONFIRMED)
 
     ordered = sorted(getattr(project, "sources", ()) or (), key=lambda s: s.url)

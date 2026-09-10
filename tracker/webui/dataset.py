@@ -240,6 +240,27 @@ def _capex(session: Session) -> dict[str, Any]:
         "year_columns": capex_mod.year_columns(positions, start=as_of.year),
         "quarter_columns": capex_mod.quarter_columns(positions, start=as_of_quarter),
         "date_precision": capex_mod.date_precision(session),
+        # How many stored capacities say which KIND of megawatt they are. The
+        # `unrecorded` bucket is the one to render: those figures are not
+        # comparable with the ones that do say, and the share is the measurement
+        # the axis was added to make. Counted here rather than in the page for
+        # the reason this module opens with — two definitions of one number are
+        # free to disagree.
+        "basis_census": capex_mod.basis_census(session),
+        "basis_unrecorded_key": capex_mod.BASIS_UNRECORDED,
+        # One dollar figure standing as the cost of several of an operator's
+        # campuses at once, which a site cost cannot be. Counted in the sums
+        # above and flagged, on the same terms as a suspected duplicate: the
+        # repair is a person correcting the figure or superseding the claim.
+        "programme_figures": [
+            {
+                "operator": f.operator,
+                "investment_usd": f.investment_usd,
+                "sites": f.sites,
+                "project_ids": list(f.project_ids),
+            }
+            for f in capex_mod.programme_figures(session)
+        ],
         "as_of_year": as_of.year,
         "as_of_quarter": as_of_quarter,
         "unattributed": capex_mod.UNATTRIBUTED,
@@ -256,6 +277,13 @@ def _capex(session: Session) -> dict[str, Any]:
                 "investment_usd": p.investment_usd,
                 "investment_excluded_usd": p.investment_excluded_usd,
                 "investment_unquoted_usd": p.investment_unquoted_usd,
+                # Money the article says is a programme's, a region's or the
+                # operator's whole estate rather than this site's. Quoted
+                # correctly and excluded from the sum, which is a different
+                # statement from `investment_excluded_usd` above: that one is the
+                # $/MW ceiling refusing an implausible figure, this one is the
+                # article saying in words what the figure is a figure of.
+                "investment_out_of_scope_usd": p.investment_out_of_scope_usd,
                 "duplicate_rows_skipped": p.duplicate_rows_skipped,
                 "mw_duplicate_skipped": p.mw_duplicate_skipped,
                 "investment_duplicate_skipped_usd": p.investment_duplicate_skipped_usd,

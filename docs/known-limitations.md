@@ -247,6 +247,49 @@ reason when the suite is run from a worktree. The fix is to follow the
 
 ## Fixed
 
+### 15 — The new axes reached one write path out of five, and no rendering surface at all
+
+| | |
+| --- | --- |
+| first observed | 2026-09-10 |
+| status | **fixed 2026-09-11** — `parties._inferred_parties`, `gapfill._basis_axes`, `export.to_json_object`, the console |
+| measured | 1 of 5 citation-creating paths covered; 0 of 3 read surfaces |
+
+Items 1 and 4 were built into the article reader and stopped there.
+
+**Five places create a citation** — the article reader, the enrichment agent, the
+hand-curated seed, the ISO queue loader, and the Census geocoder — and only the
+first produced parties or a capacity basis. So `enrich`'s harvesters carried both
+and its `--agent` pass carried neither, which is the same field behaving
+differently depending on which command wrote it.
+
+Nothing produced a *wrong* number: buyer attribution falls through to the older
+rule when no party is confirmed, and a missing basis reads as unrecorded. What was
+lost was information the reader would have captured — a duplicate-matching signal,
+and a basis waiting on a repair command.
+
+The fix is derivation in one place rather than four paths each remembering.
+`parties._inferred_parties` reads any citation's own `company`/`customer` claims
+as an operator/customer party, marked `role_inferred` and carrying no quote,
+because nobody asserted the role — it is what the column means. That covers every
+path including whichever is added next, and it made `tracker backfill parties`
+redundant, so that command is gone. It was also slightly overclaiming: it marked
+a party confirmed when the *company name* was quote-backed, and a quote for a name
+is not evidence of a role.
+
+**And none of it was visible.** The CLI showed all three new facts; the console
+and the export showed none. That is the worst arrangement — the console would have
+shown buyer totals that had moved with nothing on the page saying why. Both now
+carry `parties` and the two `mw_*_basis` columns (JSON schema `tracker/7`), and
+the console renders the roles with their sentences, the out-of-scope money, the
+programme-figure warning, and the share of capacities whose kind is unrecorded.
+
+One thing found by looking at the rendered page rather than the tests: the drawer
+labelled **both** capacity cards "IT capacity", which is what the column is
+*defined* as and not what the article necessarily measured. It now labels each
+card from that figure's own basis, so a campus quoted at 1,200 MW of IT load
+beside 200 MW gross reads as two different quantities instead of two of the same.
+
 ### 14 — A role, and a capacity basis, were licensed by wording anywhere in the sentence
 
 | | |

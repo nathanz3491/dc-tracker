@@ -249,6 +249,31 @@ def _coerce(field_name: str, raw: Any) -> Any:
     return text or None
 
 
+def _basis_axes(facts: dict[str, tuple[Any, str]]) -> dict[str, dict[str, Any]]:
+    """The `basis` axis for whichever capacity figures this citation carries.
+
+    A thin adapter onto the same gate the crawl path uses, rather than a second
+    reading of the same wording: `axis_gate` owns which phrases license which
+    basis, and two copies of that table would be free to disagree.
+
+    Only a non-default answer is stored, matching `crawl._claim_axes`. Writing
+    `unspecified` would attach an envelope to nearly every capacity claim and
+    inflate the coverage measurement that decides whether these axes are worth
+    keeping.
+    """
+    from tracker.ingest.crawl import axis_gate
+    from tracker.vocab import BASIS_FIELDS, CLAIM_AXIS_DEFAULTS
+
+    out: dict[str, dict[str, Any]] = {}
+    for name, (value, quote) in facts.items():
+        if name not in BASIS_FIELDS:
+            continue
+        basis = axis_gate({}, quote, field=name, value=value)["basis"]
+        if basis != CLAIM_AXIS_DEFAULTS["basis"]:
+            out[name] = {"basis": basis}
+    return out
+
+
 def apply_facts(
     session: Any,
     project: Any,
@@ -329,6 +354,16 @@ def apply_facts(
                     excerpt=next(iter(facts.values()))[1][:500],
                     claims={name: value for name, (value, _q) in facts.items()},
                     quotes={name: quote for name, (_v, quote) in facts.items()},
+                    # Which kind of megawatt, on the same terms as the crawl path.
+                    #
+                    # This path builds its own citation rather than going through
+                    # the article reader, so without this the agent could fill a
+                    # capacity that carried no basis while `sync` filling the same
+                    # column carried one — the same field behaving differently
+                    # depending on which command wrote it. It costs nothing: the
+                    # quote is already verified verbatim above and the figure is
+                    # in hand, which is everything the axis reads.
+                    claim_meta=_basis_axes(facts),
                     extractor="gapfill-agent-v1",
                 )
             ],

@@ -53,6 +53,11 @@ from typing import Any
 from tracker.dedup import company_key
 from tracker.vocab import COMPANY_ROLE_ORDER, PARTY_ROLES, PARTY_ROLES_BUYING
 
+#: The `unconfirmed` reason on a party derived from a citation's own claims
+#: rather than read out of a sentence. Named here because three functions test
+#: for it and a bare string in each is three places to typo.
+INFERRED_ROLE: str = "role_inferred"
+
 log = logging.getLogger(__name__)
 
 
@@ -141,33 +146,112 @@ def parties_by_key(sources: list[Any]) -> dict[tuple[str, str], Party]:
 
     Crawl order decides nothing, which is the bug `source.published_at` exists to
     fix one level up and is not worth reintroducing here.
+
+    **A citation that lists no parties still has some**, and this is where every
+    write path other than the article reader gets covered. Five places in this
+    codebase create a citation and only one of them reads an article: the agent
+    pass fills single fields from a page, the seed file is curated by hand, the ISO
+    loader promotes an operator name out of a queue row. Each of those can assert
+    a `company` — which *is* an operator claim, because that is what the column has
+    always meant — and none of them produces a party list.
+
+    Teaching four paths to emit parties would mean four places to forget. Deriving
+    it here means one, and it covers whichever path is added next. See
+    `_inferred_parties` for what the derived rows may and may not claim.
     """
     out: dict[tuple[str, str], Party] = {}
     ranks: dict[tuple[str, str], tuple[int, int, int]] = {}
 
+    def offer(source: Any, party: Party, weight: int) -> None:
+        rank = (0 if party.unconfirmed is None else 1, -weight, -len(party.quote or ""))
+        slot = (party.key, party.role)
+        if slot in ranks and ranks[slot] <= rank:
+            return
+        ranks[slot] = rank
+        out[slot] = party
+
     for source in sources:
         weight = _weight(source)
+        declared = 0
         for entry in parse(getattr(source, "parties", None)):
             name = str(entry.get("name") or "").strip()
             role = str(entry.get("role") or "").strip().lower()
             key = party_key(name)
             if not name or not key or role not in PARTY_ROLES:
                 continue
-            quote = str(entry.get("quote") or "").strip() or None
-            unconfirmed = str(entry.get("unconfirmed") or "").strip() or None
-            rank = (0 if unconfirmed is None else 1, -weight, -len(quote or ""))
-            slot = (key, role)
-            if slot in ranks and ranks[slot] <= rank:
-                continue
-            ranks[slot] = rank
-            out[slot] = Party(
+            declared += 1
+            offer(
+                source,
+                Party(
+                    name=name,
+                    key=key,
+                    role=role,
+                    quote=str(entry.get("quote") or "").strip() or None,
+                    unconfirmed=str(entry.get("unconfirmed") or "").strip() or None,
+                    source_id=getattr(source, "id", None),
+                ),
+                weight,
+            )
+        # Only when the citation declared none. A source that listed its parties
+        # has already said what it knows, and deriving more from its claims would
+        # re-add the company it deliberately left out of its own list.
+        if not declared:
+            for party in _inferred_parties(source):
+                offer(source, party, weight)
+    return out
+
+
+#: Claim -> the role that claim IS an assertion of.
+#:
+#: Two, and no more. `company` means "who runs it" and `customer` means "who
+#: occupies it" — those are the two columns' documented meanings, so reading them
+#: as roles restates rather than infers. Nothing here guesses a `developer`, an
+#: `owner` or a `utility`: those are the roles the single column was collapsing,
+#: they are recoverable only from article text, and manufacturing one would be the
+#: fabrication this whole gate exists to refuse.
+_CLAIMED_ROLES: dict[str, str] = {"company": "operator", "customer": "customer"}
+
+
+def _inferred_parties(source: Any) -> list[Party]:
+    """Parties implied by one citation's own claims, for a citation that lists none.
+
+    Every one is marked `role_inferred` and carries **no quote**, and both of those
+    are the point. Nobody asserted the role — it is what the column means — so a
+    quote would be dressing an inference as evidence, and `capex.attribute` will
+    not let one decide an attribution.
+
+    They are still worth having for the question they *can* answer. A party key is
+    what makes two rows in one locality recognise each other, and the name behind
+    a `customer` claim is a real name a real citation asserted however the role
+    was arrived at. That is the signal `docs/duplicate-shapes.md` measures as
+    missing from 48 of 90 hand-performed merges.
+    """
+    try:
+        claims = json.loads(getattr(source, "claims", None) or "{}")
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(claims, dict):
+        return []
+
+    out: list[Party] = []
+    for field, role in _CLAIMED_ROLES.items():
+        name = claims.get(field)
+        if not isinstance(name, str):
+            continue
+        name = name.strip()
+        key = party_key(name)
+        if not name or not key:
+            continue
+        out.append(
+            Party(
                 name=name,
                 key=key,
                 role=role,
-                quote=quote,
-                unconfirmed=unconfirmed,
+                quote=None,
+                unconfirmed="role_inferred",
                 source_id=getattr(source, "id", None),
             )
+        )
     return out
 
 
@@ -278,11 +362,15 @@ def reconcile(project: Any) -> list[str]:
             "another party's name, tracker duplicates will raise it"
         )
 
-    unconfirmed = [p for p in parties if p.unconfirmed is not None]
-    if unconfirmed:
+    # **Refusals only.** An inferred role was never offered and never refused —
+    # it is what `company` means — and every project in the database has a
+    # company, so counting those here would put this line on every row and bury
+    # the refusals it exists to surface. See `vocab.UNCONFIRMED_REASONS`.
+    refused = [p for p in parties if p.unconfirmed not in (None, INFERRED_ROLE)]
+    if refused:
         notes.append(
-            f"{len(unconfirmed)} of {len(parties)} parties are 待确认 "
-            f"({', '.join(sorted({p.name for p in unconfirmed}))})"
+            f"{len(refused)} of {len(parties)} parties are 待确认 "
+            f"({', '.join(sorted({p.name for p in refused}))})"
         )
 
     return notes
@@ -341,6 +429,7 @@ def buying_keys(project: Any) -> set[str]:
 
 
 __all__ = [
+    "INFERRED_ROLE",
     "Party",
     "buying_keys",
     "customer_party",

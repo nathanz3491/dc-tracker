@@ -1071,60 +1071,6 @@ def _backfill_basis(*, apply: bool, dry_run: bool) -> None:
         )
 
 
-def _backfill_parties(*, apply: bool, dry_run: bool) -> None:
-    """Seed `source.parties` from `company` and `customer`, and say what it wrote.
-
-    Free — no LLM, no network — because it reads only what is already stored, the
-    same reason `derive` and `scope` are free.
-
-    Reports before it writes, and the report is the interesting half: it says how
-    many rows the two existing columns can account for at all. Everything beyond
-    `operator` and `customer` is in the article text and needs a re-crawl, so a
-    large `no source claims the company` count is the honest measure of how much
-    of this axis is still missing rather than a failure of the run.
-    """
-    from tracker.backfill import seed_parties
-    from tracker.upsert import recompute_parties
-
-    writing = apply and not dry_run
-    engine = _writable("backfill parties") if writing else _read_engine()
-    with _explain_db_locks(), session_scope(engine, commit=writing) as session:
-        report = seed_parties(session, apply=writing)
-        rebuilt = recompute_parties(session) if writing else 0
-
-    if json_mode():
-        emit(
-            {
-                "projects": report.projects,
-                "already": report.already,
-                "unsourced": report.unsourced,
-                "sources": report.sources,
-                "written": report.written,
-                "rebuilt": rebuilt,
-                "applied": writing,
-            }
-        )
-        return
-
-    _print_report_rows(
-        report.as_rows(),
-        title="backfill parties" + ("" if writing else " (preview)"),
-    )
-    for role, count in sorted(report.written.items(), key=lambda kv: -kv[1]):
-        console.print(f"  {role:<10} {count:,}")
-    if rebuilt:
-        console.print(f"\nrebuilt parties on [bold]{rebuilt}[/bold] project(s)")
-
-    if not writing:
-        console.print("\n[dim]Nothing written. `--apply` writes them.[/dim]")
-    else:
-        console.print(
-            "\n[dim]Written. `operator` and `customer` only — every other role is in "
-            "the article text, so `tracker ingest crawl --stale-prompt` is what fills "
-            "developer, owner and utility.[/dim]"
-        )
-
-
 def _backfill_dates(*, limit: int, refetch: bool, apply: bool, yes: bool, everything: bool) -> None:
     """`tracker backfill dates`. No LLM, no API key, one column.
 
@@ -1268,7 +1214,7 @@ def _backfill_derive(*, project_id: int | None, dry_run: bool) -> None:
 def backfill(
     what: Annotated[
         str,
-        typer.Argument(help="`blocks`, `dates`, `derive`, `scope`, `parties` or `basis`."),
+        typer.Argument(help="`blocks`, `dates`, `derive`, `scope` or `basis`."),
     ] = "blocks",
     limit: Annotated[
         int, typer.Option("--limit", help="Articles to read. 0 reads every one selected.")
@@ -1319,8 +1265,6 @@ def backfill(
       is only applied when something writes to the row.
     * `dates` — fill in when each article was actually published, so a merge tie
       is broken by publication order rather than by crawl order.
-    * `parties` — seed the party table from `company` and `customer`, so migration
-      0023's axis has rows before every article has been re-read. Free.
     * `basis` — derive which KIND of megawatt each capacity figure is, out of the
       quote already stored beside it. Free.
     * `blocks` — re-read stored articles to fill in capacity blocks. The default,
@@ -1378,25 +1322,17 @@ def backfill(
         _backfill_scope(apply=apply, dry_run=dry_run)
         return
     if what == "basis":
-        # Free, like `derive`, `scope` and `parties`: the axis comes out of the
+        # Free, like `derive` and `scope`: the axis comes out of the
         # stored quote, so no extractor is constructed above this point.
         for flag, name in ((refetch, "--refetch"), (force, "--force"), (all_urls, "--all")):
             if flag:
                 _fail(f"{name} applies to `backfill blocks` or `dates`, not to `basis`.")
         _backfill_basis(apply=apply, dry_run=dry_run)
         return
-    if what == "parties":
-        # Free, like `derive` and `scope`: it reads `company`, `customer` and the
-        # quotes already on disk, so no extractor is constructed above this point.
-        for flag, name in ((refetch, "--refetch"), (force, "--force"), (all_urls, "--all")):
-            if flag:
-                _fail(f"{name} applies to `backfill blocks` or `dates`, not to `parties`.")
-        _backfill_parties(apply=apply, dry_run=dry_run)
-        return
     if what != "blocks":
         _fail(
             f"nothing to backfill called {what!r}. Expected `blocks`, `dates`, "
-            "`derive`, `scope`, `parties` or `basis`."
+            "`derive`, `scope` or `basis`."
         )
 
     settings = get_settings()

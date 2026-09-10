@@ -1743,13 +1743,40 @@ function BlockerWhy({ why, onTab }) {
     </div>`;
 }
 
+/*: What KIND of megawatt a stored capacity is, for the two places that show one.
+ *
+ * The page used to label both capacity cards "IT capacity", which is what the
+ * column is *defined* as and not necessarily what the article measured. Three
+ * quantities arrive in it — the computing load, the whole site's draw, and a
+ * nearby generator's rating — 30% or more apart. Asserting the first when the
+ * source said the second is the page telling the reader something no citation
+ * supports, which is the one thing this console is built not to do.
+ *
+ * `null` basis means no citation recorded one. That is not "IT load"; it is
+ * "unknown", and it has to read that way. */
+const BASIS = {
+  it_load: { label: "IT capacity", hint: "the computing load — what this column is for" },
+  facility: { label: "Facility power", hint: "the whole site's draw, not just the computers" },
+  nameplate: { label: "Generator rating", hint: "a power plant's output, not a data-center load" },
+  unspecified: { label: "Capacity", hint: "the article did not say which kind of megawatt" },
+};
+
+function basisOf(basis) {
+  return BASIS[basis] || { label: "Capacity", hint: "no source records which kind of megawatt" };
+}
+
 function StatsTab({ data, p, populated, open, onQuote, allowAi, onTab, claims }) {
   const worst = open.slice().sort((a, b) => SEV_ORDER.indexOf(b.severity) - SEV_ORDER.indexOf(a.severity))[0];
+  // The label follows the basis rather than asserting one. See `basisOf`.
+  const plannedBasis = basisOf(p.mw_planned_basis);
+  const builtBasis = basisOf(p.mw_built_basis);
   const stats = [
-    { label: "IT capacity, planned", value: p.mw_planned == null ? "—" : p.mw_planned.toLocaleString() + " MW",
-      hint: p.mw_planned == null ? "no source cited one" : TIER[tierOf(p, "mw_planned")][0] },
-    { label: "IT capacity in service", value: p.mw_built == null ? "—" : p.mw_built.toLocaleString() + " MW",
-      hint: p.mw_built == null ? "nothing built, or nothing read" : TIER[tierOf(p, "mw_built")][0] },
+    { label: plannedBasis.label + ", planned", value: p.mw_planned == null ? "—" : p.mw_planned.toLocaleString() + " MW",
+      hint: p.mw_planned == null ? "no source cited one"
+          : TIER[tierOf(p, "mw_planned")][0] + " · " + plannedBasis.hint },
+    { label: builtBasis.label + " in service", value: p.mw_built == null ? "—" : p.mw_built.toLocaleString() + " MW",
+      hint: p.mw_built == null ? "nothing built, or nothing read"
+          : TIER[tierOf(p, "mw_built")][0] + " · " + builtBasis.hint },
     { label: "Compute", value: fmt("h200_equivalent", p.h200_equivalent),
       hint: p.h200_equivalent == null ? "no capacity cited, so nothing to convert"
           : p.h200_equivalent === h200FromMw(p.mw_built || p.mw_planned)
@@ -1781,12 +1808,56 @@ function StatsTab({ data, p, populated, open, onQuote, allowAi, onTab, claims })
 
       <div style=${{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(330px, 1fr))",
                      gap: 18, alignItems: "start" }}>
+        ${/* Who plays which role. `company` and `customer` are two slots for what
+              is routinely four or five parties, which is why one campus used to
+              arrive as several rows — once per company an article named. A role
+              with a sentence behind it reads as a fact; one inferred from the
+              operator column has to read as an inference, or the panel launders
+              the second into the first. */ ""}
+        ${(p.parties || []).length > 0 && html`<${Card}>
+          <${CardHeader}>
+            <${CardTitle}>Who is involved<//>
+            <${CardDescription}>One site usually has several companies attached — one builds it,
+              one owns it, one occupies it, one sells it power. Each role below is only as good as
+              the sentence behind it.<//>
+          <//>
+          <div style=${{ display: "grid", gap: 0 }}>
+            ${(p.parties || []).map((party) => {
+              const inferred = party.unconfirmed === "role_inferred";
+              const refused = party.unconfirmed != null && !inferred;
+              return html`
+                <div key=${party.role + party.key}
+                     style=${{ display: "grid", gridTemplateColumns: "104px minmax(0,1fr)",
+                               gap: 14, alignItems: "baseline", padding: "11px 20px",
+                               borderTop: "1px solid var(--border)" }}>
+                  <span style=${{ fontFamily: "var(--font-mono)", fontSize: 12,
+                                  color: "var(--muted-foreground)" }}>${party.role}</span>
+                  <div style=${{ display: "grid", gap: 5, minWidth: 0 }}>
+                    <div style=${{ display: "flex", alignItems: "center", gap: 9, flexWrap: "wrap" }}>
+                      <span style=${{ fontSize: 15, lineHeight: "22px", fontWeight: 500 }}
+                        >${party.name}</span>
+                      ${inferred && html`<span style=${chip("--muted-foreground", true)}
+                        title="Nobody stated this role — it is what the operator or customer column means. Shown as an inference, and never used to attribute capacity to a buyer."
+                        >inferred</span>`}
+                      ${refused && html`<span style=${chip("--warning")}
+                        title=${"A sentence was offered and would not support this role: " +
+                                party.unconfirmed}
+                        >待确认 · ${party.unconfirmed}</span>`}
+                    </div>
+                    ${party.quote && html`<span style=${{ fontSize: 12.5, lineHeight: "19px",
+                        color: "var(--muted-foreground)" }}>"${party.quote}"</span>`}
+                  </div>
+                </div>`;
+            })}
+          </div>
+        <//>`}
         <${Card}>
           <${CardHeader}>
             <${CardTitle}>The twelve tracked fields<//>
-            <${CardDescription}>${populated} of 12 populated. Megawatts here are the data
-              center's own IT load — a utility's generation, transmission or storage figure is a
-              different quantity and is never added to them.<//>
+            <${CardDescription}>${populated} of 12 populated. A utility's generation,
+              transmission or storage figure is a different quantity and is never added to the
+              megawatts here — and where a citation says which kind of megawatt it measured, the
+              capacity cards above say so rather than assuming.<//>
           <//>
           <div style=${{ display: "grid", gap: 0 }}>
             ${TRACKED.map((key) => {
@@ -2704,6 +2775,8 @@ function CapexHoverCard({ hover, position, allowAi, onHold, onRelease }) {
       [`${Math.round(position.mw_duplicate_skipped).toLocaleString()} MW`, "set aside as duplicates"],
     position.investment_excluded_usd > 0 &&
       [fmtUSD(position.investment_excluded_usd), "claimed, never confirmed"],
+    position.investment_out_of_scope_usd > 0 &&
+      [fmtUSD(position.investment_out_of_scope_usd), "a programme's, not this site's"],
   ].filter(Boolean);
   return html`
     <div class="dc-pop" onMouseEnter=${onHold} onMouseLeave=${onRelease}
@@ -2899,6 +2972,14 @@ function CapexView({ data, allowAi, onOpen }) {
   // Sums of server-sent disclosures — arithmetic, not a judgement of our own.
   const skippedMW = capex.positions.reduce((t, p) => t + (p.mw_duplicate_skipped || 0), 0);
   const excludedUSD = capex.positions.reduce((t, p) => t + (p.investment_excluded_usd || 0), 0);
+  const outOfScopeUSD = capex.positions.reduce(
+    (t, p) => t + (p.investment_out_of_scope_usd || 0), 0);
+  // Which kind of megawatt each stored capacity is. The server counts these; the
+  // share is the only arithmetic done here.
+  const bases = capex.basis_census || {};
+  const basesTotal = Object.values(bases).reduce((t, n) => t + n, 0);
+  const basisUnrecorded = bases[capex.basis_unrecorded_key || "unrecorded"] || 0;
+  const programmes = capex.programme_figures || [];
 
   const num = (v, suffix = "") =>
     v ? Math.round(v).toLocaleString() + suffix : html`<span class="dc-v dc-v--missing">—</span>`;
@@ -3191,8 +3272,29 @@ function CapexView({ data, allowAi, onOpen }) {
             ${excludedUSD > 0 && html`${" "}${fmtUSD(excludedUSD)} more was claimed but never
             confirmed — usually a headline number for a whole programme ("OpenAI's $500 billion
             Stargate") attached to one site — and is excluded and disclosed, not summed.`}
+            ${outOfScopeUSD > 0 && html`${" "}A further ${fmtUSD(outOfScopeUSD)} is quoted
+            correctly and is not this site's money: the article calls it a programme, a region's
+            economic impact, or the operator's whole estate. Also excluded.`}
             ${" "}Open a project to see which of its numbers are flagged.
           </span>
+          ${basesTotal > 0 && basisUnrecorded > 0 && html`<span>
+            ${html`<b>Not every megawatt is the same megawatt.</b>`} A campus can be quoted as its
+            computing load, as the whole site's power draw, or as a nearby power plant's rating —
+            three numbers 30% or more apart.
+            ${" "}${Math.round((basisUnrecorded / basesTotal) * 100)}% of the stored capacities
+            (${basisUnrecorded.toLocaleString()} of ${basesTotal.toLocaleString()}) do not record
+            which, so those are not comparable with the ones that do. Open a project to see which
+            kind its figures are.
+          </span>`}
+          ${programmes.length > 0 && html`<span>
+            ${html`<b>${programmes.length}
+            ${programmes.length === 1 ? "figure" : "figures"} may be a programme, not a site.</b>`}
+            ${" "}The same amount stands as the cost of several of one operator's campuses at once,
+            which a single site's cost cannot be:
+            ${" "}${programmes.slice(0, 4).map((f, i) => html`<span key=${f.operator + f.investment_usd}
+              >${i > 0 ? ", " : ""}${f.operator} ${fmtUSD(f.investment_usd)} on ${f.sites} sites</span>`)}${programmes.length > 4 ? `, and ${programmes.length - 4} more` : ""}.
+            ${" "}These are still counted above — correcting one is a person's call.
+          </span>`}
         </div>
       <//>
 

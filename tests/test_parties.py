@@ -412,3 +412,127 @@ def test_a_party_row_written_by_hand_survives_only_if_a_source_asserts_it(sessio
     session.flush()
     assert parties.rebuild(session, project) == 1  # the orphan is removed
     assert list(project.parties) == []
+
+
+# --- a citation that lists no parties still has some -------------------------
+#
+# Five places create a citation and only one reads an article. Teaching four of
+# them to emit parties would be four places to forget, so it is derived in one.
+
+
+def _claiming_source(session, project, claims, *, url="https://example.test/claim"):
+    row = Source(
+        project_id=project.id,
+        url=url,
+        source_type="company_filing",
+        fetched_at=utcnow(),
+        claims=json.dumps(claims),
+    )
+    session.add(row)
+    session.flush()
+    session.refresh(project)
+    return row
+
+
+def test_a_company_claim_is_an_operator_claim(session):
+    """What every path other than the article reader gets for free."""
+    project = _project(session, company="Meta", dedup_key="meta|city:abilene|TX")
+    _claiming_source(session, project, {"company": "Meta", "customer": "Meta"})
+    parties.rebuild(session, project)
+
+    got = {(p.party_key, p.role): p for p in project.parties}
+    assert set(got) == {("meta", "operator"), ("meta", "customer")}
+
+
+def test_an_inferred_role_carries_no_quote_and_cannot_attribute(session):
+    """Nobody asserted the role, so nothing may present it as evidenced."""
+    from tracker.capex import attribute
+
+    project = _project(
+        session, company="Vantage", customer=None, dedup_key="vantage|city:abilene|TX"
+    )
+    _claiming_source(session, project, {"company": "Vantage", "customer": "OpenAI"})
+    parties.rebuild(session, project)
+
+    tenant = parties.customer_party(list(project.parties))
+    assert tenant.unconfirmed == parties.INFERRED_ROLE
+    assert tenant.quote is None
+    # `customer` is still NULL on the row, so the ladder has nothing to fall back
+    # to and the inferred party is refused rather than deciding the buyer.
+    _name, key, _self = attribute(project)
+    assert key == ""
+
+
+def test_an_inferred_role_still_raises_a_duplicate(session):
+    """It is the name that makes two rows recognise each other, not the role."""
+    a = _project(session, company="Crusoe", dedup_key="crusoe|city:abilene|TX")
+    b = _project(session, company="Oracle", name="Stargate", dedup_key="oracle|city:abilene|TX")
+    _claiming_source(session, a, {"company": "Crusoe", "customer": "OpenAI"}, url="https://a.test")
+    _claiming_source(session, b, {"company": "Oracle", "customer": "OpenAI"}, url="https://b.test")
+    for row in (a, b):
+        parties.rebuild(session, row)
+
+    assert parties.shared_across_companies(a, b) == {"openai"}
+
+
+def test_a_citation_that_listed_parties_is_not_second_guessed(session):
+    """It has said what it knows; deriving more would re-add what it left out."""
+    project = _project(session, company="Crusoe")
+    row = _source(
+        session,
+        project,
+        [{"name": "Oracle", "role": "customer", "quote": "Oracle will lease it."}],
+    )
+    row.claims = json.dumps({"company": "Crusoe", "customer": "Someone Else"})
+    session.flush()
+    parties.rebuild(session, project)
+
+    assert {(p.party_key, p.role) for p in project.parties} == {("oracle", "customer")}
+
+
+def test_an_inferred_role_is_not_disclosed_as_a_refusal(session):
+    """Every project has a company, so counting these would note every row."""
+    project = _project(session, company="Meta", dedup_key="meta|city:abilene|TX")
+    _claiming_source(session, project, {"company": "Meta"})
+    parties.rebuild(session, project)
+
+    assert not [n for n in parties.reconcile(project) if "待确认" in n]
+
+
+def test_a_refused_role_is_still_disclosed(session):
+    """The distinction the separate reason code buys."""
+    project = _project(session, company="Crusoe")
+    _source(
+        session,
+        project,
+        [{"name": "Oracle", "role": "customer", "unconfirmed": "quote_off_target"}],
+    )
+    parties.rebuild(session, project)
+
+    assert [n for n in parties.reconcile(project) if "待确认" in n]
+
+
+def test_a_party_derived_customer_reads_as_derived_not_unconfirmed(session):
+    """Observed on screen, which is why this is pinned.
+
+    `reconcile` fills `customer` from a confirmed party, and no *claim* carries
+    that value — so provenance found no winning source and reported 待确认, whose
+    own wording is "a source gave this figure and we could not find a sentence
+    proving it". A sentence was right there, on the party.
+    """
+    from tracker.gaps import DERIVED, provenance
+
+    project = _project(session, company="Crusoe", customer=None)
+    _source(
+        session,
+        project,
+        [{"name": "Oracle", "role": "customer", "quote": "Oracle will lease the facility."}],
+    )
+    parties.rebuild(session, project)
+    parties.reconcile(project)
+    session.flush()
+
+    got = provenance(project, "customer")
+    assert project.customer == "Oracle"
+    assert got.tier == DERIVED
+    assert got.quote == "Oracle will lease the facility."

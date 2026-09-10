@@ -126,7 +126,8 @@ Touching any of these means the poster is in scope. Re-render with
 | Harvesters | `tracker/ingest/enrich.py` — `harvest_queue`, `harvest_retry`, `harvest_archive`, `harvest_search`, `harvest_refresh`, `_derive` |
 | Ignore-list filtering | `tracker/ingest/enrich.py` — `Round.urls`; `tracker/policy.py` |
 | Settle stage | `tracker/ingest/enrich.py` — `_settle`; `tracker/conflicts.py` — `disputes`, `solve`, `apply_outcome` |
-| Agent pass | `tracker/cli/enrich.py` — `_gapfill_batch`; `tracker/gapfill.py` |
+| Agent pass | `tracker/cli/enrich.py` — `_gapfill_batch`; `tracker/gapfill.py` — `apply_facts`, `_basis_axes` |
+| Parties and the megawatt basis | inherited: the harvesters run the crawl reader, so a citation from this command carries both. The agent pass builds its own citation and derives the basis itself (`gapfill._basis_axes`); its parties come from `parties._inferred_parties`, which reads any citation's own claims |
 | Scoring and reporting | `tracker/ingest/enrich.py` — `report_score`, `EnrichReport`, `BatchReport`; `tracker/cli/enrich.py` — `_render_enrich`, `_render_batch` |
 
 See also: [sync](sync.md), whose phase 5 is this command with `--enrich-budget` in
