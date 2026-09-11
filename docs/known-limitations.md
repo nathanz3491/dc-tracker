@@ -247,6 +247,52 @@ reason when the suite is run from a worktree. The fix is to follow the
 
 ## Fixed
 
+### 16 — The console showed the data without letting a reader compare it
+
+| | |
+| --- | --- |
+| first observed | 2026-09-11 |
+| status | **fixed 2026-09-11** — `tracker/webui/static/app.js` |
+
+Found by opening the console against a 25-project fixture rather than by reading
+the code. Five defects, all the same shape: the page had the numbers and withheld
+the comparison that makes a number mean something.
+
+**Column headings were database field names.** `mw_planned`, `first_announced`,
+`investment_usd` — precise, and answering none of a reader's questions. Worse,
+the *unit* was left to be inferred from the values, so a capacity column and a
+dollar column looked alike while scanning. Headings are now words, with the unit
+under the label once instead of on every cell.
+
+**Capacity figures did not say which kind of megawatt they were.** The axis added
+in item 4 reached the project drawer and not the table, so a column mixing
+computing load with whole-site draw looked uniform. Figures that are *not* the
+column's own quantity now carry a mark; the ones that are, and the ones nobody
+qualified, do not — marking the exception rather than the rule, because a label on
+all 25 rows is the same information and unreadable.
+
+**A ranked table with no way to rank it by eye.** The capex table printed twelve
+buyers' capacities and left the reader to divide. Each row's planned capacity now
+carries a share bar — one hue, uniform, scaled to the largest row. Deliberately
+not a value-ramp: colouring bars darker-where-bigger double-encodes length as
+lightness and spends the one free channel on information the bar already carries.
+
+**Machine vocabulary in cells.** The obstacle column printed `grid_capacity/blocking`
+— two facts welded into one slug. Now "Grid capacity · blocking", with severity
+carried by the chip's colour.
+
+**The citation list could not answer its own question.** Sources was an accordion
+ordered by decided values, which answers "which is biggest" when the question a
+reader has is "how much of this rests on one outlet" — a ratio, which a ranked
+list cannot show. It now opens with the concentration figure. On the fixture that
+immediately surfaced an inversion the old view hid: one publisher had more
+articles read but fewer stored values resting on it than another.
+
+Also on the landing page: 25 near-identical cards with no summary, and a filter
+button reading "0 worth telling you about" — the one control on the page inviting
+a click that empties it. The window now opens with its own shape, and the button
+is only offered when it would leave something on screen.
+
 ### 15 — The new axes reached one write path out of five, and no rendering surface at all
 
 | | |

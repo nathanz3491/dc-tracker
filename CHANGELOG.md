@@ -129,6 +129,34 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **The console showed the data without letting a reader compare it**
+  (`tracker/webui/static/app.js`).
+
+  Found by opening the console against a 25-project fixture rather than by reading
+  the code. Five defects of one shape — the numbers were present and the
+  comparison that makes a number mean something was not.
+
+  Column headings were database field names (`mw_planned`, `first_announced`) with
+  the unit left to be inferred from the values; they are words now, with the unit
+  under the label once rather than on every cell. Capacity figures did not say
+  which kind of megawatt they were, so a column mixing computing load with
+  whole-site draw looked uniform — figures that are *not* the column's own
+  quantity now carry a mark, and the ones that are do not, because a label on all
+  25 rows is unreadable. The capex table printed twelve buyers' capacities and
+  left the reader to divide; each row now carries a share bar, one hue and uniform
+  rather than a value-ramp, which would double-encode length as lightness. The
+  obstacle column printed `grid_capacity/blocking` and now reads "Grid capacity ·
+  blocking". And Sources was an accordion ordered by decided values, which answers
+  "which is biggest" when the question is "how much rests on one outlet" — it
+  opens with the concentration figure now, which on the fixture immediately
+  surfaced an inversion the old view hid.
+
+  Also: the updates window opens with its own shape instead of 25 near-identical
+  cards, and the "0 worth telling you about" button — the one control on the page,
+  inviting a click that empties it — is only offered when it would leave something
+  on screen.
+
+
 - **The new axes reached one write path out of five, and no rendering surface at
   all** (`tracker/parties.py`, `tracker/gapfill.py`, `tracker/export.py`,
   `tracker/webui/dataset.py`, `tracker/webui/static/app.js`, `tracker/gaps.py`).

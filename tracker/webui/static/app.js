@@ -45,6 +45,44 @@ const AUDIT = ["h200_equivalent", "county", "lat", "lon", "confidence", "last_ve
 const RIGHT = new Set(["mw_planned", "mw_built", "investment_usd", "h200_equivalent",
                        "confidence", "lat", "lon"]);
 
+/*: Column heading, unit, and the tooltip that says what the number is OF.
+ *
+ * The table used to head every column with its own database field name —
+ * `mw_planned`, `first_announced`, `investment_usd` — which is precise and
+ * answers none of a reader's questions. Worse, it left the *unit* to be inferred
+ * from the values, so a capacity column and a dollar column looked alike at a
+ * glance and the reader had to stop and check.
+ *
+ * `unit` is rendered under the label in the header, once, instead of on every
+ * cell. A unit repeated 25 times down a column is noise; a unit in the heading is
+ * the thing a scanner actually needs.
+ *
+ * `why` is the tooltip. Each says what the figure is a figure OF, because that is
+ * the question this dataset gets wrong most often — see `BASIS`. */
+const COLUMN = {
+  id: { label: "#", why: "Row id. Hover for the identity key this row is stored under." },
+  name: { label: "Project", why: "The campus name the winning source uses." },
+  company: { label: "Operator", why: "Who runs the site. Other parties — the developer, the landowner, the tenant, the utility — are in the project drawer." },
+  customer: { label: "Buyer", why: "Who occupies the site and pays for the compute. Empty is often correct: a hyperscaler building for itself has no external tenant." },
+  city: { label: "City" },
+  county: { label: "County" },
+  state: { label: "State" },
+  phase: { label: "Phase", why: "The furthest stage any source puts the campus at." },
+  mw_planned: { label: "Planned", unit: "MW", why: "Capacity at full build. Hover a marked figure: not every megawatt is the same kind." },
+  mw_built: { label: "Running", unit: "MW", why: "Capacity a source says is energised and serving today." },
+  investment_usd: { label: "Investment", unit: "USD", why: "Only figures a source confirmed for this specific site." },
+  h200_equivalent: { label: "Compute", unit: "H200-eq", why: "The capacity restated as accelerators. Derived from MW unless a source stated a chip count." },
+  first_announced: { label: "Announced", why: "When the project first became public." },
+  expected_online: { label: "Online", why: "Expected in service. A source saying only a year normalises to 1 January, so read these as approximate." },
+  blocker: { label: "Biggest obstacle", why: "The most severe open obstacle. Most projects have none, and that is usually the truth." },
+  confidence: { label: "Confidence", unit: "0-3", why: "How much to trust this row without checking it yourself. 3 needs two independent sources or a human sign-off." },
+  lat: { label: "Lat" },
+  lon: { label: "Lon" },
+  last_verified_at: { label: "Verified", why: "When a person last signed the row off." },
+};
+
+const columnLabel = (key) => (COLUMN[key] || {}).label || key;
+
 /* Coverage at or above this shows by default. Chosen so the default table is
  * mostly populated rather than mostly dashes; everything below it is one switch
  * away and the switch says how many. */
@@ -135,6 +173,57 @@ function h200FromMw(mw, kwEach) {
 let H200_KW = 1.3;  // replaced from the dataset on load
 
 const place = (p) => (p.city || (p.county ? p.county + " Co." : "")) + (p.state ? ", " + p.state : "");
+/*: A risk category in a reader's words, and its severity separately.
+ *
+ * The table printed the stored pair verbatim — `grid_capacity/blocking`,
+ * `water/material` — which is two facts welded into one slug with an underscore
+ * and a slash in it. The category is what is wrong and the severity is how badly;
+ * they answer different questions and a reader scanning for the blocking ones
+ * should not have to parse a string to find them. */
+const RISK_LABEL = {
+  grid_capacity: "Grid capacity",
+  transmission: "Transmission",
+  permitting: "Permitting",
+  environmental: "Environmental",
+  equipment_supply: "Equipment supply",
+  chip_supply: "Chip supply",
+  financing: "Financing",
+  offtake: "No committed buyer",
+  community_opposition: "Local opposition",
+  water: "Water",
+  unclassified: "Unclassified",
+};
+
+const riskLabel = (slug) => RISK_LABEL[slug] || (slug || "").replace(/_/g, " ");
+
+/*: A share-of-total bar, drawn under a number in a table cell.
+ *
+ * The job is "compare magnitude across rows", and the table already prints the
+ * magnitude — what it could not do is let the eye rank twelve rows without
+ * arithmetic. A 2px rule under the figure does that at no cost in height and no
+ * cost in ink.
+ *
+ * **One hue for every bar, never a ramp.** Colouring each bar darker-where-bigger
+ * would double-encode length as lightness, spend the one free channel on
+ * information the bar already carries, and make a nominal list look ordered by
+ * something other than the number. Single series, single colour.
+ *
+ * Scaled to the largest row rather than to the column total, because the question
+ * a reader asks of a ranked table is "how does this compare with the biggest",
+ * not "what fraction of everything is this" — and against a total, eleven of
+ * twelve bars would be slivers. */
+function ShareBar({ value, max, title }) {
+  if (!value || !max || value <= 0) return null;
+  const pct = Math.max(1.5, Math.min(100, (value / max) * 100));
+  return html`
+    <div aria-hidden="true" title=${title}
+         style=${{ marginTop: 3, height: 2, borderRadius: 999, width: "100%",
+                   background: "color-mix(in oklab, var(--muted-foreground) 12%, transparent)" }}>
+      <div style=${{ width: `${pct}%`, height: "100%", borderRadius: 999,
+                     background: "color-mix(in oklab, var(--primary) 62%, transparent)" }}></div>
+    </div>`;
+}
+
 const chip = (token, outline) => {
   const t = `var(${token})`;
   return {
@@ -458,13 +547,46 @@ function Value({ project, field, text, extra, onQuote }) {
     if (cut && typeof shown === "string") shown = shown.slice(0, cut);
     shown = withBound(shown, axes.bound);
   }
+  /* A capacity that is NOT the kind the column is defined as gets a mark; one
+   * that is, or that nobody qualified, does not.
+   *
+   * Marking the exception rather than the rule is the whole design. The honest
+   * alternative — a basis label on all 25 rows — is the same information and
+   * unreadable, because the reader has to compare 25 labels to find the two that
+   * differ. Here the eye lands on exactly the figures that are not comparable
+   * with the rest of the column. */
+  const odd = ODD_BASIS[field] && ODD_BASIS[field][project[`${field}_basis`]];
+
   return html`
     <span class=${`dc-v dc-v--${na ? "na" : tier}`} style=${extra}
           onMouseEnter=${(e) => onQuote(e, project, field)}
           onMouseLeave=${() => onQuote(null, project, field, { hover: true })}
           onClick=${(e) => { e.stopPropagation(); onQuote(e, project, field, { sticky: true }); }}
-          >${shown}</span>`;
+          >${shown}${odd && html`<abbr style=${{ marginLeft: 4, fontSize: 10,
+              textDecoration: "none", color: "var(--warning)", cursor: "help" }}
+              title=${odd.why}>${odd.mark}</abbr>`}</span>`;
 }
+
+/*: Per capacity column, the bases that are NOT what that column means.
+ *
+ * `mw_planned` and `mw_built` are defined as the data center's own computing
+ * load. A figure the article measured as the whole site's draw is 10-30% higher
+ * and one measuring a generator is several times higher, so summing them with
+ * the rest is adding unlike quantities — and nothing on the page used to say so.
+ *
+ * `it_load` and an absent basis are deliberately unmarked. The first is what the
+ * column claims and needs no annotation; the second is the common case, and
+ * marking two thirds of the table teaches a reader to ignore the mark. */
+const ODD_BASIS = {
+  mw_planned: {
+    facility: { mark: "◒", why: "This figure is the whole site's power draw, not the computing load the column is defined as — typically 10-30% higher. Not comparable with the unmarked figures." },
+    nameplate: { mark: "⚡", why: "This figure is a generator's rating, not a data-center load at all. Usually several times higher than the campus's own capacity." },
+  },
+  mw_built: {
+    facility: { mark: "◒", why: "This figure is the whole site's power draw, not the computing load the column is defined as — typically 10-30% higher. Not comparable with the unmarked figures." },
+    nameplate: { mark: "⚡", why: "This figure is a generator's rating, not a data-center load at all." },
+  },
+};
 
 /* Column order and the default column set, both taken from measurement.
  *
@@ -890,7 +1012,11 @@ function ProjectsView({ data, onOpen, openId }) {
                   sortDirection=${sort.key === key ? sort.dir : null}
                   onSort=${() => setSort((s) => ({ key, dir: s.key === key && s.dir === "desc" ? "asc" : "desc" }))}
                   style=${i < 2 ? { position: "sticky", left: i === 0 ? 0 : 58, zIndex: 4,
-                                    background: "var(--surface)" } : undefined}>${key}<//>`)}
+                                    background: "var(--surface)" } : undefined}>
+                  <span title=${(COLUMN[key] || {}).why || key}>${columnLabel(key)}</span>
+                  ${(COLUMN[key] || {}).unit && html`<span style=${{ display: "block", fontWeight: 400,
+                      fontSize: 9.5, letterSpacing: ".06em", textTransform: "none",
+                      color: "var(--muted-foreground)" }}>${COLUMN[key].unit}</span>`}<//>`)}
               <${TableHead} align="right">filled<//>
               <${TableHead}>tracks<//>
             <//><//>
@@ -2987,6 +3113,8 @@ function CapexView({ data, allowAi, onOpen }) {
   // Headline sums of server-sent values — arithmetic only, per the rule that the
   // browser never computes a judgement of its own.
   const totalPlanned = capex.positions.reduce((t, p) => t + (p.mw_planned || 0), 0);
+  // Bars scale to the biggest row, not to the total — see `ShareBar`.
+  const maxPlanned = capex.positions.reduce((m, p) => Math.max(m, p.mw_planned || 0), 0);
   const totalBuilt = capex.positions.reduce((t, p) => t + (p.mw_built || 0), 0);
   const totalUSD = capex.positions.reduce((t, p) => t + (p.investment_usd || 0), 0);
   const skippedUSD = capex.positions.reduce(
@@ -3184,9 +3312,12 @@ function CapexView({ data, allowAi, onOpen }) {
                     <td class="dc-num" ...${openable(p, "sites", "the sites behind this count")}>
                       ${p.projects}</td>
                     <td class="dc-num" ...${openable(p, "planned", "which sites make up this capacity")}
-                        style=${{ textAlign: "right", fontWeight: 600, cursor: "pointer",
+                        style=${{ textAlign: "right", fontWeight: 600, cursor: "pointer", minWidth: 92,
                                   ...(isOpen(p, "planned") ? { background: "var(--accent)" } : {}) }}>
-                      ${num(p.mw_planned)}</td>
+                      ${num(p.mw_planned)}
+                      <${ShareBar} value=${p.mw_planned} max=${maxPlanned}
+                        title=${`${Math.round(((p.mw_planned || 0) / (totalPlanned || 1)) * 100)}% of the ${gw(totalPlanned)} on this page`} />
+                    </td>
                     <td class="dc-num" ...${openable(p, "running", "which sites are actually running")}>
                       ${num(p.mw_built)}</td>
                     <td class="dc-num" ...${openable(p, "money", "the investment figure site by site")}
@@ -3217,8 +3348,12 @@ function CapexView({ data, allowAi, onOpen }) {
                         title="what is obstructing these sites"
                         onClick=${() => toggle(p, "risk")}>
                       ${p.worst_open_risk
-                        ? html`<span style=${chip(p.worst_open_risk.endsWith("blocking") ? "--danger" : "--warning")}>
-                            ${p.worst_open_risk}</span>`
+                        ? (() => {
+                            const [cat, sev] = p.worst_open_risk.split("/");
+                            return html`<span style=${chip(sev === "blocking" ? "--danger" : "--warning")}
+                                  title=${`${riskLabel(cat)} — severity: ${sev}`}>
+                              ${riskLabel(cat)}${sev === "blocking" ? " · blocking" : ""}</span>`;
+                          })()
                         : ""}</td>
                   </tr>
                   ${anyOpen && html`
@@ -3999,11 +4134,19 @@ function UpdatesView({ data, onOpen }) {
           <span style=${{ color: "var(--success)" }}>${counts.good} good</span>,
           <span style=${{ color: "var(--danger)" }}>${counts.bad} bad</span>
         </span>`}
-        ${!!counts?.total && !loading &&
+        ${/* Only offered when it would leave something on screen. "0 worth
+             telling you about" was rendered as a button, so the one control on
+             the page invited a click that empties it. */ ""}
+        ${!!counts?.total && !loading && (counts.notify > 0 || onlyAlerts) &&
         html`<button type="button" class="dc-linkish" aria-pressed=${onlyAlerts}
                      onClick=${() => setOnlyAlerts((v) => !v)}>
           ${onlyAlerts ? "show all" : `${counts.notify} worth telling you about`}
         </button>`}
+        ${!!counts?.total && !loading && !counts.notify && !onlyAlerts &&
+        html`<span style=${{ fontSize: 13, color: "var(--muted-foreground)" }}
+                   title="Nothing in this window is an obstacle, a delay or a capacity change on a project you watch.">
+          nothing here needs you
+        </span>`}
         <span style=${{ flex: "1 1 20px" }} />
         ${payload &&
         html`<span style=${{ fontSize: 12, color: stale != null && stale > STALE_HOURS
@@ -4043,6 +4186,29 @@ function UpdatesView({ data, onOpen }) {
       ${/* Dimmed rather than replaced while the next window loads: the previous
            answer is still true, and a page that empties itself on every click
            reads as slower than it is. */ ""}
+      ${/* The shape of the window, before the window itself.
+           A feed answers "what happened, one item at a time" and cannot answer
+           "what kind of week was this" — which is the first thing a reader wants
+           and the only one a list of 25 near-identical cards actively hides. Same
+           counting the cards do, done once at the top. */ ""}
+      ${payload && shown.length > 3 && html`
+        <div class="dc-band" style=${{ display: "flex", flexWrap: "wrap", gap: "6px 8px",
+                                       alignItems: "center", paddingBottom: 14 }}>
+          <span style=${{ fontFamily: "var(--font-mono)", fontSize: 11,
+                          letterSpacing: ".06em", textTransform: "uppercase",
+                          color: "var(--muted-foreground)", marginRight: 4 }}>this window</span>
+          ${Object.entries(shown.reduce((acc, s) => {
+              const key = s.headline || s.label || s.kind;
+              acc[key] = (acc[key] || 0) + 1;
+              return acc;
+            }, {}))
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 6)
+            .map(([label, n]) => html`
+              <span key=${label} style=${chip("--muted-foreground", true)}>
+                <b style=${{ fontWeight: 600, marginRight: 5 }}>${n}</b>${label}</span>`)}
+        </div>`}
+
       ${payload &&
       html`<div style=${{ display: "grid", gap: 12, opacity: loading ? 0.55 : 1,
                           transition: "opacity var(--duration-fast, .12s)" }}>
@@ -4273,6 +4439,17 @@ function SourcesView({ data }) {
         || p.articles.some((a) => (a.url + (a.excerpt || "")).toLowerCase().includes(needle)))
     : publishers;
   const articles = publishers.reduce((n, p) => n + p.articles.length, 0);
+  /* How much of the dataset rests on its single largest publisher.
+   *
+   * The list was ordered by decided values and said so — but ordering answers
+   * "which is biggest" and the question a reader of a citation list actually has
+   * is "how much of this is one outlet". That is a ratio, and a ranked list
+   * cannot show a ratio. Measured on this project's own history it is the number
+   * that mattered: one outlet once decided 72% of the editorial citations. */
+  const decidedTotal = publishers.reduce((n, p) => n + ((p.stat && p.stat.decisive) || 0), 0);
+  const maxDecided = publishers.reduce((m, p) => Math.max(m, (p.stat && p.stat.decisive) || 0), 0);
+  const leader = publishers.find((p) => ((p.stat && p.stat.decisive) || 0) === maxDecided);
+  const leaderShare = decidedTotal > 0 ? Math.round((maxDecided / decidedTotal) * 100) : 0;
 
   return html`
     <div class="dc-view dc-rise" style=${{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)",
@@ -4283,6 +4460,26 @@ function SourcesView({ data }) {
         which is a measure of how much we read rather than how much it was worth reading.
         Open one to read it; what it supports is listed beside it either way.
       <//>
+
+      ${/* The three numbers a citation list is actually asked for, before the
+            list itself. Same tile row the capex page opens with. */ ""}
+      ${decidedTotal > 0 && html`
+        <${Card}>
+          <div class="dc-capex-cover">
+            ${[[`${leaderShare}%`, "rests on one publisher",
+                `${leader ? leader.host : "the largest"} decided ${maxDecided} of the ${decidedTotal} values any citation decided — a dataset concentrated on one outlet inherits that outlet's mistakes`],
+               [`${publishers.length}`, "publishers in all",
+                "distinct domains; corroboration counts per domain, so two articles from one outlet are one source"],
+               [`${decidedTotal}`, "values resting on them",
+                "stored values where some citation's claim is the one that won — a publisher deciding nothing is being read without being used"],
+              ].map(([big, label, why]) => html`
+              <div key=${label} style=${{ display: "grid", gap: 4, minWidth: 0 }}>
+                <span class="dc-num" style=${{ fontSize: 22, fontFamily: "var(--font-display)" }}>${big}</span>
+                <span style=${{ fontSize: 12, fontWeight: 600 }}>${label}</span>
+                <span style=${{ fontSize: 11, lineHeight: "16px", color: "var(--muted-foreground)" }}>${why}</span>
+              </div>`)}
+          </div>
+        <//>`}
 
       <${Card}>
         <div style=${{ padding: "12px 20px" }}>
@@ -4296,12 +4493,22 @@ function SourcesView({ data }) {
           <button type="button" class="dc-disclose"
                   aria-expanded=${expanded === p.host}
                   onClick=${() => setExpanded(expanded === p.host ? null : p.host)}>
-            <span style=${{ display: "grid", gap: 3, minWidth: 0 }}>
+            <span style=${{ display: "grid", gap: 3, minWidth: 0, flex: 1 }}>
               <span style=${{ fontSize: 15, fontWeight: 500 }}>${p.host}</span>
               <span style=${{ fontSize: 12, color: "var(--muted-foreground)" }}>
-                ${p.articles.length} article${p.articles.length === 1 ? "" : "s"}${p.stat
-                  ? ` · decided ${p.stat.decisive}, ${p.stat.contested} against a rival`
-                  : " · nothing decided yet"}</span>
+                ${p.stat && p.stat.decisive
+                  ? html`<b style=${{ fontWeight: 600, color: "var(--foreground)" }}
+                      >${p.stat.decisive}</b> stored value${p.stat.decisive === 1 ? "" : "s"} rest on
+                      it${decidedTotal ? ` · ${Math.round((p.stat.decisive / decidedTotal) * 100)}% of all` : ""}`
+                  : "nothing here rests on it yet"}
+                ${" · "}${p.articles.length} article${p.articles.length === 1 ? "" : "s"} read
+                ${p.stat && p.stat.contested > 0 && html`<span style=${{ color: "var(--warning)" }}
+                  title="values where this publisher's figure won over a different figure from somebody else — the citations most worth checking"
+                  >${" · "}${p.stat.contested} over a disagreeing source</span>`}</span>
+              ${maxDecided > 0 && html`<div style=${{ maxWidth: 260 }}>
+                <${ShareBar} value=${(p.stat && p.stat.decisive) || 0} max=${maxDecided}
+                  title=${`${(p.stat && p.stat.decisive) || 0} of ${decidedTotal} decided values`} />
+              </div>`}
             </span>
             <span style=${{ fontSize: 12, color: "var(--muted-foreground)" }}>
               ${expanded === p.host ? "hide" : "show"}</span>
