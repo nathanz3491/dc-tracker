@@ -563,6 +563,110 @@ def test_one_projects_claims_are_fetchable_on_their_own(server):
     assert request(address, "/api/claims?project=nope")[0] == 400
 
 
+def test_one_project_has_its_own_page(server):
+    """The project is the thing this database is about, and it had no URL.
+
+    Detail lived in a drawer: React state, no path, so a project could not be
+    linked, refreshed or reached with the back button. The same test that pins
+    the six views says why that is not good enough — "a page you cannot link to,
+    refresh or reach with the back button is a tab".
+    """
+    address, _ = server
+    _status, data = request(address, "/api/dataset")
+    pid = data["projects"][0]["id"]
+
+    status, body = request(address, f"/projects/{pid}")
+    assert status == 200
+    # Both globals, because the front end needs to know which view AND which row.
+    assert 'window.DC_VIEW="projects"' in body
+    assert f"window.DC_PROJECT={pid}" in body
+
+    # A list view carries no project, and `null` is what JavaScript reads for it.
+    assert "window.DC_PROJECT=null" in request(address, "/projects")[1]
+
+
+def test_a_project_path_that_is_not_an_id_is_a_404(server):
+    """Same rule the view paths follow: a typo is visible, not a default page."""
+    address, _ = server
+    for path in (
+        "/projects/abc",
+        "/projects/1/x",
+        "/projects/-1",
+        "/projects/1.0",
+        "/projects/2e3",
+    ):
+        assert request(address, path)[0] == 404, path
+
+    # A trailing slash is the collection, not a malformed member: `route.strip("/")`
+    # has folded `/projects/` onto `/projects` since before this route existed.
+    assert request(address, "/projects/")[0] == 200
+
+
+def test_a_project_path_cannot_inject_script_into_the_shell(server):
+    """`window.DC_PROJECT` is interpolated into a `<script>` unescaped.
+
+    That is safe only because `_PROJECT_PATH` matches digits and `_route_get`
+    parses them to an `int` — so nothing but a number can reach the string. This
+    test is here because the comment saying so is not a mechanism, and widening
+    that pattern is a script-injection bug rather than a styling choice.
+
+    The property asserted is that the shell is never served for such a path, so
+    nothing reaches the interpolation. The 404 body does echo the route it
+    refused — but it is `application/json` under `X-Content-Type-Options:
+    nosniff`, so a browser cannot be talked into running it as markup.
+    """
+    address, _ = server
+    for attack in (
+        '/projects/1"></script><script>alert(1)</script>',
+        "/projects/1;alert(1)",
+        "/projects/1%22%3E%3Cscript%3E",
+        "/projects/<script>",
+    ):
+        status, body = request(address, attack)
+        assert status == 404, attack
+        assert "window.DC_PROJECT" not in str(body), attack
+        assert "<div id=" not in str(body), attack
+
+
+def test_one_project_is_fetchable_whole_with_its_claims(server):
+    """What the page reads, and the one way it differs from the list payload.
+
+    `claims_by_field` is 48% of the list payload and is left out of it. A page
+    whose subject is one project should not be limited by a decision taken to
+    keep a 300-row table small, so this route includes it.
+    """
+    address, _ = server
+    _status, data = request(address, "/api/dataset")
+    pid = data["projects"][0]["id"]
+
+    status, payload = request(address, f"/api/project?id={pid}")
+    assert status == 200
+    assert payload["project"]["id"] == pid
+    assert isinstance(payload["project"]["claims_by_field"], dict)
+
+    assert request(address, "/api/project?id=999999")[0] == 404
+    assert request(address, "/api/project?id=nope")[0] == 400
+
+
+def test_the_project_page_and_the_table_cannot_disagree(server):
+    """Both go through `dataset.project_payload`, and this is why.
+
+    Two copies of that decoration would drift, and the page would then show a
+    different `filled` count or a different obstacle rationale than the row the
+    reader clicked — a contradiction with no visible cause.
+    """
+    address, _ = server
+    _status, data = request(address, "/api/dataset")
+    listed = data["projects"][0]
+    _status, payload = request(address, f"/api/project?id={listed['id']}")
+    page = payload["project"]
+
+    assert set(page) - set(listed) == {"claims_by_field"}
+    assert not set(listed) - set(page)
+    for key in set(page) & set(listed):
+        assert page[key] == listed[key], key
+
+
 def test_static_refuses_to_escape_its_root(server):
     address, _ = server
     for attempt in (

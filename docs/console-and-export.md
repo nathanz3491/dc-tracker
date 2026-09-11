@@ -48,6 +48,31 @@ URL, so a page can be linked to, refreshed and reached with the back button.
 Sources opens any cited article in a reader view. Nothing here changes a project,
 a citation or a figure.
 
+**And a page per project, at `/projects/<id>`.** That used to be a drawer, and it
+was the wrong shape for two reasons. It could not hold the data: 1040px with four
+tabs, so most of what the database knows about a campus sat behind a click and
+the visible part was squeezed into 330px columns. And it read as temporary,
+because it had no URL — the one thing in the console you could not link to was
+the thing the console is about. The rule the six views are held to is stated in
+their own test: *"a page you cannot link to, refresh or reach with the back
+button is a tab."*
+
+The page reads one project fresh from `GET /api/project?id=<id>` rather than out
+of the list payload, which buys it the per-field claim tables — those are 48% of
+the list payload and are deliberately left out of it. Tabs became sections on one
+page, so a reader can see a campus's capacity and the obstacle blocking it at the
+same time, with a sticky jump nav to skip rather than to hide.
+
+Its timeline is five lanes on one time axis rather than a list, because the five
+tracks run in parallel and **the gap between two dates is the signal** — a list
+draws every gap the same height. Colour there carries state (reached, implied,
+blocked) and never track identity, which the lane labels already carry.
+
+Long lists are capped at a dozen rows with an exact count and an in-place "show N
+more". Measured on a project with 70 citations: that section alone was 14,660px —
+fifteen screens, two thirds of the page — and a reader scrolling past it had no
+way to know how much was left.
+
 There used to be a second face at `/dev` carrying Pipeline, Commands and Runs: a
 palette built by introspecting the CLI, and a real subprocess per button. **It is
 gone**, and not because it was broken. The database is changed from the CLI, by
@@ -263,9 +288,10 @@ sequence halfway. It stops at the first real failure, except for steps like
 rather than a breakage. Adding a seventh routine is eight lines in
 `webui/workflows.py`; a node editor would have been a builder nobody asked for.
 
-**The AI overview** in each project drawer is the one thing in the console that
-is a *reading* of the values rather than one of them. It is a card in the stats
-tab's ordinary flow, under the figures it is a reading of — it was briefly pinned
+**The AI overview** on each project page is the one thing in the console that
+is a *reading* of the values rather than one of them. It is a card in the
+figures section's ordinary flow, under the figures it is a reading of — it was
+briefly pinned
 above the tab strip, which made it the one block you could not scroll past. It generates
 when you open the row and streams as it is written, and it is cached by content —
 so a row is paid for once, and reopening it is free until something about the row

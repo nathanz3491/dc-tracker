@@ -247,6 +247,57 @@ reason when the suite is run from a worktree. The fix is to follow the
 
 ## Fixed
 
+### 17 — A project's detail was a popup, so it could not be linked or hold the data
+
+| | |
+| --- | --- |
+| first observed | 2026-09-11 |
+| status | **fixed 2026-09-11** — `/projects/<id>`, `GET /api/project` |
+| measured | 23.4 screens of scroll on a 70-citation project, 66% of it one section |
+
+Project detail lived in a modal drawer. Two defects, and the second is the one
+that mattered.
+
+**It could not hold the data.** `width: min(1040px, 100vw)` with four tabs, so
+most of what the database knows about a campus was behind a click and the visible
+part was squeezed into 330px columns. That is what produced the empty column
+beside the twelve-field table: a two-column grid where one card was ten times
+taller than the other, so the short one sat at the top of a tall row and the rest
+of that column was dead space.
+
+**And it read as temporary.** A drawer has no URL. `openId` was React state, so a
+project could not be linked, bookmarked, refreshed or reached with the back
+button, and every nav click threw it away — while all six views met the standard
+stated in their own test: *"a page you cannot link to, refresh or reach with the
+back button is a tab."* The one thing in the console without that property was
+the thing the console is about.
+
+Now a page, fetched per visit from its own route, which also buys it the per-field
+claim tables that are 48% of the list payload and deliberately absent from it.
+Tabs became sections, so the capacity and the obstacle blocking it are on screen
+together.
+
+**What the extreme case then showed, and it was worse than the layout.** A
+project with 70 sources, 40 events and 12 obstacles rendered **23.4 screens**, and
+the citation list alone was 14,660px — fifteen screens, two thirds of the page,
+with nothing telling a reader how much was left. Long lists are now capped at a
+dozen rows with an exact count and an in-place expansion: 23.4 screens → 11.5,
+citations 14,660px → 2,650px. That is not the tabs returning — a tab hides a
+category and gives no hint what is in it; this shows the start of the list and
+says exactly how many more there are.
+
+**The timeline was a list, and a list cannot answer the question it is asked.**
+Five tracks run in parallel, so *"which one is behind, and by how long"* is the
+question — and the gaps between dates are the entire signal while a list renders
+every gap the same height. It is five lanes on one time axis now, with colour
+carrying state (reached, implied, blocked) rather than track identity, which the
+lane labels already carry.
+
+One bug found by measuring the rendered SVG rather than looking at it: the track
+labels carry a Chinese gloss, and `customer & finance (客户/资金)` is 153 units in
+a gutter that had been set to 132 by eye — so the longest label sat on top of its
+own lane. The gutter is measured now.
+
 ### 16 — The console showed the data without letting a reader compare it
 
 | | |

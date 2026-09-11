@@ -12,6 +12,52 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **A page per project, replacing the drawer** (`tracker/webui/server.py`,
+  `tracker/webui/dataset.py`, `tracker/webui/static/app.js`,
+  `tracker/webui/static/app.css`, `tests/test_webui.py`).
+
+  Project detail was a modal drawer, and the shape was wrong twice over. It could
+  not hold the data — 1040px with four tabs, so most of what the database knows
+  about a campus was behind a click and the visible part was squeezed into 330px
+  columns, which is what left an empty column beside the twelve-field table. And
+  it read as temporary, because it had no URL: `openId` was React state, so a
+  project could not be linked, bookmarked, refreshed or reached with the back
+  button, while all six views met the standard stated in their own test — *"a page
+  you cannot link to, refresh or reach with the back button is a tab."*
+
+  `GET /projects/<id>` serves the shell with the id stamped beside the view; `GET
+  /api/project?id=<id>` serves one project whole, **including `claims_by_field`**,
+  which is 48% of the list payload and deliberately absent from it — a page whose
+  subject is one project should not be limited by a decision taken to keep a
+  300-row table small. Both the page and the table go through one
+  `dataset.project_payload`, so they cannot disagree about what a project is; a
+  test asserts they differ by exactly that one key.
+
+  The id is digits-only and parsed to `int` before it reaches the shell, because
+  the shell interpolates it into a `<script>` unescaped. That was already true of
+  the view name and safe because it came from a frozen set of six literals; a
+  value from the URL is a different situation, so a test pins the injection case.
+
+  Tabs became sections on one page with a sticky jump nav, so the capacity and the
+  obstacle blocking it are on screen together, and the twelve-field table gets the
+  page's width — three columns, with the sentence beside the value it evidences
+  instead of wrapping under it.
+
+- **A timeline that answers the question it is asked**
+  (`tracker/webui/static/app.js`).
+
+  Five tracks run in parallel, so *"which one is behind, and by how long"* is the
+  question — and the gaps between dates are the whole signal while a list renders
+  every gap the same height. Five lanes on one time axis now, with today and the
+  expected-online date as dashed reference lines, a solid lane as far as the track
+  has got and a dashed one beyond it.
+
+  Colour carries state — reached, implied, blocked — and never track identity,
+  which the lane labels already carry. Giving each track a hue would have spent
+  the only free channel on information the labels repeat and left "which one is
+  stuck" to be worked out.
+
+
 - **Companies have roles, and one campus stops being four rows** (migration
   `0023`, `tracker/parties.py`, `tracker/vocab.py`, `tracker/ingest/records.py`,
   `tracker/ingest/crawl.py`, `tracker/capex.py`, `tracker/backfill.py`,
@@ -128,6 +174,24 @@ initial build of the v1 PRD.
   reason it was manual work rather than a merge the tool could perform.
 
 ### Fixed
+
+- **A long list ran to fifteen screens with no hint how much was left**
+  (`tracker/webui/static/app.js`).
+
+  Measured on a stress fixture — 70 sources, 40 events, 12 obstacles, 9 tranches —
+  the project page rendered **23.4 screens**, and the citation list alone was
+  14,660px: two thirds of the page, with nothing telling a reader how far it went.
+
+  Long lists are capped at a dozen rows with an exact count and an in-place "show
+  N more". 23.4 screens → 11.5; citations 14,660px → 2,650px. Not the tabs
+  returning: a tab hides a category and gives no hint what is in it, while this
+  shows the start of the list and says exactly how many more there are.
+
+  One layout bug found by measuring the rendered SVG rather than looking at it:
+  the track labels carry a Chinese gloss, and `customer & finance (客户/资金)` is
+  153 units wide in a gutter that had been set to 132 by eye — so the longest
+  label sat on top of its own lane. The gutter is measured now.
+
 
 - **The console showed the data without letting a reader compare it**
   (`tracker/webui/static/app.js`).

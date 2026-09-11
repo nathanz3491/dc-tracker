@@ -445,25 +445,37 @@ def _kw_per_h200() -> float:
     return kw_per_h200()
 
 
+def project_payload(project: Any, *, claims: bool = False) -> dict[str, Any]:
+    """One project as the console reads it: the export shape, plus what the page adds.
+
+    **Shared by the list and the single-project route on purpose.** `/api/dataset`
+    sends every project for the table and `/api/project` sends one for its own
+    page, and both have to agree about what a project *is* — two copies of this
+    decoration would drift, and the page would then show a different `filled`
+    count or a different obstacle rationale than the row the reader clicked.
+
+    `claims` is the one thing they legitimately differ on. `claims_by_field` is
+    48% of the list payload — 9.2 MB of 19 MB across 300 projects — for a table
+    that renders one project at a time, so the list omits it and the page, which
+    is about exactly one project, includes it.
+    """
+    payload = to_json_object(project, claims=claims)
+    payload["iso"] = _iso_of(project)
+    payload["nulls"] = _nulls(project)
+    payload["unconfirmed_because"] = _unconfirmed_because(project)
+    payload["filled"] = sum(1 for f in TRACKED_FIELDS if getattr(project, f, None) is not None)
+    # Why this obstacle and not the other twenty-six. Computed by the module
+    # that picked it, so the explanation cannot name a different risk than the
+    # column holds.
+    payload["blocker_rationale"] = blocker_rationale(project)
+    _split_serving(payload)
+    return payload
+
+
 def build(session: Session, *, db_path: str, schema_version: int) -> dict[str, Any]:
     """The whole console payload for one request."""
     rows = fetch_projects(session)
-    projects = []
-    for project in rows:
-        # Without `claims_by_field`: 9.2 MB of the 19 MB this route used to send,
-        # for a table that renders one project at a time inside a drawer. The
-        # console fetches it per project from `/api/claims`.
-        payload = to_json_object(project, claims=False)
-        payload["iso"] = _iso_of(project)
-        payload["nulls"] = _nulls(project)
-        payload["unconfirmed_because"] = _unconfirmed_because(project)
-        payload["filled"] = sum(1 for f in TRACKED_FIELDS if getattr(project, f, None) is not None)
-        # Why this obstacle and not the other twenty-six. Computed by the module
-        # that picked it, so the explanation cannot name a different risk than the
-        # column holds.
-        payload["blocker_rationale"] = blocker_rationale(project)
-        _split_serving(payload)
-        projects.append(payload)
+    projects = [project_payload(project, claims=False) for project in rows]
 
     citations = sum(len(p["sources"]) for p in projects)
     queued = session.scalar(select(IngestUrl.id).where(IngestUrl.status == "discovered").limit(1))

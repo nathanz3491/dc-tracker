@@ -24,6 +24,7 @@ from __future__ import annotations
 import gzip
 import json
 import logging
+import re
 import threading
 import time
 import webbrowser
@@ -71,6 +72,16 @@ AUTH_CACHE_S = 5.0
 #: and was only filed under the machinery because that is where the tab happened to
 #: sit.
 READ_VIEWS: frozenset[str] = frozenset({"updates", "projects", "sources", "map", "capex", "help"})
+
+#: `/projects/<id>` — one project's own page, which `READ_VIEWS` cannot express
+#: because it is a set of whole paths and this one carries an id.
+#:
+#: Digits only, deliberately. Two things rest on that: a typo 404s instead of
+#: quietly serving the console, and the captured id reaches an unescaped
+#: interpolation in `_page`, where being parseable as an `int` is the whole
+#: defence. Widening this pattern without reading `_page` first would be a
+#: script-injection bug.
+_PROJECT_PATH = re.compile(r"/projects/(\d{1,18})")
 
 
 @lru_cache(maxsize=1)
@@ -459,6 +470,20 @@ class Handler(BaseHTTPRequestHandler):
         page = route.strip("/")
         if page in READ_VIEWS:
             return self._page(view=page)
+        # One project, its own page. `READ_VIEWS` cannot express this: the check
+        # above is a set membership over whole paths, and this one carries an id.
+        #
+        # Digits only, and that is both rules at once. It keeps the existing
+        # promise that a typo 404s rather than landing on a default page — and it
+        # is what makes `_page` safe, because the id reaches an unescaped
+        # interpolation into a `<script>` tag. See `_page`.
+        #
+        # A well-formed id that no project has still gets the shell. Checking
+        # would put a database read in the page handler to produce a worse error
+        # than the client already gives: it fetches the project immediately and
+        # can say "no project 41" in the console's own furniture.
+        if match := _PROJECT_PATH.fullmatch(route):
+            return self._page(view="projects", project=int(match.group(1)))
         if route == "/api":
             return self._api_index()
         if route.startswith("/static/"):
@@ -467,6 +492,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._dataset()
         if route == "/api/claims":
             return self._claims(query)
+        if route == "/api/project":
+            return self._project(query)
         if route == "/api/article":
             return self._article(query)
         if route == "/api/publishers":
@@ -630,7 +657,7 @@ class Handler(BaseHTTPRequestHandler):
         log.info("console: %s registered from %s", email, client)
         self._json({"ok": True}, extra=self._set_session_cookie(token))
 
-    def _page(self, *, view: str = "") -> None:
+    def _page(self, *, view: str = "", project: int | None = None) -> None:
         """The console shell. One face now.
 
         There used to be two — `/` read the dataset and `/dev` ran commands, chosen
@@ -640,6 +667,16 @@ class Handler(BaseHTTPRequestHandler):
         `view` is the page the URL asked for, injected as `window.DC_VIEW` so the
         front end opens on it directly. Without it a deep link would paint the
         default view first and then swap, which reads as a flash of the wrong page.
+
+        `project` does the same for `/projects/<id>`, as `window.DC_PROJECT`.
+
+        **Both are interpolated into a `<script>` unescaped, and each is safe for
+        its own reason.** `view` is only ever a member of `READ_VIEWS`, a frozen
+        set of six literals. `project` is an `int` rather than a string that looks
+        like one, because `_PROJECT_PATH` matched digits and `_route_get` called
+        `int()` on the match. Widening either of those, or passing a value from
+        anywhere else, turns this line into script injection — so
+        `tests/test_webui.py` pins the case rather than trusting the comment.
         """
         index = assets.STATIC_ROOT / "index.html"
         if not index.is_file():
@@ -651,9 +688,12 @@ class Handler(BaseHTTPRequestHandler):
         # Stamped on the way out, so every asset URL carries its file's version.
         # The page itself is `no-store`, so the tokens are never stale.
         html = assets.stamp(index.read_text(encoding="utf-8"))
+        # `project` is an int or None, so nothing but digits can reach the string;
+        # `null` is what JavaScript reads as "no project was asked for".
+        stamp = f'window.DC_VIEW="{view}";window.DC_PROJECT={project or "null"}'
         html = html.replace(
             '<div id="root"></div>',
-            f'<script>window.DC_VIEW="{view}"</script>\n<div id="root"></div>',
+            f'<script>{stamp}</script>\n<div id="root"></div>',
         )
         self._send(200, html.encode("utf-8"), "text/html; charset=utf-8")
 
@@ -760,6 +800,13 @@ class Handler(BaseHTTPRequestHandler):
             "reads": "the whole database",
             "note": "refetched after every run. Excludes claims_by_field — see /api/claims",
         },
+        "GET /api/project": {
+            "answers": "one project, everything about it, for that project's own page",
+            "reads": "one project with its sources, events, risks, blocks and parties",
+            "note": "?id=<id>. Includes claims_by_field, which /api/dataset omits: "
+            "a page about one project is not bound by what keeps a 300-row table small. "
+            "Read fresh, because the page is where somebody goes to check a figure.",
+        },
         "GET /api/publishers": {
             "answers": "which publishers actually decide a stored value",
             "reads": "sources.survey",
@@ -847,6 +894,43 @@ class Handler(BaseHTTPRequestHandler):
         if payload is None:
             return self._error(404, f"no project {project_id}")
         self._json({"project": project_id, "claims_by_field": payload})
+
+    def _project(self, query: dict[str, list[str]]) -> None:
+        """One project, everything about it, for that project's own page.
+
+        The page at `/projects/<id>` is the reason this exists. It replaced a
+        drawer that read the project out of the already-loaded list payload — so
+        it could only ever show what that payload carried, which is deliberately
+        less than a project *is*: `claims_by_field` alone is 48% of it and is left
+        out. A page whose subject is one project should not be limited by a
+        decision made to keep a 300-row table small.
+
+        Read fresh per visit rather than from the list. The list is a snapshot
+        taken when the console loaded; an ingest run on the host moves values
+        underneath it, and the page is where somebody goes to *check* a figure.
+
+        Deliberately the whole object rather than a cheaper subset. It is a few
+        kilobytes for one row, the shape is already defined and tested, and
+        `dataset.project_payload` is the same function the list uses — so the page
+        cannot disagree with the row the reader clicked.
+        """
+        raw = (query.get("id") or [""])[0]
+        try:
+            project_id = int(raw)
+        except ValueError:
+            return self._error(400, "id must be an integer project id")
+
+        from tracker.models import Project
+        from tracker.webui.dataset import project_payload
+
+        with self.console.read_session() as session:
+            project = session.get(Project, project_id)
+            if project is None:
+                return self._error(404, f"no project {project_id}")
+            # Inside the session: the payload walks `sources`, `risks`, `blocks`
+            # and `parties`, and a detached instance raises on the first of them.
+            payload = project_payload(project, claims=True)
+        self._json({"project": payload})
 
     def _article(self, query: dict[str, list[str]]) -> None:
         """Reader view of one cited article, for the sources modal's frame.

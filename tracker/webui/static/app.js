@@ -793,10 +793,10 @@ function CoverageStrip({ data }) {
 
 /* One project as a card. The phone form of a table row: the six facts worth
  * having at a glance, and the same drawer behind a tap. */
-function ProjectCard({ p, data, open, onOpen, onQuote }) {
+function ProjectCard({ p, data, onOpen, onQuote }) {
   const blocking = p.risks.some((r) => r.status === "open" && r.severity === "blocking");
   return html`
-    <button type="button" class=${`dc-pcard${open ? " dc-pcard--open" : ""}`}
+    <button type="button" class="dc-pcard"
             onClick=${() => onOpen(p.id)}
             aria-label=${`${p.company} ${p.name}, ${place(p)}, confidence ${p.confidence}`}>
       <div class="dc-pcard-top">
@@ -828,7 +828,7 @@ function ProjectCard({ p, data, open, onOpen, onQuote }) {
 
 const BLANK_FILTERS = { q: "", state: "", phase: "", conf: "", risk: "", severity: "", quoted: false };
 
-function ProjectsView({ data, onOpen, openId }) {
+function ProjectsView({ data, onOpen }) {
   const [f, setF] = useState(BLANK_FILTERS);
   const [wide, setWide] = useState(false);
   const [sort, setSort] = useState({ key: "confidence", dir: "desc" });
@@ -985,7 +985,7 @@ function ProjectsView({ data, onOpen, openId }) {
           <div style=${{ display: "grid", gap: 9 }}>
             ${rows.map((p, i) => html`
               <div key=${p.id} class=${i < 12 ? "dc-enter" : undefined} style=${i < 12 ? { "--i": i } : undefined}>
-                <${ProjectCard} p=${p} data=${data} open=${openId === p.id}
+                <${ProjectCard} p=${p} data=${data}
                                 onOpen=${onOpen} onQuote=${showQuote} />
               </div>`)}
             ${rows.length === 0 && html`
@@ -1022,7 +1022,7 @@ function ProjectsView({ data, onOpen, openId }) {
             <//><//>
             <${TableBody}>
               ${rows.map((p, i) => html`
-                <tr key=${p.id} class=${`dc-row${i < 12 ? " dc-enter" : ""}${openId === p.id ? " dc-row--open" : ""}`}
+                <tr key=${p.id} class=${`dc-row${i < 12 ? " dc-enter" : ""}`}
                     style=${i < 12 ? { "--i": i } : undefined}
                     role="button" tabindex="0"
                     aria-label=${`${p.company} ${p.name}, ${place(p)}, confidence ${p.confidence}`}
@@ -1062,110 +1062,264 @@ function ProjectsView({ data, onOpen, openId }) {
     </div>`;
 }
 
-/* ---- Detail drawer ------------------------------------------------------- */
+/* ---- The project page ------------------------------------------------------
+ *
+ * This was a drawer, and the drawer was the wrong shape twice over.
+ *
+ * **It could not hold the data.** 1040px with four tabs, so most of what the
+ * database knows about a campus sat behind a click, and the visible part was
+ * squeezed into 330px columns — which is how the twelve-field table, ten times
+ * taller than its neighbour, came to leave a column of dead space beside it.
+ *
+ * **And it read as temporary.** A drawer has no URL, so a project could not be
+ * linked, bookmarked, refreshed or reached with the back button, and every nav
+ * click threw it away. The console's own standard is stated in a test: *"A page
+ * you cannot link to, refresh or reach with the back button is a tab."* All six
+ * views met it. The project — the thing this database is about — did not.
+ *
+ * So: one page per project at `/projects/<id>`, everything on it, nothing behind
+ * a tab. The tabs became sections, and that is the point rather than a side
+ * effect — a reader can now see a campus's capacity and the obstacle blocking it
+ * at the same time.
+ */
 
-function Drawer({ data, project, onClose }) {
-  const [tab, setTab] = useState("stats");
-  /* One project's claim table, fetched when the drawer opens. Keyed by id and
-     kept for the session, so re-opening a row costs nothing. */
-  const [claims, setClaims] = useState({});
+//: The page's sections, in reading order, for the jump nav.
+//:
+//: Identity, then the numbers, then what is wrong — an analyst's first three
+//: questions in that order. `when` decides whether a section exists at all: an
+//: empty "Tranches" heading on the 88% of the database with no blocks would read
+//: as "this campus has one tranche", which is the opposite of what a missing
+//: backfill means.
+const PAGE_SECTIONS = [
+  { id: "figures", label: "Figures", when: () => true },
+  { id: "parties", label: "Who is involved", when: (p) => (p.parties || []).length > 0 },
+  { id: "fields", label: "The twelve fields", when: () => true },
+  { id: "context", label: "In context", when: () => true },
+  { id: "tranches", label: "Tranches",
+    when: (p) => (p.blocks || []).length || (p.serving || []).length },
+  { id: "obstacles", label: "Obstacles", when: (p) => (p.risks || []).length > 0 },
+  { id: "citations", label: "Citations", when: (p) => (p.sources || []).length > 0 },
+  { id: "timeline", label: "Timeline", when: () => true },
+];
+
+function scrollToSection(id) {
+  document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+/* One section: a heading the jump nav can reach, and its content.
+ *
+ * The heading carries its count where there is one, so a reader deciding whether
+ * to scroll does not have to scroll to find out. */
+function Section({ id, title, count, blurb, children }) {
+  return html`
+    <section id=${id} style=${{ display: "grid", gap: 12, scrollMarginTop: 80 }}>
+      <div style=${{ display: "grid", gap: 3 }}>
+        <h2 style=${{ margin: 0, fontFamily: "var(--font-display)", fontSize: 21, fontWeight: 500,
+                      letterSpacing: "-0.01em" }}>
+          ${title}${count != null && html`<span class="dc-num" style=${{ fontSize: 13,
+              fontWeight: 400, color: "var(--muted-foreground)", marginLeft: 9 }}>${count}</span>`}
+        </h2>
+        ${blurb && html`<p style=${{ margin: 0, fontSize: 12.5, lineHeight: "18px",
+                                     color: "var(--muted-foreground)", maxWidth: "86ch" }}>${blurb}</p>`}
+      </div>
+      ${children}
+    </section>`;
+}
+
+function ProjectPage({ id, data, onBack }) {
+  /* Fetched per visit, not read out of the list payload the console already has.
+   *
+   * Two reasons, and the second is the one that matters. The list deliberately
+   * omits `claims_by_field` — 48% of a 19 MB payload — so a page built from it
+   * could never show the rival claims behind a contested value, which is most of
+   * what a project page is for. And the list is a snapshot from whenever the
+   * console loaded, while an ingest run on the host moves values underneath it;
+   * this page is where somebody goes to *check* a figure. */
+  const [state, setState] = useState({ loading: true, project: null, error: null });
   const [quote, showQuote] = useQuote();
-  const closeRef = useRef(null);
 
-  useEffect(() => { setTab("stats"); }, [project?.id]);
   useEffect(() => {
-    const id = project?.id;
-    if (id == null || claims[id]) return;
     let cancelled = false;
-    api(`/api/claims?project=${id}`)
+    setState({ loading: true, project: null, error: null });
+    window.scrollTo({ top: 0 });
+    api(`/api/project?id=${id}`)
       .then((payload) => {
-        if (!cancelled) setClaims((c) => ({ ...c, [id]: payload.claims_by_field || {} }));
+        if (!cancelled) setState({ loading: false, project: payload.project, error: null });
       })
-      /* A failed fetch leaves the claim tables absent, which is what they looked
-         like before this route existed. Every value and its tier is already on
-         screen from the list payload. */
-      .catch(() => {});
+      .catch((err) => {
+        if (!cancelled) {
+          setState({ loading: false, project: null, error: String((err && err.message) || err) });
+        }
+      });
     return () => { cancelled = true; };
-  }, [project?.id, claims]);
-  useEffect(() => {
-    const page = document.getElementById("dc-page");
-    if (page) {
-      // aria-modal is a claim; inert is what makes it true.
-      if (project) { page.setAttribute("inert", ""); page.setAttribute("aria-hidden", "true"); }
-      else { page.removeAttribute("inert"); page.removeAttribute("aria-hidden"); }
-    }
-    if (project) closeRef.current?.focus();
-  }, [project]);
-  useEffect(() => {
-    const onKey = (e) => { if (e.key === "Escape" && project) onClose(); };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [project, onClose]);
+  }, [id]);
 
-  if (!project) return null;
-  const p = project;
-  const open = p.risks.filter((r) => r.status === "open");
+  const back = html`
+    <button type="button" class="dc-linkish" onClick=${onBack}
+            style=${{ justifySelf: "start" }}>← every project</button>`;
+
+  if (state.loading) {
+    return html`
+      <div class="dc-view" style=${{ display: "grid", gap: 16, padding: "22px 26px 60px" }}>
+        ${back}
+        <${Skeleton} style=${{ height: 38, maxWidth: 460 }} />
+        <${Skeleton} style=${{ height: 130 }} />
+        <${Skeleton} style=${{ height: 340 }} />
+      </div>`;
+  }
+
+  if (!state.project) {
+    /* The id was well formed — the server 404s the path otherwise — so this is a
+     * project that does not exist, or a link that outlived its row. Name the id,
+     * because somebody who followed a link wants to know what they were
+     * promised, and name the likeliest cause: a merge deletes the row it folds. */
+    return html`
+      <div class="dc-view" style=${{ display: "grid", gap: 16, padding: "22px 26px 60px" }}>
+        ${back}
+        <${EmptyState} variant="dashed" title=${`No project #${id}`}
+          description=${state.error
+            ? `The console could not load it: ${state.error}`
+            : "Nothing in the database has that id. It may have been folded into another "
+              + "row by a merge, which deletes the row it folds."} />
+      </div>`;
+  }
+
+  const p = state.project;
+  const open = (p.risks || []).filter((r) => r.status === "open");
   const populated = TRACKED.filter((k) => p[k] != null).length;
-  // Campus tranches only — the utility's plant is counted separately, and the
-  // count on the tab is the campus's. A site whose only tranches are its serving
-  // power still gets the tab, because that is a fact worth reading.
-  const blocks = p.blocks || [];
-  const serving = p.serving || [];
-  // Only offered when there are blocks. An empty tab on 88% of the database would
-  // read as "this campus has one tranche", which is the opposite of what a missing
-  // backfill means.
-  const tabs = [
-    ["stats", "Stats", ""],
-    ...(blocks.length || serving.length ? [["blocks", "Blocks", ` ${blocks.length}`]] : []),
-    ["risks", "Risks", ` ${open.length}`],
-    ["sources", "Sources", ` ${p.sources.length}`],
-  ];
+  const sections = PAGE_SECTIONS.filter((s) => s.when(p));
+  const has = (key) => sections.some((s) => s.id === key);
 
   return html`
-    <div style=${{ position: "fixed", inset: 0, zIndex: 60, display: "flex" }}>
-      <div class="dc-scrim" onClick=${onClose} />
-      <aside class="dc-slide dc-drawer" role="dialog" aria-modal="true"
-             aria-label=${`${p.company} — ${p.name}`}>
-        <div class="dc-drawer-head" style=${{ display: "flex", alignItems: "flex-start", gap: 16, padding: "20px 24px 16px",
-                       borderBottom: "1px solid var(--border)", background: "var(--surface)" }}>
-          <div style=${{ flex: 1, minWidth: 0, display: "grid", gap: 7 }}>
-            <div style=${{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
-              <span style=${{ fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--muted-foreground)" }}>#${p.id}</span>
-              <h2 style=${{ margin: 0, fontFamily: "var(--font-display)", fontSize: 30, fontWeight: 500,
-                            letterSpacing: "-0.02em", lineHeight: 1.1 }}>${p.company} — ${p.name}</h2>
-            </div>
-            <div style=${{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-              <span style=${chip(p.confidence >= 3 ? "--success" : p.confidence === 2 ? "--chart-1" : "--warning")}>
-                confidence ${p.confidence}</span>
-              <span style=${chip("--foreground", true)}>${p.phase}</span>
-              <span style=${{ fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--muted-foreground)" }}>
-                ${place(p)}${p.iso ? " · " + p.iso : ""}</span>
-            </div>
-          </div>
-          <button ref=${closeRef} class="dc-xbtn" onClick=${onClose} aria-label="Close">✕</button>
-        </div>
+    <div class="dc-view dc-rise" style=${{ display: "grid", gap: 24, padding: "22px 26px 72px" }}>
+      ${back}
 
-        <div class="dc-drawer-tabs" style=${{ padding: "8px 24px 0", background: "var(--surface)", borderBottom: "1px solid var(--border)" }}>
-          <${Tabs} variant="underline" value=${tab} onValueChange=${setTab}>
-            <${TabsList}>
-              ${tabs.map(([key, label, count]) => html`
-                <${TabsTrigger} key=${key} value=${key}>${label}${count}<//>`)}
-            <//>
-          <//>
+      ${/* Identity first. A real heading rather than a dialog label: this is a
+            page somebody may have reached from a pasted link, and the first
+            question is "what am I looking at". */ ""}
+      <header style=${{ display: "grid", gap: 9 }}>
+        <div style=${{ display: "flex", alignItems: "baseline", gap: 11, flexWrap: "wrap" }}>
+          <span class="dc-num" style=${{ fontSize: 13, color: "var(--muted-foreground)" }}
+                title=${p.dedup_key}>#${p.id}</span>
+          <h1 style=${{ margin: 0, fontFamily: "var(--font-display)", fontSize: 32, fontWeight: 500,
+                        letterSpacing: "-0.02em", lineHeight: 1.1 }}>${p.name}</h1>
         </div>
+        <div style=${{ display: "flex", alignItems: "center", gap: 9, flexWrap: "wrap" }}>
+          <span style=${{ fontSize: 14, fontWeight: 500 }}>${p.company}</span>
+          <span style=${{ color: "var(--border)" }}>·</span>
+          <span class="dc-num" style=${{ fontSize: 12.5, color: "var(--muted-foreground)" }}>
+            ${place(p)}${p.iso ? " · " + p.iso : ""}</span>
+          <span style=${chip("--foreground", true)}>${p.phase}</span>
+          <span style=${chip(p.confidence >= 3 ? "--success" : p.confidence === 2 ? "--chart-1" : "--warning")}
+                title="How much to trust this row without going and checking it yourself. 3 needs two independent sources, or a person signing it off.">
+            confidence ${p.confidence}</span>
+          ${open.length > 0 && html`
+            <button type="button" style=${{ ...chip(open.some((r) => r.severity === "blocking")
+                      ? "--danger" : "--warning"), cursor: "pointer", border: "none" }}
+                    onClick=${() => scrollToSection("obstacles")}
+                    title="jump to the obstacles">
+              ${open.length} open obstacle${open.length === 1 ? "" : "s"}</button>`}
+        </div>
+      </header>
 
-        <div class="dc-drawer-body" style=${{ flex: 1, overflowY: "auto", padding: "20px 24px 56px" }}>
-          ${tab === "stats" && html`<${StatsTab} data=${data} p=${p} populated=${populated}
-                                                 open=${open} onQuote=${showQuote} onTab=${setTab}
-                                                 claims=${claims[p.id]}
-                                                 allowAi=${data.allow_ai} />`}
-          ${tab === "blocks" && html`<${BlocksTab} p=${p} />`}
-          ${tab === "risks" && html`<${RisksTab} data=${data} p=${p} />`}
-          ${tab === "sources" && html`<${SourcesTab} data=${data} p=${p} />`}
-        </div>
-      </aside>
+      ${/* Sticky jump nav. The page is long by design — the whole point of
+            leaving the drawer was to stop hiding sections behind tabs — and a
+            long page needs a way to skip, not a way to hide. */ ""}
+      <nav class="dc-jump" aria-label="Sections of this project">
+        ${sections.map((s) => html`
+          <button key=${s.id} type="button" class="dc-jump-btn"
+                  onClick=${() => scrollToSection(s.id)}>${s.label}</button>`)}
+      </nav>
+
+      <${Section} id="figures" title="The figures"
+        blurb="Capacity, money and compute, each with what it rests on. A marked capacity is not the kind of megawatt the column is defined as, so it is not comparable with the unmarked ones.">
+        <${StatsTab} data=${data} p=${p} populated=${populated} open=${open}
+          onQuote=${showQuote} onTab=${() => scrollToSection("obstacles")}
+          claims=${p.claims_by_field} allowAi=${data.allow_ai} />
+      <//>
+
+      ${has("parties") && html`
+        <${Section} id="parties" title="Who is involved" count=${(p.parties || []).length}
+          blurb="One site usually has several companies attached — one builds it, one owns it, one occupies it, one sells it power. Each role is only as good as the sentence behind it.">
+          <${PartyList} p=${p} />
+        <//>`}
+
+      <${Section} id="fields" title="The twelve tracked fields" count=${`${populated} of 12`}
+        blurb="Every field the PRD requires, what each value rests on, and the sentence behind it. A utility's generation, transmission or storage figure is a different quantity and is never added to the megawatts here.">
+        <${TrackedFields} p=${p} populated=${populated} onQuote=${showQuote}
+          claims=${p.claims_by_field} />
+      <//>
+
+      <${Section} id="context" title="In context"
+        blurb="How this campus compares with the rest of the database, and the five things that have to happen in parallel for it to be built.">
+        <${ProjectContext} p=${p} data=${data} />
+      <//>
+
+      ${has("tranches") && html`
+        <${Section} id="tranches" title="Tranches" count=${(p.blocks || []).length}
+          blurb="A modern campus is several states at once — one phase energised and serving a buyer, the next under construction, a third planned with nobody named. One phase column cannot say that.">
+          <${BlocksTab} p=${p} />
+        <//>`}
+
+      ${has("obstacles") && html`
+        <${Section} id="obstacles" title="Obstacles" count=${(p.risks || []).length}
+          blurb="What could stop this being built, and which of the five tracks each one sits on. Most projects have none, and that is usually the truth rather than a gap in our reading.">
+          <${RisksTab} data=${data} p=${p} />
+        <//>`}
+
+      ${has("citations") && html`
+        <${Section} id="citations" title="Citations" count=${(p.sources || []).length}
+          blurb="Every article this row rests on, what each one supports, and what its publisher is worth.">
+          <${SourcesTab} data=${data} p=${p} />
+        <//>`}
+
+      <${Section} id="timeline" title="Timeline"
+        blurb="Dated milestones, and where several articles restated one fact.">
+        <${Timeline} p=${p} data=${data} />
+      <//>
+
       <${QuotePopover} quote=${quote} />
     </div>`;
+}
+
+/* The parties, given a section of their own rather than a 330px column.
+ *
+ * Unchanged in substance from the panel this replaces: a role with a sentence
+ * behind it reads as a fact, and one inferred from the operator column has to
+ * read as an inference, or the list launders the second into the first. What the
+ * page buys is width — the quote sits beside the name instead of wrapping every
+ * four words. */
+function PartyList({ p }) {
+  return html`
+    <${Card}>
+      <div style=${{ display: "grid", gap: 0 }}>
+        ${(p.parties || []).map((party) => {
+          const inferred = party.unconfirmed === "role_inferred";
+          const refused = party.unconfirmed != null && !inferred;
+          return html`
+            <div key=${party.role + party.key}
+                 style=${{ display: "grid", gridTemplateColumns: "124px minmax(0,1fr)",
+                           gap: 16, alignItems: "baseline", padding: "13px 20px",
+                           borderTop: "1px solid var(--border)" }}>
+              <span style=${{ fontFamily: "var(--font-mono)", fontSize: 12,
+                              color: "var(--muted-foreground)" }}>${party.role}</span>
+              <div style=${{ display: "grid", gap: 5, minWidth: 0 }}>
+                <div style=${{ display: "flex", alignItems: "center", gap: 9, flexWrap: "wrap" }}>
+                  <span style=${{ fontSize: 15, lineHeight: "22px", fontWeight: 500 }}>${party.name}</span>
+                  ${inferred && html`<span style=${chip("--muted-foreground", true)}
+                    title="Nobody stated this role — it is what the operator or customer column means. Shown as an inference, and never used to attribute capacity to a buyer."
+                    >inferred</span>`}
+                  ${refused && html`<span style=${chip("--warning")}
+                    title=${"A sentence was offered and would not support this role: " + party.unconfirmed}
+                    >待确认 · ${party.unconfirmed}</span>`}
+                </div>
+                ${party.quote && html`<span style=${{ fontSize: 12.5, lineHeight: "19px",
+                    color: "var(--muted-foreground)", maxWidth: "94ch" }}>"${party.quote}"</span>`}
+              </div>
+            </div>`;
+        })}
+      </div>
+    <//>`;
 }
 
 /* ---- Markdown, rendered to React elements ---------------------------------
@@ -1672,10 +1826,171 @@ function InContext({ p, data }) {
  *
  * A CSS grid rather than a chart: dates here range from day precision to
  * year-only, and a horizontal axis would draw false precision on most rows. */
-function Timeline({ p }) {
+/* ---- The timeline ----------------------------------------------------------
+ *
+ * A list of dated milestones grouped by track answers "what happened". The
+ * question an analyst actually brings to a construction tracker is *"which of
+ * the five things that must happen in parallel is behind, and by how long"* —
+ * and a list cannot answer that, because the gaps between dates are the whole
+ * signal and a list renders every gap the same height.
+ *
+ * So: five lanes on one time axis. The distance between two marks is the time
+ * between them, which is the one thing worth drawing here.
+ *
+ * **Colour carries state, not identity.** The five tracks are told apart by
+ * their lane labels, never by hue — so the hue is free to say the thing a reader
+ * is looking for: reached, merely implied, or blocked. Giving each track its own
+ * colour would have spent the only free channel on information the row labels
+ * already carry, and left "which one is stuck" to be worked out.
+ */
+
+//: Lane geometry, in viewBox units. The chart is drawn at a fixed 1000-unit
+//: width and scaled to its container, so these are proportions rather than
+//: pixels: at a typical 1200px container everything here renders ~1.2x.
+const LANE_H = 30;
+//: The label gutter, wide enough for the longest track name there is.
+//:
+//: 132 was picked by eye and was wrong: the track names carry a Chinese gloss —
+//: "customer & finance (客户/资金)" measures 153 units — so the longest label
+//: overran the gutter and sat on top of its own lane. Measured rather than
+//: guessed this time, with room for a longer name than any current one.
+const LANE_LABEL_W = 176;
+const CHART_W = 1000;
+const CHART_PAD_R = 18;
+
+const DAY = 86400000;
+
+function asTime(value) {
+  if (!value) return null;
+  const t = Date.parse(value);
+  return Number.isNaN(t) ? null : t;
+}
+
+/* Round a span out to whole years, so the axis ticks land on January and the
+ * first and last marks are not jammed against the frame. */
+function axisSpan(times) {
+  const lo = Math.min(...times);
+  const hi = Math.max(...times);
+  const pad = Math.max((hi - lo) * 0.04, 20 * DAY);
+  return [lo - pad, hi + pad];
+}
+
+function yearTicks(t0, t1) {
+  const out = [];
+  for (let y = new Date(t0).getUTCFullYear(); y <= new Date(t1).getUTCFullYear(); y += 1) {
+    const t = Date.UTC(y, 0, 1);
+    if (t >= t0 && t <= t1) out.push([t, y]);
+  }
+  // More than eight labels on a 1000-unit axis collide; drop every other one.
+  return out.length > 8 ? out.filter((_, i) => i % 2 === 0) : out;
+}
+
+function TimelineChart({ p, data }) {
+  const rows = (p.standing?.timeline || []).filter((r) => asTime(r.date));
+  const tracks = p.standing?.tracks || [];
+  const trackLabel = (key) =>
+    (data.tracks.find((t) => t.key === key) || {}).label || key.replace(/_/g, " ");
+
+  // Everything with a date that belongs on the axis: the milestones, plus the
+  // two dates the row itself carries. `expected_online` especially — a chart of
+  // what has happened that stops before the date it is all aimed at is drawing
+  // half the question.
+  const marks = rows.map((r) => asTime(r.date));
+  const online = asTime(p.expected_online);
+  const today = Date.now();
+  if (!marks.length) return null;
+  const [t0, t1] = axisSpan([...marks, ...(online ? [online] : []), today]);
+
+  const x = (t) => LANE_LABEL_W + ((t - t0) / (t1 - t0)) * (CHART_W - LANE_LABEL_W - CHART_PAD_R);
+  const lanes = tracks.length ? tracks : [...new Set(rows.map((r) => r.track))].map((t) => ({ track: t }));
+  const height = lanes.length * LANE_H + 34;
+
+  return html`
+    <div class="dc-scroll-x">
+      <svg viewBox=${`0 0 ${CHART_W} ${height}`} width="100%" role="img"
+           style=${{ display: "block", minWidth: 520 }}
+           aria-label=${`Milestones by track for ${p.name}, ${new Date(t0).getUTCFullYear()} to ${new Date(t1).getUTCFullYear()}`}>
+        ${/* Year rules first, behind everything: an axis is context, not data. */ ""}
+        ${yearTicks(t0, t1).map(([t, y]) => html`
+          <g key=${y}>
+            <line x1=${x(t)} x2=${x(t)} y1="14" y2=${lanes.length * LANE_H + 16}
+                  stroke="var(--border)" stroke-width="1" />
+            <text x=${x(t)} y="9" text-anchor="middle" font-size="9.5"
+                  fill="var(--muted-foreground)" font-family="var(--font-mono)">${y}</text>
+          </g>`)}
+
+        ${/* Today, and the date it is all aimed at. Both are the reader's own
+              frame of reference rather than anything a source said, so both are
+              dashed and neither is a data mark. */ ""}
+        <line x1=${x(today)} x2=${x(today)} y1="14" y2=${lanes.length * LANE_H + 16}
+              stroke="var(--foreground)" stroke-width="1" stroke-dasharray="2 3" opacity="0.45" />
+        <text x=${x(today)} y=${lanes.length * LANE_H + 29} text-anchor="middle" font-size="9"
+              fill="var(--muted-foreground)" font-family="var(--font-mono)">today</text>
+        ${online && html`
+          <${Frag}>
+            <line x1=${x(online)} x2=${x(online)} y1="14" y2=${lanes.length * LANE_H + 16}
+                  stroke="var(--chart-1)" stroke-width="1" stroke-dasharray="4 3" opacity="0.8" />
+            <text x=${x(online)} y=${lanes.length * LANE_H + 29} text-anchor="middle" font-size="9"
+                  fill="var(--chart-1)" font-family="var(--font-mono)">online</text>
+          <//>`}
+
+        ${lanes.map((lane, i) => {
+          const y = 16 + i * LANE_H + LANE_H / 2;
+          const mine = rows.filter((r) => r.track === lane.track);
+          const blocked = (lane.blocking_risks || []).length > 0;
+          const last = mine.length ? Math.max(...mine.map((r) => asTime(r.date))) : null;
+          return html`
+            <g key=${lane.track}>
+              <text x="0" y=${y + 3} font-size="10" fill="var(--foreground)">
+                <title>${trackLabel(lane.track)}</title>${trackLabel(lane.track)}</text>
+              ${blocked && html`
+                <text x="0" y=${y + 14} font-size="8.5" font-family="var(--font-mono)"
+                      fill=${lane.blocker_severity === "blocking" ? "var(--danger)" : "var(--warning)"}
+                      >blocked</text>`}
+
+              ${/* The lane itself: solid as far as it has got, dashed from there
+                    to the horizon. The dashed part is the part nobody has
+                    reported yet, and drawing it solid would claim progress. */ ""}
+              <line x1=${LANE_LABEL_W} x2=${last ? x(last) : LANE_LABEL_W} y1=${y} y2=${y}
+                    stroke="var(--primary)" stroke-width="2" stroke-linecap="round" opacity="0.5" />
+              ${last && html`
+                <line x1=${x(last)} x2=${CHART_W - CHART_PAD_R} y1=${y} y2=${y}
+                      stroke="var(--border)" stroke-width="2" stroke-dasharray="2 4"
+                      stroke-linecap="round" />`}
+
+              ${mine.map((r, j) => {
+                const cx = x(asTime(r.date));
+                const tone = r.implied ? "var(--muted-foreground)"
+                  : r.unconfirmed ? "var(--warning)" : "var(--primary)";
+                const detail = [
+                  `${trackLabel(lane.track)} — ${r.milestone.replace(/_/g, " ")}`,
+                  r.date,
+                  r.implied ? "implied, not read anywhere" : null,
+                  r.unconfirmed ? "no quote stood up for this" : null,
+                  r.restatements ? `${r.restatements} more mention(s)` : null,
+                  r.description,
+                ].filter(Boolean).join("\n");
+                return html`
+                  <g key=${j}>
+                    <title>${detail}</title>
+                    ${/* A 2-unit ring in the surface colour, so two milestones a
+                          fortnight apart read as two marks rather than a blob. */ ""}
+                    <circle cx=${cx} cy=${y} r="6.5" fill="var(--background)" />
+                    <circle cx=${cx} cy=${y} r="4.5" fill=${r.implied ? "var(--background)" : tone}
+                            stroke=${tone} stroke-width="1.6" />
+                  </g>`;
+              })}
+            </g>`;
+        })}
+      </svg>
+    </div>`;
+}
+
+function Timeline({ p, data }) {
   const [all, setAll] = useState(false);
   const rows = p.standing?.timeline || [];
   const tracks = Object.fromEntries((p.standing?.tracks || []).map((t) => [t.track, t]));
+  const [events, moreEvents] = useCapped(p.events || [], 20);
 
   if (!rows.length && !p.events.length) {
     return html`
@@ -1690,88 +2005,105 @@ function Timeline({ p }) {
 
   let lastTrack = null;
   return html`
-    <${Card}>
-      <${CardHeader}>
-        <${CardTitle}>${rows.length} milestone${rows.length === 1 ? "" : "s"} reached<//>
-        <${CardDescription}>The earliest cited date for each, grouped by track. A milestone
-          restated across several articles is one milestone; ${p.events.length} events were
-          recorded in total.<//>
+    <div style=${{ display: "grid", gap: 14 }}>
+      <${Card}>
+        <${CardHeader}>
+          <${CardTitle}>${rows.length} milestone${rows.length === 1 ? "" : "s"} reached<//>
+          <${CardDescription}>Five tracks on one axis, because they run in parallel rather than in
+            a line — a campus can own its land and still wait four years for power. The gap between
+            two marks is the time between them. A hollow mark was deduced from a later milestone
+            rather than read anywhere; an amber one had no quote stand up.<//>
+        <//>
+        <div style=${{ padding: "4px 20px 18px" }}>
+          <${TimelineChart} p=${p} data=${data} />
+        </div>
       <//>
-      <div style=${{ display: "grid", gap: 0 }}>
-        ${rows.map((r, i) => {
-          const head = r.track !== lastTrack;
-          lastTrack = r.track;
-          const t = tracks[r.track];
-          return html`
-            <${Frag} key=${i}>
-              ${head && html`
-                <div style=${{ padding: "12px 20px 4px", borderTop: i ? "1px solid var(--border)" : "none",
-                               display: "flex", gap: 10, alignItems: "baseline", flexWrap: "wrap" }}>
-                  <strong style=${{ fontSize: 12, letterSpacing: ".04em", textTransform: "uppercase",
-                                    color: "var(--muted-foreground)" }}>${r.track.replace("_", " ")}</strong>
-                  ${t?.blocking_risks?.length ? html`
-                    <span style=${chip(SEV_TONE[t.blocker_severity] || "--muted-foreground")}
-                          title=${t.blocking_risks.map((b) => `#${b.id} ${b.category}: ${b.summary}`).join("\\n")}>
-                      blocked — ${t.blocking_risks[0].category}
-                      ${t.blocking_risks.length > 1 ? ` +${t.blocking_risks.length - 1}` : ""}
-                    </span>` : null}
-                </div>`}
-              <div style=${{ display: "grid", gridTemplateColumns: "104px minmax(0,1fr)", gap: 14,
-                   alignItems: "baseline", padding: "8px 20px 8px 32px" }}>
-                <span class="dc-num" style=${{ fontSize: 12, color: "var(--muted-foreground)",
-                      opacity: r.implied ? 0.5 : 1 }}>${r.date || "—"}</span>
-                <div style=${{ minWidth: 0 }}>
-                  <span style=${{ fontSize: 14, lineHeight: "20px", opacity: r.implied ? 0.6 : 1 }}>
-                    ${r.milestone.replace(/_/g, " ")}
-                  </span>
-                  ${r.implied && html`
-                    <span style=${{ ...chip("--muted-foreground"), marginLeft: 8 }}
-                          title="deduced from a later milestone, not read anywhere">implied</span>`}
-                  ${r.unconfirmed && html`
-                    <span style=${{ ...chip("--warning"), marginLeft: 8 }}>not cited</span>`}
-                  ${r.restatements > 0 && html`
-                    <span style=${{ marginLeft: 8, fontSize: 11, color: "var(--muted-foreground)" }}>
-                      +${r.restatements} more mention${r.restatements === 1 ? "" : "s"}</span>`}
-                  ${r.conflicting_dates?.length === 2 && html`
-                    <p style=${{ margin: "3px 0 0", fontSize: 12, color: "var(--warning)" }}>
-                      sources date this between ${r.conflicting_dates[0]} and ${r.conflicting_dates[1]} —
-                      shown as the earliest, neither chosen</p>`}
-                  ${r.description && html`
-                    <p style=${{ margin: "2px 0 0", fontSize: 13, lineHeight: "19px" }}>${r.description}</p>`}
-                  ${r.quote && html`
-                    <p style=${{ margin: "3px 0 0", fontSize: 12, lineHeight: "17px", maxWidth: "76ch",
-                                 color: "var(--muted-foreground)", borderLeft: "2px solid var(--primary)",
-                                 paddingLeft: 9 }}>“${r.quote}”</p>`}
+
+      <${Card}>
+        <${CardHeader}>
+          <${CardTitle}>Every milestone, with what it rests on<//>
+          <${CardDescription}>The earliest cited date for each, grouped by track. A milestone
+            restated across several articles is one milestone; ${p.events.length} events were
+            recorded in total.<//>
+        <//>
+        <div style=${{ display: "grid", gap: 0 }}>
+          ${rows.map((r, i) => {
+            const head = r.track !== lastTrack;
+            lastTrack = r.track;
+            const t = tracks[r.track];
+            return html`
+              <${Frag} key=${i}>
+                ${head && html`
+                  <div style=${{ padding: "12px 20px 4px", borderTop: i ? "1px solid var(--border)" : "none",
+                                 display: "flex", gap: 10, alignItems: "baseline", flexWrap: "wrap" }}>
+                    <strong style=${{ fontSize: 12, letterSpacing: ".04em", textTransform: "uppercase",
+                                      color: "var(--muted-foreground)" }}>${r.track.replace("_", " ")}</strong>
+                    ${t?.blocking_risks?.length ? html`
+                      <span style=${chip(SEV_TONE[t.blocker_severity] || "--muted-foreground")}
+                            title=${t.blocking_risks.map((b) => `#${b.id} ${b.category}: ${b.summary}`).join("\n")}>
+                        blocked — ${t.blocking_risks[0].category}
+                        ${t.blocking_risks.length > 1 ? ` +${t.blocking_risks.length - 1}` : ""}
+                      </span>` : null}
+                  </div>`}
+                <div class="dc-milestone-row" style=${{ padding: "8px 20px 8px 32px" }}>
+                  <span class="dc-num" style=${{ fontSize: 12, color: "var(--muted-foreground)",
+                        opacity: r.implied ? 0.5 : 1 }}>${r.date || "—"}</span>
+                  <div style=${{ minWidth: 0 }}>
+                    <span style=${{ fontSize: 14, lineHeight: "20px", opacity: r.implied ? 0.6 : 1 }}>
+                      ${r.milestone.replace(/_/g, " ")}
+                    </span>
+                    ${r.implied && html`
+                      <span style=${{ ...chip("--muted-foreground"), marginLeft: 8 }}
+                            title="deduced from a later milestone, not read anywhere">implied</span>`}
+                    ${r.unconfirmed && html`
+                      <span style=${{ ...chip("--warning"), marginLeft: 8 }}>not cited</span>`}
+                    ${r.restatements > 0 && html`
+                      <span style=${{ marginLeft: 8, fontSize: 11, color: "var(--muted-foreground)" }}>
+                        +${r.restatements} more mention${r.restatements === 1 ? "" : "s"}</span>`}
+                    ${r.conflicting_dates?.length === 2 && html`
+                      <p style=${{ margin: "3px 0 0", fontSize: 12, color: "var(--warning)" }}>
+                        sources date this between ${r.conflicting_dates[0]} and ${r.conflicting_dates[1]} —
+                        shown as the earliest, neither chosen</p>`}
+                    ${r.description && html`
+                      <p style=${{ margin: "2px 0 0", fontSize: 13, lineHeight: "19px" }}>${r.description}</p>`}
+                  </div>
+                  <div style=${{ minWidth: 0 }}>
+                    ${r.quote && html`
+                      <p style=${{ margin: 0, fontSize: 12, lineHeight: "17px", maxWidth: "84ch",
+                                   color: "var(--muted-foreground)", borderLeft: "2px solid var(--primary)",
+                                   paddingLeft: 9 }}>“${r.quote}”</p>`}
+                  </div>
                 </div>
-              </div>
-            <//>`;
-        })}
-      </div>
-      <div style=${{ padding: "10px 20px 16px", borderTop: "1px solid var(--border)" }}>
-        <button type="button" onClick=${() => setAll(!all)}
-          style=${{ background: "none", border: "none", padding: 0, cursor: "pointer", font: "inherit",
-                    fontSize: 12, color: "var(--muted-foreground)", textDecoration: "underline",
-                    textUnderlineOffset: 3 }}>
-          ${all ? "hide" : `show every recorded event (${p.events.length})`}
-        </button>
-        ${all && html`
-          <div style=${{ display: "grid", gap: 0, marginTop: 8 }}>
-            ${p.events.map((e, i) => html`
-              <div key=${i} style=${{ display: "grid", gridTemplateColumns: "96px 168px minmax(0,1fr)",
-                   gap: 14, alignItems: "baseline", padding: "6px 0", borderTop: "1px solid var(--border)" }}>
-                <span class="dc-num" style=${{ fontSize: 12, color: "var(--muted-foreground)" }}>${e.event_date}</span>
-                <span style=${chip(e.event_type === "delayed" ? "--danger"
-                  : e.event_type === "expanded" ? "--chart-5" : "--muted-foreground")}>${e.event_type}</span>
-                <span style=${{ fontSize: 13, lineHeight: "19px" }}
-                      title=${e.quote ? `“${e.quote}”` : undefined}>
-                  ${e.description}
-                  ${e.unconfirmed && html`
-                    <span style=${{ ...chip("--warning"), marginLeft: 8 }}>not cited</span>`}
-                </span>
-              </div>`)}
-          </div>`}
-      </div>
-    <//>`;
+              <//>`;
+          })}
+        </div>
+        <div style=${{ padding: "10px 20px 16px", borderTop: "1px solid var(--border)" }}>
+          <button type="button" onClick=${() => setAll(!all)}
+            style=${{ background: "none", border: "none", padding: 0, cursor: "pointer", font: "inherit",
+                      fontSize: 12, color: "var(--muted-foreground)", textDecoration: "underline",
+                      textUnderlineOffset: 3 }}>
+            ${all ? "hide" : `show every recorded event (${p.events.length})`}
+          </button>
+          ${all && html`
+            <div style=${{ display: "grid", gap: 0, marginTop: 8 }}>
+              ${events.map((e, i) => html`
+                <div key=${i} style=${{ display: "grid", gridTemplateColumns: "96px 168px minmax(0,1fr)",
+                     gap: 14, alignItems: "baseline", padding: "6px 0", borderTop: "1px solid var(--border)" }}>
+                  <span class="dc-num" style=${{ fontSize: 12, color: "var(--muted-foreground)" }}>${e.event_date}</span>
+                  <span style=${chip(e.event_type === "delayed" ? "--danger"
+                    : e.event_type === "expanded" ? "--chart-5" : "--muted-foreground")}>${e.event_type}</span>
+                  <span style=${{ fontSize: 13, lineHeight: "19px" }}
+                        title=${e.quote ? `“${e.quote}”` : undefined}>
+                    ${e.description}
+                    ${e.unconfirmed && html`
+                      <span style=${{ ...chip("--warning"), marginLeft: 8 }}>not cited</span>`}
+                  </span>
+                </div>`)}
+              ${moreEvents}
+            </div>`}
+        </div>
+      <//>
+    </div>`;
 }
 
 /* Every claim any citation made for one field, beside the value that won.
@@ -1931,163 +2263,156 @@ function StatsTab({ data, p, populated, open, onQuote, allowAi, onTab, claims })
             model's words and both carry the same tint; only this one costs a call
             per click, so only this one has a button. */ ""}
       <${InferPanel} project=${p} allowAi=${allowAi} />
-
-      <div style=${{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(330px, 1fr))",
-                     gap: 18, alignItems: "start" }}>
-        ${/* Who plays which role. `company` and `customer` are two slots for what
-              is routinely four or five parties, which is why one campus used to
-              arrive as several rows — once per company an article named. A role
-              with a sentence behind it reads as a fact; one inferred from the
-              operator column has to read as an inference, or the panel launders
-              the second into the first. */ ""}
-        ${(p.parties || []).length > 0 && html`<${Card}>
-          <${CardHeader}>
-            <${CardTitle}>Who is involved<//>
-            <${CardDescription}>One site usually has several companies attached — one builds it,
-              one owns it, one occupies it, one sells it power. Each role below is only as good as
-              the sentence behind it.<//>
-          <//>
-          <div style=${{ display: "grid", gap: 0 }}>
-            ${(p.parties || []).map((party) => {
-              const inferred = party.unconfirmed === "role_inferred";
-              const refused = party.unconfirmed != null && !inferred;
-              return html`
-                <div key=${party.role + party.key}
-                     style=${{ display: "grid", gridTemplateColumns: "104px minmax(0,1fr)",
-                               gap: 14, alignItems: "baseline", padding: "11px 20px",
-                               borderTop: "1px solid var(--border)" }}>
-                  <span style=${{ fontFamily: "var(--font-mono)", fontSize: 12,
-                                  color: "var(--muted-foreground)" }}>${party.role}</span>
-                  <div style=${{ display: "grid", gap: 5, minWidth: 0 }}>
-                    <div style=${{ display: "flex", alignItems: "center", gap: 9, flexWrap: "wrap" }}>
-                      <span style=${{ fontSize: 15, lineHeight: "22px", fontWeight: 500 }}
-                        >${party.name}</span>
-                      ${inferred && html`<span style=${chip("--muted-foreground", true)}
-                        title="Nobody stated this role — it is what the operator or customer column means. Shown as an inference, and never used to attribute capacity to a buyer."
-                        >inferred</span>`}
-                      ${refused && html`<span style=${chip("--warning")}
-                        title=${"A sentence was offered and would not support this role: " +
-                                party.unconfirmed}
-                        >待确认 · ${party.unconfirmed}</span>`}
-                    </div>
-                    ${party.quote && html`<span style=${{ fontSize: 12.5, lineHeight: "19px",
-                        color: "var(--muted-foreground)" }}>"${party.quote}"</span>`}
-                  </div>
-                </div>`;
-            })}
-          </div>
-        <//>`}
-        <${Card}>
-          <${CardHeader}>
-            <${CardTitle}>The twelve tracked fields<//>
-            <${CardDescription}>${populated} of 12 populated. A utility's generation,
-              transmission or storage figure is a different quantity and is never added to the
-              megawatts here — and where a citation says which kind of megawatt it measured, the
-              capacity cards above say so rather than assuming.<//>
-          <//>
-          <div style=${{ display: "grid", gap: 0 }}>
-            ${TRACKED.map((key) => {
-              const tier = tierOf(p, key);
-              const q = quoteOf(p, key);
-              const quoted = tier === "reported" || tier === "derived" || tier === "inferred";
-              return html`
-                <div key=${key} style=${{ display: "grid", gridTemplateColumns: "132px minmax(0,1fr)",
-                     gap: 14, alignItems: "baseline", padding: "11px 20px", borderTop: "1px solid var(--border)" }}>
-                  <span style=${{ fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--muted-foreground)" }}>${key}</span>
-                  <div style=${{ display: "grid", gap: 5, minWidth: 0 }}>
-                    <div style=${{ display: "flex", alignItems: "center", gap: 9, flexWrap: "wrap" }}>
-                      <span style=${{ fontSize: 16, lineHeight: "24px",
-                        ...(tier === "missing" ? { color: "var(--muted-foreground)", opacity: .7 } : { fontWeight: 500 }),
-                        ...(RIGHT.has(key) ? { fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums" } : {}) }}>
-                        ${fmt(key, p[key])}</span>
-                      <span style=${chip(tier === "reported" ? "--foreground" : tier === "unconfirmed" ? "--warning"
-                        : tier === "inferred" ? "--chart-5" : "--muted-foreground")}>${TIER[tier][0]}</span>
-                      ${whyUnconfirmed(p, key) && html`
-                        <span style=${chip("--danger")}>not this site's figure</span>`}
-                      ${q.exact === false && !!provOf(p, key)?.quote && html`
-                        <span style=${{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--muted-foreground)" }}>
-                          excerpt, not this field's sentence</span>`}
-                    </div>
-                    ${whyUnconfirmed(p, key) && html`
-                      <p style=${{ margin: 0, fontSize: 12, lineHeight: "18px", color: "var(--danger)" }}>
-                        ${whyUnconfirmed(p, key).note}</p>`}
-                    <p style=${{ margin: 0, fontSize: 12, lineHeight: "18px", color: "var(--muted-foreground)",
-                      maxWidth: "80ch",
-                      ...(q.exact ? { borderLeft: "2px solid var(--primary)", paddingLeft: 9 } : {}),
-                      ...(tier === "missing" ? { opacity: .75 } : {}) }}>
-                      ${quoted && q.exact ? `“${q.text}”` : q.text}</p>
-                    ${key === "blocker" && html`<${BlockerWhy} why=${p.blocker_rationale} onTab=${onTab} />`}
-                    <${ClaimTable} claims=${claims} field=${key} />
-                  </div>
-                </div>`;
-            })}
-          </div>
-        <//>
-
-        <div style=${{ display: "grid", gap: 18 }}>
-          <${InContext} p=${p} data=${data} />
-
-          <${Card}>
-            <${CardHeader}>
-              <${CardTitle}>Five independent tracks<//>
-              <${CardDescription}>Five things happen in parallel, not in a line. A campus can own its
-                land and still wait four years for power. Look at whichever track is stuck — the next
-                milestone on it is the thing to watch for.<//>
-            <//>
-            <div style=${{ display: "grid", gap: 0 }}>
-              ${p.standing.tracks.map((t) => {
-                const onlyImplied = t.reached.length > 0 && t.reached.every((m) => t.implied.includes(m));
-                /* `complete` means the ladder is exhausted, NOT that the work is
-                   finished — so it is said as the milestone reached rather than as
-                   a verdict. "construction: complete" beside a campus under
-                   construction is the sentence that made this worth changing. */
-                const status = t.complete ? `reached ${t.status.replace(/_/g, " ")}`
-                  : t.blockers.length ? "blocked" : t.reached.length === 0 ? "not started" : "in progress";
-                return html`
-                  <div key=${t.track} style=${{ display: "grid", gridTemplateColumns: "minmax(0,1fr) 90px",
-                       gap: 12, alignItems: "center", padding: "11px 20px", borderTop: "1px solid var(--border)" }}>
-                    <div style=${{ display: "grid", gap: 3, minWidth: 0 }}>
-                      <span style=${{ fontSize: 14, fontWeight: 600 }}>${label(t.track)}</span>
-                      <span style=${{ fontFamily: "var(--font-mono)", fontSize: 12,
-                        color: t.blockers.length ? "var(--danger)" : t.complete ? "var(--success)" : "var(--muted-foreground)" }}>
-                        ${status}${onlyImplied ? " (implied)" : ""} — ${t.next_milestone ? "watch for " + t.next_milestone
-                          : t.blockers.length ? "nothing further on this ladder" : "nothing outstanding"}
-                      </span>
-                      ${/* WHICH obstacle. `blockers` holds bare category names, so
-                            every surface could say a track was obstructed and none
-                            could say by what — leaving a reader to guess which of
-                            twenty-eight recorded risks was meant. */
-                        (t.blocking_risks || []).length > 0 && html`
-                        <span style=${{ fontSize: 12, lineHeight: "17px", color: "var(--danger)" }}>
-                          blocked by #${t.blocking_risks[0].id} (${t.blocking_risks[0].category}):
-                          ${" "}${t.blocking_risks[0].summary}
-                          ${t.blocking_risks.length > 1
-                            ? html`<span style=${{ color: "var(--muted-foreground)" }}>
-                                ${" "}+${t.blocking_risks.length - 1} more</span>`
-                            : null}
-                        </span>`}
-                    </div>
-                    <div style=${{ display: "flex", gap: 3, justifyContent: "flex-end" }}>
-                      ${((data.tracks.find((x) => x.key === t.track) || {}).milestones || []).map((m, i) => html`
-                        <span key=${m} style=${{ "--i": i }} class=${`dc-seg-cell ${
-                          t.reached.includes(m) ? (t.implied.includes(m) ? "dc-seg-cell--implied" : "dc-seg-cell--reached")
-                          : t.blockers.length ? "dc-seg-cell--blocked" : "dc-seg-cell--todo"}`} />`)}
-                    </div>
-                  </div>`;
-              })}
-            </div>
-            ${p.standing.watch_for && html`
-              <div style=${{ padding: "12px 20px 18px", borderTop: "1px solid var(--border)" }}>
-                <span style=${{ fontSize: 12, textTransform: "uppercase", letterSpacing: "0.08em",
-                                color: "var(--muted-foreground)" }}>watch for</span>
-                <p style=${{ margin: "4px 0 0", fontSize: 14, lineHeight: "21px" }}>${p.standing.watch_for}</p>
-              </div>`}
-          <//>
-        </div>
-      </div>
-
-      <${Timeline} p=${p} />
     </div>`;
+}
+
+/* The twelve tracked fields, lifted out of `StatsTab` to have a page section and
+ * the whole page's width.
+ *
+ * It was one cell of a two-column grid with a 330px minimum, beside a card a
+ * tenth its height — so the row was as tall as this table, the short card sat at
+ * the top of it, and the rest of that column was empty. That gap is what made
+ * the drawer look broken, and widening the column would only have moved it.
+ *
+ * At full width the quote under each value has room to be a sentence instead of
+ * wrapping every four words, which is the actual point: the sentence is the
+ * evidence, and the reason this console exists.
+ */
+function TrackedFields({ p, populated, onQuote, claims, onTab }) {
+  return html`
+    <${Card}>
+      <${CardHeader}>
+        <${CardTitle}>The twelve tracked fields<//>
+        <${CardDescription}>${populated} of 12 populated. A utility's generation,
+          transmission or storage figure is a different quantity and is never added to the
+          megawatts here — and where a citation says which kind of megawatt it measured, the
+          capacity cards above say so rather than assuming.<//>
+      <//>
+      <div style=${{ display: "grid", gap: 0 }}>
+        ${TRACKED.map((key) => {
+          const tier = tierOf(p, key);
+          const q = quoteOf(p, key);
+          const quoted = tier === "reported" || tier === "derived" || tier === "inferred";
+          return html`
+            ${/* Three columns, and the third is why this section wanted the width.
+                 Stacked in a 330px cell, every row was: field name, then a value
+                 on its own line, then a quote wrapping every four words. Given
+                 the page, the name stays narrow, the value gets the room a
+                 formatted number needs, and the sentence sits BESIDE the figure
+                 it evidences rather than under it — which is the whole claim
+                 this console makes about itself.
+
+                 `minmax(0, …)` on both flexible tracks: without it a long
+                 unbroken quote sets the column's min-content width and pushes
+                 the table wider than the page. */ ""}
+            <div key=${key} class="dc-field-row"
+                 style=${{ padding: "11px 20px", borderTop: "1px solid var(--border)" }}>
+              <span style=${{ fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--muted-foreground)" }}>${key}</span>
+              <div style=${{ display: "grid", gap: 5, minWidth: 0 }}>
+                <div style=${{ display: "flex", alignItems: "center", gap: 9, flexWrap: "wrap" }}>
+                  <span style=${{ fontSize: 16, lineHeight: "24px",
+                    ...(tier === "missing" ? { color: "var(--muted-foreground)", opacity: .7 } : { fontWeight: 500 }),
+                    ...(RIGHT.has(key) ? { fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums" } : {}) }}>
+                    ${fmt(key, p[key])}</span>
+                  <span style=${chip(tier === "reported" ? "--foreground" : tier === "unconfirmed" ? "--warning"
+                    : tier === "inferred" ? "--chart-5" : "--muted-foreground")}>${TIER[tier][0]}</span>
+                  ${whyUnconfirmed(p, key) && html`
+                    <span style=${chip("--danger")}>not this site's figure</span>`}
+                  ${q.exact === false && !!provOf(p, key)?.quote && html`
+                    <span style=${{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--muted-foreground)" }}>
+                      excerpt, not this field's sentence</span>`}
+                </div>
+              </div>
+              <div style=${{ display: "grid", gap: 5, minWidth: 0 }}>
+                ${whyUnconfirmed(p, key) && html`
+                  <p style=${{ margin: 0, fontSize: 12, lineHeight: "18px", color: "var(--danger)" }}>
+                    ${whyUnconfirmed(p, key).note}</p>`}
+                <p style=${{ margin: 0, fontSize: 12.5, lineHeight: "19px", color: "var(--muted-foreground)",
+                  maxWidth: "88ch",
+                  ...(q.exact ? { borderLeft: "2px solid var(--primary)", paddingLeft: 9 } : {}),
+                  ...(tier === "missing" ? { opacity: .75 } : {}) }}>
+                  ${quoted && q.exact ? `“${q.text}”` : q.text}</p>
+                ${key === "blocker" && html`<${BlockerWhy} why=${p.blocker_rationale} onTab=${onTab} />`}
+                <${ClaimTable} claims=${claims} field=${key} />
+              </div>
+            </div>`;
+        })}
+      </div>
+    <//>
+`;
+}
+
+/* Where this campus sits, and the five tracks it is moving along.
+ *
+ * Two short cards, so a two-column grid is right here in a way it was not for
+ * the table above — neither is taller than the other by an order of magnitude.
+ */
+function ProjectContext({ p, data }) {
+  // The five tracks are named by the dataset, not here, so the card and the
+  // strip in the table cannot disagree about what a track is called.
+  const label = (key) => (data.tracks.find((t) => t.key === key) || {}).label || key;
+  return html`
+    <div style=${{ display: "grid", gap: 18 }}>
+      <${InContext} p=${p} data=${data} />
+
+      <${Card}>
+        <${CardHeader}>
+          <${CardTitle}>Five independent tracks<//>
+          <${CardDescription}>Five things happen in parallel, not in a line. A campus can own its
+            land and still wait four years for power. Look at whichever track is stuck — the next
+            milestone on it is the thing to watch for.<//>
+        <//>
+        <div style=${{ display: "grid", gap: 0 }}>
+          ${p.standing.tracks.map((t) => {
+            const onlyImplied = t.reached.length > 0 && t.reached.every((m) => t.implied.includes(m));
+            /* `complete` means the ladder is exhausted, NOT that the work is
+               finished — so it is said as the milestone reached rather than as
+               a verdict. "construction: complete" beside a campus under
+               construction is the sentence that made this worth changing. */
+            const status = t.complete ? `reached ${t.status.replace(/_/g, " ")}`
+              : t.blockers.length ? "blocked" : t.reached.length === 0 ? "not started" : "in progress";
+            return html`
+              <div key=${t.track} style=${{ display: "grid", gridTemplateColumns: "minmax(0,1fr) 90px",
+                   gap: 12, alignItems: "center", padding: "11px 20px", borderTop: "1px solid var(--border)" }}>
+                <div style=${{ display: "grid", gap: 3, minWidth: 0 }}>
+                  <span style=${{ fontSize: 14, fontWeight: 600 }}>${label(t.track)}</span>
+                  <span style=${{ fontFamily: "var(--font-mono)", fontSize: 12,
+                    color: t.blockers.length ? "var(--danger)" : t.complete ? "var(--success)" : "var(--muted-foreground)" }}>
+                    ${status}${onlyImplied ? " (implied)" : ""} — ${t.next_milestone ? "watch for " + t.next_milestone
+                      : t.blockers.length ? "nothing further on this ladder" : "nothing outstanding"}
+                  </span>
+                  ${/* WHICH obstacle. `blockers` holds bare category names, so
+                        every surface could say a track was obstructed and none
+                        could say by what — leaving a reader to guess which of
+                        twenty-eight recorded risks was meant. */
+                    (t.blocking_risks || []).length > 0 && html`
+                    <span style=${{ fontSize: 12, lineHeight: "17px", color: "var(--danger)" }}>
+                      blocked by #${t.blocking_risks[0].id} (${t.blocking_risks[0].category}):
+                      ${" "}${t.blocking_risks[0].summary}
+                      ${t.blocking_risks.length > 1
+                        ? html`<span style=${{ color: "var(--muted-foreground)" }}>
+                            ${" "}+${t.blocking_risks.length - 1} more</span>`
+                        : null}
+                    </span>`}
+                </div>
+                <div style=${{ display: "flex", gap: 3, justifyContent: "flex-end" }}>
+                  ${((data.tracks.find((x) => x.key === t.track) || {}).milestones || []).map((m, i) => html`
+                    <span key=${m} style=${{ "--i": i }} class=${`dc-seg-cell ${
+                      t.reached.includes(m) ? (t.implied.includes(m) ? "dc-seg-cell--implied" : "dc-seg-cell--reached")
+                      : t.blockers.length ? "dc-seg-cell--blocked" : "dc-seg-cell--todo"}`} />`)}
+                </div>
+              </div>`;
+          })}
+        </div>
+        ${p.standing.watch_for && html`
+          <div style=${{ padding: "12px 20px 18px", borderTop: "1px solid var(--border)" }}>
+            <span style=${{ fontSize: 12, textTransform: "uppercase", letterSpacing: "0.08em",
+                            color: "var(--muted-foreground)" }}>watch for</span>
+            <p style=${{ margin: "4px 0 0", fontSize: 14, lineHeight: "21px" }}>${p.standing.watch_for}</p>
+          </div>`}
+      <//>
+    </div>
+`;
 }
 
 //: Block status to a colour token. `serving` and `energized` are the two that mean
@@ -2480,7 +2805,43 @@ function BlocksTab({ p }) {
     </div>`;
 }
 
+/*: How many rows of a long list to draw before the reader asks for the rest.
+ *
+ * Measured on a project with 70 citations: the section was 14,660px — fifteen
+ * screens, two thirds of the whole page — and a reader scrolling past it to
+ * reach the timeline had no way to know how much was left. Twelve is about one
+ * screen, which is enough to see the shape of the list and judge whether the
+ * rest is worth opening.
+ *
+ * **Not the tabs coming back.** A tab hides a category and gives no hint what is
+ * inside; this shows the beginning, says exactly how many more there are, and
+ * opens in place. Nothing here is behind a navigation. */
+const LIST_CAP = 12;
+
+/* The "and N more" control for a capped list.
+ *
+ * A hook rather than a component so the caller keeps its own markup: these lists
+ * are a table, a card stack and a set of rows, and wrapping them in a shared
+ * container would flatten three deliberate layouts into one. */
+function useCapped(rows, cap = LIST_CAP) {
+  const [all, setAll] = useState(false);
+  const hidden = Math.max(0, rows.length - cap);
+  const shown = all || !hidden ? rows : rows.slice(0, cap);
+  const more = hidden === 0 ? null : html`
+    <button type="button" class="dc-linkish"
+            style=${{ padding: "10px 20px", justifySelf: "start" }}
+            onClick=${() => setAll((v) => !v)}>
+      ${all ? `show only the first ${cap}` : `show ${hidden} more (${rows.length} in all)`}
+    </button>`;
+  return [shown, more];
+}
+
 function RisksTab({ data, p }) {
+  // Open obstacles first: a resolved one is history, and a reader capped at
+  // twelve rows should be shown the live ones rather than whichever sorted first.
+  const ordered = (p.risks || []).slice().sort(
+    (a, b) => (a.status === "open" ? 0 : 1) - (b.status === "open" ? 0 : 1));
+  const [rows, more] = useCapped(ordered);
   const label = (key) => (data.tracks.find((t) => t.key === key) || {}).label || key;
   const nextOn = (trackKey) => {
     const t = p.standing.tracks.find((x) => x.track === trackKey);
@@ -2492,7 +2853,7 @@ function RisksTab({ data, p }) {
         Obstacles are rows, not a sentence, so a project can carry several at once and each can be cleared
         on its own. An article that stops mentioning one does not clear it.
       </p>
-      ${p.risks.map((r, i) => {
+      ${rows.map((r, i) => {
         const track = data.riskTrack[r.category];
         return html`
           <${Card} key=${i} style=${{ padding: "16px 20px",
@@ -2522,6 +2883,7 @@ function RisksTab({ data, p }) {
             </div>
           <//>`;
       })}
+      ${more}
       ${p.risks.length === 0 && html`
         <${EmptyState} variant="dashed" title="No open obstacle"
           description="Nothing read about this project reports one. If an obstacle appears later it lands here with the sentence that stated it." />`}
@@ -2529,13 +2891,14 @@ function RisksTab({ data, p }) {
 }
 
 function SourcesTab({ data, p }) {
+  const [rows, more] = useCapped(p.sources || []);
   return html`
     <div style=${{ display: "grid", gap: 14 }}>
       <p style=${{ margin: 0, fontSize: 14, lineHeight: "22px", color: "var(--muted-foreground)", maxWidth: "88ch" }}>
         Every value above comes from one of these. One source alone caps confidence at 2, however good it
         is — two articles on the same website still count as one voice.
       </p>
-      ${p.sources.map((s, i) => {
+      ${rows.map((s, i) => {
         const placeholder = s.url.includes("PLACEHOLDER");
         const fields = (s.fields || "").split(",").filter(Boolean);
         const quotes = s.quotes || {};
@@ -2601,12 +2964,13 @@ function SourcesTab({ data, p }) {
             </div>
           <//>`;
       })}
+      ${more}
     </div>`;
 }
 
 /* ---- Map ----------------------------------------------------------------- */
 
-function MapView({ data, onOpen, openId }) {
+function MapView({ data, onOpen }) {
   const has3d = !!window.customElements?.get("dc-map3d");
   const [mode, setMode] = useState("2d");
   const [enc, setEnc] = useState("phase");
@@ -2706,10 +3070,10 @@ function MapView({ data, onOpen, openId }) {
                      labels overlap into illegibility. */ ""}
                 <dc-map ref=${mapRef} encoding=${enc} choropleth=${chor}
                         clusters=${clusters ? "true" : null} compact=${narrow ? "true" : null}
-                        selected=${openId == null ? "" : String(openId)} />
+                        selected="" />
               </div>`}
               ${is3d && html`<div style=${{ position: "absolute", inset: 0 }}>
-                <dc-map3d encoding=${enc} selected=${openId == null ? "" : String(openId)} />
+                <dc-map3d encoding=${enc} selected="" />
               </div>`}
             </div>
           <//>
@@ -2723,7 +3087,7 @@ function MapView({ data, onOpen, openId }) {
               ? ["--muted-foreground", "--warning", "--chart-1", "--success"][p.confidence]
               : PHASE_TOKEN[p.phase] || "--chart-1";
             return html`
-              <button key=${p.id} type="button" class=${`dc-tile${openId === p.id ? " dc-tile--on" : ""}`}
+              <button key=${p.id} type="button" class="dc-tile"
                       onClick=${() => onOpen(p.id)}>
                 <div style=${{ display: "flex", alignItems: "center", gap: 8 }}>
                   <span style=${{ flex: "none", width: 10, height: 10, borderRadius: 999,
@@ -4576,7 +4940,14 @@ function App() {
      than painting the default and swapping — which reads as a flash of the wrong
      screen. */
   const [view, setView] = useState(() => window.DC_VIEW || "updates");
-  const [openId, setOpenId] = useState(null);
+  /* The project whose page is open, or null for a list view. Stamped the same way
+     `DC_VIEW` is, so `/projects/12` opens on that project rather than painting
+     the table and replacing it.
+
+     This used to be `openId` and it used to be state only — a drawer with no URL.
+     It is a route now, which is the whole change: a project can be linked,
+     refreshed and reached with the back button, like every other page here. */
+  const [projectId, setProjectId] = useState(() => window.DC_PROJECT || null);
   const [dark, setDark] = useState(false);
 
   const load = useCallback(() => api("/api/dataset").then((payload) => {
@@ -4601,6 +4972,7 @@ function App() {
   })), []);
   const goto = useCallback((key, { push = true } = {}) => {
     setView(key);
+    setProjectId(null);
     /* `pushState`, not a real navigation: the bundle and the dataset are already
        in memory, so re-fetching either to change tab would be slower than the tab
        switch it replaces. The URL is kept honest so refresh, back and a pasted
@@ -4610,13 +4982,34 @@ function App() {
     }
   }, []);
 
-  /* Back and forward. `push: false` so replaying history does not re-push it. */
+  /* Open one project's page. Same mechanism as `goto` — the URL is the state —
+     and the reason every caller switched to it: the drawer this replaces was
+     React state with no URL, so a project was the one thing in the console you
+     could not link to. */
+  const openProject = useCallback((id, { push = true } = {}) => {
+    if (id == null) return;
+    setView("projects");
+    setProjectId(id);
+    const path = `/projects/${id}`;
+    if (push && window.location.pathname !== path) {
+      window.history.pushState({ view: "projects", project: id }, "", path);
+    }
+  }, []);
+
+  /* Back and forward. `push: false` so replaying history does not re-push it.
+     Unlike before, the path is matched rather than trusted: an unrecognised one
+     used to fall through every view guard and render a blank page. */
   useEffect(() => {
-    const onPop = () => goto(window.location.pathname.replace(/^\//, "") || "updates",
-                             { push: false });
+    const onPop = () => {
+      const path = window.location.pathname;
+      const match = /^\/projects\/(\d+)$/.exec(path);
+      if (match) return openProject(Number(match[1]), { push: false });
+      const key = path.replace(/^\//, "");
+      goto(VIEWS.some(([v]) => v === key) ? key : "updates", { push: false });
+    };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
-  }, [goto]);
+  }, [goto, openProject]);
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => { document.documentElement.classList.toggle("dark", dark); }, [dark]);
@@ -4678,7 +5071,6 @@ function App() {
     </div>`;
   }
 
-  const open = openId == null ? null : data.projects.find((p) => p.id === openId);
   const t = data.totals;
 
   return html`
@@ -4706,7 +5098,7 @@ function App() {
           <div class="dc-seg">
             ${VIEWS.map(([key, label]) => html`
               <button key=${key} type="button" class="dc-seg-btn" aria-pressed=${view === key}
-                      onClick=${() => { goto(key); setOpenId(null); }}>${label}</button>`)}
+                      onClick=${() => goto(key)}>${label}</button>`)}
           </div>
 
           <span style=${{ flex: "1 1 40px" }} />
@@ -4733,16 +5125,20 @@ function App() {
           </div>
         </header>
 
-        ${view === "updates" && html`<${UpdatesView} data=${data} onOpen=${setOpenId} />`}
-        ${view === "projects" && html`<${ProjectsView} data=${data} openId=${openId} onOpen=${setOpenId} />`}
+        ${view === "updates" && html`<${UpdatesView} data=${data} onOpen=${openProject} />`}
+        ${/* One project's page, or the table. The page fetches its own detail, so it
+              needs the id rather than a row out of the list payload. */ ""}
+        ${view === "projects" && projectId != null
+          ? html`<${ProjectPage} id=${projectId} data=${data}
+                   onBack=${() => goto("projects")} />`
+          : view === "projects" && html`<${ProjectsView} data=${data} onOpen=${openProject} />`}
         ${view === "sources" && html`<${SourcesView} data=${data} />`}
-        ${view === "map" && html`<${MapView} data=${data} openId=${openId} onOpen=${setOpenId} />`}
+        ${view === "map" && html`<${MapView} data=${data} onOpen=${openProject} />`}
         ${view === "capex" && html`
-          <${CapexView} data=${data} allowAi=${data.allow_ai} onOpen=${setOpenId} />`}
+          <${CapexView} data=${data} allowAi=${data.allow_ai} onOpen=${openProject} />`}
         ${view === "help" && html`<${HelpView} data=${data} />`}
       </div>
 
-      <${Drawer} data=${data} project=${open} onClose=${() => setOpenId(null)} />
     </div>`;
 }
 

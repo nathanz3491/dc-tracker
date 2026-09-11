@@ -75,13 +75,9 @@ body {
 }
 tr.dc-enter { animation-name: fade-in; }
 
-/* Scrim fades; the panel it dims slides. Appearing instantly made the drawer
-   feel like a page change rather than a layer. */
-.dc-scrim { animation: fade-in var(--duration-base) var(--ease-swift) backwards; }
-
-/* Track segments fill left to right when the drawer opens, so the strip reads
-   as a progression rather than a row of blocks. */
-.dc-drawer .dc-seg-cell {
+/* Track segments fill left to right when a project page arrives, so the strip
+   reads as a progression rather than a row of blocks. */
+.dc-view .dc-seg-cell {
   transform-origin: left center;
   animation: dcSegFill var(--duration-base) var(--ease-spring) backwards;
   animation-delay: calc(var(--i, 0) * 40ms);
@@ -133,8 +129,6 @@ tr.dc-enter { animation-name: fade-in; }
 .dc-row            { cursor: pointer; background: var(--surface); }
 .dc-row:hover      { background: color-mix(in oklab, var(--muted) 60%, var(--surface)); }
 .dc-row:hover .dc-sticky { background: color-mix(in oklab, var(--muted) 60%, var(--surface)); }
-.dc-row--open,
-.dc-row--open .dc-sticky { background: var(--accent-soft); }
 .dc-sticky         { position: sticky; z-index: 2; background: var(--surface); }
 .dc-cell           { max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dc-cell--wide     { max-width: 230px; }
@@ -442,21 +436,73 @@ tr.dc-enter { animation-name: fade-in; }
   transition: box-shadow var(--duration-fast) var(--ease-swift), border-color var(--duration-fast) var(--ease-swift);
 }
 .dc-tile:hover       { border-color: var(--input); box-shadow: var(--shadow-hover); }
-.dc-tile--on         { border-color: var(--input); background: var(--accent-soft); }
 
-/* ---- Drawer -------------------------------------------------------------- */
-.dc-scrim { position: absolute; inset: 0; background: color-mix(in oklab, var(--scrim) 45%, transparent); backdrop-filter: blur(3px); }
-.dc-drawer {
-  position: relative; margin-left: auto; width: min(1040px, 100vw); height: 100%;
-  display: flex; flex-direction: column; background: var(--background);
-  border-left: 1px solid var(--border); box-shadow: var(--shadow-lift);
+/* ---- The project page's jump nav ----------------------------------------
+ *
+ * What the drawer's tab strip became. The tabs hid four fifths of a project
+ * behind a click; these scroll to a section that is already on the page, so the
+ * reader can see a campus's capacity and the obstacle blocking it at once.
+ *
+ * Sticky because the page is long by design. Offset by `--dc-header-h`, which a
+ * ResizeObserver measures off the real header — the table's sticky head already
+ * relies on it, so the two cannot drift apart. */
+.dc-jump {
+  position: sticky; top: calc(var(--dc-header-h, 56px) + 0px); z-index: 5;
+  display: flex; flex-wrap: wrap; gap: 6px;
+  padding: 8px 0; margin: -8px 0;
+  background: color-mix(in oklab, var(--background) 92%, transparent);
+  backdrop-filter: blur(6px);
 }
-.dc-xbtn {
-  flex: none; width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center;
-  border: 1px solid var(--border); border-radius: 10px; background: var(--surface);
-  color: var(--muted-foreground); cursor: pointer;
+.dc-jump-btn {
+  padding: 4px 11px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--surface);
+  font-family: var(--font-mono); font-size: 11.5px; letter-spacing: .01em;
+  color: var(--muted-foreground);
+  transition: border-color var(--duration-fast) var(--ease-swift),
+              color var(--duration-fast) var(--ease-swift);
 }
-.dc-xbtn:hover { background: var(--muted); color: var(--foreground); }
+.dc-jump-btn:hover { border-color: var(--input); color: var(--foreground); }
+
+/* One row of the twelve tracked fields: name, value, evidence.
+ *
+ * The value column is capped rather than elastic. A formatted figure needs about
+ * 20 characters and a phase name about 12, so letting it take a third of a
+ * 1500px page would put a 12-character word in a 500px box and push the sentence
+ * that evidences it off to the right. The sentence is the part that wants the
+ * room, so `1fr` goes there. */
+.dc-field-row {
+  display: grid;
+  grid-template-columns: 132px minmax(0, 22ch) minmax(0, 1fr);
+  gap: 20px; align-items: baseline;
+}
+
+/* Below this the three columns are narrower than the content, so they stack —
+   name above value above evidence, which is what the drawer always did and is
+   correct when there is no width to spend. */
+@media (max-width: 1000px) {
+  .dc-field-row { grid-template-columns: 132px minmax(0, 1fr); }
+  .dc-field-row > :last-child { grid-column: 2; }
+}
+@media (max-width: 640px) {
+  .dc-field-row { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+  .dc-field-row > :last-child { grid-column: 1; }
+}
+
+/* One milestone: date, what it was, the sentence behind it. Same three-column
+   reasoning as `.dc-field-row` — the evidence is what wants the room. */
+.dc-milestone-row {
+  display: grid;
+  grid-template-columns: 104px minmax(0, 40ch) minmax(0, 1fr);
+  gap: 18px; align-items: baseline;
+}
+@media (max-width: 1000px) {
+  .dc-milestone-row { grid-template-columns: 104px minmax(0, 1fr); }
+  .dc-milestone-row > :last-child { grid-column: 2; }
+}
+@media (max-width: 640px) {
+  .dc-milestone-row { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+  .dc-milestone-row > :last-child { grid-column: 1; }
+}
 
 /* ---- Terminal log ---------------------------------------------------------
    The one surface in the console that does not follow the page theme, and that
@@ -557,7 +603,6 @@ tr.dc-enter { animation-name: fade-in; }
               box-shadow var(--duration-fast) var(--ease-swift);
 }
 .dc-pcard:hover  { border-color: var(--input); box-shadow: var(--shadow-hover); }
-.dc-pcard--open  { border-color: var(--input); background: var(--accent-soft); }
 .dc-pcard-top    { display: flex; align-items: baseline; gap: 8px; }
 .dc-pcard-name   { flex: 1; min-width: 0; font-size: 15px; font-weight: 600; line-height: 20px; }
 .dc-pcard-meta   {
@@ -581,11 +626,9 @@ tr.dc-enter { animation-name: fade-in; }
 
   .dc-view        { padding: 16px 14px 48px !important; gap: 12px !important; }
 
-  /* Cards, drawer and dialogs all lose a step of padding. 24px of gutter on a
-     375px screen is 13% of the width. */
-  .dc-drawer-body { padding: 16px 14px 40px !important; }
-  .dc-drawer-head { padding: 14px 14px 12px !important; }
-  .dc-drawer-tabs { padding: 6px 14px 0 !important; }
+  /* The jump nav scrolls rather than wrapping to four rows on a phone. */
+  .dc-jump { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+  .dc-jump::-webkit-scrollbar { display: none; }
 
   /* Coverage rows are a fixed 150px + 64px grid; on 375px that is 57% of the
      width spent before the bar starts. */
