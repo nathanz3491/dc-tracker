@@ -3128,8 +3128,67 @@ function CapexView({ data, allowAi, onOpen }) {
     color: "var(--muted-foreground)", textAlign: "center",
     padding: "8px 8px 0", whiteSpace: "nowrap",
   };
-  const head = (label, why, align) => html`
-    <${TableHead} align=${align}><span title=${why}>${label}</span><//>`;
+  /* The qualifications this table carries, in column order, each with the
+   * columns it attaches to. Only the ones that actually apply to this dataset
+   * are built, so a clean database shows no markers rather than five notes
+   * saying nothing happened. */
+  const notes = [
+    { key: "floor", cols: ["planned", "running", "confirmed $"],
+      body: html`<span><b>Every number here is a minimum.</b>${" "}If nobody has said how big a
+        project is, it counts as zero — so a buyer really has at least this much, usually
+        more.</span>` },
+    { key: "attribution", cols: ["buyer"],
+      body: html`<span>We can name a buyer for ${Math.round(cover.attributed_pct)}% of projects:
+        ${" "}${Math.round(cover.named_tenant_pct)}% because a source said so, and
+        ${" "}${Math.round(cover.self_built_pct)}% worked out from who owns the site — those are
+        marked <b>*</b>. Biggest first, with the "nobody named" row pinned to the bottom; it is a
+        leftover, not a buyer.</span>` },
+    { key: "money", cols: ["confirmed $"],
+      body: html`<span><b>Trust the megawatts before the dollars.</b>${" "}This column sums only
+        figures some source confirmed for that site.
+        ${excludedUSD > 0 && html`<span>${" "}${fmtUSD(excludedUSD)} more was claimed but never
+        confirmed — usually a headline number for a whole programme ("OpenAI's $500 billion
+        Stargate") attached to one site — and is excluded and disclosed, not summed.</span>`}
+        ${outOfScopeUSD > 0 && html`<span>${" "}A further ${fmtUSD(outOfScopeUSD)} is quoted
+        correctly and is not this site's money: the article calls it a programme, a region's
+        economic impact, or the operator's whole estate. Also excluded.</span>`}
+        ${" "}Open a project to see which of its numbers are flagged.</span>` },
+    basesTotal > 0 && basisUnrecorded > 0 && { key: "basis", cols: ["planned", "running"],
+      body: html`<span><b>Not every megawatt is the same megawatt.</b>${" "}A campus can be quoted
+        as its computing load, as the whole site's power draw, or as a nearby power plant's
+        rating — three numbers 30% or more apart.
+        ${" "}${Math.round((basisUnrecorded / basesTotal) * 100)}% of the stored capacities
+        (${basisUnrecorded.toLocaleString()} of ${basesTotal.toLocaleString()}) do not record
+        which, so those are not comparable with the ones that do. A figure marked in the table
+        above is one the article measured differently.</span>` },
+    programmes.length > 0 && { key: "programme", cols: ["confirmed $"],
+      body: html`<span><b>${programmes.length}
+        ${programmes.length === 1 ? "figure" : "figures"} may be a programme, not a site.</b>
+        ${" "}The same amount stands as the cost of several of one operator's campuses at once,
+        which a single site's cost cannot be:
+        ${" "}${programmes.slice(0, 4).map((f, i) => html`<span key=${f.operator + f.investment_usd}
+          >${i > 0 ? ", " : ""}${f.operator} ${fmtUSD(f.investment_usd)} on ${f.sites} sites</span>`)}${programmes.length > 4 ? `, and ${programmes.length - 4} more` : ""}.
+        ${" "}These are still counted above — correcting one is a person's call.</span>` },
+  ].filter(Boolean);
+
+  /* column name -> the note numbers on it, so a heading can carry more than one. */
+  const noteMarks = {};
+  notes.forEach((n, i) => n.cols.forEach((c) => {
+    (noteMarks[c] = noteMarks[c] || []).push(i + 1);
+  }));
+
+  const head = (label, why, align) => {
+    const marks = noteMarks[label] || [];
+    return html`
+      <${TableHead} align=${align}>
+        <span title=${why}>${label}</span>${marks.length
+          ? html`<sup style=${{ marginLeft: 2, fontSize: 9, fontWeight: 400,
+                                color: "var(--muted-foreground)" }}
+                      title=${`see note ${marks.join(" and ")} below the table`}
+                  >${marks.join(",")}</sup>`
+          : null}
+      <//>`;
+  };
 
   // Every number in this table opens. `open` is {key, col}: which buyer, and
   // which column the reader clicked — because "8 sites" and "$185B" and "MW at
@@ -3377,59 +3436,26 @@ function CapexView({ data, allowAi, onOpen }) {
             </div>`}
         </div>
 
-        ${/* Two footers, and both are load-bearing. The first says how much of the
-              database is in the table at all; the second says that everything in
-              it is a lower bound. Either one omitted turns a floor into a total. */ ""}
+        ${/* Numbered notes, anchored to the columns they qualify.
+              These were five paragraphs stacked under the table. Each one is true
+              and each one is about a *specific column*, so as prose the reader had
+              to hold all five in their head while scanning upward and work out for
+              themselves which applied where. A marker in the heading and a
+              numbered note below is the ordinary way a table carries a
+              qualification, and it costs one character per column.
+
+              `notes` is built above so the heading markers and this list cannot
+              disagree about the numbering. */ ""}
         <div style=${{ padding: "12px 20px 16px", borderTop: "1px solid var(--border)",
-                       display: "grid", gap: 6, fontSize: 12, lineHeight: "18px",
+                       display: "grid", gap: 7, fontSize: 12, lineHeight: "18px",
                        color: "var(--muted-foreground)" }}>
-          ${/* Every gap between an expression and the next word is an explicit
-                ${" "}: htm drops the newline-plus-indent between a `${}` and the
-                text after it, which silently produced "attributed —25% because". */ ""}
-          <span>
-            ${html`<b>Every number here is a minimum.</b>`} If nobody has said how big a project is, it
-            counts as zero — so a buyer really has at least this much, usually more.
-          </span>
-          <span>
-            We can name a buyer for ${Math.round(cover.attributed_pct)}% of projects:
-            ${" "}${Math.round(cover.named_tenant_pct)}% because a source said so, and
-            ${" "}${Math.round(cover.self_built_pct)}% worked out from who owns the site — those are
-            marked ${html`<b>*</b>`}. Biggest first, with the "nobody named" row pinned to the bottom;
-            it is a leftover, not a buyer.
-          </span>
-          ${/* The one column where "a floor" is the wrong warning: it can still
-                be too high when a confirmed figure covers more than one site, and
-                saying only that it is a lower bound would be the opposite of
-                honest about it. */ ""}
-          <span>
-            ${html`<b>Trust the megawatts before the dollars.</b>`} The investment column sums only
-            figures some source confirmed for that site.
-            ${excludedUSD > 0 && html`${" "}${fmtUSD(excludedUSD)} more was claimed but never
-            confirmed — usually a headline number for a whole programme ("OpenAI's $500 billion
-            Stargate") attached to one site — and is excluded and disclosed, not summed.`}
-            ${outOfScopeUSD > 0 && html`${" "}A further ${fmtUSD(outOfScopeUSD)} is quoted
-            correctly and is not this site's money: the article calls it a programme, a region's
-            economic impact, or the operator's whole estate. Also excluded.`}
-            ${" "}Open a project to see which of its numbers are flagged.
-          </span>
-          ${basesTotal > 0 && basisUnrecorded > 0 && html`<span>
-            ${html`<b>Not every megawatt is the same megawatt.</b>`} A campus can be quoted as its
-            computing load, as the whole site's power draw, or as a nearby power plant's rating —
-            three numbers 30% or more apart.
-            ${" "}${Math.round((basisUnrecorded / basesTotal) * 100)}% of the stored capacities
-            (${basisUnrecorded.toLocaleString()} of ${basesTotal.toLocaleString()}) do not record
-            which, so those are not comparable with the ones that do. Open a project to see which
-            kind its figures are.
-          </span>`}
-          ${programmes.length > 0 && html`<span>
-            ${html`<b>${programmes.length}
-            ${programmes.length === 1 ? "figure" : "figures"} may be a programme, not a site.</b>`}
-            ${" "}The same amount stands as the cost of several of one operator's campuses at once,
-            which a single site's cost cannot be:
-            ${" "}${programmes.slice(0, 4).map((f, i) => html`<span key=${f.operator + f.investment_usd}
-              >${i > 0 ? ", " : ""}${f.operator} ${fmtUSD(f.investment_usd)} on ${f.sites} sites</span>`)}${programmes.length > 4 ? `, and ${programmes.length - 4} more` : ""}.
-            ${" "}These are still counted above — correcting one is a person's call.
-          </span>`}
+          ${notes.map((n, i) => html`
+            <div key=${n.key} id=${`capex-note-${i + 1}`}
+                 style=${{ display: "grid", gridTemplateColumns: "18px minmax(0,1fr)", gap: 6 }}>
+              <span class="dc-num" style=${{ fontSize: 11, color: "var(--muted-foreground)" }}
+                >${i + 1}</span>
+              <span>${n.body}</span>
+            </div>`)}
         </div>
       <//>
 

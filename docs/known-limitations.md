@@ -288,6 +288,16 @@ list cannot show. It now opens with the concentration figure. On the fixture tha
 immediately surfaced an inversion the old view hid: one publisher had more
 articles read but fewer stored values resting on it than another.
 
+**And the qualifications sat below the numbers they qualified.** Five paragraphs
+stacked under the capex table, each true and each about a *specific column*, so a
+reader had to hold all five in their head while scanning upward and work out for
+themselves which applied where. They are numbered notes now, with a marker in the
+heading of each column they attach to — `PLANNED¹ᐟ⁴`, `CONFIRMED $¹ᐟ³` — which is
+the ordinary way a table carries a qualification and costs one character per
+column. The list is built from one array, so a marker and its note cannot disagree
+about the numbering, and a note whose condition does not hold is not rendered at
+all rather than saying nothing happened.
+
 Also on the landing page: 25 near-identical cards with no summary, and a filter
 button reading "0 worth telling you about" — the one control on the page inviting
 a click that empties it. The window now opens with its own shape, and the button

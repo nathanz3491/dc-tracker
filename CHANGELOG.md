@@ -151,6 +151,12 @@ initial build of the v1 PRD.
   opens with the concentration figure now, which on the fixture immediately
   surfaced an inversion the old view hid.
 
+  The capex table's five qualifications were paragraphs stacked underneath it,
+  each about a specific column, so a reader held all five in their head while
+  scanning upward. They are numbered notes now, anchored by a marker in each
+  column heading they apply to, built from one array so a marker and its note
+  cannot disagree about the numbering.
+
   Also: the updates window opens with its own shape instead of 25 near-identical
   cards, and the "0 worth telling you about" button — the one control on the page,
   inviting a click that empties it — is only offered when it would leave something
