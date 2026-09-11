@@ -247,6 +247,59 @@ reason when the suite is run from a worktree. The fix is to follow the
 
 ## Fixed
 
+### 18 — The console downloaded the whole database before it could show anything
+
+| | |
+| --- | --- |
+| first observed | 2026-09-11 |
+| status | **fixed 2026-09-11** — `GET /api/projects`, `webui/query.py`, `dataset.light` |
+| measured | 4,825 KB of JSON at 437 projects, 551 ms to build, all of it before the first row |
+
+Every view was drawn from one response holding every project with every citation,
+every milestone, every tranche and every provenance record — and the browser then
+did the searching, filtering, sorting and paging itself. Measured on a 26-project
+fixture that is 9.7 KB of wire per project; two thirds of it is per-project detail
+no list view can show:
+
+| key | KB of 252 | read by a list view? |
+| --- | --- | --- |
+| `sources` | 75.6 | only the citations view, which regrouped them |
+| `standing` | 42.7 | the track strip needs `tracks`, not the full `timeline` |
+| `prov` | 37.9 | yes — the underline under every value. Kept. |
+| `events` | 22.7 | no. The timeline is on the project page. |
+| `parties`, `basis`, `blocker_rationale` | 17.7 | no |
+
+**Why it is a result problem and not a performance one.** A dataset that takes
+longer to open with every ingest teaches the reader to open it less, and the
+figures that go unchecked are the ones a reader would have caught. The cost also
+grew in the wrong place: the capex rollup alone was 304 ms of the 406 ms build,
+charged to five views that never draw it.
+
+The table asks a question now — `?q=&state=&sort=&offset=` — and gets thirty rows
+and a count for the whole filter. The shell keeps a light index of every project,
+because the two map components plot all of them at once and one of them reads
+`window.DCTRACKER` directly. Capex and the citations list fetch their own data
+when opened; a publisher's articles arrive when its card is expanded.
+
+| | before | after |
+| --- | --- | --- |
+| first screen, 437 projects | 4,825 KB raw / 114 KB gz | **390 KB raw / 17 KB gz** |
+| server time for it | 551 ms | **73 ms** |
+| citations list | (in every payload) | 1 KB at rest, ~40 KB per publisher opened |
+
+Two things this deliberately did **not** do. The terminal UI still calls
+`dataset.build` and still gets everything: it runs in-process with the database
+beside it and pays no wire cost, so starving it would be a cost with no saving.
+And the file export is unchanged — the guarantee there is that everything is in
+the file.
+
+**One defect found on the way.** The citations view grouped articles by "strip
+`www.`, keep the last two labels" while the measured publisher record beside each
+host was keyed by the CLI's registrable domain, under a comment claiming the two
+matched. They do not, for any publisher under a two-part suffix — `bbc.co.uk`
+grouped as `co.uk` — so that host's record was attached to the wrong row. One
+definition now, the CLI's.
+
 ### 17 — A project's detail was a popup, so it could not be linked or hold the data
 
 | | |

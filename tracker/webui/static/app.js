@@ -88,25 +88,6 @@ const columnLabel = (key) => (COLUMN[key] || {}).label || key;
  * away and the switch says how many. */
 const DENSE_THRESHOLD = 50;
 
-/* One definition of "does this project match what I typed", shared by the table
- * filter and every project picker in the command form.
- *
- * They had drifted: the table searched six text fields and not the id, and the
- * pickers did not search at all — they were 224-option dropdowns. Both are the
- * same question, so both ask it here.
- *
- * `#42` means the id and nothing else. A bare `42` stays a substring match,
- * because it is also a capacity, a year and part of a name. */
-function matchesProject(p, query) {
-  const q = query.trim().toLowerCase();
-  if (!q) return true;
-  if (q.startsWith("#")) return String(p.id) === q.slice(1).trim();
-  const hay = [p.id, p.name, p.company, p.customer, p.city, p.county, p.state, p.blocker]
-    .filter((v) => v != null && v !== "").join(" ").toLowerCase();
-  // Every word has to appear, so "meta ohio" narrows rather than widens.
-  return q.split(/\s+/).every((word) => hay.includes(word));
-}
-
 /* label, and the sentence shown when a value has no quote of its own. */
 const TIER = {
   reported:    ["quoted", "reported"],
@@ -826,6 +807,164 @@ function ProjectCard({ p, data, onOpen, onQuote }) {
     </button>`;
 }
 
+/* ---- the table asks the server -------------------------------------------
+ *
+ * Searching, filtering, sorting and paging all moved to `webui/query.py`. What
+ * is left here is the three things a client is actually better placed to do:
+ * debounce the typing, keep the old rows on screen while the new ones are in
+ * flight, and ask for the next thirty before the reader reaches the bottom.
+ *
+ * The rule the loading states follow: **never let a pending request look like an
+ * answer.** An empty table means "nothing matches", a dimmed table means "this
+ * is last second's answer", and a skeleton means "we have not been told yet".
+ * Blanking the table during a 250ms debounce reads as "no results", and a reader
+ * who sees that once stops trusting the filter.
+ */
+
+const PAGE_SIZE = 30;
+
+/* A value that lags the one being typed, so a keystroke is not a request.
+   250ms is what the updates view settled on: long enough that "abilene" is one
+   query rather than seven, short enough to land while the reader is still
+   looking at the box. */
+function useDebounced(value, ms) {
+  const [settled, setSettled] = useState(value);
+  useEffect(() => {
+    if (settled === value) return undefined;
+    const timer = setTimeout(() => setSettled(value), ms);
+    return () => clearTimeout(timer);
+  }, [value, ms, settled]);
+  return settled;
+}
+
+function projectsUrl(filters, sort, offset) {
+  const params = new URLSearchParams();
+  for (const [key, value] of [["q", filters.q], ["state", filters.state], ["phase", filters.phase],
+                              ["conf", filters.conf], ["risk", filters.risk],
+                              ["severity", filters.severity]]) {
+    if (value) params.set(key, value);
+  }
+  if (filters.quoted) params.set("quoted", "1");
+  params.set("sort", sort.key);
+  params.set("dir", sort.dir);
+  params.set("offset", String(offset));
+  params.set("limit", String(PAGE_SIZE));
+  return `/api/projects?${params.toString()}`;
+}
+
+/* One page of the table, and the state a reader needs told about it.
+ *
+ * `live` is a sequence number rather than a boolean: a fast typist has several
+ * requests outstanding, and the hazard is not that an old one *errors* but that
+ * it *succeeds* and paints over a newer answer. Only the newest may paint.
+ *
+ * A changed sort refetches from zero rather than reordering what is loaded.
+ * Sorting thirty of four hundred rows and presenting it as the ranking is the
+ * kind of lie that is impossible to see. */
+function useProjectPage(filters, sort) {
+  const q = useDebounced(filters.q.trim(), 250);
+  const key = JSON.stringify([{ ...filters, q }, sort]);
+  // Memoised on the serialised query, not on `filters`: that object is new on
+  // every keystroke, and an identity changing every render would rebuild the
+  // scroll observer every render.
+  const query = useMemo(() => ({ ...filters, q }), [key]);
+  const [state, setState] = useState({
+    rows: [], total: null, loading: true, appending: false, error: null, stale: false,
+  });
+  const [attempt, setAttempt] = useState(0);
+  const live = useRef(0);
+  const latest = useRef(state);
+  latest.current = state;
+
+  useEffect(() => {
+    const mine = ++live.current;
+    const ctl = new AbortController();
+    setState((s) => ({ ...s, loading: true, error: null, stale: s.rows.length > 0 }));
+    api(projectsUrl(query, sort, 0), { signal: ctl.signal })
+      .then((page) => {
+        if (live.current !== mine) return;
+        setState({ rows: page.rows, total: page.total, loading: false,
+                   appending: false, error: null, stale: false });
+      })
+      .catch((err) => {
+        if (live.current !== mine || ctl.signal.aborted || err.name === "AbortError") return;
+        setState((s) => ({ ...s, loading: false, stale: false,
+                           error: err.message || "could not read the table" }));
+      });
+    return () => ctl.abort();
+  }, [key, attempt, query, sort]);
+
+  const more = useCallback(() => {
+    const s = latest.current;
+    if (s.loading || s.appending || s.error) return;
+    if (s.total == null || s.rows.length >= s.total) return;
+    const mine = live.current;
+    setState((cur) => ({ ...cur, appending: true }));
+    api(projectsUrl(query, sort, s.rows.length))
+      .then((page) => {
+        if (live.current !== mine) return;
+        setState((cur) => {
+          // Ids already held are dropped rather than appended. An offset is
+          // resolved against the database as it is now, so an ingest finishing
+          // mid-scroll can shift a row across the boundary — and a duplicate key
+          // is a React warning and a row the reader counts twice.
+          const seen = new Set(cur.rows.map((r) => r.id));
+          return { ...cur, appending: false, total: page.total,
+                   rows: [...cur.rows, ...page.rows.filter((r) => !seen.has(r.id))] };
+        });
+      })
+      .catch((err) => {
+        if (live.current === mine) {
+          setState((cur) => ({ ...cur, appending: false,
+                               error: err.message || "could not read the next page" }));
+        }
+      });
+  }, [query, sort]);
+
+  /* `pending` starts at the keystroke, not at the request. The debounce is a
+     quarter of a second of deliberate silence, and a reader who has just typed
+     something should not spend it wondering whether the box is connected to
+     anything — so the bar comes on while the query is still settling, and the
+     rows dim as soon as they are known to be out of date. */
+  const settling = q !== filters.q.trim();
+  return { ...state, more, retry: () => setAttempt((n) => n + 1),
+           pending: state.loading || settling,
+           stale: (state.stale || settling) && state.rows.length > 0,
+           hasMore: state.total != null && state.rows.length < state.total };
+}
+
+/* Load the next page before the reader arrives at the bottom, not when they do.
+   400px of lead time is the difference between a list that continues and a list
+   that stops and then continues. */
+function useSentinel(onHit, active) {
+  const ref = useRef(null);
+  useEffect(() => {
+    const node = ref.current;
+    if (!node || !active || typeof IntersectionObserver !== "function") return undefined;
+    const observer = new IntersectionObserver(
+      (entries) => { if (entries.some((e) => e.isIntersecting)) onHit(); },
+      { rootMargin: "400px" },
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [onHit, active]);
+  return ref;
+}
+
+/* Placeholder rows in the real column widths, so the table does not jump when
+   the answer lands. `aria-hidden` with a live region beside it: a screen reader
+   should hear "loading", not fourteen empty cells. */
+function SkeletonRows({ columns, count }) {
+  return html`${Array.from({ length: count }, (_, r) => html`
+    <tr key=${`skel-${r}`} class="dc-row dc-row--skel" aria-hidden="true">
+      ${Array.from({ length: columns }, (_, c) => html`
+        <td key=${c} class="dc-cell">
+          <${Skeleton} className="mrd-shimmer" height=${12}
+                       width=${`${[68, 88, 54, 76][(r + c) % 4]}%`} />
+        </td>`)}
+    </tr>`)}`;
+}
+
 const BLANK_FILTERS = { q: "", state: "", phase: "", conf: "", risk: "", severity: "", quoted: false };
 
 function ProjectsView({ data, onOpen }) {
@@ -844,38 +983,19 @@ function ProjectsView({ data, onOpen }) {
   const [showCoverage, setShowCoverage] = useState(false);
   const activeFilters = Object.entries(f).filter(([k, v]) => k !== "q" && v !== "" && v !== false).length;
 
-  const rows = useMemo(() => {
-    const q = f.q.trim().toLowerCase();
-    const out = data.projects.filter((p) => {
-      // The id is searchable, and `#42` finds only #42. Everything else on the
-      // page identifies a project by id — the drawer header, the run log, every
-      // command that takes one — and the table was the one place you could not
-      // type one in. A bare `42` still matches anything containing "42", because
-      // that is also a capacity and a year somebody may be looking for.
-      if (q && !matchesProject(p, q)) return false;
-      if (f.state && p.state !== f.state) return false;
-      if (f.phase && p.phase !== f.phase) return false;
-      if (f.conf && p.confidence < Number(f.conf)) return false;
-      if (f.risk && !p.risks.some((r) => r.status === "open" && r.category === f.risk)) return false;
-      if (f.severity && !p.risks.some((r) => r.status === "open" && r.severity === f.severity)) return false;
-      // "Quoted only" is about the values, not the score: keep rows where every
-      // populated tracked field rests on a verbatim quote or a lookup.
-      if (f.quoted && TRACKED.some((k) => ["unconfirmed", "inferred", "defaulted"].includes(tierOf(p, k)))) return false;
-      return true;
-    });
-    const dir = sort.dir === "asc" ? 1 : -1;
-    return out.sort((a, b) => {
-      const x = a[sort.key], y = b[sort.key];
-      if (x == null && y == null) return 0;
-      if (x == null) return 1;
-      if (y == null) return -1;
-      return (typeof x === "string" ? x.localeCompare(y) : x - y) * dir;
-    });
-  }, [data, f, sort]);
+  const { rows, total, loading, appending, error, stale, pending, more, retry, hasMore } =
+    useProjectPage(f, sort);
+  const sentinel = useSentinel(more, hasMore && !loading && !error);
 
   const columns = ["id", ...cols.visible, ...(wide ? AUDIT : [])];
   const clean = JSON.stringify(f) === JSON.stringify(BLANK_FILTERS);
-  const states = useMemo(() => [...new Set(data.projects.map((p) => p.state))].sort(), [data]);
+  // Every state in the fleet, from the light index the shell already holds — a
+  // filter offering only the states on the current page would hide the rest of
+  // the country the moment paging arrived.
+  const states = useMemo(
+    () => [...new Set((data.projects || []).map((p) => p.state))].sort(), [data.projects]);
+  const fleet = (data.totals || {}).projects || (data.projects || []).length;
+  const first = loading && rows.length === 0;
 
   const field = (id, label, node) => html`
     <div key=${id} style=${{ display: "grid", gap: 5 }}>
@@ -884,6 +1004,18 @@ function ProjectsView({ data, onOpen }) {
       ${node}
     </div>`;
   const options = (values) => values.map((v) => html`<option key=${v} value=${v}>${v}</option>`);
+
+  const nothing = html`
+    <${EmptyState} variant="dashed" title="No project matches these filters"
+      description=${`Widen the confidence floor or clear the obstacle filter. ${fleet} projects are tracked.`} />`;
+  const failed = html`
+    <${Alert} variant="danger"><div>
+      <div class="mrd-alert-title">The table could not be read</div>
+      <div class="mrd-alert-desc">
+        ${error}${" "}
+        <button type="button" class="dc-intro-toggle" onClick=${retry}>try again</button>
+      </div>
+    </div><//>`;
 
   return html`
     <div class="dc-view dc-rise" style=${{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 16,
@@ -945,6 +1077,11 @@ function ProjectsView({ data, onOpen }) {
           <${Button} size="sm" variant="ghost" disabled=${clean}
                      onClick=${() => setF(BLANK_FILTERS)}>Clear filters<//>
         </div>
+        ${/* The one piece of chrome that is not decoration: while a query is in
+             flight the rows below are last second's answer, and this is what
+             says so. It sits on the filter card because that is what the reader
+             just touched. */ ""}
+        <div class=${`dc-pending${pending ? " dc-pending--on" : ""}`} aria-hidden="true" />
       <//>
 
       ${/* Both the coverage strip and the seven-swatch provenance key now fold.
@@ -955,8 +1092,11 @@ function ProjectsView({ data, onOpen }) {
            anyone opened this view for. */ ""}
       <div style=${{ display: "flex", flexWrap: "wrap", alignItems: "baseline",
                      justifyContent: "space-between", gap: "10px 18px" }}>
-        <span style=${{ fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--muted-foreground)" }}>
-          ${rows.length} of ${data.projects.length} projects · sorted by ${sort.key} ${sort.dir}
+        <span style=${{ fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--muted-foreground)" }}
+              aria-live="polite">
+          ${first
+            ? "reading the table…"
+            : `${rows.length}${total != null && total > rows.length ? ` of ${total}` : ""} project${rows.length === 1 ? "" : "s"} · sorted by ${sort.key} ${sort.dir}`}
         </span>
         <div style=${{ display: "flex", gap: 16 }}>
           <button type="button" class="dc-intro-toggle" aria-expanded=${showKey}
@@ -980,17 +1120,21 @@ function ProjectsView({ data, onOpen }) {
 
       ${showCoverage && html`<${CoverageStrip} data=${data} />`}
 
-      ${narrow
+      ${error && rows.length === 0 ? failed : narrow
         ? html`
-          <div style=${{ display: "grid", gap: 9 }}>
+          <div class=${`dc-paged${stale ? " dc-paged--stale" : ""}`} style=${{ display: "grid", gap: 9 }}>
             ${rows.map((p, i) => html`
               <div key=${p.id} class=${i < 12 ? "dc-enter" : undefined} style=${i < 12 ? { "--i": i } : undefined}>
                 <${ProjectCard} p=${p} data=${data}
                                 onOpen=${onOpen} onQuote=${showQuote} />
               </div>`)}
-            ${rows.length === 0 && html`
-              <${EmptyState} variant="dashed" title="No project matches these filters"
-                description=${`Widen the confidence floor or clear the obstacle filter. ${data.projects.length} projects are loaded.`} />`}
+            ${first && [0, 1, 2, 3, 4].map((i) => html`
+              <${Skeleton} key=${`skel-${i}`} className="mrd-shimmer" style=${{ height: 104 }} />`)}
+            ${!loading && rows.length === 0 && nothing}
+            ${appending && html`<${Skeleton} className="mrd-shimmer" style=${{ height: 104 }} />`}
+            <div ref=${sentinel} />
+            ${hasMore && html`<${Button} size="sm" variant="outline" onClick=${more}
+              disabled=${appending}>${appending ? "loading…" : `Load ${Math.min(PAGE_SIZE, total - rows.length)} more`}<//>`}
           </div>`
         : html`
       <${Card}>
@@ -1003,6 +1147,7 @@ function ProjectsView({ data, onOpen }) {
              how everything inside positions. See app.css for why the header row
              cannot also be sticky. */ ""}
         <div style=${{ minWidth: 0 }}>
+          <div class=${`dc-paged${stale ? " dc-paged--stale" : ""}`}>
           <${Table} density="compact">
             <${TableHeader}><${TableRow}>
               ${columns.map((key, i) => html`
@@ -1049,18 +1194,31 @@ function ProjectsView({ data, onOpen }) {
                     ${p.filled}/12</td>
                   <td><${TrackStrip} standing=${p.standing} tracks=${data.tracks} /></td>
                 </tr>`)}
+              ${first && html`<${SkeletonRows} columns=${columns.length + 2} count=${8} />`}
+              ${appending && html`<${SkeletonRows} columns=${columns.length + 2} count=${2} />`}
             <//>
           <//>
-          ${rows.length === 0 && html`
-            <div style=${{ padding: "8px 20px 20px" }}>
-              <${EmptyState} variant="dashed" title="No project matches these filters"
-                description=${`Widen the confidence floor or clear the obstacle filter. ${data.projects.length} projects are loaded.`} />
+          </div>
+          <div ref=${sentinel} />
+          ${!loading && rows.length === 0 && html`
+            <div style=${{ padding: "8px 20px 20px" }}>${nothing}</div>`}
+          ${error && rows.length > 0 && html`
+            <div style=${{ padding: "0 20px 16px" }}>${failed}</div>`}
+          ${/* The button is not a fallback for the sentinel, it is the keyboard
+               path to it: a reader tabbing down the table never scrolls, and an
+               observer that only fires on scroll would strand them at row 30. */ ""}
+          ${hasMore && !error && html`
+            <div style=${{ padding: "4px 20px 18px" }}>
+              <${Button} size="sm" variant="outline" onClick=${more} disabled=${appending}>
+                ${appending ? "loading…" : `Load ${Math.min(PAGE_SIZE, total - rows.length)} more`}
+              <//>
             </div>`}
         </div>
       <//>`}
       <${QuotePopover} quote=${quote} />
     </div>`;
 }
+
 
 /* ---- The project page ------------------------------------------------------
  *
@@ -3188,8 +3346,8 @@ function DuplicateGroup({ ids, byId, evidence, label }) {
             </span>
             <span style=${chip(PHASE_TOKEN[p.phase] || "--muted-foreground")}>${p.phase}</span>
             <span class="dc-num" style=${{ fontSize: 12, color: "var(--muted-foreground)", whiteSpace: "nowrap" }}
-                  title=${`${p.sources.length} citation(s), last updated ${String(p.updated_at).slice(0, 10)}`}>
-              ${p.sources.length} src · ${String(p.updated_at).slice(0, 10)}
+                  title=${`${p.n_sources} citation(s), last updated ${String(p.updated_at).slice(0, 10)}`}>
+              ${p.n_sources} src · ${String(p.updated_at).slice(0, 10)}
             </span>
           </div>`)}
       </div>
@@ -3395,7 +3553,10 @@ function CapexBreakdown({ position, col, byId, bucket, grain, onOpenProject }) {
             </div>`)}
         </div>`);
   } else if (col === "delays") {
-    const slipped = sites.filter((s) => (s.events || []).some((e) => e.event_type === "delayed"));
+    /* `delays` rather than a scan of `events`: the index that feeds this view
+       carries the slipped dates and not the whole history, because the whole
+       history of four hundred projects is a megabyte this page never draws. */
+    const slipped = sites.filter((s) => (s.delays || []).length > 0);
     heading = "sites whose expected online date has moved later";
     body = slipped.length === 0
       ? html`<div style=${{ color: "var(--muted-foreground)" }}>no recorded slip on any counted site</div>`
@@ -3403,7 +3564,7 @@ function CapexBreakdown({ position, col, byId, bucket, grain, onOpenProject }) {
         <div key=${s.id} style=${{ marginBottom: 6 }}>
           ${site(s, s.expected_online
             ? html`<span class="dc-num">now online ${yearOf(s)}</span>` : null)}
-          ${(s.events || []).filter((e) => e.event_type === "delayed").map((e, i) => html`
+          ${(s.delays || []).map((e, i) => html`
             <div key=${i} style=${{ paddingLeft: 18, fontSize: 12, color: "var(--muted-foreground)" }}>
               ${e.description}</div>`)}
         </div>`);
@@ -3441,8 +3602,54 @@ function CapexBreakdown({ position, col, byId, bucket, grain, onOpenProject }) {
     </div>`;
 }
 
+/* The rollup arrives on its own request, and this is the wait.
+ *
+ * It used to be a key on `/api/dataset`, which meant every visit to every other
+ * view paid 304ms for a rollup it does not draw — three quarters of the whole
+ * payload's build time for one view of six. Fetched here instead, with the wait
+ * shown rather than hidden: a skeleton in the shape of what is coming, because a
+ * blank card for half a second reads as "there is nothing here". */
 function CapexView({ data, allowAi, onOpen }) {
-  const capex = data.capex;
+  const [capex, setCapex] = useState(null);
+  const [failed, setFailed] = useState(null);
+  const [attempt, setAttempt] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    setFailed(null);
+    api("/api/capex")
+      .then((payload) => { if (!cancelled) setCapex(payload); })
+      .catch((err) => { if (!cancelled) setFailed(err.message || "could not read the rollup"); })
+    return () => { cancelled = true; };
+  }, [attempt]);
+
+  if (failed) {
+    return html`
+      <div class="dc-view dc-rise" style=${{ display: "grid", gap: 16, padding: "22px 26px 60px" }}>
+        <${Alert} variant="danger"><div>
+          <div class="mrd-alert-title">The rollup could not be read</div>
+          <div class="mrd-alert-desc">
+            ${failed}${" "}
+            <button type="button" class="dc-intro-toggle"
+                    onClick=${() => setAttempt((n) => n + 1)}>try again</button>
+          </div>
+        </div><//>
+      </div>`;
+  }
+  if (!capex) {
+    return html`
+      <div class="dc-view dc-rise" style=${{ display: "grid", gap: 16, padding: "22px 26px 60px" }}
+           aria-busy="true">
+        <${Skeleton} className="mrd-shimmer" style=${{ height: 38, maxWidth: 520 }} />
+        <${Skeleton} className="mrd-shimmer" style=${{ height: 104 }} />
+        <${Skeleton} className="mrd-shimmer" style=${{ height: 320 }} />
+        <${Skeleton} className="mrd-shimmer" style=${{ height: 180 }} />
+      </div>`;
+  }
+  return html`<${CapexBody} data=${data} capex=${capex} allowAi=${allowAi} onOpen=${onOpen} />`;
+}
+
+function CapexBody({ data, capex, allowAi, onOpen }) {
   const cover = capex.coverage;
   const dupes = capex.duplicates;
   const byId = useMemo(
@@ -3891,69 +4098,6 @@ function CapexView({ data, allowAi, onOpen }) {
     </div>`;
 }
 
-/* Type to find a project; click to take it.
- *
- * The pickers began as plain `<select>`s holding every row in the database. With
- * 224 of them that is not a picker, it is a wall — and the report back was that
- * the form had made things *harder*, because a command taking several projects
- * looked like it took one. Same matcher as the table's search box, so `#42`,
- * `meta ohio` and `abilene` behave the same in both places. */
-function ProjectSearch({ projects, exclude = [], placeholder, onPick, value }) {
-  const [query, setQuery] = useState("");
-  const [open, setOpen] = useState(false);
-  const box = useRef(null);
-
-  const hits = useMemo(() => {
-    const skip = new Set(exclude.map(String));
-    return projects.filter((p) => !skip.has(String(p.id)) && matchesProject(p, query)).slice(0, 40);
-  }, [projects, exclude.join(","), query]);
-
-  // A click anywhere else closes it. Without this the list stays over whatever
-  // you were reaching for next.
-  useEffect(() => {
-    if (!open) return;
-    const away = (e) => { if (box.current && !box.current.contains(e.target)) setOpen(false); };
-    document.addEventListener("mousedown", away);
-    return () => document.removeEventListener("mousedown", away);
-  }, [open]);
-
-  const take = (project) => { onPick(project.id); setQuery(""); setOpen(false); };
-
-  return html`
-    <div ref=${box} style=${{ position: "relative" }}>
-      <${Input} size="sm" value=${query} placeholder=${placeholder || "search projects…"}
-        onFocus=${() => setOpen(true)}
-        onChange=${(e) => { setQuery(e.target.value); setOpen(true); }}
-        onKeyDown=${(e) => {
-          if (e.key === "Enter" && hits.length) { e.preventDefault(); take(hits[0]); }
-          if (e.key === "Escape") setOpen(false);
-        }} />
-      ${open && html`
-        <div class="dc-picker">
-          ${hits.length === 0 && html`
-            <div class="dc-picker-empty">
-              nothing matches ${query.trim() ? html`<b>${query.trim()}</b>` : "yet"}
-            </div>`}
-          ${hits.map((p) => html`
-            <button key=${p.id} type="button" class="dc-picker-row" onClick=${() => take(p)}>
-              <span class="dc-picker-id">#${p.id}</span>
-              <span class="dc-picker-name">${p.company} — ${p.name}</span>
-              <span class="dc-picker-where">${place(p)}</span>
-            </button>`)}
-          ${hits.length === 40 && html`
-            <div class="dc-picker-empty">first 40 shown — keep typing to narrow it</div>`}
-        </div>`}
-      ${value != null && value !== "" && html`
-        <div style=${{ marginTop: 6 }}>
-          <button type="button" class="dc-chip-x" title="Clear" onClick=${() => onPick("")}>
-            ${(() => { const p = projects.find((x) => String(x.id) === String(value));
-                       return p ? `#${p.id} ${p.name}` : `#${value}`; })()}
-            <span aria-hidden="true">✕</span>
-          </button>
-        </div>`}
-    </div>`;
-}
-
 const WINDOWS = [
   [1, "today"],
   [7, "week"],
@@ -4052,7 +4196,8 @@ const WATCH_KIND_LABEL = { company: "operator", tenant: "tenant", project: "proj
  * "meta" has to put the operator Meta above a project whose blocker sentence
  * happens to mention it, and a company above the twelve projects it contains,
  * because the company is the subscription that covers all twelve. Word-wise like
- * `matchesProject`, so "meta ohio" narrows here the same way it narrows the table. */
+ * word-wise, so "meta ohio" narrows here the same way it narrows the table —
+ * where the same rule is now applied by `webui/query.py`, in SQL. */
 function rankWatchCandidates(candidates, query, coveredIds) {
   const q = query.trim().toLowerCase();
   const kindRank = { company: 0, tenant: 1, project: 2 };
@@ -4111,7 +4256,7 @@ function WatchPicker({ projects, watchlist, disabled, onAdd, error }) {
   useEffect(() => { setActive(firstOpen < 0 ? 0 : firstOpen); }, [query, firstOpen]);
 
   // A click anywhere else closes it, or the list stays over whatever you were
-  // reaching for next. Same handler `ProjectSearch` uses.
+  // reaching for next.
   useEffect(() => {
     if (!open) return;
     const away = (e) => { if (box.current && !box.current.contains(e.target)) setOpen(false); };
@@ -4765,19 +4910,71 @@ function ArticleModal({ article, onClose }) {
 
 /* Every publisher, every article, and what each one actually decided.
  *
- * Both halves come from data the payload already carries: the per-publisher record
- * from `/api/publishers`, which the server has computed and shipped since `tracker
- * sources` existed and nothing rendered; and every citation from
- * `projects[].sources[]`.
+ * Two requests, each answering half of it. `/api/articles` groups the citations
+ * by publisher — it used to be done here, over every project's `sources[]`, which
+ * is why those citations had to be in the list payload at all: 75.6 KB of a
+ * 252 KB fixture response, carried on every visit to every view so that this one
+ * could regroup it. `/api/publishers` adds the measured record — how many stored
+ * values each publisher's claims actually decided — and costs ~0.24s, so it
+ * stays separate and the list paints without waiting for it.
  *
- * **URLs are deduplicated here, not on the server.** One article routinely cites
+ * **URLs are deduplicated, and by the server now.** One article routinely cites
  * several projects — 2,758 source rows over 1,928 distinct URLs — and the page
- * wants the article once, carrying the list of projects that rest on it. */
+ * wants the article once, carrying the list of projects that rest on it. Moving
+ * that server-side also fixed a real defect: the grouping key here was "strip
+ * `www.`, keep the last two labels", which turns `bbc.co.uk` into `co.uk`, while
+ * the record beside it was keyed by the CLI's registrable domain. They are now
+ * the same function.
+ *
+ * At rest this holds a count per publisher and no articles at all. A card's
+ * articles arrive when it is opened. */
 function SourcesView({ data }) {
   const [open, setOpen] = useState(null);
   const [expanded, setExpanded] = useState(null);
   const [query, setQuery] = useState("");
   const [trust, setTrust] = useState(null);
+  const [corpus, setCorpus] = useState(null);
+  const [failed, setFailed] = useState(null);
+  const [pending, setPending] = useState(false);
+  const [loaded, setLoaded] = useState({});
+
+  /* The publisher list — a name, a count and a date each, and no articles.
+     Searching goes back to the server because the search reaches inside the
+     articles, which are not here: a filter that could only see what had been
+     loaded would quietly stop finding things. */
+  const needle = useDebounced(query.trim(), 250);
+  useEffect(() => {
+    let cancelled = false;
+    const ctl = new AbortController();
+    setFailed(null);
+    setPending(true);
+    api(`/api/articles${needle ? `?q=${encodeURIComponent(needle)}` : ""}`, { signal: ctl.signal })
+      .then((payload) => { if (!cancelled) { setCorpus(payload); setPending(false); } })
+      .catch((err) => {
+        if (cancelled || ctl.signal.aborted || err.name === "AbortError") return;
+        setPending(false);
+        setFailed(err.message || "could not read the citations");
+      });
+    return () => { cancelled = true; ctl.abort(); };
+  }, [needle]);
+
+  /* One publisher's articles, fetched when its card is opened and kept after.
+     Shipping all of them so that one card can be expanded is the same mistake
+     this view was built to undo, one level down — 1.25 MB on a 437-project fleet
+     to show what a click needs 40 KB of. */
+  const expand = useCallback((host) => {
+    setExpanded((current) => (current === host ? null : host));
+    setLoaded((held) => {
+      if (held[host] !== undefined) return held;
+      api(`/api/articles?host=${encodeURIComponent(host)}`)
+        .then((payload) => {
+          const group = (payload.publishers || []).find((g) => g.host === host);
+          setLoaded((cur) => ({ ...cur, [host]: (group && group.loaded) || [] }));
+        })
+        .catch(() => setLoaded((cur) => ({ ...cur, [host]: [] })));
+      return { ...held, [host]: null };  // null: asked for, not yet here
+    });
+  }, []);
 
   /* The publisher record rides on `/api/publishers` rather than `/api/dataset`,
      because the survey costs ~0.24s and the dataset is refetched after every run.
@@ -4792,43 +4989,43 @@ function SourcesView({ data }) {
   }, []);
 
   const publishers = useMemo(() => {
-    const host = (u) => {
-      try {
-        const h = new URL(u).hostname.replace(/^www\./, "");
-        const parts = h.split(".");
-        return parts.length > 2 ? parts.slice(-2).join(".") : h;
-      } catch { return "?"; }
-    };
-    const byUrl = new Map();
-    for (const p of data.projects || []) {
-      for (const s of p.sources || []) {
-        const entry = byUrl.get(s.url) || { ...s, publisher: host(s.url), projects: [] };
-        entry.projects.push({ id: p.id, name: `${p.company} — ${p.name}` });
-        byUrl.set(s.url, entry);
-      }
-    }
-    const groups = new Map();
-    for (const a of byUrl.values()) {
-      const g = groups.get(a.publisher) || { host: a.publisher, articles: [] };
-      g.articles.push(a);
-      groups.set(a.publisher, g);
-    }
-    /* The measured record, keyed onto the same publisher identity the CLI prints.
-       Absent for a host with no decisions yet, which is most of them. */
+    /* Grouped by the server; ranked here, because the ranking depends on the
+       second request. The measured record is keyed onto the same publisher
+       identity the CLI prints, and is absent for a host that has decided
+       nothing yet — which is most of them. */
     const stats = new Map((trust?.sources?.top || []).map((h) => [h.host, h]));
-    return [...groups.values()]
+    return (corpus?.publishers || [])
       .map((g) => ({ ...g, stat: stats.get(g.host) || null }))
       .sort((a, b) => (b.stat?.decisive || 0) - (a.stat?.decisive || 0)
-        || b.articles.length - a.articles.length
+        || b.articles - a.articles
         || a.host.localeCompare(b.host));
-  }, [data.projects, trust]);
+  }, [corpus, trust]);
 
-  const needle = query.trim().toLowerCase();
-  const shown = needle
-    ? publishers.filter((p) => p.host.includes(needle)
-        || p.articles.some((a) => (a.url + (a.excerpt || "")).toLowerCase().includes(needle)))
-    : publishers;
-  const articles = publishers.reduce((n, p) => n + p.articles.length, 0);
+  if (failed) {
+    return html`
+      <div class="dc-view dc-rise" style=${{ display: "grid", gap: 16, padding: "22px 26px 60px" }}>
+        <${Alert} variant="danger"><div>
+          <div class="mrd-alert-title">The citations could not be read</div>
+          <div class="mrd-alert-desc">${failed}</div>
+        </div><//>
+      </div>`;
+  }
+  if (!corpus) {
+    /* Six placeholder publisher cards. The shape of the answer while it is on
+       its way — not a spinner, which says "something is happening" and nothing
+       about what. */
+    return html`
+      <div class="dc-view dc-rise" style=${{ display: "grid", gap: 16, padding: "22px 26px 60px" }}
+           aria-busy="true">
+        <${Skeleton} className="mrd-shimmer" style=${{ height: 38, maxWidth: 520 }} />
+        <${Skeleton} className="mrd-shimmer" style=${{ height: 96 }} />
+        ${[0, 1, 2, 3, 4, 5].map((i) => html`
+          <${Skeleton} key=${i} className="mrd-shimmer" style=${{ height: 62 }} />`)}
+      </div>`;
+  }
+
+  const shown = publishers;
+  const articles = (corpus.totals || {}).articles || 0;
   /* How much of the dataset rests on its single largest publisher.
    *
    * The list was ordered by decided values and said so — but ordering answers
@@ -4879,10 +5076,11 @@ function SourcesView({ data }) {
       <//>
 
       ${shown.map((p) => html`
-        <${Card} key=${p.host}>
+        <div key=${p.host} class=${`dc-paged${pending ? " dc-paged--stale" : ""}`}>
+        <${Card}>
           <button type="button" class="dc-disclose"
                   aria-expanded=${expanded === p.host}
-                  onClick=${() => setExpanded(expanded === p.host ? null : p.host)}>
+                  onClick=${() => expand(p.host)}>
             <span style=${{ display: "grid", gap: 3, minWidth: 0, flex: 1 }}>
               <span style=${{ fontSize: 15, fontWeight: 500 }}>${p.host}</span>
               <span style=${{ fontSize: 12, color: "var(--muted-foreground)" }}>
@@ -4891,7 +5089,7 @@ function SourcesView({ data }) {
                       >${p.stat.decisive}</b> stored value${p.stat.decisive === 1 ? "" : "s"} rest on
                       it${decidedTotal ? ` · ${Math.round((p.stat.decisive / decidedTotal) * 100)}% of all` : ""}`
                   : "nothing here rests on it yet"}
-                ${" · "}${p.articles.length} article${p.articles.length === 1 ? "" : "s"} read
+                ${" · "}${p.articles} article${p.articles === 1 ? "" : "s"} read
                 ${p.stat && p.stat.contested > 0 && html`<span style=${{ color: "var(--warning)" }}
                   title="values where this publisher's figure won over a different figure from somebody else — the citations most worth checking"
                   >${" · "}${p.stat.contested} over a disagreeing source</span>`}</span>
@@ -4905,7 +5103,12 @@ function SourcesView({ data }) {
           </button>
           ${expanded === p.host && html`
             <div style=${{ padding: "0 16px 12px" }}>
-              ${p.articles.map((a) => html`
+              ${/* Asked for and not yet here: placeholder rows in the shape of
+                   the list, rather than a card that opens onto nothing. */ ""}
+              ${!(p.loaded || loaded[p.host]) && [0, 1, 2, 3].map((i) => html`
+                <${Skeleton} key=${i} className="mrd-shimmer"
+                             style=${{ height: 26, margin: "6px 0" }} />`)}
+              ${(p.loaded || loaded[p.host] || []).map((a) => html`
                 <button key=${a.url} type="button" class="dc-srcrow"
                         onClick=${() => setOpen(a)}>
                   <span class="dc-num" style=${{ fontSize: 11, color: "var(--muted-foreground)" }}>
@@ -4922,7 +5125,8 @@ function SourcesView({ data }) {
                     ${a.projects.length} project${a.projects.length === 1 ? "" : "s"}</span>
                 </button>`)}
             </div>`}
-        <//>`)}
+        <//>
+        </div>`)}
 
       ${shown.length === 0 && html`
         <${EmptyState} variant="dashed" title="Nothing matches"

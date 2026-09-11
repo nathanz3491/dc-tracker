@@ -1021,3 +1021,53 @@ dc-map svg:active { cursor: grabbing; }
   .dc-srcrow { grid-template-columns: minmax(0, 1fr) auto; }
   .dc-srcrow > .dc-num { grid-column: 1 / -1; }
 }
+
+/* ---- waiting for the server ----------------------------------------------
+   The table is paged and searched by the server now, so between a keystroke and
+   its answer there is a real gap. These three rules are what fills it, and each
+   says something different:
+
+   `dc-pending` — a request is in flight. A two-pixel indeterminate bar on the
+   filter card, where the reader just was.
+
+   `dc-paged--stale` — the rows below are last second's answer. Dimmed, not
+   cleared: a table emptied for a quarter of a second reads as "no results", and
+   a reader who sees that once stops trusting the filter. Still readable, still
+   clickable — a stale row is out of date, not wrong.
+
+   The skeleton rows themselves are the design system's `Skeleton`, so they
+   shimmer the same way every other placeholder here does. */
+
+.dc-pending {
+  height: 2px;
+  overflow: hidden;
+  background: transparent;
+}
+.dc-pending--on { background: color-mix(in oklab, var(--primary) 12%, transparent); }
+.dc-pending--on::after {
+  content: "";
+  display: block;
+  height: 100%;
+  width: 38%;
+  background: var(--primary);
+  animation: dc-pending-sweep 1.05s ease-in-out infinite;
+}
+@keyframes dc-pending-sweep {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(320%); }
+}
+
+.dc-paged { transition: opacity 140ms ease-out; }
+.dc-paged--stale { opacity: 0.42; }
+
+/* A placeholder row must not look like something to click. */
+tr.dc-row--skel { cursor: default; background: var(--surface); }
+tr.dc-row--skel:hover { background: var(--surface); }
+tr.dc-row--skel > .dc-cell { vertical-align: middle; }
+
+/* The sweep never settles, so under reduced motion it is a flat tint rather
+   than a faster sweep — the same treatment the caret and the dots get above. */
+@media (prefers-reduced-motion: reduce) {
+  .dc-pending--on::after { animation: none; width: 100%; opacity: 0.5; }
+  .dc-paged { transition: none; }
+}

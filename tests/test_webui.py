@@ -24,6 +24,7 @@ import pytest
 from tracker.db import init_db, session_scope
 from tracker.ingest.records import IngestRecord, RiskRecord, SourceRecord
 from tracker.upsert import upsert_record
+from tracker.vocab import TRACKED_FIELDS
 from tracker.webui import assets, catalog
 from tracker.webui import server as server_module
 from tracker.webui.runner import Busy, Runner
@@ -141,18 +142,52 @@ def test_dataset_carries_the_shape_the_page_expects(server):
     ):
         assert key in data, f"{key} missing from the dataset"
     assert data["totals"]["projects"] == 1
-    project = data["projects"][0]
-    # The two things the page cannot compute for itself.
+    # The index the maps and the pickers read: identity and the headline numbers,
+    # and nothing a reader has to click a row to see.
+    listed = data["projects"][0]
+    assert listed["name"] and listed["state"]
+    assert "prov" not in listed and "sources" not in listed
+
+
+def test_the_light_index_always_carries_risks(server):
+    """A contract with vendored code, and its failure mode is a blank map.
+
+    `static/vendor/dc-map.js` and `dc-map3d.js` both call `p.risks.some(...)`
+    unguarded, and the 3D one reads `window.DCTRACKER.projects` directly rather
+    than taking props. A row without the array throws a TypeError inside a custom
+    element: no error reaches the page, the map simply does not draw.
+    """
+    address, _ = server
+    _status, data = request(address, "/api/dataset")
+    assert data["projects"], "expected at least one project"
+    for project in data["projects"]:
+        assert isinstance(project["risks"], list)
+
+
+def test_a_table_row_carries_the_two_things_the_page_cannot_compute(server):
+    """Moved off /api/dataset with the rest of the per-project detail.
+
+    The tier and the sentence behind a value are what the underline under it
+    means, and they must arrive **with the row** — hovering is instant, and a
+    fetch on mouseover would make the provenance system feel optional.
+    """
+    address, _ = server
+    _status, page = request(address, "/api/projects")
+    project = page["rows"][0]
     assert project["standing"]["tracks"], "per-track standing must come from the backend"
     assert project["prov"]["mw_planned"]["quote"] == "will draw 900 MW"
     assert project["prov"]["mw_planned"]["quote_is_exact"] is True
 
 
 def test_dataset_carries_the_capex_rollup(server):
-    """The buyer axis, and the duplicate warning that belongs beside it."""
+    """The buyer axis, and the duplicate warning that belongs beside it.
+
+    On its own route since the rollup was measured at 304ms of the shell
+    payload's 406ms — five views of six were paying for arithmetic they never
+    show.
+    """
     address, _ = server
-    _status, data = request(address, "/api/dataset")
-    capex = data["capex"]
+    _status, capex = request(address, "/api/capex")
     assert set(capex) >= {
         "coverage",
         "positions",
@@ -315,8 +350,8 @@ def test_the_utilitys_plant_is_filed_apart_from_the_campus(tmp_path):
 def test_a_merely_unquoted_value_claims_no_reason(server):
     """The common case must not borrow the rarer one's explanation."""
     address, _ = server
-    _status, data = request(address, "/api/dataset")
-    assert data["projects"][0]["unconfirmed_because"] == {}
+    _status, page = request(address, "/api/projects")
+    assert page["rows"][0]["unconfirmed_because"] == {}
 
 
 def test_reading_the_dataset_does_not_write(server, seeded_db, logical_snapshot):
@@ -539,14 +574,31 @@ def test_the_server_and_the_front_end_agree_on_the_view_names(server):
 
 def test_the_claim_tables_are_not_in_the_list_payload(server):
     """They were 48% of a 19 MB response, for a table that renders one project at
-    a time inside a drawer most visits never open."""
+    a time on a page most visits never open."""
     address, _ = server
-    _status, data = request(address, "/api/dataset")
-    assert data["projects"], "expected at least one project"
-    for project in data["projects"]:
+    _status, page = request(address, "/api/projects")
+    assert page["rows"], "expected at least one project"
+    for project in page["rows"]:
         assert "claims_by_field" not in project
-        # What the table and the drawer still need is still there.
-        assert "prov" in project and "sources" in project
+        # What the table itself still needs is still there.
+        assert "prov" in project and "standing" in project
+
+
+def test_a_table_row_carries_no_citation_list(server):
+    """Citations were 30% of the old payload and the table shows their number.
+
+    The articles themselves are the sources view's whole subject, and it asks for
+    them on its own route — so the row carries the count and the drill-down
+    carries the list, rather than every view paying for every citation.
+    """
+    address, _ = server
+    _status, page = request(address, "/api/projects")
+    row = page["rows"][0]
+    assert "sources" not in row
+    assert isinstance(row["n_sources"], int) and row["n_sources"] >= 1
+
+    _status, whole = request(address, f"/api/project?id={row['id']}")
+    assert len(whole["project"]["sources"]) == row["n_sources"]
 
 
 def test_one_projects_claims_are_fetchable_on_their_own(server):
@@ -649,22 +701,40 @@ def test_one_project_is_fetchable_whole_with_its_claims(server):
 
 
 def test_the_project_page_and_the_table_cannot_disagree(server):
-    """Both go through `dataset.project_payload`, and this is why.
+    """A table row is `project_payload` minus a named list, and nothing else.
 
-    Two copies of that decoration would drift, and the page would then show a
-    different `filled` count or a different obstacle rationale than the row the
-    reader clicked — a contradiction with no visible cause.
+    Both go through one builder because two would drift, and the page would then
+    show a different `filled` count or a different obstacle rationale than the
+    row the reader clicked — a contradiction with no visible cause. Since the row
+    is now a *subtraction* from the page's payload, that is what this checks, in
+    both directions: everything the row has, the page has and agrees about; and
+    what the page has and the row does not is exactly the declared list.
+
+    Without this, "built by subtraction" is a comment. With it, a second builder
+    cannot be introduced quietly.
     """
+    from tracker.webui.dataset import LIST_OMITS, RISK_LIST_FIELDS, STANDING_OMITS
+
     address, _ = server
-    _status, data = request(address, "/api/dataset")
-    listed = data["projects"][0]
-    _status, payload = request(address, f"/api/project?id={listed['id']}")
+    _status, listing = request(address, "/api/projects")
+    row = listing["rows"][0]
+    _status, payload = request(address, f"/api/project?id={row['id']}")
     page = payload["project"]
 
-    assert set(page) - set(listed) == {"claims_by_field"}
-    assert not set(listed) - set(page)
-    for key in set(page) & set(listed):
-        assert page[key] == listed[key], key
+    # The row adds exactly one key of its own, and it is a count of what it dropped.
+    assert set(row) - set(page) == {"n_sources"}
+    assert set(page) - set(row) == set(LIST_OMITS) | {"sources"}
+
+    reduced = {"risks", "standing", "n_sources"}
+    for key in (set(page) & set(row)) - reduced:
+        assert page[key] == row[key], key
+
+    # The three keys the row carries in reduced form still say the same thing.
+    assert row["n_sources"] == len(page["sources"])
+    assert [{k: r[k] for k in RISK_LIST_FIELDS} for r in page["risks"]] == row["risks"]
+    assert set(page["standing"]) - set(row["standing"]) == set(STANDING_OMITS)
+    for key in row["standing"]:
+        assert page["standing"][key] == row["standing"][key], key
 
 
 def test_static_refuses_to_escape_its_root(server):
@@ -1837,8 +1907,8 @@ def test_the_meridian_bundle_is_complete():
 def test_capex_positions_carry_the_ids_behind_their_numbers(server):
     """Ids only, like the duplicate groups — the page looks the rows up."""
     address, _ = server
-    _status, data = request(address, "/api/dataset")
-    position = next(p for p in data["capex"]["positions"] if p["key"] == "microsoft")
+    _status, capex = request(address, "/api/capex")
+    position = next(p for p in capex["positions"] if p["key"] == "microsoft")
     assert position["project_ids"], "a counted position must name its rows"
     assert all(isinstance(i, int) for i in position["project_ids"])
     assert len(position["project_ids"]) == position["projects"]
@@ -1985,7 +2055,7 @@ def test_a_stale_process_says_so_instead_of_blaming_the_database(server, monkeyp
     def explode(*args, **kwargs):
         raise ImportError("cannot import name 'NotDuplicate' from 'tracker.models'")
 
-    monkeypatch.setattr("tracker.webui.dataset.build", explode)
+    monkeypatch.setattr("tracker.webui.dataset.light", explode)
     address, _ = server
     status, body = request(address, "/api/dataset")
 
@@ -2765,3 +2835,301 @@ def test_watch_all_refuses_a_value_that_is_not_a_boolean(seeded_db):
         assert "true or false" in body["error"]
     finally:
         httpd.shutdown()
+
+
+# --- the table asks the server ----------------------------------------------
+#
+# Everything below pins a behaviour that used to happen in the browser, over a
+# payload holding every project. The move is only safe if the answers did not
+# change with it: a reader who types the same query and gets different rows has
+# caught the console lying, and nothing on screen would say which half was wrong.
+
+
+@pytest.fixture
+def many(tmp_path):
+    """Seventy projects, enough to page three times and to sort meaningfully."""
+    path = tmp_path / "many.db"
+    engine, _ = init_db(path)
+    states = ["WI", "OH", "TX", "VA", "ND"]
+    with session_scope(engine) as session:
+        for i in range(70):
+            # Every row a distinct campus: `dedup_key` is company|locality|state,
+            # so a shared city under a shared operator would merge them and the
+            # page sizes below would be measuring the merge, not the paging.
+            claims = {
+                "name": f"Campus {i:02d}",
+                "company": "Meta" if i % 3 == 0 else f"Operator {i % 7}",
+                "city": f"Columbus {i}" if i % 3 == 0 else f"Town {i}",
+                "state": states[i % len(states)],
+                "phase": "construction" if i % 2 else "announced",
+            }
+            # Two thirds carry a capacity, so "nulls last" has something to say.
+            if i % 3:
+                claims["mw_planned"] = float(100 + i * 7)
+            session_record = IngestRecord(
+                project={k: claims[k] for k in ("company", "name", "city", "state")},
+                sources=[
+                    SourceRecord(
+                        url=f"https://example.test/campus-{i}",
+                        source_type="trade_press",
+                        fetched_at=T0,
+                        excerpt=f"Campus {i:02d} will draw {100 + i * 7} MW.",
+                        claims=claims,
+                        quotes={"mw_planned": f"will draw {100 + i * 7} MW"},
+                    )
+                ],
+            )
+            upsert_record(session, session_record)
+        # One campus whose *name* carries a number, so "42" and "#42" cannot be
+        # the same question by accident.
+        upsert_record(
+            session,
+            IngestRecord(
+                project={
+                    "company": "Anchor Power",
+                    "name": "Route 42 Campus",
+                    "city": "Anchorage",
+                    "state": "AK",
+                },
+                sources=[
+                    SourceRecord(
+                        url="https://example.test/route-42",
+                        source_type="trade_press",
+                        fetched_at=T0,
+                        excerpt="Route 42 Campus is planned.",
+                        claims={
+                            "name": "Route 42 Campus",
+                            "company": "Anchor Power",
+                            "city": "Anchorage",
+                            "state": "AK",
+                        },
+                    )
+                ],
+            ),
+        )
+    return path
+
+
+@pytest.fixture
+def paged(many):
+    """A console over the seventy."""
+    from http.server import ThreadingHTTPServer
+
+    console = Console(many)
+    handler = type("Bound", (Handler,), {"console": console})
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    httpd.daemon_threads = True
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield httpd.server_address
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_the_table_arrives_thirty_rows_at_a_time(paged):
+    """The first page is thirty rows and a count of the whole thing.
+
+    `total` is the count for the filter, not for the page. The reader is told
+    "30 of 70" and the scroll knows when to stop asking; a `total` that meant the
+    page would make an infinite list that ends after one screen.
+    """
+    _status, page = request(paged, "/api/projects")
+    assert len(page["rows"]) == 30
+    assert page["total"] == 71
+    assert page["offset"] == 0
+
+
+def test_the_next_page_continues_rather_than_repeats(paged):
+    """Two pages, no row on both, and the pair in one continuous order."""
+    _status, first = request(paged, "/api/projects?sort=mw_planned&dir=desc")
+    _status, second = request(paged, "/api/projects?sort=mw_planned&dir=desc&offset=30")
+
+    ids_one = [r["id"] for r in first["rows"]]
+    ids_two = [r["id"] for r in second["rows"]]
+    assert len(ids_two) == 30
+    assert not set(ids_one) & set(ids_two), "a row appeared on two pages"
+
+    joined = [
+        r["mw_planned"] for r in first["rows"] + second["rows"] if r["mw_planned"] is not None
+    ]
+    assert joined == sorted(joined, reverse=True), "the second page restarts the ordering"
+
+
+def test_a_sorted_column_puts_its_empties_last_either_way(paged):
+    """Ascending by capacity opens with the smallest figure somebody cited.
+
+    Not with twenty-three dashes. This is the front end's old rule and the right
+    one: an empty cell is not a small number, and sorting it as one buries the
+    data under the gaps.
+    """
+    for direction in ("asc", "desc"):
+        _status, page = request(paged, f"/api/projects?sort=mw_planned&dir={direction}&limit=200")
+        values = [r["mw_planned"] for r in page["rows"]]
+        filled = [v for v in values if v is not None]
+        assert values[: len(filled)] == filled, f"an empty sorted before a figure ({direction})"
+        assert filled == sorted(filled, reverse=direction == "desc")
+
+
+def test_the_page_size_is_capped_and_a_bad_query_is_refused(paged):
+    """A clamp where the caller still gets rows; a 400 where they would be lied to."""
+    _status, page = request(paged, "/api/projects?limit=100000")
+    assert len(page["rows"]) <= 200, "an unbounded limit reinstates the whole download"
+
+    # A misspelled sort key must not fall back to a default. The header would say
+    # "sorted by investment" over rows sorted by something else.
+    assert request(paged, "/api/projects?sort=nonesuch")[0] == 400
+    assert request(paged, "/api/projects?dir=sideways")[0] == 400
+    assert request(paged, "/api/projects?offset=-1")[0] == 400
+    assert request(paged, "/api/projects?offset=nope")[0] == 400
+
+
+def test_search_narrows_word_by_word(paged):
+    """Two words narrow rather than widen — every one of them has to appear."""
+    _status, one = request(paged, "/api/projects?q=meta&limit=200")
+    _status, two = request(paged, "/api/projects?q=meta%20columbus&limit=200")
+    assert one["total"] > 0
+    assert two["total"] <= one["total"]
+    assert {r["id"] for r in two["rows"]} <= {r["id"] for r in one["rows"]}
+
+    _status, none = request(paged, "/api/projects?q=meta%20nowhere&limit=200")
+    assert none["total"] == 0
+
+
+def test_a_hashed_number_is_the_id_and_a_bare_one_is_not(paged):
+    """`#42` is the row. `42` is also a capacity, a year, and part of a name.
+
+    The distinction was the front end's and is kept: a reader who knows the id
+    can reach it past a name containing the same digits, and a reader typing a
+    number they saw in a cell still finds the cell.
+    """
+    _status, exact = request(paged, "/api/projects?q=%2342")
+    assert [r["id"] for r in exact["rows"]] == [42]
+
+    _status, loose = request(paged, "/api/projects?q=42&limit=200")
+    assert loose["total"] > 1, "a bare number should still be a substring match"
+    assert 42 in {r["id"] for r in loose["rows"]}
+    assert "Route 42 Campus" in {r["name"] for r in loose["rows"]}
+
+
+def test_a_wildcard_in_the_query_is_a_character_and_not_a_wildcard(paged):
+    """`%` typed into the box means the character. Unescaped it matches everything,
+    and the table quietly returns rows containing nothing the reader typed."""
+    _status, page = request(paged, "/api/projects?q=%25&limit=200")
+    assert page["total"] == 0
+
+
+def test_the_obstacle_filters_ask_about_open_risks(server):
+    """A resolved permitting fight is history, not a current permitting risk."""
+    address, _ = server
+    _status, all_rows = request(address, "/api/projects")
+    assert all_rows["total"] == 1
+
+    _status, filtered = request(address, "/api/projects?risk=nonesuch")
+    assert filtered["total"] == 0
+    _status, filtered = request(address, "/api/projects?severity=blocking")
+    assert filtered["total"] in (0, 1)
+
+
+def test_quoted_only_keeps_the_rows_whose_figures_are_quoted(server, seeded_db):
+    """The one filter that cannot be a WHERE clause, and it must still be exact.
+
+    Provenance is derived from a project's sources every time it is asked for —
+    there is no column to compare — so this is computed and memoised. The risk of
+    a set computed separately from the rows is that it stops agreeing with the
+    tiers the same rows display, so it is checked against them here.
+    """
+    address, _ = server
+    _status, listing = request(address, "/api/projects?limit=200")
+    unquoted = {"unconfirmed", "inferred", "defaulted"}
+    expected = set()
+    for row in listing["rows"]:
+        tiers = [
+            (row["prov"].get(f) or {}).get("tier") or "reported"
+            for f in TRACKED_FIELDS
+            if row.get(f) not in (None, "")
+        ]
+        if not any(t in unquoted for t in tiers):
+            expected.add(row["id"])
+
+    _status, quoted = request(address, "/api/projects?quoted=1&limit=200")
+    assert {r["id"] for r in quoted["rows"]} == expected
+    assert quoted["total"] == len(expected)
+
+
+def test_the_shell_payload_carries_no_per_project_detail(server):
+    """What made the console slower with every ingest.
+
+    Nine point seven kilobytes of wire per project, two thirds of it detail no
+    list view can show, all of it required to land before the first row could be
+    drawn. The index that remains is what the maps need, and a row of it should
+    stay small enough that four hundred of them are not a download.
+    """
+    address, _ = server
+    _status, data = request(address, "/api/dataset")
+    listed = data["projects"][0]
+    for absent in ("sources", "events", "blocks", "parties", "prov", "standing", "claims_by_field"):
+        assert absent not in listed, f"{absent} is back in the shell payload"
+    assert len(json.dumps(listed)) < 1500, "an index row has grown into a project"
+    assert "capex" not in data, "the rollup is 304ms and one view of six reads it"
+
+
+def test_the_citations_list_is_publishers_until_one_is_opened(server):
+    """A count per outlet at rest; the articles when a card is expanded.
+
+    Shipping every article so that one card can be opened is the mistake this
+    whole change is undoing, one level down: measured on a 437-project fleet it
+    is 1.25 MB to show what a click needs 40 KB of.
+
+    Grouped by the registrable domain the CLI prints, rather than by the
+    browser's old "last two labels" rule — which turned `bbc.co.uk` into `co.uk`
+    and attached the measured record to the wrong host.
+    """
+    address, _ = server
+    status, payload = request(address, "/api/articles")
+    assert status == 200
+    assert payload["totals"]["articles"] >= 1
+    listing = {g["host"]: g for g in payload["publishers"]}
+    assert "microsoft.com" in listing
+    entry = listing["microsoft.com"]
+    assert isinstance(entry["articles"], int) and entry["articles"] >= 1
+    assert entry["loaded"] is None, "the resting list carries counts, not articles"
+
+    _status, opened = request(address, "/api/articles?host=microsoft.com")
+    group = next(g for g in opened["publishers"] if g["host"] == "microsoft.com")
+    assert len(group["loaded"]) == entry["articles"]
+    article = group["loaded"][0]
+    assert article["url"] and article["publisher"] == "microsoft.com"
+    assert article["projects"] and article["projects"][0]["id"]
+    # Not the excerpt and not the claims blob: neither is rendered, and together
+    # they are most of a source row.
+    assert "excerpt" not in article and "claims" not in article
+
+
+def test_searching_the_citations_reaches_inside_the_articles(server):
+    """The browser's filter read the excerpt, so this has to as well.
+
+    A search that silently stopped looking somewhere would be the worst kind of
+    regression here: it returns rows, they are all correct, and the ones it can
+    no longer see are invisible by definition.
+    """
+    address, _ = server
+    _status, by_host = request(address, "/api/articles?q=microsoft")
+    assert by_host["totals"]["matched"] >= 1
+    assert by_host["publishers"][0]["loaded"], "a search result must arrive expanded"
+
+    # "will draw 900" is in the stored excerpt and in no URL and no host. A plain
+    # substring, as the browser's article filter was — not the word-AND the
+    # project table uses, because this box says "publisher or URL" and a reader
+    # pasting a phrase from an article expects to find that article.
+    _status, by_excerpt = request(address, "/api/articles?q=will+draw+900")
+    assert by_excerpt["totals"]["matched"] == 1, "the excerpt must be searched"
+    assert by_excerpt["publishers"][0]["host"] == "microsoft.com"
+
+    _status, split = request(address, "/api/articles?q=900+will")
+    assert split["totals"]["matched"] == 0, "a substring is not a bag of words"
+
+    _status, nothing = request(address, "/api/articles?q=nosuchpublisher")
+    assert nothing["totals"]["matched"] == 0
+    assert nothing["publishers"] == []

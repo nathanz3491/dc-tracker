@@ -12,6 +12,83 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **The server answers the table's questions; the browser stops downloading the
+  database** (`tracker/webui/query.py`, `tracker/webui/dataset.py`,
+  `tracker/webui/server.py`, `tracker/webui/static/app.js`,
+  `tracker/webui/static/app.css`, `tests/test_webui.py`).
+
+  Every view was drawn from one response holding every project with every
+  citation, milestone, tranche and provenance record, and the browser did the
+  searching, filtering, sorting and paging itself. At 437 projects that is
+  **4,825 KB of JSON built in 551 ms**, all of which had to land and parse before
+  the first row could be drawn — and it grows with the database, which is a
+  dataset that teaches its reader to open it less.
+
+  `GET /api/projects?q=&state=&phase=&conf=&risk=&severity=&quoted=&sort=&dir=&offset=&limit=`
+  returns thirty rows and a `total` for the whole filter; scrolling asks for the
+  next thirty. `/api/dataset` keeps a **light index** of every project — identity,
+  the headline figures, open obstacles — which is not optional: both vendored map
+  components plot every project at once and `dc-map3d.js` reads
+  `window.DCTRACKER.projects` directly rather than taking props, and all three
+  call `p.risks.some(...)` unguarded, so a row without that array is a blank map
+  and no error. A test pins it. `/api/capex` and `/api/articles` are their own
+  routes, fetched when their view opens; the rollup alone was 304 ms of the old
+  payload's 406 ms, charged to five views that never draw it.
+
+  | | before | after |
+  |---|---|---|
+  | first screen, 437 projects | 4,825 KB raw / 114 KB gz | **390 KB raw / 17 KB gz** |
+  | server time for it | 551 ms | **73 ms** |
+  | `/api/articles` | (in every payload) | 1 KB at rest, ~40 KB per publisher opened |
+
+  A table row is `dataset.project_payload` **minus a named list** rather than a
+  second builder, so the row and the project page cannot describe a project
+  differently; the test asserts the subtraction in both directions. Sorting
+  refetches from the first page rather than reordering what is loaded — sorting
+  thirty of four hundred rows and presenting it as the ranking is a lie with
+  nothing on screen to catch it. "Quoted only" is the one filter that cannot be a
+  `WHERE` clause, because a value's tier is derived from its sources rather than
+  stored; it is computed once and memoised against a fingerprint of the data.
+
+  The terminal UI keeps the full payload: `tracker/tui/data.py` calls
+  `dataset.build` in-process with the database beside it, so it pays no wire cost
+  and starving it would be a cost with no saving. The file export is untouched.
+
+- **The console says it is waiting instead of looking like an answer**
+  (`tracker/webui/static/app.js`, `tracker/webui/static/app.css`).
+
+  Now that the table asks the server, there is a real gap between a keystroke and
+  its answer, and an empty table during it reads as "no results" — a reader who
+  sees that once stops trusting the filter. Three states, each saying something
+  different: skeleton rows in the real column widths mean "not told yet", dimmed
+  rows mean "this is last second's answer, still readable and still clickable",
+  and a two-pixel indeterminate bar on the filter card means a request is in
+  flight. The bar starts at the keystroke rather than at the request, so the
+  250 ms search debounce is visibly deliberate rather than a dead control —
+  measured at 7.7 ms to appear and 319 ms to clear. Under `prefers-reduced-motion`
+  the sweep becomes a flat tint rather than a faster sweep.
+
+### Fixed
+
+- **The citations view grouped publishers by a different rule than the record it
+  showed beside them** (`tracker/webui/dataset.py`). The browser grouped articles
+  by "strip `www.`, keep the last two labels" while the per-publisher decision
+  count was keyed by the CLI's `confidence.registrable_domain`, under a comment
+  claiming the two matched. They do not for any publisher under a two-part suffix
+  — `bbc.co.uk` grouped as `co.uk` — so that host's measured record was attached
+  to the wrong row. The grouping moved to the server and uses the one definition.
+
+### Removed
+
+- `ProjectSearch` (never rendered since the command runner was deleted),
+  `matchesProject` (the table's search is `webui/query.py` now, and two
+  definitions of "does this row match" would drift), `vendor/dc-campus.js`
+  (vendored, never loaded), and `serving_blocks` from the project payload (the
+  generation rows pulled out of `blocks`, carried in every response, read by
+  nothing — the plant list is drawn from `serving`).
+
+### Added
+
 - **A page per project, replacing the drawer** (`tracker/webui/server.py`,
   `tracker/webui/dataset.py`, `tracker/webui/static/app.js`,
   `tracker/webui/static/app.css`, `tests/test_webui.py`).

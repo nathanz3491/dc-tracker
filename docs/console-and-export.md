@@ -14,9 +14,11 @@ tracker export html --out data/exports/tracker.html
 
 One self-contained file: open it by double-click. Sortable table over the 12
 fields, a five-segment track strip per project so stage is scannable down the
-column, filters for state / phase / blocked-on / confidence / quoted-only, a drawer
+column, filters for state / phase / blocked-on / confidence / quoted-only, a panel
 per project with its citations and milestones, capacity-behind-an-obstacle bars,
-and a coordinate plot.
+and a coordinate plot. It is one file with everything inlined, so it does its own
+filtering — the paging the live console gained has no meaning for a document that
+is already wholly in memory.
 
 **No network requests at all** — no CDN, no webfont, no map tiles — so it works
 offline and survives being emailed. The dataset is inlined rather than fetched from
@@ -62,6 +64,41 @@ of the list payload, which buys it the per-field claim tables — those are 48% 
 the list payload and are deliberately left out of it. Tabs became sections on one
 page, so a reader can see a campus's capacity and the obstacle blocking it at the
 same time, with a sticky jump nav to skip rather than to hide.
+
+### The server answers the questions; the browser does not download the database
+
+Everything the console shows used to arrive in one response, and the browser then
+searched, filtered, sorted and paged it itself. That works until it doesn't:
+measured on a 437-project fleet the response was **4.8 MB**, all of which had to
+land and parse before the first row could be drawn, and it grows with the
+database.
+
+Now the table asks. `GET /api/projects?q=…&sort=…&offset=…` returns thirty rows
+and a count for the whole filter; scrolling asks for the next thirty. The shell
+payload keeps a **light index** of every project — identity, the headline
+figures, open obstacles — which is what the two map components read and what the
+watchlist picker searches. Capex and the citations list each fetch their own
+data when their view opens: the rollup alone was 304 ms of the old payload's
+406 ms, paid by five views that never draw it.
+
+| | before | after |
+|---|---|---|
+| first screen, 437 projects | 4,825 KB raw / 114 KB gz | **390 KB raw / 17 KB gz** |
+| server time for it | 551 ms | **73 ms** |
+
+**Two rules the front end is held to while it waits.** A pending request must
+never look like an answer: an empty table means "nothing matches", dimmed rows
+mean "this is last second's answer", and skeleton rows mean "we have not been
+told yet". And the indicator starts at the keystroke rather than at the request,
+so the quarter-second search debounce is visibly deliberate rather than a dead
+control.
+
+Sorting refetches from the first page rather than reordering what is loaded —
+sorting thirty of four hundred rows and presenting it as the ranking is a lie
+with nothing on screen to catch it. And "quoted only" is the one filter the
+server cannot express in SQL, because a value's tier is derived from its sources
+rather than stored; it is computed once and memoised against a fingerprint of the
+data. See `tracker/webui/query.py`.
 
 Its timeline is five lanes on one time axis rather than a list, because the five
 tracks run in parallel and **the gap between two dates is the signal** — a list
@@ -222,7 +259,10 @@ The three worth knowing:
 
 | route | answers | cost |
 |---|---|---|
-| `GET /api/dataset` | every project with its claims, plus capex, gaps, queue, totals | ~1 MB, refetched after each run |
+| `GET /api/dataset` | a light index of every project, plus gaps, queue, exposure, totals | ~275 KB at 437 projects, refetched after each run |
+| `GET /api/projects` | one page of the table, filtered and sorted by the server | 30 rows; `total` counts the whole filter |
+| `GET /api/capex` | capacity by the company buying it | 304 ms — its own route for that reason |
+| `GET /api/articles` | publishers, and one publisher's citations when asked | counts at rest; `?host=` for the list |
 | `GET /api/updates` | what changed on the watchlist, signed and ranked | one pass over projects, events and risks |
 | `POST /api/watch` | adds or drops a watchlist entry | **the only write there is** |
 | `POST /api/login` | exchanges an email and password for a session cookie | — |

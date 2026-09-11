@@ -21,7 +21,7 @@ import csv
 import datetime as dt
 import io
 import json
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -109,11 +109,23 @@ class ExportFilter:
         return stmt
 
 
-def fetch_projects(session: Session, flt: ExportFilter | None = None) -> list[Project]:
+def fetch_projects(
+    session: Session,
+    flt: ExportFilter | None = None,
+    *,
+    only: Collection[int] | None = None,
+) -> list[Project]:
     """Projects in a stable order, with sources, events and risks eagerly loaded.
 
     The ordering is by content, not by id, so inserting a project does not
     reshuffle the whole export and produce a noisy diff.
+
+    `only` restricts it to a set of ids, for the console's paged table: that
+    request wants thirty rows hydrated exactly as the export hydrates them, and
+    loading four hundred to discard all but thirty is the cost server-side paging
+    exists to remove. It goes through this function rather than beside it so the
+    eager-loading list above stays the only one — a second copy would lazy-load
+    whatever relation was added to this one later, silently, one query per row.
     """
     stmt = select(Project).options(
         selectinload(Project.sources),
@@ -124,6 +136,10 @@ def fetch_projects(session: Session, flt: ExportFilter | None = None) -> list[Pr
     )
     if flt is not None:
         stmt = flt.apply(stmt)
+    if only is not None:
+        if not only:
+            return []
+        stmt = stmt.where(Project.id.in_(list(only)))
     stmt = stmt.order_by(Project.state, Project.company, Project.name, Project.id)
     return list(session.scalars(stmt))
 
@@ -131,7 +147,7 @@ def fetch_projects(session: Session, flt: ExportFilter | None = None) -> list[Pr
 # --- Row shaping ------------------------------------------------------------
 
 
-def _iso(value: Any) -> str | None:
+def iso(value: Any) -> str | None:
     if value is None:
         return None
     if isinstance(value, dt.datetime | dt.date):
@@ -212,8 +228,8 @@ def to_row(project: Project) -> dict[str, Any]:
         "mw_built": project.mw_built,
         "h200_equivalent": project.h200_equivalent,
         "investment_usd": project.investment_usd,
-        "first_announced": _iso(project.first_announced),
-        "expected_online": _iso(project.expected_online),
+        "first_announced": iso(project.first_announced),
+        "expected_online": iso(project.expected_online),
         "blocker": project.blocker,
         "risks": _risk_cell(project),
         "mw_planned_basis": project.mw_planned_basis,
@@ -222,7 +238,7 @@ def to_row(project: Project) -> dict[str, Any]:
         "confidence": project.confidence,
         "sources": len(urls),
         "source_urls": " ".join(urls),
-        "last_verified_at": _iso(project.last_verified_at),
+        "last_verified_at": iso(project.last_verified_at),
     }
 
 
@@ -323,7 +339,7 @@ def _timeline_json(project: Project, stand: Any) -> list[dict[str, Any]]:
             # carries every one for anybody who wants them.
             last = confirmed[-1]
             spread = (
-                [_iso(first.event_date), _iso(last.event_date)]
+                [iso(first.event_date), iso(last.event_date)]
                 if (last.event_date - first.event_date).days > 365
                 else []
             )
@@ -332,7 +348,7 @@ def _timeline_json(project: Project, stand: Any) -> list[dict[str, Any]]:
                     "track": state.track,
                     "milestone": milestone,
                     "implied": False,
-                    "date": _iso(first.event_date),
+                    "date": iso(first.event_date),
                     "description": first.description,
                     "quote": first.quote,
                     "unconfirmed": first.unconfirmed,
@@ -482,8 +498,8 @@ def _claims_json(project: Project) -> dict[str, Any]:
                     # sentence is the failure the label exists to prevent, so null
                     # is the honest answer.
                     "quote": _field_quote(source, field),
-                    "fetched_at": _iso(claim.fetched_at),
-                    "published_at": _iso(claim.published_at),
+                    "fetched_at": iso(claim.fetched_at),
+                    "published_at": iso(claim.published_at),
                     "is_winner": is_winner,
                 }
             )
@@ -578,15 +594,15 @@ def to_json_object(project: Project, *, claims: bool = True) -> dict[str, Any]:
         "h200_equivalent": project.h200_equivalent,
         "investment_usd": project.investment_usd,
         "phase": project.phase,
-        "first_announced": _iso(project.first_announced),
-        "expected_online": _iso(project.expected_online),
+        "first_announced": iso(project.first_announced),
+        "expected_online": iso(project.expected_online),
         "blocker": project.blocker,
         "notes": project.notes,
         "confidence": project.confidence,
         "dedup_key": project.dedup_key,
-        "created_at": _iso(project.created_at),
-        "updated_at": _iso(project.updated_at),
-        "last_verified_at": _iso(project.last_verified_at),
+        "created_at": iso(project.created_at),
+        "updated_at": iso(project.updated_at),
+        "last_verified_at": iso(project.last_verified_at),
         "sources": [
             {
                 # The row id, so `events[].source_id`, `risks[].source_id`,
@@ -597,13 +613,13 @@ def to_json_object(project: Project, *, claims: bool = True) -> dict[str, Any]:
                 "id": s.id,
                 "url": s.url,
                 "source_type": s.source_type,
-                "fetched_at": _iso(s.fetched_at),
+                "fetched_at": iso(s.fetched_at),
                 # When the PUBLISHER published it, as against when we visited.
                 # Carried on the row since migration 0014 and, until now, only
                 # reachable inside `claims_by_field` — so a page listing citations
                 # could show the crawl date and nothing else, which is the exact
                 # confusion `backfill dates` exists to remove.
-                "published_at": _iso(s.published_at),
+                "published_at": iso(s.published_at),
                 "excerpt": s.excerpt,
                 "fields": s.fields,
                 "unconfirmed_fields": s.unconfirmed_fields,
@@ -618,7 +634,7 @@ def to_json_object(project: Project, *, claims: bool = True) -> dict[str, Any]:
         ],
         "events": [
             {
-                "event_date": _iso(e.event_date),
+                "event_date": iso(e.event_date),
                 "event_type": e.event_type,
                 "description": e.description,
                 # The sentence the milestone stands on, and why there is none.
@@ -640,8 +656,8 @@ def to_json_object(project: Project, *, claims: bool = True) -> dict[str, Any]:
                 # sentence. A consumer that needs evidence wants the quote.
                 "summary": r.summary,
                 "quote": r.quote,
-                "first_seen": _iso(r.first_seen),
-                "resolved_at": _iso(r.resolved_at),
+                "first_seen": iso(r.first_seen),
+                "resolved_at": iso(r.resolved_at),
                 "delay_days": r.delay_days,
                 "source_id": r.source_id,
             }
@@ -669,8 +685,8 @@ def to_json_object(project: Project, *, claims: bool = True) -> dict[str, Any]:
                 "mw_bound": _mw_bound(b),
                 "status": b.status,
                 "customer": b.customer,
-                "expected_online": _iso(b.expected_online),
-                "energized_on": _iso(b.energized_on),
+                "expected_online": iso(b.expected_online),
+                "energized_on": iso(b.energized_on),
                 "investment_usd": b.investment_usd,
                 "quotes": json.loads(b.quotes) if b.quotes else None,
                 "unconfirmed_fields": b.unconfirmed_fields,
@@ -741,8 +757,8 @@ def _sections_json(project: Project) -> list[dict[str, Any]]:
             "parent": s.parent,
             "generic": s.generic,
             "customer": s.customer,
-            "energized_on": _iso(s.energized_on),
-            "expected_online": _iso(s.expected_online),
+            "energized_on": iso(s.energized_on),
+            "expected_online": iso(s.expected_online),
             "source_ids": list(s.source_ids),
         }
         for s in sections(project.id, list(project.blocks))
@@ -905,7 +921,7 @@ def render_md(projects: Sequence[Project], *, generated_at: str | None = None) -
         lines.append(
             f"| {p.id} | {_md_escape(p.company)} | {_md_escape(p.name)} | {location} "
             f"| {p.phase} | {_fmt_number(p.mw_planned)} | {_fmt_usd(p.investment_usd)} "
-            f"| {_iso(p.expected_online) or ''} | {p.confidence} |"
+            f"| {iso(p.expected_online) or ''} | {p.confidence} |"
         )
 
     lines += ["", "## Detail", ""]
@@ -919,8 +935,8 @@ def render_md(projects: Sequence[Project], *, generated_at: str | None = None) -
             ("Built MW", _fmt_number(p.mw_built) or None),
             ("H200-equivalent", _fmt_number(p.h200_equivalent) or None),
             ("Investment", _fmt_usd(p.investment_usd) or None),
-            ("First announced", _iso(p.first_announced)),
-            ("Expected online", _iso(p.expected_online)),
+            ("First announced", iso(p.first_announced)),
+            ("Expected online", iso(p.expected_online)),
             ("Blocker", p.blocker),
             ("Confidence", f"{p.confidence}/3"),
         ]
@@ -952,7 +968,7 @@ def render_md(projects: Sequence[Project], *, generated_at: str | None = None) -
         if p.events:
             lines += ["", "Timeline:", ""]
             for e in sorted(p.events, key=lambda e: (e.event_date, e.event_type)):
-                lines.append(f"- {_iso(e.event_date)} — **{e.event_type}** — {e.description}")
+                lines.append(f"- {iso(e.event_date)} — **{e.event_type}** — {e.description}")
         lines.append("")
 
     return "\n".join(lines)

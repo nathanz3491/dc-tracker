@@ -490,6 +490,12 @@ class Handler(BaseHTTPRequestHandler):
             return self._static(route[len("/static/") :], query)
         if route == "/api/dataset":
             return self._dataset()
+        if route == "/api/projects":
+            return self._projects(query)
+        if route == "/api/capex":
+            return self._capex()
+        if route == "/api/articles":
+            return self._articles(query)
         if route == "/api/claims":
             return self._claims(query)
         if route == "/api/project":
@@ -725,12 +731,25 @@ class Handler(BaseHTTPRequestHandler):
         self._send(200, body, assets.content_type(path), cache=cache)
 
     def _dataset(self) -> None:
-        from tracker.webui.dataset import build
+        """The shell payload: a light index of every project, plus the aggregates.
+
+        **Not every project in full.** It was, and that is what made the console
+        slower with every ingest: 9.7 KB of wire per project, two thirds of it
+        detail no list view can show, all of it required to land before the first
+        row could be drawn. `dataset.light` is the same object with the per-project
+        detail and the capex rollup taken out; the table asks `/api/projects` for
+        thirty rows at a time and the capex view asks `/api/capex` when it opens.
+
+        The index it does still carry is not optional — `window.DCTRACKER.projects`
+        is what the vendored map elements read, directly, and the maps plot every
+        project at once by definition.
+        """
+        from tracker.webui.dataset import light
 
         # One session for both, because `read_session` opens the database each
         # time it is called and this is the request every redraw makes.
         with self.console.read_session() as session:
-            payload = build(
+            payload = light(
                 session,
                 db_path=str(self.console.db_path),
                 schema_version=self.console.schema_version,
@@ -795,10 +814,33 @@ class Handler(BaseHTTPRequestHandler):
             "reads": "one project and its sources",
             "note": "?project=<id>. Split out of /api/dataset, where it was 48% of 19 MB",
         },
+        "GET /api/articles": {
+            "answers": "every cited article, grouped by publisher, with what each supports",
+            "reads": "the sources table and the project each row belongs to",
+            "note": "Bare: the publisher list, with a count each. ?host=<host>: that "
+            "publisher's articles. ?q=<text>: matches a publisher, a URL or an excerpt, "
+            "returned expanded. Grouped by the same registrable domain the CLI prints. "
+            "Split off /api/dataset, where the citations were 30% of the payload for "
+            "one view of six.",
+        },
+        "GET /api/capex": {
+            "answers": "capacity by the company buying it, with the duplicate warning",
+            "reads": "capex.rollup and capex.suspected_duplicates",
+            "note": "304ms. Its own route so the other five views stop paying for it.",
+        },
         "GET /api/dataset": {
-            "answers": "every project with its provenance, plus capex, gaps, queue and totals",
-            "reads": "the whole database",
-            "note": "refetched after every run. Excludes claims_by_field — see /api/claims",
+            "answers": "a light index of every project, plus gaps, queue, exposure and totals",
+            "reads": "the whole database, shallowly",
+            "note": "refetched after every run. Carries no citations, milestones, "
+            "tranches or provenance — see /api/projects for a page of table rows "
+            "and /api/project for one project whole.",
+        },
+        "GET /api/projects": {
+            "answers": "one page of the projects table, filtered and sorted",
+            "reads": "the ids matching the filter, then only the page's rows in full",
+            "note": "?q=&state=&phase=&conf=&risk=&severity=&quoted=&sort=&dir=&offset=&limit= "
+            "(30 by default, 200 at most). `total` counts the whole filter, not the page. "
+            "An unknown sort key is a 400, not a silent default.",
         },
         "GET /api/project": {
             "answers": "one project, everything about it, for that project's own page",
@@ -894,6 +936,78 @@ class Handler(BaseHTTPRequestHandler):
         if payload is None:
             return self._error(404, f"no project {project_id}")
         self._json({"project": project_id, "claims_by_field": payload})
+
+    def _projects(self, query: dict[str, list[str]]) -> None:
+        """One page of the projects table, filtered and sorted by the server.
+
+        The table used to be handed every project and do this itself, which meant
+        the whole database had to land before the first row could be drawn. Now it
+        asks a question. See `webui/query.py` for why the id list is resolved
+        before anything is hydrated, and for which predicate mirrors which
+        control.
+
+        `total` counts the whole filter, not the page: the reader is told "30 of
+        412" and the scroll knows when to stop asking.
+        """
+        from tracker.webui import query as projects_query
+
+        try:
+            filters, offset, limit = projects_query.parse(query)
+        except projects_query.BadQuery as exc:
+            return self._error(400, str(exc))
+
+        with self.console.read_session() as session:
+            total, rows = projects_query.page(session, filters, offset=offset, limit=limit)
+        self._json(
+            {
+                "total": total,
+                "offset": offset,
+                "limit": limit,
+                "rows": rows,
+                # Echoed so a late response can be recognised as late. The table
+                # refetches on every keystroke after a debounce, and a reply that
+                # arrives out of order must not be allowed to paint.
+                "sort": filters.sort,
+                "dir": filters.direction,
+                "q": filters.q,
+            }
+        )
+
+    def _capex(self) -> None:
+        """The capex rollup, on its own route.
+
+        It was a key on `/api/dataset` and it is 304 ms of that payload's 406 ms —
+        so every visit to every other view paid for a rollup it does not draw.
+        One view reads this, and it asks when it opens.
+        """
+        from tracker.webui.dataset import capex
+
+        with self.console.read_session() as session:
+            payload = capex(session)
+        self._json(payload)
+
+    def _articles(self, query: dict[str, list[str]]) -> None:
+        """Every cited article, grouped by publisher.
+
+        Also moved off `/api/dataset`, and for a sharper reason than size: the
+        browser was regrouping every project's citations to build this list, so
+        the citations had to be in the list payload — 75.6 KB of a 252 KB fixture
+        response — for one view of six.
+
+        Two sizes. Bare, it is the publisher list: a name, a count and a date
+        each. `?host=` is one publisher's articles, asked for when a reader
+        expands that card, and `?q=` searches across all of them and returns the
+        matches expanded.
+        """
+        from tracker.webui.dataset import articles
+
+        with self.console.read_session() as session:
+            payload = articles(
+                session,
+                q=(query.get("q") or [""])[0],
+                host=(query.get("host") or [""])[0],
+            )
+        self._json(payload)
 
     def _project(self, query: dict[str, list[str]]) -> None:
         """One project, everything about it, for that project's own page.
