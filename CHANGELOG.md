@@ -10,6 +10,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 First working version. Nothing has been released yet, so everything below is the
 initial build of the v1 PRD.
 
+### Added
+
+- **The console's version number is derived from the commit count**
+  (`tracker/release.py`, `tracker/cli/quality.py`, `tests/test_release.py`).
+
+  The header read `v0.1.0` on a repository with 190 commits — a number nobody had
+  touched since the first commit, sitting in the most-read place on the page. It
+  is now the commit count with dots before the last two digits: 190 becomes
+  `1.9.0`, 7 becomes `0.0.7`, 1,234 becomes `12.3.4`.
+
+  `tracker version --stamp` writes it into `tracker/__init__.py` and
+  `pyproject.toml`; `--number X.Y.Z` overrides the derivation for a real release.
+  Both files, always — a reader who finds them disagreeing cannot tell which one
+  is the version.
+
+  **Derived rather than typed, and stamped into source rather than stored.** The
+  number is a fact about the repository, so asking a person to retype it each
+  deploy only creates a deploy where they forget. And it goes through GitHub like
+  code: a version written on the host is reverted by the next poll, and one kept
+  in the database would be a label that can disagree with the code actually
+  running — which is the confusion the health endpoint's commit readout exists to
+  prevent. Stamped into the source, the number in the header is necessarily the
+  number of the commit serving it.
+
+  It trails its own repository by one, because stamping is itself a commit.
+  Closing that would mean writing the file from a commit hook or amending after
+  the fact, both worse than a label one behind.
+
+  Two faults worth keeping in the tests. The pattern that finds the version in
+  `pyproject.toml` first carried the DOTALL flag, so `.` matched newlines and the
+  walk from `[project]` backtracked catastrophically — measured at 0.65s over 24
+  lines and effectively never over a real file. It did not fail, it **hung**,
+  which is the worst way for a regex to be wrong. And the writer wrote as it went,
+  so a miss on the second file left the first stamped and the two disagreeing;
+  both rewrites are now computed before either is performed.
+
 ### Changed
 
 - **The drawer's AI overview is an analytical briefing, and the console renders

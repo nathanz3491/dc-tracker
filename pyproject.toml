@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "dc-tracker"
-version = "0.1.0"
+version = "1.9.0"
 description = "Ingest, normalize and query US data center construction projects with per-fact source citations"
 readme = "README.md"
 requires-python = ">=3.11"
