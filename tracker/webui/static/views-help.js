@@ -54,7 +54,7 @@ const COSTS = [
   ["point", "Goes and gets one named data center. One call to identify it, then whichever branch it takes."],
   ["logic check", "Free on its own. Spends only with --read, which has a model examine the rows it flagged."],
   ["ingest edgar", "Reads SEC filings. One call per filing; --per-company is the dial."],
-  ["the briefing panel", "The written summary at the top of a project drawer. One call, then cached — reopening the same row is free until the row changes."],
+  ["the briefing panel", "The analytical reading at the top of a project drawer — where the build stands, what would move it, how far to trust the row. One call, then cached: reopening the same row is free until the row changes."],
 ];
 
 /* Destruction is a different loss from spending, and it gets the same ritual.

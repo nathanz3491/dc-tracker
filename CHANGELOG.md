@@ -10,6 +10,87 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 First working version. Nothing has been released yet, so everything below is the
 initial build of the v1 PRD.
 
+### Changed
+
+- **The drawer's AI overview is an analytical briefing, and the console renders
+  full markdown for it** (`tracker/prompts/overview-v3.txt`, `tracker/overview.py`,
+  `tracker/webui/static/app.js`, `tracker/webui/static/app.css`,
+  `tracker/webui/static/views-help.js`, `tests/test_overview.py`,
+  `tests/test_webui.py`).
+
+  The panel used to be one sentence and two bullets, capped at 110 words. That was
+  the right size for a summary and the wrong size for the question a reader
+  actually has in front of an open row: they can already see the table, so what
+  they want is the reasoning over it.
+
+  **This length rule has now been reversed once, and the reason it was imposed
+  still stands.** A 231-word briefing was measured as scrolled past, so it was cut
+  to 110 — but the fault recorded at the time was that it rendered as "one grey
+  slab", which is a structure problem wearing a length problem's clothes. Nothing
+  in the old panel could break 231 words into anything a reader could skim: no
+  headings, no tables, no nested lists. The renderer is the half of this change
+  that makes the other half safe, and `test_stream.py` carries the history so the
+  next person to find this long does not simply cut it again.
+
+  `overview-v3` asks for 220 to 400 words in three fixed sections — a read of the
+  build, what would move it, and how far to trust the row — with the analysis
+  named as analysis. The middle section has to name observable events specific
+  enough to go and look for: a signed interconnection agreement, a
+  planning-commission vote, a transformer order. "Further announcements" is
+  explicitly not an answer.
+
+  **The honesty rules did not get more relaxed; they got a paragraph of their
+  own.** A longer answer is a larger surface for the failure this panel has always
+  been able to produce — fluent sector commentary about a two-field row, which
+  reads exactly like knowledge. So the prompt says that in as many words: more room
+  is room to reason, never room to supply facts, and a short section is the correct
+  output for a thin row. The rule about reading the five tracks one line at a time
+  is carried over unchanged, because grouping two tracks into one claim is still
+  the most damaging mistake available here.
+
+  **The renderer grew to match, and grew the way it had to.** It now handles
+  headings, ordered and nested lists, tables with alignment, block quotes, fenced
+  code, rules and strikethrough. The easy way to do that is to hand the string to a
+  markdown library and assign the result as HTML — and that is the one shape this
+  panel must never have, because the string is written by a model out of articles
+  fetched from the open web. It is the least trustworthy text on the page. Every
+  branch emits a React element or a string, so a `<script>` in a briefing is
+  characters on the screen; links are still flattened to their text, because a
+  clickable destination chosen from an untrusted page is a phishing surface and the
+  citations below the panel are the real links. `test_webui.py` now fails the build
+  if the raw-markup escape hatch appears anywhere in `app.js`, comments included.
+
+  The parser is exercised where it runs — the tests lift it out of the shipped
+  `app.js` and drive it under node, skipping when node is absent, because a second
+  copy of the rules written in Python would pass while the shipped one was wrong.
+
+  **Two layout findings, both measured rather than guessed.** Table cells wrap:
+  `nowrap` bought a horizontal scrollbar on essentially every table in a 420px
+  drawer, and a row you have to drag to read is worse than a row two lines tall.
+  And the collapsed height went to 12em rather than up: at 19em the fade landed
+  inside the first table, so the panel showed a header row with nothing under it,
+  which reads as a table that failed to load rather than as text that continues.
+  Cutting inside a paragraph is unambiguous.
+
+  `MAX_TOKENS` is 8192, up from 4096, which was sized against the old shape. It is
+  a ceiling, not a target — the capex hover card shares it and still asks for 35 to
+  60 words.
+
+  **The panel keeps the no-thinking model tier, and that is the cost of this
+  change.** The briefing generates when a row is opened, so the model's speed is
+  the page's speed; a reasoning model would spend most of its budget before the
+  first visible word and leave the card blank for as long as it took. So a longer
+  briefing is a longer stream from a model that does not deliberate, and the
+  quality of the analysis is bounded by that. Streaming is what makes it readable:
+  the opening prose, which is the part somebody needs, arrives first and the
+  sections fill in under it while they read.
+
+  The runaway sentinel is kept exactly as it was. It cuts the stream when a model
+  finishes and starts over, it matches on line starts, and a 400-word briefing
+  offers it many more line starts than three lines did — so a test now streams a
+  full analytical briefing through it and fails if it cuts, alongside one that
+  fails if it stops cutting a model that restarts.
+
 ### Fixed
 
 - **A finding the model settled is now recognised as settled** (`tracker/triage.py`,

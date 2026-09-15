@@ -237,8 +237,17 @@ tr.dc-enter { animation-name: fade-in; }
   color: var(--foreground);
   /* Collapsed by default, with the last line faded rather than sliced. The old
      panel clipped mid-letter against a hard edge, which reads as a rendering bug
-     rather than as more text. */
-  max-height: 10.5em;
+     rather than as more text.
+
+     Sized to the opening prose and the first heading under it, and deliberately
+     NOT to "most of the briefing". A taller collapsed panel sounds more generous
+     and measured worse: at 19em the cut landed inside the first table, so the
+     panel showed a header row with nothing under it, which reads as a table that
+     failed to load rather than as text that continues. Cutting inside a paragraph
+     is unambiguous — the fade means "there is more" — so the height is chosen to
+     land there, and the briefing's opening sentences are the part that has to be
+     readable without a click anyway. */
+  max-height: 12em;
   overflow: hidden;
   -webkit-mask-image: linear-gradient(180deg, #000 76%, transparent 100%);
   mask-image: linear-gradient(180deg, #000 76%, transparent 100%);
@@ -265,11 +274,100 @@ tr.dc-enter { animation-name: fade-in; }
 
 .dc-ai-body p { margin: 0 0 9px; }
 .dc-ai-body p:last-child { margin-bottom: 0; }
-.dc-ai-body ul { margin: 0 0 9px; padding-left: 18px; }
-.dc-ai-body ul:last-child { margin-bottom: 0; }
+.dc-ai-body ul,
+.dc-ai-body ol { margin: 0 0 9px; padding-left: 18px; }
+.dc-ai-body ul:last-child,
+.dc-ai-body ol:last-child { margin-bottom: 0; }
 .dc-ai-body li { margin: 0 0 4px; }
 .dc-ai-body li::marker { color: color-mix(in oklab, var(--chart-5) 60%, transparent); }
+/* A nested list is the sub-points of the item above it, so it sits tight under
+   that line rather than reading as a second list. */
+.dc-ai-body li > ul,
+.dc-ai-body li > ol { margin: 4px 0 2px; }
 .dc-ai-body strong { font-weight: 650; }
+
+/* Section titles. The briefing is long enough to need them and short enough that
+   they must not shout — same weight as the panel's own label, slightly tighter
+   than the prose, and with space above rather than below so a heading belongs to
+   what follows it. */
+.dc-md-h {
+  margin: 14px 0 6px;
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: color-mix(in oklab, var(--foreground) 62%, transparent);
+}
+.dc-ai-body > .dc-md-h:first-child { margin-top: 0; }
+h5.dc-md-h {
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 13.5px;
+  color: color-mix(in oklab, var(--foreground) 80%, transparent);
+}
+
+.dc-md-hr {
+  margin: 12px 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+
+/* Quotes carry the model's own caveats, so they read as an aside rather than as
+   evidence — the tier hue the panel already uses, at the thickness of a margin
+   note. */
+.dc-md-quote {
+  margin: 0 0 9px;
+  padding: 2px 0 2px 11px;
+  border-left: 2px solid color-mix(in oklab, var(--chart-5) 45%, transparent);
+  color: var(--muted-foreground);
+}
+.dc-md-quote > :last-child { margin-bottom: 0; }
+
+/* A table is the one block that can exceed the card, and the drawer must never
+   scroll sideways because of it — so the table scrolls inside its own box. */
+.dc-md-scroll {
+  margin: 0 0 10px;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+}
+.dc-md-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  line-height: 19px;
+}
+/* Cells wrap. The drawer is ~420px and a three-column table of English phrases
+   does not fit it on one line, so `nowrap` bought a horizontal scrollbar on
+   essentially every table — a row you have to drag to read is worse than a row
+   two lines tall. The scroll container above is the fallback for a table that is
+   genuinely too wide even wrapped, not the normal case. */
+.dc-md-table th,
+.dc-md-table td {
+  padding: 5px 9px;
+  border-bottom: 1px solid color-mix(in oklab, var(--border) 70%, transparent);
+  vertical-align: top;
+}
+.dc-md-table th {
+  font-weight: 600;
+  font-size: 11.5px;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+  background: color-mix(in oklab, var(--foreground) 4%, transparent);
+}
+.dc-md-table tr:last-child td { border-bottom: 0; }
+
+.dc-md-pre {
+  margin: 0 0 9px;
+  padding: 8px 10px;
+  overflow-x: auto;
+  border-radius: 7px;
+  background: color-mix(in oklab, var(--foreground) 6%, transparent);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 18px;
+}
 .dc-md-code {
   font-family: var(--font-mono);
   font-size: 0.88em;
