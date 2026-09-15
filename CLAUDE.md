@@ -220,6 +220,32 @@ change around a pipeline that no longer exists.
 
 ---
 
+## 8. Explain the system in plain language, not in its own function names.
+
+Plans, options, questions and summaries say what the thing **does**, and what goes
+wrong when it does not. A reader who has not opened the file has to be able to
+choose. Function and file names belong underneath, in the implementation detail and
+in the source maps — not in the sentence that asks for a decision.
+
+| not this | this |
+| --- | --- |
+| "`apply_rule_out` writes `-> None` but `_edit_still_holds` expects `empty`" | "when the model settles a finding, the note it leaves is in a shape the reader does not recognise, so the finding is offered again the next night — forever, at full cost" |
+| "no `logic_mod.resolvable` filter on the agent path" | "the model is being asked questions it has no way to answer" |
+| "`spent_so_far`'s grep exits 1 under `pipefail`" | "the nightly loop has been dying silently before it starts work" |
+
+The names are not banned — they are how the fix gets found, and the right-hand
+column above is useless for actually editing anything. The rule is about **order and
+audience**: lead with the consequence somebody can weigh, then name the code for
+whoever goes looking. A choice offered only in symbols is not a choice, and an
+approval given to one is not informed consent.
+
+This applies hardest to anything asking for a decision — a plan, a set of options, a
+question — and to commit messages and changelog entries, which are read by people
+deciding whether to care. It does not apply to docstrings and comments, whose reader
+already has the file open.
+
+---
+
 `deploy/README.md` — local, not in the repo — is the runbook: what to do when
 something breaks, how to read the logs, how to publish or unpublish. This file is
 the rules; that one is the procedures.
