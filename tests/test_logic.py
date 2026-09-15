@@ -1380,7 +1380,7 @@ def test_the_same_obstacle_stored_twice_is_one_question(session):
 
 
 def test_a_finding_no_edit_can_answer_is_not_offered_to_a_model(session):
-    """Eleven of the sixteen rules offer no action on purpose — a phase enum
+    """Sixteen of the twenty-two codes offer no action on purpose — a phase enum
     arguing with a campus that is half energised is a contradiction in the schema,
     not in the data. `decide` can only ever answer "nothing to choose between"."""
     assert not logic.resolvable(

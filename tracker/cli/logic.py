@@ -626,17 +626,26 @@ def logic_resolve(
             return
 
         if use_agent:
-            # No `logic_mod.resolvable` filter, unlike the path below. That filter
-            # exists because `decide` can only answer with a key from
-            # `ACTIONS[code]`, and 11 of 16 codes have none — it is a property of
-            # the menu, not of the finding. An agent rules claims out of the merge,
-            # which is available on every code, so the 334 tranche findings the
-            # menu could never touch reach a model here for the first time.
+            # Not `logic_mod.resolvable`, which is a property of the fixed menu:
+            # `decide` can only answer with a key from `ACTIONS[code]` and most
+            # codes have none. An agent rules claims out of the merge instead, so
+            # the codes the menu could never touch do reach a model here.
+            #
+            # But not *every* code, which is what this path assumed for too long.
+            # Superseding a claim moves a project scalar, and the tranche findings
+            # — the largest group of what the menu could not answer — live in rows
+            # it cannot write. `_triage_by_agent` filters those out and says so.
+            #
+            # The whole list, not `[:limit]`, for the reason spelled out on the
+            # path below: the limit is a budget for *calls*, and slicing before the
+            # unanswerable ones are removed spends it on findings that will never
+            # reach a model.
             _triage_by_agent(
                 session,
-                findings[:limit],
+                findings,
                 extractor,
                 min_confidence=min_confidence,
+                limit=limit,
             )
             return
 
@@ -659,7 +668,9 @@ def logic_resolve(
         _triage(session, findings[:limit], logic_mod)
 
 
-def _triage_by_agent(session, findings: list, extractor, *, min_confidence: float = 0.75) -> None:
+def _triage_by_agent(
+    session, findings: list, extractor, *, min_confidence: float = 0.75, limit: int = 30
+) -> None:
     """Let a model read the sources and rule wrong claims out, one finding at a time.
 
     Prints what each run *looked at* as well as what it concluded. That is not
@@ -668,10 +679,40 @@ def _triage_by_agent(session, findings: list, extractor, *, min_confidence: floa
     and a broken tool, and only the trail distinguishes them.
 
     Committed per finding, so a provider failure on row 40 keeps the first 39.
+
+    **Findings no ruling can answer never reach the model**, which is the same
+    filter `_triage_by_model` applies below for the same reason and a different
+    mechanism. Superseding a claim moves a project scalar; six of the rules are
+    about how a campus is split into tranches, and ~250 of those are in the backlog
+    naming a project field they cannot be repaired through. They were each costing a
+    full agent run — whole articles read at ~45,000-260,000 tokens — to arrive at the
+    only answer available. They are counted and reported in one line, which is what
+    they are worth.
     """
     from tracker import triage as triage_mod
     from tracker.logic import record_decision
     from tracker.models import Project
+
+    unanswerable = [f for f in findings if not triage_mod.can_rule_on(f)]
+    findings = [f for f in findings if triage_mod.can_rule_on(f)]
+    if unanswerable:
+        by_code: dict[str, int] = {}
+        for finding in unanswerable:
+            by_code[finding.code] = by_code.get(finding.code, 0) + 1
+        listed = ", ".join(
+            f"{code} x{n}" for code, n in sorted(by_code.items(), key=lambda kv: -kv[1])
+        )
+        console.print(
+            f"[dim]{len(unanswerable)} finding(s) name nothing a ruling can move and were "
+            f"not sent to the model — {escape(listed)}.\n"
+            "They are still worth reading: `tracker logic check`.[/dim]\n"
+        )
+    if not findings:
+        console.print("[yellow]nothing here a ruling could answer[/yellow]")
+        return
+
+    over_budget = max(0, len(findings) - limit)
+    findings = findings[:limit]
 
     ruled = left = unusable = errored = 0
     spent = 0
@@ -685,13 +726,22 @@ def _triage_by_agent(session, findings: list, extractor, *, min_confidence: floa
         head = f"[dim]{index}/{len(findings)}[/dim] #{project.id} {escape(project.name[:32])}"
         # `remedy` is included because it is where the codebase records what a
         # reader should look at, and withholding it makes the model rediscover
-        # what a rule already knows. `subject` names what the finding is *about*
+        # what a rule already knows. `subjects` names what the finding is *about*
         # — the prompt was measurably blind without it.
+        #
+        # The attribute is plural, and this line read it in the singular. `getattr`
+        # with a default swallowed the miss, so the `About:` line was never emitted
+        # once: the model has never been told which obstacle or which milestone the
+        # contradiction is about, while the comment above claimed it had. That is
+        # the exact blindness `logic.Finding.subjects` was added to fix — a model
+        # handed a quote about something else declines, correctly, and looks
+        # stubborn.
+        subjects = ", ".join(finding.subjects or ())
         question = "\n".join(
             part
             for part in (
                 f"Finding `{finding.code}`: {finding.summary}",
-                f"About: {finding.subject}" if getattr(finding, "subject", "") else "",
+                f"About: {subjects}" if subjects else "",
                 f"Where to look: {finding.remedy}" if finding.remedy else "",
                 f"Fields involved: {', '.join(finding.fields)}" if finding.fields else "",
             )
@@ -756,6 +806,7 @@ def _triage_by_agent(session, findings: list, extractor, *, min_confidence: floa
         f"\n[bold]{ruled}[/bold] ruled, [bold]{left}[/bold] left alone"
         + (f", [yellow]{unusable}[/yellow] unusable" if unusable else "")
         + (f", [red]{errored}[/red] errored" if errored else "")
+        + (f", {over_budget} beyond --limit" if over_budget else "")
         + f"  [dim]~{spent:,} tokens[/dim]"
     )
     if cache_hit or cache_miss:
@@ -781,10 +832,10 @@ def _triage_by_model(session, findings: list, logic_mod, extractor, *, limit: in
     silently resolved 12 of 30 and said nothing about the other 18 would read as
     "the rest were fine". They were not — nobody has looked at them.
 
-    **Findings no edit can answer never reach the model.** Eleven of the sixteen
-    rules offer no action — a phase enum arguing with a campus that is half
-    energised is a contradiction in the schema, not in the data — and `decide`
-    can only ever answer "nothing to choose between" for them. On the live
+    **Findings no edit can answer never reach the model.** Sixteen of the
+    twenty-two codes in circulation offer no action — a phase enum arguing with a
+    campus that is half energised is a contradiction in the schema, not in the
+    data — and `decide` can only ever answer "nothing to choose between" for them. On the live
     database that was 174 of 283 findings, and with the queue ordered by project
     id the first `--limit 30` was almost entirely made of them: twelve lines of
     "left alone" before a single decision. They are counted here and reported in

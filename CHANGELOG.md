@@ -10,6 +10,93 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 First working version. Nothing has been released yet, so everything below is the
 initial build of the v1 PRD.
 
+### Fixed
+
+- **A finding the model settled is now recognised as settled** (`tracker/triage.py`,
+  `tracker/audit.py`, `tests/test_triage.py`).
+
+  The open-findings count could not fall through this path, and the reason was a
+  sentence shape. Decisions are recorded as prose in the row's notes and parsed back
+  by `audit.settled_codes`, which asks whether the edit still holds before it treats
+  a code as answered. It recognises the word `empty`. `apply_rule_out` interpolated
+  the raw value and wrote `-> None`, which the reader takes for a value that was
+  reverted — so it re-opened the finding.
+
+  Only the *emptying* rulings were lost, which is the case this whole module exists
+  for: rule out every wrong claim and let the field go empty rather than invent a
+  number. A ruling that left a surviving figure recorded a number and settled
+  correctly, and a decline writes no arrow at all and settled correctly too. So the
+  model's refusals were remembered and its answers were not, and the overnight loop
+  was sized on the opposite assumption — "a finding the agent answered *or declined*
+  is recorded and never re-offered". Every successful ruling was re-offered, and
+  re-paid for at ~45,000-260,000 tokens, on every later run.
+
+  `audit._fmt` is now public as `fmt_value` and both sides use it, for the reason
+  `logic.one_line` is public: the module that writes a sentence and the module that
+  reads it back a day later must not each have their own idea of what "empty" looks
+  like. A test walks the round trip — rule, record, read back — for an emptied field,
+  a surviving figure and a date.
+
+  Second hole closed with it: `conflicts.supersede` is idempotent, so re-ruling an
+  already-ruled claim marked nothing while still reporting a repair — the exact
+  failure `apply_rule_out`'s own guard exists to stop, which covered "no citation
+  claims this field" and not "already ruled out". It is refused now, but only against
+  *its own* reason, so relabelling a `superseded` claim as a `misread` still counts
+  as the real change it is.
+
+- **`logic resolve` no longer pays a model to answer questions it cannot answer**
+  (`tracker/triage.py`, `tracker/cli/logic.py`, `tests/test_triage.py`).
+
+  "An agent rules claims out of the merge, which is available on every code" was the
+  justification for making it the default, and it was wrong. Superseding a claim
+  moves a **project scalar**; it cannot delete a milestone, close an obstacle,
+  relabel a tranche or edit a quote.
+
+  The six tranche rules each declare a project-level field — `mw_built`,
+  `mw_planned`, `expected_online` — so each one looks answerable, and ~250 of them
+  are in the backlog. Every one was handed to a model that read whole articles and
+  then said the only thing available to it. `value_without_evidence` is worse: it
+  fires *because* no citation claims the field, so `apply_rule_out` refuses it by
+  construction, after the reading is paid for.
+
+  `triage.can_rule_on` withholds those before a model is called and the CLI prints
+  the held-back codes in one line — the shape `_triage_by_model` already used, since
+  a finding that silently vanishes reads as a finding that was fine. It removes spend
+  and no outcome: every finding it holds back could only ever have ended in
+  `leave_alone`.
+
+  `--limit` now applies *after* that filter rather than before, for the reason the
+  menu path already documented: the limit is a budget for calls, and slicing first
+  spent it on findings that never reach a model.
+
+  The list is hand-written because nothing in a finding betrays that its subject is a
+  tranche, so a new rule about tranches needs a new entry in
+  `UNANSWERABLE_BY_RULING`; a test pins each member against the rule that raises it.
+  The honest ceiling is unchanged — those findings need an edit to a `capacity_block`
+  row, and no such command exists.
+
+- **The agent is told what the finding is about** (`tracker/cli/logic.py`).
+
+  `Finding.subjects` names the specific obstacle, milestone or track a finding
+  concerns. It exists because without it the model was handed a quote about something
+  else and declined, correctly, looking stubborn. The question built for the agent
+  read the attribute in the singular; the field is plural, and `getattr` with a
+  default swallowed the miss. The `About:` line was never emitted once, while the
+  comment above it said the opposite.
+
+- **The code counts in the docs matched no version of the code**
+  (`docs/workflows/logic.md`, `tracker/logic.py`, `tracker/triage.py`,
+  `tracker/cli/logic.py`, `tests/test_logic.py`, `scripts/render_workflow_diagrams.py`).
+
+  Four modules and the workflow page all said "11 of 16 codes have no action". There
+  are 22 codes in circulation and 6 carry an action. Nine of the sixteen without one
+  sit in `ACTIONS` as a deliberate empty tuple with a comment saying why; the other
+  seven are not in the table at all and reach the same answer through `.get`'s
+  default. The behaviour is identical and the record is not — an empty entry is a
+  decision somebody wrote down, a missing one is a rule added without anybody asking
+  the question. One of the seven, `value_above_its_evidence`, is worth asking about:
+  a claim exists there and is too low, which is exactly the shape `triage` repairs.
+
 ### Added
 
 - **The server answers the table's questions; the browser stops downloading the

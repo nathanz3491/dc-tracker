@@ -294,13 +294,22 @@ class Action:
     apply: Any  # (session, project, finding) -> str
 
 
-def _fmt(value: Any) -> str:
+def fmt_value(value: Any) -> str:
     """A value as a decision sentence writes it.
 
     `None` renders `empty`, which is the fix for four `TypeError`s: `{was:g}` on a
     column an earlier action on the same project had already emptied. `cli` builds
     the whole pending list before applying anything, so two findings on one row
     reached the second formatter with a None in hand.
+
+    **Public, and it has to be**, for the same reason `logic.one_line` is: the
+    sentence this writes is parsed back by `settled_codes` a day later, so the
+    module that writes a value and the module that reads it must not each have
+    their own idea of what "empty" looks like. `triage.apply_rule_out` interpolated
+    the raw object instead and wrote `-> None`, which `_edit_still_holds` reads as
+    a value that was reverted — so every agent ruling that emptied a field was
+    re-offered, and re-paid for, on every later run. Declines were recorded
+    correctly, which is what made it look like caution rather than a parser.
     """
     if value is None:
         return "empty"
@@ -340,7 +349,7 @@ def _rule_against(
     recompute_from_sources(session, project)
     now = getattr(project, field)
     tail = f"{marked} claim(s) superseded" if marked else "nothing left to rule against"
-    return f"{field} {_fmt(was)} -> {_fmt(now)} ({why}; {tail})"
+    return f"{field} {fmt_value(was)} -> {fmt_value(now)} ({why}; {tail})"
 
 
 def _lowest_claim(session: Session, project: Project, _f: UnitFinding) -> str:
@@ -420,7 +429,8 @@ def _recompute_h200(session: Session, project: Project, _f: UnitFinding) -> str:
     session.flush()
     recompute_from_sources(session, project)
     return (
-        f"h200_equivalent {_fmt(was)} -> {_fmt(project.h200_equivalent)} (re-derived from capacity)"
+        f"h200_equivalent {fmt_value(was)} -> {fmt_value(project.h200_equivalent)} "
+        "(re-derived from capacity)"
     )
 
 
@@ -1163,6 +1173,7 @@ __all__ = [
     "check_project",
     "evidence_block",
     "find_online",
+    "fmt_value",
     "free_answer",
     "record",
     "relevant_passage",

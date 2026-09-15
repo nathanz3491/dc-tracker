@@ -1920,12 +1920,22 @@ def dedupe(findings: list[Finding]) -> list[Finding]:
 def resolvable(finding: Finding) -> bool:
     """Whether any edit exists that answers this finding.
 
-    Eleven of the sixteen rules offer no action, on purpose — each names something
-    only a person can settle, or a contradiction between a phase enum and a campus
-    that is two things at once. Those are worth a reader's eye and are not worth an
-    LLM call: `decide` can only ever return "nothing to choose between" for them.
-    Filtering on this before spending is the difference between a run that reads as
-    twelve refusals and one that reads as three decisions.
+    Sixteen of the twenty-two codes in circulation offer no action — each names
+    something only a person can settle, or a contradiction between a phase enum and
+    a campus that is two things at once. Those are worth a reader's eye and are not
+    worth an LLM call: `decide` can only ever return "nothing to choose between" for
+    them. Filtering on this before spending is the difference between a run that
+    reads as twelve refusals and one that reads as three decisions.
+
+    **`.get`, and the default is doing real work.** Nine codes are in `ACTIONS` with
+    a deliberate empty tuple and a comment saying why. Seven more are not in the
+    table at all — `cancelled_but_building`, `placeholder_value`, `placeholder_quote`,
+    `value_without_evidence`, `value_above_its_evidence`, and the two a model raises
+    — and reach the same answer through the default. The behaviour is identical
+    and the record is not: an empty entry is a decision somebody wrote down, a
+    missing one is a rule that was added without anybody asking the question.
+    `value_above_its_evidence` is the one worth revisiting — a claim exists there and
+    is too low, which is exactly the shape `triage` repairs.
     """
     return bool(ACTIONS.get(finding.code))
 
