@@ -2537,6 +2537,138 @@ def test_health_reports_the_commit_it_is_serving(server):
         assert body["commit"] == expected == deployed_commit()
 
 
+# --- reading the commit out of `.git`, in all three layouts -------------------
+#
+# The health endpoint answers "is my fix live yet?", and it reads `.git` directly
+# rather than shelling out because it answers on every health check.
+#
+# That read assumed `.git` is a directory. In a git worktree it is a *file* holding
+# `gitdir: <path>`, so `.git/HEAD` raises `NotADirectoryError` and the commit came
+# back as unknown. Harmless in production, which is an ordinary checkout — and
+# corrosive everywhere else, because this project is worked on in worktrees, so the
+# test above failed on every single run and the deploy runbook had to name it as an
+# expected failure. A suite that is always one red is a suite nobody reads.
+
+
+def _fake_checkout(root, *, head="ref: refs/heads/main", sha="abcdef1234567890"):
+    """An ordinary checkout: `.git` is a directory holding HEAD and the refs."""
+    git = root / ".git"
+    (git / "refs" / "heads").mkdir(parents=True)
+    (git / "HEAD").write_text(head + "\n", encoding="utf-8")
+    (git / "refs" / "heads" / "main").write_text(sha + "\n", encoding="utf-8")
+    return git
+
+
+def _fake_worktree(root, common_root, *, branch="feature/x", sha="1234567890abcdef"):
+    """A worktree: `.git` is a file, HEAD is private, refs are shared.
+
+    Mirrors what git actually writes — the branch file lives under the *common*
+    directory, and the worktree's gitdir only carries `HEAD` and `commondir`.
+    """
+    common = _fake_checkout(common_root, sha="0000000000000000")
+    gitdir = common / "worktrees" / "wt"
+    gitdir.mkdir(parents=True)
+    (gitdir / "HEAD").write_text(f"ref: refs/heads/{branch}\n", encoding="utf-8")
+    (gitdir / "commondir").write_text("../..\n", encoding="utf-8")
+    ref = common / "refs" / "heads" / branch
+    ref.parent.mkdir(parents=True, exist_ok=True)
+    ref.write_text(sha + "\n", encoding="utf-8")
+    (root / ".git").write_text(f"gitdir: {gitdir}\n", encoding="utf-8")
+    return gitdir, common
+
+
+@pytest.fixture
+def _at(monkeypatch):
+    """Point the server's idea of the install root at a directory, uncached."""
+
+    def use(root):
+        from tracker.webui import server as server_mod
+
+        monkeypatch.setattr(server_mod, "home", lambda: root)
+        server_mod.deployed_commit.cache_clear()
+        return server_mod
+
+    yield use
+    from tracker.webui import server as server_mod
+
+    server_mod.deployed_commit.cache_clear()
+
+
+def test_an_ordinary_checkout_reads_its_head(tmp_path, _at):
+    root = tmp_path / "repo"
+    root.mkdir()
+    _fake_checkout(root)
+    assert _at(root).deployed_commit() == "abcdef12"
+
+
+def test_a_worktree_reads_its_own_head_not_the_main_checkouts(tmp_path, _at):
+    """The bug. `.git` is a file, so the old read raised and reported nothing —
+    and resolving the branch against the worktree's own gitdir finds nothing
+    either, because refs are shared."""
+    root = tmp_path / "wt"
+    root.mkdir()
+    _fake_worktree(root, tmp_path / "main")
+    assert _at(root).deployed_commit() == "12345678"
+
+
+def test_a_worktree_whose_pointer_is_relative(tmp_path, _at):
+    """Git writes this absolute in some versions and relative in others."""
+    root = tmp_path / "wt"
+    root.mkdir()
+    gitdir, _ = _fake_worktree(root, tmp_path / "main")
+    import os
+
+    (root / ".git").write_text(
+        f"gitdir: {os.path.relpath(gitdir, root)}\n".replace("\\", "/"), encoding="utf-8"
+    )
+    assert _at(root).deployed_commit() == "12345678"
+
+
+def test_a_packed_ref_is_found_in_the_shared_directory(tmp_path, _at):
+    """`git gc` removes the loose file. In a worktree `packed-refs` is the main
+    checkout's, so looking for it beside HEAD finds nothing."""
+    root = tmp_path / "wt"
+    root.mkdir()
+    _, common = _fake_worktree(root, tmp_path / "main")
+    (common / "refs" / "heads" / "feature" / "x").unlink()
+    (common / "packed-refs").write_text(
+        "# pack-refs with: peeled fully-peeled sorted\n"
+        "1234567890abcdef1234567890abcdef12345678 refs/heads/feature/x\n",
+        encoding="utf-8",
+    )
+    assert _at(root).deployed_commit() == "12345678"
+
+
+def test_a_detached_head_reports_the_sha_it_is_on(tmp_path, _at):
+    root = tmp_path / "repo"
+    root.mkdir()
+    _fake_checkout(root, head="deadbeefcafebabe")
+    assert _at(root).deployed_commit() == "deadbeef"
+
+
+def test_no_checkout_at_all_reports_nothing(tmp_path, _at):
+    """A tarball install has no `.git`, and the endpoint says so rather than
+    raising on a health check."""
+    root = tmp_path / "tarball"
+    root.mkdir()
+    assert _at(root).deployed_commit() is None
+
+
+def test_a_git_file_pointing_nowhere_reports_nothing(tmp_path, _at):
+    """Whatever is wrong with the checkout, the health endpoint must answer."""
+    root = tmp_path / "broken"
+    root.mkdir()
+    (root / ".git").write_text("gitdir: /nowhere/at/all\n", encoding="utf-8")
+    assert _at(root).deployed_commit() is None
+
+
+def test_an_unreadable_git_file_reports_nothing(tmp_path, _at):
+    root = tmp_path / "odd"
+    root.mkdir()
+    (root / ".git").write_text("this is not a gitdir pointer\n", encoding="utf-8")
+    assert _at(root).deployed_commit() is None
+
+
 # --- the watchlist, the one write on the reading console --------------------
 #
 # **Every test here needs somebody signed in**, which is the change: a watchlist

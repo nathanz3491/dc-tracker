@@ -129,6 +129,29 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **The console reports its commit from inside a worktree** (`tracker/webui/server.py`,
+  `tests/test_webui.py`).
+
+  `GET /api/health` answers "is my fix live yet?", and it reads `.git` directly
+  rather than shelling out to `git` because it answers on every health check. That
+  read assumed `.git` is a directory. In a git worktree it is a *file* holding
+  `gitdir: <path>`, so `.git/HEAD` raised `NotADirectoryError` and the commit came
+  back as unknown.
+
+  Harmless in production, which is an ordinary checkout — and corrosive everywhere
+  else. This project is worked on in worktrees, so `test_health_reports_the_commit_
+  it_is_serving` failed on every single run and the deploy runbook had to name it as
+  an expected failure. A suite that is always one red is a suite nobody reads, and
+  the next real failure hides behind the one everybody has learned to skip.
+
+  **HEAD is per-worktree; refs are shared**, which is the half a naive fix misses.
+  A worktree's gitdir carries its own `HEAD`, but `refs/heads/*` and `packed-refs`
+  live in the common directory its `commondir` file points at — so following the
+  pointer and then resolving the branch beside `HEAD` finds nothing, and falls
+  through to a packed-refs scan that also finds nothing. Measured against the three
+  implementations: the old one raises, pointer-following alone returns None, and
+  splitting the two directories returns the commit. All three are pinned.
+
 - **A finding the model settled is now recognised as settled** (`tracker/triage.py`,
   `tracker/audit.py`, `tests/test_triage.py`).
 
