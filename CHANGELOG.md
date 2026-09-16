@@ -129,6 +129,18 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **A preview no longer says it repaired something** (`tracker/cli/logic.py`).
+
+  `logic resolve --auto` without `--apply` writes nothing — it is the dry-run half
+  of an explicit pair in `scripts/settle.sh` and `scripts/resolve.sh`, one of which
+  says so in its own comment. It printed `repaired #14 …` anyway, for rows it had
+  not touched.
+
+  `resolve_drift` computes the same list either way, deliberately, so the preview
+  and the change come from identical code — but the label was unconditional. It now
+  reads `would repair`, followed by the same line `logic conflicts` already prints
+  when it is proposing rather than writing.
+
 - **The console reports its commit from inside a worktree** (`tracker/webui/server.py`,
   `tests/test_webui.py`).
 

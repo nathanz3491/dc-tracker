@@ -581,14 +581,27 @@ def logic_resolve(
             )
             return
 
+        # Past tense only when it happened. `resolve_drift` computes the same list
+        # either way — that is deliberate, so the preview and the change come from
+        # identical code — but printing "repaired" on a run that wrote nothing told
+        # the reader the opposite of the truth. `--auto` without `--apply` is the
+        # dry-run half of `scripts/settle.sh` and `scripts/resolve.sh`, so this is
+        # the path most likely to be read and believed.
+        label = "repaired" if writing else "would repair"
         for repair in repairs:
             console.print(
-                f"[green]repaired[/green] #{repair.project_id} {escape(repair.label[:60])}"
+                f"[green]{label}[/green] #{repair.project_id} {escape(repair.label[:60])}"
             )
             for name, (was, now) in repair.changes.items():
                 console.print(f"  {name}: {escape(str(was)[:36])} -> {escape(str(now)[:36])}")
         if repairs:
             console.print()
+        if repairs and not writing:
+            # Said the way `logic conflicts` says it, because it is the same fact.
+            console.print(
+                "[yellow]Nothing written.[/yellow] [dim]Re-run with --apply to "
+                "re-derive these rows.[/dim]\n"
+            )
 
         # The findings a comparison answers, applied without asking anybody.
         #
