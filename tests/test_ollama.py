@@ -237,7 +237,7 @@ def test_deepseek_stays_the_default_provider():
 
 @respx.mock
 def test_the_deepseek_reasoning_model_name_never_leaks_into_a_local_call():
-    """`reasoning_extractor` names `deepseek-v4-pro` explicitly on the API path;
+    """`reasoning_extractor` names a DeepSeek model explicitly on the API path;
     a local server asked for that tag would 404 on every `infer`."""
     mock_version(respx)
     extractor = reasoning_extractor(ollama_settings())

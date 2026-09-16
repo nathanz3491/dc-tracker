@@ -48,6 +48,39 @@ initial build of the v1 PRD.
 
 ### Changed
 
+- **Every DeepSeek tier runs one model, named in one place**
+  (`tracker/config.py`, `.env.example`, `docs/data-quality.md`,
+  `docs/console-and-export.md`, `tests/test_config.py`).
+
+  The three model settings held the same string written three times, and the
+  reasoning tier held a fourth. A provider that renames its models faster than this
+  project releases will eventually have two of them updated and one forgotten,
+  which surfaces as a 404 on whichever path is least exercised. They now share one
+  constant, `DEEPSEEK_MODEL`, and that is the whole edit next time.
+
+  `TRACKER_DEEPSEEK_MODEL_ALL` moves every tier from the environment, so the host
+  can follow a rename without a deploy. A tier set explicitly by its own variable
+  wins over it — otherwise the override would silently overwrite a deliberate pin,
+  which is the opposite of what an override is for.
+
+  **The judgement tier came off the heavier model, and that part is not measured.**
+  `deepseek_reasoning_model` ran `deepseek-v4-pro` on the argument that `infer` and
+  `logic conflicts` are one call per project or per contested field, so depth was
+  affordable there in a way it is not on the path that reads every article. That
+  held while the two were a generation apart. `v4.1-flash` is a later model than
+  `v4-pro`, so paying the pro rate now buys an older one — and the agent loop
+  behind `logic resolve`, at nine to twelve calls per finding, is where a per-token
+  premium is felt hardest.
+
+  Nothing about this has been measured on this corpus, and the config, the
+  `.env.example` and `docs/data-quality.md` all say so rather than presenting it as
+  settled. If judgement gets visibly worse, pin `TRACKER_DEEPSEEK_REASONING_MODEL`
+  back to a pro model for one overnight round and compare.
+
+  Effort is untouched: extraction `high`, infer `max`, agent `high`. The tiers now
+  differ by reasoning effort alone, which is what they always differed by on
+  DeepSeek — the model name was the second lever, and it is now idle.
+
 - **The drawer's AI overview is an analytical briefing, and the console renders
   full markdown for it** (`tracker/prompts/overview-v3.txt`, `tracker/overview.py`,
   `tracker/webui/static/app.js`, `tracker/webui/static/app.css`,

@@ -292,8 +292,17 @@ own repairs: a bulk pass over the whole database on demand, not tied to any one
 project's run. The default `deepseek_reasoning_model` moved to `deepseek-v4-pro`
 (from `deepseek-v4-flash`) alongside this change — `infer` and `conflicts` are
 both one call per project or per contested field, hundreds rather than the
-thousands extraction pays for, so the heavier model is affordable exactly where
+thousands extraction pays for, so the heavier model was affordable exactly where
 these two calls happen.
+
+**That split is gone as of `deepseek-v4.1-flash`.** Every tier now names the same
+model, and the tiers differ by reasoning effort alone. The argument above held
+while the two were a generation apart; a later flash model against an older pro
+one inverts it, and the agent loop behind `logic resolve` — nine to twelve calls
+per finding — is where a per-token premium is felt hardest. This has not been
+measured on this corpus: if judgement gets visibly worse, pin
+`TRACKER_DEEPSEEK_REASONING_MODEL` back to a pro model for one overnight round
+and compare.
 
 ## What the stored data actually rests on
 
