@@ -27,7 +27,16 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 #:
 #: To move every tier without a deploy, set `TRACKER_DEEPSEEK_MODEL_ALL` in the
 #: host's `.env`; a tier pinned by its own variable is left where it was pinned.
-DEEPSEEK_MODEL: Final = "deepseek-v4.1-flash"
+#:
+#: **The id carries no version, and that is DeepSeek's naming, not a shortcut.**
+#: `deepseek-flash` is the published id for the current flash model; the versioned
+#: `deepseek-v4-flash` is deprecated and still routed to it, which is why the old
+#: value here kept working long after the model behind it changed. Inventing a
+#: versioned id — `deepseek-v4.1-flash`, matching the model's *name* rather than
+#: its id — is not routed anywhere, and fails every call. Check the published id
+#: rather than deriving it from a release note:
+#: https://api-docs.deepseek.com/zh-cn/quick_start/pricing
+DEEPSEEK_MODEL: Final = "deepseek-flash"
 
 #: Marker used to locate the project root by walking up from the CWD, so
 #: `tracker list` works from any subdirectory.
@@ -190,8 +199,9 @@ class Settings(BaseSettings):
     #: figures a project holds — and that one call per project or per contested
     #: field made depth affordable where reading every article does not.
     #:
-    #: That argument held while the tiers were a generation apart. `v4.1-flash` is
-    #: a later model than `v4-pro`, so paying the pro rate now buys an older one,
+    #: That argument held while the tiers were a generation apart. The current
+    #: flash model is a later one than `v4-pro`, so paying the pro rate now buys an
+    #: older model,
     #: and the agent loop is the heaviest consumer here at nine to twelve calls a
     #: finding — the place a per-token premium hurts most. **This has not been
     #: measured on this corpus.** If judgement gets visibly worse, the honest test

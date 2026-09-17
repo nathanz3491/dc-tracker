@@ -295,7 +295,7 @@ both one call per project or per contested field, hundreds rather than the
 thousands extraction pays for, so the heavier model was affordable exactly where
 these two calls happen.
 
-**That split is gone as of `deepseek-v4.1-flash`.** Every tier now names the same
+**That split is gone as of `deepseek-flash`.** Every tier now names the same
 model, and the tiers differ by reasoning effort alone. The argument above held
 while the two were a generation apart; a later flash model against an older pro
 one inverts it, and the agent loop behind `logic resolve` — nine to twelve calls

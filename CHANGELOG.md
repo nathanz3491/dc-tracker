@@ -52,6 +52,15 @@ initial build of the v1 PRD.
   (`tracker/config.py`, `.env.example`, `docs/data-quality.md`,
   `docs/console-and-export.md`, `tests/test_config.py`).
 
+  **The id is `deepseek-flash`, with no version in it.** That is DeepSeek's
+  naming: the versioned `deepseek-v4-flash` is deprecated and still routed to the
+  current flash model, which is why the old value here kept working long after the
+  model behind it changed. A versioned id matching the model's *name* rather than
+  its id — `deepseek-v4.1-flash` — is routed nowhere and fails every call, which is
+  exactly what shipped for one deploy before this. The published id is in the
+  pricing page, and that is where to read it rather than deriving it from a release
+  note.
+
   The three model settings held the same string written three times, and the
   reasoning tier held a fourth. A provider that renames its models faster than this
   project releases will eventually have two of them updated and one forgotten,
@@ -67,8 +76,9 @@ initial build of the v1 PRD.
   `deepseek_reasoning_model` ran `deepseek-v4-pro` on the argument that `infer` and
   `logic conflicts` are one call per project or per contested field, so depth was
   affordable there in a way it is not on the path that reads every article. That
-  held while the two were a generation apart. `v4.1-flash` is a later model than
-  `v4-pro`, so paying the pro rate now buys an older one — and the agent loop
+  held while the two were a generation apart. The current flash model is a later
+  one than `v4-pro`, so paying the pro rate now buys an older model — and the agent
+  loop
   behind `logic resolve`, at nine to twelve calls per finding, is where a per-token
   premium is felt hardest.
 
