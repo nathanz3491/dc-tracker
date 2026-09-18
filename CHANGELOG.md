@@ -48,6 +48,49 @@ initial build of the v1 PRD.
 
 ### Changed
 
+- **Every DeepSeek tier runs one model, named in one place**
+  (`tracker/config.py`, `.env.example`, `docs/data-quality.md`,
+  `docs/console-and-export.md`, `tests/test_config.py`).
+
+  **The id is `deepseek-flash`, with no version in it.** That is DeepSeek's
+  naming: the versioned `deepseek-v4-flash` is deprecated and still routed to the
+  current flash model, which is why the old value here kept working long after the
+  model behind it changed. A versioned id matching the model's *name* rather than
+  its id — `deepseek-v4.1-flash` — is routed nowhere and fails every call, which is
+  exactly what shipped for one deploy before this. The published id is in the
+  pricing page, and that is where to read it rather than deriving it from a release
+  note.
+
+  The three model settings held the same string written three times, and the
+  reasoning tier held a fourth. A provider that renames its models faster than this
+  project releases will eventually have two of them updated and one forgotten,
+  which surfaces as a 404 on whichever path is least exercised. They now share one
+  constant, `DEEPSEEK_MODEL`, and that is the whole edit next time.
+
+  `TRACKER_DEEPSEEK_MODEL_ALL` moves every tier from the environment, so the host
+  can follow a rename without a deploy. A tier set explicitly by its own variable
+  wins over it — otherwise the override would silently overwrite a deliberate pin,
+  which is the opposite of what an override is for.
+
+  **The judgement tier came off the heavier model, and that part is not measured.**
+  `deepseek_reasoning_model` ran `deepseek-v4-pro` on the argument that `infer` and
+  `logic conflicts` are one call per project or per contested field, so depth was
+  affordable there in a way it is not on the path that reads every article. That
+  held while the two were a generation apart. The current flash model is a later
+  one than `v4-pro`, so paying the pro rate now buys an older model — and the agent
+  loop
+  behind `logic resolve`, at nine to twelve calls per finding, is where a per-token
+  premium is felt hardest.
+
+  Nothing about this has been measured on this corpus, and the config, the
+  `.env.example` and `docs/data-quality.md` all say so rather than presenting it as
+  settled. If judgement gets visibly worse, pin `TRACKER_DEEPSEEK_REASONING_MODEL`
+  back to a pro model for one overnight round and compare.
+
+  Effort is untouched: extraction `high`, infer `max`, agent `high`. The tiers now
+  differ by reasoning effort alone, which is what they always differed by on
+  DeepSeek — the model name was the second lever, and it is now idle.
+
 - **The drawer's AI overview is an analytical briefing, and the console renders
   full markdown for it** (`tracker/prompts/overview-v3.txt`, `tracker/overview.py`,
   `tracker/webui/static/app.js`, `tracker/webui/static/app.css`,
@@ -128,6 +171,41 @@ initial build of the v1 PRD.
   fails if it stops cutting a model that restarts.
 
 ### Fixed
+
+- **A preview no longer says it repaired something** (`tracker/cli/logic.py`).
+
+  `logic resolve --auto` without `--apply` writes nothing — it is the dry-run half
+  of an explicit pair in `scripts/settle.sh` and `scripts/resolve.sh`, one of which
+  says so in its own comment. It printed `repaired #14 …` anyway, for rows it had
+  not touched.
+
+  `resolve_drift` computes the same list either way, deliberately, so the preview
+  and the change come from identical code — but the label was unconditional. It now
+  reads `would repair`, followed by the same line `logic conflicts` already prints
+  when it is proposing rather than writing.
+
+- **The console reports its commit from inside a worktree** (`tracker/webui/server.py`,
+  `tests/test_webui.py`).
+
+  `GET /api/health` answers "is my fix live yet?", and it reads `.git` directly
+  rather than shelling out to `git` because it answers on every health check. That
+  read assumed `.git` is a directory. In a git worktree it is a *file* holding
+  `gitdir: <path>`, so `.git/HEAD` raised `NotADirectoryError` and the commit came
+  back as unknown.
+
+  Harmless in production, which is an ordinary checkout — and corrosive everywhere
+  else. This project is worked on in worktrees, so `test_health_reports_the_commit_
+  it_is_serving` failed on every single run and the deploy runbook had to name it as
+  an expected failure. A suite that is always one red is a suite nobody reads, and
+  the next real failure hides behind the one everybody has learned to skip.
+
+  **HEAD is per-worktree; refs are shared**, which is the half a naive fix misses.
+  A worktree's gitdir carries its own `HEAD`, but `refs/heads/*` and `packed-refs`
+  live in the common directory its `commondir` file points at — so following the
+  pointer and then resolving the branch beside `HEAD` finds nothing, and falls
+  through to a packed-refs scan that also finds nothing. Measured against the three
+  implementations: the old one raises, pointer-following alone returns None, and
+  splitting the two directories returns the commit. All three are pinned.
 
 - **A finding the model settled is now recognised as settled** (`tracker/triage.py`,
   `tracker/audit.py`, `tests/test_triage.py`).

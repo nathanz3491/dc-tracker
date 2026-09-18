@@ -84,6 +84,46 @@ READ_VIEWS: frozenset[str] = frozenset({"updates", "projects", "sources", "map",
 _PROJECT_PATH = re.compile(r"/projects/(\d{1,18})")
 
 
+def _git_dirs() -> tuple[Path, Path] | None:
+    """`(where HEAD lives, where refs live)`, or None outside a checkout.
+
+    The same directory twice in an ordinary checkout, and **two different ones in
+    a worktree** — which is the whole reason this function exists. There, `.git`
+    is a file holding `gitdir: <path>` rather than a directory, so reading
+    `.git/HEAD` raises `NotADirectoryError` and the commit reads as unknown.
+
+    That was harmless in production, which is an ordinary checkout, and corrosive
+    everywhere else: this project is worked on in worktrees, so the health test
+    failed on every run and the deploy runbook had to carve out an exception for
+    it by name. A suite that is always one red is a suite nobody reads.
+
+    **HEAD is per-worktree; refs are shared.** A worktree's gitdir holds its own
+    `HEAD`, but `refs/heads/*` and `packed-refs` live in the common directory that
+    its `commondir` file points at. Resolving a branch against the worktree's own
+    gitdir finds nothing and falls through to the packed-refs scan, which then
+    also finds nothing — so both paths are needed, not just the first.
+    """
+    dot = home() / ".git"
+    if dot.is_dir():
+        return dot, dot
+    try:
+        pointer = dot.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if not pointer.startswith("gitdir: "):
+        return None
+    # Git writes this absolute in some versions and relative to the worktree in
+    # others, so it is resolved against the worktree either way.
+    gitdir = Path(pointer[len("gitdir: ") :].strip())
+    if not gitdir.is_absolute():
+        gitdir = home() / gitdir
+    try:
+        common = (gitdir / (gitdir / "commondir").read_text(encoding="utf-8").strip()).resolve()
+    except OSError:
+        common = gitdir
+    return gitdir, common
+
+
 @lru_cache(maxsize=1)
 def deployed_commit() -> str | None:
     """The commit this process is serving, or None when there is no checkout.
@@ -99,16 +139,19 @@ def deployed_commit() -> str | None:
     because the answer cannot change without the process restarting — the
     deployer restarts it precisely so that it does.
     """
-    head = home() / ".git" / "HEAD"
+    found = _git_dirs()
+    if found is None:
+        return None
+    gitdir, common = found
     try:
-        ref = head.read_text(encoding="utf-8").strip()
+        ref = (gitdir / "HEAD").read_text(encoding="utf-8").strip()
         if ref.startswith("ref: "):
-            target = home() / ".git" / ref[5:]
+            name = ref[5:]
+            target = common / name
             if target.is_file():
                 return target.read_text(encoding="utf-8").strip()[:8]
             # A packed ref: the loose file is gone once `git gc` has run.
-            packed = home() / ".git" / "packed-refs"
-            name = ref[5:]
+            packed = common / "packed-refs"
             for line in packed.read_text(encoding="utf-8").splitlines():
                 if line.endswith(f" {name}"):
                     return line.split()[0][:8]
