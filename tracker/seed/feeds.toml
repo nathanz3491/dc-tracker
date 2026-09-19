@@ -316,6 +316,20 @@ risk_signal = [
   "permit",
   "zoning",
   "rezoning",
+  # A county granting or refusing a tax abatement is the public decision that
+  # most often precedes a campus, and the vote is reported where the
+  # announcement is not. Added for the `abatement` search template, which was
+  # measured producing nothing at all without it: "Maricopa County Arizona data
+  # center tax abatement approved" matched the topic tier and no signal, so
+  # every hit was discarded before it cost a fetch — and a template that queues
+  # nothing is invisible in `tracker queue stats`, indistinguishable from one
+  # that never ran.
+  #
+  # This widens the queue for every feed and sitemap, not only for search. The
+  # topic tier is what bounds it: "Ohio steel mill wins tax abatement" and
+  # "Asbestos abatement contract awarded" are both still dropped, because
+  # neither says data center. "noise abatement" already matched via "noise".
+  "abatement",
   "referendum",
   "denied",
   "rejected",

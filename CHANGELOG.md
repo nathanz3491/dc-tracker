@@ -48,6 +48,13 @@ initial build of the v1 PRD.
 
 ### Changed
 
+- **"abatement" is a risk-signal term** (`tracker/seed/feeds.toml`). A county
+  granting or refusing a tax abatement is the public decision that most often
+  precedes a campus, and the vote gets reported where the announcement does not.
+  This widens the queue for every feed and sitemap, not only for search; the topic
+  tier is what bounds it, and "Ohio steel mill wins tax abatement" is still
+  dropped.
+
 - **Every DeepSeek tier runs one model, named in one place**
   (`tracker/config.py`, `.env.example`, `docs/data-quality.md`,
   `docs/console-and-export.md`, `tests/test_config.py`).
