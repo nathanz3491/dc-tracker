@@ -33,7 +33,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from tracker.config import Settings, get_settings, seed_path
@@ -940,6 +940,15 @@ def drop_pending(
     on screen was a *prefix* of the real URL. Pasting it into `--drop --url`
     matched nothing, and pasting it into a browser produced a 404 — which is what
     a queue full of dead links looked like from the outside.
+
+    **A feed ending in a colon matches every label beneath it.** Web-search rows
+    carry `search:<template>:<place>`, one label per place, so a template that
+    turns out to be worthless has no single feed name to drop — and the rolled-up
+    name the funnel reports (`search:rezoning`) is a group that no row holds, so
+    an exact match would report dropping nothing and read as a bug. Writing
+    `search:rezoning:` clears the whole template. The trailing colon is what makes
+    this safe to add: no existing feed name ends in one, so nothing that used to
+    match exactly can silently start matching more.
     """
     stmt = select(IngestUrl).where(IngestUrl.status == PENDING_URL_STATUS)
     if urls:
@@ -947,7 +956,11 @@ def drop_pending(
     if ids:
         stmt = stmt.where(IngestUrl.id.in_(ids))
     if feeds:
-        stmt = stmt.where(IngestUrl.feed.in_(feeds))
+        exact = [f for f in feeds if not f.endswith(":")]
+        prefixes = [f for f in feeds if f.endswith(":")]
+        clauses = [IngestUrl.feed.in_(exact)] if exact else []
+        clauses += [IngestUrl.feed.startswith(p) for p in prefixes]
+        stmt = stmt.where(or_(*clauses)) if clauses else stmt
     rows = list(session.scalars(stmt))
     for row in rows:
         session.delete(row)

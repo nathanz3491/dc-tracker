@@ -501,7 +501,7 @@ def sync() -> Canvas:
     c.section(48, 454, "where the rows come from", "three phases end in one queue, and one gate stands between the queue and a new row")
 
     feeds = c.box(48, 500, 176, 62, "Feeds", ["what was published lately"], role="cool", title_size=11.5)
-    search = c.box(48, 574, 176, 62, "Search", ["reaches back past the feeds"], role="orange", title_size=11.5)
+    search = c.box(48, 574, 176, 62, "Search", ["a place and an event,", "no model, no project name"], role="orange", title_size=11.5)
     roster = c.box(48, 648, 176, 62, "Roster", ["who we hold no rows for"], role="cool", title_size=11.5)
     archives = c.box(48, 722, 176, 62, "Archives (--deep)", ["sitemaps, no key needed"], role="cool", title_size=11.5)
 

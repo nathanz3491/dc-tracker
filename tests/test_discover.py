@@ -574,6 +574,40 @@ def test_drop_pending_removes_selected_urls(session):
     assert [r.url for r in pending(session)] == ["https://a.test/two/"]
 
 
+def _queued(session, url, feed):
+    session.add(IngestUrl(url=url, run_id="r", status="discovered", feed=feed, attempts=0))
+    session.flush()
+
+
+def test_a_feed_ending_in_a_colon_drops_the_whole_template(session):
+    """The only way to clear a search template's queue once it is retired.
+
+    A template's rows are one feed per place — `search:rezoning:loudoun-va`,
+    `search:rezoning:tx` — so there is no single name to drop, and the name the
+    funnel reports is a rolled-up group that no row holds. An exact match would
+    report dropping nothing and read as a bug.
+    """
+    _queued(session, "https://a.test/1", "search:rezoning:loudoun-va")
+    _queued(session, "https://a.test/2", "search:rezoning:tx")
+    _queued(session, "https://a.test/3", "search:permit:tx")
+
+    assert drop_pending(session, feeds=["search:rezoning:"]) == 2
+    assert [r.feed for r in pending(session)] == ["search:permit:tx"]
+
+
+def test_a_feed_without_a_colon_still_matches_exactly(session):
+    """Nothing that used to match one feed may quietly start matching more.
+
+    That is what the trailing colon buys: no existing feed name ends in one, so
+    prefix matching cannot be triggered by accident.
+    """
+    _queued(session, "https://a.test/1", "datacenterknowledge")
+    _queued(session, "https://a.test/2", "datacenterknowledge-archive")
+
+    assert drop_pending(session, feeds=["datacenterknowledge"]) == 1
+    assert [r.feed for r in pending(session)] == ["datacenterknowledge-archive"]
+
+
 def test_drop_pending_without_urls_clears_the_queue(session):
     queue_candidates(session, candidates(), run_id="r1", report=DiscoverReport())
     assert drop_pending(session) == 2

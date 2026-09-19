@@ -48,6 +48,76 @@ initial build of the v1 PRD.
 
 ### Changed
 
+- **Web search now looks for a place and an event, not for a project it already
+  knows the name of** (`tracker/ingest/search.py`, `tracker/funnel.py`,
+  `tracker/cli/sync.py`, `tracker/normalize.py`, `docs/workflows/sync.md`,
+  `tests/test_search.py`, `tests/test_funnel.py`).
+
+  Search was the one discovery path meant to reach past the configured feeds, and
+  it could not. It asked a model to **name projects** to search for, which reaches
+  only projects somebody already wrote enough about for a model to have learned
+  them — the ones already stored. It also hard-coded twenty-five operator names,
+  Nebius not among them, and told the model to avoid 60 of the ~300 projects held,
+  so it re-proposed the other 240 and paid a search each to be told we had them.
+
+  A query now names a place and an event — *"Loudoun County Virginia data center
+  rezoning application"* — and so needs neither the operator nor the campus. That
+  is the whole difference: a county votes on a rezoning before anybody announces
+  anything and publishes the agenda either way, so this can surface a site nobody
+  here has heard of. Ten events, each carrying a term the discovery filter already
+  recognises; places ranked out of the database, clusters first because campuses
+  cluster. No model anywhere in it.
+
+  **And it can finally be judged.** Every other source here is measured on what it
+  produced, and search was the exception: it recorded the whole query text as its
+  provenance, and a planned query is never issued twice, so the funnel held
+  hundreds of groups of one. A row now records `search:<template>:<place>` and the
+  funnel rolls the place up, so a template gets one line with a real call count —
+  and a query that crossed the ten-call threshold can no longer be formally
+  proposed for retirement with advice to drop a query that will never be issued
+  again.
+
+  Four things worth knowing before reading the numbers:
+
+  - **A place the filter cannot accept is named, not skipped.** `exclude` is a
+    substring test, so `summit` (there for conference write-ups) and `stock`
+    (finance coverage) make Summit County in CO, OH and UT plus Stockton,
+    Woodstock and Comstock unsearchable for any query at all. Left in the plan
+    such a place spends a slot every run and returns silence.
+  - **Each run walks the diagonal of the cross product**, preferring pairs that
+    have produced nothing. Rank order alone spends a whole run on one county and
+    re-runs the identical queries the next night, which is the problem this
+    replaces wearing a new hat.
+  - **A template that queues nothing is invisible to the funnel**, which is
+    derived from `ingest_url` and so cannot tell "ran and everything was filtered"
+    from "never ran". The run itself now prints per-template counts, because that
+    is the only place the distinction exists. It is not hypothetical: `abatement`
+    behaved exactly this way, which is why "abatement" joined `risk_signal`.
+  - **`already_known` will go up.** Overlapping templates re-find the same URLs
+    and that is healthy. The number that should fall is `no_project`.
+
+  `--from-llm` stays, labelled separately. It is circular, but it is the one path
+  that can name an operator in a place holding no rows — and running both is what
+  lets the funnel say which is worth the quota instead of leaving it asserted.
+
+- **`--search N` means N queries** (`tracker/cli/sync.py`). It used to mean "ask a
+  model for N", while the number actually issued was capped separately inside the
+  run, so `--search 25` announced 25 and sent 10.
+
+- **"(no feed)" means `enrich`, and three places said otherwise** (`tracker/funnel.py`,
+  `tracker/cli/sync.py`, `docs/sources-and-feeds.md`). A comment, a docstring and
+  the sentence the report prints all attributed the 2,148 wasted calls with no feed
+  to "search and archive sweeps" — and both of those record a feed, search a
+  `search:` label and an archive sweep the sitemap's own name. Left alone, a reader
+  would now see a `search:rezoning` row in the table and a line underneath saying
+  search has no feed.
+
+- **A queue drop can name a whole search template** (`tracker/ingest/discover.py`).
+  `--feed` ending in a colon matches every label beneath it, which is the only way
+  to clear a retired template's pending rows — the funnel reports a rolled-up group
+  name that no stored row holds. No existing feed name ends in a colon, so nothing
+  that matched exactly before can start matching more.
+
 - **"abatement" is a risk-signal term** (`tracker/seed/feeds.toml`). A county
   granting or refusing a tax abatement is the public decision that most often
   precedes a campus, and the vote gets reported where the announcement does not.

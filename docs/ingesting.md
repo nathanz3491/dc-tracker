@@ -99,8 +99,10 @@ Up to seven phases. A bare `tracker sync` runs five of them:
 | 7 | list | show the result | yes |
 
 Needs the API key set as above. When a search key is also configured (see "Search"
-below), the discover phase runs LLM-proposed web searches automatically —
-`--search 0` skips them for a run.
+below), the discover phase also runs place-anchored web searches — `--search 0`
+skips them for a run. Those cost search quota but **no LLM call**: the queries are
+built from a fixed table of events and places ranked out of the database, with no
+model involved.
 
 Phases are numbered against the plan the run actually chose, so a default run says
 `1/5 … 5/5` and `--full` says `1/7 … 7/7`. A phase that was not asked for is absent
@@ -364,11 +366,32 @@ ago never appears in them. Search reaches back for it.
 
 ```bash
 tracker search "Meta Richland Parish Louisiana data center megawatts"
-tracker search --from-llm 20            # let the model propose the queries
-tracker search --from-llm 20 --print-only   # just show them, search nothing
+tracker search --plan 10                # place-anchored templates: what sync runs
+tracker search --plan 10 --print-only   # the queries and their labels, free
+tracker search --from-llm 20            # let the model propose the queries instead
 tracker sync --search 10                # more searches than the default
 tracker sync --search 0                 # skip searching this run
 ```
+
+**What a query looks for decides what it can find.** `--plan` names a place and an
+event — *"Loudoun County Virginia data center rezoning application"* — and so needs
+neither the operator nor the campus name. That is what lets it turn up a site
+nobody here has heard of: a county votes on a rezoning before anybody announces
+anything, and publishes the agenda either way.
+
+`--from-llm` asks a model to name projects to search for. That is circular — you
+can only be told about a project somebody already wrote about, which is usually one
+already stored — but it is kept, because it is the one path that can name an
+operator in a place holding no rows, and because running both is what lets
+`tracker queue stats` say which is worth the quota rather than leaving it asserted.
+
+Both are safe for the same reason: **a query is a lead, never a fact.** Nothing a
+model names is stored, and a project becomes a row only once a real article was
+fetched and every value backed by a verbatim quote.
+
+Details of the ten templates, how places are ranked, and the two counties the
+keyword filter makes unsearchable are in
+[the sync workflow](workflows/sync.md#what-search-looks-for-and-why-it-is-not-a-models-idea).
 
 Needs one search key in `.env` — **this project uses Serper**
 (`TRACKER_SEARCH_PROVIDER=serper`). Once any key is configured, `tracker sync`

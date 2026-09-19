@@ -1,28 +1,42 @@
 """Search-based discovery: find candidate articles by asking, not by waiting.
 
 RSS discovery only sees what the feeds publish *now*, so a project announced two
-years ago never appears. Search closes that gap — you can go looking for
-"Microsoft data center Mount Pleasant megawatts" and get the article that names
-the number.
+years ago never appears. Search closes that gap.
 
-Two halves, and the division between them is the important part:
+**Two ways of deciding what to look for, and they reach different ground.**
 
-* **The model proposes what to look for.** Asked for candidate US data center
-  projects, it returns names and locations from its training data. Those are
-  *guesses*, and this module treats them as nothing more than search-query
-  material. **Not one of them is ever written to the database.**
-* **Search and extraction decide what is true.** A proposed project only becomes
-  a row if a real search returns a real URL, the article fetches, and the evidence
-  gate finds a verbatim quote for each value. If the model invented a project, the
-  search finds nothing and nothing happens.
+*Place-anchored templates* are what `tracker sync` runs. A query names a **place**
+and an **event** — "Loudoun County Virginia data center rezoning application" —
+so it has to know neither the operator nor the campus. That is the point: a
+county votes on a rezoning before anybody announces anything, and it publishes
+the agenda either way, so this can surface a site nobody here has heard of. The
+places come from the database (see `rank_places`) and the events from a fixed
+table (`_PLACE_TEMPLATES`); no model is involved at any step.
 
-That asymmetry is what makes it safe to let a language model brainstorm here while
-refusing to let it assert anything. Discovery is allowed to be speculative
-precisely because storage is not.
+*Model-proposed queries* (`generate_queries`, reached by `tracker search
+--from-llm`) ask for project names instead. This is circular by construction —
+to search for a project you must already name it, so the reachable set is
+whatever is in the training data — but it is kept, because it is the only path
+that can name an operator in a place we hold no rows for, and because running
+both is what lets `tracker queue stats` say which is actually worth the quota
+rather than leaving it to be asserted.
 
-Hits go through the same two-tier keyword filter as feed discovery and land in
-`ingest_url` as `discovered`, so `tracker sync` crawls them with no special
-casing.
+Where the two halves meet is the rule nothing may break:
+
+* **A model's suggestion is search-query material and nothing else.** Not one of
+  them is ever written to the database.
+* **Search and extraction decide what is true.** A proposed project becomes a row
+  only if a real search returns a real URL, the article fetches, and the evidence
+  gate finds a verbatim quote for each value. If the model invented a project,
+  the search finds nothing and the run moves on.
+
+Discovery is allowed to be speculative precisely because storage is not.
+
+Hits from either half go through the same two-tier keyword filter as feed
+discovery and land in `ingest_url` as `discovered`, so `tracker sync` crawls them
+with no special casing. What separates them afterwards is the label recorded on
+each queued row — `search:<template>:<place>` against `search:<the query text>` —
+which is what makes the comparison above measurable at all.
 """
 
 from __future__ import annotations
@@ -30,7 +44,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Any, Protocol
 from urllib.parse import urlsplit
 
 import httpx
@@ -42,6 +56,7 @@ from tracker.ingest.discover import (
     DiscoverReport,
     FilterSpec,
     load_config,
+    normalize_haystack,
     queue_candidates,
 )
 from tracker.llm import Extractor, LLMError, parse_json_object
@@ -209,6 +224,28 @@ class SearchHit:
 
 
 @dataclass
+class LabelStat:
+    """One label's own funnel — the blind spot `tracker queue stats` cannot see.
+
+    The funnel is derived from `ingest_url`, so a template that ran ten times and
+    had every hit discarded by the keyword filter leaves **no row at all** and is
+    indistinguishable there from a template that never ran. That is not
+    hypothetical: `abatement` behaved exactly like this before "abatement" was
+    added to `risk_signal`, and the report built to catch such a template could
+    not have caught it.
+
+    So this is counted in memory during the run and printed, and it is the only
+    place `filtered` is attributable to the query that caused it.
+    """
+
+    label: str
+    queries_run: int = 0
+    hits: int = 0
+    filtered: int = 0
+    queued: int = 0
+
+
+@dataclass
 class SearchReport:
     queries_run: int = 0
     hits: int = 0
@@ -220,6 +257,11 @@ class SearchReport:
     wiki_mined: int = 0
     quota_exhausted: bool = False
     errors: list[tuple[str, str]] = field(default_factory=list)
+    #: Per-label detail, present only when `run` was given a `labels` map.
+    by_label: dict[str, LabelStat] = field(default_factory=dict)
+
+    def label(self, name: str) -> LabelStat:
+        return self.by_label.setdefault(name, LabelStat(label=name))
 
     def as_rows(self) -> list[tuple[str, int]]:
         return [
@@ -655,6 +697,368 @@ def known_projects(session: Session) -> list[str]:
     ]
 
 
+# --- Place-anchored discovery -----------------------------------------------
+#
+# The other half of this module, and the one `sync` runs by default.
+#
+# `generate_queries` above asks a model to NAME a project, which means the set it
+# can reach is the set it already knows — the famous campuses, which are the ones
+# already stored. Nothing there can find a site nobody wrote a training corpus
+# about.
+#
+# These queries name a PLACE and an EVENT instead, so they need to know neither
+# the operator nor the campus. A county votes on a rezoning before anybody
+# announces anything, and it publishes the agenda either way.
+
+
+#: What to look for, keyed by the name the funnel will group on.
+#:
+#: The query is ``f"{place.phrase} data center {phrase}"``, and "data center" is
+#: not optional: `hits_to_candidates` never sets `topic_implied`, so a hit whose
+#: title, snippet and URL path never say it is dropped as off-topic however good
+#: the rest of the match is.
+#:
+#: **Every phrase must carry a term that is verbatim in `seed/feeds.toml`'s
+#: `signal` or `risk_signal` tier.** The words here steer the search engine; they
+#: do not decide what is kept — `FilterSpec.matches` does, and it needs a topic
+#: term AND a signal-or-risk term. A phrase whose own vocabulary the filter
+#: rejects returns hits that are all discarded before they cost a fetch, and
+#: leaves nothing behind to say so. `test_every_template_phrase_survives_the_real_filter`
+#: is what stops the next one being added by eye.
+#:
+#: Note the keys are short and the phrases are not: "interconnect" and
+#: "groundbreak" are not filter terms, "interconnection" and "groundbreaking"
+#: are.
+_PLACE_TEMPLATES: dict[str, str] = {
+    "rezoning": "rezoning application",
+    "permit": "building permit filed",
+    "interconnect": "interconnection queue",
+    "substation": "substation transmission line",
+    "groundbreak": "groundbreaking ceremony",
+    "investment": "billion investment announced",
+    "moratorium": "moratorium vote",
+    "opposition": "residents oppose",
+    "water": "water use aquifer",
+    "abatement": "tax abatement approved",
+}
+
+#: What a state calls its counties. Everywhere else says "County".
+_COUNTY_WORD: dict[str, str] = {"LA": "Parish", "AK": "Borough"}
+
+
+def _county_phrase(display: str, state: str) -> str:
+    """ "Loudoun" -> "Loudoun County", but "Richland Parish" left alone.
+
+    The word matters to a search engine and not at all to the database, which is
+    why it is added here rather than stored. "Loudoun Virginia" is ambiguous
+    enough to return the town, the school district and the newspaper; "Loudoun
+    County Virginia" is the phrase reporting actually uses. The value we hold may
+    already carry the word, since it is whatever a source wrote.
+    """
+    from tracker.dedup import _COUNTY_SUFFIXES
+
+    lowered = display.lower()
+    if any(lowered.endswith(suffix) for suffix in _COUNTY_SUFFIXES):
+        return display
+    return f"{display} {_COUNTY_WORD.get(state, 'County')}"
+
+
+def templates() -> frozenset[str]:
+    """The template names, for anything that has to recognise a stored label.
+
+    `funnel.feed_group` needs this to tell `search:rezoning:loudoun-va` from a
+    hand-typed query that merely happens to contain a colon. Exposed as a
+    function rather than the dict so a caller cannot edit the registry by
+    accident.
+    """
+    return frozenset(_PLACE_TEMPLATES)
+
+
+#: Territories. Excluded from the absent-state tier because a query for
+#: "American Samoa data center rezoning" is quota spent on a certainty.
+_TERRITORIES: frozenset[str] = frozenset({"GU", "AS", "MP", "VI", "PR"})
+
+#: How many never-seen states one run may anchor on. Hard-capped so a tier that
+#: has never paid for itself cannot crowd out the two that have.
+STATE_ONLY_SLOTS = 2
+
+#: Places below this many projects are not a cluster, they are a single row.
+CLUSTER_MIN = 2
+
+
+@dataclass(frozen=True)
+class Place:
+    """Somewhere to point a query, and why it ranked."""
+
+    #: Goes into the stored label, so it must never contain a colon —
+    #: `funnel.feed_group` splits on them. `dedup._slug` strips every character
+    #: that is not a letter or a digit, which is what guarantees it.
+    slug: str
+    #: What the query actually says: "Richland Parish Louisiana".
+    phrase: str
+    state: str
+    #: ``county``, ``city`` or ``state``.
+    kind: str
+    #: Projects already held here. The rank reason, carried so a report can say
+    #: why this place was chosen rather than leaving it to be inferred.
+    projects: int
+
+
+def rank_places(
+    session: Session,
+    *,
+    limit: int = 40,
+    state_only: int = STATE_ONLY_SLOTS,
+    spec: FilterSpec | None = None,
+) -> tuple[list[Place], list[tuple[str, str]]]:
+    """Where to look, best first, and the places we are unable to look at.
+
+    Derived from the database rather than from a list somebody maintains — the
+    argument `probe.py` makes for feeds applies here unchanged: the answer is
+    already in the rows. Three tiers, and they buy different things.
+
+    1. **Clusters.** Data centers cluster hard, so a county already holding four
+       campuses is the likeliest place for a fifth. Cheapest and highest-yield.
+    2. **Thin states.** Present, below-median project count, above-median
+       capacity: we found the big one and missed its neighbours.
+    3. **Absent states.** Not in the database at all. Capped at `state_only`,
+       because this tier is a standing experiment rather than a bet.
+
+    Tier 1 spends the budget where we are *least* blind, which is worth saying
+    out loud: it is self-reinforcing, and tiers 2 and 3 exist precisely to stop
+    it being the only thing that ever runs. Which tier actually pays is a
+    question `tracker queue stats` will answer once the labels have a history.
+
+    The second return value is places that **cannot be searched at all**, with
+    the reason. Reported rather than skipped, because a place we are structurally
+    unable to look at is a finding — see the note on `exclude` below.
+    """
+    from sqlalchemy import func, select
+
+    from tracker.dedup import locality
+    from tracker.models import Project
+    from tracker.normalize import STATE_CODES, state_name
+
+    if spec is None:
+        spec = load_config()[1]
+
+    rows = list(session.scalars(select(Project)))
+
+    # Grouped through `dedup.locality`, NOT `GROUP BY county, state`.
+    #
+    # `ck_project_locality` guarantees one of city/county is set but not which,
+    # so a raw county grouping drops every city-only row into one NULL bucket
+    # that then outranks every real county. `locality` also already resolves the
+    # ISO-import case where "Racine County" was written into the `city` column,
+    # which `county_key(p.county)` alone would file as a city.
+    clusters: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for project in rows:
+        loc = locality(project.city, project.county)
+        if not loc.key or not project.state:
+            continue
+        bucket = clusters.setdefault(
+            (loc.kind, loc.key, project.state),
+            {"count": 0, "display": loc.display},
+        )
+        bucket["count"] += 1
+
+    present = {p.state for p in rows if p.state}
+    refused: list[tuple[str, str]] = []
+    out: list[Place] = []
+
+    def offer(place: Place) -> None:
+        """Keep a place unless the discovery filter could never accept it.
+
+        `exclude` is a plain substring test over the whole haystack, so two real
+        county names are already unsearchable for ANY query: "summit" (added for
+        conference write-ups) kills Summit County in CO, OH and UT, and "stock"
+        (added for finance coverage) kills Stockton, Woodstock and Comstock.
+        Left in the plan, such a place spends its slot every run and returns
+        nothing, with no queued row to explain the silence.
+
+        Checked against every template rather than one, so a term tripped by a
+        particular pairing is caught too. Ten string tests per place.
+        """
+        for phrase in _PLACE_TEMPLATES.values():
+            probe = normalize_haystack(f"{place.phrase} data center {phrase}")
+            hit = next((t for t in spec.exclude if t in probe), None)
+            if hit:
+                refused.append((place.phrase, f"the discovery filter excludes {hit!r}"))
+                return
+        out.append(place)
+
+    # Tier 1 — clusters.
+    for (kind, key, state), bucket in sorted(
+        clusters.items(), key=lambda kv: (-kv[1]["count"], kv[0][1])
+    ):
+        if bucket["count"] < CLUSTER_MIN:
+            continue
+        name = state_name(state) or state
+        where = bucket["display"]
+        offer(
+            Place(
+                slug=f"{key}-{state}".lower().replace(" ", "-"),
+                phrase=f"{_county_phrase(where, state) if kind == 'county' else where} {name}",
+                state=state,
+                kind=kind,
+                projects=bucket["count"],
+            )
+        )
+
+    # Tier 2 — thin states: present, but light on rows for the capacity held.
+    by_state = session.execute(
+        select(
+            Project.state,
+            func.count(Project.id),
+            func.coalesce(func.sum(Project.mw_planned), 0.0),
+        ).group_by(Project.state)
+    ).all()
+    if len(by_state) >= 2:
+        counts = sorted(c for _, c, _ in by_state)
+        mws = sorted(float(m or 0.0) for _, _, m in by_state)
+        mid_count = counts[len(counts) // 2]
+        mid_mw = mws[len(mws) // 2]
+        thin = [
+            (state, count)
+            for state, count, mw in by_state
+            if count <= mid_count and float(mw or 0.0) >= mid_mw
+        ]
+        for state, count in sorted(thin, key=lambda sc: (sc[1], sc[0])):
+            name = state_name(state)
+            if not name:
+                continue
+            offer(Place(slug=state.lower(), phrase=name, state=state, kind="state", projects=count))
+
+    # Tier 3 — states with nothing at all.
+    #
+    # Only meaningful once something is present: on an empty database every state
+    # is "absent", which is not a finding about anywhere, and anchoring on the
+    # first two alphabetically would spend the first run on Alabama and Alaska.
+    #
+    # Ordered by how much has already been tried there rather than by name, for
+    # the reason `plan_queries` gives: a fixed order means the same two states
+    # every run, for ever, since a state that yields nothing leaves no row to
+    # demote it. This walks the alphabet instead of standing at the front of it.
+    if present:
+        tried = _label_counts(session)
+        by_state: dict[str, int] = {}
+        for label, n in tried.items():
+            parts = label.split(":", 2)
+            if len(parts) >= 3:
+                by_state[parts[2]] = by_state.get(parts[2], 0) + n
+        absent = sorted(
+            STATE_CODES - present - _TERRITORIES,
+            key=lambda s: (by_state.get(s.lower(), 0), s),
+        )
+        for state in absent[:state_only]:
+            name = state_name(state)
+            if not name:
+                continue
+            offer(Place(slug=state.lower(), phrase=name, state=state, kind="state", projects=0))
+
+    # A state can reach tier 2 and tier 3 only by being both present and absent,
+    # which cannot happen — but a slug collision would silently merge two
+    # templates' histories, so it is cheaper to assert it than to trust it.
+    seen: set[str] = set()
+    unique = [p for p in out if not (p.slug in seen or seen.add(p.slug))]
+    return unique[:limit], refused
+
+
+@dataclass(frozen=True)
+class PlannedQuery:
+    """One query, and the label its results will be filed under."""
+
+    text: str
+    template: str
+    place: Place
+
+    @property
+    def label(self) -> str:
+        # The place is truncated, never the whole label: cutting the label as one
+        # string could drop the template segment, and two long places would then
+        # merge into a single bucket that reads as one template's history.
+        return f"search:{self.template}:{self.place.slug[:100]}"
+
+
+def plan_queries(
+    session: Session,
+    *,
+    count: int,
+    templates: dict[str, str] | None = None,
+    limit_places: int = 40,
+) -> tuple[list[PlannedQuery], list[tuple[str, str]]]:
+    """The next `count` template-and-place pairs worth running.
+
+    **Ordered by what has never produced anything**, then diagonally across the
+    cross product, then by rank. Two keys, and both earn their place.
+
+    The first is the whole design: a plan that simply took the first N pairs would
+    run the same N queries every night, everything would be `already_known` by the
+    second run, and this would have rebuilt the problem it exists to fix in a new
+    costume. It also fixes a quota failure — `run` stops at the first
+    `QuotaExhausted`, so under a fixed order the tail of the plan is never reached,
+    not once; here a pair that did not execute left no rows and heads the next
+    plan.
+
+    The second stops a run spending its whole budget on one county. Ranked order
+    alone gives ten queries about Loudoun and nothing about anywhere else, which
+    is the opposite of what a discovery run is for; walking the diagonal spreads
+    each run over both axes while still starting from the best place and the first
+    template.
+
+    **What this cannot see is a pair that ran and queued nothing** — no row is
+    written, so it is indistinguishable from one that never ran, and it will come
+    round again. That is deliberate rather than tolerated: unlike a feed, which is
+    a fixed publisher, a place with no data-center news this quarter may have some
+    next quarter, and re-asking is how that is noticed. The cost is bounded — one
+    query per full cycle of the cross product — and a template that is barren
+    *everywhere* shows up in the per-label counts `run` returns, which is the one
+    place that distinction exists.
+    """
+    templates = templates or _PLACE_TEMPLATES
+    places, refused = rank_places(session, limit=limit_places)
+    if not places:
+        return [], refused
+
+    tried = _label_counts(session)
+    order = {name: i for i, name in enumerate(templates)}
+    rank = {place.slug: i for i, place in enumerate(places)}
+
+    plan = [
+        PlannedQuery(text=f"{place.phrase} data center {phrase}", template=name, place=place)
+        for place in places
+        for name, phrase in templates.items()
+    ]
+    plan.sort(
+        key=lambda q: (
+            tried.get(q.label, 0),
+            rank[q.place.slug] + order[q.template],  # the diagonal
+            rank[q.place.slug],
+            order[q.template],
+        )
+    )
+
+    # One text can only be planned once: `run`'s labels map is keyed on the query
+    # string, so a duplicate would hand the same hits to two labels.
+    seen: set[str] = set()
+    unique = [q for q in plan if not (q.text in seen or seen.add(q.text))]
+    return unique[:count], refused
+
+
+def _label_counts(session: Session) -> dict[str, int]:
+    """How many queued URLs each search label has ever produced."""
+    from sqlalchemy import func, select
+
+    from tracker.models import IngestUrl
+
+    rows = session.execute(
+        select(IngestUrl.feed, func.count())
+        .where(IngestUrl.feed.like("search:%"))
+        .group_by(IngestUrl.feed)
+    ).all()
+    return {str(feed): int(count) for feed, count in rows if feed}
+
+
 # --- Filtering and queueing -------------------------------------------------
 
 
@@ -674,43 +1078,76 @@ def is_useful_host(url: str) -> bool:
 
 
 def hits_to_candidates(
-    hits: list[SearchHit], spec: FilterSpec, *, report: SearchReport
+    hits: list[SearchHit],
+    spec: FilterSpec,
+    *,
+    report: SearchReport,
+    labels: dict[str, str] | None = None,
 ) -> list[Candidate]:
     """Apply the same two-tier filter feed discovery uses.
 
     `topic_implied` is never set here: a search result could be from anywhere, so
     an article has to prove for itself that it is about a data center. The snippet
     participates in matching, which a feed entry does not have.
+
+    `labels` maps a query string to the label its results should be filed under,
+    so a planned query records **which template and place found this**, not the
+    sentence that was typed. A query with no entry keeps the verbatim form, which
+    is what a hand-typed `tracker search "…"` still gets.
+
+    **Labelled here rather than by rewriting the candidates afterwards**, which is
+    how `prospect` does it and is wrong for this caller. `prospect` calls this
+    function once per operator, so it can relabel the whole batch; `run` calls it
+    once over every hit, and the `seen` set below is what stops a URL two queries
+    both found being queued twice. Splitting the call per query to relabel would
+    push that de-duplication into `queue_candidates`, where the second sighting
+    increments `already_known` — inflating the exact counter this change exists to
+    bring down. So: one map, one pass, and the first query in plan order owns the
+    URL.
     """
+    labels = labels or {}
     kept: list[Candidate] = []
     seen: set[str] = set()
+
+    def note(hit: SearchHit, field_name: str) -> None:
+        """Count one outcome against the label that paid for it, if there is one."""
+        label = labels.get(hit.query)
+        if label:
+            stat = report.label(label)
+            setattr(stat, field_name, getattr(stat, field_name) + 1)
+
     for hit in hits:
         report.hits += 1
+        note(hit, "hits")
         if not hit.url or hit.url in seen:
             continue
         seen.add(hit.url)
         if not is_useful_host(hit.url):
             report.filtered += 1
+            note(hit, "filtered")
             continue
         if not looks_english(f"{hit.title} {hit.snippet}"):
             # A translated repost: it cannot satisfy the evidence gate for any
             # numeric field, so fetching it would buy nothing.
             log.debug("skip %s (not English-language)", hit.url)
             report.filtered += 1
+            note(hit, "filtered")
             continue
         haystack = f"{hit.title} {hit.snippet} {urlsplit(hit.url).path}"
         keep, reason = spec.matches(haystack)
         if not keep:
             log.debug("skip %s (%s)", hit.url, reason)
             report.filtered += 1
+            note(hit, "filtered")
             continue
         kept.append(
             Candidate(
                 url=hit.url,
                 title=hit.title or hit.url,
                 # Recorded in `ingest_url.feed` so a queued row shows where it came
-                # from, and which query found it.
-                feed=f"search:{hit.query}"[:120],
+                # from: the template and place for a planned query, the query text
+                # itself for one typed by hand.
+                feed=labels.get(hit.query) or f"search:{hit.query}"[:120],
                 published_at=None,
                 source_type="general_media",
             )
@@ -727,8 +1164,14 @@ def run(
     run_id: str | None = None,
     dry_run: bool = False,
     mine_wikipedia: bool = True,
+    labels: dict[str, str] | None = None,
 ) -> tuple[SearchReport, list[Candidate]]:
-    """Run each query, filter the hits, and queue what survives."""
+    """Run each query, filter the hits, and queue what survives.
+
+    `labels` maps query text to the label its results are filed under; see
+    `hits_to_candidates`. Absent, every candidate records the query verbatim,
+    exactly as before.
+    """
     from tracker.ingest import wiki
 
     settings = settings or get_settings()
@@ -750,10 +1193,12 @@ def run(
             log.warning("query %r failed: %s", query, exc)
             continue
         report.queries_run += 1
+        if labels and query in labels:
+            report.label(labels[query]).queries_run += 1
         log.info("%r -> %d hit(s)", query, len(hits))
         all_hits.extend(hits)
 
-    candidates = hits_to_candidates(all_hits, spec, report=report)
+    candidates = hits_to_candidates(all_hits, spec, report=report, labels=labels)
 
     # A Wikipedia hit is worth more than its own page: its References section
     # names the primary sources. Mined from the raw hits rather than the kept
@@ -775,6 +1220,9 @@ def run(
     queued = queue_candidates(session, candidates, run_id=run_id, report=shim)
     report.already_known = shim.already_known
     report.queued = shim.queued
+    for candidate in queued:
+        if candidate.feed in report.by_label:
+            report.by_label[candidate.feed].queued += 1
 
     if dry_run:
         session.rollback()
@@ -785,13 +1233,18 @@ def run(
 
 __all__ = [
     "BING_RETIRED_HELP",
+    "CLUSTER_MIN",
     "LLM_BATCH",
     "PROVIDERS",
     "QUERY_PROMPT_SYSTEM",
     "SEARCH_KEY_HELP",
+    "STATE_ONLY_SLOTS",
     "BochaProvider",
     "BraveProvider",
     "GoogleCSEProvider",
+    "LabelStat",
+    "Place",
+    "PlannedQuery",
     "QuotaExhausted",
     "SearchError",
     "SearchHit",
@@ -803,6 +1256,9 @@ __all__ = [
     "hits_to_candidates",
     "is_useful_host",
     "known_projects",
+    "plan_queries",
     "provider_name",
+    "rank_places",
     "run",
+    "templates",
 ]

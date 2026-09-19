@@ -26,7 +26,7 @@ numbering a long run is that somebody watching it knows how much is left.
 
 | | Phase | Default | Cap |
 | --- | --- | --- | --- |
-| 1 | **discover** — poll feeds, sweep archives (`--deep`), run searches | on | `--since-days 45`, `--search` |
+| 1 | **discover** — poll feeds, sweep archives (`--deep`), run place-anchored searches | on | `--since-days 45`, `--search` |
 | 2 | **prospect** — chase operators the roster says we hold no rows for | **off** | `--prospect N` |
 | 3 | **extract** — crawl the queue into new project rows | on | `--limit 15` |
 | 4 | **refresh** — re-read sources nobody has looked at lately | on | `--refresh-days 30`, `--refresh-limit 15` |
@@ -49,6 +49,49 @@ silently favour whichever phase ran first.
 * `--prospect` buys **coverage** of operators we are blind to. Nebius was absent
   from 300 projects and no amount of feed polling was ever going to say so.
 * `--enrich` buys **depth** on rows that already exist.
+
+## What search looks for, and why it is not a model's idea
+
+Search used to ask a model to **name projects** to look for. That can only ever
+reach projects somebody already wrote enough about for a model to have learned
+them, which are the ones already stored — so the one phase meant to reach past the
+configured feeds was pointed at the same ground they cover.
+
+It now names a **place and an event** instead, and needs neither the operator nor
+the campus: *"Loudoun County Virginia data center rezoning application"*. A county
+votes on a rezoning before anybody announces anything and publishes the agenda
+either way, which is how this can surface a site nobody here has heard of.
+
+Both halves are derived rather than written down. The events are a fixed table of
+ten, each carrying a term the discovery filter already recognises — a phrase the
+filter would reject returns hits that are all discarded before they cost a fetch,
+and leaves no queued row to say so. The places come from the database: counties
+already holding two or more projects first, because campuses cluster; then states
+carrying capacity on thin coverage; then, capped at two slots, states holding
+nothing at all.
+
+**A place the filter cannot accept is reported, not skipped.** `exclude` is a
+substring test, so `summit` (there for conference write-ups) and `stock` (there for
+finance coverage) make Summit County and Stockton unsearchable for any query. Left
+in the plan such a place spends a slot every run and returns nothing.
+
+**Each run walks the diagonal of the cross product**, preferring pairs that have
+never produced anything. Taking the first N in rank order instead would spend a
+whole run on one county and re-run the identical queries the following night.
+
+`tracker search --plan 10 --print-only` shows the plan and its labels, costs
+nothing and needs no key.
+
+**`--search N` now means N queries.** It used to mean "ask a model for N queries",
+while the number actually issued was capped separately inside the run — so
+`--search 25` announced 25 and sent 10. The count is capped against
+`TRACKER_SEARCH_MAX_QUERIES` before anything is printed, and the printed number is
+the number run.
+
+`--from-llm` still exists and still asks a model for project names. It is kept
+deliberately: it is the one path that can name an operator in a place holding no
+rows, and running both is what lets `tracker queue stats` say which is worth the
+quota rather than leaving it asserted.
 
 ## Where the queued rows come from
 
@@ -192,6 +235,8 @@ Touching any of these means the poster is in scope. Re-render with
 | --- | --- |
 | Phase order, plan numbering, `--full`, the lock | `tracker/cli/sync.py` — `sync`, its `plan` list and `step` |
 | Discover, archives, search | `tracker/ingest/discover.py` — `run`, `load_sitemaps`, `sweep_sitemaps`, `queue_candidates`; `tracker/ingest/search.py` |
+| What search looks for | `tracker/ingest/search.py` — `_PLACE_TEMPLATES`, `rank_places`, `plan_queries`, `PlannedQuery.label`, `templates`; `tracker/normalize.py` — `state_name` |
+| Judging a template | `tracker/funnel.py` — `feed_group`, `survey`, `verdicts`; `tracker/ingest/search.py` — `LabelStat` |
 | Queue ordering and counts | `tracker/ingest/discover.py` — `pending`, `pending_split`, `pending_risk_count`, `failed`, `failure_summary` |
 | Prospect | `tracker/prospect.py`; `tracker/roster.py` — `hunt_order`, `measure` |
 | Extract and refresh | `tracker/ingest/crawl.py` — `run`, `stale_sources` |
