@@ -48,6 +48,30 @@ initial build of the v1 PRD.
 
 ### Changed
 
+- **Four publishers the database nominated itself** (`tracker/seed/feeds.toml`).
+  `tracker feeds` ranks hosts whose claims already decide stored values against
+  what this file lists, and four of its candidates are now configured:
+  servercountry, American RE Partners, Industrial Info and Epoch. Measured by
+  walking them: **240 matching URLs** on the next `--deep`.
+
+  **They are `[[sitemap]]` entries, and that is the whole decision.** `parse_feed`
+  truncates to the first 60 entries in document order and never sorts — right for
+  RSS, and right for datacenterfrontier's article sitemap, which is ordered
+  newest-first. None of these is, and six of the eight candidates carry no
+  `lastmod` at all, so there is nothing to sort by. As feeds the same four would
+  have yielded 9 URLs instead of 240, and American RE Partners would have yielded
+  **zero for ever** while looking configured: all 30 of its matches sit past
+  position 60.
+
+  Four candidates were declined and the reasons are in the file: two answer HTTP
+  403 to the feed fetcher (one of them to every rung), one is PR Newswire's Israel
+  locale rather than its US wire, and one matches a single URL in 105.
+
+  These rows arrive with no `published_at`, which is what the merge tiebreak ranks
+  on — `tracker backfill dates` is the remedy. And with no date the age cutoff
+  cannot apply, so the first `--deep` queues the whole archive at once: budget
+  `--limit`, because each queued row is an LLM call.
+
 - **Web search now looks for a place and an event, not for a project it already
   knows the name of** (`tracker/ingest/search.py`, `tracker/funnel.py`,
   `tracker/cli/sync.py`, `tracker/normalize.py`, `docs/workflows/sync.md`,
