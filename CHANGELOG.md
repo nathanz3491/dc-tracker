@@ -273,6 +273,20 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **A `sync --full` run died after the search phase had been paid for**
+  (`tracker/cli/sync.py`, `tests/test_cli.py`). The search block named its list of
+  planned queries `plan` — which is also the name of the phase list built at the
+  top of the run and read by `step()` for every phase afterwards. Prospect raised
+  `ValueError: 'prospect' is not in list` and took extract, refresh, enrich and
+  settle down with it, on a live host, after sixty searches had already been
+  spent.
+
+  **The suite missed it because every `sync` test runs keyless**, so `--search`
+  resolves to 0 and the search block never executes. 2,954 tests passed over code
+  that could not complete a single `--full` run. The regression test therefore
+  configures a search key and stubs the backend, and it was checked by
+  reintroducing the bug and watching it reproduce the same `ValueError`.
+
 - **A preview no longer says it repaired something** (`tracker/cli/logic.py`).
 
   `logic resolve --auto` without `--apply` writes nothing — it is the dry-run half
