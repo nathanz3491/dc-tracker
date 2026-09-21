@@ -617,20 +617,25 @@ def sync(
             )
             try:
                 with session_scope(engine) as session:
-                    plan, refused = srch.plan_queries(session, count=search)
+                    # NOT `plan`: that name holds this run's phase list, built
+                    # above and read by `step()` for the rest of the function.
+                    # Shadowing it made every phase after this one die with
+                    # "'prospect' is not in list" -- after the search had already
+                    # been paid for.
+                    searches, refused = srch.plan_queries(session, count=search)
                     for phrase, why in refused:
                         err.print(f"[yellow]cannot search[/yellow] {phrase} — {why}")
-                    if not plan:
+                    if not searches:
                         raise srch.SearchError(
                             "no places to anchor on — the database holds no projects yet"
                         )
                     s_report, _ = srch.run(
                         session,
-                        [q.text for q in plan],
+                        [q.text for q in searches],
                         provider=srch.build_provider(settings),
                         settings=settings,
                         dry_run=dry_run,
-                        labels={q.text: q.label for q in plan},
+                        labels={q.text: q.label for q in searches},
                     )
             except srch.SearchError as exc:
                 err.print(f"[yellow]search skipped[/yellow]: {str(exc).splitlines()[0]}")
