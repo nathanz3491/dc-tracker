@@ -134,6 +134,21 @@ saying that nothing can decide.
 * **same** merges, but only with `--merge` and only past every rail below.
 * **unclear** leaves the pair in the report, which is a real answer.
 
+**An undecided pair is not asked again on the same evidence.** Left alone, rated
+below the floor, refused by a rail, or unable to quote a sentence — each is recorded
+in `model_decline` with a hash of both rows' citations and of what paired them, and
+the agent path holds the pair back **before** `--limit` is applied, so the limit buys
+fresh questions. It comes back when either row's evidence changes or after
+`declines.COOLDOWN_DAYS`; `--again` asks anyway. Two outcomes are deliberately not
+recorded: a provider failure, and "the same site, but merging needs `--merge`" — a run
+with `--merge` must still reach that pair. Nothing was recorded before, and with 31
+eligible pairs against a per-round limit of 25 every overnight round re-paid for
+nearly the whole set at ~45,000-260,000 tokens a pair.
+
+A real run commits after every pair. It used to be one transaction for the whole run,
+which held SQLite's write lock across every agent call — minutes at a time — while a
+console sign-in waited five seconds and failed.
+
 ### What `--merge` still refuses
 
 Every branch is a rule stated elsewhere in the codebase, restated as a refusal the
@@ -213,7 +228,8 @@ Touching any of these means the poster is in scope. Re-render with
 | The one-call path | `tracker/dupresolve.py` — `resolve`, `resolve_one`, `survivor`, `ask_model`, `pair_label`, `_checked` |
 | Scoring a change to any of it | `scripts/eval_pairs.py`; `docs/duplicate-shapes.md` |
 | The question all three judges are asked | `tracker/triage.py` — `CONTRADICTIONS`, `PAIR_SYSTEM`, `PAIR_SYSTEM_BASE`; `tracker/prompts/duplicates-resolve-v3.txt` |
-| The agent path | `tracker/triage.py` — `resolve_pairs`, `pair_triage`, `pair_verdict_tools`, `_checked` |
+| The agent path | `tracker/triage.py` — `resolve_pairs`, `pair_triage`, `pair_verdict_tools`, `_checked`, `pair_subject`, `pair_evidence` |
+| Not asking the same pair twice | `tracker/declines.py` — `split`, `record`, `holds`, `citations`, `COOLDOWN_DAYS`; migration `0025_model_decline` |
 | The merge itself | `tracker/merge.py` — `merge_projects` |
 | Prevention at write time | `tracker/gatekeeper.py` — `same_site_arbiter`, `_warm_verdict`, `_cold_verdict`, `_rejection`, `RULES`; `tracker/ingest/crawl.py` — `ExtractionContext` |
 | CLI, printers, keyboard prompt | `tracker/cli/duplicates.py` — `merge`, `duplicates`, `duplicates_park`, `duplicates_unpark`, `duplicates_resolve`, `duplicates_parked`, `_print_parked`, `_dupe_prompt` |

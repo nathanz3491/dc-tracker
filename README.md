@@ -180,8 +180,12 @@ finding, with **70% of the prompt served from the provider's prefix cache**. Tha
 last number is why `agent.run` only ever appends to its conversation — an edited
 prefix cannot hit, so the obvious "shorten old messages" saving reverses. The
 first run cost ~221k a finding before the reasoning-effort tier was split out
-(`TRACKER_DEEPSEEK_AGENT_EFFORT`). Later rounds cost less again: an answered *or
-declined* finding is recorded and never re-offered.
+(`TRACKER_DEEPSEEK_AGENT_EFFORT`). Later rounds cost less again. An answered finding
+is recorded in the row's notes. A question a model looked at and could not decide is
+recorded with a hash of what it was shown: a pair, a refused ruling, an audit
+finding, an unclear obstacle, or a row with nothing published. It is not asked again
+until that evidence changes or a month passes (`tracker/declines.py`; `--again` on
+each command asks anyway).
 
 `--refetch-dates` is separate because it is the one free phase that is not cheap —
 60 publication dates are readable straight out of the URL path and 965 need one

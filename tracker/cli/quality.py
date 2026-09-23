@@ -295,6 +295,12 @@ def risks_confirm(
     dry_run: Annotated[
         bool, typer.Option("--dry-run", help="Judge at full cost and write nothing.")
     ] = False,
+    again: Annotated[
+        bool,
+        typer.Option(
+            "--again", help="Also read obstacles already judged unclear on the same article."
+        ),
+    ] = False,
     llm_provider: Annotated[
         str | None,
         typer.Option(
@@ -326,8 +332,10 @@ def risks_confirm(
 
     Three outcomes. **confirmed** attaches the quote and clears the 待确认 mark.
     **refuted** marks the obstacle `superseded`, dropping it out of the open counts
-    without deleting the record of having believed it. **unclear** writes nothing,
-    and is the honest majority answer.
+    without deleting the record of having believed it. **unclear** changes nothing
+    on the obstacle, and is the honest majority answer — but it is remembered, with a
+    hash of the article it was judged on, so the next run reads a different obstacle
+    instead of paying to be told the same thing. `--again` reads them anyway.
     """
     _use_llm(llm_provider)
     from tracker import riskcheck
@@ -379,17 +387,30 @@ def risks_confirm(
             console.print(f'      [green]"{escape(outcome.judgement.quote[:170])}"[/green]')
 
     with _explain_db_locks(), session_scope(engine, commit=not dry_run) as session:
-        risks_to_read = riskcheck.unconfirmed_risks(
-            session, project_id=project_id, category=category, limit=limit
-        )
-        total = len(riskcheck.unconfirmed_risks(session, project_id=project_id, category=category))
-        if not risks_to_read:
+        candidates = riskcheck.unconfirmed_risks(session, project_id=project_id, category=category)
+        total = len(candidates)
+        if not candidates:
             console.print("[green]every open obstacle already has a quote that stands up[/green]")
+            return
+        # Before the limit, so the limit buys obstacles nobody has read yet.
+        unread, held = riskcheck.fresh(session, candidates, cache_dir=cache_dir, again=again)
+        risks_to_read = unread[:limit]
+        if not risks_to_read:
+            console.print(
+                f"[green]nothing new to read[/green] [dim]— all {total} unquoted obstacle(s) "
+                "were judged unclear on the article they cite; --again reads them.[/dim]"
+            )
             return
         if not json_mode():
             console.print(
                 f"[bold]{len(risks_to_read)}[/bold] of {total} unquoted obstacle(s), "
-                "worst first — one model call each, reading the whole article.\n"
+                "worst first — one model call each, reading the whole article."
+                + (
+                    f" [dim]{held} already judged unclear on the same article.[/dim]"
+                    if held
+                    else ""
+                )
+                + "\n"
             )
         outcomes = riskcheck.confirm(
             session,
@@ -833,7 +854,11 @@ def audit_resolve(
         str | None, typer.Option("--code", help="Only this kind of finding.", show_default=False)
     ] = None,
     again: Annotated[
-        bool, typer.Option("--again", help="Re-ask findings a previous run already settled.")
+        bool,
+        typer.Option(
+            "--again",
+            help="Re-ask findings already settled, or declined by the model on the same evidence.",
+        ),
     ] = False,
     limit: Annotated[int, typer.Option("--limit", help="Findings to work through.")] = 20,
     llm_provider: Annotated[
@@ -914,6 +939,24 @@ def audit_resolve(
                 continue
             pending.append((project, finding))
 
+        # A finding the model already declined on this exact evidence block is held
+        # back, before the limit, so the limit buys questions nobody has asked yet.
+        # Declines used to be recorded nowhere, and each one cost a call — and, for
+        # a figure the model wanted more on, a search, four fetches and a second
+        # call — on every round.
+        from tracker import declines
+
+        pending, declined_before = declines.split(
+            pending,
+            declines.load(session, "audit"),
+            key=lambda pf: (
+                audit_mod.decline_subject(pf[1]),
+                audit_mod.decline_evidence(pf[0], pf[1]),
+            ),
+            again=again,
+        )
+        settled_before += declined_before
+
         if not pending:
             if json_mode():
                 emit({"resolved": [], "settled_before": settled_before})
@@ -921,7 +964,7 @@ def audit_resolve(
             if settled_before:
                 console.print(
                     f"[green]nothing left to settle[/green] [dim]— {settled_before} finding(s) "
-                    "were answered on an earlier run; --again re-asks them.[/dim]"
+                    "were answered or declined on an earlier run; --again re-asks them.[/dim]"
                 )
             else:
                 console.print("[green]nothing implausible[/green]")
@@ -930,7 +973,11 @@ def audit_resolve(
         if not json_mode():
             console.print(
                 f"[bold]{len(pending)}[/bold] finding(s) to settle"
-                + (f" [dim]({settled_before} already answered)[/dim]" if settled_before else "")
+                + (
+                    f" [dim]({settled_before} already answered or declined)[/dim]"
+                    if settled_before
+                    else ""
+                )
                 + "\n"
             )
 
@@ -942,6 +989,7 @@ def audit_resolve(
                     f"#{project.id} {escape(project.name[:40])}",
                     align="left",
                 )
+            shown = audit_mod.decline_evidence(project, finding)
             got = audit_mod.resolve_one(
                 session,
                 project,
@@ -951,6 +999,16 @@ def audit_resolve(
                 allow_search=search,
                 settings=settings,
             )
+            if got.declined:
+                declines.record(
+                    session,
+                    "audit",
+                    audit_mod.decline_subject(finding),
+                    shown,
+                    outcome="declined after search" if got.searched else "declined",
+                    reason=got.note,
+                    by="model",
+                )
             resolutions.append(got)
             session.commit()
             if not json_mode():

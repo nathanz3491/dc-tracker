@@ -99,6 +99,15 @@ reach. Rows with nothing left to fill return before making a call. Refusals are
 printed as loudly as fills: a refusal is the evidence gate working, and a run that
 quietly dropped four facts of five should not look like one that stored all five.
 
+**"Nothing published" is remembered.** The agent's own tool tells it that answer "is
+recorded as one", and until `model_decline` it was not — while `select_projects`
+hands the same rows back every round, because they are still the closest to the
+target. One sync's agent pass spent ~4.2M tokens finding one fact across 25 rows. A
+row the agent found nothing for, or whose every offered fact the gate refused, is now
+held back until one of its citations or empty fields changes, or
+`declines.COOLDOWN_DAYS` pass — the web changes while the row does not. `--again`
+looks anyway.
+
 ## Two failures the comments record
 
 Both invisible from the outside, and both shaped the current call:
@@ -126,7 +135,7 @@ Touching any of these means the poster is in scope. Re-render with
 | Harvesters | `tracker/ingest/enrich.py` — `harvest_queue`, `harvest_retry`, `harvest_archive`, `harvest_search`, `harvest_refresh`, `_derive` |
 | Ignore-list filtering | `tracker/ingest/enrich.py` — `Round.urls`; `tracker/policy.py` |
 | Settle stage | `tracker/ingest/enrich.py` — `_settle`; `tracker/conflicts.py` — `disputes`, `solve`, `apply_outcome` |
-| Agent pass | `tracker/cli/enrich.py` — `_gapfill_batch`; `tracker/gapfill.py` — `apply_facts`, `_basis_axes` |
+| Agent pass | `tracker/cli/enrich.py` — `_gapfill_batch`, `_gapfill_evidence`; `tracker/gapfill.py` — `apply_facts`, `_basis_axes`; `tracker/declines.py` |
 | Parties and the megawatt basis | inherited: the harvesters run the crawl reader, so a citation from this command carries both. The agent pass builds its own citation and derives the basis itself (`gapfill._basis_axes`); its parties come from `parties._inferred_parties`, which reads any citation's own claims |
 | Scoring and reporting | `tracker/ingest/enrich.py` — `report_score`, `EnrichReport`, `BatchReport`; `tracker/cli/enrich.py` — `_render_enrich`, `_render_batch` |
 

@@ -793,6 +793,10 @@ class Verdict:
     #: "applied" | "declined" | "rejected" | "needs_evidence"
     outcome: str = "applied"
     note: str = ""
+    #: The call itself failed, so nothing was judged. Kept apart from a decline:
+    #: asking again later is exactly right after a timeout and a waste after an
+    #: answer. See `Resolution.declined`.
+    failed: bool = False
 
     @property
     def acted(self) -> bool:
@@ -819,6 +823,18 @@ def evidence_block(project: Project, finding: UnitFinding) -> str:
         mw = f"{block.mw:g} MW" if block.mw is not None else "no capacity"
         lines.append(f"  tranche {block.label}: {mw}, {block.status}")
     return "\n".join(lines) or "  (no claims recorded)"
+
+
+def decline_subject(finding: UnitFinding) -> str:
+    """A finding's key in `model_decline`."""
+    return f"{finding.project_id}:{finding.code}"
+
+
+def decline_evidence(project: Project, finding: UnitFinding) -> str:
+    """Fingerprint of a finding as the model is shown it — the evidence block itself."""
+    from tracker import declines
+
+    return declines.fingerprint(finding.code, finding.summary, evidence_block(project, finding))
 
 
 def ask_model(
@@ -860,7 +876,7 @@ def ask_model(
         )
     except LLMError as exc:
         log.warning("audit resolve failed for project %s: %s", project.id, exc)
-        return Verdict("s", 0.0, "", outcome="rejected", note=f"call failed: {exc}")
+        return Verdict("s", 0.0, "", outcome="rejected", note=f"call failed: {exc}", failed=True)
 
     try:
         payload = parse_json_object(reply.text)
@@ -918,6 +934,9 @@ class Searched:
     urls: list[str] = field(default_factory=list)
     passages: list[str] = field(default_factory=list)
     error: str = ""
+    #: The search or the fetch broke, as opposed to finding nothing. A broken
+    #: search is worth retrying tomorrow; an empty one is an answer.
+    failed: bool = False
 
     @property
     def text(self) -> str:
@@ -954,7 +973,7 @@ def find_online(project: Project, finding: UnitFinding, *, settings=None) -> Sea
     try:
         provider = build_provider(settings)
     except SearchError as exc:
-        got.error = str(exc)
+        got.error, got.failed = str(exc), True
         return got
 
     hits: list[Any] = []
@@ -963,7 +982,7 @@ def find_online(project: Project, finding: UnitFinding, *, settings=None) -> Sea
         try:
             hits.extend(provider.search(query, limit=SEARCH_RESULTS))
         except SearchError as exc:
-            got.error = str(exc)
+            got.error, got.failed = str(exc), True
             break
         if len(hits) >= SEARCH_RESULTS:
             break
@@ -981,7 +1000,7 @@ def find_online(project: Project, finding: UnitFinding, *, settings=None) -> Sea
     try:
         results = asyncio.run(fetch_all(urls, settings=settings))
     except Exception as exc:
-        got.error = f"fetch failed: {exc}"
+        got.error, got.failed = f"fetch failed: {exc}", True
         return got
 
     for result in results:
@@ -1041,6 +1060,12 @@ class Resolution:
     confidence: float = 0.0
     searched: Searched | None = None
     note: str = ""
+    #: A model read the evidence and answered, and the answer settled nothing.
+    #: The one outcome worth remembering: `audit resolve` holds such a finding back
+    #: until its evidence changes, where it used to pay for the same decline — and,
+    #: for a figure it wanted more on, a search, four fetches and a second call —
+    #: every round.
+    declined: bool = False
 
     @property
     def acted(self) -> bool:
@@ -1160,11 +1185,15 @@ def resolve_one(
                 )
                 return got
             got.note = second.note or "the model declined again after reading"
+            got.declined = not second.failed
             return got
         got.note = got.searched.error or "the search found nothing about this figure"
+        # A search that broke judged nothing; one that came back empty did.
+        got.declined = not got.searched.failed
         return got
 
     got.note = verdict.note or "the model declined"
+    got.declined = not verdict.failed
     return got
 
 

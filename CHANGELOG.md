@@ -273,6 +273,40 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **A question a model could not answer is no longer paid for again every round**
+  (`tracker/declines.py`, migration `0025_model_decline`, `tracker/models.py`,
+  `tracker/triage.py`, `tracker/riskcheck.py`, `tracker/audit.py`,
+  `tracker/cli/duplicates.py`, `tracker/cli/logic.py`, `tracker/cli/quality.py`,
+  `tracker/cli/enrich.py`, `docs/workflows/{duplicates,enrich,logic}.md` + `.svg`,
+  `tests/test_declines.py`).
+
+  The overnight loop picks its work the same way each round. Only logic's "left
+  alone" left any record, so five paid phases asked the same undecided questions
+  again. A duplicate pair the agent left alone was asked again, and so was one it
+  rated below the floor, one a rail refused, or one where it could not quote a
+  sentence. So were a logic ruling the rails refused, an audit finding the model
+  declined (with its search, four fetches and second call), an obstacle judged
+  unclear, and a row whose missing fields nobody has published. Each came back in
+  the same order at the same price until two rounds in a row failed to move a count.
+  Measured on the snapshot: 31 eligible pairs against a per-round limit of 25, at
+  ~45,000-260,000 tokens a pair. 141 open unquoted obstacles, 2 ever refuted. One
+  sync spent ~4.2M tokens on its agent pass to find one fact across 25 rows it would
+  pick again next time.
+
+  Each undecided answer is now recorded in `model_decline` with a hash of what the
+  model was shown: both rows' citations, the evidence block, the article text, the
+  empty fields. The item is held back before `--limit` is applied, so the limit buys
+  fresh questions. It comes back when that evidence changes, or after 30 days,
+  because three of these phases search the web and the web changes while the row
+  does not. `--again` on every command asks anyway. A failed call, a broken search
+  and "same site, but merging needs `--merge`" are deliberately not recorded. A
+  decline is bookkeeping about spend, not a decision about the data, so it sits
+  beside the rows rather than in their notes.
+
+  `duplicates resolve` also commits after every pair now. It was one transaction
+  for the whole run, which held SQLite's write lock across every agent call while a
+  console sign-in timed out against it.
+
 - **A logic repair now survives the next re-derive, and one that changed nothing is
   refused** (`tracker/logic.py`, `tracker/triage.py`, `tracker/audit.py`,
   `tracker/blocks.py`, `tracker/cli/logic.py`, `docs/workflows/logic.md` + `.svg`,

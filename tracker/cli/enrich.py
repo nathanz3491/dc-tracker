@@ -95,6 +95,16 @@ def enrich(
             help="Do not put the disagreements this run created to a model.",
         ),
     ] = False,
+    again: Annotated[
+        bool,
+        typer.Option(
+            "--again",
+            help=(
+                "Let the agent pass look again at rows it found nothing for in the last "
+                "month, even though nothing on them has changed."
+            ),
+        ),
+    ] = False,
     browser: Annotated[
         bool,
         typer.Option(
@@ -249,7 +259,7 @@ def enrich(
         # hundred tokens; the agent costs ~77,000 a row. So it is pointed only at
         # what the templates could not reach — "where it is needed" literally.
         with _explain_db_locks(), session_scope(engine) as session:
-            _gapfill_batch(session, wanted)
+            _gapfill_batch(session, wanted, again=again)
 
     if len(batch.reports) == 1:
         _render_enrich(batch.reports[0], dry_run=dry_run)
@@ -259,14 +269,30 @@ def enrich(
     _render_batch(batch, target=target_fields or enrich_mod.DEFAULT_TARGET_FIELDS, dry_run=dry_run)
 
 
-def _gapfill_batch(session, project_ids: list[int]) -> None:
+def _gapfill_evidence(project) -> str:
+    """Fingerprint of an agent pass: which fields are empty, and every citation."""
+    from tracker import declines, gapfill
+
+    empty = sorted(f for f in gapfill.FILLABLE_FIELDS if getattr(project, f, None) is None)
+    return declines.fingerprint(empty, declines.citations(project))
+
+
+def _gapfill_batch(session, project_ids: list[int], *, again: bool = False) -> None:
     """Let a model find and cite what the harvest rounds left empty.
 
     Committed per project, so a provider failure on row 20 keeps the first 19.
     Rows with nothing left to fill cost nothing at all — `gapfill.fill` returns
     before making a call.
+
+    **"Nothing published" is remembered.** The agent's own tool tells it that
+    answer "is recorded as one", and it was not: the batch counted it and moved on,
+    and `select_projects` picks the same rows next round because they are still the
+    closest to the target. A sync's agent pass spent ~4.2M tokens finding one fact
+    across 25 rows and would have spent it again on the same 25. A row is now held
+    back until one of its citations or empty fields changes, or a month passes —
+    the web does change while the row does not. `--again` looks anyway.
     """
-    from tracker import gapfill
+    from tracker import declines, gapfill
     from tracker.llm import LLMUnavailable, agent_extractor
 
     try:
@@ -279,11 +305,17 @@ def _gapfill_batch(session, project_ids: list[int]) -> None:
     filled = nothing = errored = 0
     spent = cache_hit = cache_miss = 0
 
+    known = declines.load(session, "gapfill")
+    held = 0
     for project_id in project_ids:
         project = session.get(Project, project_id)
         if project is None:
             continue
         head = f"#{project.id} {escape(project.name[:34])}"
+        shown = _gapfill_evidence(project)
+        if not again and declines.holds(known, str(project.id), shown):
+            held += 1
+            continue
         try:
             out = gapfill.fill(session, project, extractor=extractor)
         except Exception as exc:
@@ -303,9 +335,32 @@ def _gapfill_batch(session, project_ids: list[int]) -> None:
                 console.print(f"  {head}  [green]{escape(line)}[/green]")
         elif out.verdict == "nothing":
             nothing += 1
+            # Only a run that asked: a row with nothing empty returns "nothing" free.
+            if out.prompt_tokens:
+                declines.record(
+                    session,
+                    "gapfill",
+                    str(project.id),
+                    shown,
+                    outcome="nothing published",
+                    reason=out.note,
+                )
+                session.commit()
             console.print(f"  {head}  [dim]nothing published — {escape(out.note[:90])}[/dim]")
         else:
             session.rollback()
+            if out.verdict == "unusable":
+                # Every fact it offered was refused by the evidence gate, and the same
+                # row with the same citations gets offered the same facts.
+                declines.record(
+                    session,
+                    "gapfill",
+                    str(project.id),
+                    shown,
+                    outcome="unusable",
+                    reason="; ".join(out.refused),
+                )
+                session.commit()
             errored += 1
             console.print(f"  {head}  [yellow]{out.verdict}[/yellow]")
         # Printed even on success: a refusal is the evidence gate working, and a
@@ -318,6 +373,7 @@ def _gapfill_batch(session, project_ids: list[int]) -> None:
         f"\n[bold]{filled}[/bold] row(s) gained a cited fact, "
         f"[bold]{nothing}[/bold] had nothing published"
         + (f", [red]{errored}[/red] failed" if errored else "")
+        + (f", {held} held back as already looked for" if held else "")
         + f"  [dim]~{spent:,} tokens[/dim]"
     )
     if cache_hit or cache_miss:

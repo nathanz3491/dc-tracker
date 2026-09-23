@@ -665,6 +665,7 @@ def logic_resolve(
                 extractor,
                 min_confidence=min_confidence,
                 limit=limit,
+                again=again,
             )
             return
 
@@ -687,8 +688,32 @@ def logic_resolve(
         _triage(session, findings[:limit], logic_mod)
 
 
+def _logic_subject(finding) -> str:
+    """A finding's key in `model_decline`."""
+    return f"{finding.project_id}:{finding.code}"
+
+
+def _logic_evidence(finding, project) -> str:
+    """Fingerprint of a finding as the agent is shown it: the question and the row."""
+    from tracker import declines
+
+    return declines.fingerprint(
+        finding.code,
+        finding.summary,
+        sorted(finding.fields or ()),
+        sorted(finding.subjects or ()),
+        declines.citations(project),
+    )
+
+
 def _triage_by_agent(
-    session, findings: list, extractor, *, min_confidence: float = 0.75, limit: int = 30
+    session,
+    findings: list,
+    extractor,
+    *,
+    min_confidence: float = 0.75,
+    limit: int = 30,
+    again: bool = False,
 ) -> None:
     """Let a model read the sources and rule wrong claims out, one finding at a time.
 
@@ -730,6 +755,27 @@ def _triage_by_agent(
         console.print("[yellow]nothing here a ruling could answer[/yellow]")
         return
 
+    # A ruling the rails refused is recorded with a hash of what the agent was
+    # shown, and held back until that changes or the cooldown lapses. `left alone`
+    # has always been recorded (in the row's notes, below); `unusable` was not, and
+    # on the first overnight run it was 8 and then 12 of a round's 40 findings —
+    # re-paid every round at the full agent price.
+    from tracker import declines
+
+    def key(finding) -> tuple[str, str]:
+        row = session.get(Project, finding.project_id)
+        return _logic_subject(finding), (_logic_evidence(finding, row) if row else "")
+
+    findings, held = declines.split(findings, declines.load(session, "logic"), key, again=again)
+    if held:
+        console.print(
+            f"[dim]holding back {held} finding(s) whose last ruling was refused on the "
+            "same evidence; --again asks them.[/dim]\n"
+        )
+    if not findings:
+        console.print("[green]nothing here the agent has not already been asked[/green]")
+        return
+
     over_budget = max(0, len(findings) - limit)
     findings = findings[:limit]
 
@@ -743,6 +789,9 @@ def _triage_by_agent(
             continue
 
         head = f"[dim]{index}/{len(findings)}[/dim] #{project.id} {escape(project.name[:32])}"
+        # Fingerprinted before the run: a ruling re-derives the row, and a decline
+        # has to describe what the agent was actually asked about.
+        shown = _logic_evidence(finding, project)
         # `remedy` is included because it is where the codebase records what a
         # reader should look at, and withholding it makes the model rediscover
         # what a rule already knows. `subjects` names what the finding is *about*
@@ -812,6 +861,15 @@ def _triage_by_agent(
             console.print(f"      [dim]{escape(outcome.note[:200])}[/dim]")
         elif outcome.verdict == "unusable":
             session.rollback()
+            declines.record(
+                session,
+                "logic",
+                _logic_subject(finding),
+                shown,
+                outcome="unusable",
+                reason=outcome.note,
+            )
+            session.commit()
             unusable += 1
             console.print(f"{head}  [yellow]unusable[/yellow] [dim]— {escape(outcome.note)}[/dim]")
         else:

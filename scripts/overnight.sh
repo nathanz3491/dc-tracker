@@ -33,7 +33,11 @@
 # WHAT IT COSTS. Measured: ~45,000-260,000 tokens per agent finding depending on how
 # many articles it reads, and one HTTP request per article on a cache miss. The free
 # phases and `audit` cost almost nothing. `--tokens` is a hard ceiling, checked
-# before every paid phase, and defaults to one.
+# before every paid phase, and defaults to one. Later rounds are cheaper than the
+# first: every paid phase records what it answered or could not decide, keyed on the
+# evidence it was shown, and does not re-offer it until that evidence changes or a
+# month passes (`tracker/declines.py`). Before that, only logic findings were
+# remembered, and every round re-paid for the same pairs, obstacles and rows.
 #
 # THE CEILING READS A LEDGER, NOT THE LOG. Every paid call appends a line to the file
 # `TRACKER_SPEND_LEDGER` names (`tracker.llm.record_spend`), so a phase is counted

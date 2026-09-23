@@ -684,6 +684,31 @@ def _checked(answer: dict[str, Any]) -> list[str]:
     return [" ".join(str(item).split())[:120] for item in raw if str(item).strip()][:6]
 
 
+def pair_subject(a_id: int, b_id: int) -> str:
+    """A pair's key in `model_decline`: the two ids, lower first."""
+    low, high = sorted((a_id, b_id))
+    return f"{low}-{high}"
+
+
+def pair_evidence(a: Any, b: Any, pair: Any) -> str:
+    """Fingerprint of everything a pair was put to the judge with.
+
+    Both rows' identity and every citation's claims, plus why the pair was raised —
+    the same things the task text and the evidence tools show. A new citation on
+    either row, a re-extraction, a ruling on one of its claims or a change in the
+    signals that paired them is new evidence, and the pair is asked again.
+    """
+    from tracker import declines
+
+    return declines.fingerprint(
+        sorted(pair.kinds),
+        sorted(pair.shared_blocks or ()),
+        [(p.id, p.name, p.company, p.city, p.county, p.state) for p in (a, b)],
+        declines.citations(a),
+        declines.citations(b),
+    )
+
+
 def pair_triage(
     session: Any,
     pair: Any,
@@ -747,6 +772,23 @@ def pair_triage(
         got.detail = "one of the rows is gone"
         return got
 
+    from tracker import declines
+
+    # Fingerprinted before the run, on what the judge is about to be shown — a
+    # merge below changes both rows, and the decline must describe the question.
+    subject, shown = pair_subject(a.id, b.id), pair_evidence(a, b, pair)
+
+    def declined(outcome: str, why: str) -> Any:
+        """Undecided, and asking again on the same evidence would pay for the same.
+
+        Not called for the two outcomes a re-run *can* change: a provider failure,
+        and "the same site, but merging needs --merge" — a run with `--merge` must
+        still reach that pair.
+        """
+        declines.record(session, "pair", subject, shown, outcome=outcome, reason=why)
+        got.detail = why
+        return got
+
     tools = agent.evidence_toolkit(session, allow_search=allow_search) + pair_verdict_tools()
     task = (
         f"Are these the same site?\n\n"
@@ -762,8 +804,11 @@ def pair_triage(
         task, tools=tools, extractor=extractor, system=system or PAIR_SYSTEM, on_step=on_step
     )
     if not result.answered:
-        got.detail = result.note or f"the run ended as {result.outcome} without deciding"
-        return got
+        why = result.note or f"the run ended as {result.outcome} without deciding"
+        if result.outcome == "error":
+            got.detail = why
+            return got
+        return declined(result.outcome, why)
 
     answer = result.answer or {}
     reason = str(answer.get("reason") or "").strip()
@@ -774,8 +819,7 @@ def pair_triage(
         confidence = 0.0
 
     if result.tool_name == "leave_alone":
-        got.detail = reason or "the model would not say"
-        return got
+        return declined("left alone", reason or "the model would not say")
 
     verdict = "same" if result.tool_name == "rule_same" else "different"
     got.judgement = Judgement(verdict, confidence, reason)
@@ -788,8 +832,9 @@ def pair_triage(
         got.judgement = Judgement(
             verdict, confidence, reason, outcome="declined", note="below the floor"
         )
-        got.detail = f"confidence {confidence:.2f} is below the {MIN_CONFIDENCE} floor"
-        return got
+        return declined(
+            "below the floor", f"confidence {confidence:.2f} is below the {MIN_CONFIDENCE} floor"
+        )
 
     if verdict == "different":
         from tracker import pairs as pairs_mod
@@ -811,24 +856,29 @@ def pair_triage(
         got.detail = "the same site, but merging needs --merge"
         return got
     if confidence < min_confidence:
-        got.detail = f"confidence {confidence:.2f} is below the {min_confidence:.2f} a merge needs"
-        return got
+        return declined(
+            "below the merge bar",
+            f"confidence {confidence:.2f} is below the {min_confidence:.2f} a merge needs",
+        )
 
     # Every rail that is a fact about the pair, shared with the one-call path. The
     # one this judge is allowed past is the cross-granularity refusal, because it
     # read the articles; see `evidence_blocks_merge`.
     blocked = evidence_blocks_merge(pair, a, b, judge_read_the_sources=True)
     if blocked:
-        got.detail = blocked
-        return got
+        # A rail is a fact about the two rows, so it refuses the same pair on the
+        # same evidence every time — asking again only pays to hear it again.
+        return declined("a rail refused the merge", blocked)
     if require_quote:
         from tracker.agent import verbatim
 
         articles = _articles_read(result)
         quote = str(answer.get("quote") or "")
         if not any(verbatim(quote, text)[0] for text in articles.values()):
-            got.detail = "no sentence from an article this run read supports a merge"
-            return got
+            return declined(
+                "no supporting sentence",
+                "no sentence from an article this run read supports a merge",
+            )
 
     from tracker.logic import record_decision
     from tracker.merge import merge_projects
@@ -860,6 +910,9 @@ def resolve_pairs(
     allow_search: bool = True,
     system: str = "",
     on_step: Any = None,
+    again: bool = False,
+    commit_each: bool = False,
+    on_held: Any = None,
 ) -> list[Any]:
     """Work the suspected pairs with an agent. Returns `dupresolve.Decision` list.
 
@@ -868,22 +921,48 @@ def resolve_pairs(
     threaded for the reason it is there: four rows for one campus produce six
     pairs, and without it the first merge makes the other five report "one of the
     rows is gone" and the operator runs the command again.
+
+    **Pairs already put to the judge on the same evidence are held back** before
+    `limit` is applied, so the limit buys fresh questions. Measured on the snapshot
+    this was written against: 31 eligible pairs and a per-round limit of 25, and
+    none of the undecided outcomes recorded — so each overnight round re-paid for
+    nearly the whole set, ~45,000-260,000 tokens a pair. `again=True` asks them
+    anyway; `on_held(n)` is told how many were held back.
+
+    `commit_each` commits after every pair. A run is one agent call after another
+    for minutes at a time, and a transaction held open across them holds SQLite's
+    write lock the whole while — which is what a console sign-in, a single write of
+    `last_seen_at`, then times out against.
     """
     from sqlalchemy import select
     from sqlalchemy.orm import selectinload
 
+    from tracker import declines
     from tracker.capex import suspected_duplicates
     from tracker.models import Project
 
-    session.scalars(
-        select(Project).options(selectinload(Project.sources), selectinload(Project.blocks))
-    ).all()
+    rows = {
+        p.id: p
+        for p in session.scalars(
+            select(Project).options(selectinload(Project.sources), selectinload(Project.blocks))
+        ).all()
+    }
 
     found = sorted(suspected_duplicates(session), key=lambda p: (p.rank, p.a_id, p.b_id))
     if not weak:
         # A pair raised only by a shared name word cannot be merged and asking
         # costs a call to be told what the rails already know.
         found = [p for p in found if set(p.kinds) - {"name"}]
+
+    def key(pair: Any) -> tuple[str, str]:
+        a, b = rows.get(pair.a_id), rows.get(pair.b_id)
+        if a is None or b is None:
+            return pair_subject(pair.a_id, pair.b_id), ""
+        return pair_subject(a.id, b.id), pair_evidence(a, b, pair)
+
+    found, held = declines.split(found, declines.load(session, "pair"), key, again=again)
+    if on_held is not None:
+        on_held(held)
 
     folded: dict[int, int] = {}
     out: list[Any] = []
@@ -902,6 +981,8 @@ def resolve_pairs(
                 on_step=on_step,
             )
         )
+        if commit_each:
+            session.commit()
     return out
 
 

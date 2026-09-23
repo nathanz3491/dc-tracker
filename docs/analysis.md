@@ -362,8 +362,12 @@ case of running this is that it cost a call and changed nothing.
 
 Three outcomes: **confirmed** attaches the quote and clears the 待确认 mark;
 **refuted** marks the obstacle `superseded`, dropping it out of the open counts
-without deleting the record of having believed it; **unclear** writes nothing and
-is the honest majority answer. `--dry-run` judges at full cost and writes nothing.
+without deleting the record of having believed it; **unclear** changes nothing on
+the obstacle and is the honest majority answer. It is remembered, though, with a hash
+of the article it was judged on, and the next run reads a different obstacle rather
+than paying to be told the same thing: 141 open unquoted obstacles on one snapshot,
+2 ever refuted, and the same top 40 read every round until this. `--again` reads
+them anyway. `--dry-run` judges at full cost and writes nothing.
 
 `tracker exposure` is the rollup, and it deliberately **does not produce a single
 "MW at risk" number**:

@@ -178,6 +178,53 @@ def article_for(source: Source | None, *, cache_dir: Path | None = None) -> str:
     return (source.excerpt or "")[:ARTICLE_BUDGET]
 
 
+def evidence(risk: Risk, source: Source | None, *, cache_dir: Path | None = None) -> str:
+    """Fingerprint of what an obstacle is judged on: the obstacle and its article.
+
+    The article text is hashed whole, so a re-fetch that changed the page — or a
+    cache that finally holds it where the excerpt stood in before — is new evidence.
+    """
+    import hashlib
+
+    from tracker import declines
+
+    article = article_for(source, cache_dir=cache_dir)
+    return declines.fingerprint(
+        risk.category,
+        risk.severity,
+        risk.summary,
+        risk.quote or "",
+        risk.unconfirmed or "",
+        source.url if source else "",
+        hashlib.sha1(article.encode("utf-8")).hexdigest(),
+    )
+
+
+def fresh(
+    session: Session,
+    risks: list[Risk],
+    *,
+    cache_dir: Path | None = None,
+    again: bool = False,
+) -> tuple[list[Risk], int]:
+    """The obstacles not already judged unclear on the same article, and how many were.
+
+    `unconfirmed_risks` sorts the same way every time, so without this the same top
+    `--limit` obstacles were read every round: 141 open unquoted obstacles on the
+    snapshot this was written against, 2 ever refuted, and nothing recording the
+    `unclear` answers in between.
+    """
+    from tracker import declines
+
+    sources = {s.id: s for s in session.scalars(select(Source)).all()}
+    return declines.split(
+        risks,
+        declines.load(session, "risk"),
+        key=lambda r: (str(r.id), evidence(r, sources.get(r.source_id), cache_dir=cache_dir)),
+        again=again,
+    )
+
+
 def build_context(
     project: Project, risk: Risk, source: Source | None, article: str
 ) -> dict[str, str]:
@@ -334,6 +381,7 @@ def confirm(
         if project is None:
             continue
         source = sources.get(risk.source_id)
+        shown = evidence(risk, source, cache_dir=cache_dir)
         judgement, article = judge(project, risk, source, extractor=extractor, cache_dir=cache_dir)
         outcome = Outcome(
             risk_id=risk.id,
@@ -349,6 +397,21 @@ def confirm(
             outcome.result = "no_article"
         elif apply:
             outcome.result = apply_judgement(risk, judgement, article)
+            if outcome.result == "unclear":
+                # The model's own answer on this article, not a failed call — so
+                # the next run holds it back until the article or the obstacle
+                # changes. See `fresh`.
+                from tracker import declines
+
+                declines.record(
+                    session,
+                    "risk",
+                    str(risk.id),
+                    shown,
+                    outcome="unclear",
+                    reason=judgement.reason,
+                    by="model",
+                )
         else:
             # Judge exactly as `apply` would, against a throwaway copy, so a
             # preview cannot report an outcome the real run would not produce.
@@ -382,6 +445,8 @@ __all__ = [
     "article_for",
     "build_context",
     "confirm",
+    "evidence",
+    "fresh",
     "judge",
     "unconfirmed_risks",
     "verify_quote",

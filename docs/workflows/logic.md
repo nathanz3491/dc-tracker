@@ -264,6 +264,12 @@ first 39, and a database error while *applying* a ruling rolls back that finding
 rather than ending the batch — an `IntegrityError` on `phase` once killed the logic
 phase of three overnight rounds out of five after a single bad finding.
 
+A ruling the rails refuse (`unusable`) is recorded in `model_decline` with a hash of
+the finding and the row's citations, and held back until one of them changes or the
+cooldown lapses; `--again` asks anyway. `left alone` has always been recorded, in the
+row's notes; `unusable` was not, and on the first overnight run it was 8 and then 12
+of each round's 40 findings, re-paid every round at the full agent price.
+
 The drift repairs and the free answers are committed before the first model call.
 They used to share the agent loop's transaction, so the first refused or failed
 ruling rolled them back — after both had been printed as done.

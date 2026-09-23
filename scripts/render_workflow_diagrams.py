@@ -424,8 +424,8 @@ def enrich() -> Canvas:
     c.arrow([settle.bottom(), (settle.cx, 838)], colour=RED)
 
     agent = c.box(
-        802, 706, 208, 104, "8 · agent pass",
-        ["a model picks its own searches", "for what the query templates", "could not reach, and cites it.", "~77,000 tokens a row, so it is last"],
+        802, 700, 208, 116, "8 · agent pass",
+        ["a model picks its own searches", "for what the templates could not", "reach, and cites it. ~77,000", "tokens a row, so it is last; a row", "with nothing published waits a month"],
         role="orange",
     )
     c.arrow([supersede.right(), (802, 758)])
@@ -650,8 +650,8 @@ def duplicates() -> Canvas:
     diff = c.box(320, 630, 190, 58, "different sites", ["parks the pair, at 0.6 or above"], role="teal", title_size=12.5)
     same = c.box(320, 706, 190, 58, "same site", ["merges — behind --merge"], role="red", title_size=12.5)
     unclear = c.box(
-        320, 782, 190, 84, "unclear",
-        ["stays in the report, and", "capex keeps one row of the", "group out of the total"],
+        320, 782, 190, 100, "unclear",
+        ["stays in the report; capex", "keeps one row out of the", "total. Not asked again until", "either row's evidence changes"],
         role="cool", title_size=12.5,
     )
     c.arrow([who.right(-40), (297, 700), (297, diff.cy), (320, diff.cy)], colour=TEAL)

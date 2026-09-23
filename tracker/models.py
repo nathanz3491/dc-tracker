@@ -624,6 +624,43 @@ class NotDuplicate(Base):
         return f"<NotDuplicate #{self.a_id} != #{self.b_id}>"
 
 
+class ModelDecline(Base):
+    """A question a model was paid to answer and could not, and what it was shown.
+
+    Read by the paid phases before they select work, so an item is not put to a
+    model again until the evidence it was judged on changes or the cooldown lapses.
+    `tracker.declines` is the only writer and migration 0025 has the argument — in
+    short, a decline changes nothing on the row, so it is bookkeeping about spend and
+    lives beside the rows rather than in their notes.
+    """
+
+    __tablename__ = "model_decline"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    #: Which phase asked: pair, logic, audit, risk or gapfill.
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    #: What was asked about, in the kind's own spelling — `12-34`, `56:code`, `78`.
+    subject: Mapped[str] = mapped_column(Text, nullable=False)
+    #: Hash of the evidence the question was put with. A different hash is a
+    #: different question.
+    fingerprint: Mapped[str] = mapped_column(Text, nullable=False)
+    #: How the run ended — "left alone", "unclear", "unusable", "nothing published".
+    outcome: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text)
+    decided_by: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'agent'"))
+    decided_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False, server_default=_NOW)
+
+    __table_args__ = (
+        UniqueConstraint("kind", "subject", name="uq_model_decline_subject"),
+        CheckConstraint(
+            "kind IN ('pair', 'logic', 'audit', 'risk', 'gapfill')", name="ck_model_decline_kind"
+        ),
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return f"<ModelDecline {self.kind} {self.subject}: {self.outcome}>"
+
+
 class Account(Base):
     """One person who may sign in to the console.
 

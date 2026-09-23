@@ -376,6 +376,13 @@ def duplicates_resolve(
         typer.Option("--weak", help="Also ask about pairs raised only by a shared name word."),
     ] = False,
     limit: Annotated[int, typer.Option("--limit", help="Pairs to work through.")] = 20,
+    again: Annotated[
+        bool,
+        typer.Option(
+            "--again",
+            help="Also ask pairs the agent already left undecided on the same evidence.",
+        ),
+    ] = False,
     dry_run: Annotated[
         bool,
         typer.Option("--dry-run", help="Ask, report, write nothing. The calls are still paid for."),
@@ -423,6 +430,12 @@ def duplicates_resolve(
 
     Spends one model call per pair. `--dry-run` still pays for the calls and writes
     nothing, which is the honest way to see what a run would do.
+
+    **A pair the agent left undecided is not asked again on the same evidence.**
+    Left alone, rated below the floor, refused by a rail, or unable to quote a
+    sentence: each is recorded with a hash of both rows' citations, and the pair
+    comes back once either row's evidence changes or a month passes. `--again`
+    asks them anyway.
     """
     _use_llm(llm_provider)
     import sys as _sys
@@ -470,6 +483,13 @@ def duplicates_resolve(
         if use_agent:
             from tracker import triage as triage_mod
 
+            def held_back(count: int) -> None:
+                if count and not json_mode():
+                    console.print(
+                        f"[dim]holding back {count} pair(s) the agent already left "
+                        "undecided on the same evidence; --again asks them.[/dim]"
+                    )
+
             decisions = triage_mod.resolve_pairs(
                 session,
                 extractor=extractor,
@@ -477,6 +497,11 @@ def duplicates_resolve(
                 allow_merge=merge_them,
                 weak=weak,
                 min_confidence=min_confidence,
+                again=again,
+                # Per pair, so the write lock is not held across a run of agent
+                # calls. A dry run is one transaction that is never committed.
+                commit_each=not dry_run,
+                on_held=held_back,
             )
         else:
             decisions = dupresolve.resolve(
