@@ -2219,6 +2219,126 @@ async def test_an_escalated_read_counts_the_requests_that_led_to_it():
     assert result.attempts == 2, "one refused request, one that worked"
 
 
+# --- how fetches share the concurrency --------------------------------------------
+#
+# In real queue order 115 of the first 200 URLs are one host. The global slot was
+# taken first and held while waiting on that host and through its politeness sleep,
+# so the other hosts queued behind a slot that was doing nothing. A simulation of the
+# queue went from 24.1 s to 20.1 s with the gates the other way round.
+
+
+class _Stamping:
+    """Records when each fetch started. Instant, so only the gates take time."""
+
+    def __init__(self) -> None:
+        self.started: dict[str, float] = {}
+
+    async def fetch(self, url: str) -> FetchResult:
+        self.started[url] = time.perf_counter()
+        return FetchResult(url, True, markdown="text", status=200, fetched_at=NOW)
+
+
+async def test_a_busy_host_does_not_hold_the_only_slot():
+    from tracker.ingest.fetch import fetch_all
+
+    settings = get_settings().model_copy(update={"fetch_concurrency": 1, "politeness_delay_s": 0.4})
+    fetcher = _Stamping()
+    urls = ["https://one.test/a", "https://one.test/b", "https://two.test/a"]
+    t0 = time.perf_counter()
+    await fetch_all(urls, fetcher=fetcher, settings=settings)
+    assert fetcher.started["https://two.test/a"] - t0 < 0.2, (
+        "the other host waited out one.test's politeness sleep in the only slot"
+    )
+    gap = fetcher.started["https://one.test/b"] - fetcher.started["https://one.test/a"]
+    assert gap >= 0.35, "the politeness delay per host still holds"
+
+
+async def test_the_retry_backoff_does_not_hold_a_slot(monkeypatch):
+    from tracker.ingest.fetch import fetch_all
+
+    settings = get_settings().model_copy(
+        update={"fetch_concurrency": 1, "politeness_delay_s": 0.0, "retry_backoff_base_s": 0.2}
+    )
+    monkeypatch.setattr("tracker.ingest.fetch.get_settings", lambda: settings)
+
+    class FlakyThenFine(_Stamping):
+        async def fetch(self, url):
+            if "flaky" in url and url not in self.started:
+                self.started[url] = time.perf_counter()
+                return FetchResult(url, False, status=502, error="HTTP 502", fetched_at=NOW)
+            return await super().fetch(url)
+
+    fetcher = FlakyThenFine()
+    t0 = time.perf_counter()
+    await fetch_all(
+        ["https://flaky.test/a", "https://calm.test/a"], fetcher=fetcher, settings=settings
+    )
+    assert fetcher.started["https://calm.test/a"] - t0 < 0.15, (
+        "a URL sleeping between retries kept the only slot"
+    )
+
+
+def _serve_with(monkeypatch, handler):
+    """Make `fetch_all`'s own HttpxFetcher answer from `handler`, over no network."""
+    import httpx
+
+    from tracker.ingest import fetch as fetch_mod
+
+    transport = httpx.MockTransport(handler)
+
+    class Served(fetch_mod.HttpxFetcher):
+        def __init__(self, settings=None):
+            super().__init__(settings, transport=transport)
+
+    monkeypatch.setattr(fetch_mod, "HttpxFetcher", Served)
+
+
+async def test_one_run_reuses_one_http_client(monkeypatch):
+    """Each request opened its own client, and so its own connection."""
+    import httpx
+
+    from tracker.ingest.fetch import fetch_all
+
+    made: list[object] = []
+    real = httpx.AsyncClient
+
+    class Counting(real):
+        def __init__(self, *args, **kwargs):
+            made.append(self)
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", Counting)
+    _serve_with(
+        monkeypatch,
+        lambda request: httpx.Response(200, text="<p>" + "an article sentence. " * 30 + "</p>"),
+    )
+    results = await fetch_all([f"https://a.test/{i}" for i in range(4)], settings=get_settings())
+    assert all(r.ok for r in results)
+    assert len(made) == 1, f"{len(made)} clients for one run"
+
+
+async def test_the_shared_client_keeps_no_cookies_between_requests(monkeypatch):
+    """A fresh client per request never carried a cookie from one page to the next.
+    Sharing one must not start to: a WAF's challenge cookie is not ours to replay."""
+    import httpx
+
+    from tracker.ingest.fetch import fetch_all
+
+    seen: list[str | None] = []
+
+    def handler(request):
+        seen.append(request.headers.get("cookie"))
+        return httpx.Response(
+            200,
+            headers={"set-cookie": "session=abc; Path=/"},
+            text="<p>" + "an article sentence. " * 30 + "</p>",
+        )
+
+    _serve_with(monkeypatch, handler)
+    await fetch_all(["https://a.test/1", "https://a.test/2"], settings=get_settings())
+    assert seen == [None, None]
+
+
 def test_the_article_fetcher_reports_an_unparseable_url_rather_than_raising():
     """`httpx.InvalidURL` is not a `RequestError`, so it used to escape the fetcher
     and take every other URL in the batch with it."""

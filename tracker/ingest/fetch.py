@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
 from html import unescape
+from http.cookiejar import CookieJar, DefaultCookiePolicy
 from pathlib import Path
 from typing import Final, Protocol
 from urllib.parse import urlsplit
@@ -298,24 +299,68 @@ def html_to_text(html: str) -> str:
 # --- Implementations --------------------------------------------------------
 
 
-class HttpxFetcher:
-    """Plain HTTP. The default: fast, free, no browser."""
+def _no_cookies() -> CookieJar:
+    """A cookie jar that keeps nothing.
 
-    def __init__(self, settings: Settings | None = None) -> None:
+    A client per request never carried a cookie from one page to the next, and a
+    shared one must not start to: a WAF's challenge cookie or a paywall's metering
+    cookie set by one article would ride on the next request to that host, changing
+    what the page serves for reasons that are nothing to do with the page.
+    `allowed_domains=[]` refuses every domain, so `Set-Cookie` is ignored.
+    """
+    return CookieJar(policy=DefaultCookiePolicy(allowed_domains=[]))
+
+
+class HttpxFetcher:
+    """Plain HTTP. The default: fast, free, no browser.
+
+    **Entered as a context manager it holds one client for the run**, and `fetch_all`
+    enters the one it creates. Each request used to open its own client and so its
+    own connection — a TLS handshake per page, on a queue where 115 of the first 200
+    URLs are one host. The shared client keeps no cookies (see `_no_cookies`), so a
+    page is fetched exactly as it was before; only the connection is reused. Used
+    without entering, `fetch` opens a client per call, as it always did — which is
+    what the one-off callers (`agent`, `backfill`) do.
+
+    `transport` is for tests, which serve pages without a network.
+    """
+
+    def __init__(
+        self, settings: Settings | None = None, *, transport: httpx.AsyncBaseTransport | None = None
+    ) -> None:
         self.settings = settings or get_settings()
+        self._transport = transport
+        self._client: httpx.AsyncClient | None = None
+
+    def _new_client(self) -> httpx.AsyncClient:
+        return httpx.AsyncClient(
+            timeout=httpx.Timeout(self.settings.fetch_timeout_s, connect=10.0),
+            follow_redirects=True,
+            headers={
+                "User-Agent": self.settings.user_agent,
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9",
+            },
+            cookies=_no_cookies(),
+            transport=self._transport,
+        )
+
+    async def __aenter__(self) -> HttpxFetcher:
+        self._client = self._new_client()
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        if self._client is not None:
+            await self._client.aclose()
+            self._client = None
 
     async def fetch(self, url: str) -> FetchResult:
-        headers = {
-            "User-Agent": self.settings.user_agent,
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9",
-        }
-        timeout = httpx.Timeout(self.settings.fetch_timeout_s, connect=10.0)
         try:
-            async with httpx.AsyncClient(
-                timeout=timeout, follow_redirects=True, headers=headers
-            ) as client:
-                response = await client.get(url)
+            if self._client is not None:
+                response = await self._client.get(url)
+            else:
+                async with self._new_client() as client:
+                    response = await client.get(url)
         # `InvalidURL` is not a `RequestError`: a URL httpx cannot parse raises it
         # before any request, and it used to escape here and take the whole batch.
         except (httpx.RequestError, httpx.InvalidURL) as exc:
@@ -627,18 +672,31 @@ def cache_path(url: str, root: Path) -> Path:
     return root / f"{digest}.txt"
 
 
-async def fetch_with_retry(fetcher: Fetcher, url: str, *, attempts: int = 3) -> FetchResult:
+async def fetch_with_retry(
+    fetcher: Fetcher,
+    url: str,
+    *,
+    attempts: int = 3,
+    gate: asyncio.Semaphore | None = None,
+) -> FetchResult:
     """Retry a transient failure with exponential backoff.
 
     The result's `attempts` is the number of requests actually made. A failure that
     is not retried — a 404, a 403 that wants a different client — is one request,
     and used to be recorded as the full `attempts` allowance, three.
+
+    `gate` is held around each request and let go for the backoff between them, so
+    a URL waiting to retry does not keep a slot another host could be using.
     """
     settings = get_settings()
     last = FetchResult(url, False, error="not attempted", fetched_at=utcnow())
     made = 0
     for attempt in range(1, attempts + 1):
-        last = await fetcher.fetch(url)
+        if gate is None:
+            last = await fetcher.fetch(url)
+        else:
+            async with gate:
+                last = await fetcher.fetch(url)
         made = attempt
         if last.ok:
             return FetchResult(**{**last.__dict__, "attempts": made})
@@ -723,9 +781,21 @@ async def fetch_all(
 
     Rungs are entered lazily, on the first page that actually needs each one.
     Most runs never escalate, and launching a browser for them would cost several
-    seconds and a Chromium process for nothing.
+    seconds and a Chromium process for nothing. The default fetcher is entered up
+    front, because entering it only opens the one HTTP client the run's requests
+    share — see `HttpxFetcher`. A fetcher the caller passes in is the caller's to
+    manage.
+
+    **The host gate is taken first and the global slot only for a request.** The
+    slot was taken first and held while waiting on a busy host and through the
+    politeness sleep, so every other host queued behind a slot that was doing
+    nothing — in real queue order 115 of the first 200 URLs are one host. A
+    simulation of that queue went from 24.1 s to 20.1 s with the gates this way
+    round, against a floor of 17.3 s. At most `fetch_concurrency` requests are in
+    flight, and one per host, exactly as before.
     """
     settings = settings or get_settings()
+    owned = fetcher is None
     primary = fetcher or HttpxFetcher(settings)
     gate = asyncio.Semaphore(settings.fetch_concurrency)
     host_gates: dict[str, asyncio.Semaphore] = {}
@@ -773,9 +843,10 @@ async def fetch_all(
         return started[index] or None
 
     async def one(url: str) -> FetchResult:
-        async with gate, host_gate(url):
+        # The host first, the slot only around each request: see the docstring.
+        async with host_gate(url):
             try:
-                result = await fetch_with_retry(primary, url)
+                result = await fetch_with_retry(primary, url, gate=gate)
                 #: Every request this URL cost, across the rungs it climbed.
                 requests = result.attempts
                 for index in range(len(ladder)):
@@ -790,7 +861,7 @@ async def fetch_all(
                         getattr(stronger, "VIA", type(stronger).__name__),
                         result.status,
                     )
-                    escalated = await fetch_with_retry(stronger, url, attempts=2)
+                    escalated = await fetch_with_retry(stronger, url, attempts=2, gate=gate)
                     requests += escalated.attempts
                     if escalated.ok:
                         result = escalated
@@ -812,9 +883,15 @@ async def fetch_all(
     # dict.fromkeys dedupes while preserving order, so a repeated URL in the
     # input file is fetched once.
     unique = list(dict.fromkeys(urls))
+    enter_primary = getattr(primary, "__aenter__", None) if owned else None
+    if enter_primary is not None:
+        await enter_primary()
     try:
         return await asyncio.gather(*(one(u) for u in unique))
     finally:
+        if enter_primary is not None:
+            with contextlib.suppress(Exception):
+                await primary.__aexit__(None, None, None)
         # Chromium does not exit on its own, and a leaked one survives the
         # command that started it. Every rung that was actually entered is closed,
         # not just the last one.
