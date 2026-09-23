@@ -308,6 +308,9 @@ def enrich(
                     # `--target 0` means "no target", which for *selection* means
                     # every project short of all twelve rather than none of them.
                     target=target_fields or len(TRACKED_FIELDS),
+                    # The same cap the agent pass honours, so a row it would ask
+                    # nothing of is not handed to the harvest either.
+                    max_attempts=max_attempts,
                 )
                 wanted += [p for p in chosen if p not in wanted]
                 if not wanted:

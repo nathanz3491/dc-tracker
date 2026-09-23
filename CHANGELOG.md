@@ -66,6 +66,19 @@ initial build of the v1 PRD.
 
 ### Changed
 
+- **`enrich --select` and `sync` pass over rows with nothing left to ask**
+  (`tracker/ingest/enrich.py` — `select_projects`, `tracker/cli/enrich.py`,
+  `docs/workflows/enrich.md` + `.svg`, `tests/test_enrich.py`).
+
+  Closest-first selection is stable, so the same rows came back every round: the
+  ones a field or two short whose missing fields nobody has published. The agent
+  pass had already stopped asking about those fields (`tracker.attempts`), but the
+  harvest ran first. It re-read each row's own citations at full extraction cost,
+  every overnight round, to find the same nothing. A row whose every empty fillable
+  field is exhausted, asked `--max-attempts` times with no citation gained since, is
+  now passed over, and the limit goes to the next row. A new citation brings it back,
+  exactly as it reopens its fields.
+
 - **`backfill dates` chooses what to fetch in 6.5 ms instead of 909**
   (`tracker/migrations/0026_source_url_index.sql`, `tracker/models.py`,
   `tests/test_db.py`). For each of the 5,535 undated queue rows it asks whether any

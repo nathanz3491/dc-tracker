@@ -777,6 +777,31 @@ def test_select_skips_projects_already_at_the_target(session):
     assert todo.id in chosen
 
 
+def test_select_passes_over_a_row_with_nothing_left_to_ask(session):
+    """Closest-first is stable, so the same rows one field short came back every
+    round and were re-harvested for the same nothing, although the agent pass had
+    already stopped asking about their fields."""
+    from tracker import attempts
+    from tracker.gapfill import FILLABLE_FIELDS
+
+    stuck = add_project(session, city="Reno", company="Stuck Co", mw_planned=500.0)
+    empty = sorted(f for f in FILLABLE_FIELDS if getattr(stuck, f, None) is None)
+    for _ in range(attempts.DEFAULT_MAX_ATTEMPTS):
+        attempts.record(stuck, empty)
+    other = add_project(session, city="Mesa", company="Other Co", mw_planned=10.0)
+
+    assert enrich.select_projects(session, 1, target=12) == [other.id]
+    assert stuck.id in enrich.select_projects(session, 5, target=12, max_attempts=0), (
+        "0 asks every time, and must select it too"
+    )
+
+    add_source(session, stuck.id, "https://example.test/new-evidence")
+    session.refresh(stuck)
+    assert stuck.id in enrich.select_projects(session, 5, target=12), (
+        "a new citation reopens the row, exactly as it reopens its fields"
+    )
+
+
 def test_select_breaks_ties_toward_larger_projects(session):
     small = add_project(session, city="Reno", company="Small Co", mw_planned=20.0)
     big = add_project(session, city="Mesa", company="Big Co", mw_planned=1000.0)

@@ -762,7 +762,11 @@ class BatchReport:
 
 
 def select_projects(
-    session: Session, limit: int | None, *, target: int = DEFAULT_TARGET_FIELDS
+    session: Session,
+    limit: int | None,
+    *,
+    target: int = DEFAULT_TARGET_FIELDS,
+    max_attempts: int | None = None,
 ) -> list[int]:
     """The projects worth spending a bounded budget on, best first.
 
@@ -782,8 +786,20 @@ def select_projects(
       worth completing before a 20 MW one.
 
     Projects already at or past the target are excluded — they need nothing.
+
+    **So are projects with nothing left to ask.** Closest-first is stable, so the
+    same rows came back every round: the ones one or two fields short whose missing
+    fields nobody has published. The agent pass already stops asking about those
+    (`tracker.attempts`), but the harvest ran first, every round, re-reading the
+    row's own citations at full extraction cost to find the same nothing. A row
+    whose every empty fillable field is exhausted — asked `max_attempts` times with
+    no citation gained since — is skipped, and the limit goes to the next row. It
+    comes back the moment it gains a citation, which is also what reopens its fields.
     """
     from sqlalchemy import case, desc
+
+    from tracker import attempts
+    from tracker.gapfill import FILLABLE_FIELDS
 
     filled = sum(
         (case((getattr(Project, f).is_not(None), 1), else_=0) for f in TRACKED_FIELDS),
@@ -794,10 +810,20 @@ def select_projects(
         .where(filled < target)
         .order_by(desc("n"), desc(Project.mw_planned.is_not(None)), desc(Project.mw_planned))
     )
-    if limit is not None:
-        stmt = stmt.limit(limit)
-    rows = session.execute(stmt).all()
-    return [row[0] for row in rows]
+    ranked = [row[0] for row in session.execute(stmt).all()]
+    cap = attempts.DEFAULT_MAX_ATTEMPTS if max_attempts is None else max_attempts
+
+    chosen: list[int] = []
+    for project_id in ranked:
+        if limit is not None and len(chosen) >= limit:
+            break
+        if cap > 0:
+            project = session.get(Project, project_id)
+            empty = {f for f in FILLABLE_FIELDS if getattr(project, f, None) is None}
+            if empty and empty <= attempts.exhausted(project, max_attempts=cap):
+                continue
+        chosen.append(project_id)
+    return chosen
 
 
 def run_many(

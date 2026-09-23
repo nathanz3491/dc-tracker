@@ -33,6 +33,15 @@ capacity. Closest-first converts the most rows per call: 8 to 9 fields costs one
 article, 4 to 9 may never arrive. `--all` is not unbounded spend — `--budget` is
 the real ceiling, and the ordering decides who is served before it runs dry.
 
+Closest-first is also stable, so without a further rule the same rows come back
+every round: the ones a field or two short whose missing fields nobody has
+published. The agent pass stopped asking about those (`tracker.attempts`), but the
+harvest ran first and re-read their own citations at full extraction cost to find
+the same nothing. A row whose every empty fillable field is exhausted — asked
+`--max-attempts` times with no citation gained since — is now passed over and the
+limit goes to the next one; a new citation brings it back, exactly as it reopens its
+fields.
+
 ## `--basics`: the fields that say what a project is
 
 A modifier rather than a fourth way of choosing rows — it changes which *fields* are
