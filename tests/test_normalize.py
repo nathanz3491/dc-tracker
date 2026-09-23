@@ -282,6 +282,49 @@ def test_norm_money_range_takes_lower_bound(raw, expected_lo):
     assert parsed.note is not None and "range" in parsed.note
 
 
+def test_every_one_decimal_amount_is_stored_exactly():
+    """Scaled as a float and truncated, 4.1 billion was stored as $4,099,999,999 —
+    32 of the 1,998 one-decimal amounts from 0.1 to 99.9 million and billion."""
+    wrong = [
+        f"{n / 10:.1f} {unit}"
+        for unit, scale in (("million", 100_000), ("billion", 100_000_000))
+        for n in range(1, 1000)
+        if norm_money(f"{n / 10:.1f} {unit}") != n * scale
+    ]
+    assert wrong == []
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("4.1 billion", 4_100_000_000),
+        ("$4.1B", 4_100_000_000),
+        ("$1.15 billion", 1_150_000_000),
+        ("2.675 million", 2_675_000),
+        (4.1e9, 4_100_000_000),
+    ],
+)
+def test_money_is_exact_rather_than_truncated(raw, expected):
+    assert norm_money(raw) == expected
+
+
+@pytest.mark.parametrize("raw", [float("nan"), float("inf")])
+def test_a_number_that_is_not_an_amount_is_refused(raw):
+    """`json.loads` hands these over from a reply that says NaN or Infinity."""
+    with pytest.raises(NormalizationError):
+        norm_money(raw)
+
+
+def test_a_money_range_keeps_an_exact_lower_bound():
+    assert int(norm_money_detail("4.1-4.5 billion").value) == 4_100_000_000
+
+
+def test_every_one_decimal_capacity_is_stored_exactly():
+    """16.1 GW became 16,100.000000000002 MW by the same float scaling."""
+    wrong = [f"{n / 10:.1f} GW" for n in range(1, 1000) if norm_mw(f"{n / 10:.1f} GW") != n * 100]
+    assert wrong == []
+
+
 @pytest.mark.parametrize("raw", ["a lot of money", "$$$", "several billion", "$3.3 zillion"])
 def test_norm_money_rejects_unparseable(raw):
     with pytest.raises(NormalizationError):

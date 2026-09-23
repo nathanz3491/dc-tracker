@@ -24,9 +24,11 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import math
 import re
 import unicodedata
 from collections.abc import Callable
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any, NamedTuple, TypeVar
 
 from tracker.vocab import (
@@ -353,6 +355,29 @@ def _to_float(token: str, field: str, raw: Any) -> float:
         raise NormalizationError(field, raw, "not numeric") from exc
 
 
+def _to_decimal(token: str, field: str, raw: Any) -> Decimal:
+    """The number a token spells, exactly.
+
+    Scaling a unit in binary floating point is where the error came from: 4.1 is not
+    representable, so `4.1 * 1e9` is 4,099,999,999.9999995, and a truncating `int()`
+    stored $4,099,999,999 — 32 of the 1,998 one-decimal amounts from 0.1 to 99.9
+    million and billion. 16.1 GW became 16,100.000000000002 MW the same way. A
+    decimal carries the digits the article wrote, and the unit scale is exact on it.
+    """
+    try:
+        value = Decimal(token.replace(",", "").replace("_", ""))
+    except InvalidOperation as exc:
+        raise NormalizationError(field, raw, "not numeric") from exc
+    if not value.is_finite():
+        raise NormalizationError(field, raw, "not numeric")
+    return value
+
+
+def _whole_dollars(value: Decimal | float) -> int:
+    """Rounded to the nearest dollar, half up — never truncated."""
+    return int(Decimal(str(value)).to_integral_value(rounding=ROUND_HALF_UP))
+
+
 def norm_mw_detail(raw: Any, *, field: str = "mw_planned") -> ParsedNumber:
     """Power capacity to megawatts.
 
@@ -377,14 +402,14 @@ def norm_mw_detail(raw: Any, *, field: str = "mw_planned") -> ParsedNumber:
 
     match = _RANGE.match(text)
     if match:
-        lo = _to_float(match.group("lo"), field, raw)
-        hi = _to_float(match.group("hi"), field, raw)
+        lo = _to_decimal(match.group("lo"), field, raw)
+        hi = _to_decimal(match.group("hi"), field, raw)
         unit = (match.group("unit") or "mw").lower()
         factor = _POWER_UNITS.get(unit)
         if factor is None:
             raise NormalizationError(field, raw, f"unknown power unit {unit!r}")
         return ParsedNumber(
-            lo * factor,
+            float(lo * Decimal(str(factor))),
             f"{field} given as range {lo:g}-{hi:g} {unit.upper()}; stored lower bound",
         )
 
@@ -395,7 +420,8 @@ def norm_mw_detail(raw: Any, *, field: str = "mw_planned") -> ParsedNumber:
     factor = _POWER_UNITS.get(unit)
     if factor is None:
         raise NormalizationError(field, raw, f"unknown power unit {unit!r}")
-    value = _to_float(m.group("num"), field, raw) * factor
+    # Scaled exactly and converted once, so "16.1 GW" is 16100.0, not 16100.000000000002.
+    value = float(_to_decimal(m.group("num"), field, raw) * Decimal(str(factor)))
     if value < 0:
         raise NormalizationError(field, raw, "negative capacity")
     return ParsedNumber(value, note)
@@ -436,9 +462,12 @@ def norm_money_detail(raw: Any, *, field: str = "investment_usd") -> ParsedNumbe
     if is_blank(raw):
         return ParsedNumber(None)
     if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+        # `json.loads` accepts NaN and Infinity, and neither is an amount.
+        if isinstance(raw, float) and not math.isfinite(raw):
+            raise NormalizationError(field, raw, "not a finite amount")
         if raw < 0:
             raise NormalizationError(field, raw, "negative investment")
-        return ParsedNumber(float(raw))
+        return ParsedNumber(float(_whole_dollars(raw)))
 
     text = _clean(str(raw))
     note: str | None = None
@@ -462,11 +491,15 @@ def norm_money_detail(raw: Any, *, field: str = "investment_usd") -> ParsedNumbe
         lo_unit = (range_match.group("lounit") or hi_unit).lower()
         if lo_unit not in _MONEY_SCALES or hi_unit not in _MONEY_SCALES:
             raise NormalizationError(field, raw, "unknown money scale in range")
-        lo = _to_float(range_match.group("lo"), field, raw) * _MONEY_SCALES[lo_unit]
-        hi = _to_float(range_match.group("hi"), field, raw) * _MONEY_SCALES[hi_unit]
+        lo = _whole_dollars(
+            _to_decimal(range_match.group("lo"), field, raw) * _MONEY_SCALES[lo_unit]
+        )
+        hi = _whole_dollars(
+            _to_decimal(range_match.group("hi"), field, raw) * _MONEY_SCALES[hi_unit]
+        )
         return ParsedNumber(
-            float(int(lo)),
-            f"{field} given as range ${lo:,.0f}-${hi:,.0f}; stored lower bound",
+            float(lo),
+            f"{field} given as range ${lo:,}-${hi:,}; stored lower bound",
         )
 
     m = re.match(r"^(?P<num>[\d,]+(?:\.\d+)?)\s*(?P<unit>[a-zA-Z]*)\.?$", text)
@@ -475,10 +508,11 @@ def norm_money_detail(raw: Any, *, field: str = "investment_usd") -> ParsedNumbe
     unit = (m.group("unit") or "").lower()
     if unit not in _MONEY_SCALES:
         raise NormalizationError(field, raw, f"unknown money scale {unit!r}")
-    value = _to_float(m.group("num"), field, raw) * _MONEY_SCALES[unit]
+    # Exact decimal arithmetic, then rounded: see `_to_decimal` for the $4,099,999,999.
+    value = _whole_dollars(_to_decimal(m.group("num"), field, raw) * _MONEY_SCALES[unit])
     if value < 0:
         raise NormalizationError(field, raw, "negative investment")
-    return ParsedNumber(float(int(value)), note)
+    return ParsedNumber(float(value), note)
 
 
 def norm_money(raw: Any, *, field: str = "investment_usd") -> int | None:
