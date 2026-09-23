@@ -605,6 +605,38 @@ def test_a_drifted_row_is_put_back_and_nothing_else_is_touched(session):
     assert impossible.mw_built == 100 and impossible.mw_planned == 32
 
 
+def test_a_phase_a_live_tranche_raised_is_not_drift(session):
+    """The claims say construction, a serving tranche lifts the campus to operational,
+    and that is what the write path stores. Checked against the claims alone, 48 rows
+    read as drifted every night: `logic resolve --auto` "repaired" each one, and the
+    recompute raised it straight back."""
+    from tracker.models import CapacityBlock
+
+    project = _project(session, name="A", phase="operational")
+    for url, phase in (("https://a.test/1", "construction"), ("https://b.test/2", "announced")):
+        _source(
+            session,
+            project,
+            url,
+            source_type="trade_press",
+            claims=f'{{"phase": "{phase}"}}',
+            fetched=T0,
+            fields="phase",
+        )
+    session.add(
+        CapacityBlock(
+            project_id=project.id, block_key="hall-1", label="Hall 1", status="serving", mw=40.0
+        )
+    )
+    session.flush()
+    session.refresh(project)
+
+    collisions = {c.field: c for c in logic.check_collisions(project)}
+    assert collisions["phase"].winner == "construction"
+    assert not collisions["phase"].stored_disagrees
+    assert logic.resolve_drift(session, apply=False) == []
+
+
 # --- what a person can do about a finding ---------------------------------------
 
 
@@ -684,15 +716,99 @@ def test_no_action_rewrites_a_row_to_satisfy_a_coarse_phase_enum(session):
             )
 
 
-def test_raising_the_plan_clears_the_contradiction(session):
+def _claimed(session, project, url: str, **claims) -> None:
+    import json as _json
+
+    _source(
+        session,
+        project,
+        url,
+        source_type="trade_press",
+        claims=_json.dumps(claims),
+        fetched=T0,
+        fields=",".join(sorted(claims)),
+    )
+    session.refresh(project)
+
+
+def test_raising_the_plan_rules_out_the_smaller_figures(session):
+    """The plan was revised: the planned figures below what is built are stale.
+
+    It used to assign `mw_planned = mw_built`, a number no source states, and the
+    next recompute put the old figure straight back — the note kept saying the plan
+    had been raised. Now the stale claims are ruled out and the field is whatever
+    the surviving claims support.
+    """
     project = _project(session, name="A", mw_planned=32, mw_built=100)
+    _claimed(session, project, "https://a.test/plan", mw_planned=32)
+    _claimed(session, project, "https://a.test/built", mw_built=100)
+    _claimed(session, project, "https://a.test/revised", mw_planned=150)
     finding = next(f for f in logic.check_rules(project) if f.code == "built_exceeds_planned")
     action = next(a for a in logic.ACTIONS[finding.code] if a.key == "u")
 
     changed = action.apply(session, project, finding)
-    assert project.mw_planned == 100
-    assert "32" in changed and "100" in changed
+    assert project.mw_planned == 150
+    assert changed.startswith("mw_planned 32 -> 150")
     assert "built_exceeds_planned" not in _codes(project)
+
+
+@pytest.mark.parametrize(
+    ("code", "key", "field", "row", "claims"),
+    [
+        (
+            "built_exceeds_planned",
+            "c",
+            "mw_built",
+            {"mw_planned": 11, "mw_built": 6750},
+            [{"mw_planned": 11}, {"mw_built": 6750}],
+        ),
+        (
+            "built_exceeds_planned",
+            "u",
+            "mw_planned",
+            {"mw_planned": 32, "mw_built": 100},
+            [{"mw_planned": 32}, {"mw_built": 100}],
+        ),
+    ],
+)
+def test_a_repair_survives_the_next_recompute(session, code, key, field, row, claims):
+    """The regression, in the shape it happened: #72 held 6,750 MW built on an 11 MW
+    campus, its notes said `mw_built 6750 -> empty`, and the stored value was 6,750.
+    Every action that assigned a column was undone by the next `backfill derive`."""
+    from tracker.audit import settled_codes
+    from tracker.upsert import recompute_from_sources
+
+    project = _project(session, name="A", **row)
+    for index, claim in enumerate(claims):
+        _claimed(session, project, f"https://a.test/{index}", **claim)
+    finding = next(f for f in logic.check_rules(project) if f.code == code)
+    action = next(a for a in logic.ACTIONS[code] if a.key == key)
+
+    changed = action.apply(session, project, finding)
+    logic.record_decision(project, code, changed)
+    after = getattr(project, field)
+
+    recompute_from_sources(session, project)
+    assert getattr(project, field) == after, "the next recompute undid the repair"
+    assert code in settled_codes(project)
+    assert code not in _codes(project)
+
+
+def test_a_date_repair_rules_out_only_the_claims_stating_it(session):
+    """`past_its_own_date` is about the date the row holds, so a later claim for the
+    same milestone is what the field falls back to — not an empty cell."""
+    project = _project(session, name="A", expected_online=dt.date(2025, 1, 1))
+    _claimed(session, project, "https://a.test/old", expected_online="2025-01-01")
+    _claimed(session, project, "https://a.test/new", expected_online="2027-06-01")
+    project.expected_online = dt.date(2025, 1, 1)
+    finding = logic.Finding(
+        project_id=project.id, code="past_its_own_date", severity=logic.WARNING, summary="stale"
+    )
+    action = logic.ACTIONS["past_its_own_date"][0]
+
+    changed = action.apply(session, project, finding)
+    assert project.expected_online == dt.date(2027, 6, 1)
+    assert "1 claim(s) superseded" in changed
 
 
 def test_dropping_a_future_milestone_clears_the_contradiction(session):

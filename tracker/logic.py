@@ -873,6 +873,16 @@ def check_collisions(project: Project) -> list[Collision]:
         rival = next((c for c in claims if values_conflict(chosen, c.value)), None)
         if rival is None:
             continue
+        # What the write path actually stores, which for `phase` is not the claims'
+        # answer alone: `blocks.reconcile` raises a campus to its furthest live
+        # tranche after the merge. Compared against the claims, 48 rows read as
+        # drifted every night and were "repaired" straight back into the same value.
+        expected = chosen
+        if name == "phase":
+            from tracker.blocks import raise_phase, rollup
+
+            blocks = list(getattr(project, "blocks", ()) or ())
+            expected = raise_phase(chosen, rollup(blocks).phase if blocks else None)
 
         out.append(
             Collision(
@@ -894,7 +904,7 @@ def check_collisions(project: Project) -> list[Collision]:
                 # does not, the row has drifted from its own citations — a hand
                 # edit, or a source added since the last write — and
                 # `recompute_from_sources` is what puts it back.
-                stored_disagrees=stored is not None and not _same(claim_value(stored), chosen),
+                stored_disagrees=stored is not None and not _same(claim_value(stored), expected),
                 stored=stored,
             )
         )
@@ -1429,24 +1439,94 @@ def _move_city_to_county(_s: Session, project: Project, _f: Finding) -> str:
     return f"city {was!r} -> empty (moved to county {project.county!r})"
 
 
-def _raise_planned_to_built(_s: Session, project: Project, _f: Finding) -> str:
-    was, project.mw_planned = project.mw_planned, project.mw_built
-    return f"mw_planned {was} -> {project.mw_planned} (plan revised up to what is built)"
+# The four actions below edit a scalar, and **none of them assigns one**. They used to:
+# `project.mw_built = None`, `project.mw_planned = project.mw_built`. A scalar is a
+# cache of the claim set — `recompute_from_sources` re-derives it on the next ingest,
+# merge or `backfill derive`, and `tracker init` runs on every deploy — so each of those
+# assignments was undone within a day, while the decision note written beside it went
+# on saying the repair had been made. Measured on the snapshot this was fixed against:
+# 20 rows whose notes recorded a repair the row no longer carried, the worst #72,
+# where "mw_built 6750 -> empty" sat above a stored 6,750 MW that was 24% of every
+# built megawatt in the database. `audit.py` and `triage.py` had both been rebuilt
+# around superseding the claims instead; this table had not.
+#
+# So each action now rules out the citations that state the value and lets the merge
+# policy re-derive the field from what is left — which is the only edit that survives
+# a recompute, and the one the sentence `settled_codes` parses back can be checked
+# against.
 
 
-def _clear_built(_s: Session, project: Project, _f: Finding) -> str:
-    was, project.mw_built = project.mw_built, None
-    return f"mw_built {was} -> empty"
+def _stating(project: Project, field: str, keep: Any = None) -> list[Any]:
+    """Citations whose live claim about `field` passes `keep` (default: equals the row).
+
+    A claim already ruled out is skipped, so an action never reports superseding a
+    claim that was out of the merge already.
+    """
+    from tracker.upsert import _decided_against, claim_value
+
+    stored = getattr(project, field, None)
+    target = claim_value(stored) if stored is not None else None
+    out = []
+    for source in getattr(project, "sources", ()) or ():
+        try:
+            claims = json.loads(source.claims or "{}")
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(claims, dict) or claims.get(field) is None:
+            continue
+        if field in _decided_against(source):
+            continue
+        value = claims[field]
+        if keep(value) if keep is not None else _same(value, target):
+            out.append(source)
+    return out
 
 
-def _clear_expected_online(_s: Session, project: Project, _f: Finding) -> str:
-    was, project.expected_online = project.expected_online, None
-    return f"expected_online {was} -> empty"
+def _raise_planned_to_built(session: Session, project: Project, _f: Finding) -> str:
+    """The plan was revised: rule out the planned figures smaller than what is built."""
+    from tracker.audit import _rule_against
+
+    built = project.mw_built
+    below = _stating(
+        project,
+        "mw_planned",
+        keep=lambda value: isinstance(value, (int, float)) and built is not None and value < built,
+    )
+    return _rule_against(
+        session, project, "mw_planned", below, "the plan was revised past what is built"
+    )
 
 
-def _clear_first_announced(_s: Session, project: Project, _f: Finding) -> str:
-    was, project.first_announced = project.first_announced, None
-    return f"first_announced {was} -> empty"
+def _clear_built(session: Session, project: Project, _f: Finding) -> str:
+    from tracker.audit import _rule_against
+
+    return _rule_against(
+        session, project, "mw_built", _stating(project, "mw_built"), "the built figure is wrong"
+    )
+
+
+def _clear_expected_online(session: Session, project: Project, _f: Finding) -> str:
+    from tracker.audit import _rule_against
+
+    return _rule_against(
+        session,
+        project,
+        "expected_online",
+        _stating(project, "expected_online"),
+        "the online date is wrong",
+    )
+
+
+def _clear_first_announced(session: Session, project: Project, _f: Finding) -> str:
+    from tracker.audit import _rule_against
+
+    return _rule_against(
+        session,
+        project,
+        "first_announced",
+        _stating(project, "first_announced"),
+        "the announced date is wrong",
+    )
 
 
 def _resolve_finished_obstacles(session: Session, project: Project, _f: Finding) -> str:
@@ -1540,16 +1620,28 @@ ACTIONS: Final[dict[str, tuple[Action, ...]]] = {
     # asked to describe a campus that is partly live. Neither side is wrong.
     "energized_but_not_operational": (),
     "built_exceeds_planned": (
-        Action("u", "the plan was revised — raise mw_planned to mw_built", _raise_planned_to_built),
-        Action("c", "the built figure is wrong — clear it", _clear_built),
+        Action(
+            "u",
+            "the plan was revised — rule out the planned figures below what is built",
+            _raise_planned_to_built,
+        ),
+        Action("c", "the built figure is wrong — rule out the claims stating it", _clear_built),
     ),
     "online_before_announced": (
-        Action("c", "the online date is wrong — clear it", _clear_expected_online),
-        Action("a", "the announced date is wrong — clear it", _clear_first_announced),
+        Action(
+            "c", "the online date is wrong — rule out the claims stating it", _clear_expected_online
+        ),
+        Action(
+            "a",
+            "the announced date is wrong — rule out the claims stating it",
+            _clear_first_announced,
+        ),
     ),
     # Clearing a stale date is still honest. Declaring the campus operational
     # because one phase's date passed is not.
-    "past_its_own_date": (Action("c", "that date is stale — clear it", _clear_expected_online),),
+    "past_its_own_date": (
+        Action("c", "that date is stale — rule out the claims stating it", _clear_expected_online),
+    ),
     "city_holds_a_county_name": (
         Action("m", "move it to county — the dedup key does not change", _move_city_to_county),
     ),

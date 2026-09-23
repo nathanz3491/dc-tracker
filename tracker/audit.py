@@ -565,8 +565,8 @@ _DECISION = re.compile(r"resolved `([a-z0-9_-]+)`: *([^\n]*)")
 #: `mw_planned 13620 -> empty (no source states it)`, `investment_usd 10,000 ->
 #: empty`, `h200_equivalent 1,000 -> 2,000 (recomputed from capacity)`. A decision
 #: that is not an edit — a dismissal, `removed 2 milestone(s)`, `closed 3
-#: obstacle(s)` — deliberately does not match.
-_EDIT = re.compile(r"^([a-z][a-z0-9_]*) .+? -> ([^(—]+?)(?: *[(—]|$)")
+#: obstacle(s)` — deliberately does not match. Groups: field, was, now.
+_EDIT = re.compile(r"^([a-z][a-z0-9_]*) (.+?) -> ([^(—]+?)(?: *[(—]|$)")
 
 
 #: A block-level decision, which `_EDIT` deliberately cannot match — it has no `->`
@@ -617,6 +617,15 @@ def _edit_still_holds(project: Project, field: str, expected: str) -> bool:
         return True
 
 
+def _no_change(was: str, now: str) -> bool:
+    """Whether a recorded edit's two sides are the same value, as the sentence spells it."""
+
+    def spelled(value: str) -> str:
+        return value.strip().lower().replace(",", "")
+
+    return spelled(was) == spelled(now)
+
+
 def settled_codes(project: Project) -> set[str]:
     """Finding codes already answered on this row *and still standing*.
 
@@ -644,7 +653,13 @@ def settled_codes(project: Project) -> set[str]:
     settled: set[str] = set()
     for code, what in _DECISION.findall(project.notes or ""):
         edit = _EDIT.match(what.strip())
-        if edit and not _edit_still_holds(project, edit.group(1), edit.group(2)):
+        if edit and _no_change(edit.group(2), edit.group(3)):
+            # `6750 -> 6750`: a ruling that left the value where it was answered
+            # nothing, and reading it as settled switched the detector off on the
+            # row where it was right. See `triage.apply_rule_out`, which now refuses
+            # such a ruling; this re-opens the ones recorded before it did.
+            continue
+        if edit and not _edit_still_holds(project, edit.group(1), edit.group(3)):
             continue
         block = _BLOCK_EDIT.match(what.strip())
         if block and not _block_edits_still_hold(project, block.group(1)):

@@ -3,7 +3,7 @@
 The test that matters most here is
 `test_a_ruled_out_claim_survives_a_recompute`, and its counterpart
 `test_assigning_the_column_does_not_survive` which demonstrates the bug the
-existing `logic.py` actions still have. Measured on the live database before this
+`logic.py` actions had until they were rebuilt the same way. Measured on the live database before this
 module existed: a run resolved `built_exceeds_planned` 18 times and
 `no_inversions` stayed at exactly 30 failures, because every one of those edits
 was undone by the next `backfill derive` — and `tracker init` runs one on every
@@ -149,8 +149,8 @@ def test_a_ruled_out_claim_survives_a_recompute(session, row):
 
 
 def test_assigning_the_column_does_not_survive(session, row):
-    """The bug the existing `logic.py` actions still have, pinned so it cannot be
-    reintroduced here. `_clear_built` does exactly this."""
+    """The bug the `logic.py` actions had, pinned so it cannot be reintroduced here.
+    `_clear_built` did exactly this until it was rebuilt around `_rule_against`."""
     from tracker.upsert import recompute_from_sources
 
     project, _campus, _building = row
@@ -373,6 +373,9 @@ def test_ruling_out_a_phase_claim_does_not_violate_not_null(session, row):
     project, campus, _building = row
     campus.claims = _json.dumps({"mw_built": 230.0, "phase": "operational"})
     campus.fields = "mw_built,phase"
+    # The row holds what its only phase claim says, as a recompute would leave it —
+    # a ruling must reach the stored value to be accepted at all.
+    project.phase = "operational"
     session.flush()
 
     acted, sentence, refusal = triage.apply_rule_out(
@@ -391,6 +394,60 @@ def test_ruling_out_a_phase_claim_does_not_violate_not_null(session, row):
     assert acted, refusal
     assert project.phase is not None, sentence
     session.flush()  # the flush that used to raise
+
+
+# --- a ruling has to reach the value the row holds ---------------------------
+
+
+def test_ruling_out_a_figure_the_row_does_not_hold_is_refused(session, row):
+    """#72, reduced. The row held 6,750 MW built; the model said 6,750 was wrong and
+    named the citation stating 18. The right figure was superseded, the wrong one
+    stood, and the recorded `6750 -> 6750` settled the finding for good."""
+    project, _campus, building = row
+    assert project.mw_built == 230.0  # stated by `campus`, not by `building`
+
+    acted, _sentence, refusal = triage.apply_rule_out(
+        session,
+        project,
+        {
+            "field": "mw_built",
+            "source_ids": [building.id],
+            "reason": "nothing supports the 230 MW figure",
+            "confidence": 0.95,
+        },
+        articles={},
+        require_quote=False,
+    )
+
+    assert not acted
+    assert "states the value the row holds (230)" in refusal
+    assert "superseded" not in (building.unconfirmed_reasons or "")
+    assert "misread" not in (building.unconfirmed_reasons or "")
+
+
+def test_a_no_op_ruling_recorded_before_the_rail_does_not_settle_its_finding(session, row):
+    """The 28 rulings on the snapshot that changed nothing still read as settled.
+    `settled_codes` re-opens them, so the finding is asked again — this time under
+    the rail above."""
+    from tracker.audit import settled_codes
+    from tracker.logic import record_decision
+
+    project, _campus, _building = row
+    record_decision(
+        project,
+        "built_exceeds_planned",
+        "mw_built 230 -> 230 (1 claim(s) superseded on citation(s) [2])",
+        by="agent (0.90)",
+    )
+    record_decision(
+        project,
+        "online_before_announced",
+        "first_announced 2025-01-01 -> empty (1 claim(s) superseded)",
+        by="agent (0.90)",
+    )
+    project.first_announced = None
+
+    assert settled_codes(project) == {"online_before_announced"}
 
 
 # --- misread is not the same statement as superseded -------------------------

@@ -633,6 +633,12 @@ def logic_resolve(
                     f"[green]{answered}[/green] finding(s) answered by comparison — "
                     "no model, no decision\n"
                 )
+            # Committed before a model is asked anything. The agent loop rolls its
+            # session back on a refused or failed ruling, and a rollback here used to
+            # take the drift repairs and the free answers above with it — after both
+            # had been printed as done. It also releases the write lock for the
+            # minutes the agent runs take.
+            session.commit()
 
         if not findings:
             console.print("[green]nothing left to decide[/green]")

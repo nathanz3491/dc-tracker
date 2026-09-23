@@ -147,6 +147,12 @@ Three stages before anything is put to a model:
    narrower observation that the row no longer matches the answer that policy gives,
    which happens after a hand edit or when a source is attached by a path that did
    not recompute. Re-running the policy is arithmetic.
+
+   "The answer that policy gives" includes what happens after the merge. For
+   `phase`, a tranche further along raises the campus (`blocks.raise_phase`), so a
+   row whose claims say `construction` and whose serving hall says `operational`
+   has not drifted. Compared against the claims alone, 48 such rows were reported
+   and "repaired" every night, and every recompute raised them straight back.
 2. **Answered by comparison, free.** Held to `audit.free_answer`'s bar: a read of
    data already stored, never a judgement between two sourced figures. Three codes
    clear it, and between them they were **448 of 536** resolvable findings — which
@@ -173,10 +179,18 @@ choose between" **before calling the model** for 432 of 526 findings, 334 of the
 about tranches. The model was never the cautious party.
 
 An agent rules **claims** out of the merge instead. That is why its rulings last: a
-project scalar is a cache of the claim set, so every field-assigning action in
-`logic.py` is transient — clear `mw_built` on #14, commit, derive, and 230.0 comes
-back. `no_inversions` sat at exactly 30 failures across a run that "resolved"
-`built_exceeds_planned` 18 times.
+project scalar is a cache of the claim set, so a field-assigning action is transient
+— clear `mw_built` on #14, commit, derive, and 230.0 comes back. `no_inversions` sat
+at exactly 30 failures across a run that "resolved" `built_exceeds_planned` 18 times.
+
+The menu's own four editing actions were exactly that kind until they were rebuilt:
+each assigned a column, the next recompute undid it, and the decision note stayed.
+Twenty rows ended up saying they had been repaired while holding the value the note
+said was gone — #72 among them, 6,750 MW built on an 11 MW campus, a quarter of every
+built megawatt in the database. They now rule out the citations that state the value
+and let the policy re-derive the field, which is the repair the agent makes; "raise
+planned to built" became "rule out the planned figures below what is built", because
+a planned figure no source states is not one this database can hold.
 
 `RULEABLE_FIELDS` excludes the identity fields for the same reason `conflicts` does:
 superseding a claim about them changes nothing and would only look like it had.
@@ -223,6 +237,21 @@ an already-ruled claim marked nothing while still reporting a repair. It is now
 refused — but only against its own reason, so relabelling a `superseded` claim as a
 `misread` still counts as the real change it is.
 
+### A ruling has to reach the value the row holds
+
+On #72 the agent wrote "nothing on the page supports a 6750 MW built figure, so that
+value must be removed" — and named the citation stating **18 MW**. The right figure
+was ruled out, the wrong one stayed, and the sentence recorded `6750 -> 6750`. The
+settled-finding reader saw an edit that still held and treated the code as answered,
+so the finding was never offered again. Twenty-eight recorded rulings on the snapshot
+changed nothing at all.
+
+So `apply_rule_out` now refuses, before writing anything, a ruling none of whose
+citations states the value the row holds: ruling out some other figure cannot settle
+a contradiction about this one. The agent's instructions say so in one line. And
+`settled_codes` no longer counts a recorded `X -> X` as an answer, which re-opens the
+ones written before the rail existed.
+
 ### Two things a model may never do
 
 * It cannot mark a row **verified**. That means "an operator says this is right",
@@ -234,6 +263,10 @@ Each finding is committed individually, so a provider failure on row 40 keeps th
 first 39, and a database error while *applying* a ruling rolls back that finding
 rather than ending the batch — an `IntegrityError` on `phase` once killed the logic
 phase of three overnight rounds out of five after a single bad finding.
+
+The drift repairs and the free answers are committed before the first model call.
+They used to share the agent loop's transaction, so the first refused or failed
+ruling rolled them back — after both had been printed as done.
 
 ## Why there is no button that fixes everything
 
@@ -254,13 +287,13 @@ Touching any of these means the poster is in scope. Re-render with
 | Rules | `tracker/logic.py` — `check_rules`, `_check_stored_against_evidence`, `dedupe`, `ERROR`, `WARNING` |
 | Collisions and the per-field policy | `tracker/logic.py` — `check_collisions`, `why_decided`, `decision`; `tracker/upsert.py` — `FIELD_POLICY`, `Policy`, `resolve_field` |
 | Judgement and the evidence audit | `tracker/logic.py` — `examine`, `audit_evidence`, `parse_contradictions`, `parse_evidence_findings`, `AUDIT_VERDICTS`, `auditable_fields` |
-| Actions, and which codes have none | `tracker/logic.py` — `ACTIONS`, `resolvable`, `free_answer`, `record_decision` |
-| Drift repair | `tracker/logic.py` — `resolve_drift`; `tracker/upsert.py` — `recompute_from_sources` |
+| Actions, and which codes have none | `tracker/logic.py` — `ACTIONS`, `_stating`, `resolvable`, `free_answer`, `record_decision`; `tracker/audit.py` — `_rule_against` |
+| Drift repair | `tracker/logic.py` — `resolve_drift`, `check_collisions`; `tracker/upsert.py` — `recompute_from_sources`; `tracker/blocks.py` — `raise_phase` |
 | Contested fields, the two calls, the write | `tracker/conflicts.py` — `disputes`, `solve`, `_challenge`, `supersede`, `apply_outcome`, `MAX_CALLS_PER_FIELD`, `MIN_CONFIDENCE`, `SUPERSEDED`, `MISREAD` |
-| The agent path | `tracker/triage.py` — `triage`, `apply_rule_out`, `rule_out_tool`, `leave_alone_tool`, `RULEABLE_FIELDS`, `SYSTEM` |
+| The agent path | `tracker/triage.py` — `triage`, `apply_rule_out`, `_claims_value`, `rule_out_tool`, `leave_alone_tool`, `RULEABLE_FIELDS`, `SYSTEM` |
 | What a ruling cannot reach | `tracker/triage.py` — `can_rule_on`, `UNANSWERABLE_BY_RULING` |
 | The fixed menu and the keyboard walk | `tracker/logic.py` — `decide`, `TRIAGE_MIN_CONFIDENCE`; `tracker/cli/logic.py` — `_triage_by_agent`, `_triage_by_model`, `_triage` |
-| Settled-finding bookkeeping | `tracker/audit.py` — `settled_codes`, `free_answer`, `fmt_value` |
+| Settled-finding bookkeeping | `tracker/audit.py` — `settled_codes`, `_no_change`, `free_answer`, `fmt_value` |
 | CLI | `tracker/cli/logic.py` — `logic_check`, `logic_conflicts`, `logic_resolve` |
 
 See also: [enrich](enrich.md), whose settle stage is `logic conflicts` with

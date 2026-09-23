@@ -273,6 +273,41 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **A logic repair now survives the next re-derive, and one that changed nothing is
+  refused** (`tracker/logic.py`, `tracker/triage.py`, `tracker/audit.py`,
+  `tracker/blocks.py`, `tracker/cli/logic.py`, `docs/workflows/logic.md` + `.svg`,
+  `tests/test_logic.py`, `tests/test_triage.py`).
+
+  Twenty rows said in their notes that a figure had been cleared while still holding
+  it. The worst was #72, Flexential Englewood. Its notes read `mw_built 6750 -> empty`
+  above a stored 6,750 MW on an 11 MW campus. That one row was a quarter of every
+  built megawatt in the database and 5.2M of the H200 estimate. Four menu actions
+  (`built_exceeds_planned`, `online_before_announced`, `past_its_own_date`) assigned a
+  column. A column is a cache of the citations, and the next `backfill derive` put
+  the old value back. The note stayed, and the settled-finding reader saw a revert,
+  so the finding came back. Each action now rules out the citations stating the
+  value and lets the merge policy re-derive, as `audit` and the agent already did.
+  "Raise planned to built" became "rule out the planned figures below what is
+  built": a planned figure no source states is not one this database can hold.
+
+  #72 had a second fault. The agent wrote that nothing supported 6,750 MW, then named
+  the citation stating **18 MW**. The right figure was ruled out and the wrong one
+  stood. The sentence recorded `6750 -> 6750`, which read as a repair that still
+  held, so the finding was never asked again. Twenty-eight recorded rulings on the
+  snapshot changed nothing. `apply_rule_out` now refuses, before writing, a ruling
+  none of whose citations states the value the row holds, and the agent is told the
+  rule. `settled_codes` no longer counts `X -> X` as an answer, which reopens the
+  rulings recorded before the rail.
+
+  Two smaller faults on the same path. `logic resolve --auto` reported and
+  "repaired" 48 rows every night and changed none of them. Drift was checked against
+  the claims alone, while the write path then raises `phase` to the furthest live
+  tranche. The check now asks the same question the write path answers
+  (`blocks.raise_phase`): 0 of 48 on the production copy. And the drift repairs and
+  free answers shared the agent loop's transaction, so the first refused ruling
+  rolled them back after they had been printed as done. They are now committed
+  before any model is asked.
+
 - **The nightly quality loop runs again, and its token ceiling sees what it spends**
   (`scripts/overnight.sh`, `tracker/llm.py`, `tracker/config.py`,
   `tests/test_overnight.py`).

@@ -229,6 +229,19 @@ def _articles_read(result: Any) -> dict[str, str]:
     return out
 
 
+def _claims_value(source: Any, field: str, stored: Any) -> bool:
+    """Whether this citation's claim about `field` is the value the row holds."""
+    from tracker.upsert import _same, claim_value
+
+    try:
+        claims = json.loads(source.claims or "{}")
+    except (TypeError, ValueError):
+        return False
+    if not isinstance(claims, dict) or claims.get(field) is None:
+        return False
+    return _same(claims[field], claim_value(stored))
+
+
 def _already_misread(source: Any, field: str) -> bool:
     """Is this citation's claim about `field` already filed as a misread?
 
@@ -314,6 +327,24 @@ def apply_rule_out(
     if all(_already_misread(source, name) for source in claiming):
         return False, "", f"every citation claiming {name} is already ruled out as misread"
 
+    # **A ruling must reach the value the row holds.** The model's note on #72 read
+    # "nothing on the page supports a 6750 MW built figure, so that value must be
+    # removed" — and it named the citation stating 18 MW. The right figure was
+    # superseded, the wrong one stayed, the sentence recorded `6750 -> 6750`, and
+    # `settled_codes` read that as a repair that still held, so the finding was
+    # never offered again: 6,750 MW on an 11 MW campus, a quarter of every built
+    # megawatt in the database. 28 recorded rulings on the snapshot changed nothing.
+    # Ruling out a figure the row does not hold cannot settle a contradiction about
+    # the figure it does, so it is refused before anything is written.
+    stored = getattr(project, name, None)
+    if stored is not None and not any(_claims_value(source, name, stored) for source in claiming):
+        return (
+            False,
+            "",
+            f"none of those citations states the value the row holds ({fmt_value(stored)}) — "
+            "ruling them out would change nothing; rule out the citation that states it",
+        )
+
     if require_quote:
         from tracker.agent import verbatim
 
@@ -390,6 +421,10 @@ How to work:
 3. `search_web` only if the stored sources genuinely cannot settle it, then
    `read_article` a result so you can quote it.
 4. Then call `rule_out_claims` or `leave_alone`.
+
+Rule out the citations whose claim IS the value the row holds. If the row says
+6750 and you believe 6750 is wrong, name the citation that states 6750 — ruling out
+a citation that states some other figure changes nothing, and is refused.
 
 The commonest real cause of these contradictions is SCOPE: a figure that describes
 one building, or a whole programme, stored as if it described this campus. A

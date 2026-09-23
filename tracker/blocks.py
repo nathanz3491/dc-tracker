@@ -1048,6 +1048,27 @@ def mark_mw_unconfirmed(session: Any, project: Any, keys: set[str]) -> int:
     return touched
 
 
+def raise_phase(phase: str | None, from_blocks: str | None) -> str | None:
+    """The campus phase once its tranches have had their say.
+
+    The one rule `reconcile` applies to `phase`, as a pure function so the read path
+    can ask it too. `logic.check_collisions` decides whether a row has drifted from
+    its own citations by resolving the claims — and for `phase` the claims are not
+    the last word, because a tranche further along raises the campus after the merge.
+    Checking against the claims alone reported 48 rows as drifted on every night's
+    `logic resolve --auto`, "repaired" all 48, and the recompute raised every one of
+    them straight back.
+
+    A terminal state has no rank on the ladder, so a live tranche lifts it: a
+    campus with a serving building is not cancelled, whatever one article said.
+    """
+    from tracker.upsert import _PHASE_RANK
+
+    if from_blocks is not None and _PHASE_RANK.get(from_blocks, -1) > _PHASE_RANK.get(phase, -1):
+        return from_blocks
+    return phase
+
+
 def reconcile(project: Any) -> list[str]:
     """Fill the project's scalars from its blocks where they are empty. Disclosures.
 
@@ -1093,8 +1114,6 @@ def reconcile(project: Any) -> list[str]:
     if not project.blocks:
         return []
 
-    from tracker.upsert import _PHASE_RANK
-
     got = rollup(list(project.blocks))
     notes: list[str] = []
 
@@ -1121,10 +1140,7 @@ def reconcile(project: Any) -> list[str]:
                 "double-count or the campus figure is stale"
             )
 
-    if got.phase is not None and _PHASE_RANK.get(got.phase, -1) > _PHASE_RANK.get(
-        project.phase, -1
-    ):
-        project.phase = got.phase
+    project.phase = raise_phase(project.phase, got.phase)
 
     if project.customer is None and got.customer is not None:
         project.customer = got.customer
