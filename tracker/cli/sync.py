@@ -909,8 +909,15 @@ def sync(
                 # into different rules about what the agent is pointed at. It runs
                 # after the harvest for the same reason there: the templates are
                 # cheap and this is not, so it should only see what they missed.
-                if agent and not dry_run:
-                    _gapfill_batch(session, list(chosen))
+                #
+                # **Only the rows the harvest reached**, as `enrich` has done since
+                # it was fixed for exactly this: they had drifted after all, and this
+                # call still handed over every *chosen* row. `run_many` stops when
+                # the budget runs out, so at `--enrich-budget 0` it reaches none and
+                # the ~77,000-token agent was still asked about each of them.
+                reached = [report.project_id for report in batch.reports]
+                if agent and not dry_run and reached:
+                    _gapfill_batch(session, reached)
 
     # --- settle -------------------------------------------------------------
     # Two recomputations, both pure functions of what the rows now cite, and both

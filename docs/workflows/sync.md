@@ -48,7 +48,10 @@ silently favour whichever phase ran first.
 * `--refresh-limit` buys **currency** — rows that are still true.
 * `--prospect` buys **coverage** of operators we are blind to. Nebius was absent
   from 300 projects and no amount of feed polling was ever going to say so.
-* `--enrich` buys **depth** on rows that already exist.
+* `--enrich` buys **depth** on rows that already exist. Its agent pass — the
+  ~77,000-token rung after the harvest — sees only the rows the harvest actually
+  reached, as in `tracker enrich`; it was handed every chosen row, so even
+  `--enrich-budget 0`, which reaches none, paid for a model call on each.
 
 ## What search looks for, and why it is not a model's idea
 
@@ -294,7 +297,7 @@ Touching any of these means the poster is in scope. Re-render with
 | Extract and refresh | `tracker/ingest/crawl.py` — `run`, `stale_sources`, `unchanged_reads`, `record_url`, `failure_reason`, `MAX_REFRESH_BACKOFF` |
 | The party gate | `tracker/ingest/crawl.py` — `_parties`, `_ROLE_MARKERS`, `_role_is_licensed` |
 | Identity arbiter | `tracker/cli/ingest.py` — `_identity_arbiter`, `_report_arbiter`; `tracker/gatekeeper.py` — `same_site_arbiter`, `_warm_verdict`, `_cold_verdict`, `_rejection`, `_suspicion`, `_verdict_tools`, `RULES`, `MIN_CONFIDENCE`; `tracker/triage.py` — `CONTRADICTIONS`; `tracker/ingest/crawl.py` — `ExtractionContext` |
-| Enrich phase | `tracker/ingest/enrich.py` — `select_projects`, `run_many`; and [enrich](enrich.md) |
+| Enrich phase | `tracker/ingest/enrich.py` — `select_projects`, `run_many`; `tracker/cli/enrich.py` — `_gapfill_batch`; and [enrich](enrich.md) |
 | Settle | `tracker/derive.py` — `run`; `tracker/upsert.py` — `recompute_confidence`, `recompute_parties`, `apply_mw_basis` |
 | Parties, and what fills them without a crawl | `tracker/parties.py` — `rebuild`, `reconcile`, `parties_by_key`, `_inferred_parties` |
 | Which kind of megawatt a figure is | `tracker/ingest/crawl.py` — `axis_gate`, `_BASIS_MARKERS`; `tracker/vocab.py` — `basis_from_quote`, `BASIS_WINDOW`; `tracker/backfill.py` — `derive_basis`; `tracker/gapfill.py` — `_basis_axes` |

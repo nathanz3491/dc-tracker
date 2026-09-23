@@ -801,6 +801,37 @@ def test_sync_retry_failed_leaves_a_url_that_keeps_failing_the_same_way(
     assert "no longer retried automatically" in result.output
 
 
+def test_sync_hands_the_agent_only_the_rows_its_harvest_reached(seeded: Path, monkeypatch):
+    """`tracker enrich` was fixed for this in f63e353 and `sync` still handed the
+    agent every *chosen* row: at `--enrich-budget 0` the harvest reads nothing and
+    reaches no row, and the ~77,000-token agent was still asked about each one."""
+    from tracker.ingest import enrich as enrich_mod
+
+    monkeypatch.setattr(
+        enrich_mod,
+        "sweep_archives",
+        lambda settings, fetcher=None: enrich_mod.ArchiveSweep(skipped="not in a test"),
+    )
+    handed: list[list[int]] = []
+    monkeypatch.setattr(
+        "tracker.cli.sync._gapfill_batch", lambda session, ids, **_kw: handed.append(list(ids))
+    )
+    set_key(monkeypatch)
+    result = invoke(
+        seeded,
+        "sync",
+        "--skip-discover",
+        "--skip-refresh",
+        "--skip-derive",
+        "--enrich",
+        "2",
+        "--enrich-budget",
+        "0",
+    )
+    assert result.exit_code == 0, result.output
+    assert all(ids == [] for ids in handed), f"the agent was pointed at {handed}"
+
+
 def test_sync_suggests_browser_only_when_fetches_failed(seeded: Path, monkeypatch):
     set_key(monkeypatch)
     result = invoke(seeded, "sync", "--skip-discover", "--skip-refresh")
