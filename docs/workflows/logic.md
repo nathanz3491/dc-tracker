@@ -59,6 +59,13 @@ had. A tool that invents 73 faults is worse than one that finds none.
 * `name`, `company` and the location fields are **never overwritten** once set:
   churn in an identity field is worse than staleness.
 
+And the facts a reader sums never keep a value **no live claim states**
+(`upsert.CLAIM_OWNED_FIELDS`). With every claim ruled out, or none left after a
+re-extraction, the field resolves empty — the tranche and party reconciles may
+refill it from their own citations — and the clearing is recorded as a rule's
+decision. The merge used to hand back whatever the row held, which is how $487B of
+investment came to stand on rows where nothing claimed it.
+
 ### What the paid layers may never do
 
 A model is not allowed to pick a collision winner. Which of two cited numbers is

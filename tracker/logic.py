@@ -322,6 +322,13 @@ def _check_stored_against_evidence(project: Project) -> list[Finding]:
     Deliberately *not* an ERROR. Nothing here is arithmetically impossible — the
     row may be right and the extraction stale — so this is a question for a person,
     which is what WARNING means everywhere else in this module.
+
+    **`value_without_evidence` is now the transient half.** A recompute empties a
+    claim-owned figure no live claim states (`upsert.CLAIM_OWNED_FIELDS`) and records
+    that it did, so this code fires only on a row whose citation went away since it
+    was last re-derived — the next `backfill derive` answers it. `value_above_its_
+    evidence` is unchanged: there a claim does exist, and which of the two is right
+    is still a question for a person.
     """
     from tracker import blocks as blocks_mod
     from tracker.confidence import values_conflict
@@ -869,8 +876,16 @@ def check_collisions(project: Project) -> list[Collision]:
         # `stored` is still passed, because FILL_ONLY consults it as policy rather
         # than as a ratchet; dropping it reported 73 healthy rows as drifted.
         chosen = resolve_field(name, claims, stored, ratchet=False)
+        if chosen is None:
+            # Every claim was ruled out, so nothing is contested: the field is empty.
+            continue
         winner = next((c for c in claims if _same(c.value, chosen)), claims[0])
-        rival = next((c for c in claims if values_conflict(chosen, c.value)), None)
+        # Never the winner itself. For an identity field the kept value need not be
+        # any claim's, the winner then falls back to the first claim, and 74 of 1,183
+        # reported disagreements named one citation as both sides.
+        rival = next(
+            (c for c in claims if c is not winner and values_conflict(chosen, c.value)), None
+        )
         if rival is None:
             continue
         # What the write path actually stores, which for `phase` is not the claims'

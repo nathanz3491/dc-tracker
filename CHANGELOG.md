@@ -293,6 +293,37 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **A figure no citation states any more is cleared, not kept** (`tracker/upsert.py`,
+  `tracker/logic.py`, `tracker/capex.py`, `docs/data-quality.md`,
+  `docs/design-decisions.md`, `docs/workflows/logic.md`, `tests/test_unstated.py`).
+
+  The merge handed back whatever the row held whenever no claim on a field took
+  part. For the identity fields that is the policy, since a name is never
+  overwritten, and for the derived ones it is harmless. For the facts a reader sums
+  it was a leak: a value outlived every claim that ever stated it. A re-extraction
+  by a better prompt dropped a figure the old one had misread. A ruling took out the
+  last claim. A merge moved a citation. In each case the figure stayed, uncited,
+  reported as fact and counted in every total. On a production copy, 68 values stood
+  this way: $487B of investment, 6,699 MW planned and 812 MW built. Among them was
+  $450B on one Michigan campus whose only article gives that figure for the whole
+  Stargate programme. `#98` held 15.5 MW built with both of its claims ruled out,
+  although `resolve`'s own docstring said a ruling "has to hold even when it is the
+  only claim left".
+
+  For the seven claim-owned fields (`CLAIM_OWNED_FIELDS`: customer, both
+  capacities, investment, phase and the two dates), no live claim now means no
+  value. Phase falls back to `announced`, as it always has. The tranche and party
+  reconciles still run afterwards and may refill a field from their own citations.
+  Each value cleared this way gets a rule's decision line in the row's notes, so the
+  history stays readable, and `value_without_evidence` now fires only until the next
+  re-derive. The deploy's `tracker init` applies it. Total investment across the
+  database moves from $3.01T to $2.52T.
+
+  On the same path, `logic check` no longer names one citation as both the kept and
+  the losing side of a disagreement. On an identity field the kept value need not be
+  any claim's, so the fallback winner and the first rival could be the same claim.
+  That happened in 74 of 1,183 reported disagreements and now happens in 0.
+
 - **A question a model could not answer is no longer paid for again every round**
   (`tracker/declines.py`, migration `0025_model_decline`, `tracker/models.py`,
   `tracker/triage.py`, `tracker/riskcheck.py`, `tracker/audit.py`,

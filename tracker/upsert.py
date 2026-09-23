@@ -136,6 +136,37 @@ FIELD_POLICY: dict[str, Policy] = {
     # `blocker` is absent on purpose — see DERIVED_FIELDS above.
 }
 
+#: Fields whose stored value must be what a live claim states — or nothing.
+#:
+#: `resolve` hands back the value already on the row whenever no claim takes part,
+#: which is right for the identity fields (never overwritten once set) and for the
+#: derived ones (owned by something other than the claims). For these seven it was a
+#: leak: a value outlived every claim that ever stated it. A re-extraction by a
+#: better prompt drops a figure the old one misread, or every claim is ruled out,
+#: and the figure stays — uncited, reported as fact, summed into every total.
+#: Measured on the snapshot this was fixed against: $487B of investment, 7,046 MW
+#: planned and 1,768 MW built stood on rows where no citation claimed them at all,
+#: among them $450B on one Michigan campus whose only article gives that figure for
+#: the whole Stargate programme. `#98` held 15.5 MW built with both of its claims
+#: ruled out. `resolve`'s own docstring said a ruling "has to hold even when it is
+#: the only claim left"; the code returned the ruled-out figure instead.
+#:
+#: So for these a field with no live claim resolves to empty, and the tranche and
+#: party reconciles that run after the merge may still fill it from their own
+#: citations. `phase` empties to `DEFAULT_PHASE`, as it always has. A value cleared
+#: this way is recorded in the row's notes, so the history stays readable.
+CLAIM_OWNED_FIELDS: frozenset[str] = frozenset(
+    {
+        "customer",
+        "mw_planned",
+        "mw_built",
+        "investment_usd",
+        "phase",
+        "first_announced",
+        "expected_online",
+    }
+)
+
 _PHASE_RANK = {name: i for i, name in enumerate(PHASE_PROGRESSION)}
 
 
@@ -401,10 +432,56 @@ def resolve_field(
 
 
 def _resolve(field_name: str, claims: list[_Claim], existing: Any, *, ratchet: bool = True) -> Any:
-    """Apply the *field's* policy to choose one value. Thin wrapper over `resolve`."""
+    """Apply the *field's* policy to choose one value. Thin wrapper over `resolve`.
+
+    A field in :data:`CLAIM_OWNED_FIELDS` with no live claim is empty, whatever the
+    row held — see that constant for why `existing` may not stand in for a citation.
+    """
+    if field_name in CLAIM_OWNED_FIELDS and all(c.decided_against for c in claims):
+        return None
     return resolve(
         FIELD_POLICY.get(field_name, Policy.PREFER_WEIGHT), claims, existing, ratchet=ratchet
     )
+
+
+def _unstated(project: Project, by_field: dict[str, list[_Claim]]) -> dict[str, Any]:
+    """The claim-owned values a recompute is about to find no live claim for.
+
+    Captured before the merge so the note can name what the row held; `_note_unstated`
+    writes it only for what is still empty once the tranches and parties have had
+    their say.
+    """
+    out: dict[str, Any] = {}
+    for name in CLAIM_OWNED_FIELDS:
+        held = getattr(project, name, None)
+        if held is None or (name == "phase" and held == DEFAULT_PHASE):
+            continue
+        if all(c.decided_against for c in by_field.get(name, [])):
+            out[name] = held
+    return out
+
+
+def _note_unstated(project: Project, held: dict[str, Any]) -> None:
+    """Record, as a rule's decision, each value cleared because nothing states it.
+
+    Plain prose through `logic.record_decision`, so a re-ingest never erases it and
+    `audit.settled_codes` reads it back. Written only for what the recompute left
+    empty: a figure the tranches restated is not "cleared", it is re-cited.
+    """
+    from tracker.audit import fmt_value
+    from tracker.logic import record_decision
+
+    for name, was in sorted(held.items()):
+        now = getattr(project, name, None)
+        if name == "phase":
+            if now != DEFAULT_PHASE:
+                continue
+            what = f"phase {was} -> {DEFAULT_PHASE} (no citation on this row states a phase)"
+        elif now is None:
+            what = f"{name} {fmt_value(was)} -> empty (no citation on this row states it)"
+        else:
+            continue
+        record_decision(project, "value_without_evidence", what, by="rule")
 
 
 def resolve(
@@ -451,12 +528,13 @@ def resolve(
     demoted the citation without moving the value. Both write paths pass
     `ratchet=False`, so the result is a deterministic function of the claim set.
 
-    Turning the ratchet off does **not** make a field clearable. With no candidate
-    this policy can read — no claims at all, or none of the right type — `existing`
-    comes back exactly as before, because the callers write the result straight
-    through and :data:`DERIVED_FIELDS` cites that return as the reason `blocker`
-    cannot live in the merge loop. Only a rival the policy can actually compare may
-    lower a MAX field.
+    Turning the ratchet off does **not** make a field clearable here. With no
+    candidate this policy can read — no claims at all, or none of the right type —
+    `existing` comes back exactly as before, because :data:`DERIVED_FIELDS` cites that
+    return as the reason `blocker` cannot live in the merge loop, and the identity
+    fields depend on it. Clearing is decided one level up, in `_resolve`, and only for
+    :data:`CLAIM_OWNED_FIELDS` — the facts that must be stated by a live claim or not
+    stored at all.
     """
     if not claims:
         return existing
@@ -1021,6 +1099,7 @@ def upsert_record(
 
     # --- Recompute every field from all claims ------------------------------
     by_field = claims_by_field(list(project.sources))
+    unstated = _unstated(project, by_field)
     for name in WRITABLE_FIELDS:
         if name in DERIVED_FIELDS:
             continue
@@ -1095,6 +1174,7 @@ def upsert_record(
     derived.extend(f"{NOTE_PREFIX} {line}" for line in block_notes)
     derived.extend(f"{NOTE_PREFIX} {line}" for line in party_notes)
     project.notes = _merge_notes(project.notes, derived, contributed, tag=tag)
+    _note_unstated(project, unstated)
 
     # --- Events -------------------------------------------------------------
     events_written = _upsert_events(session, project, rec)
@@ -1651,6 +1731,7 @@ def recompute_from_sources(session: Session, project: Project) -> list[str]:
     survive untouched — see :data:`_INGEST_ONLY_NOTES`.
     """
     by_field = claims_by_field(list(project.sources))
+    unstated = _unstated(project, by_field)
     for name in WRITABLE_FIELDS:
         if name in DERIVED_FIELDS:
             continue
@@ -1692,6 +1773,7 @@ def recompute_from_sources(session: Session, project: Project) -> list[str]:
     project.notes = _merge_notes(
         project.notes, derived, [], tag=None, preserve_derived=_INGEST_ONLY_NOTES
     )
+    _note_unstated(project, unstated)
 
     # **Blocker before confidence.** `blocker` is one of the twelve tracked fields,
     # so it is part of the `populated` count that scoring reads — and deriving it

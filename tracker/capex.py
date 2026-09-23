@@ -550,8 +550,12 @@ def unconfirmed_investment_ids(session: Session) -> set[int]:
     Sources written before migration 0013 have no reason recorded, and are treated
     as excluded — the conservative reading, and the behaviour this replaces.
 
-    A project no source mentions at all is *not* in the set: there is no ingest
-    decision to read back, so a hand-entered figure keeps counting.
+    A project no source mentions at all is *not* in the set, and no longer needs to
+    be: a figure no live claim states is emptied by the next recompute
+    (`upsert.CLAIM_OWNED_FIELDS`), so it has nothing left to count. It used to keep
+    counting as "a hand-entered figure", and there was no such thing — every one was
+    a figure a re-extraction or a ruling had taken the citation away from, $487B of
+    them on the snapshot that fixed it.
     """
     return _demoted_investment(session)[0]
 

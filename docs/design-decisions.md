@@ -590,7 +590,9 @@ not do four things the PRD asks for:
   lead time is the normal case, not an edge case. One column has to pick.
 - **Ever be cleared.** `upsert._resolve` returns the existing value when a field has
   no claims, so a blocker could be replaced but never set back to NULL. A resolved
-  obstacle sat on the row forever.
+  obstacle sat on the row forever. (The same leak was later closed for the seven
+  claim-owned facts — `upsert.CLAIM_OWNED_FIELDS` — where a value no live claim
+  states now empties; `blocker` stays derived from the risk rows.)
 - **Be counted.** "How much planned capacity is blocked on transmission in ERCOT" is
   the question that carries the read-through, and free text cannot answer it. A
   closed `category` vocabulary can.

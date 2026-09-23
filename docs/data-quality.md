@@ -171,6 +171,19 @@ row at all, which is the point: a collision needs *two* claims on a field to
 compare. One claim and a row that disagrees with it is the cheapest possible
 version of the error, and it was invisible.
 
+**A figure with no live claim at all no longer survives a recompute.** The merge
+used to hand back whatever the row held whenever no claim took part, so a value
+outlived every claim that ever stated it: a re-extraction by a better prompt
+dropped a figure the old one had misread, or a ruling took the last claim out, and
+the figure stayed. On the snapshot that fixed it, 68 values stood that way — $487B
+of investment, 6,699 MW planned and 812 MW built — among them $450B on one Michigan
+campus whose only article gives that figure for the whole Stargate programme. For
+the seven claim-owned fields (`upsert.CLAIM_OWNED_FIELDS`) no live claim now means
+no value, the tranche and party reconciles may still refill it from their own
+citations, and a rule's decision line in the notes records what was cleared. So
+`value_without_evidence` fires only between a citation going away and the next
+`backfill derive`, which answers it.
+
 Both consult the block rollup as well as the claims, because a tranche's capacity
 is cited capacity whether or not `reconcile` writes the sum onto the campus. The
 first cut of the rule did not, and reported 28 rows behaving exactly as designed.
