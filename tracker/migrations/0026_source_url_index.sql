@@ -1,0 +1,29 @@
+-- 0026_source_url_index: find a citation by its URL without reading every citation.
+--
+-- `source` is looked up by `url` in several places and was indexed on it in none.
+-- The one index that contains the column is the one behind UNIQUE (project_id,
+-- url), which leads with `project_id`, so a lookup by URL alone cannot seek on it:
+-- SQLite scans the whole of it instead, and inside a correlated subquery it does
+-- so once per outer row.
+--
+-- Measured on a copy of the live database, 3,421 sources and 8,432 queued URLs:
+--
+--   `backfill dates` choosing what to fetch     909 ms -> 6.5 ms
+--   the console's article reader, one URL       4.6 ms -> 0.1 ms
+--   `funnel` joining the queue to citations     5.2 ms -> 3.5 ms
+--
+-- The first is the one that mattered. `dates.undated_urls` asks, for each of the
+-- 5,535 undated queue rows, whether any citation quotes that URL, and every one
+-- of those questions was a scan: the plan read "SCAN source USING COVERING INDEX
+-- sqlite_autoindex_source_1" and now reads "SEARCH source USING COVERING INDEX
+-- ix_source_url (url=?)".
+--
+-- One reader gets slower, and it is recorded here rather than left to be found:
+-- `crawl.stale_sources` groups by URL, and the planner now walks this index to
+-- skip a sort and then fetches each row's `fetched_at` -- 7.6 ms -> 9.9 ms, on a
+-- command that goes on to fetch every URL it returns.
+--
+-- Not UNIQUE: one article legitimately backs several projects, which is exactly
+-- what the (project_id, url) constraint allows.
+
+CREATE INDEX ix_source_url ON source (url);

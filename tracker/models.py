@@ -233,6 +233,9 @@ class Source(Base):
         Index("ix_source_project_id", "project_id"),
         Index("ix_source_type", "source_type"),
         Index("ix_source_published_at", "published_at"),
+        # Migration 0026. The UNIQUE constraint above also indexes `url`, but
+        # behind `project_id`, so a lookup by URL alone cannot use it.
+        Index("ix_source_url", "url"),
     )
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid

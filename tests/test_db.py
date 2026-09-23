@@ -399,6 +399,40 @@ def test_excerpt_length_is_capped(engine: Engine):
             )
 
 
+def test_finding_a_citation_by_its_url_uses_an_index(engine: Engine):
+    """`backfill dates` asks, for every undated queue row, whether any citation
+    quotes that URL. The only index holding `source.url` leads with `project_id`
+    (it is the UNIQUE constraint's), so each question scanned the whole table:
+    909 ms on a copy of the live database, 5,535 rows asking of 3,421 sources.
+
+    Asserted on the plan of the SQL the function really sends, captured as it
+    runs, so a rewrite of the query that can no longer use the index fails here too.
+    """
+    from sqlalchemy import event
+
+    from tracker import dates
+    from tracker.db import session_scope
+
+    sent: list[tuple[str, object]] = []
+
+    def capture(_conn, _cursor, statement, parameters, _context, _many):
+        sent.append((statement, parameters))
+
+    event.listen(engine, "before_cursor_execute", capture)
+    try:
+        with session_scope(engine, commit=False) as session:
+            dates.undated_urls(session)
+    finally:
+        event.remove(engine, "before_cursor_execute", capture)
+
+    statement, parameters = next((s, p) for s, p in sent if "FROM ingest_url" in s)
+    with engine.connect() as conn:
+        plan = [
+            row[3] for row in conn.exec_driver_sql(f"EXPLAIN QUERY PLAN {statement}", parameters)
+        ]
+    assert any("SEARCH source USING COVERING INDEX ix_source_url" in step for step in plan), plan
+
+
 def test_event_is_idempotent_per_type_and_date(engine: Engine):
     with engine.begin() as conn:
         conn.execute(
