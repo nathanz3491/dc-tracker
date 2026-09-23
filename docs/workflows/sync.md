@@ -246,9 +246,10 @@ same way three tries running (`discover.MAX_SAME_FAILURES`) is left out of the
 retry and named in the summary instead: a transient failure rarely repeats
 identically on three separate runs, and a structural one repeats every time.
 Measured on a copy of production, 9 URLs failing "reply truncated" had been tried 66
-times and 14 failing with one SSL error 190 times. `tracker ingest crawl --url`
-still reads one, and the retry after a starved reply no longer doubles past the
-configured token ceiling. Coverage of operators we should hold is likewise a separate question
+times and 14 failing with one SSL error 190 times. The same test governs enrich's
+retry harvester and the queued leads `--prospect` hands the crawl. `tracker ingest
+crawl --url` still reads one, and the retry after a starved reply no longer doubles
+past the configured token ceiling. Coverage of operators we should hold is likewise a separate question
 a clean sync cannot see, so a run without `--prospect` points at `tracker coverage`.
 
 ## The other sync

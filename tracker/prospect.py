@@ -258,20 +258,23 @@ def queue_leads(session: Session, operator: Operator, *, include_failed: bool = 
 
     Previously-failed URLs are included by default for the same reason `sync
     --retry-failed` exists: a host that answered 403 once is not a host that
-    answers 403 forever, and the escalation ladder has grown since.
+    answers 403 forever, and the escalation ladder has grown since. Not one that
+    has failed the same way three times running (`discover.retryable`): this is an
+    automatic retry like that one, and `tracker ingest crawl --url` still reads it.
     """
     from sqlalchemy import select
 
+    from tracker.ingest.discover import retryable
     from tracker.models import IngestUrl
     from tracker.vocab import PENDING_URL_STATUS
 
     tokens = operator.token_sets
     if not tokens:
         return []
-    from tracker.ingest.discover import RETRYABLE_STATUSES
-
-    wanted = [PENDING_URL_STATUS, *(RETRYABLE_STATUSES if include_failed else ())]
-    rows = session.scalars(select(IngestUrl).where(IngestUrl.status.in_(wanted))).all()
+    rows = [
+        *session.scalars(select(IngestUrl).where(IngestUrl.status == PENDING_URL_STATUS)),
+        *(retryable(session) if include_failed else ()),
+    ]
     return [
         row.url
         for row in rows

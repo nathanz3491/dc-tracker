@@ -365,6 +365,19 @@ def test_queue_leads_include_what_previously_failed(session):
     assert prospect.queue_leads(session, NEBIUS, include_failed=False) == []
 
 
+def test_queue_leads_leave_out_what_failed_the_same_way_three_times(session):
+    """Prospecting is an automatic retry like `--retry-failed`, so it gives up where
+    that does. The URL is still readable deliberately with `ingest crawl --url`."""
+    from tracker.ingest.discover import MAX_SAME_FAILURES
+
+    _queued(session, "https://dc.test/nebius-once/", status="fetch_error")
+    stuck = _queued(session, "https://dc.test/nebius-stuck/", status="fetch_error")
+    stuck.failures = MAX_SAME_FAILURES
+    session.flush()
+
+    assert prospect.queue_leads(session, NEBIUS) == ["https://dc.test/nebius-once/"]
+
+
 def test_queue_leads_ignore_urls_already_read(session):
     """An `ok` row has been extracted; re-reading it is `refresh`'s job, not this."""
     _queued(session, "https://dc.test/nebius-done/", status="ok")
