@@ -32,6 +32,13 @@ from tracker.webui.server import Console, Handler
 
 T0 = dt.datetime(2026, 1, 10, 12, 0, 0)
 
+#: How often a test server's loop checks whether it has been asked to stop.
+#: `serve_forever` looks once per `poll_interval`, half a second by default, and
+#: `shutdown()` blocks until it next does — so every server here spent 0.51 s
+#: stopping: 84 fixture teardowns and six servers started inside a test, about
+#: 45 s of the suite. `tracker serve` keeps the default; nothing waits on it there.
+FAST_POLL = {"poll_interval": 0.01}
+
 
 @pytest.fixture
 def seeded_db(tmp_path, migrated_copy):
@@ -88,7 +95,7 @@ def server(seeded_db):
     handler = type("Bound", (Handler,), {"console": console})
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     httpd.daemon_threads = True
-    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread = threading.Thread(target=httpd.serve_forever, kwargs=FAST_POLL, daemon=True)
     thread.start()
     try:
         yield httpd.server_address, console
@@ -433,7 +440,7 @@ def test_a_published_console_can_read_with_a_model_without_being_writable(seeded
     handler = type("Bound", (Handler,), {"console": console})
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     httpd.daemon_threads = True
-    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread = threading.Thread(target=httpd.serve_forever, kwargs=FAST_POLL, daemon=True)
     thread.start()
     try:
         address = httpd.server_address
@@ -1270,7 +1277,7 @@ def gated(seeded_db):
     handler = type("Bound", (Handler,), {"console": console})
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     httpd.daemon_threads = True
-    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    threading.Thread(target=httpd.serve_forever, kwargs=FAST_POLL, daemon=True).start()
     try:
         yield httpd.server_address, console
     finally:
@@ -2687,7 +2694,7 @@ def reader(seeded_db):
     handler = type("Bound", (Handler,), {"console": console})
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     httpd.daemon_threads = True
-    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    threading.Thread(target=httpd.serve_forever, kwargs=FAST_POLL, daemon=True).start()
     try:
         address = httpd.server_address
         status, cookie = sign_in(address)
@@ -2736,7 +2743,7 @@ def test_two_readers_do_not_see_each_other_s_list(seeded_db):
     handler = type("Bound", (Handler,), {"console": console})
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     httpd.daemon_threads = True
-    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    threading.Thread(target=httpd.serve_forever, kwargs=FAST_POLL, daemon=True).start()
     try:
         address = httpd.server_address
         _, alice = sign_in(address, email="alice@example.com")
@@ -2844,7 +2851,7 @@ def test_the_watchlist_write_can_be_switched_off(seeded_db):
     handler = type("Bound", (Handler,), {"console": console})
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     httpd.daemon_threads = True
-    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread = threading.Thread(target=httpd.serve_forever, kwargs=FAST_POLL, daemon=True)
     thread.start()
     try:
         address = httpd.server_address
@@ -2875,7 +2882,7 @@ def test_the_one_write_is_still_a_write(seeded_db):
     handler = type("Bound", (Handler,), {"console": console})
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     httpd.daemon_threads = True
-    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread = threading.Thread(target=httpd.serve_forever, kwargs=FAST_POLL, daemon=True)
     thread.start()
     try:
         address = httpd.server_address
@@ -2910,7 +2917,7 @@ def test_watch_all_is_off_by_default_and_toggles_per_account(seeded_db):
     handler = type("Bound", (Handler,), {"console": console})
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     httpd.daemon_threads = True
-    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    threading.Thread(target=httpd.serve_forever, kwargs=FAST_POLL, daemon=True).start()
     try:
         address = httpd.server_address
         _, alice = sign_in(address, email="alice@example.com")
@@ -2956,7 +2963,7 @@ def test_watch_all_refuses_a_value_that_is_not_a_boolean(seeded_db):
     handler = type("Bound", (Handler,), {"console": console})
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     httpd.daemon_threads = True
-    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    threading.Thread(target=httpd.serve_forever, kwargs=FAST_POLL, daemon=True).start()
     try:
         address = httpd.server_address
         _, alice = sign_in(address, email="alice@example.com")
@@ -3051,7 +3058,7 @@ def paged(many):
     handler = type("Bound", (Handler,), {"console": console})
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     httpd.daemon_threads = True
-    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread = threading.Thread(target=httpd.serve_forever, kwargs=FAST_POLL, daemon=True)
     thread.start()
     try:
         yield httpd.server_address
