@@ -15,6 +15,7 @@ import re
 import sqlite3
 import subprocess
 import sys
+import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -296,6 +297,23 @@ class AlreadyRunning(RuntimeError):
     """Another writing command holds the lock. Message is operator-facing."""
 
 
+#: An empty lock file younger than this is a lock being taken, not an abandoned one.
+#: The file is created in one call and its holder written in the next, so a racing
+#: reader can catch it empty; that gap is microseconds. A file still empty this long
+#: after it appeared lost its creator inside the gap and is reclaimed like any other.
+_UNWRITTEN_GRACE_S = 10.0
+
+#: A ceiling on waiting out contention that is not a live holder: another process
+#: reclaiming a dead one's lock, or Windows refusing to open or delete a file that
+#: some other process has open for the microseconds it takes to read it.
+_CONTENTION_TIMEOUT_S = 10.0
+_CONTENTION_POLL_S = 0.005
+
+#: One step, as far as every other process can tell: create the file, or learn it
+#: is already there. `O_BINARY` stops Windows translating the holder text.
+_EXCLUSIVE_CREATE = os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_BINARY", 0)
+
+
 def _lock_path(db_path: Path | str) -> Path:
     return Path(str(db_path) + ".lock")
 
@@ -318,43 +336,6 @@ def _pid_alive(pid: int) -> bool:
 
 
 def acquire_write_lock(db_path: Path | str, *, command: str = "sync") -> Callable[[], None]:
-    """Take the write lock and return a release function.
-
-    The non-context form exists for CLI commands with several early returns, where
-    wrapping the whole body in `with` would mean re-indenting it. Callers register
-    the returned function with `atexit` so every exit path releases, including
-    `typer.Exit`. Releasing twice is harmless.
-    """
-    path = _lock_path(db_path)
-    _claim(path, command)
-
-    def release() -> None:
-        path.unlink(missing_ok=True)
-
-    return release
-
-
-def _claim(path: Path, command: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists():
-        raw = path.read_text(encoding="utf-8", errors="replace").strip()
-        pid_text = raw.split()[0] if raw else ""
-        if pid_text.isdigit() and _pid_alive(int(pid_text)):
-            raise AlreadyRunning(
-                f"another tracker run is already writing to this database.\n"
-                f"  lock:    {path}\n"
-                f"  holder:  {raw}\n\n"
-                "Wait for it to finish, or stop that process. Running two writing "
-                "commands at once fails partway through and wastes the LLM calls "
-                "the second one already paid for."
-            )
-        log.warning("reclaiming a stale lock from pid %s", pid_text or "?")
-        path.unlink(missing_ok=True)
-    path.write_text(f"{os.getpid()} {command} {utcnow_text()}", encoding="utf-8")
-
-
-@contextmanager
-def write_lock(db_path: Path | str, *, command: str = "sync") -> Iterator[None]:
     """Refuse to start a second writing run against the same database.
 
     SQLite allows one writer, so two overlapping `tracker sync` runs produce a raw
@@ -363,32 +344,210 @@ def write_lock(db_path: Path | str, *, command: str = "sync") -> Iterator[None]:
     going when another was started, and the newcomer died on its first insert
     having spent a call to get there.
 
-    The lock is a file holding the owning pid, and a lock whose process has died
-    is reclaimed rather than blocking forever.
+    The lock is a file beside the database holding the owner's pid, command and
+    start time, and a lock whose process has died is reclaimed rather than
+    blocking forever.
+
+    Returns a release function rather than being a context manager because the CLI
+    commands have several early returns, where wrapping the whole body in `with`
+    would mean re-indenting it. Callers register it with `atexit` so every exit
+    path releases, including `typer.Exit`. Releasing twice is harmless, and a
+    release never deletes a lock this call did not take: `sync` releases explicitly
+    and then again from `atexit`, and another run may hold the file by the second.
     """
     path = _lock_path(db_path)
+    mine = _claim(path, command)
+    released = False
+
+    def release() -> None:
+        nonlocal released
+        if released:
+            return
+        released = True
+        if _read_lock(path, patient=True) == mine:
+            _unlink(path)
+
+    return release
+
+
+def _claim(path: Path, command: str) -> str:
+    """Create the lock file, reclaiming a dead holder's first. Returns what it holds.
+
+    **An exclusive create is the whole mechanism.** The previous version asked
+    whether the file existed and then wrote it, and every process that asked
+    before any had written went on to write its own: six processes released
+    together all came away holding the lock, in five trials of five. `O_EXCL`
+    makes "create it unless it exists" one step the operating system arbitrates,
+    so exactly one of any number of simultaneous callers can succeed.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-
-    if path.exists():
-        raw = path.read_text(encoding="utf-8", errors="replace").strip()
-        pid_text = raw.split()[0] if raw else ""
-        if pid_text.isdigit() and _pid_alive(int(pid_text)):
+    mine = f"{os.getpid()} {command} {utcnow_text()}"
+    deadline = time.monotonic() + _CONTENTION_TIMEOUT_S
+    while True:
+        try:
+            fd = os.open(path, _EXCLUSIVE_CREATE, 0o644)
+        except FileExistsError:
+            raw = _read_lock(path)
+            if raw is not None:
+                if _held(path, raw):
+                    raise AlreadyRunning(
+                        f"another tracker run is already writing to this database.\n"
+                        f"  lock:    {path}\n"
+                        f"  holder:  {raw or '(starting — its pid is being written)'}\n\n"
+                        "Wait for it to finish, or stop that process. Running two writing "
+                        "commands at once fails partway through and wastes the LLM calls "
+                        "the second one already paid for."
+                    ) from None
+                if _reclaim(path, raw):
+                    continue
+            # Otherwise it changed hands under us, or vanished between the create
+            # and the read because its holder was releasing it: look again shortly.
+        except PermissionError:
+            # Windows refuses to open a name another process is deleting.
+            pass
+        else:
+            try:
+                os.write(fd, mine.encode("utf-8"))
+            except BaseException:
+                os.close(fd)
+                _unlink(path)
+                raise
+            os.close(fd)
+            return mine
+        if time.monotonic() > deadline:
             raise AlreadyRunning(
-                f"another tracker run is already writing to this database.\n"
-                f"  lock:    {path}\n"
-                f"  holder:  {raw}\n\n"
-                "Wait for it to finish, or stop that process. Running two writing "
-                "commands at once fails partway through and wastes the LLM calls "
-                "the second one already paid for."
+                f"could not take the write lock at {path} within "
+                f"{_CONTENTION_TIMEOUT_S:.0f}s: it kept changing hands or could not be read."
             )
-        log.warning("reclaiming a stale lock from pid %s", pid_text or "?")
-        path.unlink(missing_ok=True)
+        time.sleep(_CONTENTION_POLL_S)
 
-    path.write_text(f"{os.getpid()} {command} {utcnow_text()}", encoding="utf-8")
+
+def _read_lock(path: Path, *, patient: bool = False) -> str | None:
+    """The holder text, or None when there is no file to read right now.
+
+    `patient` rides out Windows refusing to open a file mid-deletion, for a caller
+    with no loop of its own to come back round — a release that read nothing would
+    leave its own lock behind for the next run to reclaim.
+    """
+    deadline = time.monotonic() + _CONTENTION_TIMEOUT_S
+    while True:
+        try:
+            return path.read_text(encoding="utf-8", errors="replace").strip()
+        except FileNotFoundError:
+            return None
+        except PermissionError:
+            if not patient or time.monotonic() > deadline:
+                return None
+            time.sleep(_CONTENTION_POLL_S)
+
+
+def _held(path: Path, raw: str) -> bool:
+    """Whether the lock text names a holder that is still there."""
+    if not raw:
+        try:
+            age = time.time() - path.stat().st_mtime
+        except OSError:
+            return False
+        return age < _UNWRITTEN_GRACE_S
+    pid_text = raw.split()[0]
+    return pid_text.isdigit() and _pid_alive(int(pid_text))
+
+
+def _reclaim(path: Path, stale: str) -> bool:
+    """Delete a dead holder's lock — only if it is still that same lock.
+
+    Returns whether it did, so the caller knows the name is free to race for.
+
+    **The reclaim was a second race, inside the first.** Every contender reads the
+    dead pid, decides the lock is stale and deletes the file; one that deletes it
+    *after* another has already replaced it with a live lock deletes that one, and
+    both carry on as holders. With a stale lock in place, six processes released
+    together produced between three and six holders.
+
+    So "is it still the lock I judged, and if so delete it" happens under a guard
+    only one process can hold at a time. That makes it safe: the file can only be
+    deleted by its owner's release — and its owner is dead — or by a reclaimer
+    holding the guard. Identical text is the same lock, because it names a dead pid
+    and the second it started, and a dead process takes no second lock.
+    """
+    with _reclaim_guard(path):
+        current = _read_lock(path)
+        if current != stale:
+            return False  # released, or reclaimed and retaken by somebody else
+        if not current and _held(path, current):
+            return False  # empty again, but a new file: somebody's lock being written
+        pid_text = stale.split()[0] if stale else ""
+        log.warning("reclaiming a stale lock from pid %s", pid_text or "?")
+        _unlink(path)
+        return True
+
+
+@contextmanager
+def _reclaim_guard(path: Path) -> Iterator[None]:
+    """Hold an operating-system lock on a file beside the lock, for one reclaim.
+
+    Not another create-exclusive file: that would need its own staleness rule for a
+    process that died while holding it, and reclaiming *that* is the same race
+    again. An OS-level lock is released by the kernel when its holder exits,
+    however it exits, which is the one property a lock file cannot have. The guard
+    file is created once and never deleted — deleting a file other processes are
+    locking lets a newcomer create a fresh one and lock that instead.
+    """
+    guard = path.with_name(path.name + ".guard")
+    fd = os.open(guard, os.O_CREAT | os.O_RDWR | getattr(os, "O_BINARY", 0), 0o644)
     try:
-        yield
+        if sys.platform == "win32":
+            import msvcrt
+
+            def take() -> None:
+                os.lseek(fd, 0, os.SEEK_SET)
+                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+
+            def drop() -> None:
+                os.lseek(fd, 0, os.SEEK_SET)
+                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+
+        else:
+            import fcntl
+
+            def take() -> None:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+            def drop() -> None:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+
+        deadline = time.monotonic() + _CONTENTION_TIMEOUT_S
+        while True:
+            try:
+                take()
+                break
+            except OSError:
+                if time.monotonic() > deadline:
+                    raise AlreadyRunning(
+                        f"another tracker run has been reclaiming the write lock at {path} "
+                        f"for over {_CONTENTION_TIMEOUT_S:.0f}s. A reclaim takes milliseconds, "
+                        "so the process doing it is stuck: stop it, then run this again."
+                    ) from None
+                time.sleep(_CONTENTION_POLL_S)
+        try:
+            yield
+        finally:
+            drop()
     finally:
-        path.unlink(missing_ok=True)
+        os.close(fd)
+
+
+def _unlink(path: Path) -> None:
+    """Delete the lock file, waiting out Windows refusing while a reader has it open."""
+    deadline = time.monotonic() + _CONTENTION_TIMEOUT_S
+    while True:
+        try:
+            path.unlink(missing_ok=True)
+            return
+        except PermissionError:
+            if time.monotonic() > deadline:
+                raise
+            time.sleep(_CONTENTION_POLL_S)
 
 
 def utcnow_text() -> str:

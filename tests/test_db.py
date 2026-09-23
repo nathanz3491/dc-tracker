@@ -8,7 +8,11 @@ start returning wrong results against a schema that no longer matches.
 
 from __future__ import annotations
 
+import logging
+import multiprocessing
+import os
 import re
+import time
 from pathlib import Path
 
 import pytest
@@ -17,7 +21,9 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 
 from tracker.config import install_root
 from tracker.db import (
+    AlreadyRunning,
     MigrationError,
+    acquire_write_lock,
     discover_migrations,
     init_db,
     make_engine,
@@ -342,6 +348,147 @@ def test_event_is_idempotent_per_type_and_date(engine: Engine):
         conn.execute(ins)
         with pytest.raises(IntegrityError):
             conn.execute(ins)
+
+
+# --- The single-writer lock -------------------------------------------------
+#
+# Real processes, not threads: the lock is a file shared between separate
+# `tracker` invocations, and a pid is how it tells a live holder from a dead one.
+# Every contender waits at one barrier, so they all reach the lock in the same
+# instant rather than a process start-up apart — 300 ms apart, even the old
+# check-then-write lock let exactly one through, which is why the race survived.
+
+
+def _contend(db_path: str, barrier, outcomes, done) -> None:
+    """One process racing the others for the lock; reports what it got."""
+    from tracker.db import AlreadyRunning, acquire_write_lock
+
+    try:
+        barrier.wait(timeout=60)
+        try:
+            release = acquire_write_lock(db_path, command="contender")
+        except AlreadyRunning:
+            outcomes.put("refused")
+            return
+        outcomes.put("acquired")
+        # Held until every contender has answered, so a late one cannot slip in
+        # after the winner lets go and be counted as a second holder.
+        done.wait(timeout=60)
+        release()
+    except Exception as exc:  # reported, not raised: a dead child cannot fail the test
+        outcomes.put(f"error: {exc!r}")
+
+
+def _exit_at_once() -> None:
+    """A process that exists only to leave a pid nothing is running under."""
+
+
+def _race(db_path: Path, contenders: int) -> list[str]:
+    ctx = multiprocessing.get_context("spawn")
+    barrier, outcomes, done = ctx.Barrier(contenders), ctx.Queue(), ctx.Event()
+    procs = [
+        ctx.Process(target=_contend, args=(str(db_path), barrier, outcomes, done))
+        for _ in range(contenders)
+    ]
+    for proc in procs:
+        proc.start()
+    try:
+        return sorted(outcomes.get(timeout=120) for _ in procs)
+    finally:
+        done.set()
+        for proc in procs:
+            proc.join(timeout=60)
+            if proc.is_alive():
+                proc.terminate()
+
+
+def _dead_pid() -> int:
+    proc = multiprocessing.get_context("spawn").Process(target=_exit_at_once)
+    proc.start()
+    proc.join(timeout=60)
+    return proc.pid
+
+
+def test_only_one_of_several_simultaneous_writers_gets_the_lock(tmp_path: Path):
+    """Six at once, one holder. The old lock checked for the file and then wrote it,
+    and every process that looked before any had written went on to write its own:
+    six started together all "acquired" it, in five trials of five."""
+    outcomes = _race(tmp_path / "tracker.db", contenders=6)
+    assert outcomes == ["acquired"] + ["refused"] * 5
+
+
+def test_a_stale_lock_is_reclaimed_by_exactly_one_of_several_writers(tmp_path: Path):
+    """The reclaim is a check-then-act of its own: each contender reads the dead pid,
+    and a contender that deletes the file *after* another has already replaced it
+    deletes a live lock. Only one may come out holding it."""
+    db = tmp_path / "tracker.db"
+    lock = Path(f"{db}.lock")
+    stale = f"{_dead_pid()} sync 2026-01-01 00:00:00"
+    lock.write_text(stale, encoding="utf-8")
+
+    outcomes = _race(db, contenders=6)
+
+    assert outcomes == ["acquired"] + ["refused"] * 5
+    assert not lock.exists(), "the winner released on the way out"
+
+
+def test_a_dead_holders_lock_is_reclaimed_and_says_so(tmp_path: Path, caplog):
+    """The line the production logs carry, `reclaiming a stale lock from pid N`."""
+    db = tmp_path / "tracker.db"
+    dead = _dead_pid()
+    Path(f"{db}.lock").write_text(f"{dead} sync 2026-01-01 00:00:00", encoding="utf-8")
+
+    with caplog.at_level(logging.WARNING, logger="tracker.db"):
+        release = acquire_write_lock(db, command="sync")
+    try:
+        assert f"reclaiming a stale lock from pid {dead}" in caplog.text
+        assert Path(f"{db}.lock").read_text(encoding="utf-8").split()[0] == str(os.getpid())
+    finally:
+        release()
+
+
+def test_a_live_holder_is_refused_by_name(tmp_path: Path):
+    db = tmp_path / "tracker.db"
+    release = acquire_write_lock(db, command="merge")
+    try:
+        with pytest.raises(AlreadyRunning, match="merge"):
+            acquire_write_lock(db, command="sync")
+    finally:
+        release()
+    acquire_write_lock(db, command="sync")()
+
+
+def test_releasing_twice_does_not_delete_the_next_runs_lock(tmp_path: Path):
+    """`sync` releases explicitly and again from `atexit`. Between the two, another
+    run may take the lock — and an unconditional delete on the second call removed
+    that run's lock out from under it, letting a third one in beside it."""
+    db = tmp_path / "tracker.db"
+    lock = Path(f"{db}.lock")
+    release = acquire_write_lock(db, command="sync")
+    release()
+
+    theirs = f"{os.getpid()} enrich 2026-01-01 00:00:00"
+    lock.write_text(theirs, encoding="utf-8")
+    release()
+
+    assert lock.read_text(encoding="utf-8") == theirs
+
+
+def test_an_empty_lock_file_is_a_lock_being_taken_until_it_is_old(tmp_path: Path):
+    """An exclusive create and the write of the holder's pid are two calls, so a
+    racing reader can catch the file empty. Reclaiming it then would delete the
+    winner's lock between its two calls; a file still empty long after is one
+    whose creator died there, and is reclaimed like any other stale lock."""
+    db = tmp_path / "tracker.db"
+    lock = Path(f"{db}.lock")
+    lock.write_text("", encoding="utf-8")
+
+    with pytest.raises(AlreadyRunning):
+        acquire_write_lock(db)
+
+    long_ago = time.time() - 3600
+    os.utime(lock, (long_ago, long_ago))
+    acquire_write_lock(db)()
 
 
 # --- The drift gate ---------------------------------------------------------

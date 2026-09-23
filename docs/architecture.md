@@ -236,7 +236,11 @@ spending an invite.
 **On the write side only one thing runs at a time.**
 
 SQLite takes one writer, and a `tracker` command holds a lock file for the hours a
-crawl runs. The watchlist write deliberately does **not** take that lock: it is a
+crawl runs. The file is made with an exclusive create, so of any number of commands
+started in the same instant exactly one proceeds — the check-then-write it replaced
+let all six of six through — and a lock left by a process that died is reclaimed
+under an operating-system lock, so two runs arriving together cannot both take it
+over. The watchlist write deliberately does **not** take that lock: it is a
 rule about derived data, which a `watch` row is not, and blocking somebody from
 changing which companies they are told about because tonight's crawl is still
 running would be a worse answer than letting the two interleave. SQLite's
