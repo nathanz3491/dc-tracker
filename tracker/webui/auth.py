@@ -52,6 +52,7 @@ import logging
 import secrets
 import threading
 import time
+from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
@@ -89,11 +90,20 @@ LOCKOUT_S = 15 * 60
 #: combinations, so an exhaustive search is ~57 million years. Length is not what
 #: is protecting this; the rate limit is.
 #:
+#: **"Per 15 minutes" is a window, and a correct password does not reset it.** It
+#: used to be a counter that only a successful sign-in cleared, so the arithmetic
+#: above was false in both directions: unrelated typos over a week added up to a
+#: lockout, and anybody with an account of their own could guess seven times,
+#: sign in as themselves, and repeat without ever reaching a limit. A failure now
+#: counts for `GLOBAL_WINDOW_S` and then ages out, and a success forgets only the
+#: succeeding client's own failures (`succeed`).
+#:
 #: **Nothing is counted per email**, and that is a decision rather than an
 #: omission. A per-address counter lets anyone who knows an address lock its owner
 #: out, and the global counter already bounds the rate without handing out that
 #: lever.
 GLOBAL_MAX_FAILURES = 40
+GLOBAL_WINDOW_S = 15 * 60
 GLOBAL_LOCKOUT_S = 15 * 60
 
 #: The cookie holds a lookup key, never a claim. Named for the app so it cannot
@@ -136,6 +146,7 @@ class Gate:
     max_failures: int = MAX_FAILURES
     lockout_s: int = LOCKOUT_S
     global_max_failures: int = GLOBAL_MAX_FAILURES
+    global_window_s: int = GLOBAL_WINDOW_S
     global_lockout_s: int = GLOBAL_LOCKOUT_S
     #: Injectable so a test can move time rather than wait it out. Monotonic, so a
     #: wall-clock change on the host cannot extend a session or end a lockout.
@@ -143,7 +154,9 @@ class Gate:
 
     _sessions: dict[str, _Session] = field(default_factory=dict, repr=False)
     _attempts: dict[str, _Attempts] = field(default_factory=dict, repr=False)
-    _global: _Attempts = field(default_factory=_Attempts, repr=False)
+    #: When each failure inside the current global window happened, oldest first.
+    _failures: deque[float] = field(default_factory=deque, repr=False)
+    _global_locked_until: float = field(default=0.0, repr=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     # --- attempts ---------------------------------------------------------
@@ -161,7 +174,7 @@ class Gate:
             record = self._attempts.get(client)
             until = max(
                 record.locked_until if record else 0.0,
-                self._global.locked_until,
+                self._global_locked_until,
             )
         remaining = until - now
         return int(remaining) + 1 if remaining > 0 else 0
@@ -177,24 +190,46 @@ class Gate:
                 record.count = 0
                 log.warning("console: locking out %s for %ds", client, self.lockout_s)
 
-            self._global.count += 1
-            if self._global.count >= self.global_max_failures:
-                self._global.locked_until = now + self.global_lockout_s
-                self._global.count = 0
+            self._failures.append(now)
+            self._age_out(now)
+            if len(self._failures) >= self.global_max_failures:
+                self._global_locked_until = now + self.global_lockout_s
+                # Cleared, so the gate reopens with a whole window to fill rather
+                # than one failure away from closing again — as the counter did.
+                self._failures.clear()
                 log.warning(
-                    "console: %d failed sign-ins across all clients; closing the gate for %ds",
+                    "console: %d failed sign-ins across all clients within %ds; "
+                    "closing the gate for %ds",
                     self.global_max_failures,
+                    self.global_window_s,
                     self.global_lockout_s,
                 )
 
     def succeed(self, client: str) -> None:
-        """Forget this client's failures, and the shared ones."""
+        """Forget this client's failures — and only this client's.
+
+        It used to clear the global counter too, on the reasoning that a correct
+        password says the traffic is not an attack. It says that about one client,
+        and nothing about the rest: an account holder could guess seven times at
+        other people's passwords, sign in as themselves, and repeat indefinitely,
+        never reaching either limit. Old failures leave the global count by ageing
+        out of `global_window_s` instead, which keeps the thing the reset was for —
+        one person's typos never closing the gate on everybody — without the hole.
+        """
         with self._lock:
             self._attempts.pop(client, None)
-            # A correct password says the traffic is not an attack, so the global
-            # counter resets too. The lockout itself is left alone: if the gate is
-            # shut, `locked_for` has already refused this request.
-            self._global.count = 0
+
+    def recent_failures(self) -> int:
+        """Failures across every client inside the current global window."""
+        now = self.clock()
+        with self._lock:
+            self._age_out(now)
+            return len(self._failures)
+
+    def _age_out(self, now: float) -> None:
+        horizon = now - self.global_window_s
+        while self._failures and self._failures[0] <= horizon:
+            self._failures.popleft()
 
     # --- sessions ---------------------------------------------------------
 
@@ -301,6 +336,7 @@ __all__ = [
     "COOKIE",
     "GLOBAL_LOCKOUT_S",
     "GLOBAL_MAX_FAILURES",
+    "GLOBAL_WINDOW_S",
     "LOCKOUT_S",
     "MAX_FAILURES",
     "SESSION_CONFIRM_S",

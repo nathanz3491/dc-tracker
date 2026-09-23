@@ -1464,14 +1464,74 @@ def test_the_gate_closes_globally_not_just_per_client(gated):
     assert "Locked" in body
 
 
-def test_a_correct_password_clears_the_global_counter(gated):
-    """One person fumbling twice must not spend everyone's budget."""
+def test_signing_in_as_yourself_does_not_buy_more_guesses(gated):
+    """A correct password used to reset the *global* counter as well as the client's.
+
+    The reasoning was "a right password says the traffic is not an attack", and it
+    only says that about one client. Anybody holding an account could guess seven
+    times at other people's passwords, sign in as themselves, and repeat — never
+    reaching the per-client limit of eight and resetting the global forty every
+    time, so their guessing had no limit at all. A success now forgets that
+    client's own failures and nothing else. Scaled down from 8 and 40 so the test
+    does not spend a minute hashing.
+    """
     address, console = gated
-    for _ in range(3):
-        sign_in(address, "wrong")
-    assert console.gate._global.count == 3
-    assert sign_in(address)[0] == 200
-    assert console.gate._global.count == 0
+    gate = console.gate
+    gate.max_failures, gate.global_max_failures = 4, 10
+
+    guesses = 0
+    while guesses < gate.global_max_failures:
+        for _ in range(gate.max_failures - 1):  # always one short of the lockout
+            if guesses == gate.global_max_failures:
+                break
+            body = {"email": "someone-else@example.com", "password": f"guess {guesses}"}
+            assert raw(address, "/api/login", "POST", body)[0] == 401
+            guesses += 1
+        if guesses < gate.global_max_failures:
+            assert sign_in(address)[0] == 200, "as themselves"
+
+    body = {"email": "someone-else@example.com", "password": "one more"}
+    assert raw(address, "/api/login", "POST", body)[0] == 429
+
+
+def test_an_old_fumble_ages_out_of_the_global_window():
+    """What the reset-on-success was standing in for, done properly.
+
+    "One person fumbling twice must not spend everyone's budget" is still the rule
+    — it is why a success used to clear the global counter. A window keeps it
+    without the hole: failures count towards the global limit for
+    `GLOBAL_WINDOW_S` and then stop counting, so the documented rate — forty
+    attempts per fifteen minutes — is what the gate actually enforces, and a
+    typo on Monday cannot help close the gate on Thursday.
+    """
+    from tracker.webui.auth import Gate
+
+    now = [0.0]
+    gate = Gate(clock=lambda: now[0], max_failures=100, global_max_failures=3, global_window_s=60)
+    gate.fail("a")
+    gate.fail("b")
+    now[0] += 61
+    gate.fail("c")
+    assert gate.locked_for("anyone") == 0, "two of the three were outside the window"
+
+    gate.fail("d")
+    gate.fail("e")
+    assert gate.locked_for("anyone") > 0, "three inside it"
+
+
+def test_a_success_forgets_only_its_own_clients_failures():
+    from tracker.webui.auth import Gate
+
+    now = [0.0]
+    gate = Gate(clock=lambda: now[0], max_failures=3, global_max_failures=100)
+    for client in ("x", "x", "y", "y"):
+        gate.fail(client)
+    gate.succeed("x")
+
+    assert gate.recent_failures() == 4, "nothing forgotten across the gate"
+    gate.fail("y")
+    assert gate.locked_for("y") > 0, "y's own count survived x's success"
+    assert gate.locked_for("x") == 0
 
 
 def test_no_accounts_means_no_gate(server):

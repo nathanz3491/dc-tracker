@@ -327,10 +327,13 @@ stays gated even if every account is later deleted (`Console.published`). Before
 signing in, the entire site is a login page — not even the frontend code is served.
 
 What makes a short password safe is not its length, it is the rate: eight failures
-lock one client out for fifteen minutes, and forty across *all* clients close the
-gate for fifteen minutes. The second counter is the one that matters behind a
-tunnel, where an attacker with a thousand addresses would otherwise get a thousand
-budgets. Nothing is counted per email — that would let anyone who knows an address
+lock one client out for fifteen minutes, and forty across *all* clients within any
+fifteen minutes close the gate for fifteen more. The second counter is the one that
+matters behind a tunnel, where an attacker with a thousand addresses would
+otherwise get a thousand budgets. A successful sign-in forgets only that client's
+own failures: it used to clear the shared count as well, which let anybody holding
+an account guess at other people's passwords without limit by signing in as
+themselves every seventh attempt. Nothing is counted per email — that would let anyone who knows an address
 lock its owner out.
 
 **What a request costs before anybody has signed in** is bounded too, because a

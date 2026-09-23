@@ -50,9 +50,9 @@ log = logging.getLogger(__name__)
 #: Below this a password is a typo rather than a secret. Deliberately low, and it
 #: lives here rather than in `webui/auth.py` because it is a fact about an
 #: identity and not about a gate. What makes a short password safe is the rate
-#: limit — 40 failed sign-ins across all clients closes the console for 15
-#: minutes, which puts even a 7-character keyspace tens of millions of years out
-#: of reach. See `tracker/webui/auth.py`.
+#: limit — 40 failed sign-ins across all clients within 15 minutes closes the
+#: console for 15 more, which puts even a 7-character keyspace tens of millions of
+#: years out of reach. See `tracker/webui/auth.py`.
 MIN_PASSWORD_LEN: Final = 6
 
 #: Long enough that a paste cannot be a password by accident, short enough not to

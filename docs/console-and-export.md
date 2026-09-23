@@ -489,10 +489,12 @@ loopback, which means the "refuse a non-loopback bind" check never fires and the
 sign-in is what replaces it.
 
 What makes a short password safe is not its length, it is the rate: eight failures
-lock one client out for fifteen minutes, and forty across *all* clients close the
-gate for the same. The second counter is the one that matters here, where every
-request arrives from 127.0.0.1 and an attacker with a thousand addresses would
-otherwise get a thousand budgets.
+lock one client out for fifteen minutes, and forty across *all* clients within any
+fifteen minutes close the gate for fifteen more. The second counter is the one that
+matters here, where every request arrives from 127.0.0.1 and an attacker with a
+thousand addresses would otherwise get a thousand budgets. Signing in successfully
+forgets only your own failures, never the shared count — otherwise anybody with an
+account could buy unlimited guesses by signing in as themselves between them.
 
 **`--check` before you need it.** It verifies that an account exists, that
 `cloudflared` is
