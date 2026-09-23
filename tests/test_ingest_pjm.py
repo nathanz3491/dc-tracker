@@ -484,6 +484,104 @@ def test_high_reject_rate_is_a_loud_failure(tmp_path: Path, session):
     assert "failed normalization" in str(exc.value)
 
 
+SYNTHETIC_HEADER = (
+    "Project ID,Name,Commercial Name,County,State,MW Capacity,Fuel,Status,Submitted Date\n"
+)
+
+
+def synthetic_row(i: int, *, state: str = "VA", name: str | None = None) -> str:
+    name = name or f"Test Data Center {i}"
+    return (
+        f"TEST{i:05d},{name},Test DC {i} LLC,Loudoun,{state},100,Natural Gas,Active,"
+        f"2024-01-0{1 + i % 9}\n"
+    )
+
+
+def test_a_load_reported_as_failed_has_written_nothing(tmp_path: Path, engine):
+    """The quality gate used to run after every chunk had been committed, so a load
+    the operator was told had failed had already written its rows — 30 of 40 in the
+    case that found it. The gate now runs before the first write."""
+    from tracker.db import session_scope
+
+    path = tmp_path / "rejects.csv"
+    path.write_text(
+        SYNTHETIC_HEADER
+        + "".join(synthetic_row(i) for i in range(30))
+        + "".join(synthetic_row(100 + i, state="ZZ") for i in range(10)),
+        encoding="utf-8",
+    )
+    # Exactly how `tracker ingest pjm` wraps it.
+    with (
+        pytest.raises(pjm.IsoIngestError, match="failed normalization"),
+        session_scope(engine) as session,
+    ):
+        pjm.run(session, path, iso="pjm")
+
+    with session_scope(engine, commit=False) as session:
+        assert session.scalars(select(Source)).all() == []
+        assert projects(session) == []
+
+
+def test_a_windows_1252_byte_deep_in_the_file_does_not_stop_the_load(tmp_path: Path, session):
+    """The encoding was sniffed from the first 4 KB, so an en dash further down
+    crashed the load half-way through, after the chunks before it had committed."""
+    path = tmp_path / "cp1252.csv"
+    body = SYNTHETIC_HEADER + "".join(synthetic_row(1000 + i) for i in range(100))
+    en_dash = chr(0x2013)  # 0x96 in cp1252, and no valid UTF-8 byte
+    body += synthetic_row(9999, name=f"Test Data Center {en_dash} Phase 2")
+    path.write_bytes(body.encode("cp1252"))
+    assert len(body) > 4096
+
+    report = pjm.run(session, path, iso="pjm")
+    assert report.rejected == 0
+    # `norm_text` folds the dash to a hyphen; what matters is that the row was read.
+    assert any(p.name == "Test Data Center - Phase 2" for p in projects(session))
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["Shawsville Solar", "Solar Advantage", "Claws Creek Wind", "Megaqtsum Storage"],
+)
+def test_an_operator_name_inside_another_word_is_not_a_match(name):
+    """Substring matching made "Shawsville Solar" Amazon (sh-AWS-ville) and "Solar
+    Advantage" Vantage — and so both of them data centers."""
+    keep, _reason, _cap = pjm.match_data_center({"Name": name}, PJM, "heuristic")
+    assert not keep
+    assert pjm._infer_company(name, "fallback")[0] == "fallback"
+
+
+@pytest.mark.parametrize(
+    ("name", "company"),
+    [
+        ("AWS Solar I", "Amazon"),
+        ("Vantage Data Centers VA1", "Vantage Data Centers"),
+        ("x.ai Memphis Load", "xAI"),
+        ("Stack Infrastructure Manassas", "STACK Infrastructure"),
+        ("Meta Platforms Solar", "Meta Platforms"),
+    ],
+)
+def test_an_operator_named_as_a_word_still_matches(name, company):
+    keep, _reason, _cap = pjm.match_data_center({"Name": name}, PJM, "heuristic")
+    assert keep
+    assert pjm._infer_company(name, "fallback")[0] == company
+
+
+def test_the_write_lock_is_let_go_within_a_bounded_time(session, monkeypatch):
+    """A chunk of 1,000 held the lock for ~28 s — the console's sign-in waits five.
+    So a chunk also ends on time, whichever comes first."""
+    monkeypatch.setattr(pjm, "MAX_HOLD_S", 0.0)
+    commits = {"n": 0}
+    original = session.commit
+
+    def counting_commit():
+        commits["n"] += 1
+        original()
+
+    monkeypatch.setattr(session, "commit", counting_commit)
+    report = pjm.run(session, FIXTURE, iso="pjm")
+    assert commits["n"] >= report.read - report.filtered, "one commit per record at a zero bound"
+
+
 def test_rejects_are_written_as_replayable_jsonl(tmp_path: Path, session, monkeypatch):
     # Raise the ceiling: this test is about the reject file, not the ceiling,
     # and one bad row out of eleven already exceeds the 5% default.

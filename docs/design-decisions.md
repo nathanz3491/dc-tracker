@@ -30,9 +30,17 @@ So `tracker/ingest/pjm.py` is honest about being a **candidate generator**:
 - `company` from a queue is a commercial name, often a single-purpose entity
   ("Nova Solar I LLC") or a site label ("MS Mt Pleasant"). Because we already scan
   those columns for operator keywords, the matched operator is promoted to
-  `company` and the substitution is disclosed in `notes`.
+  `company` and the substitution is disclosed in `notes`. Keywords match as whole
+  words: as bare substrings "aws" found Amazon in "Shawsville Solar" and "vantage"
+  found Vantage in "Solar Advantage", and made both generators data centers.
 - Two of the four ISOs do not publish CSV at all: PJM exports XLS and MISO serves
-  a JSON API, so the loader reads CSV, XLSX and JSON.
+  a JSON API, so the loader reads CSV, XLSX and JSON. A CSV's encoding is decided
+  from the whole file, not its first 4 KB, so a Windows-1252 dash on row 1,101 no
+  longer stops a load half-way.
+- **A load the quality gate fails writes nothing.** The file is read twice: once to
+  count, reject and judge, then — only if the reject rate and the match count pass —
+  again to write, in chunks that end at 1,000 rows or two seconds so the write lock
+  is let go well inside the console sign-in's five-second wait.
 
 The seam for the day a genuine large-load export appears is
 `IsoMap.load_type_col` plus `--filter "column:Load Type=(?i)data"`, which raises

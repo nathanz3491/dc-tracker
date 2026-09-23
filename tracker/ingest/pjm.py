@@ -18,12 +18,14 @@ exits 0 — the failure mode where you believe you have data and do not.
 
 from __future__ import annotations
 
+import codecs
 import csv
 import hashlib
 import json
 import logging
 import re
-from collections.abc import Iterator, Mapping
+import time
+from collections.abc import Callable, Iterator, Mapping
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -49,6 +51,14 @@ log = logging.getLogger(__name__)
 
 #: Rows per transaction. The PRD asks for chunks of 1000 for a 50 MB+ file.
 CHUNK = 1000
+
+#: Seconds a chunk may hold SQLite's write lock before it is committed anyway.
+#:
+#: A thousand upserts took ~28 s measured, and every other writer — the console's
+#: sign-in among them, whose busy timeout is five seconds — failed with "database is
+#: locked" for all of it. Two seconds keeps a waiting writer well inside that
+#: timeout while still committing in batches of dozens rather than one at a time.
+MAX_HOLD_S = 2.0
 
 #: Fail the run if more than this fraction of matched rows cannot be normalized.
 #: A few bad rows are normal; a fifth of them means the mapping is wrong.
@@ -90,6 +100,9 @@ DC_OPERATOR_NAMES: dict[str, str] = {
     "digital realty": "Digital Realty",
     "equinix": "Equinix",
     "stack infra": "STACK Infrastructure",
+    # Spelled out as well, because matching is by whole word: "stack infra" no longer
+    # matches inside "Stack Infrastructure", and the longer key wins the tie.
+    "stack infrastructure": "STACK Infrastructure",
     "switch inc": "Switch",
     "applied digital": "Applied Digital",
     "novva": "Novva",
@@ -99,6 +112,21 @@ DC_OPERATOR_NAMES: dict[str, str] = {
 }
 
 DC_OPERATORS = tuple(DC_OPERATOR_NAMES)
+
+#: Each operator as a whole word or phrase. Matched as a bare substring, "aws" found
+#: Amazon inside "Shawsville Solar" and "vantage" found Vantage Data Centers inside
+#: "Solar Advantage" — each of them a generator, and each promoted to a data center
+#: by the same match. The edges are letters and digits rather than `\b`, so
+#: "x.ai" and "meta platforms" keep their punctuation and spaces inside the key.
+_OPERATOR_PATTERNS: dict[str, re.Pattern[str]] = {
+    op: re.compile(rf"(?<![a-z0-9]){re.escape(op)}(?![a-z0-9])") for op in DC_OPERATORS
+}
+
+
+def operators_in(text: str) -> list[str]:
+    """The operator keys named in `text` as whole words, in table order."""
+    haystack = text.lower()
+    return [op for op, pattern in _OPERATOR_PATTERNS.items() if pattern.search(haystack)]
 
 
 class HeaderError(ValueError):
@@ -123,15 +151,39 @@ def _first(row: Mapping[str, Any], iso_map: IsoMap, logical: str) -> Any:
 # --- Readers ----------------------------------------------------------------
 
 
-def _iter_csv(path: Path) -> Iterator[tuple[int, dict[str, Any]]]:
-    """Stream a CSV. `utf-8-sig` first: ISO exports routinely carry a BOM."""
-    try:
-        handle = path.open("r", encoding="utf-8-sig", newline="")
-        handle.read(4096)
-        handle.seek(0)
-    except UnicodeDecodeError:
-        log.warning("%s is not UTF-8; falling back to cp1252", path.name)
-        handle = path.open("r", encoding="cp1252", newline="")
+#: Encodings tried in order, each over the WHOLE file. `utf-8-sig` first because ISO
+#: exports routinely carry a BOM; cp1252 because the ones that are not UTF-8 are
+#: saved from Excel on Windows; latin-1 last because it decodes any byte at all,
+#: which is the promise that nothing crashes half-way through a load.
+_ENCODINGS: tuple[str, ...] = ("utf-8-sig", "cp1252", "latin-1")
+
+
+def sniff_encoding(path: Path) -> str:
+    """The first encoding in :data:`_ENCODINGS` that decodes every byte of the file.
+
+    It used to decide from the first 4 KB, so a Windows-1252 en dash on row 1,101
+    passed the sniff and killed the load with a `UnicodeDecodeError` in the middle
+    of it, after the chunks before it had already been committed. Decoded
+    incrementally a megabyte at a time, so a 50 MB export costs a read, not a copy.
+    """
+    for encoding in _ENCODINGS:
+        decoder = codecs.getincrementaldecoder(encoding)()
+        try:
+            with path.open("rb") as fh:
+                for block in iter(lambda: fh.read(1 << 20), b""):
+                    decoder.decode(block)
+                decoder.decode(b"", final=True)
+        except UnicodeDecodeError:
+            continue
+        if encoding != "utf-8-sig":
+            log.warning("%s is not UTF-8; reading it as %s", path.name, encoding)
+        return encoding
+    return "latin-1"  # unreachable: latin-1 decodes every byte
+
+
+def _iter_csv(path: Path, encoding: str | None = None) -> Iterator[tuple[int, dict[str, Any]]]:
+    """Stream a CSV in the encoding that decodes all of it. See `sniff_encoding`."""
+    handle = path.open("r", encoding=encoding or sniff_encoding(path), newline="")
     with handle:
         # start=2 so the reported line number matches what an operator sees
         # in a spreadsheet, where row 1 is the header.
@@ -187,24 +239,27 @@ def _iter_json(path: Path) -> Iterator[tuple[int, dict[str, Any]]]:
             yield lineno, row
 
 
-def iter_rows(path: Path, iso_map: IsoMap) -> Iterator[tuple[int, dict[str, Any]]]:
+def iter_rows(
+    path: Path, iso_map: IsoMap, *, encoding: str | None = None
+) -> Iterator[tuple[int, dict[str, Any]]]:
+    """Rows of any supported export. `encoding` spares a CSV a second sniff."""
     suffix = path.suffix.lower()
     if suffix in {".xlsx", ".xlsm", ".xls"}:
         yield from _iter_xlsx(path, iso_map.sheet)
     elif suffix == ".json":
         yield from _iter_json(path)
     else:
-        yield from _iter_csv(path)
+        yield from _iter_csv(path, encoding)
 
 
-def assert_headers(path: Path, iso_map: IsoMap) -> list[str]:
+def assert_headers(path: Path, iso_map: IsoMap, *, encoding: str | None = None) -> list[str]:
     """Abort before row 1 if a required column is absent.
 
     This is the difference between "the ISO renamed a column and we ingested
     nothing" being a loud failure and being a silent success.
     """
     try:
-        _, first_row = next(iter_rows(path, iso_map))
+        _, first_row = next(iter_rows(path, iso_map, encoding=encoding))
     except StopIteration:
         raise HeaderError(f"{path.name} has no data rows") from None
 
@@ -261,7 +316,7 @@ def match_data_center(row: Mapping[str, Any], iso_map: IsoMap, mode: str) -> tup
     haystack = " ".join(str(row.get(c) or "") for c in iso_map.dc_search_cols).lower()
     if any(re.search(p, haystack) for p in DC_PHRASES):
         return True, "name contains a data-center phrase", 1
-    if any(op in haystack for op in DC_OPERATORS):
+    if operators_in(haystack):
         return True, "name contains a known data-center operator", 1
     return False, "no-match", 0
 
@@ -283,10 +338,10 @@ def _infer_company(text: str, fallback: str) -> tuple[str, str | None]:
     so promoting the matched operator to `company` costs nothing and makes dedup
     work. The longest match wins so "meta platforms" beats a stray "meta".
 
-    It is a heuristic, and the note records that it was applied.
+    It is a heuristic, and the note records that it was applied. Operators are
+    matched as whole words — see :data:`_OPERATOR_PATTERNS`.
     """
-    haystack = text.lower()
-    hits = [op for op in DC_OPERATORS if op in haystack]
+    hits = operators_in(text)
     if not hits:
         return fallback, None
     best = max(hits, key=len)
@@ -505,6 +560,20 @@ def run(
     run. The run *does* fail (via :class:`IsoIngestError`) when zero rows matched
     the filter or when the reject rate exceeds :data:`MAX_REJECT_RATE`, because
     both mean the output is not what the operator thinks it is.
+
+    **Two passes, and the quality gate stands between them.** The file is read and
+    normalized once without a write, the gate is applied, and only then is it read
+    again and written. The gate used to run after every chunk had been committed,
+    so a load the operator was told had *failed* had already written its rows — 30
+    of 40 in the case that found it. A file is now all-or-nothing on the question
+    the gate asks, and it still commits in chunks, because holding one transaction
+    for the whole file would lock every other writer out for the length of the
+    load. Only a failure of the database itself, mid-write, can leave part of a
+    load behind — and every row is keyed on its queue id, so re-running it resumes.
+
+    Each chunk ends at :data:`CHUNK` rows or :data:`MAX_HOLD_S` seconds, whichever
+    comes first, so SQLite's write lock is let go well inside a waiting writer's
+    busy timeout.
     """
     iso_map = get_map(iso, map_override)
     if iso_map.iso not in VERIFIED_ISOS:
@@ -514,72 +583,93 @@ def run(
             iso_map.iso,
         )
 
-    assert_headers(path, iso_map)
+    encoding = sniff_encoding(path) if path.suffix.lower() not in _NOT_CSV else None
+    assert_headers(path, iso_map, encoding=encoding)
     file_digest = _digest(path)
     fetched_at = utcnow()
     report = IngestReport()
-    batch: list[IngestRecord] = []
     reject_reasons: list[str] = []
 
-    def flush() -> None:
-        for record in batch:
-            result = upsert_record(session, record, force_new=force_new)
-            report.bump(result.action)
-            report.events += result.events_written
-            report.risks += result.risks_written
-            report.conflicts += len(result.conflicts)
-            if result.duplicate_of is not None:
-                report.duplicates_flagged += 1
-        if dry_run:
-            session.rollback()
-        else:
-            session.commit()
-        batch.clear()
+    def reject(lineno: int, row: Mapping[str, Any], exc: NormalizationError) -> None:
+        report.rejected += 1
+        reject_reasons.append(exc.reason)
+        log.warning(
+            "REJECT iso=%s line=%d id=%r field=%s value=%r reason=%s",
+            iso_map.iso,
+            lineno,
+            _first(row, iso_map, "ext_id"),
+            exc.field,
+            exc.value,
+            exc.reason,
+        )
+        if rejects_out:
+            _append_reject(rejects_out, lineno, row, exc)
 
-    for lineno, row in iter_rows(path, iso_map):
-        # Checked before filtering: --limit means "read at most N rows", and a
-        # filtered row still consumed one.
-        if limit is not None and report.read >= limit:
-            break
-        report.read += 1
-        keep, reason, cap = match_data_center(row, iso_map, filter_mode)
-        if not keep:
-            report.filtered += 1
-            continue
-        try:
-            record = to_record(
-                row,
-                iso_map,
-                fetched_at=fetched_at,
-                reason=reason,
-                confidence_cap=cap,
-                trust_gen_mw=trust_gen_mw,
-                file_digest=file_digest,
-                lineno=lineno,
-            )
-        except NormalizationError as exc:
-            report.rejected += 1
-            reject_reasons.append(exc.reason)
-            log.warning(
-                "REJECT iso=%s line=%d id=%r field=%s value=%r reason=%s",
-                iso_map.iso,
-                lineno,
-                _first(row, iso_map, "ext_id"),
-                exc.field,
-                exc.value,
-                exc.reason,
-            )
-            if rejects_out:
-                _append_reject(rejects_out, lineno, row, exc)
-            continue
+    def records(on_reject: Callable[..., None] | None) -> Iterator[IngestRecord]:
+        """Every matched row as a record. Deterministic, so both passes agree."""
+        read = 0
+        for lineno, row in iter_rows(path, iso_map, encoding=encoding):
+            # Checked before filtering: --limit means "read at most N rows", and a
+            # filtered row still consumed one.
+            if limit is not None and read >= limit:
+                break
+            read += 1
+            if on_reject is not None:
+                report.read += 1
+            keep, reason, cap = match_data_center(row, iso_map, filter_mode)
+            if not keep:
+                if on_reject is not None:
+                    report.filtered += 1
+                continue
+            try:
+                yield to_record(
+                    row,
+                    iso_map,
+                    fetched_at=fetched_at,
+                    reason=reason,
+                    confidence_cap=cap,
+                    trust_gen_mw=trust_gen_mw,
+                    file_digest=file_digest,
+                    lineno=lineno,
+                )
+            except NormalizationError as exc:
+                if on_reject is not None:
+                    on_reject(lineno, row, exc)
 
-        batch.append(record)
-        if len(batch) >= CHUNK:
-            flush()
-
-    flush()
+    # Pass 1: count, reject and judge. Nothing is written.
+    for _ in records(reject):
+        pass
     _check_run_quality(report, iso_map, filter_mode, reject_reasons)
+
+    # Pass 2: write, in chunks bounded by size and by time.
+    written = 0
+    opened = time.monotonic()
+    for record in records(None):
+        result = upsert_record(session, record, force_new=force_new)
+        report.bump(result.action)
+        report.events += result.events_written
+        report.risks += result.risks_written
+        report.conflicts += len(result.conflicts)
+        if result.duplicate_of is not None:
+            report.duplicates_flagged += 1
+        written += 1
+        if written >= CHUNK or time.monotonic() - opened >= MAX_HOLD_S:
+            _end_chunk(session, dry_run)
+            written, opened = 0, time.monotonic()
+    _end_chunk(session, dry_run)
     return report
+
+
+#: Exports that are not read as text, so have no encoding to sniff.
+_NOT_CSV: frozenset[str] = frozenset({".xlsx", ".xlsm", ".xls", ".json"})
+
+
+def _end_chunk(session: Session, dry_run: bool) -> None:
+    """Commit a chunk — or, on a dry run, roll it back so the lock goes with it."""
+    if dry_run:
+        session.rollback()
+    else:
+        session.commit()
 
 
 def _check_run_quality(
