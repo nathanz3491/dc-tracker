@@ -339,6 +339,15 @@ def test_evidence_gate_matches_quantities_by_value_not_by_string():
     assert dropped == {}
 
 
+@pytest.mark.parametrize("usd", [4_100_000_000, 8_200_000_000, 16_400_000_000, 32_300_000_000])
+def test_a_quoted_one_decimal_amount_evidences_its_own_figure(usd):
+    """The gate matches a quote by parsing it, and the parse truncated "$4.1 billion"
+    to $4,099,999,999 — a dollar outside the gate's tolerance of the model's
+    4,100,000,000, so a correctly quoted figure could not be confirmed."""
+    quote = f"the company will invest ${usd / 1e9:.1f} billion in the campus"
+    assert crawl._stated_in("investment_usd", usd, quote)
+
+
 def test_evidence_gate_rejects_a_real_quote_citing_a_different_number():
     """Strictly stronger than the label check it replaced.
 
