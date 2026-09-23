@@ -144,8 +144,23 @@ def _no_network(request, monkeypatch):
         )
 
 
+@pytest.fixture
+def real_home(monkeypatch):
+    """The checkout as `home()`, for the few tests *about* where home resolves.
+
+    Every other test gets a temporary home (`_fast_and_keyless_settings`), so that
+    no cache it writes lands in the repository for a later run to be served.
+    """
+    from tracker.config import home
+
+    monkeypatch.delenv("TRACKER_HOME", raising=False)
+    home.cache_clear()
+    yield
+    home.cache_clear()
+
+
 @pytest.fixture(autouse=True)
-def _fast_and_keyless_settings(monkeypatch):
+def _fast_and_keyless_settings(monkeypatch, tmp_path_factory):
     """Isolate every test from the operator's real environment.
 
     Three things this guarantees:
@@ -200,9 +215,21 @@ def _fast_and_keyless_settings(monkeypatch):
     # failed locally. Neutralize the file itself so tests see defaults only.
     monkeypatch.setitem(Settings.model_config, "env_file", None)
 
+    # **A home of its own, so no test writes into the checkout.** `home()` resolves
+    # to the repository for an editable install, and every cache — fetched articles,
+    # the console's reader pages — lives under it. So a test that cached a page left
+    # it in `.cache/` for every later run to be served instead of its own stub,
+    # which is a result depending on what ran before. A test that means a particular
+    # home still sets `TRACKER_HOME` itself, after this.
+    from tracker.config import home
+
+    monkeypatch.setenv("TRACKER_HOME", str(tmp_path_factory.mktemp("home")))
+    home.cache_clear()
+
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()
+    home.cache_clear()
 
 
 @pytest.fixture(scope="session", autouse=True)

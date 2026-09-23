@@ -371,6 +371,16 @@ initial build of the v1 PRD.
   nothing, but the archive sweep, about 30 requests, ran before that check. `run_many`
   now skips it and reports "not swept — the article budget is zero".
 
+- **A test no longer leaves a cached page in the checkout for later runs to be
+  served** (`tests/conftest.py`, `tests/test_db.py`, `tests/test_webui.py`). With
+  an editable install `home()` is the repository, and every cache lives under it,
+  so a test that fetched through the reader left the page in `.cache/`, where the
+  next run found it instead of that test's stub: a result that depended on what had
+  run before. Every test now gets a temporary home of its own. The two tests about
+  where home resolves ask for the real one (`real_home`), and the health check
+  clears the commit it cached for the life of the process, which an earlier test
+  had answered from a home with no checkout in it.
+
 ### Changed
 
 - **Picking from a short menu no longer pays the deepest reasoning rate**

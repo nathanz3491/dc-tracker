@@ -3378,7 +3378,7 @@ def test_a_page_that_really_is_latin1_still_decodes():
     assert "Café naïve" in article._decode(raw, "text/html; charset=iso-8859-1")
 
 
-def test_health_reports_the_commit_it_is_serving(server):
+def test_health_reports_the_commit_it_is_serving(real_home, server):
     """Which version is in production is a question the deploy pipeline created.
 
     Code reaches the host by a poller rather than by a person, so "is my fix live
@@ -3389,6 +3389,9 @@ def test_health_reports_the_commit_it_is_serving(server):
 
     from tracker.webui.server import deployed_commit
 
+    # Cached for the process's life, and an earlier test answered it from a
+    # temporary home with no checkout in it.
+    deployed_commit.cache_clear()
     status, body = request(server[0], "/api/health")
     assert status == 200 and body["ok"] is True
     expected = subprocess.run(

@@ -96,7 +96,7 @@ def test_project_dotenv_is_read_from_any_directory(tmp_path: Path, monkeypatch):
         get_settings.cache_clear()
 
 
-def test_install_root_is_independent_of_cwd(tmp_path: Path, monkeypatch):
+def test_install_root_is_independent_of_cwd(tmp_path: Path, monkeypatch, real_home):
     before = install_root()
     monkeypatch.chdir(tmp_path)
     assert install_root() == before
