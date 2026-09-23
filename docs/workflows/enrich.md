@@ -94,7 +94,8 @@ project.
 
 ## Why a round stops
 
-Seven reasons, each reported verbatim as `stopped_because`. Two are worth knowing:
+Eight reasons, each reported verbatim as `stopped_because` — the eighth, **"read its
+share of the article budget"**, is the batch budget below. Two are worth knowing:
 
 * **"a full round filled nothing new"** is the real stop condition. "Cost no
   object" means bounded by diminishing returns; `--max-rounds` and `--max-articles`
