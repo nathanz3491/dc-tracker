@@ -12,6 +12,113 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **Only one writing run can hold the database, even when several start in the same
+  instant** (`tracker/db.py`, `tests/test_db.py`, `docs/architecture.md`).
+
+  The single-writer lock checked whether its file existed and then wrote it, so
+  every process that checked before any had written went on to write its own. Two
+  writers at once is what the lock exists to prevent: the second dies on "database
+  is locked" partway through, after paying for its model calls. Reclaiming a dead
+  run's lock was the same check-then-act again, so a stale lock let several through
+  too, each logging that it had reclaimed the same dead pid.
+
+  | six processes released together | before | after |
+  |---|---|---|
+  | lock free | 6 holders, in 5 trials of 5 | 1, in 15 of 15 |
+  | a dead run's lock in place | 3–6 holders | 1, in 15 of 15 |
+
+  The file is now created with `O_CREAT | O_EXCL`, which the operating system
+  performs as one step. A dead holder's lock is still reclaimed with the same
+  `reclaiming a stale lock from pid N` warning. The check that it is still the same
+  lock, and the delete, now happen under an operating-system lock on a guard file
+  beside it (`flock` / `msvcrt.locking`). The kernel releases that lock however its
+  holder exits, where a second lock *file* would need its own staleness rule and
+  bring back the same race. The guard file is created once and never deleted, by
+  design.
+
+  Three smaller holes in the same place. A release deleted the lock unconditionally,
+  and `sync` releases twice (explicitly, then from `atexit`), so the second call
+  could delete the next run's lock; a release now removes only its own. An empty
+  lock file is now treated as a lock whose holder is still being written, not an
+  abandoned one, until it is ten seconds old. A lock file the user may not create is
+  reported as that at once, instead of after ten seconds of retrying and a message
+  blaming another run. `db.write_lock`, an unused copy of the old logic, is gone.
+
+- **A migration that fails partway now leaves nothing behind** (`tracker/db.py`,
+  `tests/test_db.py`).
+
+  Python's sqlite3 driver opens a transaction only before INSERT, UPDATE and DELETE.
+  A migration's CREATE TABLE or ALTER TABLE therefore ran in autocommit inside what
+  looked like a transaction. One whose second statement failed left its first
+  applied with no version row. Every later `tracker init` then died on "already
+  exists", and the console, which refuses a database behind on migrations, stayed
+  down until somebody undid the half by hand. Migrations now use SQLAlchemy's
+  documented pysqlite recipe on their own connection: the driver in autocommit, and
+  an explicit `BEGIN IMMEDIATE` … `COMMIT` around the statements and the version
+  row. The transaction also re-reads `schema_version` once it holds the write lock,
+  so two processes that find the same migration pending no longer both try to apply
+  it.
+
+- **`enrich --budget 0` and `sync --enrich-budget 0` no longer walk every sitemap
+  first** (`tracker/ingest/enrich.py`, `tests/test_enrich.py`). A zero budget reads
+  nothing, but the archive sweep, about 30 requests, ran before that check. `run_many`
+  now skips it and reports "not swept — the article budget is zero".
+
+### Changed
+
+- **`backfill dates` chooses what to fetch in 6.5 ms instead of 909**
+  (`tracker/migrations/0026_source_url_index.sql`, `tracker/models.py`,
+  `tests/test_db.py`). For each of the 5,535 undated queue rows it asks whether any
+  citation quotes that URL, and `source` had no index a URL alone can seek on: the
+  only one holding the column belongs to the UNIQUE (project_id, url) constraint and
+  leads with `project_id`, so every question scanned all 3,421 citations. Migration
+  0026 adds `ix_source_url`. The console's article reader for one URL goes from
+  4.6 ms to 0.1 ms.
+
+- **The test suite runs in two and a half minutes instead of nine and a half**
+  (`tests/conftest.py`, `tests/test_cli.py`, `tests/test_webui.py`,
+  `tests/test_tui.py`, `tests/test_ollama.py`).
+
+  | cause | before | after |
+  |---|---|---|
+  | two `sync` tests walking every configured sitemap for real | 222 s | 0.25 s |
+  | 1,390 setups each migrating a fresh database (~93 ms) | 179 s | 56 s: one template per run, copied per test |
+  | typer rebuilding the Click tree on every `CliRunner.invoke` | `test_cli.py` 43 s | 15 s |
+  | 90 test servers waiting out `serve_forever`'s 0.5 s poll to stop | 40.5 s | 1.2 s |
+
+  The template is checkpointed before anything copies it, and the setup asserts
+  this, because a WAL-mode main file on its own can be missing committed pages
+  (`CLAUDE.md` §3). Every test still gets a file of its own, and tests about
+  migrating still build from nothing.
+
+### Added
+
+- **A test that reaches for the network fails, and names the host**
+  (`tests/conftest.py`, `tests/test_cli.py`, `README.md`). "A fresh clone with no
+  network produces a green run" was stated but never checked: the two `sync` tests
+  above passed while walking live sitemaps, because the code treats a failed fetch
+  as just a failed fetch. An autouse fixture now refuses any DNS lookup or connection
+  past loopback at once and fails the test at teardown, whether or not the code
+  swallowed the error; tests marked `network` or `llm` are exempt. It also clears
+  the proxy variables per test, which is what made it work: the dev machine reaches
+  the internet through a proxy on loopback, so httpx's traffic went to 127.0.0.1 and
+  the proxy made the outside connection out of sight. asyncio's `sock_connect` is
+  hooked too, because the Windows event loop connects without calling
+  `socket.connect`.
+
+### Removed
+
+- **The console routines, and the runner code only the console used**
+  (`tracker/webui/workflows.py`, `tracker/webui/runner.py`, `tracker/webui/runs.py`,
+  `tests/test_workflows.py`, `docs/console-and-export.md`, `docs/architecture.md`).
+  When the console stopped running commands these stayed behind with nothing
+  reaching them but their own tests: the six named routines (342 lines),
+  `Runner.start_workflow` / `_execute_workflow`, `Runner.snapshot`, and
+  `runs.history` / `runs.read_log`. The runner and the runs module stay, because
+  `tracker tui` runs its command pane through them.
+
+### Fixed
+
 - **The agent pass no longer bills the expensive rung for rows the harvest never
   opened** (`tracker/cli/enrich.py`, `tests/test_enrich.py`,
   `docs/workflows/enrich.md`, `docs/workflows/enrich.svg`,
