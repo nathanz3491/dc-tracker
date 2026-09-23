@@ -768,9 +768,9 @@ def sync(
         # that fails the same way every run is still unread, and still readable by
         # hand. See `discover.MAX_SAME_FAILURES`.
         given_up = disc.given_up(session)
-        if retry_failed:
-            room = max(0, limit - len(pending_urls))
-            pending_urls += [row.url for row in disc.retryable(session, limit=room or None)][:room]
+        room = max(0, limit - len(pending_urls))
+        if retry_failed and room:
+            pending_urls += [row.url for row in disc.retryable(session, limit=room)]
 
     if pending_urls and not breadth_first and deepening:
         detail = f", {risky} of them reporting an obstacle" if risky else ""
