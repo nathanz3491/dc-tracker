@@ -3686,6 +3686,26 @@ def test_the_shell_payload_carries_no_per_project_detail(server):
     assert "capex" not in data, "the rollup is 304ms and one view of six reads it"
 
 
+def test_the_shell_payload_does_not_say_where_the_database_is(server, seeded_db):
+    """`/api/dataset` sent every reader the host's absolute database path.
+
+    Nothing in the page read it. Behind a tunnel that was a stranger with an
+    account learning the host's directory layout — its user name, among other
+    things — for no benefit. The terminal interface still gets it: `build()` runs
+    in-process on the machine the path describes.
+    """
+    from tracker.db import open_db, session_scope
+    from tracker.webui.dataset import build
+
+    address, _ = server
+    _status, _headers, body = raw(address, "/api/dataset")
+    assert "db" not in json.loads(body)
+    assert seeded_db.parent.name not in body, "the path is in there under another name"
+
+    with session_scope(open_db(seeded_db), commit=False) as session:
+        assert build(session, db_path=str(seeded_db), schema_version=1)["db"] == str(seeded_db)
+
+
 def test_the_citations_list_is_publishers_until_one_is_opened(server):
     """A count per outlet at rest; the articles when a card is expanded.
 

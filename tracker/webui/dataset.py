@@ -685,7 +685,7 @@ def index_rows(session: Session) -> list[dict[str, Any]]:
     return rows
 
 
-def light(session: Session, *, db_path: str, schema_version: int) -> dict[str, Any]:
+def light(session: Session, *, schema_version: int) -> dict[str, Any]:
     """The shell payload: the light index, the aggregates, and the vocabularies.
 
     Everything here is either one number for the whole fleet or a list the front
@@ -694,6 +694,9 @@ def light(session: Session, *, db_path: str, schema_version: int) -> dict[str, A
     - **per-project detail** — the table asks `/api/projects` for a page of 30
     - **`capex`** — 304 ms of `build()`'s 406 ms, for one view of six. It moved to
       `/api/capex`, which that view asks for when it opens.
+    - **`db`**, the database's absolute path, which `build()` carries for the
+      terminal interface. Nothing in the page read it, and on a published console
+      it told every reader the host's directory layout, user name included.
     """
     from tracker.models import Project, Source
 
@@ -706,7 +709,6 @@ def light(session: Session, *, db_path: str, schema_version: int) -> dict[str, A
 
     return {
         "schema": "tracker/webui-1",
-        "db": db_path,
         "schema_version": schema_version,
         "version": __version__,
         "projects": rows,

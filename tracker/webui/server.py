@@ -1015,11 +1015,7 @@ class Handler(BaseHTTPRequestHandler):
         # One session for both, because `read_session` opens the database each
         # time it is called and this is the request every redraw makes.
         with self.console.read_session() as session:
-            payload = light(
-                session,
-                db_path=str(self.console.db_path),
-                schema_version=self.console.schema_version,
-            )
+            payload = light(session, schema_version=self.console.schema_version)
             # Who is reading, so the header can say so and the watchlist knows
             # whether it has an owner. None on an open console with no accounts,
             # which the page reads as "no watchlist here" rather than "signed out".
