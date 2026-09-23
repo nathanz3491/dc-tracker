@@ -316,7 +316,9 @@ class HttpxFetcher:
                 timeout=timeout, follow_redirects=True, headers=headers
             ) as client:
                 response = await client.get(url)
-        except httpx.RequestError as exc:
+        # `InvalidURL` is not a `RequestError`: a URL httpx cannot parse raises it
+        # before any request, and it used to escape here and take the whole batch.
+        except (httpx.RequestError, httpx.InvalidURL) as exc:
             return FetchResult(url, False, error=str(exc), fetched_at=utcnow(), via="httpx")
 
         if response.status_code >= 400:
@@ -765,22 +767,32 @@ async def fetch_all(
 
     async def one(url: str) -> FetchResult:
         async with gate, host_gate(url):
-            result = await fetch_with_retry(primary, url)
-            for index in range(len(ladder)):
-                if not should_escalate(result):
-                    break
-                stronger = await rung(index)
-                if stronger is None:
-                    continue
-                log.info(
-                    "escalating %s to %s (status=%s)",
-                    url,
-                    getattr(stronger, "VIA", type(stronger).__name__),
-                    result.status,
+            try:
+                result = await fetch_with_retry(primary, url)
+                for index in range(len(ladder)):
+                    if not should_escalate(result):
+                        break
+                    stronger = await rung(index)
+                    if stronger is None:
+                        continue
+                    log.info(
+                        "escalating %s to %s (status=%s)",
+                        url,
+                        getattr(stronger, "VIA", type(stronger).__name__),
+                        result.status,
+                    )
+                    escalated = await fetch_with_retry(stronger, url, attempts=2)
+                    if escalated.ok:
+                        result = escalated
+            except Exception as exc:
+                # One URL's failure is that URL's outcome, never the batch's. A
+                # fetcher that raised — a URL httpx could not parse, a bug in a
+                # rung — used to escape `gather` and throw away every other URL's
+                # result: one mistyped feed stopped discovery for all of them.
+                log.warning("fetching %s raised %s: %s", url, type(exc).__name__, exc)
+                result = FetchResult(
+                    url, False, error=f"{type(exc).__name__}: {exc}", fetched_at=utcnow()
                 )
-                escalated = await fetch_with_retry(stronger, url, attempts=2)
-                if escalated.ok:
-                    result = escalated
             if settings.politeness_delay_s:
                 await asyncio.sleep(settings.politeness_delay_s)
             return result

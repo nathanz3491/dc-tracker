@@ -289,6 +289,31 @@ def provider_name(provider: object) -> str:
     return getattr(provider, "NAME", None) or type(provider).__name__
 
 
+def _payload(response: httpx.Response, engine: str) -> dict[str, Any]:
+    """The reply as a JSON object, or a `SearchError` naming what came back instead.
+
+    Every backend answers errors in its status line most of the time — and a
+    proxy's 502 page, a captive portal or a maintenance banner some of the time,
+    behind a 200. `response.json()` raised `JSONDecodeError` on those, which is not
+    a `SearchError`, so `run` did not catch it and every hit the earlier queries had
+    already found was lost with the run. A `SearchError` costs only this query.
+    """
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise SearchError(
+            f"{engine} answered HTTP {response.status_code} but not JSON: {response.text[:200]!r}"
+        ) from exc
+    if not isinstance(payload, dict):
+        raise SearchError(f"{engine} answered with JSON that is not an object: {payload!r:.200}")
+    return payload
+
+
+def _items(value: Any) -> list[dict[str, Any]]:
+    """The entries of a result list that are objects; anything else is skipped."""
+    return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
+
+
 # --- Google Programmable Search --------------------------------------------
 
 
@@ -342,7 +367,7 @@ class GoogleCSEProvider:
         if response.status_code >= 400:
             raise SearchError(f"search returned HTTP {response.status_code}: {response.text[:400]}")
 
-        payload = response.json()
+        payload = _payload(response, "Google")
         return [
             SearchHit(
                 url=item.get("link", ""),
@@ -350,7 +375,7 @@ class GoogleCSEProvider:
                 snippet=item.get("snippet", ""),
                 query=query,
             )
-            for item in payload.get("items") or []
+            for item in _items(payload.get("items"))
             if item.get("link")
         ]
 
@@ -429,8 +454,9 @@ class BraveProvider:
         if response.status_code >= 400:
             raise SearchError(f"search returned HTTP {response.status_code}: {response.text[:400]}")
 
-        payload = response.json()
-        results = (payload.get("web") or {}).get("results") or []
+        payload = _payload(response, "Brave")
+        web = payload.get("web")
+        results = _items(web.get("results") if isinstance(web, dict) else None)
         return [
             SearchHit(
                 url=item.get("url", ""),
@@ -484,7 +510,7 @@ class SerperProvider:
         if response.status_code >= 400:
             raise SearchError(f"search returned HTTP {response.status_code}: {response.text[:400]}")
 
-        payload = response.json()
+        payload = _payload(response, "Serper")
         return [
             SearchHit(
                 url=item.get("link", ""),
@@ -492,7 +518,7 @@ class SerperProvider:
                 snippet=item.get("snippet", ""),
                 query=query,
             )
-            for item in payload.get("organic") or []
+            for item in _items(payload.get("organic"))
             if item.get("link")
         ]
 
@@ -557,18 +583,18 @@ class BochaProvider:
         if response.status_code >= 400:
             raise SearchError(f"search returned HTTP {response.status_code}: {response.text[:400]}")
 
-        payload = response.json()
+        payload = _payload(response, "Bocha")
         # Bocha answers HTTP 200 with an error code in the body, so the status line
         # alone does not tell you the call succeeded.
-        if isinstance(payload, dict) and payload.get("code") not in (200, None):
+        if payload.get("code") not in (200, None):
             raise SearchError(
                 f"Bocha returned code {payload.get('code')}: "
                 f"{payload.get('msg') or payload.get('message') or payload}"
             )
 
-        data = (payload or {}).get("data") or {}
-        pages = data.get("webPages") or {}
-        results = pages.get("value") or [] if isinstance(pages, dict) else []
+        data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+        pages = data.get("webPages")
+        results = _items(pages.get("value") if isinstance(pages, dict) else None)
         return [
             SearchHit(
                 url=item.get("url", ""),

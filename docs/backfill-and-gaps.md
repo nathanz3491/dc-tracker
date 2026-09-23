@@ -136,7 +136,10 @@ it is worth an LLM call, and two things break that promise quietly:
   about what "gone" means: 404 and 410 are dead, **403 and 429 are not** — a
   newsroom answering 403 to a non-browser is what `ingest crawl --browser` is for,
   and on the live queue that was 55 URLs across seven publishers, which is to say
-  the best-defended sources. `--drop` removes the dead ones and nothing else.
+  the best-defended sources. A name that does not resolve counts as gone only when
+  other names in the same check did — a DNS outage makes every URL fail its lookup
+  identically, and `--drop` used to delete whatever it asked about. `--drop` removes
+  the dead ones and nothing else.
 * **`prune`** re-applies the filter in `tracker/seed/feeds.toml` to rows that were queued
   under an earlier version of it. The filter is data and data gets edited; nothing
   ever re-applied it, so the queue accumulated everything that passed any *past*

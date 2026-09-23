@@ -642,6 +642,77 @@ def test_bocha_survives_a_missing_data_block():
     assert srch.BochaProvider(settings_with(bocha_api_key="k")).search("q") == []
 
 
+# --- a reply that is not what it claims to be ------------------------------------
+#
+# A 200 whose body is an HTML error page — a proxy's 502 rendered as a page, a
+# captive portal — raised JSONDecodeError out of `search()`. That is not a
+# SearchError, so `run` did not catch it, and every hit the earlier queries had
+# already found was lost with the run.
+
+_NOT_JSON = "<html><body>502 Bad Gateway</body></html>"
+
+_PROVIDERS = [
+    ("google", "get", {"google_api_key": "k", "google_cse_id": "cx"}),
+    ("brave", "get", {"brave_api_key": "k"}),
+    ("serper", "post", {"serper_api_key": "k"}),
+    ("bocha", "post", {"bocha_api_key": "k"}),
+]
+
+
+@pytest.mark.parametrize(("name", "method", "keys"), _PROVIDERS)
+@respx.mock
+def test_a_reply_that_is_not_json_is_a_search_error(name, method, keys):
+    provider = srch.PROVIDERS[name](settings_with(**keys))
+    getattr(respx, method)(provider.ENDPOINT).mock(return_value=httpx.Response(200, text=_NOT_JSON))
+    with pytest.raises(SearchError, match="not JSON"):
+        provider.search("q")
+
+
+@pytest.mark.parametrize(("name", "method", "keys"), _PROVIDERS)
+@respx.mock
+def test_a_json_reply_of_the_wrong_shape_is_a_search_error(name, method, keys):
+    provider = srch.PROVIDERS[name](settings_with(**keys))
+    getattr(respx, method)(provider.ENDPOINT).mock(
+        return_value=httpx.Response(200, json=["not", "an", "object"])
+    )
+    with pytest.raises(SearchError):
+        provider.search("q")
+
+
+@respx.mock
+def test_one_unreadable_reply_does_not_lose_what_the_other_queries_found(session):
+    replies = iter(
+        [
+            httpx.Response(
+                200,
+                json={
+                    "organic": [
+                        {
+                            "link": "https://news.example/loudoun-data-center-300-mw-campus",
+                            "title": "Loudoun data center campus 300 MW announced",
+                            "snippet": "rezoning",
+                        }
+                    ]
+                },
+            ),
+            httpx.Response(200, text=_NOT_JSON),
+        ]
+    )
+    respx.post(srch.SerperProvider.ENDPOINT).mock(side_effect=lambda request: next(replies))
+    settings = settings_with(serper_api_key="k")
+
+    report, _ = srch.run(
+        session,
+        ["q1", "q2"],
+        provider=srch.SerperProvider(settings),
+        settings=settings,
+        mine_wikipedia=False,
+    )
+    assert report.queries_run == 1
+    assert [q for q, _ in report.errors] == ["q2"]
+    assert report.queued == 1, "the hit q1 found was lost with the run"
+
+
 def test_bocha_is_the_last_backend_auto_picks():
     """Its index is thin on US trade press, so it should never displace a better one."""
     both = settings_with(serper_api_key="s", bocha_api_key="b")

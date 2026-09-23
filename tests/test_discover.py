@@ -682,6 +682,48 @@ def feed_mapping(tmp_path: Path) -> tuple[Path, dict[str, str | None]]:
     }
 
 
+class RaisingFeedFetcher(FakeFeedFetcher):
+    """Raises for the URLs in `raise_for`, as httpx does for a URL it cannot parse."""
+
+    def __init__(self, mapping, raise_for):
+        super().__init__(mapping)
+        self.raise_for = set(raise_for)
+
+    async def fetch(self, url: str) -> FetchResult:
+        if url in self.raise_for:
+            import httpx
+
+            raise httpx.InvalidURL("Invalid port: ':1'")
+        return await super().fetch(url)
+
+
+def test_a_malformed_feed_url_fails_that_feed_not_the_run(session, tmp_path: Path):
+    """One mistyped URL in feeds.toml used to stop discovery for every other feed:
+    the fetcher raised `httpx.InvalidURL`, which is not a `RequestError`, and the
+    exception took the whole batch's `gather` with it."""
+    config, mapping = feed_mapping(tmp_path)
+    fetcher = RaisingFeedFetcher(mapping, raise_for={"https://a.test/atom"})
+
+    report, queued = discover.run(
+        session, feeds_path=config, fetcher=fetcher, since_days=None, run_id="r1"
+    )
+
+    assert report.feeds_failed == 2, "the malformed feed and the 404 are both reported"
+    assert any(name == "ms" and "Invalid" in reason for name, reason in report.failures)
+    assert any("xai-colossus" in c.url for c in queued), "the other feeds still ran"
+
+
+def test_the_feed_fetcher_reports_an_unparseable_url_rather_than_raising():
+    import asyncio
+
+    from tracker.config import get_settings
+    from tracker.ingest.discover import _RawFetcher
+
+    result = asyncio.run(_RawFetcher(get_settings()).fetch("http://[::1/feed"))
+    assert not result.ok
+    assert "invalid" in (result.error or "").lower()
+
+
 def test_run_queues_matches_and_survives_a_dead_feed(session, tmp_path: Path):
     config, mapping = feed_mapping(tmp_path)
     fetcher = FakeFeedFetcher(mapping)

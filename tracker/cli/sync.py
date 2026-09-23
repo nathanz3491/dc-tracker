@@ -1707,6 +1707,10 @@ def queue_check(
     and on the live queue that was 55 URLs across seven publishers — the
     best-defended sources, which is often to say the good ones. Dropping those
     would have been the most expensive tidy-up available.
+
+    **A name that does not resolve is dead only if other names did.** During a DNS
+    outage every URL fails its lookup the same way, and `--drop` used to delete
+    everything the check asked about. See `discover.verify_urls`.
     """
     from tracker.ingest import discover as disc
 

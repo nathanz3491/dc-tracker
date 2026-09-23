@@ -2170,6 +2170,35 @@ def test_a_later_reading_does_not_move_the_date(session):
 # --- escalation lifecycle ----------------------------------------------------
 
 
+def test_the_article_fetcher_reports_an_unparseable_url_rather_than_raising():
+    """`httpx.InvalidURL` is not a `RequestError`, so it used to escape the fetcher
+    and take every other URL in the batch with it."""
+    import asyncio
+
+    from tracker.ingest.fetch import HttpxFetcher
+
+    result = asyncio.run(HttpxFetcher(get_settings()).fetch("http://[::1/article"))
+    assert not result.ok
+    assert "invalid" in (result.error or "").lower()
+
+
+async def test_a_fetcher_that_raises_costs_only_its_own_url():
+    from tracker.ingest.fetch import fetch_all
+
+    class HalfBroken:
+        async def fetch(self, url):
+            if "bad" in url:
+                raise RuntimeError("a rung with a bug in it")
+            return FetchResult(url, True, markdown="fine", status=200, fetched_at=NOW)
+
+    results = await fetch_all(["https://a.test/good", "https://a.test/bad"], fetcher=HalfBroken())
+    assert [(r.url, r.ok) for r in results] == [
+        ("https://a.test/good", True),
+        ("https://a.test/bad", False),
+    ]
+    assert "RuntimeError" in (results[1].error or "")
+
+
 class _RecordingBrowser:
     """Stands in for Crawl4AIFetcher, and insists on the same contract.
 

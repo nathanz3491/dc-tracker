@@ -1059,8 +1059,26 @@ class UrlVerdict:
     detail: str = ""
 
 
+#: Error text a failed name lookup produces, on Linux, macOS and Windows.
+_NO_SUCH_NAME: tuple[str, ...] = (
+    "name or service not known",
+    "nodename nor servname",
+    "getaddrinfo",
+    "no address",
+)
+
+
+def _lookup_failed(status: int | None, error: str) -> bool:
+    return status is None and any(term in error.lower() for term in _NO_SUCH_NAME)
+
+
 def classify_status(status: int | None, error: str = "") -> str:
-    """Reachable, gone, defended, or something else."""
+    """Reachable, gone, defended, or something else — from this one answer alone.
+
+    A name that does not resolve reads as dead here, but one answer cannot tell a
+    domain that is gone from a resolver that is down; `verify_urls` is what decides
+    between them, from the rest of the batch.
+    """
     if status in DEAD_STATUS:
         return "dead"
     if status is not None and 200 <= status < 400:
@@ -1070,8 +1088,7 @@ def classify_status(status: int | None, error: str = "") -> str:
     if status is None and error:
         # A name that does not resolve is as dead as a 404 and stays dead; a
         # timeout is a bad afternoon. Only the first is worth deleting.
-        gone = ("name or service not known", "nodename nor servname", "getaddrinfo", "no address")
-        return "dead" if any(term in error.lower() for term in gone) else "error"
+        return "dead" if _lookup_failed(status, error) else "error"
     return "error"
 
 
@@ -1081,6 +1098,14 @@ def verify_urls(rows: list[IngestUrl], *, settings: Settings | None = None) -> l
     Uses the project's own fetch stack — same user agent, same per-host
     politeness — so a site that answers this differently from a crawl is telling
     us something real rather than reacting to a different client.
+
+    **A failed name lookup counts as gone only when other names in the same check
+    resolved.** On this machine a DNS outage and every host having vanished produce
+    the same error for every URL, and `queue check --drop` deleted whatever a check
+    during a hiccup asked about. A 404 or 410 is the server positively saying so; a
+    lookup failure is evidence against a name only once some other URL in the batch
+    got an HTTP answer, which proves the resolver and the network were up. Until then
+    it is "could not tell", which is never dropped.
     """
     import asyncio
 
@@ -1090,12 +1115,19 @@ def verify_urls(rows: list[IngestUrl], *, settings: Settings | None = None) -> l
         return []
     by_url = {row.url: row for row in rows}
     results = asyncio.run(fetch_all(list(by_url), settings=settings))
+    resolver_worked = any(result.status is not None for result in results)
     out: list[UrlVerdict] = []
     for result in results:
         row = by_url.get(result.url)
         if row is None:
             continue
         verdict = classify_status(result.status, result.error or "")
+        if (
+            verdict == "dead"
+            and not resolver_worked
+            and _lookup_failed(result.status, result.error or "")
+        ):
+            verdict = "error"
         out.append(
             UrlVerdict(
                 row_id=row.id,
@@ -1262,7 +1294,9 @@ class _RawFetcher:
                 headers=headers,
             ) as client:
                 response = await client.get(url)
-        except httpx.RequestError as exc:
+        # `InvalidURL` is not a `RequestError`. A mistyped feed URL raised it before
+        # any request, and that exception stopped discovery for every other feed.
+        except (httpx.RequestError, httpx.InvalidURL) as exc:
             return FetchResult(url, False, error=str(exc), fetched_at=utcnow(), via="feed")
 
         if response.status_code >= 400:

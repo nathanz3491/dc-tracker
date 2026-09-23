@@ -107,6 +107,44 @@ def test_verify_reports_each_queued_url_without_touching_the_database(session, m
     assert session.get(IngestUrl, gone.id) is not None, "verifying never deletes"
 
 
+_NO_SUCH_NAME = "[Errno 8] nodename nor servname provided, or not known"
+
+
+def test_a_name_that_did_not_resolve_is_not_dead_when_no_name_did(session, monkeypatch):
+    """A DNS outage on this machine looks exactly like every host having vanished.
+
+    `classify_status` reads a single answer and cannot tell them apart, so
+    `queue check --drop` during a network hiccup deleted every queued row it
+    asked about. A failed lookup is only evidence against a name when other names
+    in the same check resolved — that is the positive signal that the resolver
+    works."""
+    rows = [_queued(session, f"https://site{i}.test/a/") for i in range(3)]
+
+    async def fake_fetch_all(urls, **kwargs):
+        return [FetchResult(u, False, error=_NO_SUCH_NAME) for u in urls]
+
+    monkeypatch.setattr("tracker.ingest.fetch.fetch_all", fake_fetch_all)
+    verdicts = [v.verdict for v in discover.verify_urls(rows)]
+    assert verdicts == ["error", "error", "error"]
+
+
+def test_a_name_that_did_not_resolve_while_others_did_is_dead(session, monkeypatch):
+    alive = _queued(session, "https://alive.test/a/")
+    gone = _queued(session, "https://gone.test/a/")
+
+    async def fake_fetch_all(urls, **kwargs):
+        return [
+            FetchResult(u, True, status=200)
+            if "alive" in u
+            else FetchResult(u, False, error=_NO_SUCH_NAME)
+            for u in urls
+        ]
+
+    monkeypatch.setattr("tracker.ingest.fetch.fetch_all", fake_fetch_all)
+    verdicts = {v.row_id: v.verdict for v in discover.verify_urls([alive, gone])}
+    assert verdicts == {alive.id: "ok", gone.id: "dead"}
+
+
 # --- re-applying the filter ---------------------------------------------------
 
 
