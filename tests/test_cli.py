@@ -1840,7 +1840,7 @@ def test_duplicates_resolve_dry_run_writes_nothing(initialized: Path, monkeypatc
 
             return R()
 
-    monkeypatch.setattr("tracker.llm.reasoning_extractor", lambda *a, **k: _Model())
+    monkeypatch.setattr("tracker.llm.judgement_extractor", lambda *a, **k: _Model())
 
     # `--no-agent` names the path this test exercises. `_Model` offers only
     # `complete`, which is the fixed-menu judge; the agent path needs `converse`

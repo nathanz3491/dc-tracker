@@ -284,6 +284,36 @@ def test_infer_thinks_harder_than_extraction():
     )
 
 
+def test_the_per_item_judgements_do_not_pay_the_per_project_price():
+    """`max` is `infer`'s tier because `infer` is one call per project. Obstacles,
+    audit findings, contested fields and settle disagreements are one call each —
+    up to a hundred a round overnight — and they had all inherited `max` by reusing
+    `infer`'s factory, the mistake the agent tier was split out to fix."""
+    import inspect
+
+    from tracker.cli import duplicates, logic, quality
+    from tracker.config import Settings
+    from tracker.ingest import enrich
+    from tracker.llm import judgement_extractor, reasoning_extractor
+
+    settings = Settings(deepseek_api_key="test-key")
+    assert judgement_extractor(settings).effort == "high"
+    assert judgement_extractor(settings).model == settings.deepseek_reasoning_model
+    assert reasoning_extractor(settings).effort == "max", "infer keeps its depth"
+
+    for command in (
+        quality.risks_confirm,
+        quality.audit_resolve,
+        logic.logic_conflicts,
+        logic.logic_resolve,
+        duplicates.duplicates_resolve,
+    ):
+        source = inspect.getsource(command)
+        assert "judgement_extractor" in source, command.__name__
+        assert "reasoning_extractor" not in source, command.__name__
+    assert "_judgement_extractor(settings)" in inspect.getsource(enrich)
+
+
 def test_reasoning_off_and_an_effort_cannot_disagree():
     """`thinking` is derived from `effort`, so the invalid pair cannot be built.
 

@@ -325,10 +325,10 @@ def logic_conflicts(
         )
         raise typer.Exit(1)
 
-    from tracker.llm import LLMUnavailable, reasoning_extractor
+    from tracker.llm import LLMUnavailable, judgement_extractor
 
     try:
-        extractor = reasoning_extractor(get_settings())
+        extractor = judgement_extractor(get_settings())
     except LLMUnavailable as exc:
         _fail(str(exc))
         return
@@ -498,12 +498,13 @@ def logic_resolve(
 
     extractor = None
     if llm or use_agent:
-        from tracker.llm import LLMUnavailable, agent_extractor, reasoning_extractor
+        from tracker.llm import LLMUnavailable, agent_extractor, judgement_extractor
 
         try:
             # The agent pays its effort per turn across nine to twelve calls, so it
-            # gets its own tier. `--llm` is one call and keeps `max`.
-            build = agent_extractor if use_agent else reasoning_extractor
+            # gets its own tier. `--llm` is one call per finding, a pick from a
+            # closed menu, which is the judgement tier's shape rather than `infer`'s.
+            build = agent_extractor if use_agent else judgement_extractor
             extractor = build(get_settings())
         except LLMUnavailable as exc:
             # A bare `logic resolve` used to be the interactive walkthrough, and

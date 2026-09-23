@@ -48,6 +48,26 @@ initial build of the v1 PRD.
 
 ### Changed
 
+- **Picking from a short menu no longer pays the deepest reasoning rate**
+  (`tracker/llm.py` — `judgement_extractor`, `tracker/config.py` —
+  `deepseek_judgement_effort`, `tracker/cli/quality.py`, `tracker/cli/logic.py`,
+  `tracker/cli/duplicates.py`, `tracker/ingest/enrich.py`, `.env.example`,
+  `docs/ingesting.md`, `tests/test_stream.py`).
+
+  `risks confirm`, `audit resolve`, `logic conflicts`, enrich's settle step,
+  `logic resolve --llm` and `duplicates resolve --no-agent` each make one call per
+  item. Each picks from a closed set of answers against evidence already in the
+  prompt. All six reused the factory built for `infer`, whose case for `max` effort
+  is "one call per project". Overnight that is up to a hundred `max` calls a round.
+  This is the same inherited-`max` mistake the agent tier was split out to fix,
+  measured then at 264,000 tokens a finding against an estimated 45,000. At `max`
+  on a 6,000-token reply budget, `risks confirm` also ran out of room and came back
+  unusable. They now use a judgement tier at `high` effort, the setting extraction
+  already answers this kind of question at. `infer`, `point`'s identification and
+  `logic check --read/--audit` keep `max`, because each really is one call per
+  project. `TRACKER_DEEPSEEK_JUDGEMENT_EFFORT=max` restores the old cost for anyone
+  who measures it doing better.
+
 - **Four publishers the database nominated itself** (`tracker/seed/feeds.toml`).
   `tracker feeds` ranks hosts whose claims already decide stored values against
   what this file lists, and four of its candidates are now configured:

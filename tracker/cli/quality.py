@@ -346,10 +346,10 @@ def risks_confirm(
     if category and category not in RISK_CATEGORIES:
         _fail(f"--category must be one of: {', '.join(RISK_CATEGORIES)}")
 
-    from tracker.llm import LLMUnavailable, reasoning_extractor
+    from tracker.llm import LLMUnavailable, judgement_extractor
 
     try:
-        extractor = reasoning_extractor(get_settings())
+        extractor = judgement_extractor(get_settings())
     except LLMUnavailable as exc:
         _fail(str(exc))
         raise
@@ -911,10 +911,10 @@ def audit_resolve(
     settings = get_settings()
     extractor = None
     if llm:
-        from tracker.llm import LLMUnavailable, reasoning_extractor
+        from tracker.llm import LLMUnavailable, judgement_extractor
 
         try:
-            extractor = reasoning_extractor(settings)
+            extractor = judgement_extractor(settings)
         except LLMUnavailable as exc:
             _fail(str(exc))
 

@@ -1251,6 +1251,25 @@ def reasoning_extractor(settings: Settings | None = None) -> Extractor:
     )
 
 
+def judgement_extractor(settings: Settings | None = None) -> Extractor:
+    """The tier for a per-item pick from a closed menu: the reasoning model at `high`.
+
+    Split from `reasoning_extractor` for the reason `agent_extractor` was: that
+    factory's case for `max` is "one call per project", and `risks confirm`,
+    `audit resolve`, `logic conflicts` and enrich's settle step make one call per
+    obstacle, finding, field or disagreement — up to a hundred a round overnight.
+    See `Settings.deepseek_judgement_effort`.
+    """
+    settings = settings or get_settings()
+    if settings.llm_provider == "ollama":
+        return OllamaExtractor(settings, effort=settings.deepseek_judgement_effort)
+    return DeepSeekExtractor(
+        settings,
+        model=settings.deepseek_reasoning_model,
+        effort=settings.deepseek_judgement_effort,
+    )
+
+
 def agent_extractor(settings: Settings | None = None) -> Extractor:
     """The tier for a tool-using loop: same reasoning model, effort paid per turn.
 
@@ -1311,6 +1330,7 @@ __all__ = [
     "build_extractor",
     "default_extractor",
     "fast_extractor",
+    "judgement_extractor",
     "parse_json_object",
     "reasoning_extractor",
     "split_thinking",

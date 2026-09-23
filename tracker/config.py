@@ -245,6 +245,20 @@ class Settings(BaseSettings):
     #: next lever if the bill still bites, ahead of shortening what it may read.
     deepseek_agent_effort: Literal["low", "high", "max"] = "high"
 
+    #: The per-item judgements: one call per obstacle, per audit finding, per
+    #: contested field, per disagreement an enrich run created — each choosing from a
+    #: short closed menu against evidence already in the prompt.
+    #:
+    #: They inherited `max` the way the agent loop once did, by reusing the factory
+    #: built for `infer`, whose case for depth is "one call per project". These are
+    #: not one per project: a night's `risks confirm` alone is 40 of them a round, and
+    #: `audit resolve` 60. The question each asks — does this sentence state this
+    #: obstacle, which printed figure is this campus's — is the shape extraction
+    #: answers at `high`, and `max` on a 6,000-token reply budget is also how
+    #: `risks confirm` came back truncated and was retried. `max` stays one setting
+    #: away for anyone who measures it doing better.
+    deepseek_judgement_effort: Literal["low", "high", "max"] = "high"
+
     #: Model for the drawer's written briefing — the one call a person waits for.
     #:
     #: A third setting, because this job's constraint is neither volume nor depth

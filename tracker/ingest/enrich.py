@@ -44,7 +44,7 @@ from sqlalchemy.orm import Session
 from tracker.config import Settings, get_settings
 from tracker.gaps import FILLED, NOT_APPLICABLE, FieldState, for_project
 from tracker.llm import LLMUnavailable
-from tracker.llm import reasoning_extractor as _reasoning_extractor
+from tracker.llm import judgement_extractor as _judgement_extractor
 from tracker.models import IngestUrl, Project, Source
 from tracker.vocab import TRACKED_FIELDS
 
@@ -696,7 +696,7 @@ def run(
                 # The JUDGEMENT tier, deliberately not the `extractor` above: that
                 # one reads articles and is the high-volume path. This is one call
                 # per contested field and is where the heavier model earns its cost.
-                extractor=settle_extractor or _reasoning_extractor(settings),
+                extractor=settle_extractor or _judgement_extractor(settings),
                 dry_run=dry_run,
             )
         except LLMUnavailable:

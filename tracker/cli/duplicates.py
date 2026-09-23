@@ -458,10 +458,11 @@ def duplicates_resolve(
 
     extractor = None
     if llm or use_agent:
-        from tracker.llm import LLMUnavailable, agent_extractor, reasoning_extractor
+        from tracker.llm import LLMUnavailable, agent_extractor, judgement_extractor
 
         try:
-            build = agent_extractor if use_agent else reasoning_extractor
+            # One call per pair on the one-call path: a verdict from a closed set.
+            build = agent_extractor if use_agent else judgement_extractor
             extractor = build()
         except LLMUnavailable as exc:
             if keyboard is None:

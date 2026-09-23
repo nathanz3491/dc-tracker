@@ -76,8 +76,8 @@ project gets a turn.
 After the rounds, before the report. Harvesting sources is what *creates*
 disagreement, so this is the moment the question arises and the claims are in hand.
 Every still-contested field — not only the ones this run added — goes to
-`conflicts.solve` on the **reasoning** tier, deliberately not the extractor that
-read the articles. It writes, unlike `tracker logic conflicts`, which proposes;
+`conflicts.solve` on the **judgement** tier (the reasoning model at `high`, one call
+per field), deliberately not the extractor that read the articles. It writes, unlike `tracker logic conflicts`, which proposes;
 `--dry-run` suppresses the write along with everything else.
 
 It needs no bookkeeping to avoid re-asking. Applying an answer marks the losing

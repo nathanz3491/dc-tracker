@@ -61,6 +61,14 @@ is stripped the same way DeepSeek's `reasoning_content` is), and the tier
 policy (extraction and `infer` reason, the drawer's briefing does not — on
 Ollama the effort dial collapses to think-or-not).
 
+The tiers, and why there are five: extraction runs at `high` because it is every
+article; `infer` at `max` because it is one call per project; the agent loop at
+`high` because it is nine to twelve calls per finding; the per-item judgements —
+`risks confirm`, `audit resolve`, `logic conflicts`, enrich's settle step — at `high`
+because each is one call per obstacle, finding or field, up to a hundred a round
+overnight (`TRACKER_DEEPSEEK_JUDGEMENT_EFFORT`); and the drawer's briefing not at
+all, because a person is waiting for it.
+
 Two Ollama-specific settings are worth knowing about, and one is load-bearing.
 `TRACKER_OLLAMA_NUM_CTX` (default 32768) rides on every request because
 Ollama's own default context is a few thousand tokens and **input beyond it is
