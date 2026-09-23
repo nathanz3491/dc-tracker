@@ -621,6 +621,36 @@ def test_the_publishers_route_answers_who_decided(server):
         assert host["host"]
 
 
+def _statements_for(address, path) -> int:
+    """How many SQL statements one request issues, across every engine."""
+    from sqlalchemy import event
+    from sqlalchemy.engine import Engine
+
+    issued: list[int] = []
+
+    def count(*_args) -> None:
+        issued.append(1)
+
+    event.listen(Engine, "before_cursor_execute", count)
+    try:
+        assert request(address, path)[0] == 200
+    finally:
+        event.remove(Engine, "before_cursor_execute", count)
+    return len(issued)
+
+
+def test_the_publisher_survey_reads_every_citation_in_one_pass(server, seeded_db):
+    """It read one project's citations at a time: 486 queries on a copy of
+    production, 239 ms. The count is now a property of the survey, not of the
+    database — asked with one project and again with two."""
+    address, _ = server
+    assert request(address, "/api/dataset")[0] == 200  # the engine opened, the accounts counted
+    one = _statements_for(address, "/api/publishers")
+    _second_project(seeded_db)  # a commit, so the next request recomputes
+    assert request(address, "/api/dataset")[0] == 200
+    assert _statements_for(address, "/api/publishers") == one
+
+
 def test_the_updates_route_is_the_landing_page(server):
     """Signed, ranked, and honest about which clock the window is on."""
     address, _ = server

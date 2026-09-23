@@ -270,15 +270,32 @@ def decisive_by_source(sources: list[Source]) -> Attribution:
 
 
 def survey(session: Session) -> Survey:
-    """Walk every project and total up what each publisher decided."""
+    """Walk every project and total up what each publisher decided.
+
+    **Two queries, not one per project.** It asked for each project's citations
+    separately — 486 queries and 239 ms for the console's Sources view on a copy of
+    production. Every citation is read in one pass now and grouped here.
+
+    The order is kept exactly, because it can decide a credit: `claims_by_field`
+    breaks ties between equally strong claims on the order its sources arrive. A
+    per-project query reads through `ix_source_project_id`, which is id order
+    within a project, so `ORDER BY project_id, id` hands each project the same
+    list; and projects are walked in id order, which is what the table scan the
+    old loop ran over returns. Checked on the production copy: the survey is
+    identical, host for host.
+    """
     out = Survey()
     stats: dict[str, HostStat] = {}
 
     def stat(host: str) -> HostStat:
         return stats.setdefault(host, HostStat(host=host))
 
-    for project in session.scalars(select(Project)).all():
-        rows = session.scalars(select(Source).where(Source.project_id == project.id)).all()
+    by_project: dict[int, list[Source]] = {}
+    for source in session.scalars(select(Source).order_by(Source.project_id, Source.id)):
+        by_project.setdefault(source.project_id, []).append(source)
+
+    for project_id in session.scalars(select(Project.id).order_by(Project.id)):
+        rows = by_project.get(project_id, [])
         # Attribution runs over the FULL claim set, including derived rows: a
         # reference-data claim still competes in the merge, so removing it before
         # resolving would credit a publisher with a win it did not have. Only the
