@@ -208,8 +208,19 @@ class Console:
         *,
         allow_ai: bool = True,
         allow_watch: bool = True,
+        published: bool = False,
     ) -> None:
         self.db_path = db_path
+        #: Whether this console was started behind a tunnel — on a public URL.
+        #:
+        #: **A published console requires a sign-in whatever the account count.**
+        #: Behind a tunnel every request arrives from 127.0.0.1, so "reaching
+        #: loopback already means having the machine" — the reason zero accounts
+        #: may mean an open console — is simply false there. Startup already refused
+        #: to publish with no accounts; this is the same rule held for the life of
+        #: the process, because `tracker users rm` of the last account used to turn
+        #: a published console into an open one within five seconds.
+        self.published = published
         #: Whether the LLM panels — the briefing, `infer`, the capex overview —
         #: may run. They *read* a row and spend a token; `tracker infer` has never
         #: written its answer anywhere, which is why spending and writing were two
@@ -230,7 +241,7 @@ class Console:
         self.allow_watch = allow_watch
         self.gate = Gate()
         self._schema_version: int | None = None
-        self._auth_required = False
+        self._accounts_exist = False
         self._auth_checked_at = 0.0
 
     def read_session(self):
@@ -245,7 +256,16 @@ class Console:
 
     @property
     def auth_required(self) -> bool:
-        """Whether anybody has to sign in — i.e. whether any account exists.
+        """Whether anybody has to sign in.
+
+        **Always, on a published console** — see `published`. On loopback, whether
+        any account exists, and zero is the no-setup default a fresh install has.
+        """
+        return self.published or self.accounts_exist
+
+    @property
+    def accounts_exist(self) -> bool:
+        """Whether any account exists.
 
         Read from the database rather than from a flag, because the answer is made
         by `tracker users add` in a *different process* and a console that had been
@@ -257,23 +277,29 @@ class Console:
         for an answer that changes about once. The staleness window is shorter than
         the time it takes to alt-tab to the browser after creating an account.
 
-        A database that cannot be read at all is treated as **requiring** auth. The
-        request is going to fail anyway, and the safe direction for a doubt about
-        whether a password is needed is "yes".
+        A database that cannot be read at all is treated as **having** accounts, so
+        a sign-in is required. The request is going to fail anyway, and the safe
+        direction for a doubt about whether a password is needed is "yes".
         """
         now = time.monotonic()
         if now - self._auth_checked_at < AUTH_CACHE_S:
-            return self._auth_required
+            return self._accounts_exist
+        had = self._accounts_exist
         try:
             with self.read_session() as session:
                 from tracker import accounts
 
-                self._auth_required = accounts.any_exist(session)
+                self._accounts_exist = accounts.any_exist(session)
         except Exception:  # a missing file, a pending migration, a locked database
             log.debug("console: could not count accounts; assuming a sign-in is needed")
-            self._auth_required = True
+            self._accounts_exist = True
         self._auth_checked_at = now
-        return self._auth_required
+        if had and not self._accounts_exist and self.published:
+            log.warning(
+                "console: the last account was deleted; this published console now "
+                "refuses every sign-in until `tracker users add` makes one"
+            )
+        return self._accounts_exist
 
     def account_holds(self, account_id: int, stamp: str) -> bool | None:
         """Whether a session's account still exists with the credential it signed in on.
@@ -751,9 +777,24 @@ class Handler(BaseHTTPRequestHandler):
         On a console with no accounts there is nothing to sign in to, and saying so
         is better than a bare 401: it is a legitimate state (`tracker serve` on
         loopback needs no setup) and the page needs to know not to show a form.
+
+        A *published* console with no accounts is the other case, and it refuses
+        with the fix rather than "wrong email or password": nobody can sign in, no
+        guess is being made, and the only person who can act on it is whoever runs
+        the host. Answered before the lockout for the same reason — there is nothing
+        to rate-limit.
         """
         if not self.console.auth_required:
             return self._json({"ok": True, "note": "this console has no accounts"})
+        if self.console.published and not self.console.accounts_exist:
+            return self._json(
+                {
+                    "error": "This console is published and has no accounts, so nobody can "
+                    "sign in. Whoever runs it has to create one on the host: "
+                    "`tracker users add <email>`."
+                },
+                status=503,
+            )
 
         locked = self._locked_out()
         if locked:
@@ -1797,9 +1838,14 @@ def serve(
     open_browser: bool = True,
     allow_ai: bool = True,
     allow_watch: bool = True,
+    published: bool = False,
 ) -> None:
-    """Run the console until interrupted."""
-    console = Console(db_path, allow_ai=allow_ai, allow_watch=allow_watch)
+    """Run the console until interrupted.
+
+    `published` is True behind a tunnel, and makes the console require a sign-in
+    for as long as it runs — see `Console.published`.
+    """
+    console = Console(db_path, allow_ai=allow_ai, allow_watch=allow_watch, published=published)
     handler = type("BoundHandler", (Handler,), {"console": console})
     httpd = ThreadingHTTPServer((host, port), handler)
     httpd.daemon_threads = True

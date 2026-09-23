@@ -142,6 +142,15 @@ refuses is publishing: `serve --tunnel` will not put a page with no way to gate 
 on the open internet. Creating the first account closes the gate on a *running*
 console within a few seconds, without a restart.
 
+**A console that is already published never opens.** Behind a tunnel every
+request arrives from 127.0.0.1, so the loopback argument is simply false there,
+and the console requires a sign-in for as long as it runs whatever the account
+count. Deleting the last account therefore refuses everyone, and the sign-in form
+says `tracker users add` is the fix. It used to do the opposite: the check that
+refused to publish ran only at startup, so `tracker users rm` of the last account
+put the whole dataset on the public URL within five seconds, and the CLI reported
+that the console was "open again".
+
 There is no open registration. Behind a tunnel the login page is a public URL, and
 while an account cannot run a command it can still read the whole dataset. So an
 account is made either at a terminal or by redeeming a code that was minted at
@@ -469,7 +478,9 @@ asset URL with that file's version, so a restart genuinely replaces the front en
 file is a different URL. Only the Python process needs the restart.
 
 **At least one account is required for either shape** and the command refuses to
-start without one — `tracker users add you@example.com`. A quick-tunnel hostname
+start without one — `tracker users add you@example.com` — and a published console
+keeps requiring one: delete the last account while it runs and it refuses every
+sign-in rather than opening. A quick-tunnel hostname
 is random but **not secret** — it goes over the wire and Cloudflare knows it — so
 it is obscurity, not access control. The sign-in, the per-client and global
 lockouts, and the fact that nothing here can start a command are the access

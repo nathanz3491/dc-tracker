@@ -95,7 +95,9 @@ There are no roles, because there is nothing left to have a role *about*.
 fresh install is in, and it is right for loopback: reaching 127.0.0.1 already
 means having the machine. What refuses is *publishing* — `serve --tunnel` will not
 put a page with no way to gate it on the open internet, exactly as it refused
-without a password before.
+without a password before. And a console already published holds that rule for
+as long as it runs: it requires a sign-in whatever the count, so deleting its
+last account refuses everyone instead of opening the page.
 
 Creating the first account changes what a running console does, within seconds and
 without a restart. The server counts rows rather than reading a flag it was given
@@ -320,8 +322,9 @@ and — with `--ai` — a model panel that spends real tokens per click.
 **Accounts, and a rate limit.** The moment the console is published — a tunnel, a
 proxy — loopback stops meaning anything, because a tunnel connects from the local
 machine and so every request looks local. Publishing therefore *requires* an
-account; without one the command refuses to start. Before signing in, the entire
-site is a login page — not even the frontend code is served.
+account; without one the command refuses to start, and once published the console
+stays gated even if every account is later deleted (`Console.published`). Before
+signing in, the entire site is a login page — not even the frontend code is served.
 
 What makes a short password safe is not its length, it is the rate: eight failures
 lock one client out for fifteen minutes, and forty across *all* clients close the

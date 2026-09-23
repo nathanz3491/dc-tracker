@@ -212,7 +212,9 @@ def any_exist(session: Session) -> bool:
     Zero accounts is a legitimate state and means an open console, exactly as an
     unset `TRACKER_CONSOLE_PASSWORD` did before this: `tracker serve` on loopback
     needs no setup, and reaching loopback already means having the machine.
-    Publishing is what refuses — see `cli._console_accounts`.
+    Publishing is what refuses — see `cli._console_accounts` — and a console
+    already published ignores this answer and requires a sign-in regardless
+    (`webui/server.py::Console.published`).
     """
     return session.scalar(select(Account.id).limit(1)) is not None
 

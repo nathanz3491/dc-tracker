@@ -179,7 +179,8 @@ def serve(
     `tracker users add` puts a sign-in in front of it and gives each person their
     own watchlist. With no accounts it opens straight in, which is fine on loopback
     — reaching localhost already means having the machine — and is why `--tunnel`
-    refuses until at least one account exists.
+    refuses until at least one account exists. Once published it stays gated: if
+    the last account is deleted it refuses everyone rather than opening.
 
     `--tunnel` uses the tunnel configured in `TRACKER_TUNNEL_NAME` /
     `TRACKER_TUNNEL_HOSTNAME` if there is one, and an anonymous quick tunnel
@@ -335,6 +336,11 @@ def _run_console(
     # "published and open". The console can no longer start a run, so what is behind
     # the URL is the dataset and the token spend — still not things to publish
     # anonymously.
+    #
+    # This is the check at startup. The same rule is held for the life of the
+    # process by `published=` below: a console started behind a tunnel requires a
+    # sign-in whatever the account count, so deleting the last account refuses
+    # everyone rather than opening the page. See `webui.server.Console.published`.
     if publish and not accounts_held:
         _fail(
             "publishing this console puts it on a public URL, and it has no accounts, "
@@ -407,6 +413,7 @@ def _run_console(
             open_browser=open_browser and not publish,
             allow_ai=ai,
             allow_watch=watch_edits,
+            published=bool(publish),
         )
     finally:
         if public is not None:
@@ -494,7 +501,8 @@ def cloudflare(
     **At least one account is required either way and this refuses to start
     without one** (`tracker users add`). The URL is public, and what is behind it is
     the whole dataset plus, with `--ai`, a model panel that spends real tokens per
-    click; a random hostname is obscurity, not access control.
+    click; a random hostname is obscurity, not access control. The rule holds for
+    as long as it runs: delete the last account and every sign-in is refused.
 
     `--check` runs every test short of opening the tunnel and prints what it
     found, which is the cheap way to discover that cloudflared is a truncated

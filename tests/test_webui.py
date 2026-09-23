@@ -1662,6 +1662,117 @@ def test_a_session_whose_account_cannot_be_checked_is_refused_but_kept():
     assert gate.session_for(token) is None, "dropped"
 
 
+@pytest.fixture
+def published(seeded_db):
+    """A console started the way `tracker cloudflare` starts it: behind a tunnel."""
+    from http.server import ThreadingHTTPServer
+
+    _account(seeded_db)
+    console = Console(seeded_db, published=True)
+    handler = type("Bound", (Handler,), {"console": console})
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    httpd.daemon_threads = True
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        yield httpd.server_address, console
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_a_published_console_fails_closed_when_its_last_account_goes(published, seeded_db):
+    """Publishing with no accounts was refused at startup and nowhere after it.
+
+    Whether a sign-in is needed is re-read from "does any account exist" every
+    few seconds, so `tracker users rm` of the last account turned a tunnelled
+    console into an open one — the whole dataset on a public URL — and the CLI
+    said so as if it were good news ("open again"). A published console now
+    requires a sign-in whatever the account count, so with none left it refuses
+    everyone and says why on the one form it still serves.
+    """
+    address, console = published
+    console.gate.session_confirm_s = 0
+    _, cookie = sign_in(address)
+    assert raw(address, "/api/dataset", cookie=cookie)[0] == 200
+
+    _delete_account(seeded_db)
+    console._auth_checked_at = 0.0  # the cache, expired
+    assert console.auth_required is True, "a tunnel is not loopback, whatever the count"
+    for path in ("/api/dataset", "/api/projects", "/api/health", "/static/app.js"):
+        assert raw(address, path)[0] == 401, f"{path} was served on a published console"
+        assert raw(address, path, cookie=cookie)[0] == 401, f"{path}: the old session too"
+    status, _, body = raw(address, "/")
+    assert status == 200 and "Sign in" in body, "the form, and nothing else"
+
+    status, _, body = raw(address, "/api/login", "POST", {"email": EMAIL, "password": PASSWORD})
+    assert status == 503
+    assert "tracker users add" in body, "the refusal says what fixes it"
+
+
+def test_a_loopback_console_still_opens_when_its_last_account_goes(gated, seeded_db):
+    """The other half of the split, unchanged: on loopback, zero accounts is the
+    no-setup default a fresh install has, because reaching 127.0.0.1 already means
+    having the machine."""
+    address, console = gated
+    _delete_account(seeded_db)
+    console._auth_checked_at = 0.0
+    assert console.auth_required is False
+    assert raw(address, "/api/dataset")[0] == 200
+
+
+def test_publishing_tells_the_console_it_is_published(seeded_db, monkeypatch):
+    """The flag has to reach the server from both ways of publishing, or the
+    fail-closed rule protects nothing."""
+    from typer.testing import CliRunner
+
+    from tracker.cli import app
+
+    class FakeTunnel:
+        via_proxy, url, confirmed, kind = None, "https://console.example", True, "quick"
+
+        def stop(self) -> None:
+            pass
+
+    _account(seeded_db)
+    started: list[dict] = []
+    monkeypatch.setattr("tracker.webui.server.serve", lambda path, **kw: started.append(kw))
+    monkeypatch.setattr("tracker.webui.tunnel.find_cloudflared", lambda: "cloudflared")
+    monkeypatch.setattr("tracker.webui.tunnel.quick_tunnel", lambda *a, **kw: FakeTunnel())
+    runner = CliRunner()
+
+    for argv in (["cloudflare", "--quick"], ["serve", "--tunnel", "--no-open"]):
+        result = runner.invoke(app, ["--db", str(seeded_db), *argv])
+        assert result.exit_code == 0, result.output
+    assert [kw["published"] for kw in started] == [True, True]
+
+    started.clear()
+    assert runner.invoke(app, ["--db", str(seeded_db), "serve", "--no-open"]).exit_code == 0
+    assert started[0]["published"] is False
+
+
+def test_deleting_the_last_account_says_what_it_does_to_a_published_console(seeded_db):
+    """It used to announce "the console is open again", which on the host — the
+    only place a console is published — was the one outcome that must not happen."""
+    from typer.testing import CliRunner
+
+    from tracker.cli import app
+
+    _account(seeded_db)
+    runner = CliRunner()
+
+    def said(result) -> str:
+        return " ".join(result.output.split())  # Rich wraps at the runner's width
+
+    declined = runner.invoke(app, ["--db", str(seeded_db), "users", "rm", EMAIL], input="n\n")
+    assert "last account" in said(declined), "the prompt says so before anything goes"
+    assert declined.exit_code != 0
+
+    removed = runner.invoke(app, ["--db", str(seeded_db), "users", "rm", EMAIL, "--yes"])
+    assert removed.exit_code == 0, removed.output
+    assert "refuses every sign-in" in said(removed)
+    assert "open again" not in said(removed)
+
+
 def _exchange(address, head: bytes, *, wait: float = 5.0) -> bytes:
     """Send bytes exactly as given; return whatever came back before `wait` ran out.
 

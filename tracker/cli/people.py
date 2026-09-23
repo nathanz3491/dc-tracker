@@ -361,7 +361,9 @@ def users(ctx: typer.Context) -> None:
     in: the console then opens with no sign-in, exactly as it did with no
     `TRACKER_CONSOLE_PASSWORD`, because reaching loopback already means having the
     machine. What refuses is publishing — `serve --tunnel` will not put a page with
-    no way to gate it on the open internet.
+    no way to gate it on the open internet — and a console *already* published
+    goes on requiring a sign-in if its last account is deleted, so it refuses
+    everyone rather than opening.
 
     Adding the first account therefore *changes what the console does*, and only
     ever in the safe direction: every route starts asking for a session, and each
@@ -405,8 +407,9 @@ def users(ctx: typer.Context) -> None:
 
         if not rows:
             console.print(
-                "[dim]no accounts, so the console opens without a sign-in and refuses "
-                "to publish.\nMake one with `tracker users add you@example.com`.[/dim]"
+                "[dim]no accounts, so a console on loopback opens without a sign-in, a "
+                "published one refuses everyone, and publishing is refused.\n"
+                "Make one with `tracker users add you@example.com`.[/dim]"
             )
         else:
             table = Table(header_style="bold", title_justify="left", box=TABLE_BOX)
@@ -517,6 +520,15 @@ def users_rm(
 
     Their open sessions end within a few seconds on a running console, on every
     route: each request re-checks its session against this row.
+
+    **The last account can be deleted like any other, with no extra flag**, and
+    that is a decision. It used to be the dangerous one — a published console
+    opened within seconds of it — but a published console now refuses everyone
+    instead (`webui/server.py::Console.published`). What is left is an outage that
+    `tracker users add` undoes in seconds, for an operation that is rare and
+    already confirmed; a second flag would be friction on the one path that
+    already asks. So the prompt says it is the last account, and the result says
+    what that did.
     """
     from tracker import accounts, watchlist
 
@@ -529,6 +541,12 @@ def users_rm(
             raise
         target, held = row.email, len(watchlist.entries(session, account_id=row.id))
         if not yes and not json_mode():
+            if accounts.count(session) == 1:
+                console.print(
+                    "[yellow]this is the last account.[/yellow][dim] A published console "
+                    "will refuse every sign-in until `tracker users add` makes another; "
+                    "one on loopback will open without a sign-in.[/dim]"
+                )
             note = f" and {held} watchlist entr{'y' if held == 1 else 'ies'}" if held else ""
             typer.confirm(f"delete {target}{note}?", abort=True)
         accounts.delete(session, email)
@@ -540,8 +558,9 @@ def users_rm(
     console.print(f"[green]deleted[/green] {escape(target)}")
     if not remaining:
         console.print(
-            "[yellow]that was the last account[/yellow][dim] — the console is open "
-            "again on loopback, and will refuse to publish.[/dim]"
+            "[yellow]that was the last account[/yellow][dim] — a published console now "
+            "refuses every sign-in until `tracker users add` makes another; one on "
+            "loopback opens without a sign-in, and cannot be published.[/dim]"
         )
 
 
