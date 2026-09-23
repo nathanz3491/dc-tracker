@@ -150,7 +150,11 @@ preview. The discover phase still polls the feeds and still runs its searches; t
 prospect phase still searches and still asks the model for campus names; the
 refresh and enrich phases still fetch articles and still put them through the
 extractor, because "what would this run change" cannot be answered without doing
-the reading. What it guarantees is the transaction: every write is rolled back.
+the reading. What it guarantees is the transaction: every write is rolled back,
+article by article, so a dry run does not hold the database's write lock while it
+reads. The one model call it does skip is the identity check, whose verdict nothing
+would be written for — so a dry run counts as inserts the rows that check might
+have routed onto an existing one.
 
 The one phase a dry run genuinely does not spend on is **extract**, and for a
 mechanical reason rather than a designed one — the candidates phase 1 found were

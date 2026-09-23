@@ -158,6 +158,15 @@ the model was *shown* rather than the full stored article. Extraction truncates 
 head, marker, tail — so verifying against the whole thing would pass a sentence from
 the omitted middle and leave a gate that proves nothing.
 
+**It never runs inside an open write.** SQLite takes one writer and the console's
+sign-in waits five seconds for it, so each record's writes are committed before the
+next record is upserted — the arbiter used to be asked about an article's second
+project with the first project's writes still holding the lock, for the length of a
+model call. **A `--dry-run` does not ask it at all**: a verdict nothing is written
+for is a cost with nothing to show, so the dry run counts the insert the arbiter
+might have prevented. A dry run also rolls each article back as it goes rather than
+holding one transaction from the first URL to the last.
+
 It is passed to both the extract and refresh phases through one helper
 (`_identity_arbiter`), so the two cannot drift into different rules about when a
 row may be created. Refresh re-reads URLs already attached, so it matches by key

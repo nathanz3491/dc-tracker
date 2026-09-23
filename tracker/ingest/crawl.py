@@ -2719,10 +2719,26 @@ def run(
     `sync`, `enrich`, `ingest crawl` and `backfill` all funnel through here, so
     filtering once covers callers nobody remembered to update, and covers queue
     rows that predate the policy. Pass an explicit `policy.EMPTY` to disable it.
+
+    **No model call is made inside an open write transaction.** SQLite takes one
+    writer, and the console's sign-in waits five seconds for it; a model call is
+    tens. So each record's writes are committed before the next record is upserted
+    — the identity arbiter, which runs inside `upsert_record`, used to be asked about
+    an article's second project with the first project's writes still open — and a
+    `dry_run` rolls each article back instead of holding one transaction from the
+    first URL to the last. A dry run judges every article against the database as
+    it stands, so two articles about one new campus both report an insert.
+
+    **A dry run does not consult the arbiter.** It would pay for a verdict nothing
+    is written for, and hold the dry run's own uncommitted writes while it waited;
+    the report counts the insert the arbiter might have prevented instead.
     """
     import asyncio
 
     settings = settings or get_settings()
+    if dry_run and arbiter is not None:
+        log.info("dry run: the identity arbiter is not consulted, so inserts are counted as such")
+        arbiter = None
     prompt = load_prompt(prompt_name)
     if extractor is None:
         from tracker.llm import default_extractor
@@ -2886,6 +2902,11 @@ def run(
                 arbiter=record_arbiter,
                 reading=reading,
             )
+            # Before the next record, not after the article: the next record's
+            # arbitration is a model call, and it must not run with these writes
+            # still holding the lock. See the docstring.
+            if not dry_run:
+                session.commit()
             if upsert.action == "refused":
                 # Named, not merely counted: a refused campus is a candidate to
                 # add deliberately later, and a run that reported only a number
@@ -2911,7 +2932,7 @@ def run(
 
 
 def _checkpoint(session: Session, dry_run: bool) -> None:
-    """Commit after each URL rather than once at the end of the run.
+    """End each URL's transaction rather than holding one for the whole run.
 
     Two reasons, both learned the hard way on a 150-article run:
 
@@ -2922,9 +2943,14 @@ def _checkpoint(session: Session, dry_run: bool) -> None:
       Ingestion is idempotent by design, so committing as it goes means a
       re-run resumes instead of starting over.
 
-    A dry run holds everything so the outer rollback still discards it.
+    A dry run rolls the article back here instead. It used to hold everything so one
+    rollback at the end could discard it, which is the first reason above in full: a
+    dry run held the lock from its first URL to its last, across every model call in
+    between. Per-record commits inside an article are `run`'s, for the arbiter.
     """
-    if not dry_run:
+    if dry_run:
+        session.rollback()
+    else:
         session.commit()
 
 

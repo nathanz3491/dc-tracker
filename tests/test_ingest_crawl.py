@@ -3072,6 +3072,96 @@ def test_a_project_the_arbiter_routes_onto_its_siblings_row_keeps_its_claims(ses
     assert claims["expected_online"] == "2027-07-01"
 
 
+# --- no model call inside an open write transaction ------------------------------
+#
+# SQLite takes one writer. A crawl that makes a model call while its own writes are
+# uncommitted holds the lock for the length of the call, and every other writer —
+# the console's sign-in among them, with a five-second busy timeout — fails with
+# "database is locked". Two places did: the identity arbiter for the second project
+# of an article, which ran after the first project's writes, and every `--dry-run`,
+# which held one transaction from the first URL to the last.
+
+
+def _another_writer_can_write(db_path: Path) -> bool:
+    """What a console sign-in needs: the write lock, now, with no patience."""
+    import sqlite3
+
+    other = sqlite3.connect(db_path, timeout=0)
+    try:
+        other.execute("BEGIN IMMEDIATE")
+        other.execute("ROLLBACK")
+        return True
+    except sqlite3.OperationalError:
+        return False
+    finally:
+        other.close()
+
+
+def test_the_arbiter_is_never_consulted_inside_an_open_write(session, db_path):
+    """The first project's writes are committed before the second's arbitration."""
+    seen: list[bool] = []
+
+    def arbiter(*, candidate, **_):
+        seen.append(_another_writer_can_write(db_path))
+        return candidate.id
+
+    llm = FakeLLM([_two_projects_reply(second_city=None, second_county="Racine")])
+    crawl.run(session, [URL], fetcher=FakeFetcher({URL: fetched()}), extractor=llm, arbiter=arbiter)
+
+    assert seen == [True], "another writer was locked out while the arbiter ran"
+
+
+class _ProbingLLM(FakeLLM):
+    """Asks, at every extraction call, whether another writer could write."""
+
+    def __init__(self, replies, db_path):
+        super().__init__(replies)
+        self.db_path = db_path
+        self.free: list[bool] = []
+
+    def complete(self, **kwargs) -> LLMReply:
+        self.free.append(_another_writer_can_write(self.db_path))
+        return super().complete(**kwargs)
+
+
+def test_a_dry_run_does_not_hold_the_lock_across_articles(session, db_path):
+    other = "https://www.datacenterdynamics.com/en/news/another-article/"
+    llm = _ProbingLLM(
+        [canned("llm_response_microsoft_wi.json"), canned("llm_response_microsoft_wi.json")],
+        db_path,
+    )
+    report = crawl.run(
+        session,
+        [URL, other],
+        fetcher=FakeFetcher({URL: fetched(), other: fetched(other)}),
+        extractor=llm,
+        dry_run=True,
+    )
+    assert llm.free == [True, True], "the dry run's writes held the lock into the next call"
+    assert report.inserted + report.updated >= 1, "a dry run still reports what it would do"
+    assert session.scalar(select(func.count()).select_from(Project)) == 0
+
+
+def test_a_dry_run_pays_for_no_identity_verdict(session, _city_row):
+    """A verdict nothing will be written for is a cost with nothing to show. The
+    dry run reports the insert the arbiter might have prevented instead."""
+    from tracker import gatekeeper
+
+    session.commit()
+    body = article()
+    llm = VerdictLLM([_county_twin_reply()], quote=body.split(".")[0][:80])
+    report = crawl.run(
+        session,
+        [URL],
+        fetcher=FakeFetcher({URL: fetched(markdown=body)}),
+        extractor=llm,
+        arbiter=gatekeeper.same_site_arbiter(llm),
+        dry_run=True,
+    )
+    assert llm.verdicts == []
+    assert report.inserted == 1
+
+
 def test_an_unambiguous_article_costs_no_arbitration(session):
     """With no stored row to collide with there is no question, so no second call."""
     from tracker import gatekeeper
