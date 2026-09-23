@@ -168,6 +168,52 @@ def test_an_unknown_address_still_spends_a_hash(session, monkeypatch):
     assert len(calls) == 1, "a miss must hash too"
 
 
+def test_an_unknown_address_costs_exactly_the_hash_a_known_one_does(session, monkeypatch):
+    """One scrypt either way, counted rather than timed.
+
+    "Still spends a hash" (above) was true and not enough. The miss hashed a fresh
+    random password — one scrypt — and then verified against it — a second — so on
+    a copy of production a wrong password for an unknown address took ~109 ms
+    against ~56 ms for a real one, and the response time said which addresses have
+    accounts. Counted on `hashlib.scrypt` itself, because the property is how much
+    work each path does and a clock in a test suite measures the machine.
+    """
+    import hashlib
+
+    _make(session)
+    # One miss first, so whatever a miss prepares once is prepared — `server.serve`
+    # does this at startup, so the first miss after a restart is not the odd one.
+    accounts.verify(session, "warm@example.com", PASSWORD)
+
+    calls: list[int] = []
+    real = hashlib.scrypt
+    monkeypatch.setattr(hashlib, "scrypt", lambda *a, **kw: (calls.append(1), real(*a, **kw))[1])
+
+    cost: dict[str, int] = {}
+    for label, email, password in (
+        ("unknown address", "nobody@example.com", PASSWORD),
+        ("malformed address", "not an address", PASSWORD),
+        ("wrong password", "alice@example.com", "not the password"),
+        ("right password", "alice@example.com", PASSWORD),
+    ):
+        calls.clear()
+        accounts.verify(session, email, password)
+        cost[label] = len(calls)
+    assert set(cost.values()) == {1}, cost
+
+
+def test_the_decoy_is_made_once_rather_than_per_miss(session, monkeypatch):
+    """Making it per miss was the second scrypt."""
+    made: list[int] = []
+    real = accounts.hash_password
+    monkeypatch.setattr(accounts, "hash_password", lambda p: (made.append(1), real(p))[1])
+    accounts.decoy_hash.cache_clear()
+
+    for _ in range(3):
+        assert accounts.verify(session, "nobody@example.com", PASSWORD) is None
+    assert len(made) == 1
+
+
 def test_setting_a_password_replaces_the_hash(session):
     row = _make(session)
     before = row.password_hash

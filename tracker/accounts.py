@@ -37,6 +37,7 @@ import hashlib
 import hmac
 import logging
 import secrets
+from functools import lru_cache
 from typing import Final
 
 from sqlalchemy import func, select
@@ -258,16 +259,36 @@ def delete(session: Session, email: str) -> bool:
     return True
 
 
+@lru_cache(maxsize=1)
+def decoy_hash() -> str:
+    """A real stored-form hash of a secret nobody holds, made once per process.
+
+    What `verify` checks a password against when no account has the address, so
+    that path costs exactly the one scrypt the wrong-password path costs. It used to
+    hash a fresh random string on every miss and then verify against it — two
+    scrypts — and on a copy of production a wrong password for an unknown address
+    took ~109 ms against ~56 ms for a real one: the response time said which
+    addresses exist, which is the one thing the shared "Wrong email or password"
+    message was written not to say.
+
+    Made with today's cost parameters, which are the ones every row is written
+    with. If they are ever raised, rows written before verify at their old cost,
+    and this is where the difference would reappear. `server.serve` calls it
+    before listening, so the first miss after a restart is not the odd one out.
+    """
+    return hash_password(secrets.token_urlsafe(32))
+
+
 def verify(session: Session, email: str, password: str) -> Account | None:
     """The account this pair signs in as, or None.
 
     **The unknown-address and wrong-password paths must cost the same**, or the
-    response time says which addresses have accounts. So a miss still runs one
-    scrypt, against a hash of a random string that nothing can match.
+    response time says which addresses have accounts. So a miss runs the same one
+    scrypt a real row does, against `decoy_hash` — a hash nothing can match.
     """
     row = by_email(session, email)
     if row is None:
-        verify_password(password, hash_password(secrets.token_urlsafe(16)))
+        verify_password(password, decoy_hash())
         return None
     return row if verify_password(password, row.password_hash) else None
 
@@ -391,6 +412,7 @@ __all__ = [
     "check_password_length",
     "count",
     "create",
+    "decoy_hash",
     "delete",
     "hash_password",
     "listing",

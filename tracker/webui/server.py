@@ -1845,7 +1845,12 @@ def serve(
     `published` is True behind a tunnel, and makes the console require a sign-in
     for as long as it runs — see `Console.published`.
     """
+    from tracker import accounts
+
     console = Console(db_path, allow_ai=allow_ai, allow_watch=allow_watch, published=published)
+    # Made now rather than on the first sign-in to an unknown address, which
+    # would otherwise cost two scrypts where every later one costs one.
+    accounts.decoy_hash()
     handler = type("BoundHandler", (Handler,), {"console": console})
     httpd = ThreadingHTTPServer((host, port), handler)
     httpd.daemon_threads = True
