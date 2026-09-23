@@ -149,3 +149,66 @@ def test_the_policy_writer_never_writes_into_the_package(monkeypatch, tmp_path):
 
     assert written == tmp_path / "seed" / "sources.toml"
     assert package_root() not in written.parents
+
+
+# --- one name for every DeepSeek tier ------------------------------------------
+#
+# The three model settings were the same string written three times. A provider
+# that renames its models faster than this project releases will eventually have
+# two of them updated and one forgotten, which surfaces as a 404 on whichever path
+# is least exercised — so they share one constant, and one variable moves them all.
+
+
+def test_every_tier_defaults_to_the_one_constant():
+    from tracker.config import DEEPSEEK_MODEL, Settings
+
+    settings = Settings(deepseek_api_key="k")
+    assert settings.deepseek_model == DEEPSEEK_MODEL
+    assert settings.deepseek_reasoning_model == DEEPSEEK_MODEL
+    assert settings.deepseek_fast_model == DEEPSEEK_MODEL
+
+
+def test_one_variable_moves_every_tier():
+    """The change that actually happens: DeepSeek renames everything again, and
+    the host follows without a deploy."""
+    from tracker.config import Settings
+
+    settings = Settings(deepseek_api_key="k", deepseek_model_all="deepseek-v5-flash")
+    assert settings.deepseek_model == "deepseek-v5-flash"
+    assert settings.deepseek_reasoning_model == "deepseek-v5-flash"
+    assert settings.deepseek_fast_model == "deepseek-v5-flash"
+
+
+def test_a_tier_pinned_by_its_own_variable_wins():
+    """Otherwise the override silently overwrites a deliberate pin, which is the
+    opposite of what an override is for — and pinning the reasoning tier back to a
+    pro model is exactly how the flash-for-everything default gets tested."""
+    from tracker.config import Settings
+
+    settings = Settings(
+        deepseek_api_key="k",
+        deepseek_model_all="deepseek-v5-flash",
+        deepseek_reasoning_model="deepseek-v5-pro",
+    )
+    assert settings.deepseek_model == "deepseek-v5-flash"
+    assert settings.deepseek_reasoning_model == "deepseek-v5-pro"
+    assert settings.deepseek_fast_model == "deepseek-v5-flash"
+
+
+def test_the_override_reaches_the_tiers_from_the_environment(monkeypatch):
+    """`.env` on the host is the point of it, so the env path is what is pinned."""
+    from tracker.config import Settings
+
+    monkeypatch.setenv("TRACKER_DEEPSEEK_MODEL_ALL", "deepseek-v9-flash")
+    monkeypatch.setenv("TRACKER_DEEPSEEK_FAST_MODEL", "deepseek-v9-turbo")
+    settings = Settings(deepseek_api_key="k")
+    assert settings.deepseek_model == "deepseek-v9-flash"
+    assert settings.deepseek_reasoning_model == "deepseek-v9-flash"
+    assert settings.deepseek_fast_model == "deepseek-v9-turbo"
+
+
+def test_unset_leaves_the_defaults_alone(monkeypatch):
+    from tracker.config import DEEPSEEK_MODEL, Settings
+
+    monkeypatch.delenv("TRACKER_DEEPSEEK_MODEL_ALL", raising=False)
+    assert Settings(deepseek_api_key="k").deepseek_reasoning_model == DEEPSEEK_MODEL

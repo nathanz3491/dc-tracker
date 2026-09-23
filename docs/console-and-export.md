@@ -364,7 +364,7 @@ finish"*, inverting the most informative field in the row. It also named a utili
 and a permit process that appear nowhere in the data.
 
 DeepSeek honours `thinking: {"type": "disabled"}`, so the fast path is now the
-same `deepseek-v4-flash` as everything else with reasoning switched off at request
+same model as everything else with reasoning switched off at request
 time, and **that accuracy trade is gone** — the role is unchanged, but it is no
 longer paid for with a worse model. Any reasoning that does arrive is still
 stripped as it streams, so it never reaches the page.

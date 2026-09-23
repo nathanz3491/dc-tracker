@@ -5,9 +5,9 @@ it exists because both of those were capped by their own shape rather than by th
 model's judgement. Measured on the live database, twice:
 
 * `logic.decide` returns "nothing to choose between" **before calling the model**
-  whenever `ACTIONS[code]` is empty, and it is empty for 11 of 16 codes — 432 of
-  526 findings, 334 of them about tranches. Of the 94 it *was* shown, it acted on
-  52 and declined 10. The model was never the cautious party.
+  whenever `ACTIONS[code]` has no action, which is true of 16 of the 22 codes in
+  circulation — 432 of 526 findings, 334 of them about tranches. Of the 94 it *was*
+  shown, it acted on 52 and declined 10. The model was never the cautious party.
 * `dupresolve.merge_blocked` refuses a pair whose only evidence is a
   cross-granularity key match, regardless of what the model concluded. It ruled 45
   pairs "same" at 0.80-0.85 with containment reasoning of its own — *"El Mirage is
@@ -53,6 +53,63 @@ RULEABLE_FIELDS: frozenset[str] = frozenset(
         "phase",
     }
 )
+
+
+#: Finding codes a ruling cannot answer, whatever the model concludes.
+#:
+#: **Stated by code because the finding does not betray itself.** Each of these
+#: declares a project-level field in `fields` — `mw_built`, `mw_planned`,
+#: `expected_online` — so a filter reading only the field name would pass every one
+#: of them through. The contradiction is somewhere else: in a `capacity_block` row,
+#: which `supersede` cannot write, and for which this project has no edit command at
+#: all. `docs/workflows/logic.md` says as much in its own words, and so does the
+#: overnight loop's header.
+#:
+#: **Adding a rule about tranches means adding its code here.** There is no way to
+#: derive this set — that is the whole problem it exists for — so `tests/test_triage.py`
+#: pins every member against the rules that raise them.
+UNANSWERABLE_BY_RULING: frozenset[str] = frozenset(
+    {
+        # Six tranche rules. Each needs a block row edited, merged or cited.
+        "block_past_its_own_date",
+        "live_block_without_cited_capacity",
+        "built_capacity_uncited_in_blocks",
+        "block_label_ambiguous",
+        "blocks_may_double_count",
+        "no_block_for_energisation",
+        # Raised precisely because *no* citation claims the field, so there is
+        # nothing to rule out. `apply_rule_out` refuses it by construction — but
+        # only after the articles have been read and paid for.
+        "value_without_evidence",
+    }
+)
+
+
+def can_rule_on(finding: Any) -> bool:
+    """Whether ruling a claim out could make this finding stop firing.
+
+    **This filters on the mechanism, never on the model's judgement.** The one
+    repair here is `supersede` plus a re-derive, which moves a project scalar merged
+    from claims and nothing else. It cannot delete a milestone, close an obstacle,
+    relabel a tranche or edit a quote, so a finding whose subject is one of those
+    rows has exactly one outcome available to it no matter how well the model reads.
+
+    Two tests, and a finding must pass both: it names a field a claim can be ruled
+    out of, and its code is not one the mechanism structurally cannot reach.
+
+    **What this is worth.** ~250 of the open findings are about tranches. Every one
+    was being sent to a model that read whole articles at ~45,000-260,000 tokens a
+    finding and then declined, because declining was the only thing it could do. The
+    saving is one-time per row and code, since a decline *is* recorded — but the
+    first full pass pays all of it, and the first full pass has never finished.
+
+    Withholding loses no outcome. What it must not do is withhold *silently*: the
+    caller prints the held-back codes in one line, because a finding that simply
+    vanishes reads as a finding that was fine.
+    """
+    if str(getattr(finding, "code", "")) in UNANSWERABLE_BY_RULING:
+        return False
+    return bool(RULEABLE_FIELDS.intersection(getattr(finding, "fields", ()) or ()))
 
 
 @dataclass
@@ -172,6 +229,22 @@ def _articles_read(result: Any) -> dict[str, str]:
     return out
 
 
+def _already_misread(source: Any, field: str) -> bool:
+    """Is this citation's claim about `field` already filed as a misread?
+
+    Mirrors `conflicts.supersede`'s own idempotency test — the same reason, not
+    merely the same effect — so the two cannot drift into disagreeing about what a
+    second ruling would change.
+    """
+    from tracker.conflicts import MISREAD
+
+    try:
+        reasons = json.loads(source.unconfirmed_reasons or "{}")
+    except (TypeError, ValueError):
+        return False
+    return isinstance(reasons, dict) and reasons.get(field) == MISREAD
+
+
 def apply_rule_out(
     session: Any,
     project: Any,
@@ -189,6 +262,7 @@ def apply_rule_out(
     been ruled out stays empty — durably, and without this function ever choosing a
     number.
     """
+    from tracker.audit import fmt_value
     from tracker.conflicts import MISREAD, supersede
     from tracker.upsert import recompute_from_sources
 
@@ -223,6 +297,22 @@ def apply_rule_out(
             claiming.append(source)
     if not claiming:
         return False, "", f"none of those citations claims {name}"
+
+    # The second half of the same rule, and it was missing. `supersede` is
+    # idempotent against its own reason, so ruling `misread` on a claim already
+    # filed as `misread` marks nothing and changes no value — but the code still
+    # returned `acted=True` and wrote a sentence saying it had repaired something.
+    # A run re-offered the same finding every night (see `audit.fmt_value` for why
+    # it was re-offered) and every night reported a fresh repair, so the notes grew
+    # a line for work nobody did.
+    #
+    # Tested against *this* reason and not against `_decided_against`, for the same
+    # reason `supersede` is: a claim filed `superseded` is still out of the merge,
+    # but relabelling it `misread` tells a reader something true that the row did
+    # not say before — right-then-restated against never-about-this-row. That is a
+    # real change, so it is not refused here.
+    if all(_already_misread(source, name) for source in claiming):
+        return False, "", f"every citation claiming {name} is already ruled out as misread"
 
     if require_quote:
         from tracker.agent import verbatim
@@ -270,8 +360,15 @@ def apply_rule_out(
     session.flush()
     recompute_from_sources(session, project)
     now = getattr(project, name, None)
+    # `fmt_value`, not an f-string on the raw object, and the difference is the
+    # whole reason this path never reduced the backlog. `settled_codes` parses this
+    # sentence back a day later to decide the finding was answered; it recognises
+    # `empty` and reads a literal `None` as a value that was reverted. So every
+    # ruling that emptied a field — the headline case this module was built for —
+    # was re-offered, and re-paid for, on every run. Declines were recorded
+    # correctly, which is what made it look like caution rather than a parser.
     sentence = (
-        f"{name} {was} -> {now} "
+        f"{name} {fmt_value(was)} -> {fmt_value(now)} "
         f"({marked} claim(s) superseded on citation(s) {sorted(s.id for s in claiming)})"
     )
     return True, sentence, ""
@@ -779,8 +876,10 @@ __all__ = [
     "PAIR_SYSTEM_BASE",
     "RULEABLE_FIELDS",
     "SYSTEM",
+    "UNANSWERABLE_BY_RULING",
     "Outcome",
     "apply_rule_out",
+    "can_rule_on",
     "leave_alone_tool",
     "pair_triage",
     "pair_verdict_tools",

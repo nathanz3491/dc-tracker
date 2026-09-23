@@ -379,28 +379,40 @@ def test_the_console_asks_for_the_fast_model():
     assert "reasoning_extractor" not in source
 
 
-def test_the_briefing_prompt_asks_for_short_markdown(session):
-    """The two things the panel's shape depends on, asserted against the prompt.
+def test_the_briefing_prompt_asks_for_structured_markdown(session):
+    """The things the panel's shape depends on, asserted against the prompt.
 
-    A prose-only briefing renders as one grey slab, and a 231-word one is scrolled
-    past — both were the previous version, and both are prompt properties rather
-    than code properties, so this is where they can be checked.
+    **The length rule here has been reversed once, and the reason it was imposed
+    still stands.** A 231-word briefing was scrolled past, so it was cut to 110
+    words — but the fault measured at the time was that it rendered as "one grey
+    slab", which is a *structure* problem wearing a length problem's clothes. The
+    panel now renders headings, tables and nested lists, so `overview-v3` asks for
+    220 to 400 words in three named sections. Length came back; the slab did not.
+
+    These are prompt properties rather than code properties, so this is where they
+    can be checked.
     """
     from tracker.prompts import load_prompt
 
-    prompt = load_prompt("overview-v2")
+    prompt = load_prompt("overview-v3")
     system = prompt.system.lower()
     assert "markdown" in system
-    assert "110 words" in system
+    assert "220 to 400 words" in system
+    # Sections, not a wall: the renderer only helps if the prompt asks for them.
+    for section in ("## read of the build", "## what would move it", "## how much to trust this"):
+        assert section in system
     assert "nothing reached" in system, "the track-reading rule must survive edits"
+    # A longer answer is a larger surface for confident padding, which is the
+    # failure this panel has always been able to produce.
+    assert "say when you do not know" in system
 
 
-def test_the_default_prompt_is_the_short_one(session):
+def test_the_default_prompt_is_the_analytical_one(session):
     """`write` and `stream` must not drift apart on which prompt they use."""
     import inspect
 
     for fn in (overview.write, overview.stream):
-        assert inspect.signature(fn).parameters["prompt_name"].default == "overview-v2"
+        assert inspect.signature(fn).parameters["prompt_name"].default == "overview-v3"
 
 
 # --- stopping a model that will not stop -------------------------------------

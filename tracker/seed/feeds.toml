@@ -316,6 +316,20 @@ risk_signal = [
   "permit",
   "zoning",
   "rezoning",
+  # A county granting or refusing a tax abatement is the public decision that
+  # most often precedes a campus, and the vote is reported where the
+  # announcement is not. Added for the `abatement` search template, which was
+  # measured producing nothing at all without it: "Maricopa County Arizona data
+  # center tax abatement approved" matched the topic tier and no signal, so
+  # every hit was discarded before it cost a fetch — and a template that queues
+  # nothing is invisible in `tracker queue stats`, indistinguishable from one
+  # that never ran.
+  #
+  # This widens the queue for every feed and sitemap, not only for search. The
+  # topic tier is what bounds it: "Ohio steel mill wins tax abatement" and
+  # "Asbestos abatement contract awarded" are both still dropped, because
+  # neither says data center. "noise abatement" already matched via "noise".
+  "abatement",
   "referendum",
   "denied",
   "rejected",
@@ -704,3 +718,70 @@ topic_implied = false
 # and not depth. If the queue is already long, --skip it.
 max_children = 26
 max_urls = 20000
+
+
+# ---------------------------------------------------------------------------
+# Publishers the database itself nominated, added 2026-09-20.
+#
+# Candidates came from `tracker feeds`: hosts whose claims already decide stored
+# values and that this file did not list. Every one is a SITEMAP rather than a
+# [[feed]], and that is not a formatting preference — see below.
+#
+# **Why none of these is a [[feed]].** `parse_feed` truncates to MAX_PER_FEED (60)
+# entries in document order and never sorts, which is right for an RSS feed and
+# for datacenterfrontier's article sitemap (ordered newest-first, and its comment
+# above says so). None of these is ordered that way. Measured at the moment of
+# adding, on the full file versus the first 60 a feed would see:
+#
+#   servercountry        181 matches overall,  4 in the first 60
+#   industrialinfo        26 matches overall,  2 in the first 60
+#   americanrepartners    30 matches overall,  0 in the first 60
+#
+# So as feeds they would return a fraction of their value, and American RE
+# Partners would return none of it, for ever, while looking configured. As
+# [[sitemap]] entries they are read up to `max_urls` and walked by `--deep`.
+#
+# **They carry no lastmod**, except americanrepartners. So their rows arrive with
+# no `published_at`, which is what the merge tiebreak ranks on and what
+# `tracker backfill dates` exists to fill. Worth knowing before reading a
+# conflict that was settled by crawl order.
+
+[[sitemap]]
+name = "servercountry-archive"
+# 46 value(s) decided from 32 citation(s) — the strongest candidate in the batch.
+# 1,353 URLs, 181 of which match the filter. No lastmod, so the age cutoff
+# cannot apply and the whole archive is always eligible: expect a large first
+# sweep and budget --limit accordingly.
+url = "https://servercountry.org/sitemap-0.xml"
+source_type = "general_media"
+max_urls = 5000
+
+[[sitemap]]
+name = "americanrepartners-archive"
+# 11 value(s) decided from 17 citation(s). 259 URLs, 30 matching, and the only
+# one here carrying real lastmod dates (newest 2026-08-25).
+#
+# The reason this file says [[sitemap]] and not [[feed]] in one line: its 30
+# matches are all past position 60, so the feed path would have queued zero.
+url = "https://www.americanrepartners.com/sitemap.xml"
+source_type = "general_media"
+max_urls = 5000
+
+[[sitemap]]
+name = "industrialinfo-news"
+# 12 value(s) decided from 10 citation(s). 1,000 URLs, 26 matching — industrial
+# project tracking, so it reports construction starts the trade press skips.
+url = "https://www.industrialinfo.com/sitemap/xml/news.xml"
+source_type = "general_media"
+max_urls = 5000
+
+[[sitemap]]
+name = "epoch-data"
+# 15 value(s) decided from 13 citation(s), and already `priority` in
+# seed/sources.toml. But 175 URLs yield only 3 matches: it publishes compute and
+# model datasets, not project news, and the citations it wins were found by
+# search rather than by polling. Kept because 3 is not 0 and the sweep is one
+# fetch; the first candidate to drop if --deep gets slow.
+url = "https://epoch.ai/sitemap-data-0.xml"
+source_type = "general_media"
+max_urls = 5000

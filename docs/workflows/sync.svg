@@ -65,8 +65,9 @@
 <text x="136.0" y="528.7" font-size="11.5" fill="#16242E" text-anchor="middle" font-weight="700">Feeds</text>
 <text x="136.0" y="545.7" font-size="10" fill="#5C6B73" text-anchor="middle">what was published lately</text>
 <rect x="48.0" y="574.0" width="176.0" height="62.0" rx="7" fill="#FBF2E4" stroke="#D9891F" stroke-width="1.3"/>
-<text x="136.0" y="602.7" font-size="11.5" fill="#16242E" text-anchor="middle" font-weight="700">Search</text>
-<text x="136.0" y="619.7" font-size="10" fill="#5C6B73" text-anchor="middle">reaches back past the feeds</text>
+<text x="136.0" y="595.9" font-size="11.5" fill="#16242E" text-anchor="middle" font-weight="700">Search</text>
+<text x="136.0" y="612.9" font-size="10" fill="#5C6B73" text-anchor="middle">a place and an event,</text>
+<text x="136.0" y="626.5" font-size="10" fill="#5C6B73" text-anchor="middle">no model, no project name</text>
 <rect x="48.0" y="648.0" width="176.0" height="62.0" rx="7" fill="#EDF1F2" stroke="#B9C6CC" stroke-width="1.3"/>
 <text x="136.0" y="676.7" font-size="11.5" fill="#16242E" text-anchor="middle" font-weight="700">Roster</text>
 <text x="136.0" y="693.7" font-size="10" fill="#5C6B73" text-anchor="middle">who we hold no rows for</text>

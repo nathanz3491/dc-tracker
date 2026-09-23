@@ -31,9 +31,16 @@ first `--audit`-only run silently started reading every row in the database.
 
 Paying an LLM to notice that `mw_built > mw_planned` is paying for arithmetic, and
 a rule states its reasoning in a way anybody can check without reading code.
-`ACTIONS` currently covers 16 codes, and **11 offer no action at all** — each names
+Twenty-two codes are in circulation and **only 6 carry an action** — the rest name
 something only a person can settle, or a contradiction between a phase enum and a
 campus that is two things at once.
+
+Nine of those sixteen sit in `ACTIONS` as a deliberate empty tuple with a comment
+saying why. The other seven are not in the table at all and reach the same answer
+through `.get`'s default. The behaviour is identical; the record is not. An empty
+entry is a decision somebody wrote down, a missing one is a rule added without
+anybody asking the question — and one of the seven, `value_above_its_evidence`, is
+worth asking about, because a claim does exist there and is too low.
 
 ### Collisions report the policy's answer; they do not re-decide it
 
@@ -141,7 +148,7 @@ Three stages before anything is put to a model:
    which happens after a hand edit or when a source is attached by a path that did
    not recompute. Re-running the policy is arithmetic.
 2. **Answered by comparison, free.** Held to `audit.free_answer`'s bar: a read of
-   data already stored, never a judgement between two sourced figures. Two codes
+   data already stored, never a judgement between two sourced figures. Three codes
    clear it, and between them they were **448 of 536** resolvable findings — which
    is most of what makes a whole-database pass affordable.
 3. **What is left** goes to the agent (default), the older fixed menu (`--llm`), or
@@ -160,19 +167,61 @@ and "skip", while the ones with a real edit behind them sat at position 190.
 
 ### Why an agent, not the menu
 
-The menu could only answer with a key from `ACTIONS[code]`, and 11 of 16 codes have
-none — a property of the menu, not of the finding. It returned "nothing to choose
-between" **before calling the model** for 432 of 526 findings, 334 of them about
-tranches. The model was never the cautious party.
+The menu could only answer with a key from `ACTIONS[code]`, and 16 of the 22 codes
+have none — a property of the menu, not of the finding. It returned "nothing to
+choose between" **before calling the model** for 432 of 526 findings, 334 of them
+about tranches. The model was never the cautious party.
 
-An agent rules **claims** out of the merge instead, which is available on every
-code. That is also why its rulings last: a project scalar is a cache of the claim
-set, so every field-assigning action in `logic.py` is transient — clear `mw_built`
-on #14, commit, derive, and 230.0 comes back. `no_inversions` sat at exactly 30
-failures across a run that "resolved" `built_exceeds_planned` 18 times.
+An agent rules **claims** out of the merge instead. That is why its rulings last: a
+project scalar is a cache of the claim set, so every field-assigning action in
+`logic.py` is transient — clear `mw_built` on #14, commit, derive, and 230.0 comes
+back. `no_inversions` sat at exactly 30 failures across a run that "resolved"
+`built_exceeds_planned` 18 times.
 
 `RULEABLE_FIELDS` excludes the identity fields for the same reason `conflicts` does:
 superseding a claim about them changes nothing and would only look like it had.
+
+### What a ruling cannot reach, and why that was expensive
+
+"Available on every code" was this page's claim for the agent, and it was wrong in a
+way that cost real money. Superseding a claim moves a **project scalar**. It cannot
+delete a milestone, close an obstacle, relabel a tranche or edit a quote.
+
+The six tranche rules each declare a project-level field — `mw_built`, `mw_planned`,
+`expected_online` — so each one *looks* answerable, and roughly 250 of them sit in
+the backlog. Every one was being handed to a model that read whole articles at
+~45,000-260,000 tokens and then said the only thing available to it. A seventh code,
+`value_without_evidence`, fires precisely *because* no citation claims the field, so
+`apply_rule_out` refuses it by construction — after the reading is paid for.
+
+`triage.can_rule_on` now withholds those before a model is called, and the count is
+printed by code. It removes spend and no outcome: every finding it holds back could
+only ever have ended in `leave_alone`. The list is hand-written, because nothing in a
+finding betrays that its subject is a tranche, so **a new rule about tranches means a
+new entry in `UNANSWERABLE_BY_RULING`**; a test pins each member against the rule
+that raises it.
+
+The honest ceiling is unchanged: the repair those findings need is an edit to a
+`capacity_block` row, and no such command exists.
+
+### A ruling has to be readable back as an answer
+
+Decisions are recorded as prose in the row's notes and parsed back by
+`audit.settled_codes`, which asks whether the edit still holds before it treats a
+code as answered. It recognises the word `empty`; `apply_rule_out` interpolated the
+raw value and wrote `-> None`, which the reader takes for a value that was reverted.
+
+So an agent ruling that emptied a field — the headline case this design exists for —
+was never recognised as an answer. It was re-offered, and re-paid for, on every later
+run, while declines (which write no arrow at all) were recorded correctly. That
+asymmetry is what made a parser bug look like a cautious model, and it is why the
+open-findings count could not fall through this path. Both sides now use
+`audit.fmt_value`, and a test walks the whole round trip.
+
+The same fix closed a second hole: `conflicts.supersede` is idempotent, so re-ruling
+an already-ruled claim marked nothing while still reporting a repair. It is now
+refused — but only against its own reason, so relabelling a `superseded` claim as a
+`misread` still counts as the real change it is.
 
 ### Two things a model may never do
 
@@ -209,8 +258,9 @@ Touching any of these means the poster is in scope. Re-render with
 | Drift repair | `tracker/logic.py` — `resolve_drift`; `tracker/upsert.py` — `recompute_from_sources` |
 | Contested fields, the two calls, the write | `tracker/conflicts.py` — `disputes`, `solve`, `_challenge`, `supersede`, `apply_outcome`, `MAX_CALLS_PER_FIELD`, `MIN_CONFIDENCE`, `SUPERSEDED`, `MISREAD` |
 | The agent path | `tracker/triage.py` — `triage`, `apply_rule_out`, `rule_out_tool`, `leave_alone_tool`, `RULEABLE_FIELDS`, `SYSTEM` |
+| What a ruling cannot reach | `tracker/triage.py` — `can_rule_on`, `UNANSWERABLE_BY_RULING` |
 | The fixed menu and the keyboard walk | `tracker/logic.py` — `decide`, `TRIAGE_MIN_CONFIDENCE`; `tracker/cli/logic.py` — `_triage_by_agent`, `_triage_by_model`, `_triage` |
-| Settled-finding bookkeeping | `tracker/audit.py` — `settled_codes`, `free_answer` |
+| Settled-finding bookkeeping | `tracker/audit.py` — `settled_codes`, `free_answer`, `fmt_value` |
 | CLI | `tracker/cli/logic.py` — `logic_check`, `logic_conflicts`, `logic_resolve` |
 
 See also: [enrich](enrich.md), whose settle stage is `logic conflicts` with

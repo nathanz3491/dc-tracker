@@ -237,6 +237,38 @@ _STATE_NAMES: dict[str, str] = {
 
 STATE_CODES: frozenset[str] = frozenset(_STATE_NAMES.values())
 
+#: Codes that do not read correctly when their first spelling is title-cased.
+#: `.title()` would give "District Of Columbia" and would strip the capitals
+#: from "U.S. Virgin Islands", so both are written out.
+#:
+#: Each value must still be a spelling `norm_state` accepts, so the two functions
+#: are inverses — a test asserts the round trip for every code. That is why this
+#: says "Washington DC" and not "Washington, D.C.": the comma is in no key.
+_STATE_DISPLAY: dict[str, str] = {"DC": "Washington DC", "VI": "U.S. Virgin Islands"}
+
+#: code -> the spelling a person would write. Built by inverting `_STATE_NAMES`
+#: first-key-wins, which is why the canonical spelling of each code is listed
+#: FIRST above: three keys map to `DC` and three to `VI`, so a plain
+#: `{v: k for k, v in ...}` would silently return whichever happened to be last.
+_CODE_TO_NAME: dict[str, str] = {}
+for _name, _code in _STATE_NAMES.items():
+    _CODE_TO_NAME.setdefault(_code, _STATE_DISPLAY.get(_code) or _name.title())
+del _name, _code
+
+
+def state_name(code: Any) -> str | None:
+    """A 2-letter USPS code to the state's written name, or None if unknown.
+
+    The inverse of :func:`norm_state`, and it exists for search: a web query has
+    to say "Louisiana", because "LA" matches Los Angeles, Louisiana and nothing
+    in particular. Everything else in this module normalizes *towards* the code,
+    so this is the only place that goes back the other way.
+    """
+    if is_blank(code):
+        return None
+    return _CODE_TO_NAME.get(str(code).strip().upper())
+
+
 _COUNTRY_NAMES = {
     "us": "US",
     "usa": "US",
@@ -882,4 +914,5 @@ __all__ = [
     "norm_text",
     "norm_url",
     "soft",
+    "state_name",
 ]

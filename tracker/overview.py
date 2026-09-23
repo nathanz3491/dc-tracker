@@ -18,7 +18,16 @@ panel says what it is and stays visually separate from the cited values.
 
 **It is asked to say when it does not know.** Most rows are thin. A briefing that
 pads a two-field project with sector commentary reads exactly like knowledge, and
-that is worse than no briefing — see the prompt, where this is rule two.
+that is worse than no briefing — see the prompt, where this is a standing rule.
+
+That last point is what made the move from a three-line summary to an analytical
+briefing a real decision rather than a formatting one. `overview-v3` asks for 220
+to 400 words across three sections — a read of the build, what would move it, and
+how far to trust the row — because a reader who can already see the table wants the
+reasoning over it. More room to reason is also more room to sound certain about a
+row that supports nothing, so the prompt spends a paragraph saying that a longer
+answer is a larger surface for exactly that, and that a short section is the
+correct output for a thin row.
 """
 
 from __future__ import annotations
@@ -35,10 +44,21 @@ from tracker.vocab import TRACKED_FIELDS
 
 log = logging.getLogger(__name__)
 
-#: Room for four short paragraphs plus a reasoning model's thinking. Truncation
-#: mid-sentence is worse than no briefing, and the reasoning models used here
-#: spend most of their budget before the first visible word.
-MAX_TOKENS: Final = 4096
+#: Room for the briefing. Truncation mid-sentence is worse than no briefing.
+#:
+#: Raised from 4096 with `overview-v3`, which asks for 220 to 400 words across
+#: three sections instead of a sentence and two bullets. It is a ceiling, not a
+#: target — the capex hover card shares it and still asks for 35 to 60 words.
+#:
+#: **This panel is served by `llm.fast_extractor`, the one tier that does not
+#: think**, so the whole budget is visible answer and none of it is reasoning. That
+#: is a deliberate arrangement and the longer format does not change it: the
+#: briefing generates when a row is opened, so the model's speed is the page's
+#: speed, and a reasoning model would spend most of its budget before the first
+#: visible word — a blank card for as long as it took. Streaming is what makes the
+#: longer answer affordable to *read*: the opening prose, which is the part a
+#: reader needs, arrives first and the sections fill in under it.
+MAX_TOKENS: Final = 8192
 
 #: How many briefings to keep in memory. One per project is the natural size and
 #: the console serves one operator; this is a bound against a runaway, not a
@@ -72,7 +92,7 @@ def fingerprint(project: Project) -> str:
 
     Deliberately includes the sources and the milestones, not just the fields: a
     row can gain a citation that changes how trustworthy it is without any value
-    moving, and paragraph four is about exactly that.
+    moving, and the briefing's last section is about exactly that.
     """
     parts = [str(getattr(project, name, None)) for name in TRACKED_FIELDS]
     parts += sorted(f"{e.event_type}:{e.event_date}" for e in project.events or ())
@@ -96,7 +116,7 @@ def _remember(overview: Overview, *, key: str | None = None) -> None:
 def build_context(project: Project) -> dict[str, str]:
     """Everything the model may reason from, and nothing else.
 
-    Includes the gaps and the provenance tiers, because paragraph four is about
+    Includes the gaps and the provenance tiers, because the last section is about
     how much to trust the row and it cannot be written from the values alone. A
     briefing that cannot see which numbers are 待确认 will describe a guess and a
     quote in the same confident voice.
@@ -174,7 +194,7 @@ def _today():
     return utcnow().date()
 
 
-def write(project: Project, *, extractor, prompt_name: str = "overview-v2") -> Overview | None:
+def write(project: Project, *, extractor, prompt_name: str = "overview-v3") -> Overview | None:
     """Generate the briefing. Costs one call. None when it could not be written.
 
     Returns None rather than a placeholder: an empty panel is honest and a
@@ -241,7 +261,7 @@ RUNAWAY: Final = re.compile(
 )
 
 
-def stream(project: Project, *, extractor, prompt_name: str = "overview-v2") -> Iterator[str]:
+def stream(project: Project, *, extractor, prompt_name: str = "overview-v3") -> Iterator[str]:
     """The same briefing, yielded as it is written.
 
     The panel generates on open rather than on a click, so the wait is no longer

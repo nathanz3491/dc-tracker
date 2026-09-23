@@ -16,6 +16,11 @@ because the feed is `topic_implied` and "expanding" is a signal term.
 Reading it per feed is what makes it actionable: a `topic_implied` outlet that
 covers a wider beat than the flag assumes shows up as a column of `no_project`.
 
+**Web search is grouped by the template that found the URL, not by the query
+text** — see `feed_group`. A planned query is never issued twice, so recording the
+sentence made search the one source class here that could never be judged:
+hundreds of groups of one, no two of them comparable.
+
 Everything here is a read of `ingest_url`, which already records status, feed,
 publication date and the run that found each URL. No new table, no counters to
 keep in sync — the funnel is derived, so it cannot drift from what happened.
@@ -23,6 +28,7 @@ keep in sync — the funnel is derived, so it cannot drift from what happened.
 
 from __future__ import annotations
 
+from collections.abc import Container
 from dataclasses import dataclass
 from dataclasses import field as dc_field
 from typing import Any
@@ -181,8 +187,10 @@ def verdicts(report: Funnel, *, min_read: int = MIN_READ_TO_JUDGE) -> list[Verdi
     out: list[Verdict] = []
     for stat in report.feeds:
         if stat.feed == "(no feed)":
-            # Search, archive sweeps and enrich. Real, and much larger than every
-            # feed combined, but no feed list controls it — see `no_feed_share`.
+            # `enrich`'s harvesters, and hand-supplied URLs. Real, and much larger
+            # than every feed combined, but no feed list controls it — see
+            # `no_feed_share`. Search and archive sweeps are NOT here: both record
+            # a feed of their own and are judged like any other source.
             continue
         if stat.read == 0:
             if stat.failed:
@@ -202,6 +210,26 @@ def verdicts(report: Funnel, *, min_read: int = MIN_READ_TO_JUDGE) -> list[Verdi
         elif stat.read < min_read:
             out.append(
                 Verdict(stat.feed, "too few to judge", f"{stat.read} read, needs {min_read}", stat)
+            )
+        elif stat.cited == 0 and stat.feed.startswith(SEARCH_PREFIX):
+            # A search template is code, not a line in `feeds.toml`, so the
+            # standard advice would be wrong twice over. `tracker queue --drop
+            # --feed` matches a stored feed exactly, and no row holds the rolled-up
+            # group name, so the command would report dropping nothing and look
+            # like a bug. And retiring a template means deleting it from
+            # `_PLACE_TEMPLATES`, where the commit message is the record of why —
+            # which is the whole reason this is reported and never applied.
+            ahead = (
+                f", and {stat.pending} more queued" if stat.pending else ", with none left queued"
+            )
+            out.append(
+                Verdict(
+                    stat.feed,
+                    "rewrite the template",
+                    f"{stat.read} call(s), {stat.no_project} found no project, "
+                    f"not one backs a stored value{ahead}",
+                    stat,
+                )
             )
         elif stat.cited == 0:
             # The queued count is the part that matters. Calls already made are
@@ -237,10 +265,11 @@ def verdicts(report: Funnel, *, min_read: int = MIN_READ_TO_JUDGE) -> list[Verdi
             )
     order = {
         "retire": 0,
-        "low yield": 1,
-        "cannot read": 2,
-        "too few to judge": 3,
-        "not read yet": 4,
+        "rewrite the template": 1,
+        "low yield": 2,
+        "cannot read": 3,
+        "too few to judge": 4,
+        "not read yet": 5,
     }
     return sorted(out, key=lambda v: (order.get(v.verdict, 9), -v.stat.read, v.feed))
 
@@ -250,9 +279,18 @@ def no_feed_share(report: Funnel) -> tuple[int, int]:
 
     Printed beside any retirement proposal, because it is the number that says how
     much retiring feeds can possibly achieve. On the live database 2,148 of the
-    2,381 wasted calls came from URLs no feed found — search and archive sweeps —
-    so the whole feed list accounts for about a tenth of the problem. Without this
-    line the report reads as if pruning feeds fixes the 49%.
+    2,381 wasted calls carried no feed at all, so the whole feed list accounts for
+    about a tenth of the problem. Without this line the report reads as if pruning
+    feeds fixes the 49%.
+
+    **What "(no feed)" actually means is `enrich`**, and this docstring said
+    otherwise for a long time. It claimed search and archive sweeps, and both of
+    those do record a feed — search writes a `search:` label and an archive sweep
+    writes the sitemap's own name. The path that leaves the column NULL is
+    `enrich.harvest_search` and its siblings, whose URLs go straight to
+    `crawl.record_url`, which never sets it. The 2,148 above was measured before
+    anyone noticed, so it is quoted as a magnitude and the split behind it wants
+    re-measuring.
     """
     no_feed = next((f.no_project for f in report.feeds if f.feed == "(no feed)"), 0)
     return no_feed, report.no_project
@@ -286,9 +324,70 @@ def fetch_failures(session: Session, *, limit: int = 8) -> list[tuple[str, int]]
     return [(str(error)[:70], count) for error, count in rows[:limit]]
 
 
-def survey(session: Session) -> Funnel:
-    """Build the funnel from `ingest_url`, one grouped query per column."""
+#: Prefix every web-search label carries.
+SEARCH_PREFIX: str = "search:"
+
+#: Where a hand-typed `tracker search "…"` query lands. Not a compatibility
+#: shim — it is the permanent home for one-off queries, which have no template
+#: and never will.
+AD_HOC: str = "search:(ad hoc)"
+
+
+def feed_group(feed: str | None, *, templates: Container[str] = ()) -> str:
+    """The label this row should be counted under.
+
+    **Search is the only source here that was unreadable, and this is the fix.**
+    Every other feed name is a stable string reused run after run, so counting by
+    it answers "is this worth reading". A web-search row recorded the whole query
+    text, and a planned query is never issued twice, so the funnel held hundreds
+    of groups of one — enough to make search the one source class nothing in this
+    repo could judge. Rolling the place up leaves the template, which IS reused
+    and therefore IS judgeable: `search:rezoning:loudoun-va` counts under
+    `search:rezoning`, and the row keeps its full provenance for anyone reading it
+    directly.
+
+    **The template registry is checked rather than the shape.** Stored queries
+    contain colons of their own — `search:site:datacenterfrontier.com meta` is a
+    real one — so splitting on the second colon and trusting the result would
+    invent a template called `site` and report it alongside the real ones. A
+    segment that is not a known template means the row was typed by hand, which
+    is what `AD_HOC` is for.
+
+    **Scoped to the search prefix on purpose.** `prospect:<operator>` is already
+    a stable reused label whose measurement is correct today, and a generic
+    "split any label on its second colon" would silently reshape it.
+
+    One honest limit, worth knowing before reading the numbers: `queue_candidates`
+    leaves an already-queued URL completely alone, so whichever template found it
+    first owns it forever. Per-template counts are "first to find it", not "found
+    it" — right for attributing cost, and the misreading that would retire a good
+    template that always arrives second.
+    """
+    if not feed:
+        return "(no feed)"
+    if not feed.startswith(SEARCH_PREFIX):
+        return feed
+    parts = feed.split(":", 2)
+    if len(parts) >= 3 and parts[1] in templates:
+        return f"{SEARCH_PREFIX}{parts[1]}"
+    return AD_HOC
+
+
+def _search_templates() -> frozenset[str]:
+    """Imported lazily: `funnel` is read-only and `search` pulls in httpx."""
+    from tracker.ingest.search import templates
+
+    return templates()
+
+
+def survey(session: Session, *, templates: Container[str] | None = None) -> Funnel:
+    """Build the funnel from `ingest_url`, one grouped query per column.
+
+    Grouping happens in Python rather than in SQL because the search rule needs
+    the template registry, which SQLite has no way to consult.
+    """
     out = Funnel()
+    known = _search_templates() if templates is None else templates
 
     rows = session.execute(
         select(
@@ -300,7 +399,8 @@ def survey(session: Session) -> Funnel:
     ).all()
 
     stats: dict[str, FeedStat] = {}
-    for feed, status, count, dated in rows:
+    for raw_feed, status, count, dated in rows:
+        feed = feed_group(raw_feed, templates=known)
         stat = stats.setdefault(feed, FeedStat(feed=feed))
         stat.queued += count
         stat.dated += dated or 0
@@ -330,20 +430,28 @@ def survey(session: Session) -> Funnel:
         .join(Source, Source.url == IngestUrl.url)
         .group_by(IngestUrl.feed)
     ).all()
-    for feed, count in cited:
-        stats.setdefault(feed, FeedStat(feed=feed)).cited = count
+    # Grouped here too, and accumulated rather than assigned. Miss either and
+    # every template reports `read > 0, cited = 0` — which is precisely the input
+    # `verdicts` turns into "retire", so the first report would propose retiring
+    # every template at once.
+    for raw_feed, count in cited:
+        feed = feed_group(raw_feed, templates=known)
+        stats.setdefault(feed, FeedStat(feed=feed)).cited += count
 
     out.feeds = list(stats.values())
     return out
 
 
 __all__ = [
+    "AD_HOC",
     "LOW_YIELD",
     "MIN_READ_TO_JUDGE",
     "REACHED_THE_MODEL",
+    "SEARCH_PREFIX",
     "FeedStat",
     "Funnel",
     "Verdict",
+    "feed_group",
     "fetch_failures",
     "no_feed_share",
     "survey",

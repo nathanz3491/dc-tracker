@@ -32,7 +32,7 @@ from tracker.ingest.search import (
     known_projects,
 )
 from tracker.llm import LLMError, LLMReply
-from tracker.models import IngestUrl, Project
+from tracker.models import IngestUrl, Project, utcnow
 
 
 class FakeProvider:
@@ -256,8 +256,13 @@ def test_duplicate_urls_across_queries_are_kept_once(spec):
     assert len(kept) == 1
 
 
-def test_the_query_is_recorded_on_the_candidate(spec):
-    """So a queued row shows which query found it."""
+def test_a_hand_typed_query_is_still_recorded_verbatim(spec):
+    """So a one-off `tracker search "…"` row still shows what found it.
+
+    Unlabelled is the path with no plan behind it, and it must keep behaving
+    exactly as it did — `funnel.feed_group` files these under one `(ad hoc)`
+    bucket precisely because the text is all there is.
+    """
     report = SearchReport()
     kept = hits_to_candidates(
         [hit("https://a.test/1", "Meta 1GW data center campus", query="meta louisiana")],
@@ -265,6 +270,23 @@ def test_the_query_is_recorded_on_the_candidate(spec):
         report=report,
     )
     assert kept[0].feed == "search:meta louisiana"
+
+
+def test_a_templated_query_is_recorded_as_its_template_and_place(spec):
+    """The label, not the sentence — which is what makes search measurable.
+
+    A planned query is never issued twice, so recording its text gave the funnel
+    hundreds of groups of one and no way to say which KIND of query was worth
+    paying for. The template is reused and therefore judgeable.
+    """
+    report = SearchReport()
+    kept = hits_to_candidates(
+        [hit("https://a.test/1", "Meta 1GW data center campus", query="a long planned query")],
+        spec,
+        report=report,
+        labels={"a long planned query": "search:rezoning:richland-la"},
+    )
+    assert kept[0].feed == "search:rezoning:richland-la"
 
 
 # --- run() ------------------------------------------------------------------
@@ -873,3 +895,236 @@ def test_a_chinese_result_never_becomes_a_candidate():
     report = SearchReport()
     assert hits_to_candidates(hits, spec, report=report) == []
     assert report.filtered == 1
+
+
+# --- Place-anchored templates -----------------------------------------------
+#
+# The half `tracker sync` runs. These queries name a place and an event rather
+# than a project, which is the only way search can reach a campus nobody here
+# has heard of.
+
+
+def project(session, company, *, city=None, county=None, state="VA", mw=100.0):
+    session.add(
+        Project(
+            name=f"{company} {city or county}",
+            company=company,
+            city=city,
+            county=county,
+            state=state,
+            dedup_key=f"{company}|{city or county}|{state}".lower(),
+            mw_planned=mw,
+        )
+    )
+    session.flush()
+
+
+def test_every_template_phrase_survives_the_real_filter(spec):
+    """A phrase the discovery filter rejects spends quota and returns nothing.
+
+    This is not hypothetical. `abatement` was drafted against the real `[filter]`
+    block and every hit it could ever return was discarded before it cost a
+    fetch — and because nothing was queued, the template left NO row in
+    `ingest_url`, so `tracker queue stats` reported it identically to a template
+    nobody had run. A report cannot catch what it cannot see, so the check lives
+    here instead.
+    """
+    for name, phrase in srch._PLACE_TEMPLATES.items():
+        query = f"Loudoun County Virginia data center {phrase}"
+        keep, why = spec.matches(query)
+        assert keep, f"template {name!r} cannot survive the filter: {why}"
+
+
+def test_a_place_slug_never_contains_a_colon(session):
+    """The invariant `funnel.feed_group` rests on.
+
+    Labels are `search:<template>:<place>` and the funnel splits on the colon to
+    roll a place up into its template. A colon inside a place would invent a
+    template out of half a county name.
+    """
+    project(session, "Amazon", county="Loudoun", state="VA")
+    project(session, "Microsoft", county="Loudoun", state="VA")
+
+    places, _ = srch.rank_places(session)
+    assert places
+    assert all(":" not in place.slug for place in places)
+
+
+def test_a_county_written_into_the_city_field_still_ranks_as_a_county(session):
+    """ISO imports put "Racine County" in `city`, and it is not a municipality.
+
+    Ranked through `dedup.locality` rather than a raw `GROUP BY county`, which
+    also keeps every city-only row out of one enormous NULL bucket that would
+    otherwise outrank every real county.
+    """
+    project(session, "Microsoft", city="Racine County", state="WI")
+    project(session, "Vantage", city="Racine County", state="WI")
+
+    places, _ = srch.rank_places(session)
+    racine = next(p for p in places if "racine" in p.slug)
+    assert racine.kind == "county"
+    assert racine.phrase == "Racine County Wisconsin"
+
+
+def test_a_county_gains_the_word_a_search_engine_needs(session):
+    """ "Loudoun Virginia" returns the town and the newspaper; the county needs saying.
+
+    Added when the query is built rather than stored, because the word is worth
+    nothing to the database and everything to a search engine. Louisiana says
+    Parish and Alaska says Borough.
+    """
+    project(session, "Amazon", county="Loudoun", state="VA")
+    project(session, "Microsoft", county="Loudoun", state="VA")
+    project(session, "Meta", county="Richland", state="LA")
+    project(session, "Crusoe", county="Richland", state="LA")
+
+    by_slug = {p.slug: p.phrase for p in srch.rank_places(session)[0]}
+    assert by_slug["loudoun-va"] == "Loudoun County Virginia"
+    assert by_slug["richland-la"] == "Richland Parish Louisiana"
+
+
+def test_a_place_the_exclude_list_forbids_is_refused_and_named(session):
+    """Two real counties cannot be searched for, and silence is the wrong answer.
+
+    `exclude` is a plain substring test, so "summit" — there for conference
+    write-ups — drops every headline about Summit County in CO, OH and UT, and
+    "stock", there for finance coverage, takes Stockton, Woodstock and Comstock
+    with it. Left in the plan such a place spends its slot on every run and
+    returns nothing, with no queued row to explain why. So it is reported as a
+    refusal, the way a feed we cannot fetch is.
+    """
+    project(session, "Vantage", county="Summit", state="OH")
+    project(session, "Aligned", county="Summit", state="OH")
+
+    places, refused = srch.rank_places(session)
+    assert not any("summit" in p.slug for p in places)
+    assert any("Summit" in phrase and "summit" in why for phrase, why in refused)
+
+
+def test_a_pair_already_tried_yields_to_one_that_has_not(session):
+    """Otherwise the same ten queries run every night and find nothing twice.
+
+    The most load-bearing behaviour here: a plan that took the first N of the
+    cross product would have every result `already_known` by its second run,
+    which is the problem this replaced, rebuilt in a new shape.
+    """
+    project(session, "Amazon", county="Loudoun", state="VA")
+    project(session, "Microsoft", county="Loudoun", state="VA")
+
+    first, _ = srch.plan_queries(session, count=3)
+    assert first
+    for i, planned in enumerate(first):
+        session.add(
+            IngestUrl(
+                url=f"https://e.test/{i}",
+                run_id="r",
+                status="discovered",
+                feed=planned.label,
+                first_seen_at=utcnow(),
+                last_tried_at=utcnow(),
+            )
+        )
+    session.flush()
+
+    second, _ = srch.plan_queries(session, count=3)
+    assert {q.label for q in second}.isdisjoint({q.label for q in first})
+
+
+def test_one_run_does_not_spend_its_whole_budget_on_one_county(session):
+    """Ranked order alone gives ten queries about Loudoun and nothing else.
+
+    Discovery is supposed to widen, so the plan walks the diagonal of the cross
+    product: it still starts at the best place and the first template, but every
+    run reaches several places.
+    """
+    project(session, "Amazon", county="Loudoun", state="VA")
+    project(session, "Microsoft", county="Loudoun", state="VA")
+    project(session, "Meta", county="Richland", state="LA")
+    project(session, "Crusoe", county="Richland", state="LA")
+
+    plan, _ = srch.plan_queries(session, count=6)
+    assert len({q.place.slug for q in plan}) > 1
+    assert len({q.template for q in plan}) > 1
+
+
+def test_an_empty_database_plans_nothing_rather_than_erroring(session):
+    """There is nowhere to anchor a query before the first project exists."""
+    plan, refused = srch.plan_queries(session, count=10)
+    assert plan == []
+    assert refused == []
+
+
+def test_the_territories_are_never_anchored_on(session):
+    """ "American Samoa data center rezoning" is quota spent on a certainty.
+
+    The absent-state tier walks every code we know, and five of them are
+    territories that will not be building a hyperscale campus.
+    """
+    project(session, "Amazon", county="Loudoun", state="VA")
+
+    places, _ = srch.rank_places(session, limit=200, state_only=60)
+    assert {"gu", "as", "mp", "vi", "pr"}.isdisjoint({p.slug for p in places})
+
+
+def test_the_label_stays_short_enough_to_store():
+    """Truncating the place, never the whole label.
+
+    Cutting the label as one string could drop the template segment, and two long
+    places would then merge into a single bucket that reads as one template's
+    history.
+    """
+    long_place = srch.Place(
+        slug="x" * 400, phrase="Somewhere", state="VA", kind="county", projects=2
+    )
+    planned = srch.PlannedQuery(text="q", template="rezoning", place=long_place)
+    assert planned.label.startswith("search:rezoning:")
+    assert len(planned.label) <= 120
+
+
+def test_a_template_that_queues_nothing_is_still_counted(session):
+    """The blind spot `tracker queue stats` has, and the only place it is visible.
+
+    The funnel is derived from `ingest_url`, so a template whose every hit is
+    filtered out leaves no row and cannot be told apart from one that never ran.
+    The per-label counts are kept in memory during the run for exactly that case.
+    """
+    provider = FakeProvider(
+        {"planned query": [hit("https://a.test/1", "a cooking blog", query="planned query")]}
+    )
+    report, _ = srch.run(
+        session,
+        ["planned query"],
+        provider=provider,
+        labels={"planned query": "search:abatement:loudoun-va"},
+    )
+    stat = report.by_label["search:abatement:loudoun-va"]
+    assert (stat.queries_run, stat.hits, stat.filtered, stat.queued) == (1, 1, 1, 0)
+
+
+def test_a_url_two_templates_both_found_is_queued_once(session):
+    """And the first template in plan order owns it.
+
+    Labelling in one pass rather than relabelling per query keeps the `seen` set
+    doing the de-duplication. Split per query, the second sighting would reach
+    `queue_candidates` and increment `already_known` — inflating the counter this
+    whole change exists to bring down.
+    """
+    same = "https://a.test/1"
+    provider = FakeProvider(
+        {
+            "q rezoning": [hit(same, "Meta 1GW data center campus", query="q rezoning")],
+            "q permit": [hit(same, "Meta 1GW data center campus", query="q permit")],
+        }
+    )
+    report, queued = srch.run(
+        session,
+        ["q rezoning", "q permit"],
+        provider=provider,
+        labels={
+            "q rezoning": "search:rezoning:richland-la",
+            "q permit": "search:permit:richland-la",
+        },
+    )
+    assert report.queued == 1
+    assert report.already_known == 0
+    assert queued[0].feed == "search:rezoning:richland-la"

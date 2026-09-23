@@ -262,3 +262,97 @@ def test_no_feed_share_reports_what_retirement_cannot_reach(session):
     url(session, "https://x.test/1", feed=None, status="no_project")
     url(session, "https://y.test/1", feed="a-feed", status="no_project")
     assert funnel.no_feed_share(funnel.survey(session)) == (1, 2)
+
+
+# --- Web search, grouped by template ----------------------------------------
+#
+# Search was the one source class here that could never be judged. Its label was
+# the whole query text and a planned query is never issued twice, so the funnel
+# held hundreds of groups of one. Rolling the place up leaves the template, which
+# IS reused run after run and therefore IS evidence of something.
+
+TEMPLATES = frozenset({"rezoning", "permit", "abatement"})
+
+
+def test_two_places_under_one_template_are_one_row(session):
+    """Which is the entire point: one template, one verdict, over many places."""
+    url(session, "https://a.test/1", feed="search:rezoning:loudoun-va")
+    url(session, "https://a.test/2", feed="search:rezoning:richland-la")
+
+    report = funnel.survey(session, templates=TEMPLATES)
+    by_feed = {f.feed: f for f in report.feeds}
+    assert list(by_feed) == ["search:rezoning"]
+    assert by_feed["search:rezoning"].read == 2
+
+
+def test_an_old_full_query_row_does_not_invent_a_template(session):
+    """Stored queries contain colons of their own, and one is a real example.
+
+    `search:site:datacenterfrontier.com meta` split on its second colon would
+    report a template called `site` beside the real ones. The registry is checked
+    rather than the shape, so anything unrecognised is a query somebody typed.
+    """
+    url(session, "https://a.test/1", feed="search:site:datacenterfrontier.com meta")
+    url(session, "https://a.test/2", feed="search:meta louisiana megawatts")
+
+    by_feed = {f.feed: f for f in funnel.survey(session, templates=TEMPLATES).feeds}
+    assert list(by_feed) == [funnel.AD_HOC]
+    assert by_feed[funnel.AD_HOC].read == 2
+
+
+def test_a_template_that_cites_something_is_credited(session):
+    """The half of `survey` that is easy to forget, and expensive to miss.
+
+    Citations are counted by a second grouped query. Re-key only the first and
+    every template reports `read > 0, cited = 0` — which is exactly what
+    `verdicts` turns into a retirement proposal, so the first report would
+    propose scrapping every template at once.
+    """
+    url(session, "https://a.test/1", feed="search:rezoning:loudoun-va")
+    url(session, "https://a.test/2", feed="search:rezoning:richland-la")
+    cite(session, "https://a.test/1")
+    cite(session, "https://a.test/2")
+
+    by_feed = {f.feed: f for f in funnel.survey(session, templates=TEMPLATES).feeds}
+    assert by_feed["search:rezoning"].cited == 2
+
+
+def test_a_search_template_is_never_told_to_drop_a_queue(session):
+    """The advice would silently match nothing, and the remedy is a commit.
+
+    `--drop --feed` compares a stored feed exactly, and the rolled-up group name
+    is not a value any row holds. A template is also code rather than a line in
+    `feeds.toml`, so retiring one means editing `_PLACE_TEMPLATES` with the reason
+    in the commit message.
+    """
+    for i in range(12):
+        url(session, f"https://a.test/{i}", feed="search:abatement:loudoun-va", status="no_project")
+
+    verdict = next(
+        v
+        for v in funnel.verdicts(funnel.survey(session, templates=TEMPLATES))
+        if "abatement" in v.feed
+    )
+    assert verdict.verdict == "rewrite the template"
+
+
+def test_prospect_labels_are_left_alone(session):
+    """Their measurement is already correct, and a generic rule would reshape it.
+
+    `prospect:<operator>` is a stable reused label. Splitting any name on its
+    second colon would have folded every operator into one bucket.
+    """
+    url(session, "https://a.test/1", feed="prospect:Nebius")
+    url(session, "https://a.test/2", feed="prospect:CoreWeave")
+
+    feeds = {f.feed for f in funnel.survey(session, templates=TEMPLATES).feeds}
+    assert feeds == {"prospect:Nebius", "prospect:CoreWeave"}
+
+
+def test_a_feed_with_no_colon_is_untouched(session):
+    """Ordinary feeds must pass through the grouping unchanged."""
+    url(session, "https://a.test/1", feed="datacenterknowledge")
+
+    assert [f.feed for f in funnel.survey(session, templates=TEMPLATES).feeds] == [
+        "datacenterknowledge"
+    ]

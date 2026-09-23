@@ -193,9 +193,32 @@ the comment that stops someone deleting DataCenterDynamics, and a command that
 rewrote it would strip the reasoning that prevents the mistake.
 
 One number is printed with every run, because it bounds the whole exercise:
-**2,148 of 2,381 wasted calls came from URLs no feed found** — search and archive
-sweeps. Retiring feeds can address the other 10%. If you want the 49% down, the
-filter and the search templates are where the volume is.
+**2,148 of 2,381 wasted calls came from URLs carrying no feed at all.** Retiring
+feeds can address the other 10%. If you want the 49% down, the filter and the
+search templates are where the volume is.
+
+**That line used to say "search and archive sweeps", and it was wrong about both.**
+Search records a `search:` label and an archive sweep records the sitemap's own
+name, so neither has ever been in the `(no feed)` bucket. What is actually there is
+`enrich`'s harvesters, whose URLs go straight to `crawl.record_url` — which never
+sets the column — plus anything supplied by hand. The magnitude stands; the split
+behind it was measured before anyone noticed and wants re-measuring.
+
+**Web search is grouped by template, not by query.** A row stores
+`search:<template>:<place>` and the funnel rolls the place up, so `search:rezoning`
+gets one line with a real call count. Before that, search was the only source class
+here that could not be judged at all: the label was the whole query text and a
+planned query is never issued twice, so the table held hundreds of groups of one.
+
+Two things to know when reading those rows. A template that has never cited
+anything is reported as **"rewrite the template"** rather than "retire" — a
+template is code, so the remedy is an edit to `_PLACE_TEMPLATES` with the reason in
+the commit, and `--drop --feed` would match nothing anyway because the rolled-up
+name is a group no row holds (use a trailing colon, `--feed 'search:rezoning:'`, to
+clear what is queued). And **the first template to find a URL owns it**:
+`queue_candidates` leaves an already-queued URL alone, so per-template counts are
+"first to find it", not "found it" — right for attributing cost, and the misreading
+that would retire a good template that always arrives second.
 
 `tracker/seed/feeds.toml` is hand-maintained, which is the wrong way round: the database
 already knows which publishers decide stored values. Candidates are the hosts

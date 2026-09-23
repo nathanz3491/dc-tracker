@@ -52,12 +52,86 @@ from tracker.vocab import OPEN_RISK_STATUS, RISK_CATEGORIES, RISK_SEVERITIES
 
 
 @app.command()
-def version() -> None:
-    """Print the version."""
-    if json_mode():
-        emit({"name": "dc-tracker", "version": __version__})
+def version(
+    stamp: Annotated[
+        bool,
+        typer.Option("--stamp", help="Write the version into the source, to be committed."),
+    ] = False,
+    number: Annotated[
+        str | None,
+        typer.Option(
+            "--number",
+            help="With --stamp: use this instead of the number the commit count implies.",
+            show_default=False,
+        ),
+    ] = None,
+) -> None:
+    """Print the version, or stamp it into the source before a push.
+
+    **The number is a fact about the repository, not a decision.** It is the
+    commit count with dots before the last two digits — 190 commits is `1.9.0` —
+    so `--stamp` on its own is the ordinary use and `--number` is the override for
+    a real release.
+
+    **Run it here, never on the host.** It edits `tracker/__init__.py` and
+    `pyproject.toml`, which are source: the host's checkout is reset to the pushed
+    commit on every poll, so a version written there is gone within two minutes.
+    Stamp, commit, push — then the number on the console is necessarily the number
+    of the commit serving it.
+
+    It is one behind its own repo, always: stamping is itself a commit. That is
+    not worth closing, and the next deploy stamps again.
+    """
+    from tracker import release
+
+    if number is not None and not stamp:
+        _fail("--number only means something with --stamp.")
+
+    if not stamp:
+        if json_mode():
+            emit({"name": "dc-tracker", "version": __version__})
+            return
+        console.print(f"dc-tracker {__version__}")
         return
-    console.print(f"dc-tracker {__version__}")
+
+    if number is None:
+        count = release.commit_count()
+        if count is None:
+            _fail(
+                "not a git checkout, so there is no commit count to read.\n"
+                "Pass --number X.Y.Z to stamp a version by hand."
+            )
+            return
+        wanted = release.from_commit_count(count)
+        why = f"{count} commit(s)"
+    else:
+        if not release.VERSION.match(number):
+            _fail(f"not a three-part version: {number!r}")
+            return
+        wanted = number
+        why = "given on the command line"
+
+    was = release.stamped()
+    changed = release.stamp(wanted)
+
+    if json_mode():
+        emit(
+            {
+                "version": wanted,
+                "was": was,
+                "from": why,
+                "changed": [p.name for p in changed],
+            }
+        )
+        return
+
+    if not changed:
+        console.print(f"already [bold]{wanted}[/bold] [dim]({why}) — nothing to commit[/dim]")
+        return
+    console.print(f"[bold]{was}[/bold] -> [bold]{wanted}[/bold] [dim]({why})[/dim]")
+    for path in changed:
+        console.print(f"  {path.name}")
+    console.print("\n[dim]Commit these with the change they ship with.[/dim]")
 
 
 @app.command()

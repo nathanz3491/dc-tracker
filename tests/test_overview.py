@@ -221,3 +221,136 @@ def test_the_position_context_names_the_sites_and_the_shaky_money(session):
     assert "Crusoe — Stargate" in context["sites"]
     assert context["projects"] == "1"
     assert context["investment_usd"] == "none"
+
+
+# --- the analytical shape, and what it must not break ------------------------
+#
+# `overview-v3` asks for 220 to 400 words across three sections instead of a
+# sentence and two bullets. The panel renders full markdown for it, which means
+# the pipeline between the model and the drawer now has to carry headings, tables
+# and nested lists intact — and the one thing in that pipeline that *cuts* text is
+# the runaway sentinel. A longer answer gives it far more line starts to match
+# against, so the risk it silently truncates a good briefing went up with the
+# length, and that is what these pin.
+
+V3_BRIEFING = """\
+Meta is building a 1 GW campus in New Albany. The shell is ahead of the power, \
+which is the ordinary shape at this scale and is also the whole risk.
+
+## Read of the build
+
+Construction has reached equipment install while the power track has reached \
+nothing at all.
+
+| Track | Reached | What is missing |
+| --- | --- | :--- |
+| Construction | equipment install | nothing |
+| Power | nothing reached | an interconnection agreement |
+
+## What would move it
+
+- **Interconnection agreement** — a signed one would date the energisation
+  - the queue in this region runs years, so the date matters more than the figure
+- **Named anchor tenant** — would confirm the campus is pre-leased rather than speculative
+
+## How much to trust this
+
+One trade-press article sits behind the capacity, and nothing quotes the money.
+
+> The 1 GW figure is 待确认 and should not be read as cited.
+"""
+
+
+def test_the_briefing_prompt_is_the_analytical_one(session):
+    project = _project(session)
+    writer = _Writer(V3_BRIEFING)
+    overview.write(project, extractor=writer)
+
+    # The shape the renderer was widened for, asked for in the prompt itself.
+    assert "## Read of the build" in writer.system
+    assert "## What would move it" in writer.system
+    assert "## How much to trust this" in writer.system
+    assert "220 to 400 words" in writer.system
+
+    # And the honesty rules survived the rewrite — a longer answer is a larger
+    # surface for exactly the failure they exist to stop.
+    assert "must come from the data given" in writer.system
+    assert "Say when you do not know" in writer.system
+    assert "nothing reached" in writer.system, "the literal-track rule is load-bearing"
+
+
+def test_markdown_structure_reaches_the_reader_intact(session):
+    """Headings, a table, nested bullets and a quote all survive the pipeline.
+
+    Nothing between the model and the drawer may flatten these: the panel renders
+    them as elements, and a briefing that arrives as one long paragraph is the
+    failure this format was adopted to avoid.
+    """
+    project = _project(session)
+    got = overview.write(project, extractor=_Writer(V3_BRIEFING))
+    assert got is not None
+
+    assert "## Read of the build" in got.text
+    assert "| Track | Reached | What is missing |" in got.text
+    assert "| --- | --- | :--- |" in got.text
+    assert "  - the queue in this region runs years" in got.text, "nesting must survive"
+    assert got.text.rstrip().endswith("should not be read as cited.")
+
+
+def test_the_sentinel_does_not_cut_an_analytical_briefing(session):
+    """The runaway guard must survive the longer format.
+
+    It matches on line starts — `here is`, `revised`, `final answer` — and a 400
+    word briefing offers many more of those than three lines did. A cut lands
+    silently: the reader gets a briefing that stops mid-section and nothing says
+    so, because only a near-empty result is rejected.
+    """
+    project = _project(session)
+    # Character at a time, which is the worst case for a guard that matches on
+    # line starts across a growing buffer.
+    pieces = list(V3_BRIEFING)
+
+    class _Streamer:
+        model = "test-model"
+
+        def stream(self, *, system, user, max_tokens):
+            yield from pieces
+
+    text = "".join(overview.stream(project, extractor=_Streamer()))
+    assert text == V3_BRIEFING, "the sentinel cut a legitimate briefing"
+
+
+def test_the_sentinel_still_cuts_a_model_that_starts_over(session):
+    """The guard is kept, not loosened — the behaviour it was measured against is
+    a model writing a good answer and then writing it again."""
+    project = _project(session)
+    body = V3_BRIEFING + "\n[[END]]\nHere is another version:\nMeta is building..."
+
+    class _Streamer:
+        model = "test-model"
+
+        def stream(self, *, system, user, max_tokens):
+            yield body
+
+    text = "".join(overview.stream(project, extractor=_Streamer()))
+    assert "[[END]]" not in text
+    assert "another version" not in text
+    assert "## How much to trust this" in text, "it cut before the answer finished"
+
+
+def test_the_token_ceiling_leaves_room_for_the_longer_answer(session):
+    """400 words of visible answer, all of it visible.
+
+    This panel is served by the one tier that does not think, so the whole budget
+    is the answer — the old 4096 was sized against a sentence and two bullets, not
+    against reasoning it never pays for.
+    """
+    asked = {}
+
+    class _Counting(_Writer):
+        def complete(self, *, system, user, max_tokens):
+            asked["max_tokens"] = max_tokens
+            return super().complete(system=system, user=user, max_tokens=max_tokens)
+
+    overview.write(_project(session), extractor=_Counting(V3_BRIEFING))
+    assert asked["max_tokens"] == overview.MAX_TOKENS >= 8192

@@ -46,6 +46,34 @@ from tracker.config import get_settings
 from tracker.db import AlreadyRunning, acquire_write_lock, init_db, session_scope
 
 
+def _print_search_labels(report) -> None:
+    """Per-template detail for a search run, when it was a planned one.
+
+    **The funnel cannot report this and never will.** It is derived from
+    `ingest_url`, so a template that ran ten times and had every hit discarded by
+    the keyword filter leaves no row and is indistinguishable there from a
+    template nobody ran. That is not a hypothetical failure — it is exactly how
+    `abatement` behaved before its vocabulary was added — so the one place the
+    distinction exists is here, in the run that spent the quota.
+    """
+    if not report.by_label:
+        return
+    rows = sorted(report.by_label.values(), key=lambda s: (-s.queued, s.label))
+    console.print("[dim]  per template — queries, hits, filtered, queued[/dim]")
+    for stat in rows:
+        tone = "yellow" if stat.hits and not stat.queued else "dim"
+        console.print(
+            f"  [{tone}]{stat.label}[/{tone}] "
+            f"{stat.queries_run} · {stat.hits} · {stat.filtered} · {stat.queued}"
+        )
+    barren = [s.label for s in rows if s.queries_run and not s.queued]
+    if barren:
+        console.print(
+            f"[dim]  {len(barren)} template(s) queued nothing this run. Repeatedly, that "
+            "is the template's vocabulary, not the places.[/dim]"
+        )
+
+
 def _print_feed_verdicts(verdicts: list, report, funnel_mod) -> None:
     """The retire half of `tracker feeds`.
 
@@ -64,6 +92,7 @@ def _print_feed_verdicts(verdicts: list, report, funnel_mod) -> None:
         return
 
     retire = [v for v in verdicts if v.verdict == "retire"]
+    rewrite = [v for v in verdicts if v.verdict == "rewrite the template"]
     thin = [v for v in verdicts if v.verdict == "low yield"]
     blocked = [v for v in verdicts if v.verdict == "cannot read"]
     unjudged = [v for v in verdicts if v.verdict in {"too few to judge", "not read yet"}]
@@ -81,6 +110,22 @@ def _print_feed_verdicts(verdicts: list, report, funnel_mod) -> None:
         console.print(
             "[green]nothing worth retiring[/green] — no feed has been read "
             "enough times to judge and cited nothing"
+        )
+
+    if rewrite:
+        # Deliberately not filed under "worth retiring". A search template is code,
+        # so the action is an edit and a commit message rather than a line
+        # commented out of a config file — and `--drop --feed` matches a stored
+        # feed exactly, while this name is a rolled-up group no row holds.
+        console.print("\n[bold]search templates that have never cited anything[/bold]")
+        for v in rewrite:
+            console.print(f"  [yellow]{v.feed}[/yellow] — {v.why}")
+            if v.stat.pending:
+                console.print(f"    [dim]tracker queue --drop --feed '{v.feed}:'[/dim]")
+        console.print(
+            "[dim]The fix is an edit: drop the phrase from _PLACE_TEMPLATES in "
+            "tracker/ingest/search.py, with the reason in the commit. A trailing colon "
+            "above matches every place under that template.[/dim]"
         )
 
     if thin:
@@ -105,8 +150,9 @@ def _print_feed_verdicts(verdicts: list, report, funnel_mod) -> None:
     no_feed, total = funnel_mod.no_feed_share(report)
     if total:
         console.print(
-            f"\n[dim]Scope: {no_feed} of {total} wasted call(s) came from URLs no feed "
-            f"found — search and archive sweeps. Retiring feeds addresses the other "
+            f"\n[dim]Scope: {no_feed} of {total} wasted call(s) came from URLs carrying no "
+            f"feed at all — enrich's harvesters and hand-supplied URLs. Everything listed "
+            f"above, search templates included, is the other "
             f"{100 * (total - no_feed) / total:.0f}%.[/dim]"
         )
 
@@ -553,12 +599,11 @@ def sync(
     # silently, since a keyless setup is a configuration, not an error.
     if search < 0:
         search = settings.search_max_queries if settings.has_search_keys() else 0
-        if search:
-            console.print(
-                f"[dim]search: on by default via "
-                f"[bold]{settings.resolve_search_provider()}[/bold] "
-                f"({search} queries; --search 0 to skip)[/dim]"
-            )
+    # Capped here rather than only inside `run`, so the number printed is the
+    # number run. It used to be neither: the count was prompt text asking a model
+    # for N queries, while `run` silently sliced the list to
+    # `search_max_queries` — so `--search 25` announced 25 and issued 10.
+    search = min(search, settings.search_max_queries) if search > 0 else search
     if search:
         from tracker.ingest import search as srch
 
@@ -566,17 +611,31 @@ def sync(
             err.print("[yellow]--search needs a search backend[/yellow]")
             err.print(srch.SEARCH_KEY_HELP)
         else:
-            with session_scope(engine, commit=False) as session:
-                known = srch.known_projects(session)
+            console.print(
+                f"[dim]search: [bold]{settings.resolve_search_provider()}[/bold], "
+                f"{search} place-anchored quer(ies); --search 0 to skip[/dim]"
+            )
             try:
-                queries = srch.generate_queries(extractor, count=search, known=known)
                 with session_scope(engine) as session:
+                    # NOT `plan`: that name holds this run's phase list, built
+                    # above and read by `step()` for the rest of the function.
+                    # Shadowing it made every phase after this one die with
+                    # "'prospect' is not in list" -- after the search had already
+                    # been paid for.
+                    searches, refused = srch.plan_queries(session, count=search)
+                    for phrase, why in refused:
+                        err.print(f"[yellow]cannot search[/yellow] {phrase} — {why}")
+                    if not searches:
+                        raise srch.SearchError(
+                            "no places to anchor on — the database holds no projects yet"
+                        )
                     s_report, _ = srch.run(
                         session,
-                        queries,
+                        [q.text for q in searches],
                         provider=srch.build_provider(settings),
                         settings=settings,
                         dry_run=dry_run,
+                        labels={q.text: q.label for q in searches},
                     )
             except srch.SearchError as exc:
                 err.print(f"[yellow]search skipped[/yellow]: {str(exc).splitlines()[0]}")
@@ -586,6 +645,7 @@ def sync(
                     f"searched {s_report.queries_run} quer(ies), {s_report.hits} hit(s), "
                     f"queued [bold]{s_report.queued}[/bold] more"
                 )
+                _print_search_labels(s_report)
                 if s_report.wiki_mined:
                     console.print(
                         f"[dim]  {s_report.wiki_mined} of those came from Wikipedia's own "
@@ -925,6 +985,13 @@ def search_cmd(
             help="Search queries. Omit and use --from-llm to have the model propose them."
         ),
     ] = None,
+    plan: Annotated[
+        int,
+        typer.Option(
+            "--plan",
+            help="Run this many place-anchored template queries, chosen from the database.",
+        ),
+    ] = 0,
     from_llm: Annotated[
         int,
         typer.Option("--from-llm", help="Ask the model for this many project search queries."),
@@ -945,15 +1012,28 @@ def search_cmd(
         ),
     ] = None,
 ) -> None:
-    """Find candidate articles with Google search instead of waiting for a feed.
+    """Find candidate articles with web search instead of waiting for a feed.
 
     Feeds only surface what was published recently, so a project announced two
     years ago never appears in them. Search goes looking for it.
 
-    With --from-llm, the model proposes which projects to search for. Those are
-    leads, never facts: nothing the model names is stored, and a project only
-    becomes a row once a real article has been fetched and its values backed by
-    verbatim quotes. If the model invents a project, the search finds nothing.
+    Three ways to say what to look for, and they reach different ground.
+
+    A literal query is a literal query. **--plan N** is what `tracker sync` runs:
+    N queries built from a fixed table of events crossed with places ranked out
+    of the database, so each one names a place and an event and needs to know
+    neither the operator nor the campus. That is what lets it turn up a site
+    nobody here has heard of. No model is involved.
+
+    **--from-llm** asks the model which projects to search for instead. It is
+    circular — you can only be told about a project somebody already wrote about
+    — but it is the one path that can name an operator in a place holding no rows,
+    and running both is what lets `tracker queue stats` say which is worth the
+    quota. What the model names is a lead and never a fact: nothing it says is
+    stored, and a project becomes a row only once a real article has been fetched
+    and its values backed by verbatim quotes.
+
+    The three combine; --plan and --from-llm both append to any literal queries.
     """
     _use_llm(llm_provider)
     from tracker.ingest import search as srch
@@ -961,6 +1041,22 @@ def search_cmd(
 
     settings = get_settings()
     queries = list(query or [])
+    labels: dict[str, str] = {}
+
+    if plan:
+        engine_ro = _read_engine()
+        with session_scope(engine_ro, commit=False) as session:
+            planned, refused = srch.plan_queries(session, count=plan)
+        for phrase, why in refused:
+            err.print(f"[yellow]cannot search[/yellow] {phrase} — {why}")
+        if not planned:
+            _fail(
+                "no places to anchor a query on — the database holds no projects yet.\n"
+                "Run `tracker sync` first, or pass a literal query."
+            )
+            return
+        queries += [q.text for q in planned]
+        labels.update({q.text: q.label for q in planned})
 
     if from_llm:
         try:
@@ -978,7 +1074,7 @@ def search_cmd(
             return
 
     if not queries:
-        _fail("give at least one query, or use --from-llm N")
+        _fail("give at least one query, or use --plan N or --from-llm N")
         return
 
     if print_only or not settings.has_search_keys():
@@ -986,7 +1082,10 @@ def search_cmd(
             err.print(f"[yellow]search is not configured[/yellow]\n{srch.SEARCH_KEY_HELP}")
         console.print(f"\n[bold]{len(queries)} quer(ies)[/bold]")
         for q in queries:
-            console.print(f"  {q}")
+            # The label is printed beside the query because it is what the funnel
+            # will be grouped by later — this is how you find out what to grep
+            # `tracker queue stats` for without spending a search to learn it.
+            console.print(f"  {q}" + (f"  [dim]{labels[q]}[/dim]" if q in labels else ""))
         if not print_only:
             raise typer.Exit(2)
         return
@@ -999,7 +1098,12 @@ def search_cmd(
     engine, _ = init_db(_db_path())
     with session_scope(engine) as session:
         report, candidates = srch.run(
-            session, queries, provider=provider, settings=settings, dry_run=dry_run
+            session,
+            queries,
+            provider=provider,
+            settings=settings,
+            dry_run=dry_run,
+            labels=labels or None,
         )
 
     _print_report_rows(
@@ -1007,6 +1111,7 @@ def search_cmd(
         title=f"search{' (dry run)' if dry_run else ''}",
         warn={"filtered out"},
     )
+    _print_search_labels(report)
     for q, reason in report.errors:
         err.print(f"[yellow]{q[:60]}[/yellow]: {reason.splitlines()[0]}")
     if report.quota_exhausted:

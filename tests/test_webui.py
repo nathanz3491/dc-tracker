@@ -2537,6 +2537,138 @@ def test_health_reports_the_commit_it_is_serving(server):
         assert body["commit"] == expected == deployed_commit()
 
 
+# --- reading the commit out of `.git`, in all three layouts -------------------
+#
+# The health endpoint answers "is my fix live yet?", and it reads `.git` directly
+# rather than shelling out because it answers on every health check.
+#
+# That read assumed `.git` is a directory. In a git worktree it is a *file* holding
+# `gitdir: <path>`, so `.git/HEAD` raises `NotADirectoryError` and the commit came
+# back as unknown. Harmless in production, which is an ordinary checkout — and
+# corrosive everywhere else, because this project is worked on in worktrees, so the
+# test above failed on every single run and the deploy runbook had to name it as an
+# expected failure. A suite that is always one red is a suite nobody reads.
+
+
+def _fake_checkout(root, *, head="ref: refs/heads/main", sha="abcdef1234567890"):
+    """An ordinary checkout: `.git` is a directory holding HEAD and the refs."""
+    git = root / ".git"
+    (git / "refs" / "heads").mkdir(parents=True)
+    (git / "HEAD").write_text(head + "\n", encoding="utf-8")
+    (git / "refs" / "heads" / "main").write_text(sha + "\n", encoding="utf-8")
+    return git
+
+
+def _fake_worktree(root, common_root, *, branch="feature/x", sha="1234567890abcdef"):
+    """A worktree: `.git` is a file, HEAD is private, refs are shared.
+
+    Mirrors what git actually writes — the branch file lives under the *common*
+    directory, and the worktree's gitdir only carries `HEAD` and `commondir`.
+    """
+    common = _fake_checkout(common_root, sha="0000000000000000")
+    gitdir = common / "worktrees" / "wt"
+    gitdir.mkdir(parents=True)
+    (gitdir / "HEAD").write_text(f"ref: refs/heads/{branch}\n", encoding="utf-8")
+    (gitdir / "commondir").write_text("../..\n", encoding="utf-8")
+    ref = common / "refs" / "heads" / branch
+    ref.parent.mkdir(parents=True, exist_ok=True)
+    ref.write_text(sha + "\n", encoding="utf-8")
+    (root / ".git").write_text(f"gitdir: {gitdir}\n", encoding="utf-8")
+    return gitdir, common
+
+
+@pytest.fixture
+def _at(monkeypatch):
+    """Point the server's idea of the install root at a directory, uncached."""
+
+    def use(root):
+        from tracker.webui import server as server_mod
+
+        monkeypatch.setattr(server_mod, "home", lambda: root)
+        server_mod.deployed_commit.cache_clear()
+        return server_mod
+
+    yield use
+    from tracker.webui import server as server_mod
+
+    server_mod.deployed_commit.cache_clear()
+
+
+def test_an_ordinary_checkout_reads_its_head(tmp_path, _at):
+    root = tmp_path / "repo"
+    root.mkdir()
+    _fake_checkout(root)
+    assert _at(root).deployed_commit() == "abcdef12"
+
+
+def test_a_worktree_reads_its_own_head_not_the_main_checkouts(tmp_path, _at):
+    """The bug. `.git` is a file, so the old read raised and reported nothing —
+    and resolving the branch against the worktree's own gitdir finds nothing
+    either, because refs are shared."""
+    root = tmp_path / "wt"
+    root.mkdir()
+    _fake_worktree(root, tmp_path / "main")
+    assert _at(root).deployed_commit() == "12345678"
+
+
+def test_a_worktree_whose_pointer_is_relative(tmp_path, _at):
+    """Git writes this absolute in some versions and relative in others."""
+    root = tmp_path / "wt"
+    root.mkdir()
+    gitdir, _ = _fake_worktree(root, tmp_path / "main")
+    import os
+
+    (root / ".git").write_text(
+        f"gitdir: {os.path.relpath(gitdir, root)}\n".replace("\\", "/"), encoding="utf-8"
+    )
+    assert _at(root).deployed_commit() == "12345678"
+
+
+def test_a_packed_ref_is_found_in_the_shared_directory(tmp_path, _at):
+    """`git gc` removes the loose file. In a worktree `packed-refs` is the main
+    checkout's, so looking for it beside HEAD finds nothing."""
+    root = tmp_path / "wt"
+    root.mkdir()
+    _, common = _fake_worktree(root, tmp_path / "main")
+    (common / "refs" / "heads" / "feature" / "x").unlink()
+    (common / "packed-refs").write_text(
+        "# pack-refs with: peeled fully-peeled sorted\n"
+        "1234567890abcdef1234567890abcdef12345678 refs/heads/feature/x\n",
+        encoding="utf-8",
+    )
+    assert _at(root).deployed_commit() == "12345678"
+
+
+def test_a_detached_head_reports_the_sha_it_is_on(tmp_path, _at):
+    root = tmp_path / "repo"
+    root.mkdir()
+    _fake_checkout(root, head="deadbeefcafebabe")
+    assert _at(root).deployed_commit() == "deadbeef"
+
+
+def test_no_checkout_at_all_reports_nothing(tmp_path, _at):
+    """A tarball install has no `.git`, and the endpoint says so rather than
+    raising on a health check."""
+    root = tmp_path / "tarball"
+    root.mkdir()
+    assert _at(root).deployed_commit() is None
+
+
+def test_a_git_file_pointing_nowhere_reports_nothing(tmp_path, _at):
+    """Whatever is wrong with the checkout, the health endpoint must answer."""
+    root = tmp_path / "broken"
+    root.mkdir()
+    (root / ".git").write_text("gitdir: /nowhere/at/all\n", encoding="utf-8")
+    assert _at(root).deployed_commit() is None
+
+
+def test_an_unreadable_git_file_reports_nothing(tmp_path, _at):
+    root = tmp_path / "odd"
+    root.mkdir()
+    (root / ".git").write_text("this is not a gitdir pointer\n", encoding="utf-8")
+    assert _at(root).deployed_commit() is None
+
+
 # --- the watchlist, the one write on the reading console --------------------
 #
 # **Every test here needs somebody signed in**, which is the change: a watchlist
@@ -3133,3 +3265,147 @@ def test_searching_the_citations_reaches_inside_the_articles(server):
     _status, nothing = request(address, "/api/articles?q=nosuchpublisher")
     assert nothing["totals"]["matched"] == 0
     assert nothing["publishers"] == []
+
+
+# --- The briefing's markdown, and the rule that survived it ------------------
+#
+# The panel renders a model's prose. That string is written out of articles
+# fetched from the open web, which makes it the least trustworthy text on the
+# page: anything turning it into markup is an injection path running from someone
+# else's site, through the extraction pipeline, into a console that holds an
+# operator's session.
+#
+# The renderer grew from four constructs to headings, tables, nested lists, quotes
+# and fenced code when the prompt started asking for an analytical briefing. The
+# growth is the risk — the easy way to support markdown is to hand a string to a
+# library and set `innerHTML`, and that is precisely the shape this must not have.
+
+
+def test_the_briefing_renderer_never_reaches_for_innerhtml():
+    """Growing the markdown subset must never become "parse it and assign HTML".
+
+    Every branch has to emit a React element or a string, so a `<script>` in a
+    briefing renders as characters. This is the one property the panel cannot
+    trade for features, and it is cheap to pin.
+    """
+    source = (assets.STATIC_ROOT / "app.js").read_text(encoding="utf-8")
+    for banned in ("dangerouslySetInnerHTML", "innerHTML", "outerHTML", "insertAdjacentHTML"):
+        assert banned not in source, f"app.js reaches for {banned}"
+
+
+def test_the_briefing_renderer_flattens_links():
+    """A clickable destination chosen by a model reading an untrusted page is a
+    phishing surface. The citations under the panel are the real links and they
+    come from the database."""
+    source = (assets.STATIC_ROOT / "app.js").read_text(encoding="utf-8")
+    assert r"\[([^\]]*)\]\((?:[^()]|\([^()]*\))*\)" in source, "the link-flattening rule is gone"
+    assert "<a " not in source.split("function renderMarkdown")[0].split("const MD_INLINE")[-1]
+
+
+def _node() -> str | None:
+    import shutil
+
+    return shutil.which("node")
+
+
+def _parse_markdown(document: str):
+    """Run the console's own block parser under node, and hand back its output.
+
+    The parser is the riskiest new code in the panel and there is no JS test
+    harness in this repo, so it is exercised where it actually runs rather than
+    reimplemented in Python — a second copy of the rules would pass while the
+    shipped one was wrong.
+    """
+    import json
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    source = (assets.STATIC_ROOT / "app.js").read_text(encoding="utf-8")
+    start = source.index("const MD_INLINE =")
+    end = source.index("function mdRender(")
+    with tempfile.TemporaryDirectory() as tmp:
+        module = Path(tmp) / "parser.mjs"
+        # `mdInline` needs the templating tag; the block parser does not touch it.
+        module.write_text(
+            "const html = (s, ...v) => ({ s, v });\n"
+            + source[start:end]
+            + "\nexport { mdBlocks };\n",
+            encoding="utf-8",
+        )
+        runner = Path(tmp) / "run.mjs"
+        runner.write_text(
+            f"import {{ mdBlocks }} from {json.dumps(module.as_uri())};\n"
+            "let input = '';\n"
+            "process.stdin.on('data', (d) => (input += d));\n"
+            "process.stdin.on('end', () => "
+            "process.stdout.write(JSON.stringify(mdBlocks(JSON.parse(input).split('\\n')))));\n",
+            encoding="utf-8",
+        )
+        done = subprocess.run(
+            [_node(), str(runner)],
+            input=json.dumps(document),
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    assert done.returncode == 0, done.stderr
+    return json.loads(done.stdout)
+
+
+needs_node = pytest.mark.skipif(_node() is None, reason="node is not installed")
+
+
+@needs_node
+def test_a_script_tag_in_a_briefing_stays_text():
+    """The injection path, tested at the parser rather than asserted about it."""
+    blocks = _parse_markdown("<script>alert(1)</script>\n\n<img src=x onerror=alert(1)>")
+    assert all(b["type"] == "p" for b in blocks)
+    assert blocks[0]["text"] == "<script>alert(1)</script>"
+
+
+@needs_node
+def test_the_parser_reads_the_shape_the_prompt_asks_for():
+    """Headings, a table with alignment, nested lists and a quote — the four the
+    analytical briefing is built from."""
+    blocks = _parse_markdown(
+        "Opening prose.\n\n"
+        "## Read of the build\n\n"
+        "| Track | Reached |\n| --- | ---: |\n| Power | nothing |\n\n"
+        "## What would move it\n\n"
+        "1. An interconnection agreement\n"
+        "   - the queue runs years\n"
+        "2. A named tenant\n\n"
+        "> The capacity is not cited.\n"
+    )
+    kinds = [b["type"] for b in blocks]
+    assert kinds == ["p", "h", "table", "h", "list", "quote"]
+
+    table = blocks[2]
+    assert table["head"] == ["Track", "Reached"]
+    assert table["align"] == ["left", "right"]
+    assert table["rows"] == [["Power", "nothing"]]
+
+    ordered = blocks[4]
+    assert ordered["ordered"] is True
+    nested = ordered["items"][0]["children"][0]
+    assert nested["ordered"] is False
+    assert nested["items"][0]["text"] == "the queue runs years"
+
+
+@needs_node
+def test_a_rule_under_a_paragraph_is_not_mistaken_for_a_table():
+    """`---` is both a horizontal rule and a table's alignment row. The divider is
+    only ever tested against the line following a candidate header, so a rule
+    under ordinary prose stays a rule."""
+    blocks = _parse_markdown("Opening prose.\n---\nMore prose.")
+    assert [b["type"] for b in blocks] == ["p", "hr", "p"]
+
+
+@needs_node
+def test_a_half_written_briefing_renders_what_arrived():
+    """Every frame of a stream is a partial document, and none of them may render
+    as a blank panel — a briefing that appears to vanish mid-write reads as a
+    crash."""
+    for cut in ("## Read of the b", "| Track | Reach", "```\nlet x =", "- **Power"):
+        assert _parse_markdown(cut), f"{cut!r} rendered nothing"

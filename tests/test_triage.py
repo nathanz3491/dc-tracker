@@ -461,3 +461,335 @@ def test_a_misread_relabels_a_claim_previously_filed_as_superseded(session, row)
     assert _json.loads(campus.unconfirmed_reasons)["mw_built"] == MISREAD
     # Still idempotent against its own reason.
     assert not supersede(campus, "mw_built", reason=MISREAD)
+
+
+# --- the ruling has to be readable back as an answer -------------------------
+#
+# `settled_codes` parses the sentence `record_decision` wrote and decides whether
+# the finding is still open. Nothing tested that round trip, and it was broken for
+# the one case this module exists for: a ruling that empties a field wrote
+# `-> None`, which the reader takes for a value that was reverted. So the model did
+# the expensive work, got the right answer, and the finding came back every run —
+# while declines, which write no arrow at all, were recorded correctly. That
+# asymmetry is what made a broken parser look like a cautious model.
+
+
+def _decide_and_read_back(session, project, answer, code="built_exceeds_planned"):
+    """Rule, record the sentence the CLI would record, and ask if it settled."""
+    from tracker.audit import settled_codes
+    from tracker.logic import record_decision
+
+    acted, sentence, refusal = triage.apply_rule_out(
+        session, project, answer, articles={}, require_quote=False
+    )
+    assert acted, refusal
+    record_decision(project, code, sentence, by="agent (0.95)", detail="scope error")
+    return sentence, settled_codes(project)
+
+
+def test_a_ruling_that_empties_a_field_is_read_back_as_answered(session, row):
+    """The case this module was built for, and the one that did not stick."""
+    project, campus, building = row
+    sentence, settled = _decide_and_read_back(
+        session,
+        project,
+        {
+            "field": "mw_built",
+            "source_ids": [campus.id, building.id],
+            "reason": "neither figure describes this row",
+            "confidence": 0.95,
+        },
+    )
+    assert project.mw_built is None
+    assert "-> empty" in sentence, f"the reader only understands `empty`: {sentence!r}"
+    assert "None" not in sentence
+    assert "built_exceeds_planned" in settled, (
+        "an emptying ruling was not recognised as an answer, so the finding is "
+        "re-offered and re-paid for on every later run"
+    )
+
+
+def test_a_ruling_that_leaves_a_figure_is_read_back_as_answered(session, row):
+    """The case that always worked. Kept so a fix to the other cannot break it."""
+    project, campus, _building = row
+    _sentence, settled = _decide_and_read_back(
+        session,
+        project,
+        {
+            "field": "mw_built",
+            "source_ids": [campus.id],
+            "reason": "the 230 MW figure is the whole campus",
+            "confidence": 0.95,
+        },
+    )
+    assert project.mw_built == 19.2
+    assert "built_exceeds_planned" in settled
+
+
+def test_a_ruling_on_a_date_field_is_read_back_as_answered(session, row):
+    """Dates take the same path and the same formatter."""
+    project, campus, _building = row
+    project.expected_online = dt.date(2027, 1, 1)
+    campus.claims = json.dumps({"mw_built": 230.0, "expected_online": "2027-01-01"})
+    session.flush()
+
+    _sentence, settled = _decide_and_read_back(
+        session,
+        project,
+        {
+            "field": "expected_online",
+            "source_ids": [campus.id],
+            "reason": "that date is the campus, not this building",
+            "confidence": 0.95,
+        },
+        code="online_before_announced",
+    )
+    assert project.expected_online is None
+    assert "online_before_announced" in settled
+
+
+def test_re_ruling_an_already_ruled_claim_is_refused_not_reported_as_a_repair(session, row):
+    """`supersede` is idempotent, so a second ruling changes nothing. Saying it
+    repaired something writes a note for work nobody did, and grows the row's
+    notes by a line every night."""
+    project, campus, _building = row
+    answer = {
+        "field": "mw_built",
+        "source_ids": [campus.id],
+        "reason": "the 230 MW figure is the whole campus",
+        "confidence": 0.95,
+    }
+    acted, _sentence, _refusal = triage.apply_rule_out(
+        session, project, answer, articles={}, require_quote=False
+    )
+    assert acted
+
+    acted, _sentence, refusal = triage.apply_rule_out(
+        session, project, answer, articles={}, require_quote=False
+    )
+    assert not acted, "a second ruling on the same claim reported a repair that changed nothing"
+    assert "already ruled out" in refusal
+
+
+def test_a_claim_filed_as_superseded_can_still_be_relabelled_a_misread(session, row):
+    """The refusal above must be against *this* reason, not against being out of
+    the merge at all. `superseded` and `misread` say different true things to a
+    reader — right-then-restated against never-about-this-row — so a relabel is a
+    real change and must not be refused."""
+    from tracker.conflicts import MISREAD, SUPERSEDED, supersede
+
+    project, campus, _building = row
+    assert supersede(campus, "mw_built", reason=SUPERSEDED)
+    session.flush()
+
+    acted, _sentence, refusal = triage.apply_rule_out(
+        session,
+        project,
+        {
+            "field": "mw_built",
+            "source_ids": [campus.id],
+            "reason": "the article was never about this row",
+            "confidence": 0.95,
+        },
+        articles={},
+        require_quote=False,
+    )
+    assert acted, refusal
+    assert json.loads(campus.unconfirmed_reasons)["mw_built"] == MISREAD
+
+
+# --- what never reaches a model ----------------------------------------------
+
+
+def test_a_tranche_finding_is_not_sent_to_a_model():
+    """Six rules are about how a campus is split into tranches. Each names a
+    project-level field, so each *looks* actionable — and a ruling moves a project
+    scalar, which is not where the contradiction is. ~250 of these sat in the
+    backlog, each costing a full agent run to reach the only answer available."""
+    from tracker.logic import Finding
+
+    for code in (
+        "block_past_its_own_date",
+        "live_block_without_cited_capacity",
+        "built_capacity_uncited_in_blocks",
+        "block_label_ambiguous",
+        "blocks_may_double_count",
+        "no_block_for_energisation",
+    ):
+        finding = Finding(
+            project_id=1,
+            code=code,
+            severity="warning",
+            summary="a tranche disagrees with the campus",
+            fields=("mw_built", "mw_planned", "expected_online"),
+        )
+        assert not triage.can_rule_on(finding), (
+            f"`{code}` reached a model that cannot write a block row"
+        )
+
+
+def test_a_value_no_citation_claims_is_not_sent_to_a_model():
+    """It fires *because* nothing claims the field, so there is nothing to rule
+    out. `apply_rule_out` refuses it — after the articles have been paid for."""
+    from tracker.logic import Finding
+
+    finding = Finding(
+        project_id=1,
+        code="value_without_evidence",
+        severity="warning",
+        summary="230 MW is stored, and no source on this row claims mw_built at all",
+        fields=("mw_built",),
+    )
+    assert not triage.can_rule_on(finding)
+
+
+def test_the_findings_a_ruling_can_answer_still_go_to_a_model():
+    """The filter must remove spend, never an outcome."""
+    from tracker.logic import Finding
+
+    for code, fields in (
+        ("built_exceeds_planned", ("mw_built", "mw_planned")),
+        ("online_before_announced", ("expected_online", "first_announced")),
+        ("value_above_its_evidence", ("investment_usd",)),
+        ("energized_but_not_operational", ("phase",)),
+    ):
+        finding = Finding(project_id=1, code=code, severity="error", summary="x", fields=fields)
+        assert triage.can_rule_on(finding), f"`{code}` is exactly what this path is for"
+
+
+def test_a_finding_naming_no_ruleable_field_is_not_sent_to_a_model():
+    """`blocker` is derived from risk rows and `city` is never overwritten once
+    set, so there is no claim behind either that superseding could remove."""
+    from tracker.logic import Finding
+
+    for fields in ((), ("blocker",), ("city", "county")):
+        finding = Finding(
+            project_id=1, code="whatever", severity="warning", summary="x", fields=fields
+        )
+        assert not triage.can_rule_on(finding)
+
+
+def test_every_unanswerable_code_is_one_a_rule_actually_raises():
+    """The list is hand-written because nothing in a finding betrays that its
+    subject is a tranche. This is what catches a typo in it, and a rule renamed
+    out from under it."""
+    from pathlib import Path
+
+    text = Path(triage.__file__).with_name("logic.py").read_text(encoding="utf-8")
+    missing = [code for code in triage.UNANSWERABLE_BY_RULING if f'"{code}"' not in text]
+    assert not missing, f"no rule in logic.py raises {sorted(missing)}"
+
+
+# --- the CLI wiring around that filter ---------------------------------------
+
+
+def test_the_agent_walk_sends_only_what_a_ruling_could_answer(session, row, monkeypatch):
+    """`can_rule_on` is only worth anything if the walk actually applies it, and
+    applies it *before* `--limit`. Slicing first spends a budget for calls on
+    findings that never reach a model — the mistake the menu path documents."""
+    from tracker.cli import logic as cli_logic
+    from tracker.logic import Finding
+
+    project, _campus, _building = row
+
+    asked: list[str] = []
+
+    def _never_called(session, project, *, question, extractor, min_confidence):
+        asked.append(question)
+        raise AssertionError("this finding should not have reached a model")
+
+    monkeypatch.setattr("tracker.triage.triage", _never_called)
+
+    findings = [
+        Finding(
+            project_id=project.id,
+            code=code,
+            severity="warning",
+            summary="a tranche disagrees with the campus",
+            fields=("mw_built", "mw_planned"),
+        )
+        for code in sorted(triage.UNANSWERABLE_BY_RULING)
+    ]
+    cli_logic._triage_by_agent(session, findings, extractor=None, limit=30)
+    assert not asked, "a finding no ruling can answer was sent to a model"
+
+
+def test_the_agent_walk_applies_the_limit_after_the_filter(session, row, monkeypatch):
+    """Twelve unanswerable findings then two real ones, with a limit of two: both
+    real ones must be offered. Before the filter moved ahead of the slice, the
+    unanswerable ones ate the budget and the model saw nothing."""
+    from tracker.cli import logic as cli_logic
+    from tracker.logic import Finding
+
+    project, _campus, _building = row
+    seen: list[str] = []
+
+    def _record(session, project, *, question, extractor, min_confidence):
+        seen.append(question)
+        return triage.Outcome(verdict="left", note="not settled by the evidence")
+
+    monkeypatch.setattr("tracker.triage.triage", _record)
+
+    padding = [
+        Finding(
+            project_id=project.id,
+            code="block_label_ambiguous",
+            severity="warning",
+            summary=f"tranche {n} is unplaceable",
+            fields=("mw_planned",),
+        )
+        for n in range(12)
+    ]
+    real = [
+        Finding(
+            project_id=project.id,
+            code="built_exceeds_planned",
+            severity="error",
+            summary="230 MW built against 19.2 MW planned",
+            fields=("mw_built", "mw_planned"),
+        ),
+        Finding(
+            project_id=project.id,
+            code="online_before_announced",
+            severity="error",
+            summary="online before it was announced",
+            fields=("expected_online", "first_announced"),
+        ),
+    ]
+    cli_logic._triage_by_agent(session, padding + real, extractor=None, limit=2)
+    assert len(seen) == 2, "the limit was spent on findings that cannot be answered"
+    assert any("built_exceeds_planned" in q for q in seen)
+    assert any("online_before_announced" in q for q in seen)
+
+
+def test_the_agent_is_told_which_obstacle_the_finding_is_about(session, row, monkeypatch):
+    """`Finding.subjects` is plural and this line read it in the singular, so the
+    `About:` line was never emitted once — the exact blindness those tokens were
+    added to fix."""
+    from tracker.cli import logic as cli_logic
+    from tracker.logic import Finding
+
+    project, _campus, _building = row
+    seen: list[str] = []
+
+    def _record(session, project, *, question, extractor, min_confidence):
+        seen.append(question)
+        return triage.Outcome(verdict="left", note="no")
+
+    monkeypatch.setattr("tracker.triage.triage", _record)
+
+    cli_logic._triage_by_agent(
+        session,
+        [
+            Finding(
+                project_id=project.id,
+                code="built_exceeds_planned",
+                severity="error",
+                summary="230 MW built against 19.2 MW planned",
+                fields=("mw_built", "mw_planned"),
+                subjects=("risk:grid_capacity", "track:power"),
+            )
+        ],
+        extractor=None,
+    )
+    assert seen and "About: risk:grid_capacity, track:power" in seen[0]

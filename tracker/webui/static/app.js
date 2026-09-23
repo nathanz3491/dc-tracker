@@ -1482,20 +1482,32 @@ function PartyList({ p }) {
 
 /* ---- Markdown, rendered to React elements ---------------------------------
  *
- * A deliberately small subset: paragraphs, bullets, bold, italic, inline code.
- * That is what the briefing prompt asks for and nothing else is worth carrying.
+ * Headings, paragraphs, nested bullet and numbered lists, tables, block quotes,
+ * fenced code, horizontal rules, and inline bold / italic / strike / code.
  *
- * **Never innerHTML.** This string is written by a model out of articles fetched
- * from the open web, which makes it the least trustworthy text on the page —
- * anything that turns it into markup is an injection path running from someone
- * else's web page, through the extraction pipeline, into a console that runs
- * commands. Emitting elements means a `<script>` in the text is a `<script>` on
- * the screen, as characters.
+ * **Never assign markup, and that is the whole reason this file has a parser in
+ * it rather than a dependency.** This string is written by a model out of
+ * articles fetched from the open web, which makes it the least trustworthy text
+ * on the page — anything that turns it into markup is an injection path running
+ * from someone else's web page, through the extraction pipeline, into a console
+ * that runs commands. Every branch below emits a React element or a string, so a
+ * `<script>` in the briefing is a `<script>` on the screen, as characters.
  *
- * Links are flattened to their text for the same reason. A clickable destination
- * chosen by a model reading an untrusted page is a phishing surface, the prompt
- * does not ask for links, and there is nothing here worth linking to anyway. */
-const MD_INLINE = /(\*\*[^*\n]+\*\*|`[^`\n]+`|\*[^*\n]+\*|_[^_\n]+_)/g;
+ * The subset used to be four constructs, because the prompt asked for four. The
+ * prompt now asks for an analytical briefing with sections and comparison tables,
+ * so the renderer had to grow with it — but it grew by adding element branches,
+ * never by reaching for React's raw-markup escape hatch or a markdown library. A
+ * library here would be a third-party parser standing between untrusted text and
+ * the DOM, which is the one shape this panel must not have. `test_webui.py` fails
+ * the build if either name appears anywhere in this file, comments included, so
+ * the rule cannot be weakened quietly.
+ *
+ * Links are flattened to their text, and that stays true at any size. A clickable
+ * destination chosen by a model reading an untrusted page is a phishing surface,
+ * and nothing in a briefing is worth linking to — the citations below it are the
+ * real links and they come from the database. */
+
+const MD_INLINE = /(\*\*[^*\n]+\*\*|__[^_\n]+__|~~[^~\n]+~~|`[^`\n]+`|\*[^*\n]+\*|_[^_\n]+_)/g;
 
 function mdInline(text, key) {
   const parts = [];
@@ -1506,8 +1518,11 @@ function mdInline(text, key) {
     if (match.index > at) parts.push(text.slice(at, match.index));
     const token = match[0];
     const k = `${key}-${match.index}`;
-    if (token.startsWith("**")) parts.push(html`<strong key=${k}>${token.slice(2, -2)}</strong>`);
-    else if (token.startsWith("`")) parts.push(html`<code key=${k} class="dc-md-code">${token.slice(1, -1)}</code>`);
+    if (token.startsWith("**") || token.startsWith("__"))
+      parts.push(html`<strong key=${k}>${token.slice(2, -2)}</strong>`);
+    else if (token.startsWith("~~")) parts.push(html`<s key=${k}>${token.slice(2, -2)}</s>`);
+    else if (token.startsWith("`"))
+      parts.push(html`<code key=${k} class="dc-md-code">${token.slice(1, -1)}</code>`);
     else parts.push(html`<em key=${k}>${token.slice(1, -1)}</em>`);
     at = match.index + token.length;
   }
@@ -1515,52 +1530,261 @@ function mdInline(text, key) {
   return parts;
 }
 
+const MD_HEADING = /^(#{1,6})\s+(.*)$/;
+const MD_BULLET = /^(\s*)[-*+]\s+(.*)$/;
+const MD_ORDERED = /^(\s*)\d+[.)]\s+(.*)$/;
+const MD_QUOTE = /^\s*>\s?(.*)$/;
+const MD_FENCE = /^\s*(?:```|~~~)/;
+const MD_RULE = /^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/;
+/* A table's alignment row: `| --- | :--: |`. Tested only against the line that
+   *follows* a candidate header, so it never has to fight `---` as a rule. */
+const MD_DIVIDER = /^\s*\|?(?:\s*:?-{2,}:?\s*\|)+\s*:?-{2,}:?\s*\|?\s*$|^\s*\|\s*:?-{2,}:?\s*\|\s*$/;
+
+function mdCells(line) {
+  return line.replace(/^\s*\|/, "").replace(/\|\s*$/, "").split("|").map((c) => c.trim());
+}
+
+function mdAlign(cell) {
+  const left = cell.startsWith(":");
+  const right = cell.endsWith(":");
+  if (left && right) return "center";
+  if (right) return "right";
+  return "left";
+}
+
+function mdStartsBlock(raw) {
+  const line = raw.trim();
+  return (
+    !line ||
+    MD_HEADING.test(line) ||
+    MD_BULLET.test(raw) ||
+    MD_ORDERED.test(raw) ||
+    MD_QUOTE.test(line) ||
+    MD_FENCE.test(line) ||
+    MD_RULE.test(line)
+  );
+}
+
+/* A run of list items at one indent, with deeper runs recursed into the item
+   above them. Indentation is the only nesting signal a model reliably produces. */
+function mdList(lines, start) {
+  const first = lines[start].match(MD_BULLET) || lines[start].match(MD_ORDERED);
+  const indent = first[1].length;
+  const ordered = !MD_BULLET.test(lines[start]);
+  const items = [];
+  let i = start;
+
+  while (i < lines.length) {
+    const raw = lines[i];
+    if (!raw.trim()) {
+      // A blank line inside a list is only a break if nothing follows it that is
+      // still a list item — models put blank lines between items constantly.
+      const next = lines[i + 1];
+      if (!next || !(MD_BULLET.test(next) || MD_ORDERED.test(next))) break;
+      i++;
+      continue;
+    }
+    const match = raw.match(MD_BULLET) || raw.match(MD_ORDERED);
+    if (!match) break;
+    const at = match[1].length;
+    if (at < indent) break;
+    if (at > indent) {
+      const [nested, next] = mdList(lines, i);
+      if (items.length) items[items.length - 1].children.push(nested);
+      else items.push({ text: "", children: [nested] });
+      i = next;
+      continue;
+    }
+    // A numbered run and a bulleted run at the same indent are two lists.
+    if (!MD_BULLET.test(raw) !== ordered) break;
+    items.push({ text: match[2], children: [] });
+    i++;
+  }
+  return [{ type: "list", ordered, items }, i];
+}
+
+function mdBlocks(lines) {
+  const blocks = [];
+  let i = 0;
+
+  while (i < lines.length) {
+    const raw = lines[i];
+    const line = raw.trim();
+
+    if (!line) {
+      i++;
+      continue;
+    }
+
+    if (MD_FENCE.test(line)) {
+      const body = [];
+      i++;
+      while (i < lines.length && !MD_FENCE.test(lines[i].trim())) body.push(lines[i++]);
+      // An unterminated fence is the ordinary mid-stream state, not an error:
+      // render what has arrived rather than swallowing the rest of the briefing.
+      if (i < lines.length) i++;
+      blocks.push({ type: "code", text: body.join("\n") });
+      continue;
+    }
+
+    const heading = line.match(MD_HEADING);
+    if (heading) {
+      blocks.push({ type: "h", level: heading[1].length, text: heading[2] });
+      i++;
+      continue;
+    }
+
+    if (line.includes("|") && i + 1 < lines.length && MD_DIVIDER.test(lines[i + 1])) {
+      const head = mdCells(line);
+      const align = mdCells(lines[i + 1].trim()).map(mdAlign);
+      const rows = [];
+      i += 2;
+      while (i < lines.length && lines[i].includes("|") && lines[i].trim()) {
+        rows.push(mdCells(lines[i].trim()));
+        i++;
+      }
+      blocks.push({ type: "table", head, align, rows });
+      continue;
+    }
+
+    if (MD_RULE.test(line)) {
+      blocks.push({ type: "hr" });
+      i++;
+      continue;
+    }
+
+    if (MD_QUOTE.test(line)) {
+      const body = [];
+      while (i < lines.length && MD_QUOTE.test(lines[i].trim())) {
+        body.push(lines[i].trim().match(MD_QUOTE)[1]);
+        i++;
+      }
+      blocks.push({ type: "quote", blocks: mdBlocks(body) });
+      continue;
+    }
+
+    if (MD_BULLET.test(raw) || MD_ORDERED.test(raw)) {
+      const [list, next] = mdList(lines, i);
+      blocks.push(list);
+      i = next;
+      continue;
+    }
+
+    // Consecutive non-blank lines are one paragraph, the way markdown means it —
+    // otherwise a model that hard-wraps produces a line break every nine words.
+    const text = [line];
+    i++;
+    while (i < lines.length && !mdStartsBlock(lines[i])) {
+      // Stop before a table header, whose own line is ordinary prose until the
+      // divider under it proves otherwise.
+      if (lines[i].includes("|") && i + 1 < lines.length && MD_DIVIDER.test(lines[i + 1])) break;
+      text.push(lines[i].trim());
+      i++;
+    }
+    blocks.push({ type: "p", text: text.join(" ") });
+  }
+  return blocks;
+}
+
+function mdRender(blocks, prefix) {
+  return blocks.map((block, i) => {
+    const key = `${prefix}-${i}`;
+    if (block.type === "h") {
+      // Capped at h4/h5. The drawer owns the headings above it, and a model's
+      // section title must never outrank the panel's own label — an outline
+      // where untrusted prose sits at the same level as the interface is a
+      // misuse of the document structure a screen reader announces.
+      const tag = block.level <= 2 ? "h4" : "h5";
+      return html`<${tag} key=${key} class="dc-md-h">${mdInline(block.text, key)}<//>`;
+    }
+    if (block.type === "hr") return html`<hr key=${key} class="dc-md-hr" />`;
+    if (block.type === "code")
+      return html`<pre key=${key} class="dc-md-pre"><code>${block.text}</code></pre>`;
+    if (block.type === "quote")
+      return html`<blockquote key=${key} class="dc-md-quote">
+        ${mdRender(block.blocks, key)}
+      </blockquote>`;
+    if (block.type === "table")
+      return html`<div key=${key} class="dc-md-scroll">
+        <table class="dc-md-table">
+          <thead>
+            <tr>
+              ${block.head.map(
+                (cell, c) =>
+                  html`<th key=${c} style=${{ textAlign: block.align[c] || "left" }}>
+                    ${mdInline(cell, `${key}-h${c}`)}
+                  </th>`,
+              )}
+            </tr>
+          </thead>
+          <tbody>
+            ${block.rows.map(
+              (row, r) =>
+                html`<tr key=${r}>
+                  ${row.map(
+                    (cell, c) =>
+                      html`<td key=${c} style=${{ textAlign: block.align[c] || "left" }}>
+                        ${mdInline(cell, `${key}-${r}-${c}`)}
+                      </td>`,
+                  )}
+                </tr>`,
+            )}
+          </tbody>
+        </table>
+      </div>`;
+    if (block.type === "list") {
+      const tag = block.ordered ? "ol" : "ul";
+      return html`<${tag} key=${key}>
+        ${block.items.map(
+          (item, j) =>
+            html`<li key=${j}>
+              ${mdInline(item.text, `${key}-${j}`)}${mdRender(item.children, `${key}-${j}`)}
+            </li>`,
+        )}
+      <//>`;
+    }
+    return html`<p key=${key}>${mdInline(block.text, key)}</p>`;
+  });
+}
+
 function renderMarkdown(source) {
   const text = source
     // Links → their text. The target allows one level of nesting so that a URL
     // like `(javascript:alert(1))` is consumed whole rather than leaving its
     // closing bracket behind as debris.
-    .replace(/\[([^\]]*)\]\((?:[^()]|\([^()]*\))*\)/g, "$1")
-    .replace(/^\s*#{1,6}\s*/gm, "")            // headings → ordinary lines
-    .replace(/^\s*```.*$/gm, "");              // fences → dropped, never asked for
-  const blocks = [];
-  let list = null;
-
-  const flush = () => { if (list) { blocks.push(list); list = null; } };
-
-  for (const raw of text.split("\n")) {
-    const line = raw.trim();
-    if (!line) { flush(); continue; }
-    const bullet = line.match(/^[-*+]\s+(.*)$/);
-    if (bullet) {
-      if (!list) list = { type: "ul", items: [] };
-      list.items.push(bullet[1]);
-      continue;
-    }
-    flush();
-    const last = blocks[blocks.length - 1];
-    // Consecutive non-blank lines are one paragraph, the way markdown means it —
-    // otherwise a model that hard-wraps produces a line break every nine words.
-    if (last && last.type === "p") last.text += " " + line;
-    else blocks.push({ type: "p", text: line });
-  }
-  flush();
-
-  return blocks.map((block, i) =>
-    block.type === "ul"
-      ? html`<ul key=${i}>${block.items.map((item, j) => html`<li key=${j}>${mdInline(item, `${i}-${j}`)}</li>`)}</ul>`
-      : html`<p key=${i}>${mdInline(block.text, String(i))}</p>`);
+    .replace(/\[([^\]]*)\]\((?:[^()]|\([^()]*\))*\)/g, "$1");
+  return mdRender(mdBlocks(text.split("\n")), "b");
 }
 
-/* Hide a bold marker whose partner has not arrived yet.
+/* Hide the markers whose partner has not arrived yet.
  *
  * Without this, streaming shows `**Phoenix` as literal asterisks for a second and
  * then reflows into bold. Dropping the lone marker keeps the words and lets them
- * simply become bold when the closer lands. */
+ * simply become bold when the closer lands.
+ *
+ * Every paired inline marker the renderer understands gets the same treatment,
+ * because the richer output uses more of them — and a stray `~~` reading as
+ * literal tildes for half a second is the same flaw as the asterisks were.
+ *
+ * A heading marker with nothing after it yet is dropped whole: `##` alone parses
+ * as an empty heading, which lands as a blank line that pushes the text down and
+ * then jumps back when the title arrives. */
 function tidyPartialMarkdown(text) {
-  return (text.match(/\*\*/g) || []).length % 2
-    ? text.replace(/\*\*(?![\s\S]*\*\*)/, "")
-    : text;
+  let out = text.replace(/(^|\n)#{1,6}[ \t]*$/, "$1");
+  const pairs = [
+    // A fence is three of the same character, so counting them as pairs would
+    // strip one and stop the fence being a fence. Skip the marker entirely while
+    // one is open — an unterminated fence already renders what has arrived.
+    { find: /\*\*/g, cut: /\*\*(?![\s\S]*\*\*)/, skip: false },
+    { find: /~~/g, cut: /~~(?![\s\S]*~~)/, skip: out.includes("~~~") },
+    { find: /`/g, cut: /`(?![\s\S]*`)/, skip: out.includes("```") },
+  ];
+  for (const { find, cut, skip } of pairs) {
+    if (skip) continue;
+    if ((out.match(find) || []).length % 2 === 0) continue;
+    out = out.replace(cut, "");
+  }
+  return out;
 }
 
 const REDUCED_MOTION = () =>

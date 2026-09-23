@@ -12,10 +12,31 @@ import os
 import sys
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal
+from typing import Final, Literal
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+#: **The DeepSeek model every tier runs on. This is the line to change when
+#: DeepSeek ships a new one.**
+#:
+#: It is one constant rather than three defaults because the three tiers were the
+#: same string copied three times, and a provider that renames its models faster
+#: than this project releases will eventually have two of them updated and one
+#: forgotten — which fails as a 404 on whichever path is least exercised.
+#:
+#: To move every tier without a deploy, set `TRACKER_DEEPSEEK_MODEL_ALL` in the
+#: host's `.env`; a tier pinned by its own variable is left where it was pinned.
+#:
+#: **The id carries no version, and that is DeepSeek's naming, not a shortcut.**
+#: `deepseek-flash` is the published id for the current flash model; the versioned
+#: `deepseek-v4-flash` is deprecated and still routed to it, which is why the old
+#: value here kept working long after the model behind it changed. Inventing a
+#: versioned id — `deepseek-v4.1-flash`, matching the model's *name* rather than
+#: its id — is not routed anywhere, and fails every call. Check the published id
+#: rather than deriving it from a release note:
+#: https://api-docs.deepseek.com/zh-cn/quick_start/pricing
+DEEPSEEK_MODEL: Final = "deepseek-flash"
 
 #: Marker used to locate the project root by walking up from the CWD, so
 #: `tracker list` works from any subdirectory.
@@ -158,23 +179,38 @@ class Settings(BaseSettings):
     # separate no-think model to work around.
     deepseek_api_key: SecretStr | None = None
     deepseek_base_url: str = "https://api.deepseek.com"
-    deepseek_model: str = "deepseek-v4-flash"
+    deepseek_model: str = DEEPSEEK_MODEL
 
-    #: Model used for *judgement* rather than extraction — `tracker infer` and
-    #: `tracker logic conflicts`.
+    #: Move every tier at once, from the environment, without a deploy.
     #:
-    #: **The heavier model, and the split is the point.** These are the two places
-    #: the tool asks a question it cannot look up: which obstacle actually binds,
-    #: and which of five quote-backed figures a project holds today. Both are one
-    #: call per *project* or per *contested field* — hundreds, not thousands — so
-    #: depth is affordable here in a way it is not on `deepseek_model`, which reads
-    #: every article and is where the token bill lives.
+    #: The three model settings below each answer a different question and are
+    #: worth keeping separate — but the commonest change by far is "DeepSeek
+    #: renamed everything again", and doing that three times in a `.env` is three
+    #: chances to miss one. A tier set explicitly by its own variable wins over
+    #: this, so pinning one tier and floating the rest is the shape it supports.
+    deepseek_model_all: str | None = None
+
+    #: Model used for *judgement* rather than extraction — `tracker infer`,
+    #: `tracker logic conflicts`, and the agent loop behind `logic resolve`.
     #:
-    #: On DeepSeek the depth dial is also the `thinking` parameter rather than the
-    #: model name (see :data:`deepseek_infer_effort` and `tracker.llm`), so this is
-    #: the second of two levers, not the only one. Set it back to
-    #: `deepseek-v4-flash` if the bill bites; the answers get shallower, not wrong.
-    deepseek_reasoning_model: str = "deepseek-v4-pro"
+    #: **Kept as its own setting, no longer a heavier model.** It ran on
+    #: `deepseek-v4-pro` on the argument that these are the places the tool asks a
+    #: question it cannot look up — which obstacle binds, which of five quote-backed
+    #: figures a project holds — and that one call per project or per contested
+    #: field made depth affordable where reading every article does not.
+    #:
+    #: That argument held while the tiers were a generation apart. The current
+    #: flash model is a later one than `v4-pro`, so paying the pro rate now buys an
+    #: older model,
+    #: and the agent loop is the heaviest consumer here at nine to twelve calls a
+    #: finding — the place a per-token premium hurts most. **This has not been
+    #: measured on this corpus.** If judgement gets visibly worse, the honest test
+    #: is one overnight round with this pinned back to a pro model.
+    #:
+    #: The depth dial is the `thinking` parameter rather than the model name (see
+    #: :data:`deepseek_infer_effort` and `tracker.llm`), so the two levers are
+    #: still separate and effort is untouched by this change.
+    deepseek_reasoning_model: str = DEEPSEEK_MODEL
 
     #: How hard each reasoning tier thinks. Two settings, because the two tiers
     #: have opposite cost shapes and the same number cannot serve both.
@@ -234,7 +270,24 @@ class Settings(BaseSettings):
     #: Two things outside this setting still bound the reply, and both still earn
     #: their place: the prompt asks for an `[[END]]` sentinel and `overview.RUNAWAY`
     #: cuts the stream there.
-    deepseek_fast_model: str = "deepseek-v4-flash"
+    deepseek_fast_model: str = DEEPSEEK_MODEL
+
+    @model_validator(mode="after")
+    def _apply_model_all(self) -> Settings:
+        """Let one variable move every tier that is not pinned to its own.
+
+        `model_fields_set` is what makes "not pinned" answerable: it holds the
+        names the environment or the caller actually supplied, so a tier left at
+        its default follows `deepseek_model_all` while one set explicitly does
+        not. Without that distinction the override would silently overwrite a
+        deliberate pin, which is the opposite of what an override is for.
+        """
+        if not self.deepseek_model_all:
+            return self
+        for name in ("deepseek_model", "deepseek_reasoning_model", "deepseek_fast_model"):
+            if name not in self.model_fields_set:
+                object.__setattr__(self, name, self.deepseek_model_all)
+        return self
 
     #: Send `response_format={"type": "json_object"}` on the JSON-returning calls.
     #:

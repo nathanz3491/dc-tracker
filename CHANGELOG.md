@@ -96,6 +96,403 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **The console's version number is derived from the commit count**
+  (`tracker/release.py`, `tracker/cli/quality.py`, `tests/test_release.py`).
+
+  The header read `v0.1.0` on a repository with 190 commits — a number nobody had
+  touched since the first commit, sitting in the most-read place on the page. It
+  is now the commit count with dots before the last two digits: 190 becomes
+  `1.9.0`, 7 becomes `0.0.7`, 1,234 becomes `12.3.4`.
+
+  `tracker version --stamp` writes it into `tracker/__init__.py` and
+  `pyproject.toml`; `--number X.Y.Z` overrides the derivation for a real release.
+  Both files, always — a reader who finds them disagreeing cannot tell which one
+  is the version.
+
+  **Derived rather than typed, and stamped into source rather than stored.** The
+  number is a fact about the repository, so asking a person to retype it each
+  deploy only creates a deploy where they forget. And it goes through GitHub like
+  code: a version written on the host is reverted by the next poll, and one kept
+  in the database would be a label that can disagree with the code actually
+  running — which is the confusion the health endpoint's commit readout exists to
+  prevent. Stamped into the source, the number in the header is necessarily the
+  number of the commit serving it.
+
+  It trails its own repository by one, because stamping is itself a commit.
+  Closing that would mean writing the file from a commit hook or amending after
+  the fact, both worse than a label one behind.
+
+  Two faults worth keeping in the tests. The pattern that finds the version in
+  `pyproject.toml` first carried the DOTALL flag, so `.` matched newlines and the
+  walk from `[project]` backtracked catastrophically — measured at 0.65s over 24
+  lines and effectively never over a real file. It did not fail, it **hung**,
+  which is the worst way for a regex to be wrong. And the writer wrote as it went,
+  so a miss on the second file left the first stamped and the two disagreeing;
+  both rewrites are now computed before either is performed.
+
+### Changed
+
+- **Four publishers the database nominated itself** (`tracker/seed/feeds.toml`).
+  `tracker feeds` ranks hosts whose claims already decide stored values against
+  what this file lists, and four of its candidates are now configured:
+  servercountry, American RE Partners, Industrial Info and Epoch. Measured by
+  walking them: **240 matching URLs** on the next `--deep`.
+
+  **They are `[[sitemap]]` entries, and that is the whole decision.** `parse_feed`
+  truncates to the first 60 entries in document order and never sorts — right for
+  RSS, and right for datacenterfrontier's article sitemap, which is ordered
+  newest-first. None of these is, and six of the eight candidates carry no
+  `lastmod` at all, so there is nothing to sort by. As feeds the same four would
+  have yielded 9 URLs instead of 240, and American RE Partners would have yielded
+  **zero for ever** while looking configured: all 30 of its matches sit past
+  position 60.
+
+  Four candidates were declined and the reasons are in the file: two answer HTTP
+  403 to the feed fetcher (one of them to every rung), one is PR Newswire's Israel
+  locale rather than its US wire, and one matches a single URL in 105.
+
+  These rows arrive with no `published_at`, which is what the merge tiebreak ranks
+  on — `tracker backfill dates` is the remedy. And with no date the age cutoff
+  cannot apply, so the first `--deep` queues the whole archive at once: budget
+  `--limit`, because each queued row is an LLM call.
+
+- **Web search now looks for a place and an event, not for a project it already
+  knows the name of** (`tracker/ingest/search.py`, `tracker/funnel.py`,
+  `tracker/cli/sync.py`, `tracker/normalize.py`, `docs/workflows/sync.md`,
+  `tests/test_search.py`, `tests/test_funnel.py`).
+
+  Search was the one discovery path meant to reach past the configured feeds, and
+  it could not. It asked a model to **name projects** to search for, which reaches
+  only projects somebody already wrote enough about for a model to have learned
+  them — the ones already stored. It also hard-coded twenty-five operator names,
+  Nebius not among them, and told the model to avoid 60 of the ~300 projects held,
+  so it re-proposed the other 240 and paid a search each to be told we had them.
+
+  A query now names a place and an event — *"Loudoun County Virginia data center
+  rezoning application"* — and so needs neither the operator nor the campus. That
+  is the whole difference: a county votes on a rezoning before anybody announces
+  anything and publishes the agenda either way, so this can surface a site nobody
+  here has heard of. Ten events, each carrying a term the discovery filter already
+  recognises; places ranked out of the database, clusters first because campuses
+  cluster. No model anywhere in it.
+
+  **And it can finally be judged.** Every other source here is measured on what it
+  produced, and search was the exception: it recorded the whole query text as its
+  provenance, and a planned query is never issued twice, so the funnel held
+  hundreds of groups of one. A row now records `search:<template>:<place>` and the
+  funnel rolls the place up, so a template gets one line with a real call count —
+  and a query that crossed the ten-call threshold can no longer be formally
+  proposed for retirement with advice to drop a query that will never be issued
+  again.
+
+  Four things worth knowing before reading the numbers:
+
+  - **A place the filter cannot accept is named, not skipped.** `exclude` is a
+    substring test, so `summit` (there for conference write-ups) and `stock`
+    (finance coverage) make Summit County in CO, OH and UT plus Stockton,
+    Woodstock and Comstock unsearchable for any query at all. Left in the plan
+    such a place spends a slot every run and returns silence.
+  - **Each run walks the diagonal of the cross product**, preferring pairs that
+    have produced nothing. Rank order alone spends a whole run on one county and
+    re-runs the identical queries the next night, which is the problem this
+    replaces wearing a new hat.
+  - **A template that queues nothing is invisible to the funnel**, which is
+    derived from `ingest_url` and so cannot tell "ran and everything was filtered"
+    from "never ran". The run itself now prints per-template counts, because that
+    is the only place the distinction exists. It is not hypothetical: `abatement`
+    behaved exactly this way, which is why "abatement" joined `risk_signal`.
+  - **`already_known` will go up.** Overlapping templates re-find the same URLs
+    and that is healthy. The number that should fall is `no_project`.
+
+  `--from-llm` stays, labelled separately. It is circular, but it is the one path
+  that can name an operator in a place holding no rows — and running both is what
+  lets the funnel say which is worth the quota instead of leaving it asserted.
+
+- **`--search N` means N queries** (`tracker/cli/sync.py`). It used to mean "ask a
+  model for N", while the number actually issued was capped separately inside the
+  run, so `--search 25` announced 25 and sent 10.
+
+- **"(no feed)" means `enrich`, and three places said otherwise** (`tracker/funnel.py`,
+  `tracker/cli/sync.py`, `docs/sources-and-feeds.md`). A comment, a docstring and
+  the sentence the report prints all attributed the 2,148 wasted calls with no feed
+  to "search and archive sweeps" — and both of those record a feed, search a
+  `search:` label and an archive sweep the sitemap's own name. Left alone, a reader
+  would now see a `search:rezoning` row in the table and a line underneath saying
+  search has no feed.
+
+- **A queue drop can name a whole search template** (`tracker/ingest/discover.py`).
+  `--feed` ending in a colon matches every label beneath it, which is the only way
+  to clear a retired template's pending rows — the funnel reports a rolled-up group
+  name that no stored row holds. No existing feed name ends in a colon, so nothing
+  that matched exactly before can start matching more.
+
+- **"abatement" is a risk-signal term** (`tracker/seed/feeds.toml`). A county
+  granting or refusing a tax abatement is the public decision that most often
+  precedes a campus, and the vote gets reported where the announcement does not.
+  This widens the queue for every feed and sitemap, not only for search; the topic
+  tier is what bounds it, and "Ohio steel mill wins tax abatement" is still
+  dropped.
+
+- **Every DeepSeek tier runs one model, named in one place**
+  (`tracker/config.py`, `.env.example`, `docs/data-quality.md`,
+  `docs/console-and-export.md`, `tests/test_config.py`).
+
+  **The id is `deepseek-flash`, with no version in it.** That is DeepSeek's
+  naming: the versioned `deepseek-v4-flash` is deprecated and still routed to the
+  current flash model, which is why the old value here kept working long after the
+  model behind it changed. A versioned id matching the model's *name* rather than
+  its id — `deepseek-v4.1-flash` — is routed nowhere and fails every call, which is
+  exactly what shipped for one deploy before this. The published id is in the
+  pricing page, and that is where to read it rather than deriving it from a release
+  note.
+
+  The three model settings held the same string written three times, and the
+  reasoning tier held a fourth. A provider that renames its models faster than this
+  project releases will eventually have two of them updated and one forgotten,
+  which surfaces as a 404 on whichever path is least exercised. They now share one
+  constant, `DEEPSEEK_MODEL`, and that is the whole edit next time.
+
+  `TRACKER_DEEPSEEK_MODEL_ALL` moves every tier from the environment, so the host
+  can follow a rename without a deploy. A tier set explicitly by its own variable
+  wins over it — otherwise the override would silently overwrite a deliberate pin,
+  which is the opposite of what an override is for.
+
+  **The judgement tier came off the heavier model, and that part is not measured.**
+  `deepseek_reasoning_model` ran `deepseek-v4-pro` on the argument that `infer` and
+  `logic conflicts` are one call per project or per contested field, so depth was
+  affordable there in a way it is not on the path that reads every article. That
+  held while the two were a generation apart. The current flash model is a later
+  one than `v4-pro`, so paying the pro rate now buys an older model — and the agent
+  loop
+  behind `logic resolve`, at nine to twelve calls per finding, is where a per-token
+  premium is felt hardest.
+
+  Nothing about this has been measured on this corpus, and the config, the
+  `.env.example` and `docs/data-quality.md` all say so rather than presenting it as
+  settled. If judgement gets visibly worse, pin `TRACKER_DEEPSEEK_REASONING_MODEL`
+  back to a pro model for one overnight round and compare.
+
+  Effort is untouched: extraction `high`, infer `max`, agent `high`. The tiers now
+  differ by reasoning effort alone, which is what they always differed by on
+  DeepSeek — the model name was the second lever, and it is now idle.
+
+- **The drawer's AI overview is an analytical briefing, and the console renders
+  full markdown for it** (`tracker/prompts/overview-v3.txt`, `tracker/overview.py`,
+  `tracker/webui/static/app.js`, `tracker/webui/static/app.css`,
+  `tracker/webui/static/views-help.js`, `tests/test_overview.py`,
+  `tests/test_webui.py`).
+
+  The panel used to be one sentence and two bullets, capped at 110 words. That was
+  the right size for a summary and the wrong size for the question a reader
+  actually has in front of an open row: they can already see the table, so what
+  they want is the reasoning over it.
+
+  **This length rule has now been reversed once, and the reason it was imposed
+  still stands.** A 231-word briefing was measured as scrolled past, so it was cut
+  to 110 — but the fault recorded at the time was that it rendered as "one grey
+  slab", which is a structure problem wearing a length problem's clothes. Nothing
+  in the old panel could break 231 words into anything a reader could skim: no
+  headings, no tables, no nested lists. The renderer is the half of this change
+  that makes the other half safe, and `test_stream.py` carries the history so the
+  next person to find this long does not simply cut it again.
+
+  `overview-v3` asks for 220 to 400 words in three fixed sections — a read of the
+  build, what would move it, and how far to trust the row — with the analysis
+  named as analysis. The middle section has to name observable events specific
+  enough to go and look for: a signed interconnection agreement, a
+  planning-commission vote, a transformer order. "Further announcements" is
+  explicitly not an answer.
+
+  **The honesty rules did not get more relaxed; they got a paragraph of their
+  own.** A longer answer is a larger surface for the failure this panel has always
+  been able to produce — fluent sector commentary about a two-field row, which
+  reads exactly like knowledge. So the prompt says that in as many words: more room
+  is room to reason, never room to supply facts, and a short section is the correct
+  output for a thin row. The rule about reading the five tracks one line at a time
+  is carried over unchanged, because grouping two tracks into one claim is still
+  the most damaging mistake available here.
+
+  **The renderer grew to match, and grew the way it had to.** It now handles
+  headings, ordered and nested lists, tables with alignment, block quotes, fenced
+  code, rules and strikethrough. The easy way to do that is to hand the string to a
+  markdown library and assign the result as HTML — and that is the one shape this
+  panel must never have, because the string is written by a model out of articles
+  fetched from the open web. It is the least trustworthy text on the page. Every
+  branch emits a React element or a string, so a `<script>` in a briefing is
+  characters on the screen; links are still flattened to their text, because a
+  clickable destination chosen from an untrusted page is a phishing surface and the
+  citations below the panel are the real links. `test_webui.py` now fails the build
+  if the raw-markup escape hatch appears anywhere in `app.js`, comments included.
+
+  The parser is exercised where it runs — the tests lift it out of the shipped
+  `app.js` and drive it under node, skipping when node is absent, because a second
+  copy of the rules written in Python would pass while the shipped one was wrong.
+
+  **Two layout findings, both measured rather than guessed.** Table cells wrap:
+  `nowrap` bought a horizontal scrollbar on essentially every table in a 420px
+  drawer, and a row you have to drag to read is worse than a row two lines tall.
+  And the collapsed height went to 12em rather than up: at 19em the fade landed
+  inside the first table, so the panel showed a header row with nothing under it,
+  which reads as a table that failed to load rather than as text that continues.
+  Cutting inside a paragraph is unambiguous.
+
+  `MAX_TOKENS` is 8192, up from 4096, which was sized against the old shape. It is
+  a ceiling, not a target — the capex hover card shares it and still asks for 35 to
+  60 words.
+
+  **The panel keeps the no-thinking model tier, and that is the cost of this
+  change.** The briefing generates when a row is opened, so the model's speed is
+  the page's speed; a reasoning model would spend most of its budget before the
+  first visible word and leave the card blank for as long as it took. So a longer
+  briefing is a longer stream from a model that does not deliberate, and the
+  quality of the analysis is bounded by that. Streaming is what makes it readable:
+  the opening prose, which is the part somebody needs, arrives first and the
+  sections fill in under it while they read.
+
+  The runaway sentinel is kept exactly as it was. It cuts the stream when a model
+  finishes and starts over, it matches on line starts, and a 400-word briefing
+  offers it many more line starts than three lines did — so a test now streams a
+  full analytical briefing through it and fails if it cuts, alongside one that
+  fails if it stops cutting a model that restarts.
+
+### Fixed
+
+- **A `sync --full` run died after the search phase had been paid for**
+  (`tracker/cli/sync.py`, `tests/test_cli.py`). The search block named its list of
+  planned queries `plan` — which is also the name of the phase list built at the
+  top of the run and read by `step()` for every phase afterwards. Prospect raised
+  `ValueError: 'prospect' is not in list` and took extract, refresh, enrich and
+  settle down with it, on a live host, after sixty searches had already been
+  spent.
+
+  **The suite missed it because every `sync` test runs keyless**, so `--search`
+  resolves to 0 and the search block never executes. 2,954 tests passed over code
+  that could not complete a single `--full` run. The regression test therefore
+  configures a search key and stubs the backend, and it was checked by
+  reintroducing the bug and watching it reproduce the same `ValueError`.
+
+- **A preview no longer says it repaired something** (`tracker/cli/logic.py`).
+
+  `logic resolve --auto` without `--apply` writes nothing — it is the dry-run half
+  of an explicit pair in `scripts/settle.sh` and `scripts/resolve.sh`, one of which
+  says so in its own comment. It printed `repaired #14 …` anyway, for rows it had
+  not touched.
+
+  `resolve_drift` computes the same list either way, deliberately, so the preview
+  and the change come from identical code — but the label was unconditional. It now
+  reads `would repair`, followed by the same line `logic conflicts` already prints
+  when it is proposing rather than writing.
+
+- **The console reports its commit from inside a worktree** (`tracker/webui/server.py`,
+  `tests/test_webui.py`).
+
+  `GET /api/health` answers "is my fix live yet?", and it reads `.git` directly
+  rather than shelling out to `git` because it answers on every health check. That
+  read assumed `.git` is a directory. In a git worktree it is a *file* holding
+  `gitdir: <path>`, so `.git/HEAD` raised `NotADirectoryError` and the commit came
+  back as unknown.
+
+  Harmless in production, which is an ordinary checkout — and corrosive everywhere
+  else. This project is worked on in worktrees, so `test_health_reports_the_commit_
+  it_is_serving` failed on every single run and the deploy runbook had to name it as
+  an expected failure. A suite that is always one red is a suite nobody reads, and
+  the next real failure hides behind the one everybody has learned to skip.
+
+  **HEAD is per-worktree; refs are shared**, which is the half a naive fix misses.
+  A worktree's gitdir carries its own `HEAD`, but `refs/heads/*` and `packed-refs`
+  live in the common directory its `commondir` file points at — so following the
+  pointer and then resolving the branch beside `HEAD` finds nothing, and falls
+  through to a packed-refs scan that also finds nothing. Measured against the three
+  implementations: the old one raises, pointer-following alone returns None, and
+  splitting the two directories returns the commit. All three are pinned.
+
+- **A finding the model settled is now recognised as settled** (`tracker/triage.py`,
+  `tracker/audit.py`, `tests/test_triage.py`).
+
+  The open-findings count could not fall through this path, and the reason was a
+  sentence shape. Decisions are recorded as prose in the row's notes and parsed back
+  by `audit.settled_codes`, which asks whether the edit still holds before it treats
+  a code as answered. It recognises the word `empty`. `apply_rule_out` interpolated
+  the raw value and wrote `-> None`, which the reader takes for a value that was
+  reverted — so it re-opened the finding.
+
+  Only the *emptying* rulings were lost, which is the case this whole module exists
+  for: rule out every wrong claim and let the field go empty rather than invent a
+  number. A ruling that left a surviving figure recorded a number and settled
+  correctly, and a decline writes no arrow at all and settled correctly too. So the
+  model's refusals were remembered and its answers were not, and the overnight loop
+  was sized on the opposite assumption — "a finding the agent answered *or declined*
+  is recorded and never re-offered". Every successful ruling was re-offered, and
+  re-paid for at ~45,000-260,000 tokens, on every later run.
+
+  `audit._fmt` is now public as `fmt_value` and both sides use it, for the reason
+  `logic.one_line` is public: the module that writes a sentence and the module that
+  reads it back a day later must not each have their own idea of what "empty" looks
+  like. A test walks the round trip — rule, record, read back — for an emptied field,
+  a surviving figure and a date.
+
+  Second hole closed with it: `conflicts.supersede` is idempotent, so re-ruling an
+  already-ruled claim marked nothing while still reporting a repair — the exact
+  failure `apply_rule_out`'s own guard exists to stop, which covered "no citation
+  claims this field" and not "already ruled out". It is refused now, but only against
+  *its own* reason, so relabelling a `superseded` claim as a `misread` still counts
+  as the real change it is.
+
+- **`logic resolve` no longer pays a model to answer questions it cannot answer**
+  (`tracker/triage.py`, `tracker/cli/logic.py`, `tests/test_triage.py`).
+
+  "An agent rules claims out of the merge, which is available on every code" was the
+  justification for making it the default, and it was wrong. Superseding a claim
+  moves a **project scalar**; it cannot delete a milestone, close an obstacle,
+  relabel a tranche or edit a quote.
+
+  The six tranche rules each declare a project-level field — `mw_built`,
+  `mw_planned`, `expected_online` — so each one looks answerable, and ~250 of them
+  are in the backlog. Every one was handed to a model that read whole articles and
+  then said the only thing available to it. `value_without_evidence` is worse: it
+  fires *because* no citation claims the field, so `apply_rule_out` refuses it by
+  construction, after the reading is paid for.
+
+  `triage.can_rule_on` withholds those before a model is called and the CLI prints
+  the held-back codes in one line — the shape `_triage_by_model` already used, since
+  a finding that silently vanishes reads as a finding that was fine. It removes spend
+  and no outcome: every finding it holds back could only ever have ended in
+  `leave_alone`.
+
+  `--limit` now applies *after* that filter rather than before, for the reason the
+  menu path already documented: the limit is a budget for calls, and slicing first
+  spent it on findings that never reach a model.
+
+  The list is hand-written because nothing in a finding betrays that its subject is a
+  tranche, so a new rule about tranches needs a new entry in
+  `UNANSWERABLE_BY_RULING`; a test pins each member against the rule that raises it.
+  The honest ceiling is unchanged — those findings need an edit to a `capacity_block`
+  row, and no such command exists.
+
+- **The agent is told what the finding is about** (`tracker/cli/logic.py`).
+
+  `Finding.subjects` names the specific obstacle, milestone or track a finding
+  concerns. It exists because without it the model was handed a quote about something
+  else and declined, correctly, looking stubborn. The question built for the agent
+  read the attribute in the singular; the field is plural, and `getattr` with a
+  default swallowed the miss. The `About:` line was never emitted once, while the
+  comment above it said the opposite.
+
+- **The code counts in the docs matched no version of the code**
+  (`docs/workflows/logic.md`, `tracker/logic.py`, `tracker/triage.py`,
+  `tracker/cli/logic.py`, `tests/test_logic.py`, `scripts/render_workflow_diagrams.py`).
+
+  Four modules and the workflow page all said "11 of 16 codes have no action". There
+  are 22 codes in circulation and 6 carry an action. Nine of the sixteen without one
+  sit in `ACTIONS` as a deliberate empty tuple with a comment saying why; the other
+  seven are not in the table at all and reach the same answer through `.get`'s
+  default. The behaviour is identical and the record is not — an empty entry is a
+  decision somebody wrote down, a missing one is a rule added without anybody asking
+  the question. One of the seven, `value_above_its_evidence`, is worth asking about:
+  a claim exists there and is too low, which is exactly the shape `triage` repairs.
+
+### Added
+
 - **The server answers the table's questions; the browser stops downloading the
   database** (`tracker/webui/query.py`, `tracker/webui/dataset.py`,
   `tracker/webui/server.py`, `tracker/webui/static/app.js`,

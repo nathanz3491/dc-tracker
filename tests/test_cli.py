@@ -2077,6 +2077,73 @@ def test_sync_prospect_phase_reports_a_broken_roster_without_dying(initialized: 
     assert "sync complete" in result.output
 
 
+def test_the_search_phase_leaves_the_phase_plan_intact(initialized: Path, monkeypatch):
+    """A later phase must still know its own number after search has run.
+
+    This is a regression test for a real production failure, and for the reason
+    the whole suite missed it. Every other `sync` test runs keyless, so `--search`
+    resolves to 0 and the search block never executes at all; the bug therefore
+    sat behind 2,954 passing tests and only appeared on the host, after the run
+    had already paid for sixty searches.
+
+    What broke: the search block named its list of planned queries `plan`, which
+    is also the name of the phase list built before the run starts and read by
+    `step()` for every phase afterwards. Prospect then died with
+    "'prospect' is not in list" and took extract, refresh, enrich and settle with
+    it.
+
+    So this asserts the thing that actually matters -- the run completes and the
+    phases after search are still numbered -- rather than asserting the absence of
+    one variable name.
+    """
+    from tracker.config import get_settings
+    from tracker.ingest import search as srch
+
+    set_key(monkeypatch)
+    monkeypatch.setenv("TRACKER_SERPER_API_KEY", "test-search-key")
+    get_settings.cache_clear()
+
+    # No network, and no dependency on what the roster or the templates hold.
+    monkeypatch.setattr(srch, "build_provider", lambda *a, **k: object())
+    monkeypatch.setattr(
+        srch,
+        "plan_queries",
+        lambda *a, **k: (
+            [
+                srch.PlannedQuery(
+                    text="Loudoun County Virginia data center rezoning application",
+                    template="rezoning",
+                    place=srch.Place(
+                        slug="loudoun-va",
+                        phrase="Loudoun County Virginia",
+                        state="VA",
+                        kind="county",
+                        projects=3,
+                    ),
+                )
+            ],
+            [],
+        ),
+    )
+    monkeypatch.setattr(srch, "run", lambda *a, **k: (srch.SearchReport(), []))
+
+    # Prospect itself is stubbed for the same reason: this test is about the phase
+    # numbering surviving, not about what prospect finds, and the real one spends
+    # an LLM call that the fake key cannot answer.
+    from tracker import prospect as prospect_mod
+
+    monkeypatch.setattr(prospect_mod, "run", lambda *a, **k: prospect_mod.ProspectReport())
+
+    result = invoke(
+        initialized, "sync", "--skip-discover", "--skip-refresh", "--prospect", "1", "--search", "1"
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "prospect" in result.output
+    assert "sync complete" in result.output
+    assert "is not in list" not in result.output
+
+
 def test_sync_points_at_coverage_when_it_did_not_prospect(initialized: Path, monkeypatch):
     """The gap `sync` cannot otherwise see: operators never in the database at all."""
     set_key(monkeypatch)
