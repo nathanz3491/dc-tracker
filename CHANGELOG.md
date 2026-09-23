@@ -381,6 +381,167 @@ initial build of the v1 PRD.
   clears the commit it cached for the life of the process, which an earlier test
   had answered from a home with no checkout in it.
 
+- **An article naming one site twice keeps both projects' claims on its citation**
+  (`tracker/upsert.py`, `tracker/ingest/crawl.py`, `tests/test_upsert.py`,
+  `tests/test_ingest_crawl.py`).
+
+  When two projects from one article landed on one row — the same company and town
+  twice, or the identity arbiter routing a county record onto the town row its
+  sibling had just made — the second reading replaced the first's claims, quotes,
+  blocks and parties. Reproduced on a copy of production: the row kept 1000 MW and
+  $3.3B while its only citation claimed `expected_online` alone.
+
+  The citation is now the union of the two readings (`upsert.fold_reading`). Where
+  both state a figure the first stands: a quoted value beats an unquoted one, a
+  `superseded`/`misread` decision is never overturned, and the rival is named in the
+  notes. Records sharing a dedup key are folded before the write, so re-reading such
+  an article reports `unchanged`. Pairs only the database can make fold at the
+  write, through `upsert_record(reading=...)`.
+
+- **`tracker merge` keeps what only the folded row's citation said, and keeps the
+  quoted milestone** (`tracker/merge.py`, `tracker/upsert.py`, `tests/test_merge.py`,
+  `docs/workflows/duplicates.md`).
+
+  The folded row's copy of a URL the survivor also cited was deleted outright.
+  Across the suspected pairs on a copy of production, 9 of 25 shared URLs held
+  claims only that copy had (13 fields). Collapsing two copies of one milestone kept
+  the survivor's even when only the other was quoted (3 of 26 collisions). The
+  survivor's copy now absorbs the other by the same rule as above, and a milestone
+  or obstacle keeps whichever copy has a verified sentence. Folding every non-weak
+  suspected pair on the copy carried 18 claims that were previously deleted.
+
+- **Crawls, enrich and ISO loads no longer hold the write lock through a model or
+  network call** (`tracker/ingest/crawl.py`, `tracker/ingest/enrich.py`,
+  `tracker/ingest/pjm.py`, `tests/test_ingest_crawl.py`, `tests/test_enrich.py`,
+  `tests/test_ingest_pjm.py`, `docs/workflows/sync.md`, `docs/ingesting.md`).
+
+  SQLite takes one writer, and the console's sign-in waits five seconds for it. The
+  identity arbiter for an article's second project ran with the first project's
+  writes uncommitted; every `--dry-run` crawl held one transaction from its first
+  URL to its last; enrich asked the model about each contested field with the
+  previous answer's writes still open, and kept its Census writes open through the
+  first searches; `ingest pjm` held the lock ~28 s per 1,000-row chunk. Each record
+  and each settle answer is now committed before the next call. A dry run rolls each
+  article back and no longer pays for identity verdicts. A PJM chunk also ends after
+  two seconds: 1,000 rows now commit seven times, the longest hold 2.1 s.
+
+- **Enrich's paid-for settle decisions survive the agent pass rolling back**
+  (`tracker/ingest/enrich.py`, `tests/test_enrich.py`, `docs/workflows/enrich.md`).
+  Settle answers were flushed but not committed, and `sync` hands the same session
+  to the agent pass, which rolls back on its first error. On a copy of production,
+  project #1 went from 36 superseded marks to 39 and back to 36. Answers are now
+  committed as applied; the same run ends at 39.
+
+- **Sync's refresh rotates through every stale page instead of re-reading the same
+  fifteen** (`tracker/ingest/crawl.py`, `tracker/cli/sync.py`,
+  `tracker/ingest/records.py`, `tests/test_ingest_crawl.py`,
+  `docs/workflows/sync.md`, `docs/workflows/sync.svg`,
+  `scripts/render_workflow_diagrams.py`, `docs/ingesting.md`).
+
+  Refresh picked URLs by their oldest citation row, which only a fully successful
+  re-read moves. On a copy of production the fifteen picked every run were 11
+  `llm_error`, 3 `fetch_error` and 1 `ok`, tried 4–24 times each, and 1,945 others
+  were never reached. The Census reference file (365 derived citations) was fetched
+  and sent through extraction every run. Refresh now goes by when a URL was last
+  tried, doubles the wait after each failed re-read in a row (up to sixteen
+  intervals), and considers only citations produced by reading an article. A page
+  that hashes the same as its last good read under today's prompt is no longer sent
+  to the model; it is recorded as tried and reported as "page unchanged, not
+  re-read".
+
+- **A failed re-read no longer pushes a cited URL into the retry pool**
+  (`tracker/ingest/crawl.py`, `tests/test_ingest_crawl.py`). A later failure
+  overwrote a URL's `ok`, and on a copy of production 35 cited URLs sat in the pool
+  `--retry-failed` spends a try on every run. A URL that was read successfully now
+  keeps its status, HTTP status and content hash, with the failure recorded beside
+  them.
+
+- **Automatic retries stop after three identical failures**
+  (`tracker/ingest/discover.py`, `tracker/ingest/enrich.py`, `tracker/prospect.py`,
+  `tracker/cli/sync.py`, `tracker/ingest/crawl.py`, `tracker/config.py`,
+  `tests/test_discover.py`, `tests/test_enrich.py`, `tests/test_prospect.py`,
+  `tests/test_cli.py`, `tests/test_ingest_crawl.py`, `docs/workflows/sync.md`,
+  `docs/workflows/enrich.md`).
+
+  On a copy of production, 9 URLs failing "reply truncated" had been tried 66
+  times, and 14 failing with one SSL error 190 times, still retried on 2026-09-22.
+  After `MAX_SAME_FAILURES` = 3 same-way failures in a row, a URL leaves the
+  automatic retries — `--retry-failed`, enrich's retry harvester and the queued
+  leads `--prospect` crawls — but stays in the unread list. Sync's summary and
+  `queue --failed` say how many were given up, and `tracker ingest crawl --url`
+  still reads one. The retry after a starved reply no longer doubles past the
+  configured ceiling; one article could cost ~98,000 output tokens and still fail.
+
+- **An ISO queue load reported as failed has written nothing**
+  (`tracker/ingest/pjm.py`, `tests/test_ingest_pjm.py`, `docs/design-decisions.md`).
+  The quality gate ran after every chunk had committed: 30 of 40 rows were written
+  in the case that found it. The file is now read and judged before anything is
+  written, then written in chunks. Its encoding is decided from the whole file, not
+  the first 4 KB, so a Windows-1252 dash further down no longer stops a load
+  halfway. Operators match as whole words, so "Shawsville Solar" is no longer Amazon
+  and "Solar Advantage" no longer Vantage; each had been turned into a data center.
+
+- **`enrich --budget` is a ceiling, and each search query is sent once a run**
+  (`tracker/ingest/enrich.py`, `tests/test_enrich.py`, `docs/workflows/enrich.md`,
+  `docs/workflows/enrich.svg`). The per-project share applied per round and the
+  budget was checked only between projects: `--budget 120` over ten projects read
+  144 articles and reached two. A project's share is now a total across its rounds,
+  recomputed from what is left; the same case reads 120 and reaches all ten. Queries
+  were re-sent every round (22 sent, 14 distinct over four rounds of one project);
+  they are now answered from a per-run memo, which also keeps offering hits an
+  earlier round had no room to read.
+
+- **One bad search reply, feed URL or DNS hiccup no longer costs a whole run's
+  work** (`tracker/ingest/search.py`, `tracker/ingest/fetch.py`,
+  `tracker/ingest/discover.py`, `tracker/cli/sync.py`, `tests/test_search.py`,
+  `tests/test_discover.py`, `tests/test_queue_maintenance.py`,
+  `tests/test_ingest_crawl.py`, `docs/backfill-and-gaps.md`). A search backend
+  answering 200 with an error page lost every hit found so far. A mistyped feed URL
+  raised `InvalidURL`, which escaped the fetcher and stopped discovery for every
+  other feed; any error from a fetcher is now that URL's failed result. `queue
+  check --drop` treated a failed name lookup as "gone", so during a DNS outage it
+  deleted whatever it checked; a lookup failure now counts only when another URL in
+  the same check got an HTTP answer.
+
+- **"4.1 billion" is stored as $4,100,000,000, not $4,099,999,999**
+  (`tracker/normalize.py`, `tests/test_normalize.py`, `tests/test_ingest_crawl.py`).
+  Money was scaled as a float and truncated, leaving 32 of 1,998 one-decimal amounts
+  a dollar short, and the evidence gate uses the same parse, so a correctly quoted
+  "$4.1 billion" could not confirm the model's 4,100,000,000. Amounts are now exact
+  decimals rounded to the dollar, and NaN or Infinity is refused. Megawatts are
+  exact too (16.1 GW had been 16,100.000000000002 MW). No stored claim on the
+  snapshot sat at an affected figure.
+
+- **One article is cited and queued once, whatever the spelling of its URL**
+  (`tracker/normalize.py`, `tracker/upsert.py`, `tracker/merge.py`,
+  `tracker/ingest/discover.py`, `tracker/ingest/search.py`,
+  `tracker/ingest/crawl.py`, `tracker/cli/ingest.py`, tests,
+  `docs/workflows/sync.md`). On a copy of production, 19 projects cited one article
+  twice: nine differing only in Google's `srsltid`, four in a trailing slash, three
+  in `www.`, one in the scheme, and two in a `?p=` that may select a different page;
+  69 queued URLs had another spelling already stored. URLs are now stored without
+  tracking parameters (`canonical_url`), and the queue, citations, milestones,
+  obstacles and merges match by `url_identity`. Existing rows are not rewritten.
+
+- **A fetch records the requests it really made** (`tracker/ingest/fetch.py`,
+  `tests/test_ingest_crawl.py`). A 404, which is not retried, was recorded as three
+  attempts.
+
+- **One busy host no longer holds the fetch slots every other host needs, and a run
+  reuses connections** (`tracker/ingest/fetch.py`, `tests/test_ingest_crawl.py`).
+  The global slot was held while waiting on a busy host, through the politeness
+  sleep and through retry backoff, and 115 of the first 200 queued URLs are one
+  host. The same queue order now runs in 20.1 s instead of 24.1 s. A run shares one
+  connection pool, with a fresh client and cookie jar per request: cookies set
+  within a redirect still work, none carry to the next article, and six pages from
+  a local server used one connection instead of six.
+
+- **Sync's enrich phase no longer bills the agent pass for rows its harvest never
+  reached** (`tracker/cli/sync.py`, `tests/test_cli.py`, `docs/workflows/sync.md`).
+  The fix `tracker enrich` got earlier never reached `sync`, which still handed the
+  ~77,000-token agent every chosen row; even `--enrich-budget 0` paid for one call
+  per chosen row. It now sees only the rows the harvest reached.
+
 ### Changed
 
 - **Picking from a short menu no longer pays the deepest reasoning rate**
@@ -558,6 +719,17 @@ initial build of the v1 PRD.
   the proxy made the outside connection out of sight. asyncio's `sock_connect` is
   hooked too, because the Windows event loop connects without calling
   `socket.connect`.
+
+- **Each queued URL records how many tries in a row it has failed the same way**
+  (`tracker/migrations/0027_url_failure_streak.sql`, `tracker/models.py`,
+  `tracker/ingest/crawl.py`). `attempts` counts every request over a URL's life and
+  `error` holds only the latest failure, so nothing could tell a URL that failed
+  once from one failing identically for a month. `ingest_url.failures` is the
+  length of the current streak: the same failure extends it, anything else restarts
+  it (`crawl.failure_reason` ignores the digits and reply text that vary between
+  tries of one failure). On a URL that was read successfully it counts consecutive
+  failed re-reads. It is backfilled so every URL failing today gets exactly one more
+  automatic try.
 
 ### Removed
 
