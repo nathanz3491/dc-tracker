@@ -938,11 +938,15 @@ def union_parties(first: list[Any], second: list[Any]) -> list[Any]:
     return union_by_key(first, second, _party_marker)
 
 
-def rival_note(field_name: str, kept: Any, rival: Any) -> str:
+#: Who gave the rival figure, in the default disclosure.
+_SIBLING = "another project this article names that resolved to this row"
+
+
+def rival_note(field_name: str, kept: Any, rival: Any, *, given_by: str = _SIBLING) -> str:
     """The disclosure for a figure a second reading of the same article gave."""
     return (
-        f"this article also gave {field_name} = {rival!r} for another project it names that "
-        f"resolved to this row; the first reading's {kept!r} was kept on the citation"
+        f"this article also gave {field_name} = {rival!r} for {given_by}; "
+        f"the first reading's {kept!r} was kept on the citation"
     )
 
 
@@ -962,6 +966,115 @@ def _json_array(raw: str | None) -> list[Any]:
     return got if isinstance(got, list) else []
 
 
+def _split(raw: str | None) -> set[str]:
+    return {f.strip() for f in (raw or "").split(",") if f.strip()}
+
+
+@dataclass
+class _Citation:
+    """One citation's per-field evidence, in the shape `fold_reading` works on.
+
+    Built from a stored `Source` row or from an arriving `SourceRecord`, so the same
+    fold serves a second project from one article (`upsert_record(reading=...)`) and
+    the two copies of one URL a merge brings together (`fold_source`).
+
+    `quoted` is its own fact rather than "claimed and not flagged": a superseded
+    figure keeps its place in `source.fields` because its quote is still real — see
+    `conflicts.supersede` — so it has to be carried, not re-derived.
+    """
+
+    claims: dict[str, Any]
+    unconfirmed: dict[str, str | None]
+    quoted: set[str]
+    quotes: dict[str, str]
+    meta: dict[str, Any]
+    blocks: list[Any]
+    parties: list[Any]
+    excerpt: str | None
+
+    @classmethod
+    def of_row(cls, row: Source) -> _Citation:
+        reasons = _json_object(row.unconfirmed_reasons)
+        unconfirmed: dict[str, str | None] = {
+            f: reasons.get(f) for f in _split(row.unconfirmed_fields)
+        }
+        unconfirmed.update({f: r for f, r in reasons.items() if r in DECIDED_REASONS})
+        return cls(
+            claims=_json_object(row.claims),
+            unconfirmed=unconfirmed,
+            quoted=_split(row.fields),
+            quotes=_json_object(row.quotes),
+            meta=_json_object(row.claim_meta),
+            blocks=_json_array(row.blocks),
+            parties=_json_array(row.parties),
+            excerpt=row.excerpt,
+        )
+
+    @classmethod
+    def of_record(cls, sr: Any, claims: dict[str, Any]) -> _Citation:
+        reasons = dict(sr.unconfirmed_reasons)
+        unconfirmed = {f: reasons.get(f) for f in sr.unconfirmed if f in claims}
+        return cls(
+            claims=dict(claims),
+            unconfirmed=unconfirmed,
+            quoted={f for f in claims if f not in unconfirmed},
+            quotes=dict(sr.quotes or {}),
+            meta=dict(sr.claim_meta or {}),
+            blocks=[b.as_json() for b in sr.blocks],
+            parties=[p.as_json() for p in sr.parties],
+            excerpt=sr.excerpt,
+        )
+
+    def absorb(self, other: _Citation) -> tuple[list[tuple[str, Any, Any]], set[str]]:
+        """Fold `other` in by `fold_reading`'s rule. Returns (rivals, fields taken)."""
+        rivals, taken = fold_reading(
+            self.claims,
+            self.unconfirmed,
+            self.quotes,
+            self.meta,
+            extra_claims=other.claims,
+            extra_unconfirmed=other.unconfirmed,
+            extra_quotes=other.quotes,
+            extra_meta=other.meta,
+        )
+        self.quoted = {f for f in self.quoted if f not in taken} | (taken & other.quoted)
+        self.blocks = union_blocks(self.blocks, other.blocks)
+        self.parties = union_parties(self.parties, other.parties)
+        self.excerpt = self.excerpt or other.excerpt
+        return rivals, taken
+
+    def write(self, row: Source) -> None:
+        """Store it back, sorted exactly as `upsert_record` writes a citation."""
+        held = self.claims
+
+        def dumped(mapping: dict[str, Any]) -> str | None:
+            kept = {k: v for k, v in mapping.items() if k in held}
+            return json.dumps(kept, sort_keys=True, ensure_ascii=False) if kept else None
+
+        row.claims = json.dumps(held, sort_keys=True, ensure_ascii=False) if held else None
+        row.fields = derive_fields({k: v for k, v in held.items() if k in self.quoted})
+        row.unconfirmed_fields = derive_fields(
+            {k: v for k, v in held.items() if k in self.unconfirmed}
+        )
+        row.unconfirmed_reasons = dumped({k: r for k, r in self.unconfirmed.items() if r})
+        row.quotes = dumped(self.quotes)
+        row.claim_meta = dumped(self.meta)
+        row.excerpt = self.excerpt
+        row.blocks = (
+            json.dumps(sorted(self.blocks, key=_block_key), ensure_ascii=False)
+            if self.blocks
+            else None
+        )
+        row.parties = (
+            json.dumps(
+                sorted(self.parties, key=lambda p: (*_party_marker(p), str(p.get("name") or ""))),
+                ensure_ascii=False,
+            )
+            if self.parties
+            else None
+        )
+
+
 def _fold_into_row(row: Source, sr: Any, claims: dict[str, Any]) -> list[str]:
     """Merge a second reading's citation into the row the first reading wrote.
 
@@ -969,58 +1082,30 @@ def _fold_into_row(row: Source, sr: Any, claims: dict[str, Any]) -> list[str]:
     before they reach here; both apply `fold_reading`, so the rule has one home.
     Returns the disclosure lines for rival figures.
     """
-    held = _json_object(row.claims)
-    flagged = {f.strip() for f in (row.unconfirmed_fields or "").split(",") if f.strip()}
-    # `fields` is its own fact rather than "claimed and not flagged": a superseded
-    # figure keeps its place there because its quote is still real — see
-    # `conflicts.supersede` — so it has to be carried, not re-derived.
-    quoted = {f.strip() for f in (row.fields or "").split(",") if f.strip()}
-    reasons = _json_object(row.unconfirmed_reasons)
-    unconfirmed: dict[str, str | None] = {f: reasons.get(f) for f in flagged}
-    unconfirmed.update({f: r for f, r in reasons.items() if r in DECIDED_REASONS})
-    quotes = _json_object(row.quotes)
-    meta = _json_object(row.claim_meta)
-
-    incoming_reasons = dict(sr.unconfirmed_reasons)
-    extra_unconfirmed = {f: incoming_reasons.get(f) for f in sr.unconfirmed if f in claims}
-    rivals, taken = fold_reading(
-        held,
-        unconfirmed,
-        quotes,
-        meta,
-        extra_claims=claims,
-        extra_unconfirmed=extra_unconfirmed,
-        extra_quotes=dict(sr.quotes or {}),
-        extra_meta=dict(sr.claim_meta or {}),
-    )
-    quoted = {f for f in quoted if f not in taken} | {
-        f for f in taken if f not in extra_unconfirmed
-    }
-
-    row.claims = json.dumps(held, sort_keys=True, ensure_ascii=False) if held else None
-    row.fields = derive_fields({k: v for k, v in held.items() if k in quoted})
-    row.unconfirmed_fields = derive_fields({k: v for k, v in held.items() if k in unconfirmed})
-    why = {k: r for k, r in unconfirmed.items() if r and k in held}
-    row.unconfirmed_reasons = json.dumps(why, sort_keys=True, ensure_ascii=False) if why else None
-    quotes = {k: q for k, q in quotes.items() if k in held}
-    row.quotes = json.dumps(quotes, sort_keys=True, ensure_ascii=False) if quotes else None
-    meta = {k: m for k, m in meta.items() if k in held}
-    row.claim_meta = json.dumps(meta, sort_keys=True, ensure_ascii=False) if meta else None
-    if not row.excerpt and sr.excerpt:
-        row.excerpt = sr.excerpt
-
-    blocks = union_blocks(_json_array(row.blocks), [b.as_json() for b in sr.blocks])
-    row.blocks = json.dumps(sorted(blocks, key=_block_key), ensure_ascii=False) if blocks else None
-    parties = union_parties(_json_array(row.parties), [p.as_json() for p in sr.parties])
-    row.parties = (
-        json.dumps(
-            sorted(parties, key=lambda p: (*_party_marker(p), str(p.get("name") or ""))),
-            ensure_ascii=False,
-        )
-        if parties
-        else None
-    )
+    citation = _Citation.of_row(row)
+    rivals, _taken = citation.absorb(_Citation.of_record(sr, claims))
+    citation.write(row)
     return [rival_note(name, kept, rival) for name, kept, rival in rivals]
+
+
+def fold_source(into: Source, other: Source, *, given_by: str) -> tuple[list[str], int]:
+    """Fold another stored copy of the same URL into `into`.
+
+    For `tracker merge`, where the row being folded away can hold its own copy of a
+    citation the survivor also has. Both are readings of one article, so the
+    survivor's copy absorbs the other by `fold_reading`'s rule — its own values
+    stand — instead of the other copy being deleted along with whatever only it
+    said. Measured on a copy of production: across the suspected pairs, 9 of 25
+    shared URLs held claims only the folded copy had, 13 fields in all.
+
+    Returns the disclosure lines for rival figures, and how many claims the survivor's
+    copy took from the other.
+    """
+    citation = _Citation.of_row(into)
+    rivals, taken = citation.absorb(_Citation.of_row(other))
+    citation.write(into)
+    notes = [rival_note(name, kept, rival, given_by=given_by) for name, kept, rival in rivals]
+    return notes, len(taken)
 
 
 def upsert_record(
@@ -2125,6 +2210,7 @@ __all__ = [
     "claims_by_field",
     "derive_fields",
     "fold_reading",
+    "fold_source",
     "is_placeholder",
     "recompute_blocks",
     "recompute_confidence",

@@ -17,7 +17,9 @@ That is a nuisance in a site listing and a wrong number the moment anything
 groups by end customer, which is exactly what `tracker capex` does.
 
 **What a merge does, and does not do.** Citations, milestones and obstacles move
-onto the surviving row; the duplicates are deleted; and every field is then
+onto the surviving row; a citation both rows hold is folded into the survivor's
+copy rather than dropped, and a milestone or obstacle both hold keeps whichever
+copy's verified sentence there is; the duplicates are deleted; and every field is then
 recomputed from the combined set of claims by `upsert.recompute_from_sources`.
 Nothing is hand-copied, so the survivor's values are what the citations support
 rather than whichever row happened to be kept. The merge is recorded in `notes`
@@ -34,7 +36,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from tracker.models import Event, Project, ProjectAlias, Risk, utcnow
-from tracker.upsert import recompute_from_sources
+from tracker.upsert import SOURCE_NOTE_PREFIX, fold_source, recompute_from_sources, record_tag
 
 log = logging.getLogger(__name__)
 
@@ -49,6 +51,9 @@ class MergeResult:
     removed: list[int] = field(default_factory=list)
     sources_moved: int = 0
     sources_discarded: int = 0
+    #: Claims a folded row's copy of a shared citation held that the survivor's copy
+    #: did not, carried onto it rather than deleted with the copy.
+    claims_carried: int = 0
     events_moved: int = 0
     events_discarded: int = 0
     risks_moved: int = 0
@@ -61,6 +66,7 @@ class MergeResult:
             ("projects removed", len(self.removed)),
             ("citations moved", self.sources_moved),
             ("citations already held", self.sources_discarded),
+            ("claims carried from a shared citation", self.claims_carried),
             ("milestones moved", self.events_moved),
             ("milestones already held", self.events_discarded),
             ("obstacles moved", self.risks_moved),
@@ -96,6 +102,9 @@ def merge_projects(
     kept_urls = {s.url: s for s in keep.sources}
     #: Operator prose from the rows being folded away, carried to the survivor.
     carried: list[str] = []
+    #: Disclosures for figures a folded copy of a shared citation gave that the
+    #: survivor's copy already stated differently. See `upsert.fold_source`.
+    rivals: list[str] = []
 
     for dupe_id in targets:
         dupe = session.get(Project, dupe_id)
@@ -104,8 +113,14 @@ def merge_projects(
 
         # --- Citations -------------------------------------------------------
         # A source already on the survivor is the same citation, not a second
-        # one. Its claims are already represented, so the duplicate row is
-        # dropped — but anything pointing at it is repointed first, or the FK
+        # one, so the duplicate row is dropped — but only after the survivor's
+        # copy has absorbed it. The two copies are two readings of one article,
+        # and they are not interchangeable: measured across the suspected pairs,
+        # 9 of 25 shared URLs held claims only the folded copy had. Deleting it
+        # "because its claims are already represented" deleted those. The
+        # survivor's own values stand where both state one; the rival is named.
+        #
+        # Anything pointing at the dropped copy is repointed first, or the FK
         # would null out a milestone's provenance.
         #
         # Reassigned through the RELATIONSHIP, not by setting `project_id`.
@@ -117,6 +132,15 @@ def merge_projects(
         for source in list(dupe.sources):
             twin = kept_urls.get(source.url)
             if twin is not None:
+                lines, taken = fold_source(
+                    twin, source, given_by=f"project #{dupe.id}, since merged into this row"
+                )
+                # Tagged as the citation's own disclosure, so it lives exactly as
+                # long as the folded citation does: the next reading of this URL
+                # replaces both. See `upsert._merge_notes`.
+                marker = f"{SOURCE_NOTE_PREFIX}[{record_tag([source.url])}]"
+                rivals += [f"{marker} {line}" for line in lines]
+                result.claims_carried += taken
                 _repoint(session, source.id, twin.id)
                 dupe.sources.remove(source)
                 session.delete(source)
@@ -164,6 +188,10 @@ def merge_projects(
         session.flush()
 
     session.refresh(keep)
+    if rivals:
+        # Before the recompute, which keeps every contributed line it did not write.
+        lines = [line for line in (keep.notes or "").splitlines() if line.strip()]
+        keep.notes = "\n".join([*lines, *(r for r in dict.fromkeys(rivals) if r not in lines)])
     result.conflicts = recompute_from_sources(session, keep)
     # After the recompute, which regenerates the derived `[tracker]` block. Prose
     # survives that untouched, so the order only matters for readability.
@@ -213,48 +241,82 @@ def _record_alias(session: Session, from_key: str | None, keep: Project, *, by: 
     return 1
 
 
+def _verified(row: Event | Risk) -> bool:
+    """A verbatim sentence the gate accepted stands behind it."""
+    return bool(row.quote) and row.unconfirmed is None
+
+
+def _take_the_evidence(survivor: Event | Risk, folded: Event | Risk) -> None:
+    """Give the survivor's copy the folded copy's verified sentence, if only it has one.
+
+    Collapsing two copies of one milestone kept the survivor's whatever each held, so
+    a merge could trade a quoted milestone for an unquoted one — measured across the
+    suspected pairs, 3 of 26 milestone collisions did exactly that. The rule is the
+    one `upsert._upsert_events` applies to a re-read: a verified sentence upgrades an
+    unverified copy, never the reverse. The citation moves with the sentence, because
+    the quote is only evidence of the article it came from.
+    """
+    if _verified(survivor) or not _verified(folded):
+        return
+    survivor.quote = folded.quote
+    survivor.unconfirmed = None
+    survivor.source_id = folded.source_id or survivor.source_id
+    if isinstance(survivor, Event):
+        survivor.description = folded.description or survivor.description
+
+
 def _move_events(session: Session, keep: Project, dupe: Project) -> tuple[int, int]:
     """Move milestones, collapsing any the survivor already has on that date.
 
     The (project, type, date) UNIQUE is the same accepted cost migration 0002
-    documents: two milestones of one kind on one day become one.
+    documents: two milestones of one kind on one day become one — the survivor's,
+    carrying whichever copy's verified sentence there is.
     """
     existing = {
-        (e.event_type, e.event_date)
+        (e.event_type, e.event_date): e
         for e in session.scalars(select(Event).where(Event.project_id == keep.id)).all()
     }
     moved = dropped = 0
     # Through the relationship, for the same cascade reason as the sources above.
     for event in list(dupe.events):
         key = (event.event_type, event.event_date)
-        if key in existing:
+        survivor = existing.get(key)
+        if survivor is not None:
+            _take_the_evidence(survivor, event)
             dupe.events.remove(event)
             session.delete(event)
             dropped += 1
             continue
         event.project = keep
-        existing.add(key)
+        existing[key] = event
         moved += 1
     session.flush()
     return moved, dropped
 
 
 def _move_risks(session: Session, keep: Project, dupe: Project) -> tuple[int, int]:
-    """Move obstacles, collapsing on (category, first_seen) per the schema."""
+    """Move obstacles, collapsing on (category, first_seen) per the schema.
+
+    Collapsed the way milestones are, and for the same reason: the survivor's copy
+    takes the folded copy's verified sentence when it has none of its own. Its
+    `status` stays the survivor's — resolving an obstacle is an operator's decision.
+    """
     existing = {
-        (r.category, r.first_seen)
+        (r.category, r.first_seen): r
         for r in session.scalars(select(Risk).where(Risk.project_id == keep.id)).all()
     }
     moved = dropped = 0
     for risk in list(dupe.risks):
         key = (risk.category, risk.first_seen)
-        if key in existing:
+        survivor = existing.get(key)
+        if survivor is not None:
+            _take_the_evidence(survivor, risk)
             dupe.risks.remove(risk)
             session.delete(risk)
             dropped += 1
             continue
         risk.project = keep
-        existing.add(key)
+        existing[key] = risk
         moved += 1
     session.flush()
     return moved, dropped

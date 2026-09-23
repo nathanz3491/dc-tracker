@@ -7,6 +7,7 @@ milestone's provenance, or the disagreement between two sources.
 from __future__ import annotations
 
 import datetime as dt
+import json
 
 import pytest
 from sqlalchemy import func, select
@@ -453,3 +454,132 @@ def test_generated_notes_are_not_carried(session):
 
     assert "14462" not in (keep.notes or "")
     assert "extracted summary" not in (keep.notes or "")
+
+
+# --- a citation both rows hold ---------------------------------------------------
+#
+# The folded row's copy of a shared URL used to be deleted outright on the grounds
+# that "its claims are already represented". On a copy of production, in 9 of the 25
+# shared URLs across suspected pairs that copy held claims the kept copy did not —
+# 13 fields that a merge would have dropped without a trace.
+
+
+def test_a_shared_citation_keeps_what_only_the_folded_rows_copy_said(session):
+    keep = _project(session, "Stargate Abilene", "Crusoe", mw_planned=1000)
+    dupe = _project(session, "Stargate", "Oracle", investment_usd=15_000_000_000)
+    kept = _source(
+        session, keep, "https://shared.test/", claims='{"mw_planned": 1000}', fields="mw_planned"
+    )
+    kept.quotes = json.dumps({"mw_planned": "a 1,000 MW campus"})
+    folded = _source(
+        session,
+        dupe,
+        "https://shared.test/",
+        claims='{"investment_usd": 15000000000, "mw_planned": 1000}',
+        fields="mw_planned,investment_usd",
+    )
+    folded.quotes = json.dumps(
+        {"mw_planned": "a 1,000 MW campus", "investment_usd": "a $15 billion build"}
+    )
+    session.flush()
+
+    merge_projects(session, keep.id, [dupe.id])
+
+    survivor = session.get(Project, keep.id)
+    (citation,) = survivor.sources
+    assert json.loads(citation.claims) == {"investment_usd": 15_000_000_000, "mw_planned": 1000}
+    assert set(json.loads(citation.quotes)) == {"investment_usd", "mw_planned"}
+    assert set(citation.fields.split(",")) == {"mw_planned", "investment_usd"}
+    assert survivor.investment_usd == 15_000_000_000, "the recompute lost the figure"
+
+
+def test_where_both_copies_disagree_the_survivors_stands_and_the_rival_is_named(session):
+    keep = _project(session, "Stargate Abilene", "Crusoe")
+    dupe = _project(session, "Stargate", "Oracle")
+    _source(
+        session, keep, "https://shared.test/", claims='{"mw_planned": 1000}', fields="mw_planned"
+    )
+    _source(
+        session, dupe, "https://shared.test/", claims='{"mw_planned": 1200}', fields="mw_planned"
+    )
+
+    merge_projects(session, keep.id, [dupe.id])
+
+    survivor = session.get(Project, keep.id)
+    assert json.loads(survivor.sources[0].claims) == {"mw_planned": 1000}
+    assert "1200" in (survivor.notes or ""), "the folded copy's figure vanished without a word"
+
+
+def _groundbreaking(project, **evidence) -> Event:
+    return Event(
+        project_id=project.id,
+        event_date=dt.date(2026, 3, 1),
+        event_type="groundbreaking",
+        description="broke ground",
+        **evidence,
+    )
+
+
+QUOTED = "Crews broke ground on the Abilene site on March 1."
+
+
+def test_a_quoted_milestone_is_not_traded_for_an_unquoted_one(session):
+    keep = _project(session, "Stargate Abilene", "Crusoe")
+    dupe = _project(session, "Stargate", "Oracle")
+    session.add(_groundbreaking(keep, unconfirmed="no_quote"))
+    session.add(_groundbreaking(dupe, quote=QUOTED))
+    session.flush()
+
+    merge_projects(session, keep.id, [dupe.id])
+
+    (event,) = session.scalars(select(Event)).all()
+    assert event.project_id == keep.id
+    assert event.quote == QUOTED
+    assert event.unconfirmed is None
+
+
+def test_a_quoted_milestone_on_the_survivor_is_kept(session):
+    """The control: the survivor's own verified sentence is not replaced by a
+    folded copy that has none."""
+    keep = _project(session, "Stargate Abilene", "Crusoe")
+    dupe = _project(session, "Stargate", "Oracle")
+    session.add(_groundbreaking(keep, quote=QUOTED))
+    session.add(_groundbreaking(dupe, unconfirmed="no_quote"))
+    session.flush()
+
+    merge_projects(session, keep.id, [dupe.id])
+
+    (event,) = session.scalars(select(Event)).all()
+    assert event.quote == QUOTED
+    assert event.unconfirmed is None
+
+
+def test_a_quoted_obstacle_is_not_traded_for_an_unquoted_one(session):
+    keep = _project(session, "Stargate Abilene", "Crusoe")
+    dupe = _project(session, "Stargate", "Oracle")
+    session.add(
+        Risk(
+            project_id=keep.id,
+            category="water",
+            severity="watch",
+            summary="a",
+            unconfirmed="no_quote",
+        )
+    )
+    quote = "Residents objected to the water draw."
+    session.add(
+        Risk(
+            project_id=dupe.id,
+            category="water",
+            severity="material",
+            summary="b",
+            quote=quote,
+        )
+    )
+    session.flush()
+
+    merge_projects(session, keep.id, [dupe.id])
+
+    (risk,) = session.scalars(select(Risk)).all()
+    assert risk.quote == quote
+    assert risk.unconfirmed is None

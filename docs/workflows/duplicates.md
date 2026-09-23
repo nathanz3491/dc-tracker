@@ -195,7 +195,10 @@ fact check rather than a menu.
 Not the model's choice. The row with more citations, then more fields filled, then
 the lower id — deterministic, so the same input gives the same answer. It is also
 nearly consequence-free: `merge_projects` recomputes every field from the combined
-claims, so this decides a row number rather than a value.
+claims, so this decides a row number rather than a value. A citation both rows hold
+is folded into the survivor's copy rather than dropped with the other, so the choice
+decides a value only where two copies of one article disagree — the survivor's
+stands and the other is named in its notes.
 
 `folded` carries a run's merges forward, so a later pair naming a row this run just
 deleted is asked about the survivor instead. That is what settles a group of four
@@ -242,6 +245,6 @@ Touching any of these means the poster is in scope. Re-render with
 | The question all three judges are asked | `tracker/triage.py` — `CONTRADICTIONS`, `PAIR_SYSTEM`, `PAIR_SYSTEM_BASE`; `tracker/prompts/duplicates-resolve-v3.txt` |
 | The agent path | `tracker/triage.py` — `resolve_pairs`, `pair_triage`, `pair_verdict_tools`, `_checked`, `pair_subject`, `pair_evidence` |
 | Not asking the same pair twice | `tracker/declines.py` — `split`, `record`, `holds`, `citations`, `COOLDOWN_DAYS`; migration `0025_model_decline` |
-| The merge itself | `tracker/merge.py` — `merge_projects` |
+| The merge itself | `tracker/merge.py` — `merge_projects`, `_move_events`, `_move_risks`; `tracker/upsert.py` — `fold_source` |
 | Prevention at write time | `tracker/gatekeeper.py` — `same_site_arbiter`, `_warm_verdict`, `_cold_verdict`, `_rejection`, `RULES`; `tracker/ingest/crawl.py` — `ExtractionContext` |
 | CLI, printers, keyboard prompt | `tracker/cli/duplicates.py` — `merge`, `duplicates`, `duplicates_park`, `duplicates_unpark`, `duplicates_resolve`, `duplicates_parked`, `_print_parked`, `_dupe_prompt` |
