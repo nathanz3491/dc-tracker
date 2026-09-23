@@ -36,6 +36,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from tracker.models import Event, Project, ProjectAlias, Risk, utcnow
+from tracker.normalize import url_identity
 from tracker.upsert import SOURCE_NOTE_PREFIX, fold_source, recompute_from_sources, record_tag
 
 log = logging.getLogger(__name__)
@@ -97,9 +98,10 @@ def merge_projects(
         raise MergeError("nothing to merge: no duplicate ids given, or only the kept id")
 
     result = MergeResult(kept=keep_id)
-    #: url -> the surviving source, so a citation held by both rows is not moved
-    #: into a UNIQUE violation.
-    kept_urls = {s.url: s for s in keep.sources}
+    #: URL identity -> the surviving source, so a citation held by both rows is not
+    #: moved into a UNIQUE violation — nor, under two spellings of one URL, kept
+    #: twice on the survivor. See `normalize.url_identity`.
+    kept_urls = {url_identity(s.url): s for s in keep.sources}
     #: Operator prose from the rows being folded away, carried to the survivor.
     carried: list[str] = []
     #: Disclosures for figures a folded copy of a shared citation gave that the
@@ -130,7 +132,7 @@ def merge_projects(
         # first live run lost sources exactly that way and then failed on a
         # foreign key when a milestone pointed at one of them.
         for source in list(dupe.sources):
-            twin = kept_urls.get(source.url)
+            twin = kept_urls.get(url_identity(source.url))
             if twin is not None:
                 lines, taken = fold_source(
                     twin, source, given_by=f"project #{dupe.id}, since merged into this row"
@@ -147,7 +149,7 @@ def merge_projects(
                 result.sources_discarded += 1
                 continue
             source.project = keep
-            kept_urls[source.url] = source
+            kept_urls[url_identity(source.url)] = source
             result.sources_moved += 1
         session.flush()
 

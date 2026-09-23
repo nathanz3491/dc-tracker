@@ -546,6 +546,48 @@ def test_a_failed_url_is_not_requeued_either(session):
     assert report.already_known == 1
 
 
+def test_a_url_already_read_under_another_spelling_is_not_queued_again(session):
+    """69 queued URLs on a copy of production had another spelling already in the
+    table — a second fetch, and mostly a second model call, on the same text."""
+    session.add(IngestUrl(url="https://a.test/one", run_id="crawl-1", status="ok"))
+    session.flush()
+    report = DiscoverReport()
+    queue_candidates(
+        session,
+        [Candidate(url="http://www.a.test/one/?utm_source=feed", title="x", feed="f")],
+        run_id="r2",
+        report=report,
+    )
+    assert report.queued == 0
+    assert report.already_known == 1
+
+
+def test_a_new_url_is_queued_without_its_tracking_parameters(session):
+    report = DiscoverReport()
+    queued = queue_candidates(
+        session,
+        [Candidate(url="https://a.test/story?srsltid=AfmBOoo1&id=7", title="x", feed="f")],
+        run_id="r1",
+        report=report,
+    )
+    assert [c.url for c in queued] == ["https://a.test/story?id=7"]
+    assert session.scalar(select(IngestUrl)).url == "https://a.test/story?id=7"
+
+
+def test_one_feed_listing_two_spellings_queues_one(session):
+    report = DiscoverReport()
+    queue_candidates(
+        session,
+        [
+            Candidate(url="https://a.test/story", title="x", feed="f"),
+            Candidate(url="https://a.test/story/", title="x", feed="f"),
+        ],
+        run_id="r1",
+        report=report,
+    )
+    assert report.queued == 1
+
+
 # --- Retrying what failed -----------------------------------------------------
 
 

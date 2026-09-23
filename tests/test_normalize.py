@@ -16,6 +16,7 @@ import pytest
 from tracker.normalize import (
     EXCERPT_MAX,
     NormalizationError,
+    canonical_url,
     is_blank,
     norm_country,
     norm_date,
@@ -34,6 +35,8 @@ from tracker.normalize import (
     norm_text,
     norm_url,
     soft,
+    url_identity,
+    url_variants,
 )
 
 # --- Blanks and sentinels ---------------------------------------------------
@@ -617,6 +620,99 @@ def test_norm_url_rejects_non_http(raw):
     """A citation you cannot open in a browser is not a citation."""
     with pytest.raises(NormalizationError):
         norm_url(raw)
+
+
+# --- One article, one spelling ----------------------------------------------------
+#
+# Measured on a copy of production: 19 projects cited the same article twice under
+# two spellings of its URL. Nine differed only in Google's `srsltid` click-tracking
+# parameter, four in a trailing slash, three in `www.`, one in the scheme — and two
+# in an `?p=` that may genuinely select a different page, which is why a query
+# string in general is left alone.
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (
+            "https://www.researchandmarkets.com/reports/5527026/x?srsltid=AfmBOoo1s9YACrnh",
+            "https://www.researchandmarkets.com/reports/5527026/x",
+        ),
+        (
+            "https://datacentertracker.org/?utm_source=Poynter&utm_medium=email&mc_cid=f28&mc_eid=db3",
+            "https://datacentertracker.org/",
+        ),
+        ("https://a.test/story?id=7&utm_campaign=x&fbclid=abc", "https://a.test/story?id=7"),
+        ("HTTPS://News.Example.COM:443/Story", "https://news.example.com/Story"),
+        ("http://example.com:80/a", "http://example.com/a"),
+        ("https://a.test/story?", "https://a.test/story"),
+        # Left exactly as they are: a fragment keeps an ISO queue row unique, and a
+        # real query parameter can select a different page.
+        ("https://www.pjm.com/queues.aspx#AG1-234", "https://www.pjm.com/queues.aspx#AG1-234"),
+        (
+            "https://www.aboutamazon.com/news/x?p=amazons-virginia",
+            "https://www.aboutamazon.com/news/x?p=amazons-virginia",
+        ),
+        ("https://example.com/Path/With/Case/", "https://example.com/Path/With/Case/"),
+    ],
+)
+def test_canonical_url_drops_only_what_cannot_change_the_page(raw, expected):
+    assert canonical_url(raw) == expected
+
+
+def test_canonical_url_is_idempotent():
+    for raw in (
+        "https://www.x.test/a/?utm_source=y&b=1",
+        "http://X.test:80",
+        "https://x.test/#frag",
+    ):
+        once = canonical_url(raw)
+        assert canonical_url(once) == once
+
+
+@pytest.mark.parametrize(
+    ("a", "b"),
+    [
+        (
+            "https://thetechcapital.com/legacy-investing-invesco-real-estate",
+            "https://thetechcapital.com/legacy-investing-invesco-real-estate/",
+        ),
+        (
+            "https://rcrwireless.com/20250514/ntt-data",
+            "https://www.rcrwireless.com/20250514/ntt-data",
+        ),
+        (
+            "http://fortisconstruction.com/news/metas-cheyenne-campus/",
+            "https://fortisconstruction.com/news/metas-cheyenne-campus/",
+        ),
+        (
+            "https://www.blackridgeresearch.com/blog/x?srsltid=AfmBOooGRk",
+            "https://www.blackridgeresearch.com/blog/x?srsltid=AfmBOoqpjJ",
+        ),
+    ],
+)
+def test_spellings_of_one_article_share_an_identity(a, b):
+    assert url_identity(a) == url_identity(b)
+
+
+@pytest.mark.parametrize(
+    ("a", "b"),
+    [
+        ("https://www.pjm.com/queues.aspx#AG1-001", "https://www.pjm.com/queues.aspx#AG1-002"),
+        ("https://x.test/news/x?p=1", "https://x.test/news/x?p=2"),
+        ("https://x.test/a", "https://x.test/b"),
+        ("https://x.test/", "https://y.test/"),
+    ],
+)
+def test_different_pages_keep_different_identities(a, b):
+    assert url_identity(a) != url_identity(b)
+
+
+def test_url_variants_lists_the_spellings_a_stored_url_could_have():
+    variants = url_variants("https://www.x.test/a/")
+    assert "https://www.x.test/a/" in variants
+    assert "http://x.test/a" in variants
+    assert all(url_identity(v) == url_identity("https://x.test/a") for v in variants)
 
 
 # --- Text and excerpts ------------------------------------------------------

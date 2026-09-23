@@ -1999,6 +1999,14 @@ def test_read_urls_skips_comments_blanks_and_dedupes(tmp_path: Path):
     assert crawl.read_urls(path) == ["https://a.example/1", "https://b.example/2"]
 
 
+def test_read_urls_drops_tracking_parameters(tmp_path: Path):
+    path = tmp_path / "urls.txt"
+    path.write_text(
+        "https://a.example/1?utm_source=newsletter\nhttps://a.example/1\n", encoding="utf-8"
+    )
+    assert crawl.read_urls(path) == ["https://a.example/1"]
+
+
 # --- Fetch helpers ----------------------------------------------------------
 
 

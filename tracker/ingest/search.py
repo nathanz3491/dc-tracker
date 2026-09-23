@@ -61,7 +61,7 @@ from tracker.ingest.discover import (
 )
 from tracker.llm import Extractor, LLMError, parse_json_object
 from tracker.models import utcnow
-from tracker.normalize import looks_english
+from tracker.normalize import canonical_url, looks_english
 
 log = logging.getLogger(__name__)
 
@@ -217,10 +217,23 @@ class SearchError(RuntimeError):
 
 @dataclass(frozen=True)
 class SearchHit:
+    """One result. `url` is stored in its `normalize.canonical_url` spelling.
+
+    Canonicalised here, where every backend's result is built, because a Google
+    result carries a click-tracking `srsltid` that differs on every click: nine of
+    the 19 projects on a copy of production that cited one article twice had the
+    two copies differ only in that parameter. `enrich`'s search harvester hands
+    these URLs straight to the crawl, so the queue was not the only door they came
+    through.
+    """
+
     url: str
     title: str
     snippet: str = ""
     query: str = ""
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "url", canonical_url(self.url))
 
 
 @dataclass

@@ -713,6 +713,15 @@ def test_one_unreadable_reply_does_not_lose_what_the_other_queries_found(session
     assert report.queued == 1, "the hit q1 found was lost with the run"
 
 
+def test_a_hit_is_stored_without_its_click_tracking_parameter():
+    """A Google result carries `srsltid`, different on every click: 9 of 19 double
+    citations on a copy of production differed in nothing else."""
+    assert (
+        SearchHit(url="https://a.test/report?srsltid=AfmBOoo1s9YACrnh", title="t").url
+        == "https://a.test/report"
+    )
+
+
 def test_bocha_is_the_last_backend_auto_picks():
     """Its index is thin on US trade press, so it should never displace a better one."""
     both = settings_with(serper_api_key="s", bocha_api_key="b")

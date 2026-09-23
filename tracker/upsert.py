@@ -44,6 +44,7 @@ from tracker.dedup import (
 from tracker.dedup import company_key as _party_key
 from tracker.ingest.records import IngestRecord
 from tracker.models import Event, Project, ProjectAlias, Risk, Source, utcnow
+from tracker.normalize import url_identity
 from tracker.pairs import is_parked
 from tracker.vocab import (
     DEFAULT_PHASE,
@@ -1313,7 +1314,12 @@ def upsert_record(
     expected_online_before = project.expected_online
 
     # --- Write the citations ------------------------------------------------
-    existing_sources = {s.url: s for s in project.sources}
+    # By identity, not by exact string: the same article under another spelling of
+    # its URL — `www.`, a trailing slash, the scheme, a click-tracking parameter —
+    # is the same citation, and keyed on the string it became a second one. 19
+    # projects on a copy of production cited one article twice that way. The row
+    # keeps the spelling it was first read under. See `normalize.url_identity`.
+    existing_sources = {url_identity(s.url): s for s in project.sources}
     #: Disclosures for figures a second reading of the same article gave; see
     #: `fold_reading`. Non-empty only when a citation was folded rather than written.
     folded_notes: list[str] = []
@@ -1321,18 +1327,18 @@ def upsert_record(
     for sr in rec.sources:
         claims = {k: claim_value(v) for k, v in sr.tracked_claims().items()}
         blob = json.dumps(claims, sort_keys=True, ensure_ascii=False) if claims else None
-        row = existing_sources.get(sr.url)
-        if row is not None and reading is not None and (project.id, sr.url) in reading:
+        row = existing_sources.get(url_identity(sr.url))
+        if row is not None and reading is not None and (project.id, row.url) in reading:
             folded = True
             folded_notes += _fold_into_row(row, sr, claims)
             continue
-        if reading is not None:
-            reading.add((project.id, sr.url))
         if row is None:
             row = Source(project_id=project.id, url=sr.url)
             session.add(row)
             project.sources.append(row)
-            existing_sources[sr.url] = row
+            existing_sources[url_identity(sr.url)] = row
+        if reading is not None:
+            reading.add((project.id, row.url))
         row.source_type = sr.source_type
         row.excerpt = sr.excerpt
         row.claims = blob
@@ -1581,6 +1587,11 @@ def _discovered_at(source: Source | None) -> _dt.datetime:
     return getattr(source, "fetched_at", None) or utcnow()
 
 
+def _by_identity(project: Project) -> dict[str, Source]:
+    """The project's citations keyed by `url_identity`, as `upsert_record` writes them."""
+    return {url_identity(s.url): s for s in project.sources}
+
+
 def _upsert_events(session: Session, project: Project, rec: IngestRecord) -> int:
     """Write events, deduplicating on (project, type, date) per the schema.
 
@@ -1589,7 +1600,9 @@ def _upsert_events(session: Session, project: Project, rec: IngestRecord) -> int
     """
     if not rec.events:
         return 0
-    by_url = {s.url: s for s in project.sources}
+    # By identity, as the citations were written: an event names its article by the
+    # spelling it arrived under, which need not be the spelling the citation keeps.
+    by_url = _by_identity(project)
     url_to_id = {url: s.id for url, s in by_url.items()}
     # Queried rather than read off `project.events`: rows added earlier in this
     # same session are not necessarily reflected on the relationship yet, and a
@@ -1601,7 +1614,8 @@ def _upsert_events(session: Session, project: Project, rec: IngestRecord) -> int
     }
     inserted = 0
     for ev in rec.events:
-        source_id = url_to_id.get(ev.source_url) if ev.source_url else None
+        key = url_identity(ev.source_url) if ev.source_url else ""
+        source_id = url_to_id.get(key) if ev.source_url else None
         found = existing.get((ev.event_type, ev.event_date))
         if found is None:
             row = Event(
@@ -1612,7 +1626,7 @@ def _upsert_events(session: Session, project: Project, rec: IngestRecord) -> int
                 quote=ev.quote,
                 unconfirmed=ev.unconfirmed,
                 source_id=source_id,
-                created_at=_discovered_at(by_url.get(ev.source_url or "")),
+                created_at=_discovered_at(by_url.get(key)),
             )
             session.add(row)
             # Registered immediately, because ONE record can carry two events
@@ -1657,7 +1671,7 @@ def _upsert_risks(session: Session, project: Project, rec: IngestRecord) -> int:
     """
     if not rec.risks:
         return 0
-    by_url = {s.url: s for s in project.sources}
+    by_url = _by_identity(project)
     url_to_id = {url: s.id for url, s in by_url.items()}
     # Queried rather than read off `project.risks`, for the same reason as events:
     # rows added earlier in this session may not be on the relationship yet, and a
@@ -1668,8 +1682,9 @@ def _upsert_risks(session: Session, project: Project, rec: IngestRecord) -> int:
     }
     inserted = 0
     for risk in rec.risks:
-        source_id = url_to_id.get(risk.source_url) if risk.source_url else None
-        source_row = by_url.get(risk.source_url or "")
+        key = url_identity(risk.source_url) if risk.source_url else ""
+        source_id = url_to_id.get(key) if risk.source_url else None
+        source_row = by_url.get(key)
         found = existing.get((risk.category, risk.first_seen))
         if found is None:
             row = Risk(

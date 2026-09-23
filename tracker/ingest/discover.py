@@ -46,7 +46,7 @@ from tracker.ingest.fetch import (
     parse_timestamp,
 )
 from tracker.models import IngestUrl, utcnow
-from tracker.normalize import norm_text
+from tracker.normalize import canonical_url, norm_text, url_identity, url_variants
 from tracker.vocab import PENDING_URL_STATUS
 
 log = logging.getLogger(__name__)
@@ -557,17 +557,35 @@ def queue_candidates(
     A URL already in `ingest_url` is left completely alone — whether it was
     crawled successfully, failed, or is still pending. Re-queueing a processed URL
     would make discovery undo the crawl path's bookkeeping.
+
+    **Known means known under any spelling.** A candidate is stored in its
+    `canonical_url` form — a search hit carries a click-tracking `srsltid` on every
+    result — and counts as known when a stored row shares its `url_identity`: the
+    same page with or without `www.`, a trailing slash or `https`. On a copy of
+    production 69 queued URLs had another spelling already in the table, each a
+    second fetch and most a second model call on the same text. The candidates
+    handed back carry the stored spelling, so a caller caching their bodies files
+    them under the URL the crawl will ask for.
     """
-    urls = [c.url for c in candidates]
-    if not urls:
+    from dataclasses import replace
+
+    if not candidates:
         return []
-    known = {
-        row.url for row in session.scalars(select(IngestUrl).where(IngestUrl.url.in_(urls))).all()
-    }
+    candidates = [replace(c, url=canonical_url(c.url)) for c in candidates]
+    spellings = list(dict.fromkeys(v for c in candidates for v in url_variants(c.url)))
+    known: set[str] = set()
+    for start in range(0, len(spellings), 500):  # SQLite caps bound parameters
+        known.update(
+            url_identity(url)
+            for url in session.scalars(
+                select(IngestUrl.url).where(IngestUrl.url.in_(spellings[start : start + 500]))
+            )
+        )
     now = utcnow()
     queued: list[Candidate] = []
     for candidate in candidates:
-        if candidate.url in known:
+        identity = url_identity(candidate.url)
+        if identity in known:
             report.already_known += 1
             continue
         session.add(
@@ -583,7 +601,7 @@ def queue_candidates(
                 last_tried_at=now,
             )
         )
-        known.add(candidate.url)  # a feed can list the same URL twice
+        known.add(identity)  # a feed can list the same URL twice, or two spellings of it
         queued.append(candidate)
         report.queued += 1
     session.flush()

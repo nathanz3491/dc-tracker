@@ -510,6 +510,28 @@ def test_where_both_copies_disagree_the_survivors_stands_and_the_rival_is_named(
     assert "1200" in (survivor.notes or ""), "the folded copy's figure vanished without a word"
 
 
+def test_two_spellings_of_one_url_are_one_shared_citation(session):
+    """Otherwise the survivor cites the article twice, as 19 rows already did."""
+    keep = _project(session, "Stargate Abilene", "Crusoe")
+    dupe = _project(session, "Stargate", "Oracle")
+    _source(
+        session, keep, "https://news.test/story", claims='{"mw_planned": 1000}', fields="mw_planned"
+    )
+    _source(
+        session,
+        dupe,
+        "http://www.news.test/story/",
+        claims='{"phase": "construction"}',
+        fields="phase",
+    )
+
+    result = merge_projects(session, keep.id, [dupe.id])
+
+    assert result.sources_discarded == 1
+    (citation,) = session.get(Project, keep.id).sources
+    assert json.loads(citation.claims) == {"mw_planned": 1000, "phase": "construction"}
+
+
 def _groundbreaking(project, **evidence) -> Event:
     return Event(
         project_id=project.id,

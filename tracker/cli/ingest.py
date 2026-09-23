@@ -240,9 +240,11 @@ def ingest_crawl(
     source_label = "queue"
 
     if url:
-        # Deduped like `read_urls` does, so passing the same link twice costs one
-        # call rather than two.
-        url_list = list(dict.fromkeys(u.strip() for u in url if u.strip()))
+        from tracker.normalize import canonical_url
+
+        # Deduped and canonicalised like `read_urls` does, so passing the same link
+        # twice — or once with its tracking parameters — costs one call, not two.
+        url_list = list(dict.fromkeys(canonical_url(u) for u in url if u.strip()))
         bad = [u for u in url_list if not u.lower().startswith(("http://", "https://"))]
         if bad:
             _fail(f"not an http(s) URL: {bad[0]}")

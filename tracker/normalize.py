@@ -30,6 +30,7 @@ import unicodedata
 from collections.abc import Callable
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any, NamedTuple, TypeVar
+from urllib.parse import unquote_plus, urlsplit, urlunsplit
 
 from tracker.vocab import (
     DEFAULT_PHASE,
@@ -984,13 +985,129 @@ def norm_risk_severity(raw: Any, *, field: str = "severity") -> str | None:
 
 
 def norm_url(raw: Any, *, field: str = "url") -> str | None:
-    """A citation URL. Must be http(s) — a citation you cannot open is not one."""
+    """A citation URL. Must be http(s) — a citation you cannot open is not one.
+
+    Returned in its :func:`canonical_url` spelling, like every other way a URL
+    enters the database.
+    """
     if is_blank(raw):
         return None
     text = _clean(str(raw))
     if not re.match(r"^https?://[^\s/$.?#].[^\s]*$", text, re.I):
         raise NormalizationError(field, raw, "not an absolute http(s) URL")
-    return text
+    return canonical_url(text)
+
+
+# --- One article, one spelling ----------------------------------------------------
+#
+# Measured on a copy of production: 19 projects cited the same article twice, under
+# two spellings of one URL, and 69 queued URLs had another spelling already queued
+# or read — each a second fetch and, for most, a second model call on the same text.
+# Nothing canonicalised a URL anywhere it entered: `norm_url` validated and returned
+# the text as given, and the crawl, discovery and search paths never called even
+# that. The citation variants were nine Google `srsltid` click-tracking parameters
+# (search results carry one per click), four trailing slashes, three `www.`
+# prefixes and one scheme; two more differed in `?p=`, which may select a
+# different page and is left alone.
+#
+# Two functions, because the two questions differ. `canonical_url` is the spelling
+# to STORE, and only drops what provably cannot change the page: tracking
+# parameters, the case of the scheme and host, a default port, an empty query.
+# `url_identity` is the key to COMPARE, and also sets aside the scheme, `www.` and
+# a trailing slash: a server nearly always answers both spellings with one page,
+# but it is not guaranteed to answer both at all, so the stored spelling keeps
+# whichever one was actually read.
+
+#: Query parameters that record how a reader arrived, never what they read.
+_TRACKING_PARAMS: frozenset[str] = frozenset(
+    {
+        "srsltid",  # Google search result click id — on every Serper/Google hit
+        "fbclid",
+        "gclid",
+        "gclsrc",
+        "dclid",
+        "msclkid",
+        "yclid",
+        "igshid",
+        "mc_cid",  # Mailchimp
+        "mc_eid",
+        "_hsenc",  # HubSpot
+        "_hsmi",
+        "mkt_tok",  # Marketo
+        "oly_anon_id",
+        "oly_enc_id",
+        "vero_id",
+        "wickedid",
+        "_ga",
+    }
+)
+
+_DEFAULT_PORTS: dict[str, int] = {"http": 80, "https": 443}
+
+
+def _tracking(segment: str) -> bool:
+    key = unquote_plus(segment.split("=", 1)[0]).lower()
+    return key.startswith("utm_") or key in _TRACKING_PARAMS
+
+
+def canonical_url(url: str) -> str:
+    """The spelling of a URL to store: the same page, minus what cannot change it.
+
+    Tracking parameters go (`utm_*`, `srsltid`, `fbclid`, …), the scheme and host are
+    lowercased, a default port is dropped, and an empty `?` goes with it. Everything
+    else — the path's case, a trailing slash, every other parameter in its original
+    order and encoding, the fragment — is kept exactly: a fragment is what keeps an
+    ISO queue row's URL unique, and a real parameter can select a different page.
+    Idempotent, and anything that is not an http(s) URL comes back unchanged.
+    """
+    text = url.strip()
+    try:
+        parts = urlsplit(text)
+        port = parts.port
+    except ValueError:
+        return text
+    scheme = parts.scheme.lower()
+    if scheme not in _DEFAULT_PORTS or not parts.hostname or parts.username or parts.password:
+        return text
+    host = parts.hostname
+    if ":" in host:
+        host = f"[{host}]"
+    netloc = host if port in (None, _DEFAULT_PORTS[scheme]) else f"{host}:{port}"
+    query = "&".join(s for s in parts.query.split("&") if s and not _tracking(s))
+    return urlunsplit((scheme, netloc, parts.path, query, parts.fragment))
+
+
+def url_identity(url: str) -> str:
+    """The key two spellings of one article share. For comparing, never storing.
+
+    `canonical_url`, less the scheme, a leading `www.` and a trailing slash.
+    """
+    parts = urlsplit(canonical_url(url))
+    key = parts.netloc.removeprefix("www.") + parts.path.rstrip("/")
+    if parts.query:
+        key += f"?{parts.query}"
+    if parts.fragment:
+        key += f"#{parts.fragment}"
+    return key
+
+
+def url_variants(url: str) -> list[str]:
+    """Every stored spelling that shares `url`'s identity: scheme, `www.`, slash.
+
+    For an indexed lookup — `ingest_url.url IN (...)` — where computing the
+    identity of every stored row would be a scan.
+    """
+    parts = urlsplit(canonical_url(url))
+    bare = parts.netloc.removeprefix("www.")
+    path = parts.path.rstrip("/")
+    return list(
+        dict.fromkeys(
+            urlunsplit((scheme, host, trail, parts.query, parts.fragment))
+            for scheme in ("https", "http")
+            for host in (bare, f"www.{bare}")
+            for trail in (path, f"{path}/")
+        )
+    )
 
 
 __all__ = [
@@ -1000,6 +1117,7 @@ __all__ = [
     "NormalizationError",
     "ParsedDate",
     "ParsedNumber",
+    "canonical_url",
     "is_blank",
     "looks_english",
     "norm_coord",
@@ -1023,4 +1141,6 @@ __all__ = [
     "norm_url",
     "soft",
     "state_name",
+    "url_identity",
+    "url_variants",
 ]

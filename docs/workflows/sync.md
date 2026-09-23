@@ -119,6 +119,13 @@ Publishers that `tracker/seed/sources.toml` ignores are partitioned out and **na
 merely subtracted: the queue still holds those rows and `tracker queue` still lists
 them, so the number has to be attributable.
 
+**A page is queued once, whatever its spelling.** Tracking parameters — Google's
+`srsltid` rides on every search hit — are dropped before a URL is stored, and a
+candidate is already known when another spelling of it (`www.`, a trailing slash,
+`http`) is. The same identity keys a project's citations, so one article cannot be
+cited twice: 19 projects on a copy of production did, and 69 queued URLs had a
+second spelling already in the table.
+
 ## The identity arbiter
 
 `--verify-identity` is on by default. Before a phase creates a row that has a
@@ -279,7 +286,7 @@ Touching any of these means the poster is in scope. Re-render with
 | Concern | Where |
 | --- | --- |
 | Phase order, plan numbering, `--full`, the lock | `tracker/cli/sync.py` — `sync`, its `plan` list and `step` |
-| Discover, archives, search | `tracker/ingest/discover.py` — `run`, `load_sitemaps`, `sweep_sitemaps`, `queue_candidates`; `tracker/ingest/search.py` |
+| Discover, archives, search | `tracker/ingest/discover.py` — `run`, `load_sitemaps`, `sweep_sitemaps`, `queue_candidates`; `tracker/ingest/search.py`; `tracker/normalize.py` — `canonical_url`, `url_identity`, `url_variants` |
 | What search looks for | `tracker/ingest/search.py` — `_PLACE_TEMPLATES`, `rank_places`, `plan_queries`, `PlannedQuery.label`, `templates`; `tracker/normalize.py` — `state_name` |
 | Judging a template | `tracker/funnel.py` — `feed_group`, `survey`, `verdicts`; `tracker/ingest/search.py` — `LabelStat` |
 | Queue ordering and counts | `tracker/ingest/discover.py` — `pending`, `pending_split`, `pending_risk_count`, `failed`, `retryable`, `given_up`, `MAX_SAME_FAILURES`, `failure_summary` |

@@ -49,6 +49,7 @@ from tracker.llm import Extractor, LLMError, LLMJsonError, LLMReply, parse_json_
 from tracker.models import IngestUrl, utcnow
 from tracker.normalize import (
     NormalizationError,
+    canonical_url,
     is_blank,
     looks_english,
     norm_country,
@@ -2821,7 +2822,12 @@ def unchanged_reads(session: Session, urls: list[str], *, stamp: str) -> dict[st
 
 
 def read_urls(path: Path) -> list[str]:
-    """One URL per line; `#` comments and blanks ignored."""
+    """One URL per line; `#` comments and blanks ignored.
+
+    Each in its `normalize.canonical_url` spelling, like every other way a URL
+    enters the database, so a link pasted with its tracking parameters is the same
+    URL as the one the queue already holds.
+    """
     urls: list[str] = []
     for raw in path.read_text(encoding="utf-8").splitlines():
         line = raw.strip()
@@ -2830,7 +2836,7 @@ def read_urls(path: Path) -> list[str]:
         if not line.lower().startswith(("http://", "https://")):
             log.warning("skipping %r: not an http(s) URL", line)
             continue
-        urls.append(line)
+        urls.append(canonical_url(line))
     return list(dict.fromkeys(urls))
 
 

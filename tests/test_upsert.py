@@ -2057,6 +2057,35 @@ def test_route_to_and_force_new_are_refused_together(session):
         upsert_record(session, rec(), route_to=existing.project_id, force_new=True)
 
 
+# --- one article under two spellings of its URL ---------------------------------
+
+
+def test_another_spelling_of_a_cited_url_is_the_same_citation(session):
+    """19 projects on a copy of production cited one article twice this way."""
+    first = upsert_record(session, rec(sources=[manual_source(url="https://news.test/story")]))
+    second = upsert_record(
+        session,
+        rec(
+            sources=[manual_source(url="https://www.news.test/story/", mw_planned=500.0)],
+            events=[
+                EventRecord(
+                    event_date=dt.date(2026, 3, 1),
+                    event_type="groundbreaking",
+                    description="broke ground",
+                    source_url="https://www.news.test/story/",
+                )
+            ],
+        ),
+    )
+    assert second.project_id == first.project_id
+    project = session.get(Project, first.project_id)
+    (source,) = project.sources
+    assert source.url == "https://news.test/story", "the first spelling read is kept"
+    assert json.loads(source.claims)["mw_planned"] == 500.0
+    event = session.scalar(select(Event))
+    assert event.source_id == source.id, "the milestone lost its citation to the spelling"
+
+
 # --- two projects from one article landing on one row ----------------------------
 #
 # An article naming two projects that turn out to be one site — the arbiter's
