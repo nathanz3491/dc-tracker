@@ -139,8 +139,9 @@ def merge_projects(
                 )
                 # Tagged as the citation's own disclosure, so it lives exactly as
                 # long as the folded citation does: the next reading of this URL
-                # replaces both. See `upsert._merge_notes`.
-                marker = f"{SOURCE_NOTE_PREFIX}[{record_tag([source.url])}]"
+                # replaces both. The survivor's spelling, because that is the URL
+                # the next reading will carry. See `upsert._merge_notes`.
+                marker = f"{SOURCE_NOTE_PREFIX}[{record_tag([twin.url])}]"
                 rivals += [f"{marker} {line}" for line in lines]
                 result.claims_carried += taken
                 _repoint(session, source.id, twin.id)
