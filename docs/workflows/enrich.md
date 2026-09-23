@@ -85,7 +85,7 @@ debug log.
 | queue | free | every round | `ingest_url` rows still `discovered` |
 | retry | one fetch each | every round | this project's URLs in `RETRYABLE_STATUSES` |
 | archive | ~30 requests, once per batch | round 1 only | configured `[[sitemap]]` entries |
-| search | one query each, capped at `MAX_QUERIES` = 12 | every round | Serper / Google / Brave / Bocha |
+| search | one query each, sent once a run, capped at `MAX_QUERIES` = 12 | every round | Serper / Google / Brave / Bocha |
 | refresh | one fetch each | round 1 only | the project's own citations |
 
 The archive is why this works without a search API: it reaches back years, needs no
@@ -105,12 +105,17 @@ Seven reasons, each reported verbatim as `stopped_because`. Two are worth knowin
 
 ## Budget arithmetic
 
-`--budget` (default 200) is the whole run's article count, not per project.
-`run_many` divides it: `fair_share = budget / len(project_ids)`, and each project
-gets `min(--max-articles, fair_share)` per round. Measured before that division, a
-budget of 120 across thirty projects was consumed by the first five and twenty-five
-never ran — the run is judged on how many rows clear the bar, so every selected
-project gets a turn.
+`--budget` (default 200) is the whole run's article count, not per project, and it
+is a ceiling. `run_many` divides it as it goes: each project may read the budget
+still left divided by the projects still to run, **across all of its rounds**, and
+never more than `--max-articles` in one round; what a project leaves unread passes
+to the ones after it. Measured before any division, a budget of 120 across thirty
+projects was consumed by the first five and twenty-five never ran — the run is
+judged on how many rows clear the bar, so every selected project gets a turn.
+Measured before the share was a total, it was applied per *round*, so a project read
+it up to six times over and the budget was only checked between projects: `--budget
+120` over ten projects read 144 articles and reached two of them. It now reads 120
+and reaches all ten.
 
 ## The settle stage
 

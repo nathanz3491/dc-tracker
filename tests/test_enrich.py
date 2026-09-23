@@ -898,6 +898,151 @@ def test_the_budget_is_divided_fairly_not_first_come_first_served(session):
     )
 
 
+def _endless_harvest(session, monkeypatch, ids, *, starved=frozenset()):
+    """Every round finds 40 unread URLs and every read fills one more field, so the
+    round loop keeps going — the shape a real `--all` run has and the fakes above
+    do not: their one article fills everything in round 1 and the loop stops.
+
+    Projects in `starved` find nothing in the queue."""
+    import itertools
+
+    counter = itertools.count()
+    current = {"pid": None}
+    read_by: dict[int, int] = {}
+
+    def fake_queue(session, project_id):
+        current["pid"] = project_id
+        if project_id in starved:
+            return enrich.Harvest("queue", [])
+        return enrich.Harvest("queue", [f"https://x.test/{next(counter)}" for _ in range(40)])
+
+    def fake_crawl(session, urls, **_kw):
+        pid = current["pid"]
+        read_by[pid] = read_by.get(pid, 0) + len(urls)
+        project = session.get(Project, pid)
+        for name in ("mw_planned", "mw_built", "investment_usd", "customer"):
+            if getattr(project, name) is None:
+                setattr(project, name, "x" if name == "customer" else 1)
+                break
+        else:
+            project.expected_online = dt.date(2027, 1, 1) + dt.timedelta(days=len(read_by))
+        session.flush()
+        from tracker.ingest.records import IngestReport
+
+        return IngestReport()
+
+    from tracker.ingest import crawl
+
+    monkeypatch.setattr(enrich, "harvest_queue", fake_queue)
+    monkeypatch.setattr(enrich, "harvest_retry", lambda s, pid: enrich.Harvest("retry", []))
+    monkeypatch.setattr(enrich, "harvest_refresh", lambda s, pid: enrich.Harvest("refresh", []))
+    monkeypatch.setattr(crawl, "run", fake_crawl)
+    return read_by
+
+
+def test_the_budget_is_a_ceiling_across_rounds_not_only_between_projects(session, monkeypatch):
+    """Measured: `--budget 120` over ten projects read 144 articles and reached two
+    of them. The per-project share was applied per ROUND, and the budget was only
+    checked between projects, so the first project read its share six times over."""
+    ids = [
+        add_project(session, city=c, company=f"Op {c}").id
+        for c in (
+            "Reno",
+            "Mesa",
+            "Plano",
+            "Ames",
+            "Provo",
+            "Boise",
+            "Waco",
+            "Tyler",
+            "Erie",
+            "Utica",
+        )
+    ]
+    read_by = _endless_harvest(session, monkeypatch, ids)
+
+    batch = enrich.run_many(
+        session,
+        ids,
+        max_articles=120,
+        max_articles_per_round=25,
+        target_fields=None,
+        skip_archive=True,
+        skip_search=True,
+        skip_settle=True,
+    )
+
+    assert batch.articles_read <= 120, f"read {batch.articles_read} on a budget of 120"
+    assert len(batch.reports) == 10, f"only {len(batch.reports)} of 10 projects got a turn"
+    assert max(read_by.values()) <= 13, f"one project took more than a fair share: {read_by}"
+
+
+def test_a_share_a_project_leaves_unspent_goes_to_the_next(session, monkeypatch):
+    """Dividing up front would strand what an early finisher did not use."""
+    finished = add_project(session, city="Reno", company="Op Reno")
+    hungry = add_project(session, city="Mesa", company="Op Mesa")
+    read_by = _endless_harvest(
+        session, monkeypatch, [finished.id, hungry.id], starved={finished.id}
+    )
+
+    enrich.run_many(
+        session,
+        [finished.id, hungry.id],
+        max_articles=40,
+        max_articles_per_round=10,
+        target_fields=None,
+        skip_archive=True,
+        skip_search=True,
+        skip_settle=True,
+    )
+    assert read_by.get(hungry.id) == 40
+
+
+def test_a_query_is_sent_once_per_run_however_many_rounds_ask_it(session, monkeypatch):
+    """Measured: four rounds on one project sent 22 queries, 14 of them distinct.
+    Each is an API call against a daily quota, and the anchor query alone was being
+    re-sent every round. What an earlier round found is still offered to the next."""
+    project = add_project(session)
+    _endless_harvest(session, monkeypatch, [project.id])
+
+    class Recording(FakeSearch):
+        def search(self, query, *, limit=10):
+            super().search(query, limit=limit)
+            return []
+
+    provider = Recording([])
+    report = enrich.run(
+        session,
+        project.id,
+        search_provider=provider,
+        skip_archive=True,
+        skip_settle=True,
+        max_rounds=4,
+    )
+    assert len(report.rounds) >= 3, "the loop has to run for the test to mean anything"
+    assert len(provider.queries) == len(set(provider.queries)), (
+        f"re-sent {len(provider.queries) - len(set(provider.queries))} identical queries"
+    )
+
+
+def test_hits_a_round_could_not_read_are_offered_again_without_a_second_query(session, monkeypatch):
+    project = add_project(session)
+    _endless_harvest(session, monkeypatch, [project.id], starved={project.id})
+    provider = FakeSearch([f"https://news.test/hillsboro-{i}" for i in range(8)])
+    report = enrich.run(
+        session,
+        project.id,
+        search_provider=provider,
+        skip_archive=True,
+        skip_settle=True,
+        max_rounds=3,
+        max_articles=5,
+    )
+    assert report.rounds[0].articles_read == 5
+    assert report.rounds[1].articles_read >= 1, "the unread hits from round 1 were lost"
+    assert len(provider.queries) == len(set(provider.queries))
+
+
 # --- the target must not silently refuse to work ----------------------------
 
 

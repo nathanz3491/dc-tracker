@@ -392,6 +392,7 @@ def harvest_search(
     settings: Settings,
     provider: object | None = None,
     skip: frozenset[str] | set[str] = frozenset(),
+    memo: dict[str, list] | None = None,
 ) -> Harvest:
     """The configured search backend (Serper/Google/Brave/Bocha), aimed at this
     project's gaps. Needs one key in .env.
@@ -399,6 +400,14 @@ def harvest_search(
     A Wikipedia article among the hits is mined for its references too — the
     campus article's bibliography names the operator's own announcements and
     the local coverage, which is precisely what a gap-filling read wants.
+
+    `memo` holds the hits of every query already sent this run, keyed by the query,
+    and a query found there is answered from it rather than sent again. `run` asks
+    for this harvest every round, and the queries are built from the gaps, which
+    change slowly: measured on four rounds of one project, 22 were sent and 14 were
+    distinct, the anchor query alone every round — each an API call against a daily
+    quota. Answered from the memo, a hit an earlier round had no room to read is
+    still offered to this one, which re-sending the query was the only way to get.
     """
     from tracker.ingest import wiki
     from tracker.ingest.discover import load_config
@@ -425,19 +434,25 @@ def harvest_search(
         return Harvest("search", skipped="project has no company/locality to anchor a query")
 
     urls: list[str] = []
-    ran = 0
+    ran = reused = 0
     note = ""
     for query in queries:
-        try:
-            hits = provider.search(query, limit=settings.search_results_per_query)
-        except QuotaExhausted as exc:
-            log.warning("%s", exc)
-            note = f"quota exhausted after {ran} quer(ies): {exc}"
-            break
-        except SearchError as exc:
-            log.warning("query %r failed: %s", query, exc)
-            continue
-        ran += 1
+        if memo is not None and query in memo:
+            hits = memo[query]
+            reused += 1
+        else:
+            try:
+                hits = provider.search(query, limit=settings.search_results_per_query)
+            except QuotaExhausted as exc:
+                log.warning("%s", exc)
+                note = f"quota exhausted after {ran} quer(ies): {exc}"
+                break
+            except SearchError as exc:
+                log.warning("query %r failed: %s", query, exc)
+                continue
+            ran += 1
+            if memo is not None:
+                memo[query] = list(hits)
         for hit in hits:
             if is_useful_host(hit.url) and hit.url not in urls:
                 urls.append(hit.url)
@@ -461,6 +476,8 @@ def harvest_search(
     # that simply found nothing.
     if not note:
         note = f"{ran} quer(ies) run"
+    if reused:
+        note += f", {reused} answered from earlier rounds"
     note += f" via {provider_name(provider)}"
     if mined:
         note += f"; {mined} wikipedia reference(s)"
@@ -570,6 +587,7 @@ def run(
     target_fields: int | None = None,
     want_fields: tuple[str, ...] | None = None,
     max_attempts: int = 0,
+    budget: int | None = None,
 ) -> EnrichReport:
     """Recruit every method against one project until rounds stop paying.
 
@@ -577,6 +595,12 @@ def run(
     leaving the rest of a shared budget for the next project. The PRD's bar is 9;
     pushing a project from 9 to 10 costs the same call as pushing another from 6
     to 7, and the second is worth more.
+
+    `max_articles` is the most one ROUND reads; `budget` is the most this project
+    reads across all of them, None for no ceiling beyond the rounds. They are two
+    numbers because `run_many` used to hand its per-project share over as the
+    per-round cap, and a project then read that share once a round, up to six
+    times over — see `run_many`.
 
     **A last stage settles what the sources disagree about.** Adding sources is
     what creates contested fields — two publishers, two figures, both quoted — and
@@ -615,7 +639,13 @@ def run(
     assert project is not None
 
     tried: set[str] = project_urls(session, project_id)
+    #: Every query this run has sent, with its hits. See `harvest_search`.
+    searched: dict[str, list] = {}
+    spent = 0
     for number in range(1, max_rounds + 1):
+        if budget is not None and spent >= budget:
+            report.stopped_because = f"read its share of the article budget ({budget})"
+            break
         gaps = for_project(project)
         if not any(s.is_gap for s in gaps):
             report.stopped_because = "every field is filled"
@@ -664,6 +694,7 @@ def run(
                     settings=settings,
                     provider=search_provider,
                     skip=skip_fields,
+                    memo=searched,
                 )
             )
         if number == 1:
@@ -681,7 +712,9 @@ def run(
             report.rounds.append(current)
             break
 
-        batch = fresh[:max_articles]
+        room = max_articles if budget is None else min(max_articles, budget - spent)
+        batch = fresh[:room]
+        spent += len(batch)
         tried.update(batch)
         before_state = {s.field for s in for_project(project) if s.status == FILLED}
 
@@ -895,9 +928,14 @@ def run_many(
     # consumed the lot and twenty-five never ran. A fair share means every selected
     # project gets a turn, which matters because the run is judged on how many
     # projects clear the target, not on how much any one of them moves.
-    fair_share = max(1, max_articles // max(1, len(project_ids)))
-    per_project = min(max_articles_per_round, fair_share)
-
+    #
+    # **The share is a total, not a per-round cap.** It was handed to `run` as the
+    # round's slice, so a project read it once a round — six times over — and the
+    # budget was only checked between projects: `--budget 120` over ten projects
+    # read 144 articles and reached two of them. Now each project may read the
+    # budget left divided by the projects still to run, across all its rounds, and
+    # never more than `max_articles_per_round` in one; whatever a project does not
+    # use passes to the ones after it, so the ceiling holds and nothing is stranded.
     spent = 0
     unreached = list(project_ids)
     for project_id in project_ids:
@@ -910,12 +948,14 @@ def run_many(
                 len(unreached),
             )
             break
+        share = min(remaining, max(1, remaining // len(unreached)))
         unreached.remove(project_id)
         report = run(
             session,
             project_id,
             settings=settings,
-            max_articles=min(per_project, remaining),
+            max_articles=max_articles_per_round,
+            budget=share,
             max_rounds=max_rounds,
             skip_archive=skip_archive,
             skip_settle=skip_settle,
