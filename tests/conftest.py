@@ -205,6 +205,39 @@ def _fast_and_keyless_settings(monkeypatch):
     get_settings.cache_clear()
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _build_each_cli_once():
+    """Build the Click command tree from a Typer app once per run, not per invoke.
+
+    `typer.testing.CliRunner.invoke` calls `get_command(app)` every time, and for
+    this CLI that is 49 ms of a 57 ms invocation — rebuilding every command's
+    Click objects to run one of them — in a suite that invokes the CLI several
+    hundred times. The tree is built from the callbacks the app registered at
+    import, so a cached one runs exactly the same functions: a monkeypatched
+    module attribute is looked up when the command runs, either way.
+
+    Keyed on the app object and holding it, so an id cannot be reused by a test
+    that builds an app of its own. `raising=False` because `_get_command` is
+    typer's private name for it: if a release renames it, this stops helping and
+    nothing breaks.
+    """
+    import typer.testing
+
+    real = typer.testing._get_command
+    built: dict[int, tuple[object, object]] = {}
+
+    def get_command(app):
+        hit = built.get(id(app))
+        if hit is None or hit[0] is not app:
+            hit = built[id(app)] = (app, real(app))
+        return hit[1]
+
+    patch = pytest.MonkeyPatch()
+    patch.setattr(typer.testing, "_get_command", get_command, raising=False)
+    yield
+    patch.undo()
+
+
 @pytest.fixture
 def db_path(tmp_path: Path) -> Path:
     return tmp_path / "tracker.db"
