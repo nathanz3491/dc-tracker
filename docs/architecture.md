@@ -69,7 +69,10 @@ it runs in a terminal on the machine that owns the database, so "who may start
 this?" is answered by ssh rather than by a cookie. It still shares
 `webui/catalog.py` and `webui/runner.py` with what used to be here — the
 introspection and the process handling were never the problem — which is why
-those modules survive a change that deleted their only HTTP caller.
+those modules survive a change that deleted their only HTTP caller. What only the
+console used went later, once nothing but its own tests reached it: the named
+routines in `webui/workflows.py` and `Runner.start_workflow` that ran them,
+`Runner.snapshot`, and `runs.history` and `runs.read_log`, which fed the Runs view.
 
 ---
 

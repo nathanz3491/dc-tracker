@@ -44,7 +44,11 @@ class Busy(RuntimeError):
 
 
 class Runner:
-    """The single-slot executor behind /api/run."""
+    """The single-slot executor behind the TUI's command pane.
+
+    It was the console's too, behind `/api/run`, until the console stopped running
+    commands; the TUI kept it — see `docs/tui.md`.
+    """
 
     def __init__(self, db_path: str | Path) -> None:
         self.db_path = str(db_path)
@@ -60,10 +64,6 @@ class Runner:
     @property
     def current(self) -> runs.Run | None:
         return self._current
-
-    def snapshot(self) -> dict[str, Any] | None:
-        run = self._current
-        return None if run is None else {**run.summary(), "lines": list(run.lines)}
 
     # --- starting ---------------------------------------------------------
 
@@ -105,54 +105,6 @@ class Runner:
         threading.Thread(target=self._execute, args=(run, argv, columns), daemon=True).start()
         return run
 
-    def start_workflow(self, name: str, *, confirm: str | None = None) -> runs.Run:
-        """Run a named sequence as a single job.
-
-        One `Run`, one log, one entry in the history — not N runs chained by the
-        browser. Chaining client-side would mean a closed tab abandons the
-        sequence halfway, and the history would show three unrelated commands with
-        nothing recording that they were one intention.
-        """
-        from tracker.webui import workflows as workflow_mod
-
-        workflow = workflow_mod.resolve(name)
-        if workflow.needs_confirmation and (confirm or "").strip() != name:
-            why = (
-                f"`{name}` {workflow.destroys}"
-                if workflow.destroys
-                else f"`{name}` spends LLM tokens."
-            )
-            raise catalog.InvalidRequest(f'{why} Re-send with confirm="{name}" to run it.')
-
-        # Every step's argv is built before anything executes. A typo in the last
-        # step should not be discovered after the first two have spent money.
-        plan = [
-            (step, catalog.build_argv(step.cmd, step.flags, db_path=self.db_path))
-            for step in workflow.steps
-        ]
-
-        with self._lock:
-            if self._current is not None and self._current.status == "running":
-                raise Busy(
-                    f"`{self._current.cmd}` is still running. "
-                    "SQLite takes one writer, so a second run would fail partway through."
-                )
-            run = runs.Run(
-                id=runs.new_id(self.db_path),
-                cmd=f"workflow {name}",
-                argv=[a for _, argv in plan for a in argv],
-                started_at=_now(),
-                cost=workflow.cost,
-            )
-            self._current = run
-            self._listeners = []
-
-        runs.begin(self.db_path, run)
-        threading.Thread(
-            target=self._execute_workflow, args=(run, workflow, plan), daemon=True
-        ).start()
-        return run
-
     def cancel(self) -> bool:
         process, run = self._process, self._current
         if process is None or run is None or run.status != "running":
@@ -187,46 +139,6 @@ class Runner:
         before = _project_stamps(self.db_path)
         exit_code, error = self._spawn(run, argv, columns)
         self._close(run, exit_code=exit_code, started=started, before=before, error=error)
-
-    def _execute_workflow(self, run: runs.Run, workflow: Any, plan: list[Any]) -> None:
-        """Each step in turn, into one log, stopping at the first real failure.
-
-        The before/after stamps span the whole sequence, so `projects_touched`
-        counts rows the workflow changed rather than rows the last step changed.
-        """
-        started = time.monotonic()
-        before = _project_stamps(self.db_path)
-        total = len(plan)
-        self._push(run, f"[console] {workflow.title} — {total} step(s)")
-
-        exit_code: int | None = 0
-        for index, (step, argv) in enumerate(plan, start=1):
-            if run.status == "cancelled":
-                self._push(run, "[console] cancelled; remaining steps skipped")
-                break
-            self._push(run, "")
-            self._push(run, f"[console] step {index}/{total}: {step.cmd}")
-            if step.because:
-                self._push(run, f"[console] {step.because}")
-
-            code, error = self._spawn(run, argv)
-            if error:
-                self._push(run, f"[console] could not start: {error}")
-                exit_code = 127
-                break
-            if code == 0:
-                continue
-            if step.tolerate_failure:
-                # `duplicates` and `logic check` exit non-zero when they find
-                # something. That is the answer, not a breakage.
-                self._push(run, f"[console] {step.cmd} exited {code} — a finding, continuing")
-                continue
-            self._push(run, f"[console] {step.cmd} failed ({code}); stopping here")
-            self._push(run, f"[console] {total - index} step(s) not run")
-            exit_code = code
-            break
-
-        self._close(run, exit_code=exit_code, started=started, before=before)
 
     def _spawn(
         self, run: runs.Run, argv: list[str], columns: int | None = None

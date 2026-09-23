@@ -2,8 +2,9 @@
 
 Files, not a table. The schema holds the tracked data and is guarded by a drift
 test; a command's stdout is operational exhaust with a different lifetime and no
-relational shape. One JSONL per run beside the database, and an index for the
-listing.
+relational shape. One JSONL per run beside the database, and an index of the
+latest runs. Since the console's Runs view went nothing in the code displays
+either; they are for whoever looks in `data/runs/`.
 
 `.gitignore` already carries an unanchored `runs/` pattern that nothing wrote to,
 so `data/runs/` is ignored the moment it appears.
@@ -131,34 +132,6 @@ def _read_index(db_path: str | Path) -> list[dict[str, Any]]:
     return data if isinstance(data, list) else []
 
 
-def history(db_path: str | Path, limit: int = 50) -> list[dict[str, Any]]:
-    return _read_index(db_path)[:limit]
-
-
-def read_log(db_path: str | Path, run_id: str) -> dict[str, Any] | None:
-    """One run's header, output and footer, replayed from its file."""
-    path = _log_path(db_path, run_id)
-    if not path.is_file():
-        return None
-    header: dict[str, Any] = {}
-    footer: dict[str, Any] = {}
-    lines: list[str] = []
-    with path.open(encoding="utf-8") as fh:
-        for raw in fh:
-            try:
-                entry = json.loads(raw)
-            except ValueError:
-                continue
-            kind = entry.get("t")
-            if kind == "out":
-                lines.append(entry.get("s", ""))
-            elif kind == "start":
-                header = entry
-            elif kind == "end":
-                footer = entry
-    return {**header, **footer, "lines": lines}
-
-
 __all__ = [
     "INDEX_LIMIT",
     "TAIL",
@@ -166,8 +139,6 @@ __all__ = [
     "append",
     "begin",
     "finish",
-    "history",
     "new_id",
-    "read_log",
     "runs_dir",
 ]

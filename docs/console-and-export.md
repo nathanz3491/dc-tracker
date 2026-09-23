@@ -281,9 +281,8 @@ run did without re-exporting anything. Reload to pick up a run that finished whi
 you were reading; nothing on the page can start one.
 
 **Different from `tracker export html`, and both are worth having.** The export is
-one self-contained file you can email; it is frozen at the moment it was written
-and cannot run anything. The console is a server: live, and able to execute the
-commands that change the data.
+one self-contained file you can email; it is frozen at the moment it was written.
+The console is a server: live, reading the database every time it is asked.
 
 Hovering any value shows the sentence behind it. That works because the evidence
 gate's per-field quotes are now stored (`source.quotes`, migration 0007) rather
@@ -292,41 +291,14 @@ below. Citations recorded before that migration fall back to the source excerpt
 and the page says so rather than passing a paragraph off as the sentence behind
 one number.
 
-**Running commands from the browser.** The Commands view is built by introspecting
-the CLI itself, so it cannot fall behind: every flag appears with its real type,
-default and help. Output streams into the Runs view and is kept per run under
-`data/runs/`.
-
-Flags are rendered for someone who has not used a terminal — a plain-language
-label with the real flag beside it, a picker listing the actual projects instead
-of an id you have to go and look up, presets around the CLI's own default rather
-than an empty number box, and the thirteen flags on `sync` folded down to the ones
-you might change. The argv preview stays: it is the honest record of what will
-run, it is what you paste into a terminal on a read-only console, and matching it
-against the labels is how someone graduates to the CLI.
-
-**Routines** sit above the command list, because for most visits the question
-"what do I run to catch up" has one right answer and it is three commands in a
-particular order:
-
-| Routine | Steps |
-| --- | --- |
-| Catch up on the news | `sync` → `ingest geo` → `logic check` |
-| Deepen what we already have | `enrich` → `ingest geo` → `gaps` |
-| Tidy the database | `duplicates` → `logic check` → `stats` |
-| Raise rows to T1, free | `duplicates` → `backfill blocks` → `backfill derive` → `logic resolve --auto` → `blocks` → `clean` |
-| Raise rows to T3, with a model | `audit resolve` → `risks confirm` → `logic resolve --llm` → `logic conflicts` → `clean` |
-| Prepare a report | `stats` → `capex` → `verify` |
-
-The order carries reasons the page now states: geography is a free lookup, so
-deriving it *after* the read locates the rows that just arrived; contradictions
-come from new values, so checking logic before the read reports problems the run
-was about to fix. Each runs as **one job with one log and one entry in the
-history** — not chained by the browser, where a closed tab would abandon the
-sequence halfway. It stops at the first real failure, except for steps like
-`duplicates` that exit non-zero when they *find* something, which is an answer
-rather than a breakage. Adding a seventh routine is eight lines in
-`webui/workflows.py`; a node editor would have been a builder nobody asked for.
+**It runs no commands.** The Commands and Runs views went with the runner (see
+above), and later so did the six routines — named sequences such as `sync` →
+`ingest geo` → `logic check`, run as one job — whose module had outlived its only
+caller and was reachable from nothing but its own tests. The sequences that matter
+are scripts now, each stating why its order is what it is:
+[`scripts/settle.sh`](../scripts/settle.sh), [`resolve.sh`](../scripts/resolve.sh)
+and [`overnight.sh`](../scripts/overnight.sh). Single commands run from
+`tracker tui`.
 
 **The AI overview** on each project page is the one thing in the console that
 is a *reading* of the values rather than one of them. It is a card in the
@@ -389,35 +361,20 @@ The reply is markdown — one sentence, then two or three bullets — rendered t
 React elements by a small parser in `app.js`. Deliberately **not** `innerHTML`:
 this text is written by a model out of articles fetched from the open web, which
 makes it the least trustworthy string in the product, and turning it into markup
-would run a path from someone else's page into a console that executes commands.
+would run a path from someone else's page into a signed-in session on the console.
 Links are flattened to their text for the same reason. Verified by feeding the
 panel a briefing containing `<script>` and an `onerror` attribute: both render as
 characters, nothing executes.
 
-Three things bound what that can do, and they are the reason it is safe to leave
-open:
-
-* **The bind address.** Loopback only. `--host` anything else is refused without
-  `--allow-remote`, because anyone who can reach the port can start a run.
-* **No shell, ever.** A request names a command and a flag object; the server
-  validates both against the catalog and builds an argument *list*. Nothing is
-  concatenated into a command line, so `;`, backticks and `&&` are inert. An
-  unknown flag is an error rather than something passed through — which is how a
-  `--db` or an `--out` would otherwise arrive.
-* **Spending is confirmed.** `sync`, `enrich`, `infer`, `search`, `point`,
-  `logic check`, `ingest crawl` and `ingest edgar` spend real LLM tokens, and no
-  single click can start one — the UI asks a second time and says what it will
-  cost. A routine containing any of them is confirmed the same way, so wrapping a
-  command in a sequence is not the way around this.
-* **Destruction is confirmed too**, on its own axis, and more heavily. `merge`
-  spends nothing and is the only command here that cannot be undone, so it still
-  takes the command name typed out — proportionate friction in front of an
-  irreversible act, where a second click is proportionate to spending money you
-  can decide to spend again. The check is on the command name, not its flags, so
-  no argument combination talks its way past it.
-* **A routine is not a back door.** Its steps are validated against the same
-  catalog, so a blocked command — `cloudflare`, which publishes this page to a
-  public URL — cannot be reached by putting it in a sequence.
+What bounds the console is short now. **The bind address**: loopback only, and
+`--host` anything else is refused without `--allow-remote`, because anyone who
+can reach the port could read the whole dataset and — with `--ai` — spend LLM
+tokens a panel at a time. It cannot start a command at all. The runner is gone
+from here, and with it the checks that stood in front of it — a typed
+confirmation before anything that spends or deletes, and flags validated into an
+argument list against the CLI's own catalog. Both still guard `tracker tui`,
+which runs commands through the same executor; see
+[the terminal interface](tui.md).
 
 `--ai/--no-ai` governs the panels that call a model — the project briefing,
 `infer`, the capex overview. They *read* a row and spend tokens, and `tracker
