@@ -254,6 +254,11 @@ class IngestUrl(Base):
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     error: Mapped[str | None] = mapped_column(Text)
     content_sha1: Mapped[str | None] = mapped_column(Text)
+    #: Tries in a row that failed the same way (migration 0027). Reset by a success
+    #: or by a different failure; `discover.MAX_SAME_FAILURES` is where a streak
+    #: stops being retried automatically. On a URL that was read successfully it
+    #: counts consecutive failed re-reads instead, which the refresh backs off on.
+    failures: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
 
     # Discovery metadata: NULL for a URL supplied by hand via --urls. The title is
     # what makes `tracker queue` triageable — a bare URL is not enough to judge

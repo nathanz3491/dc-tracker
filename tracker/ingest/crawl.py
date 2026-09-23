@@ -2523,25 +2523,77 @@ def extract_one(
 # --- ingest_url bookkeeping -------------------------------------------------
 
 
+#: Outcomes that are an answer rather than a failure: the page was read and a model
+#: judged it. A later try that fails does not take that answer away.
+SETTLED_STATUSES: Final[frozenset[str]] = frozenset({"ok", "no_project"})
+
+#: A quoted slice of the model's reply, which varies between tries of one failure.
+_REPLY_SLICE: Final = re.compile(r"reply began.*", re.IGNORECASE | re.DOTALL)
+_DIGITS: Final = re.compile(r"\d+")
+
+
+def failure_reason(status: str | None, http_status: int | None, error: str | None) -> str:
+    """What "failed the same way" means for the retry streak.
+
+    The status, the HTTP status and the error text — with its digits and any quoted
+    slice of the model's reply set aside, because those vary between tries of the
+    very same failure: a thin page reports how many characters it had, a parse error
+    quotes whatever the reply began with. The HTTP status stays whole, so a 403 and
+    a 404 remain two different failures however their messages are worded.
+    """
+    text = _REPLY_SLICE.sub("", (error or "").lower())
+    text = " ".join(_DIGITS.sub("#", text).split())[:120]
+    return f"{status or ''}|{http_status if http_status is not None else ''}|{text}"
+
+
 def record_url(session: Session, run_id: str, outcome: ExtractionOutcome) -> None:
     """Upsert the per-URL outcome.
 
     This table is why re-running a URL list is cheap: URLs already `ok` are
     skipped, and `--retry-failed` can target just the ones that were not.
+
+    **`failures` is the length of the current streak** — see migration 0027. A
+    failure the same as the last one extends it and anything else restarts it, and
+    `discover.MAX_SAME_FAILURES` is where the automatic retries stop.
+
+    **A failed re-read of a URL that was read keeps what the good read recorded.**
+    Its citations still stand, so it is not an unread URL: overwriting `ok` with the
+    re-read's `fetch_error` is what put 35 cited URLs on a copy of production into
+    the retry pool. The failure is still recorded — `error`, `last_tried_at` and the
+    streak move — but the status, the HTTP status and `content_sha1` stay the last
+    good read's, which is also what change detection compares a fresh read against.
     """
+    from tracker.ingest.discover import RETRYABLE_STATUSES
+
     row = session.scalar(select(IngestUrl).where(IngestUrl.url == outcome.url))
     now = utcnow()
     if row is None:
-        row = IngestUrl(url=outcome.url, run_id=run_id, first_seen_at=now, attempts=0)
+        row = IngestUrl(url=outcome.url, run_id=run_id, first_seen_at=now, attempts=0, failures=0)
         session.add(row)
+    failed = outcome.status in RETRYABLE_STATUSES
+    error = (outcome.error or None) and outcome.error[:1000]
+    if not failed:
+        row.failures = 0
+    elif row.status in SETTLED_STATUSES:
+        row.failures = (row.failures or 0) + 1
+    else:
+        # Compared as stored, so a reason read back off the row matches one computed
+        # from a fresh outcome: `error` is kept to its first 1,000 characters.
+        same = failure_reason(row.status, row.http_status, row.error) == failure_reason(
+            outcome.status, outcome.http_status, error
+        )
+        row.failures = (row.failures or 0) + 1 if same else 1
     row.run_id = run_id
+    row.attempts = (row.attempts or 0) + outcome.attempts
+    row.error = error
+    row.last_tried_at = now
+    if failed and row.status in SETTLED_STATUSES:
+        session.flush()
+        return
     row.status = outcome.status
     row.http_status = outcome.http_status
     row.via = outcome.via
-    row.attempts = (row.attempts or 0) + outcome.attempts
-    row.error = (outcome.error or None) and outcome.error[:1000]
     row.content_sha1 = outcome.content_sha1
-    row.last_tried_at = now
     # Filled, never overwritten, and never cleared. `upsert` applies the same rule
     # one table over, for the same reason: the date a publisher put on an article
     # does not change, so a later reading of it has nothing to add. The guard on

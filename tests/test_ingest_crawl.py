@@ -1495,6 +1495,113 @@ def test_fetch_error_is_recorded_in_ingest_url_not_as_a_source(session):
     assert session.scalar(select(IngestUrl)).status == "fetch_error"
 
 
+# --- the bookkeeping a re-read leaves behind ---------------------------------------
+
+
+def _read_ok_then(session, second: FetchResult, *, llm=None):
+    """Read URL once successfully, then again with `second` as the fetch."""
+    crawl.run(
+        session,
+        [URL],
+        fetcher=FakeFetcher({URL: fetched()}),
+        extractor=FakeLLM([canned("llm_response_microsoft_wi.json")]),
+        run_id="good",
+    )
+    good = session.scalar(select(IngestUrl))
+    before = (good.content_sha1, good.last_tried_at)
+    crawl.run(
+        session,
+        [URL],
+        fetcher=FakeFetcher({URL: second}),
+        extractor=llm or FakeLLM([canned("llm_response_microsoft_wi.json")]),
+        run_id="again",
+        force=True,
+    )
+    return session.scalar(select(IngestUrl)), before
+
+
+def test_a_failed_re_read_does_not_demote_a_url_that_was_read(session):
+    """The citation from the good read still stands, so the URL is not "unread".
+
+    Demoting it put 35 cited URLs on a copy of production into the retry pool,
+    where `sync --retry-failed` and enrich's retry harvester spent a try on each of
+    them every run."""
+    from tracker.ingest import discover
+
+    row, (sha, _) = _read_ok_then(
+        session, FetchResult(URL, False, error="HTTP 403", status=403, fetched_at=NOW)
+    )
+    assert row.status == "ok"
+    assert row.content_sha1 == sha, "the last good read's hash is what change detection needs"
+    assert row.error == "HTTP 403", "the failure is still on record"
+    assert row.failures == 1
+    assert row.run_id == "again"
+    assert discover.failed(session) == []
+
+
+def test_a_model_failure_on_a_re_read_does_not_demote_it_either(session):
+    row, _ = _read_ok_then(session, fetched(), llm=BoomLLM())
+    assert row.status == "ok"
+    assert row.failures == 1
+
+
+def test_a_success_ends_the_streak(session):
+    row, _ = _read_ok_then(session, fetched())
+    assert row.status == "ok"
+    assert row.failures == 0
+    assert row.error is None
+
+
+def _fail_with(session, *results: FetchResult) -> IngestUrl:
+    for index, result in enumerate(results):
+        crawl.run(
+            session,
+            [URL],
+            fetcher=FakeFetcher({URL: result}),
+            extractor=FakeLLM([]),
+            run_id=f"t{index}",
+            force=True,
+        )
+    return session.scalar(select(IngestUrl))
+
+
+def test_the_same_failure_again_is_a_streak(session):
+    row = _fail_with(
+        session,
+        FetchResult(URL, False, error="HTTP 429", status=429, fetched_at=NOW),
+        FetchResult(URL, False, error="HTTP 429", status=429, fetched_at=NOW),
+    )
+    assert (row.status, row.failures) == ("fetch_error", 2)
+
+
+def test_a_different_failure_starts_a_new_streak(session):
+    row = _fail_with(
+        session,
+        FetchResult(URL, False, error="HTTP 429", status=429, fetched_at=NOW),
+        FetchResult(URL, False, error="HTTP 429", status=429, fetched_at=NOW),
+        FetchResult(URL, False, error="HTTP 500", status=500, fetched_at=NOW),
+    )
+    assert row.failures == 1
+
+
+def test_a_failure_whose_wording_varies_is_still_the_same_failure(session):
+    """Thin-page and parse errors carry counts and a slice of the reply; those vary
+    between tries of the very same failure and must not reset the streak."""
+    from tracker.ingest.crawl import failure_reason
+
+    assert failure_reason("thin_content", None, "0 characters of prose in 8 of page") == (
+        failure_reason("thin_content", None, "12 characters of prose in 31 of page")
+    )
+    assert failure_reason(
+        "parse_error", None, "model did not return a JSON object; reply began: '<think>\\nThe user'"
+    ) == failure_reason(
+        "parse_error", None, "model did not return a JSON object; reply began: '<think>\\nLet me'"
+    )
+    assert failure_reason("fetch_error", 403, "HTTP 403") != failure_reason(
+        "fetch_error", 404, "HTTP 404"
+    )
+
+
 def test_rerunning_skips_urls_already_done(session):
     fetcher = FakeFetcher({URL: fetched()})
     llm = FakeLLM([canned("llm_response_microsoft_wi.json")])
