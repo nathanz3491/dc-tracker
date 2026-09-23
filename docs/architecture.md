@@ -236,7 +236,10 @@ raises instead of quietly changing a row. Every route except `POST /api/watch`,
 
 The three that do not are as narrow as their jobs: one row of `watch`, one
 `last_seen_at` stamp on a successful sign-in, and one `account` row created by
-spending an invite.
+spending an invite. The sign-in checks the password read-only and writes the stamp
+afterwards, on its own connection with a quarter-second wait: while a command holds
+the write lock the stamp is skipped, where it used to wait five seconds and turn
+the right password into a 500.
 
 **On the write side only one thing runs at a time.**
 

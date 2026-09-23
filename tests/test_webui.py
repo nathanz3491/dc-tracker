@@ -1534,6 +1534,44 @@ def test_a_success_forgets_only_its_own_clients_failures():
     assert gate.locked_for("x") == 0
 
 
+def test_signing_in_works_while_a_command_is_writing(gated, seeded_db):
+    """A crawl holds SQLite's write lock for as long as each of its transactions.
+
+    Sign-in wrote `last_seen_at` with the five-second busy timeout and did not catch
+    "database is locked", so the right password sat out five seconds and then got
+    a 500. The credential check only reads, and WAL readers are never blocked by a
+    writer; the stamp is the part that can wait, and it no longer makes the reader
+    wait with it.
+    """
+    import sqlite3
+    import time as clock
+
+    address, _ = gated
+    holder = sqlite3.connect(seeded_db, timeout=0)
+    holder.execute("BEGIN IMMEDIATE")  # what a CLI command's write transaction holds
+    try:
+        started = clock.monotonic()
+        status, cookie = sign_in(address)
+        elapsed = clock.monotonic() - started
+        assert status == 200, "the right password was refused because a command was writing"
+        assert raw(address, "/api/dataset", cookie=cookie)[0] == 200
+    finally:
+        holder.rollback()
+        holder.close()
+    assert elapsed < 3, f"the sign-in sat out the busy timeout ({elapsed:.1f}s)"
+
+
+def test_a_sign_in_still_records_when_it_happened(gated, seeded_db):
+    """The stamp is skipped only when the database is busy, not dropped."""
+    from tracker import accounts
+    from tracker.db import open_db, session_scope
+
+    address, _ = gated
+    assert sign_in(address)[0] == 200
+    with session_scope(open_db(seeded_db), commit=False) as session:
+        assert accounts.by_email(session, EMAIL).last_seen_at is not None
+
+
 def test_no_accounts_means_no_gate(server):
     """Loopback default: reaching 127.0.0.1 already means having the machine.
 

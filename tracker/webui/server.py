@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import Any, ClassVar
 from urllib.parse import parse_qs, urlsplit
 
+from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 
 from tracker import __version__
@@ -92,6 +93,17 @@ class _BodyRefused(ValueError):
     def __init__(self, status: int, message: str) -> None:
         super().__init__(message)
         self.status = status
+
+
+def _database_busy(exc: OperationalError) -> bool:
+    """Whether SQLite refused because another connection holds its lock.
+
+    pysqlite words SQLITE_BUSY as "database is locked"; "busy" covers the rest of
+    the family. The request was fine and the moment was not — an answer the
+    caller can retry, never a 500.
+    """
+    message = str(exc).lower()
+    return "locked" in message or "busy" in message
 
 
 #: How long `Console.auth_required` may go without re-reading the database. See
@@ -804,11 +816,10 @@ class Handler(BaseHTTPRequestHandler):
 
         client = self._client()
         gate = self.console.gate
-        # Read-write, and only because a successful sign-in stamps `last_seen_at`.
-        # A failed one writes nothing, which is what keeps a brute-force attempt
-        # from being a write per guess.
-        engine = open_db(self.console.db_path, readonly=False)
-        with session_scope(engine) as session:
+        # Read-only: checking a password is a read, and a WAL reader is never
+        # blocked by a writer. A failed sign-in writes nothing, which is what keeps
+        # a brute-force attempt from being a write per guess.
+        with self.console.read_session() as session:
             account = accounts.verify(
                 session, str(body.get("email") or ""), str(body.get("password") or "")
             )
@@ -816,18 +827,56 @@ class Handler(BaseHTTPRequestHandler):
                 gate.fail(client)
                 log.warning("console: failed sign-in from %s", client)
                 # One message for a wrong password and for an unknown address.
-                # `accounts.verify` already spends the same scrypt either way, so
+                # `accounts.verify` spends the same one scrypt either way, so
                 # neither the wording nor the timing says which addresses exist.
                 return self._json({"error": "Wrong email or password."}, status=401)
-            accounts.touch(session, account)
             account_id = account.id
             email = account.email
             stamp = accounts.session_stamp(account.password_hash)
 
+        self._stamp_sign_in(account_id)
         gate.succeed(client)
         token = gate.grant(account_id, stamp=stamp)
         log.info("console: %s signed in from %s", email, client)
         self._json({"ok": True}, extra=self._set_session_cookie(token))
+
+    #: How long a sign-in waits for SQLite's write lock to record `last_seen_at`.
+    STAMP_WAIT_MS: ClassVar[int] = 250
+
+    def _stamp_sign_in(self, account_id: int) -> None:
+        """Record `last_seen_at` if the database will take a write now, else skip it.
+
+        **A sign-in never waits on this, and never fails on it.** It used to be
+        written in the sign-in's own transaction under the five-second busy
+        timeout, and "database is locked" was not caught — so while a CLI command
+        held the write lock, a correct password waited five seconds and got a 500.
+        The stamp is a convenience for `tracker users`; the sign-in is the thing
+        the reader asked for.
+
+        Its own short-lived engine, so the shortened busy timeout cannot leak into
+        any other connection. A database busy for longer than `STAMP_WAIT_MS` just
+        means this sign-in goes unrecorded, and says so in the log.
+        """
+        from tracker import accounts
+        from tracker.models import Account
+
+        engine = open_db(self.console.db_path, readonly=False)
+        try:
+            with session_scope(engine) as session:
+                session.execute(text(f"PRAGMA busy_timeout = {int(self.STAMP_WAIT_MS)}"))
+                account = session.get(Account, account_id)
+                if account is not None:
+                    accounts.touch(session, account)
+        except OperationalError as exc:
+            if not _database_busy(exc):
+                raise
+            log.info(
+                "console: account %d signed in; last-seen not recorded, the database is "
+                "busy writing",
+                account_id,
+            )
+        finally:
+            engine.dispose()
 
     def _register(self, body: dict[str, Any]) -> None:
         """Spend an invite code and sign the new account straight in.
