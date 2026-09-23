@@ -255,12 +255,16 @@ spent_so_far() {
   awk -F'\t' '{t += $5 + $6} END {printf "%d\n", t}' "$TRACKER_SPEND_LEDGER"
 }
 
-# The night's spend by command, largest first — which phase the money went to.
+# The night's spend by command, largest first — which phase the money went to, and
+# how much of its prompt the provider served from cache. A phase whose hit rate
+# falls is one whose prompt prefix is being disturbed, which costs the difference.
 spend_by_command() {
   [ -s "$TRACKER_SPEND_LEDGER" ] || { echo "    no paid calls"; return 0; }
-  awk -F'\t' '{t[$3] += $5 + $6; n[$3]++}
-    END {for (c in t) printf "%d\t%d\t%s\n", t[c], n[c], c}' "$TRACKER_SPEND_LEDGER" \
-    | sort -rn | awk -F'\t' '{printf "    %-22s %6d call(s)  ~%d tokens\n", $3, $2, $1}'
+  awk -F'\t' '{t[$3] += $5 + $6; n[$3]++; h[$3] += $7; m[$3] += $8}
+    END {for (c in t) printf "%d\t%d\t%s\t%d\n", t[c], n[c], c,
+      (h[c] + m[c]) ? 100 * h[c] / (h[c] + m[c]) : -1}' "$TRACKER_SPEND_LEDGER" \
+    | sort -rn | awk -F'\t' '{cache = ($4 < 0) ? "cache n/a" : sprintf("cache %d%%", $4);
+      printf "    %-22s %6d call(s)  ~%d tokens  %s\n", $3, $2, $1, cache}'
 }
 
 # True when the ceiling is reached. Called before every paid phase rather than once a

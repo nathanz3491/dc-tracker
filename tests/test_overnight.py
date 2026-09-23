@@ -219,3 +219,25 @@ def test_the_ledger_counts_agent_turns_too(keyed, monkeypatch):
         DeepSeekExtractor(keyed).converse(system="s", messages=[], tools=[])
     line = keyed.spend_ledger.read_text(encoding="utf-8").strip().split("\t")
     assert line[4:6] == ["50000", "900"]
+
+
+@needs_bash
+def test_the_morning_report_breaks_spend_down_by_command(tmp_path):
+    (tmp_path / "night.spend").write_text(
+        "t\t1\tlogic resolve\tm\t9000\t1000\t8000\t1000\n"
+        "t\t1\tlogic resolve\tm\t9000\t1000\t8000\t1000\n"
+        "t\t2\trisks confirm\tm\t500\t100\t0\t0\n",
+        encoding="utf-8",
+    )
+    script = (
+        "set -euo pipefail\n"
+        + _function("spend_by_command")
+        + "export TRACKER_SPEND_LEDGER=night.spend\nspend_by_command\n"
+    )
+    done = subprocess.run(
+        [BASH, "-c", script], cwd=tmp_path, capture_output=True, text=True, timeout=60, check=False
+    )
+    assert done.returncode == 0, done.stderr
+    lines = [line.split() for line in done.stdout.strip().splitlines()]
+    assert lines[0][:2] == ["logic", "resolve"] and "~20000" in lines[0] and "88%" in lines[0]
+    assert lines[1][:2] == ["risks", "confirm"] and "n/a" in lines[1]

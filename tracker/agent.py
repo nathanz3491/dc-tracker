@@ -228,6 +228,10 @@ def run(
                 )
                 result.prompt_tokens += reply.prompt_tokens or 0
                 result.completion_tokens += reply.completion_tokens or 0
+                # Counted like any other turn: the retry re-sends the same prefix and
+                # is exactly the call a cache hit should make cheap.
+                result.cache_hit_tokens += reply.cache_hit_tokens or 0
+                result.cache_miss_tokens += reply.cache_miss_tokens or 0
         except LLMError as exc:
             result.outcome, result.note = "error", str(exc)
             return result
@@ -371,7 +375,7 @@ def evidence_toolkit(
                 "properties": {"url": {"type": "string"}},
                 "required": ["url"],
             },
-            run=lambda url: _read_article(str(url), cache_dir=cache_dir),
+            run=lambda url: _article_view(_read_article(str(url), cache_dir=cache_dir)),
         ),
         Tool(
             name="show_project",
@@ -442,6 +446,22 @@ def _list_sources(session: Any, project_id: int) -> str:
         if excerpt:
             lines.append(f'    "{excerpt[:300]}"')
     return "\n".join(lines)
+
+
+def _article_view(text: str) -> str:
+    """An article as the model is shown it: its head and its tail, within budget.
+
+    Every tool result is clipped to `MAX_RESULT_CHARS` from the front, which for an
+    article kept the lead and the navigation and dropped the close — and the close
+    is where a news piece puts its timeline and its objections, the facts these runs
+    are usually looking for. Extraction has always read articles through
+    `crawl.truncate`, which keeps both ends; the agent now reads them the same way.
+    What it was shown is also what its quote is checked against (`_articles_read`),
+    so the two cannot disagree.
+    """
+    from tracker.ingest.crawl import truncate
+
+    return truncate(text, MAX_RESULT_CHARS)
 
 
 def _read_article(url: str, *, cache_dir: Any = None) -> str:

@@ -48,6 +48,23 @@ initial build of the v1 PRD.
 
 ### Changed
 
+- **The agent reads an article's close as well as its lead, and every call reports
+  its cache hits** (`tracker/agent.py`, `tracker/llm.py`, `scripts/overnight.sh`,
+  `tests/test_agent.py`, `tests/test_overnight.py`).
+
+  Every tool result is clipped from the front to 8,000 characters. For an article
+  that kept the headline, the lead and the site navigation, and dropped the close,
+  which is where a news piece puts its timeline and its objections. Extraction has
+  always read articles through `crawl.truncate`, which keeps the head and the tail.
+  The agent's `read_article` now does the same, within the same budget, and its
+  quote is still checked against exactly what it was shown.
+
+  `complete` is the most frequent call in the tool, a ~10,000-token system prompt on
+  every article extracted, and it never read the provider's cache counts, so a broken
+  prompt prefix on that path would have gone unnoticed. It reads them now, as does
+  the agent loop's retry of a truncated turn, which had dropped them. The overnight
+  morning report prints each command's cache hit rate beside its spend.
+
 - **Picking from a short menu no longer pays the deepest reasoning rate**
   (`tracker/llm.py` — `judgement_extractor`, `tracker/config.py` —
   `deepseek_judgement_effort`, `tracker/cli/quality.py`, `tracker/cli/logic.py`,

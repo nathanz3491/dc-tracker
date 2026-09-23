@@ -712,12 +712,18 @@ class DeepSeekExtractor:
             text = f"{_THINK_OPEN}{reasoning}{_THINK_CLOSE}{text}"
 
         usage = data.get("usage") or {}
+        # Read here too, not only on `converse`. Extraction is the highest-volume
+        # path in the tool — a ~10k-token system prompt on every article — and a
+        # broken prefix there was invisible because nothing ever asked.
+        hit, miss = cache_counts(usage)
         return LLMReply(
             text=text,
             finish_reason=choice.get("finish_reason"),
             prompt_tokens=usage.get("prompt_tokens"),
             completion_tokens=usage.get("completion_tokens"),
             model=data.get("model") or self.model,
+            cache_hit_tokens=hit,
+            cache_miss_tokens=miss,
         )
 
     def converse(

@@ -625,3 +625,31 @@ def test_cache_tokens_are_totalled_across_turns():
     assert result.cache_hit_tokens == 1000
     assert result.cache_miss_tokens == 1200
     assert result.cache_rate == pytest.approx(1000 / 2200)
+
+
+def test_an_article_is_shown_by_its_head_and_its_tail():
+    """The close of a news piece carries its timeline; a front-only clip dropped it,
+    while extraction has always read articles through `crawl.truncate`."""
+    from tracker.agent import MAX_RESULT_CHARS, _article_view
+
+    article = "LEAD. " + "filler " * 3000 + "Completion is scheduled for 2028."
+    shown = _article_view(article)
+    assert len(shown) <= MAX_RESULT_CHARS
+    assert shown.startswith("LEAD.")
+    assert shown.endswith("Completion is scheduled for 2028.")
+    assert _article_view("short") == "short"
+
+
+def test_an_extraction_call_reports_its_cache_hits(monkeypatch):
+    """`complete` is the highest-volume call in the tool and never read the counts."""
+    reply = {
+        "choices": [{"message": {"content": "{}"}, "finish_reason": "stop"}],
+        "usage": {
+            "prompt_tokens": 10_000,
+            "completion_tokens": 50,
+            "prompt_cache_hit_tokens": 9_000,
+            "prompt_cache_miss_tokens": 1_000,
+        },
+    }
+    got = _deepseek(monkeypatch, reply).complete(system="s", user="u")
+    assert (got.cache_hit_tokens, got.cache_miss_tokens) == (9_000, 1_000)
