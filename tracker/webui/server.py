@@ -1539,12 +1539,30 @@ class Handler(BaseHTTPRequestHandler):
         # different pages. None — nobody signed in, on a console with no accounts
         # at all — reaches `feed.digest`'s existing "no watchlist, read everything"
         # path, so the anonymous case needed no branch of its own.
+        #
+        # The watchlist is resolved once and handed to the digest. Both need it,
+        # and resolving it walks every project's company keys — 35-85 ms each on a
+        # copy of production — so the route used to pay that twice. With nobody
+        # signed in there is no list to draw, and the digest resolves its own
+        # every-account view exactly as it always has.
+        from tracker import watchlist
+
         account_id = self._account_id
         with self.console.read_session() as session:
+            entities = (
+                watchlist.watched(session, account_id=account_id)
+                if account_id is not None
+                else None
+            )
             payload = feed.digest(
-                session, since=since, days=days, limit=limit, account_id=account_id
+                session,
+                since=since,
+                days=days,
+                limit=limit,
+                account_id=account_id,
+                entities=entities,
             ).as_json()
-            payload["watchlist"] = self._watchlist_json(session, account_id)
+            payload["watchlist"] = self._watchlist_json(session, account_id, entities=entities)
             # So the toggle can show its own state. `watching_everything` in the
             # digest says what this *view* is; this says what the person asked for,
             # and with no account there is nobody to have asked.
@@ -1582,7 +1600,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._error(503, "the database is busy writing; try again in a moment")
         return self._json(result)
 
-    def _watchlist_json(self, session: Any, account_id: int | None) -> list[dict[str, Any]]:
+    def _watchlist_json(
+        self, session: Any, account_id: int | None, *, entities: list[Any] | None = None
+    ) -> list[dict[str, Any]]:
         """One account's watchlist as the page renders it, against today's projects.
 
         The page needs more than the digest's per-entity tally: the note, and the
@@ -1592,12 +1612,17 @@ class Handler(BaseHTTPRequestHandler):
         Empty for `account_id=None`, and that is not the same as "no entries". A
         visitor to an open console has no list because there is nobody to own one;
         the page reads `account` from `/api/dataset` to tell the two apart.
+
+        `entities` is the list already resolved for this account, when the caller
+        has it — see `_updates`.
         """
         if account_id is None:
             return []
-        from tracker import watchlist
+        if entities is None:
+            from tracker import watchlist
 
-        return [entity.as_json() for entity in watchlist.watched(session, account_id=account_id)]
+            entities = watchlist.watched(session, account_id=account_id)
+        return [entity.as_json() for entity in entities]
 
     def _watch(self, body: dict[str, Any]) -> None:
         """Add or drop one entry on the signed-in account's watchlist.

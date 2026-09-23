@@ -3603,6 +3603,27 @@ def test_the_watchlist_write_lands_in_the_database(reader, seeded_db):
     assert [e["entry"] for e in updates["entities"]] == ["Microsoft"]
 
 
+def test_the_updates_page_resolves_the_watchlist_once(reader, monkeypatch):
+    """Resolving a watchlist walks every project's company keys — 35-85 ms on a copy
+    of production — and the route did it twice: once inside `feed.digest`, once
+    more to draw the list beside the digest, from the same session."""
+    from tracker import watchlist
+
+    address, _console, cookie, _id = reader
+    as_reader(address, cookie, "/api/watch", "POST", {"action": "add", "entry": "Microsoft"})
+
+    calls: list[int] = []
+    real = watchlist.watched
+    monkeypatch.setattr(
+        watchlist, "watched", lambda *args, **kw: (calls.append(1), real(*args, **kw))[1]
+    )
+    status, body = as_reader(address, cookie, "/api/updates?days=36500")
+    assert status == 200
+    assert [w["entry"] for w in body["watchlist"]] == ["Microsoft"]
+    assert [e["entry"] for e in body["entities"]] == ["Microsoft"]
+    assert len(calls) == 1
+
+
 def test_the_watchlist_write_answers_rather_than_hanging(reader):
     """It shipped reading the request body twice, which blocks on `rfile` forever.
 

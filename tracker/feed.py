@@ -713,8 +713,15 @@ def digest(
     days: int | None = None,
     limit: int | None = None,
     account_id: int | None = None,
+    entities: list[watchlist.Entity] | None = None,
 ) -> Digest:
     """The whole page, for the watchlist as it stands.
+
+    `entities` is `watchlist.watched(session, account_id=account_id)` when the
+    caller has already resolved it. The console draws the list beside the digest,
+    and resolving it walks every project's company keys — 35-85 ms on a copy of
+    production — so it passes its own rather than paying twice. None resolves it
+    here, as always.
 
     **An empty watchlist means nothing is watched.** It used to mean *everything*,
     on the argument that a blank page teaches nobody what the console is for. That
@@ -757,7 +764,8 @@ def digest(
     }
     last_crawl = _as_datetime(session.scalar(select(func.max(Source.fetched_at))))
 
-    entities = watchlist.watched(session, account_id=account_id)
+    if entities is None:
+        entities = watchlist.watched(session, account_id=account_id)
     collected: list[Signal] = []
     digests: list[EntityDigest] = []
     watched_ids: set[int] = set()
