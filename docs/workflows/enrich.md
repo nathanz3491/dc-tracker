@@ -159,7 +159,8 @@ Both invisible from the outside, and both shaped the current call:
 * The archive sweep once ran before anything asked whether it was needed, so
   `enrich 10` on a finished row fetched every configured sitemap and then declined
   to work. `will_harvest` mirrors the two conditions `run` breaks on, and lives
-  beside them so a divergence is visible.
+  beside them so a divergence is visible. The sweep also ran at `--budget 0`, where
+  nothing is read; `run_many` skips it there now.
 
 ## Source map
 

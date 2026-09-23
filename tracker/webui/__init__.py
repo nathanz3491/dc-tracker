@@ -1,9 +1,10 @@
-"""The local console: the database as a live page, and the CLI as buttons.
+"""The console: the database as a live page.
 
 Distinct from `tracker export html`, and both are worth having. The export is one
-self-contained file you can email; it is frozen at the moment it was written and
-cannot run anything. This is a server on loopback: it reads the database on every
-request, and it can execute the commands that change it.
+self-contained file you can email; it is frozen at the moment it was written. This
+is a server: it reads the database on every request, and it cannot change a project,
+a citation or a figure — the command runner it once had was deleted, and the
+buttons for the CLI live in `tracker tui`, on the machine that owns the data.
 
 Deliberately built on `http.server`. The dependency list here is
 sqlalchemy/pydantic/typer/rich/httpx, and a single-operator console on 127.0.0.1

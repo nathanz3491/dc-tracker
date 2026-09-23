@@ -58,8 +58,9 @@ class Migration:
         """SHA-256 of the file's normalized text.
 
         Line endings are normalized so a CRLF checkout does not appear to be a
-        different migration than an LF one — this is why .gitattributes forces
-        `*.sql text eol=lf`, but belt and braces.
+        different migration than an LF one. `.gitattributes` pins only the shell
+        scripts and plists to LF, so on a Windows checkout this normalization is
+        the whole defence, not belt and braces.
         """
         return hashlib.sha256(self.sql.replace("\r\n", "\n").encode("utf-8")).hexdigest()
 

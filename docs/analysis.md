@@ -102,10 +102,10 @@ words* and the numbers stay where they are correct — on the card above the pro
 and in the table behind it.
 
 The duplicate review also lives on that page rather than under Coverage: the
-repair belongs next to the figure it protects. Reviewing a group by eye is also the one thing a browser does
-better than the CLI — the candidate rows sit side by side with their capacity,
-citation count and dates, a radio picks the survivor, and the merge runs through
-the same `/api/run` path as everything else, behind the typed confirmation.
+repair belongs next to the figure it protects. The candidate rows sit side by side
+with their capacity, citation count and dates, which is what reviewing a group by eye
+needs. The merge itself is `tracker merge` on the host — the console no longer runs
+commands, so it shows the group and names the command rather than offering a button.
 
 Which id survives decides more than a row number: quantitative fields are
 recomputed from the combined citations, but identity fields — name, company,
