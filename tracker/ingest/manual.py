@@ -471,9 +471,13 @@ def run(
     records = to_records(parsed, digest=digest, source_name=path.name)
     report.read = len(records)
 
+    # One file is one reading, as one article is to `crawl.run`: two records that
+    # land on one row with one URL add to that citation rather than the second
+    # replacing the first's claims. A second run of the file starts a fresh one.
+    reading: set[tuple[int, str]] = set()
     for rec in records:
         try:
-            result = upsert_record(session, rec, force_new=force_new)
+            result = upsert_record(session, rec, force_new=force_new, reading=reading)
         except Exception:
             if strict:
                 raise

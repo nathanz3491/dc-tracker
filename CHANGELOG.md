@@ -410,6 +410,13 @@ initial build of the v1 PRD.
   the snapshot — its 4 agent citations are on URLs no crawl read — but the agent
   searches for articles about rows that already cite some of them.
 
+- **Two seed-file records for one site and one URL keep both**
+  (`tracker/ingest/manual.py`, `tests/test_upsert.py`). A seed file is now one
+  reading, as one article is to the crawl: the second record adds to the citation
+  instead of replacing the first's claims, which the purity rule would otherwise
+  have cleared from the row. A second run of the file starts afresh, so
+  re-ingesting it is still exact.
+
 - **`tracker merge` keeps what only the folded row's citation said, and keeps the
   quoted milestone** (`tracker/merge.py`, `tracker/upsert.py`, `tests/test_merge.py`,
   `docs/workflows/duplicates.md`).

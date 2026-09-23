@@ -2383,3 +2383,37 @@ def test_blocks_and_parties_from_both_readings_are_kept(session):
     assert [b["label"] for b in blocks] == ["Phase 1", "Phase 2"]
     assert blocks[0]["mw"] == 400.0, "the first reading's block stands on a label collision"
     assert {p["name"] for p in json.loads(source.parties)} == {"Acme", "OpenAI"}
+
+
+def test_two_seed_records_citing_one_url_for_one_site_keep_both_readings(session, tmp_path):
+    """A seed file is one reading, like one article: a second record that lands on
+    the same row with the same URL adds to that citation instead of replacing it.
+
+    Replaced, the first record's figures lost the only citation stating them, and
+    the purity rule cleared them from the row at once.
+    """
+    from tracker.ingest import manual
+
+    seed = tmp_path / "seed.json"
+    site = {"name": "Fairwater", "company": "Microsoft", "city": "Mount Pleasant", "state": "WI"}
+    url = "https://news.microsoft.com/fairwater/"
+    seed.write_text(
+        json.dumps(
+            [
+                {**site, "mw_planned": 900, "sources": [{"url": url}]},
+                {**site, "investment_usd": 3_300_000_000, "sources": [{"url": url}]},
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    manual.run(session, seed)
+
+    project = session.scalar(select(Project))
+    assert [s.url for s in project.sources] == [url]
+    claims = json.loads(project.sources[0].claims)
+    assert (claims["mw_planned"], claims["investment_usd"]) == (900, 3_300_000_000)
+    assert (project.mw_planned, project.investment_usd) == (900.0, 3_300_000_000)
+
+    manual.run(session, seed)
+    assert json.loads(project.sources[0].claims) == claims, "a re-ingest is not exact"
