@@ -2170,6 +2170,47 @@ def test_a_later_reading_does_not_move_the_date(session):
 # --- escalation lifecycle ----------------------------------------------------
 
 
+class _Answers:
+    """A fetcher that answers each call from a list, and counts the calls."""
+
+    def __init__(self, *results: FetchResult) -> None:
+        self.results = list(results)
+        self.calls = 0
+
+    async def fetch(self, url: str) -> FetchResult:
+        self.calls += 1
+        return self.results.pop(0) if len(self.results) > 1 else self.results[0]
+
+
+async def test_a_page_that_is_gone_is_one_attempt_not_three():
+    """A 404 is not retried, and was still recorded as three attempts."""
+    from tracker.ingest.fetch import fetch_with_retry
+
+    fetcher = _Answers(FetchResult(URL, False, status=404, error="HTTP 404", fetched_at=NOW))
+    result = await fetch_with_retry(fetcher, URL)
+    assert fetcher.calls == 1
+    assert result.attempts == 1
+
+
+async def test_a_retried_failure_counts_every_request():
+    from tracker.ingest.fetch import fetch_with_retry
+
+    fetcher = _Answers(FetchResult(URL, False, status=502, error="HTTP 502", fetched_at=NOW))
+    result = await fetch_with_retry(fetcher, URL, attempts=3)
+    assert fetcher.calls == 3
+    assert result.attempts == 3
+
+
+async def test_an_escalated_read_counts_the_requests_that_led_to_it():
+    from tracker.ingest.fetch import fetch_all
+
+    blocked = _Answers(FetchResult(URL, False, status=403, error="HTTP 403", fetched_at=NOW))
+    rung = _Answers(fetched())
+    (result,) = await fetch_all([URL], fetcher=blocked, escalate=rung)
+    assert result.ok
+    assert result.attempts == 2, "one refused request, one that worked"
+
+
 def test_the_article_fetcher_reports_an_unparseable_url_rather_than_raising():
     """`httpx.InvalidURL` is not a `RequestError`, so it used to escape the fetcher
     and take every other URL in the batch with it."""

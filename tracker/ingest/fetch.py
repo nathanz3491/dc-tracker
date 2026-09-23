@@ -628,13 +628,20 @@ def cache_path(url: str, root: Path) -> Path:
 
 
 async def fetch_with_retry(fetcher: Fetcher, url: str, *, attempts: int = 3) -> FetchResult:
-    """Retry a transient failure with exponential backoff."""
+    """Retry a transient failure with exponential backoff.
+
+    The result's `attempts` is the number of requests actually made. A failure that
+    is not retried — a 404, a 403 that wants a different client — is one request,
+    and used to be recorded as the full `attempts` allowance, three.
+    """
     settings = get_settings()
     last = FetchResult(url, False, error="not attempted", fetched_at=utcnow())
+    made = 0
     for attempt in range(1, attempts + 1):
         last = await fetcher.fetch(url)
+        made = attempt
         if last.ok:
-            return FetchResult(**{**last.__dict__, "attempts": attempt})
+            return FetchResult(**{**last.__dict__, "attempts": made})
         if last.status in HARD_FAIL_STATUS or last.status in BROWSER_WORTHY_STATUS:
             break  # retrying the same tool will not help; escalate instead
         if last.status is not None and last.status not in RETRYABLE_STATUS:
@@ -648,7 +655,7 @@ async def fetch_with_retry(fetcher: Fetcher, url: str, *, attempts: int = 3) -> 
             if delay > 0:
                 log.warning("fetch failed for %s (%s); retrying in %.1fs", url, last.error, delay)
                 await asyncio.sleep(delay)
-    return FetchResult(**{**last.__dict__, "attempts": attempts})
+    return FetchResult(**{**last.__dict__, "attempts": made})
 
 
 def should_escalate(result: FetchResult) -> bool:
@@ -769,6 +776,8 @@ async def fetch_all(
         async with gate, host_gate(url):
             try:
                 result = await fetch_with_retry(primary, url)
+                #: Every request this URL cost, across the rungs it climbed.
+                requests = result.attempts
                 for index in range(len(ladder)):
                     if not should_escalate(result):
                         break
@@ -782,8 +791,11 @@ async def fetch_all(
                         result.status,
                     )
                     escalated = await fetch_with_retry(stronger, url, attempts=2)
+                    requests += escalated.attempts
                     if escalated.ok:
                         result = escalated
+                if result.attempts != requests:
+                    result = FetchResult(**{**result.__dict__, "attempts": requests})
             except Exception as exc:
                 # One URL's failure is that URL's outcome, never the batch's. A
                 # fetcher that raised — a URL httpx could not parse, a bug in a
