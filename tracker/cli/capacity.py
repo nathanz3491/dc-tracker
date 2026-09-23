@@ -192,13 +192,18 @@ def capex(
     from tracker import capex as capex_mod
 
     engine = _read_engine()
-    with session_scope(engine, commit=False) as session:
-        positions = capex_mod.rollup(session, include_terminal=include_terminal)
+    # The console's payload does the same work the same way (`dataset.capex_payload`):
+    # the rows held for the whole block, the duplicate finder run once and handed to
+    # the rollup, and one scan of open obstacles for every buyer. This command ran
+    # the finder twice and re-scanned every obstacle once per buyer.
+    with session_scope(engine, commit=False) as session, capex_mod.working_set(session):
+        dupes = capex_mod.suspected_duplicates(session)
+        positions = capex_mod.rollup(session, include_terminal=include_terminal, pairs=dupes)
         cover = capex_mod.coverage(session)
         precision = capex_mod.date_precision(session)
-        blockers = {p.key: capex_mod.blocking_risk(session, p.key) for p in positions if p.key}
+        worst = capex_mod.blocking_risks(session)
+        blockers = {p.key: worst.get(p.key) for p in positions if p.key}
         suspects = capex_mod.suspect_attributions(session)
-        dupes = capex_mod.suspected_duplicates(session)
         bases = capex_mod.basis_census(session)
         programmes = capex_mod.programme_figures(session)
 

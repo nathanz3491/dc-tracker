@@ -249,6 +249,12 @@ initial build of the v1 PRD.
   thirty minutes (`article.REFUSAL_TTL_S`), so it survives restarts and every
   process agrees; a success clears it.
 
+- **`tracker capex` does the capex view's work once, as the console now does**
+  (`tracker/cli/capacity.py`). The command ran the duplicate finder twice and
+  re-scanned every open obstacle once per buyer; it now holds the rows for the
+  block, hands the one set of pairs to the rollup and answers every buyer's worst
+  obstacle in one scan. The JSON output is byte-identical on a production copy.
+
 - **`enrich --select` and `sync` pass over rows with nothing left to ask**
   (`tracker/ingest/enrich.py` — `select_projects`, `tracker/cli/enrich.py`,
   `docs/workflows/enrich.md` + `.svg`, `tests/test_enrich.py`).
