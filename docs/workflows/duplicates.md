@@ -10,11 +10,11 @@ Bare `tracker duplicates` and `duplicates parked` are **read-only**. `park`,
 `unpark` and `resolve` write and take the single-writer lock, so per `CLAUDE.md` §2
 they run on the production host.
 
-![The duplicates workflow: three detection passes, the ranked evidence classes, and the three answers with every rail that refuses a merge](duplicates.svg)
+![The duplicates workflow: four detection passes, the ranked evidence classes, and the three answers with every rail that refuses a merge](duplicates.svg)
 
 ## How a pair is raised
 
-Three passes over the same rows, **unioned rather than substituted**. Each reaches
+Four passes over the same rows, **unioned rather than substituted**. Each reaches
 duplicates the others structurally cannot, and the measurements are the argument:
 
 | | Starts from | Reaches |
@@ -22,6 +22,18 @@ duplicates the others structurally cannot, and the measurements are the argument
 | 1 | the `(city or county, state)` bucket | the same-locality, different-company case that made `capex` need this at all. Finds 230 pairs live |
 | 2 | dedup keys, bucketed on **company** — locality is the axis that disagrees | cross-granularity duplicates: Hyperion stored four times as `richland parish`, `holly ridge`, `richland`, `richmond parish`. Finds 259 pairs, but alone would **lose 225 of pass 1's 230** |
 | 3 | a shared tranche key, not a place | a campus filed under two locality names that do not match — Stargate as Crusoe's `abilene` row and Oracle's `shackelford county` row. Nine pairs, seven of them real |
+| 4 | one distinctive **name** in one state | a campus whose rows disagree about the place and share no tranche — xAI's Colossus as `Memphis` and as `孟菲斯`, TeraWulf's Lake Mariner under its county and under a town in it, Project Jupiter filed by two of its builders, CyrusOne Thad Hill as a town and as its county. The name must carry a word that is neither a place, nor industry vocabulary, nor the state: two operators' "Santa Clara Data Center" in Santa Clara name nothing |
+
+Pass 1's bucket is folded before anything is compared: accents, case and the words
+that say what kind of place it is (`county`, `counties`, `parish`, `township`) are
+dropped, and within one state two folded localities of five or more letters that
+are one edit apart are one place. Stargate Michigan was stored six times, and the two
+rows spelling Saline as "Salien" sat in their own bucket and were never compared
+with the four that did not. The fold only decides which rows are *compared* — a pair
+still needs a signal from the evidence below — so two different towns a letter apart
+cost a comparison, not a pair. On a production copy passes 1 and 4 together raised
+22 pairs never reported before, every one a real duplicate on inspection, and lost
+none.
 
 Every pass records **every** signal that holds for the pair, not only the one that
 raised it. Pass 2 once recorded `shared_keys` and nothing else, which left 31 live
@@ -218,7 +230,7 @@ Touching any of these means the poster is in scope. Re-render with
 
 | Concern | Where |
 | --- | --- |
-| The three detection passes | `tracker/capex.py` — `suspected_duplicates` |
+| The four detection passes | `tracker/capex.py` — `suspected_duplicates`, `_locality_buckets`, `_locality_word`, `_one_edit_apart` |
 | The party signal, and the guard on it | `tracker/parties.py` — `shared_across_companies`, `keys_for` |
 | Evidence classes, labels, ranking | `tracker/capex.py` — `EVIDENCE_ORDER`, `EVIDENCE_LABELS`, `strongest_evidence`, `DuplicatePair.rank` |
 | Grouping and the MW figure | `tracker/capex.py` — `duplicate_groups`, `double_counted_mw` |

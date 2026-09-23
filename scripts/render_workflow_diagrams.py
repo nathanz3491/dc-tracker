@@ -565,21 +565,26 @@ def duplicates() -> Canvas:
     c.legend(48, 108)
     c.rule(128)
 
-    c.section(48, 162, "how a pair is raised", "three passes, unioned — each reaches duplicates the others structurally cannot")
+    c.section(48, 162, "how a pair is raised", "four passes, unioned — each reaches duplicates the others structurally cannot")
 
     p1 = c.box(
-        48, 196, 236, 108, "1 · same locality",
-        ["rows sharing (city or county, state).", "Compares company strings AND the", "party rows: 48 of 90 folds had", "no key signal at all"],
+        48, 196, 236, 84, "1 · same locality",
+        ["(city or county, state), folded: accents,", "'County', a one-letter typo. Compares", "company strings AND party rows"],
         role="cool", title_size=12,
     )
     p2 = c.box(
-        48, 318, 236, 108, "2 · dedup keys",
-        ["bucketed on company, not locality —", "locality is the axis that disagrees.", "Pairs county:richland with city:richland"],
+        48, 288, 236, 84, "2 · dedup keys",
+        ["bucketed on company, not locality —", "pairs county:richland with city:richland"],
         role="cool", title_size=12,
     )
     p3 = c.box(
-        48, 440, 236, 108, "3 · shared tranche key",
-        ["starts from the key, not a place.", "Reaches Crusoe's Abilene row and", "Oracle's Shackelford County row"],
+        48, 380, 236, 84, "3 · shared tranche key",
+        ["starts from the key, not a place:", "Crusoe's Abilene, Oracle's Shackelford"],
+        role="cool", title_size=12,
+    )
+    p4 = c.box(
+        48, 472, 236, 84, "4 · one name, one state",
+        ["a distinctive name filed twice under", "places that do not match: Colossus,", "Project Jupiter, Polaris Forge 1"],
         role="cool", title_size=12,
     )
 
@@ -588,7 +593,7 @@ def duplicates() -> Canvas:
         ["carrying every signal that", "holds for it, not only the", "one that raised it.", "", "Recording only the latter left", "31 live pairs with a single", "evidence class and no route", "to any decision"],
         role="panel", title_size=13,
     )
-    for b in (p1, p2, p3):
+    for b in (p1, p2, p3, p4):
         c.arrow([b.right(), (307, b.cy), (307, pair.cy), (330, pair.cy)])
 
     c.text(576, 258, "RANKED, STRONGEST FIRST", size=10.5, colour=SLATE, bold=True, spacing=SECTION_TRACKING)

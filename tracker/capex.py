@@ -1049,12 +1049,7 @@ def suspected_duplicates(session: Session, *, include_parked: bool = False) -> l
     from tracker.pairs import canonical, parked_keys
 
     projects = session.scalars(select(Project)).all()
-    by_locality: dict[tuple[str, str], list[Project]] = {}
-    for project in projects:
-        locality = (project.city or project.county or "").strip().lower()
-        if not locality:
-            continue
-        by_locality.setdefault((locality, project.state), []).append(project)
+    by_locality = _locality_buckets(projects)
 
     keys = identifying_block_keys(projects)
     where = block_key_localities(projects)
@@ -1228,10 +1223,148 @@ def suspected_duplicates(session: Session, *, include_parked: bool = False) -> l
                     )
                 )
 
+    # --- The pairs no place can reach: one campus, one name, filed twice ------
+    #
+    # Every pass above starts from a place or from a tranche, and a campus whose
+    # two rows disagree about the place and share no tranche is invisible to all of
+    # them. Measured on the snapshot this pass was written for: xAI's Colossus as
+    # `Memphis` and as `孟菲斯`, TeraWulf's Lake Mariner under its real county and
+    # under a town in it, Applied Digital's Polaris Forge 1 under Ellendale and
+    # under McLean County, CyrusOne Thad Hill as a town and as its county, and
+    # Project Jupiter filed by two of the companies building it. Same name, same
+    # state, not one of them ever reported.
+    #
+    # The name has to carry a word that is neither a place nor industry vocabulary
+    # nor the state: "Santa Clara Data Center" is held by two operators in Santa
+    # Clara and names nothing, and a false pair is not free — `rollup` holds one row
+    # of every group out of the buyer table. Whatever `evidence` then finds is what
+    # the pair carries, so a same-company pair is `exact` and the rails and the
+    # judges treat it exactly as they treat one found by a place.
+    from tracker.dedup import _slug, distinctive_name_tokens
+    from tracker.normalize import state_name
+
+    by_name: dict[tuple[str, str], list[Project]] = {}
+    for project in projects:
+        slug = _slug(project.name or "")
+        if slug:
+            by_name.setdefault((slug, project.state), []).append(project)
+    for (_slug_key, state), group in by_name.items():
+        if len(group) < 2:
+            continue
+        state_words = set(_slug(state_name(state) or "").split())
+        for i, a in enumerate(group):
+            for b in group[i + 1 :]:
+                key = canonical(a.id, b.id)
+                if key in seen or key in parked:
+                    continue
+                places = " ".join(part for part in (a.city, a.county, b.city, b.county) if part)
+                if not distinctive_name_tokens(a.name, locality=places) - state_words:
+                    continue
+                found = evidence(a, b)
+                if not any(found.values()):
+                    continue
+                seen.add(key)
+                pairs.append(
+                    DuplicatePair(
+                        a_id=a.id,
+                        a_company=a.company,
+                        a_name=a.name,
+                        b_id=b.id,
+                        b_company=b.company,
+                        b_name=b.name,
+                        locality=a.city or a.county or "",
+                        state=state,
+                        b_mw=float(b.mw_planned or 0.0),
+                        **found,
+                    )
+                )
+
     # Strongest evidence first, so the pair most worth merging is the one on
     # screen. `looks_like_the_same_site` decided the same things in the same order
     # and threw the reason away; nothing is detected differently here.
     return sorted(pairs, key=lambda p: (p.rank, p.a_id, p.b_id))
+
+
+#: Trailing words that say what kind of place a locality is, not which one.
+#: `county` alone was already folded by `dedup.county_key`; the plurals and the
+#: township forms were not, so "Loudoun and Prince William" and "... counties" were
+#: two buckets holding one Yondr campus twice.
+_PLACE_KIND_WORDS: frozenset[str] = frozenset(
+    {"county", "counties", "parish", "parishes", "borough", "township", "twp"}
+)
+
+
+def _locality_word(project: Project) -> str:
+    """A row's locality as pass one compares it: accents, case and kind words folded.
+
+    It used to be the raw `city or county` string lowercased, so "Doña Ana" and
+    "Doña Ana County" were two places and two rows of Project Jupiter never met.
+    """
+    from tracker.dedup import _slug
+
+    words = _slug(project.city or project.county or "").split()
+    while words and words[-1] in _PLACE_KIND_WORDS:
+        words.pop()
+    return " ".join(words)
+
+
+def _one_edit_apart(a: str, b: str) -> bool:
+    """Whether two words differ by one letter changed, added, dropped or swapped."""
+    if a == b or abs(len(a) - len(b)) > 1:
+        return a == b
+    if len(a) == len(b):
+        diff = [i for i, (x, y) in enumerate(zip(a, b, strict=True)) if x != y]
+        if len(diff) == 1:
+            return True
+        return (
+            len(diff) == 2
+            and diff[1] == diff[0] + 1
+            and a[diff[0]] == b[diff[1]]
+            and (a[diff[1]] == b[diff[0]])
+        )
+    short, long_ = (a, b) if len(a) < len(b) else (b, a)
+    return any(long_[:i] + long_[i + 1 :] == short for i in range(len(long_)))
+
+
+def _locality_buckets(projects: list[Project]) -> dict[tuple[str, str], list[Project]]:
+    """Pass one's buckets: rows by folded locality and state, typos joined.
+
+    **A misspelt town is still the town.** Stargate Michigan was stored six times,
+    and two of the rows spelt Saline as "Salien" — one swapped pair of letters, so
+    they sat in their own bucket and were never compared with the four that did not.
+    Within one state, two folded localities of five or more letters that are one
+    edit apart are treated as one place. That only decides which rows get
+    *compared*: a pair still needs a signal from `evidence` before it is reported,
+    so two genuinely different towns a letter apart cost a comparison, not a pair.
+    """
+    by_word: dict[tuple[str, str], list[Project]] = {}
+    for project in projects:
+        word = _locality_word(project)
+        if word:
+            by_word.setdefault((word, project.state), []).append(project)
+
+    parent: dict[tuple[str, str], tuple[str, str]] = {key: key for key in by_word}
+
+    def root(key: tuple[str, str]) -> tuple[str, str]:
+        while parent[key] != key:
+            parent[key] = parent[parent[key]]
+            key = parent[key]
+        return key
+
+    by_state: dict[str, list[str]] = {}
+    for word, state in by_word:
+        by_state.setdefault(state, []).append(word)
+    for state, words in by_state.items():
+        words.sort()
+        for i, a in enumerate(words):
+            for b in words[i + 1 :]:
+                if min(len(a), len(b)) >= 5 and _one_edit_apart(a, b):
+                    parent[root((b, state))] = root((a, state))
+
+    out: dict[tuple[str, str], list[Project]] = {}
+    for key, rows in by_word.items():
+        out.setdefault(root(key), []).extend(rows)
+    return out
 
 
 def duplicate_groups(pairs: list[DuplicatePair]) -> list[list[int]]:

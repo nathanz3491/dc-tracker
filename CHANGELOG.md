@@ -293,6 +293,29 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **Duplicates filed under a misspelt town, a second spelling of a county, or no
+  shared place at all are now found** (`tracker/capex.py` — `suspected_duplicates`,
+  `_locality_buckets`, `_locality_word`, `_one_edit_apart`,
+  `docs/workflows/duplicates.md` + `.svg`, `tests/test_duplicate_detection.py`).
+
+  Stargate Michigan was stored six times. Two of the rows spelt Saline as "Salien",
+  so pass one, which buckets on the raw lowercased town, never compared them with
+  the four that did not. Project Jupiter sat under "Doña Ana" and "Doña Ana County",
+  Yondr under "Loudoun and Prince William" and "... counties". xAI's Colossus was
+  filed under `Memphis` and `孟菲斯`, TeraWulf's Lake Mariner under its real county
+  and under a town in it, Polaris Forge 1 under Ellendale and under McLean County.
+  None of them was ever reported, so each was counted twice in every total.
+
+  Pass one now folds accents, case and the words that say what kind of place a
+  locality is. Within a state it joins two localities of five or more letters that
+  are one edit apart. That only decides which rows are compared: a pair still needs
+  a signal from the evidence. A fourth pass compares rows that carry one
+  distinctive name in one state, whatever their places say. The name must hold a
+  word that is neither a place, nor industry vocabulary, nor the state, because a
+  false pair holds a real campus out of the buyer table. On a production copy this
+  raised 22 pairs never reported before, all of them real duplicates on inspection,
+  and lost none. Suspected groups went from 33 to 39.
+
 - **"Online in 2027" no longer reads as 1 January 2027** (`tracker/normalize.py` —
   `precision_in_quote`, `tracker/ingest/crawl.py` — `_claim_axes`,
   `tracker/backfill.py` — `derive_date_precision`, `tracker/cli/quality.py` —
