@@ -55,8 +55,8 @@ async def loaded(app_under_test, pilot, *, timeout: float = 20.0):
 
 
 @pytest.fixture
-def seeded(tmp_path: Path) -> Path:
-    db = tmp_path / "t.db"
+def seeded(tmp_path: Path, migrated_copy) -> Path:
+    db = migrated_copy(tmp_path / "t.db")
     assert invoke(db, "init").exit_code == 0
     result = invoke(db, "ingest", "manual", "--json", str(SEED), "--allow-placeholders")
     assert result.exit_code == 0, result.output
@@ -64,9 +64,9 @@ def seeded(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def curated(tmp_path: Path) -> Path:
+def curated(tmp_path: Path, migrated_copy) -> Path:
     """Two rows with real figures, so the panes have something to draw."""
-    db = tmp_path / "curated.db"
+    db = migrated_copy(tmp_path / "curated.db")
     assert invoke(db, "init").exit_code == 0
     payload = {
         "projects": [

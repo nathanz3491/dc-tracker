@@ -54,8 +54,11 @@ def hide_crawl4ai(monkeypatch) -> None:
 
 
 @pytest.fixture
-def initialized(tmp_path: Path) -> Path:
-    db = tmp_path / "t.db"
+def initialized(tmp_path: Path, migrated_copy) -> Path:
+    """A database `tracker init` has run on, starting from the migrated template so
+    the command has no migrations left to apply; `test_init_creates_the_database`
+    is the one that builds from nothing."""
+    db = migrated_copy(tmp_path / "t.db")
     assert invoke(db, "init").exit_code == 0
     return db
 

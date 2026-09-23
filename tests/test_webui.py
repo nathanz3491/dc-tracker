@@ -34,9 +34,9 @@ T0 = dt.datetime(2026, 1, 10, 12, 0, 0)
 
 
 @pytest.fixture
-def seeded_db(tmp_path):
+def seeded_db(tmp_path, migrated_copy):
     """A real database file with one fully-populated project."""
-    path = tmp_path / "tracker.db"
+    path = migrated_copy(tmp_path / "tracker.db")
     engine, _ = init_db(path)
     with session_scope(engine) as session:
         upsert_record(
@@ -2978,9 +2978,9 @@ def test_watch_all_refuses_a_value_that_is_not_a_boolean(seeded_db):
 
 
 @pytest.fixture
-def many(tmp_path):
+def many(tmp_path, migrated_copy):
     """Seventy projects, enough to page three times and to sort meaningfully."""
-    path = tmp_path / "many.db"
+    path = migrated_copy(tmp_path / "many.db")
     engine, _ = init_db(path)
     states = ["WI", "OH", "TX", "VA", "ND"]
     with session_scope(engine) as session:

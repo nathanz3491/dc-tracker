@@ -273,8 +273,8 @@ def invoke(db: Path, *args: str):
 
 
 @pytest.fixture
-def initialized(tmp_path: Path) -> Path:
-    db = tmp_path / "t.db"
+def initialized(tmp_path: Path, migrated_copy) -> Path:
+    db = migrated_copy(tmp_path / "t.db")
     assert invoke(db, "init").exit_code == 0
     return db
 

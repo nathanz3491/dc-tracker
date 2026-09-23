@@ -3,7 +3,8 @@
 Every DB fixture uses a real file under `tmp_path` rather than `:memory:`.
 In-memory SQLite rejects `PRAGMA journal_mode=WAL` and, more importantly, hides
 file-level behaviour (the read-only `mode=ro` guard, WAL sibling files) that we
-specifically want covered.
+specifically want covered. Each file is a copy of one database migrated once per
+run, rather than migrated again per test — see `migrated_template`.
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ from __future__ import annotations
 import errno
 import ipaddress
 import os
+import shutil
 import socket
 from pathlib import Path
 
@@ -18,7 +20,7 @@ import pytest
 from sqlalchemy import Engine
 
 from tracker.config import Settings, get_settings
-from tracker.db import init_db, session_scope
+from tracker.db import init_db, make_engine, session_scope
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -208,12 +210,60 @@ def db_path(tmp_path: Path) -> Path:
     return tmp_path / "tracker.db"
 
 
+@pytest.fixture(scope="session")
+def migrated_template(tmp_path_factory) -> Path:
+    """One fully migrated, empty database per run, for fixtures to copy.
+
+    **Building a database per test was a third of the suite.** It is every
+    migration, each in its own transaction, on a new file — about 100 ms — and
+    1,390 setups did it: `engine` 1,086 times, the CLI's `initialized` 169, the
+    console's `seeded_db` 106, the TUI's `curated` 29. That was 179 s of a 575 s
+    run deriving the same empty schema again. Copying a file takes about a
+    millisecond and isolates exactly as well: every test still gets a file of its
+    own, and nothing a test writes can reach the template or another test.
+
+    Tests *about* migrating — `test_db.py`, `tracker init` on a new path — build
+    from nothing as before, which is what keeps the migrations themselves covered.
+
+    Checkpointed before anything copies it, and asserted to be: a WAL-mode main
+    file on its own can be missing committed pages — the mistake `CLAUDE.md` §3 is
+    about — and copies of a half-checkpointed template would pass every test that
+    did not happen to look for what was missing. Left in WAL rather than switched
+    out, because switching each copy back cost its first connection 2.6 ms.
+    """
+    path = tmp_path_factory.mktemp("migrated") / "tracker.db"
+    engine, applied = init_db(path)
+    assert applied, "the template is built from nothing"
+    with engine.connect() as conn:
+        busy, _, _ = conn.exec_driver_sql("PRAGMA wal_checkpoint(TRUNCATE)").one()
+    engine.dispose()
+    wal = Path(f"{path}-wal")
+    assert busy == 0 and (not wal.exists() or wal.stat().st_size == 0), "not checkpointed"
+    return path
+
+
 @pytest.fixture
-def engine(db_path: Path) -> Engine:
-    """A fully migrated, empty database."""
-    eng, applied = init_db(db_path)
-    assert applied, "expected migrations to be applied to a fresh database"
-    return eng
+def migrated_copy(migrated_template: Path):
+    """Put a fully migrated, empty database at a path, and return the path."""
+
+    def copy(path: Path) -> Path:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(migrated_template, path)
+        return path
+
+    return copy
+
+
+@pytest.fixture
+def engine(db_path: Path, migrated_copy) -> Engine:
+    """A fully migrated, empty database of this test's own. See `migrated_template`.
+
+    `make_engine` rather than `init_db`, which is `make_engine` plus a migration
+    pass: the template was built from these same files this run, so the pass
+    would only re-read every one of them to find nothing to do — 7 ms a test,
+    measured, against 1.3 ms for the copy itself.
+    """
+    return make_engine(migrated_copy(db_path))
 
 
 @pytest.fixture
