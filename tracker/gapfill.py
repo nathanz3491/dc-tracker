@@ -375,8 +375,17 @@ def apply_facts(
             notes=[f"agent found {', '.join(sorted(facts))} at {url}"],
         )
         # `existing_only` and `route_to` together: this may only ever add citations
-        # to the row it was asked about, never create one.
-        result = upsert_record(session, record, existing_only=True, route_to=project.id)
+        # to the row it was asked about, never create one. `reading` because the
+        # agent reports only the gaps it came for: on a URL the row already cites,
+        # replacing the citation, as a re-read of the whole article does, would
+        # erase every other claim it made. Folded, the first reading stands.
+        result = upsert_record(
+            session,
+            record,
+            existing_only=True,
+            route_to=project.id,
+            reading={(project.id, s.url) for s in project.sources},
+        )
         # `action`, not `status` — a refusal comes back as `UpsertResult(project_id=0,
         # action="refused")`, and checking the wrong attribute would report every
         # refusal as a success.

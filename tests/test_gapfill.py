@@ -186,6 +186,55 @@ def test_several_facts_from_one_article_become_one_citation(session, thin, cache
     assert sum(1 for s in thin.sources if s.url == _URL) == 1
 
 
+def test_an_article_the_row_already_cites_keeps_what_it_said(session, thin, cached):
+    """The agent's facts are a second reading of that article, not a re-read of it.
+
+    A re-read replaces a citation's claims, which is right when the whole article
+    was read again. The agent reports only the gaps it came for, so replacing
+    erased every other claim the citation made, and a value those claims were the
+    only evidence for was cleared at the next derive.
+    """
+    from tracker.upsert import recompute_from_sources
+
+    session.add(
+        Source(
+            project_id=thin.id,
+            url=_URL,
+            source_type="trade_press",
+            excerpt=_ARTICLE[:200],
+            claims=json.dumps({"customer": "OpenAI"}),
+            quotes=json.dumps(
+                {"customer": "The company named OpenAI as the anchor tenant for the campus"}
+            ),
+            fields="customer",
+        )
+    )
+    session.flush()
+    recompute_from_sources(session, thin)
+    assert thin.customer == "OpenAI"
+
+    model = _Model(
+        {
+            "field": "mw_planned",
+            "value": 1400,
+            "url": _URL,
+            "quote": "Port Washington campus in Ozaukee County will reach 1,400 MW at full",
+        }
+    )
+    out = gapfill.fill(session, thin, extractor=model)
+
+    assert out.verdict == "filled", (out.note, out.refused)
+    cited = [s for s in thin.sources if s.url == _URL]
+    assert len(cited) == 1
+    claims = json.loads(cited[0].claims)
+    assert claims["customer"] == "OpenAI", "the citation's own claim was replaced"
+    assert claims["mw_planned"] == 1400
+    assert set((cited[0].fields or "").split(",")) == {"customer", "mw_planned"}
+
+    recompute_from_sources(session, thin)
+    assert (thin.customer, thin.mw_planned) == ("OpenAI", 1400.0)
+
+
 # --- the refusals, which are the whole safety argument -----------------------
 
 

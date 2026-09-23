@@ -398,6 +398,18 @@ initial build of the v1 PRD.
   an article reports `unchanged`. Pairs only the database can make fold at the
   write, through `upsert_record(reading=...)`.
 
+- **The gap-filling agent no longer erases what an article it re-cites already
+  said** (`tracker/gapfill.py`, `tests/test_gapfill.py`,
+  `docs/workflows/enrich.md`).
+
+  The agent reports only the gaps it came for, and its citation was written as a
+  re-read of the whole article: on a URL the row already cited, every other claim
+  that citation made was replaced by the agent's one or two. With the purity rule
+  above, each figure those claims were the only evidence for would then have been
+  cleared. Its facts now fold into the existing citation by the same rule. Latent on
+  the snapshot — its 4 agent citations are on URLs no crawl read — but the agent
+  searches for articles about rows that already cite some of them.
+
 - **`tracker merge` keeps what only the folded row's citation said, and keeps the
   quoted milestone** (`tracker/merge.py`, `tracker/upsert.py`, `tests/test_merge.py`,
   `docs/workflows/duplicates.md`).

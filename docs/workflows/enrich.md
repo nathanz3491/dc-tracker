@@ -151,6 +151,13 @@ reach. Rows with nothing left to fill return before making a call. Refusals are
 printed as loudly as fills: a refusal is the evidence gate working, and a run that
 quietly dropped four facts of five should not look like one that stored all five.
 
+A fact from an article the row already cites is **added to** that citation, not
+written over it. The agent reports only the gaps it came for, so treating its
+answer as a re-read of the whole article would erase every other claim the
+citation made, and the purity rule would then clear each figure those claims were
+the only evidence for. It is folded the way a second project from one article is
+(`upsert.fold_reading`): the first reading stands wherever both state a field.
+
 **Three rails decide what it is not asked, and all three save by not calling.**
 
 * **Only rows the harvest reached.** `run_many` stops when the article budget runs
