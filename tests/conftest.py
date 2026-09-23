@@ -8,7 +8,10 @@ specifically want covered.
 
 from __future__ import annotations
 
+import errno
+import ipaddress
 import os
+import socket
 from pathlib import Path
 
 import pytest
@@ -18,6 +21,125 @@ from tracker.config import Settings, get_settings
 from tracker.db import init_db, session_scope
 
 FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def _is_loopback(host) -> bool:
+    """Whether a name or address stays on this machine. None and "" are a bind."""
+    if host is None:
+        return True
+    if isinstance(host, bytes):
+        host = host.decode("ascii", "replace")
+    host = str(host).strip("[]").lower()
+    if host in ("", "localhost") or host.endswith(".localhost"):
+        return True
+    try:
+        address = ipaddress.ip_address(host.split("%", 1)[0])
+    except ValueError:
+        return False
+    return address.is_loopback or address.is_unspecified
+
+
+@pytest.fixture(autouse=True)
+def _no_network(request, monkeypatch):
+    """Fail any test that reaches past this machine, and refuse the attempt at once.
+
+    **A fresh clone with no network must produce a green run**, and the suite did
+    not check it. Two `sync` tests walked every configured sitemap for real — the
+    archive sweep was not stubbed in either — and spent 117 s and 106 s doing it,
+    over a third of the whole run, while passing: the code under test treats a fetch
+    that fails as a fetch that failed, so nothing ever said "this went outside".
+
+    So the refusal is immediate — a DNS lookup or a connection to anything but
+    loopback raises the error an unplugged machine would, rather than waiting out
+    a timeout — and the test fails at teardown whether or not the code swallowed
+    that error. Tests marked `network` or `llm` are exempt; they are deselected by
+    default and exist to go outside. Loopback stays open because the console tests
+    run a real server on 127.0.0.1.
+
+    **The proxy variables go too, or the guard sees nothing.** A machine that
+    reaches the internet through a local proxy — this one: `HTTPS_PROXY` is
+    `http://127.0.0.1:8080` — sends httpx's traffic to loopback, and the proxy
+    makes the outside connection where no hook here can see it. That is exactly
+    how both sweeps got past the first version of this guard. With no proxy the
+    same request goes direct and meets the refused lookup, which names the host.
+    `NO_PROXY` is set to the loopback names rather than removed or made `*`:
+    with no proxy variable at all, urllib and httpx fall back to the system's
+    settings (the Windows registry, macOS's network configuration) and the hiding
+    place is back; and `*` also cancels a proxy a test passes explicitly, which is
+    how the tunnel relay's test watches where the relay goes.
+
+    Covers what goes through Python's `socket` module and asyncio's loops, which is
+    everything installed here: httpx sync and async, `http.client`, `smtplib`.
+    asyncio needs its own hook because the Windows loop connects with `ConnectEx`,
+    never calling `socket.connect`. A subprocess, or a C library with sockets of
+    its own (`curl_cffi`), is outside it.
+    """
+    if request.node.get_closest_marker("network") or request.node.get_closest_marker("llm"):
+        yield
+        return
+
+    for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"):
+        monkeypatch.delenv(name, raising=False)
+        monkeypatch.delenv(name.lower(), raising=False)
+    monkeypatch.setenv("NO_PROXY", "localhost,127.0.0.1,::1")
+    monkeypatch.setenv("no_proxy", "localhost,127.0.0.1,::1")
+
+    reached: list[str] = []
+    real_getaddrinfo = socket.getaddrinfo
+    real_connect = socket.socket.connect
+    real_connect_ex = socket.socket.connect_ex
+
+    def outside(sock: socket.socket, address) -> bool:
+        families = (socket.AF_INET, socket.AF_INET6)
+        return sock.family in families and not _is_loopback(address[0])
+
+    def refused(address) -> OSError:
+        reached.append(f"connect {address[0]}:{address[1]}")
+        return OSError(errno.ENETUNREACH, f"the test suite refused to connect to {address}")
+
+    def getaddrinfo(host, *args, **kwargs):
+        if not _is_loopback(host):
+            reached.append(f"lookup {host}")
+            raise socket.gaierror(socket.EAI_NONAME, f"the test suite refused to resolve {host}")
+        return real_getaddrinfo(host, *args, **kwargs)
+
+    def connect(sock, address):
+        if outside(sock, address):
+            raise refused(address)
+        return real_connect(sock, address)
+
+    def connect_ex(sock, address):
+        if outside(sock, address):
+            refused(address)
+            return errno.ENETUNREACH
+        return real_connect_ex(sock, address)
+
+    monkeypatch.setattr(socket, "getaddrinfo", getaddrinfo)
+    monkeypatch.setattr(socket.socket, "connect", connect)
+    monkeypatch.setattr(socket.socket, "connect_ex", connect_ex)
+
+    import asyncio.proactor_events
+    import asyncio.selector_events
+
+    for loop_class in (
+        asyncio.selector_events.BaseSelectorEventLoop,
+        asyncio.proactor_events.BaseProactorEventLoop,
+    ):
+
+        async def sock_connect(loop, sock, address, _real=loop_class.sock_connect):
+            if outside(sock, address):
+                raise refused(address)
+            return await _real(loop, sock, address)
+
+        monkeypatch.setattr(loop_class, "sock_connect", sock_connect)
+    yield
+    if reached:
+        pytest.fail(
+            "this test reached for the network, which a fresh clone must not need: "
+            + ", ".join(sorted(set(reached)))
+            + ". Stub the call, or mark the test `network`.",
+            pytrace=False,
+        )
 
 
 @pytest.fixture(autouse=True)

@@ -390,7 +390,10 @@ directory, which is what lets `tracker init` work from anywhere.
 2,987 tests, about twelve minutes. **A fresh clone with no API key and no network access
 must produce a green run.** Tests that would hit the network or spend DeepSeek
 tokens are marked `network` / `llm` and deselected by default; run them
-explicitly with `-m network` or `-m llm`.
+explicitly with `-m network` or `-m llm`. An unmarked test that reaches for the
+network anyway fails and names the host: `tests/conftest.py` refuses every DNS
+lookup and connection past loopback, with the proxy variables cleared so a local
+proxy cannot hide one.
 
 The coverage gate the PRD asks for:
 

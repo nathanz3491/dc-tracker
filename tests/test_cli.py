@@ -2046,8 +2046,19 @@ def test_sync_settles_what_the_citations_imply(seeded: Path, monkeypatch):
 
 
 def test_sync_asks_for_the_enrich_phase_by_number(seeded: Path, monkeypatch):
-    """--enrich N adds a phase; without it the phase does not exist."""
+    """--enrich N adds a phase; without it the phase does not exist.
+
+    The numbering is the subject, so the two things in that phase that go outside
+    are kept from going: the archive sweep, which walked every configured sitemap
+    for real and took 117 s of the suite, and the agent pass, which is on by
+    default and asked the provider about the chosen row with a fake key.
+    """
+    from tracker.ingest import enrich as enrich_mod
+
     set_key(monkeypatch)
+    monkeypatch.setattr(
+        enrich_mod, "sweep_archives", lambda *a, **k: enrich_mod.ArchiveSweep(candidates=[])
+    )
     result = invoke(
         seeded,
         "sync",
@@ -2057,6 +2068,7 @@ def test_sync_asks_for_the_enrich_phase_by_number(seeded: Path, monkeypatch):
         "1",
         "--enrich-budget",
         "0",
+        "--no-agent",
     )
     assert result.exit_code == 0, result.output
     assert "4/6 enrich" in result.output
@@ -2129,10 +2141,16 @@ def test_the_search_phase_leaves_the_phase_plan_intact(initialized: Path, monkey
 
     # Prospect itself is stubbed for the same reason: this test is about the phase
     # numbering surviving, not about what prospect finds, and the real one spends
-    # an LLM call that the fake key cannot answer.
+    # an LLM call that the fake key cannot answer. So is the archive sweep the
+    # phase runs before it, which otherwise walks every configured sitemap for
+    # real — 106 s of the suite.
     from tracker import prospect as prospect_mod
+    from tracker.ingest import enrich as enrich_mod
 
     monkeypatch.setattr(prospect_mod, "run", lambda *a, **k: prospect_mod.ProspectReport())
+    monkeypatch.setattr(
+        enrich_mod, "sweep_archives", lambda *a, **k: enrich_mod.ArchiveSweep(candidates=[])
+    )
 
     result = invoke(
         initialized, "sync", "--skip-discover", "--skip-refresh", "--prospect", "1", "--search", "1"
