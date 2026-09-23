@@ -637,14 +637,14 @@ class ModelDecline(Base):
     __tablename__ = "model_decline"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    #: Which phase asked: pair, logic, audit, risk or gapfill.
+    #: Which phase asked: pair, logic, audit or risk.
     kind: Mapped[str] = mapped_column(Text, nullable=False)
     #: What was asked about, in the kind's own spelling — `12-34`, `56:code`, `78`.
     subject: Mapped[str] = mapped_column(Text, nullable=False)
     #: Hash of the evidence the question was put with. A different hash is a
     #: different question.
     fingerprint: Mapped[str] = mapped_column(Text, nullable=False)
-    #: How the run ended — "left alone", "unclear", "unusable", "nothing published".
+    #: How the run ended — "left alone", "unclear", "unusable", "declined".
     outcome: Mapped[str] = mapped_column(Text, nullable=False)
     reason: Mapped[str | None] = mapped_column(Text)
     decided_by: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'agent'"))
@@ -652,9 +652,7 @@ class ModelDecline(Base):
 
     __table_args__ = (
         UniqueConstraint("kind", "subject", name="uq_model_decline_subject"),
-        CheckConstraint(
-            "kind IN ('pair', 'logic', 'audit', 'risk', 'gapfill')", name="ck_model_decline_kind"
-        ),
+        CheckConstraint("kind IN ('pair', 'logic', 'audit', 'risk')", name="ck_model_decline_kind"),
     )
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid

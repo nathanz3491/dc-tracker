@@ -314,7 +314,7 @@ def enrich() -> Canvas:
     c.title(
         "tracker enrich — every method at one row, cheapest first",
         "Six harvesters in cost order. A round that fills nothing ends the run, and the two "
-        "model rungs go last, on whatever is left.",
+        "model rungs go last, on whatever is left — and only on the rows the harvest reached.",
     )
     c.legend(48, 108)
     c.rule(128)
@@ -324,17 +324,21 @@ def enrich() -> Canvas:
     ids = c.box(48, 196, 186, 44, "tracker enrich 90 93", ["no field target — work the row"], role="cool", title_size=11.5)
     sel = c.box(48, 250, 186, 44, "--select 30", ["the 30 closest to nine fields"], role="cool", title_size=11.5)
     allr = c.box(48, 304, 186, 44, "--all", ["every row still below nine"], role="cool", title_size=11.5)
+    # A modifier, not a fourth selector: it changes which FIELDS are chased, so it
+    # composes with the three above. Alone it picks the rows too, which is why it
+    # sits in this column at all.
+    basc = c.box(48, 358, 186, 44, "--basics", ["every row short of a", "field that defines it"], role="teal", title_size=11.5, sub_size=9)
 
     order = c.box(
-        278, 196, 178, 152, "Rows, ordered",
-        ["closest to the target first,", "capacity breaks the tie,", "finished rows excluded", "", "--budget is the real ceiling"],
+        278, 196, 178, 206, "Rows, ordered",
+        ["closest to the target first,", "capacity breaks the tie,", "finished rows excluded", "", "with --basics: fewest", "defining fields missing first", "", "--budget is the real ceiling"],
         role="cool2",
     )
-    for b in (ids, sel, allr):
+    for b in (ids, sel, allr, basc):
         c.arrow([b.right(), (278, b.cy)])
 
     derive = c.box(
-        278, 386, 178, 78, "1 · derive",
+        278, 430, 178, 78, "1 · derive",
         ["county, lat, lon from Census.", "Free and certain, so these", "fields are never searched for"],
         role="teal",
     )
@@ -424,11 +428,20 @@ def enrich() -> Canvas:
     c.arrow([settle.bottom(), (settle.cx, 838)], colour=RED)
 
     agent = c.box(
-        802, 700, 208, 116, "8 · agent pass",
-        ["a model picks its own searches", "for what the templates could not", "reach, and cites it. ~77,000", "tokens a row, so it is last; a row", "with nothing published waits a month"],
+        802, 706, 208, 104, "8 · agent pass",
+        ["a model picks its own searches", "for what the query templates", "could not reach, and cites it.", "~77,000 tokens a row, so it is last"],
         role="orange",
     )
     c.arrow([supersede.right(), (802, 758)])
+
+    # The three rails that decide what it is NOT asked. Every one of them saves by
+    # not making a call, which is the only saving worth the name at this price.
+    c.box(
+        802, 826, 208, 88, "and what it is not asked",
+        ["rows the budget never harvested", "fields already looked for twice", "without success, until a new", "citation reopens them", "--token-budget stops BETWEEN rows"],
+        role="red", title_size=11.5, sub_size=9,
+    )
+    c.arrow([agent.bottom(), (agent.cx, 826)], colour=RED)
 
     c.box(
         1058, 700, 224, 116, "The row",

@@ -183,9 +183,10 @@ first run cost ~221k a finding before the reasoning-effort tier was split out
 (`TRACKER_DEEPSEEK_AGENT_EFFORT`). Later rounds cost less again. An answered finding
 is recorded in the row's notes. A question a model looked at and could not decide is
 recorded with a hash of what it was shown: a pair, a refused ruling, an audit
-finding, an unclear obstacle, or a row with nothing published. It is not asked again
-until that evidence changes or a month passes (`tracker/declines.py`; `--again` on
-each command asks anyway).
+finding, an unclear obstacle. It is not asked again until that evidence changes or a
+month passes (`tracker/declines.py`; `--again` on each command asks anyway). The
+enrich agent's fields nobody has published are the same idea, kept in the row's
+notes by `tracker/attempts.py`.
 
 `--refetch-dates` is separate because it is the one free phase that is not cheap —
 60 publication dates are readable straight out of the URL path and 965 need one
@@ -386,7 +387,7 @@ directory, which is what lets `tracker init` work from anywhere.
 .venv/Scripts/python -m pytest
 ```
 
-2,960 tests, about twelve minutes. **A fresh clone with no API key and no network access
+2,987 tests, about twelve minutes. **A fresh clone with no API key and no network access
 must produce a green run.** Tests that would hit the network or spend DeepSeek
 tokens are marked `network` / `llm` and deselected by default; run them
 explicitly with `-m network` or `-m llm`.

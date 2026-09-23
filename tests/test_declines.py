@@ -41,12 +41,12 @@ def test_a_decline_holds_on_the_same_evidence_and_only_on_it(session):
 
 def test_a_decline_lapses_after_the_cooldown(session):
     """The agent phases can search the web, and the web changes while the row does not."""
-    declines.record(session, "gapfill", "12", "f", outcome="nothing published")
+    declines.record(session, "pair", "12-34", "f", outcome="left alone")
     row = session.query(ModelDecline).one()
     row.decided_at = utcnow() - dt.timedelta(days=declines.COOLDOWN_DAYS + 1)
     session.flush()
 
-    assert not declines.holds(declines.load(session, "gapfill"), "12", "f")
+    assert not declines.holds(declines.load(session, "pair"), "12-34", "f")
 
 
 def test_the_latest_look_replaces_the_last(session):
@@ -394,31 +394,3 @@ def test_a_broken_search_is_not_an_answer_and_an_empty_one_is(session, monkeypat
         audit, "find_online", lambda *a, **k: audit.Searched(error="no usable search results")
     )
     assert audit.resolve_one(session, project, finding, extractor=WantsMore()).declined
-
-
-# --- the enrich agent pass ---------------------------------------------------------
-
-
-def test_a_row_with_nothing_published_is_not_searched_again(session, monkeypatch):
-    """A sync's agent pass spent ~4.2M tokens finding one fact across 25 rows, and
-    `select_projects` hands it the same rows next time."""
-    from tracker import gapfill
-    from tracker.cli import enrich as cli_enrich
-
-    project = _project(session, name="Thin", city="Abilene", state="TX", dedup_key="g")
-    session.commit()
-    calls: list[int] = []
-
-    def nothing(_session, row, **_kw):
-        calls.append(row.id)
-        return gapfill.Filled(verdict="nothing", note="nobody has sized it", prompt_tokens=70_000)
-
-    monkeypatch.setattr(gapfill, "fill", nothing)
-    monkeypatch.setattr("tracker.llm.agent_extractor", lambda *_a, **_k: object())
-
-    cli_enrich._gapfill_batch(session, [project.id])
-    cli_enrich._gapfill_batch(session, [project.id])
-    assert calls == [project.id]
-
-    cli_enrich._gapfill_batch(session, [project.id], again=True)
-    assert calls == [project.id, project.id]

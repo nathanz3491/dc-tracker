@@ -37,7 +37,7 @@
 # first: every paid phase records what it answered or could not decide, keyed on the
 # evidence it was shown, and does not re-offer it until that evidence changes or a
 # month passes (`tracker/declines.py`). Before that, only logic findings were
-# remembered, and every round re-paid for the same pairs, obstacles and rows.
+# remembered, and every round re-paid for the same pairs, rulings and obstacles.
 #
 # THE CEILING READS A LEDGER, NOT THE LOG. Every paid call appends a line to the file
 # `TRACKER_SPEND_LEDGER` names (`tracker.llm.record_spend`), so a phase is counted

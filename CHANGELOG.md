@@ -10,6 +10,90 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 First working version. Nothing has been released yet, so everything below is the
 initial build of the v1 PRD.
 
+### Fixed
+
+- **The agent pass no longer bills the expensive rung for rows the harvest never
+  opened** (`tracker/cli/enrich.py`, `tests/test_enrich.py`,
+  `docs/workflows/enrich.md`, `docs/workflows/enrich.svg`,
+  `scripts/render_workflow_diagrams.py`).
+
+  `run_many` divides the article budget across every selected row and stops when it
+  runs out, leaving the tail of the list untouched. The agent pass was handed every
+  id that had been *selected*, not the ids that were actually worked. On the shape
+  that exposed it — `--all` over 403 rows at the default `--budget 200` —
+  `fair_share` is `max(1, 200 // 403)`, so each row gets **one article a round**, the
+  budget is gone after roughly fifty rows, and the ~77,000-token agent then ran on
+  all 403.
+
+  | | before | after |
+  |---|---|---|
+  | rows the harvest reached | ~50 | ~50 |
+  | rows billed the agent pass | **403** | **~50** |
+  | share of ~31M tokens spent on unharvested rows | **~85%** | 0 |
+
+  The command even printed "article budget spent before every project was reached"
+  a few lines after having paid for those rows.
+
+### Added
+
+- **`enrich --basics`, and a free `clean` condition that sizes the job first**
+  (`tracker/clean.py`, `tracker/attempts.py`, `tracker/cli/enrich.py`,
+  `tracker/ingest/enrich.py`, `tracker/gapfill.py`, `tracker/gaps.py`,
+  `tests/test_attempts.py`, `tests/test_clean.py`, `tests/test_enrich.py`,
+  `tests/test_cli.py`, `docs/workflows/enrich.md`, `docs/workflows/enrich.svg`).
+
+  A mode that chases only the eight fields which say what a project *is* — `name`,
+  `company`, `state`, `country`, `phase`, `mw_planned`, `mw_built`,
+  `expected_online` — and a `basics_defined` condition on `tracker clean` that
+  reports the same question for free, so the size of the job is visible before
+  anything is spent.
+
+  **Presence alone could not be the check.** Five of the eight are `NOT NULL` and
+  `ck_project_locality` forces a city or a county, so a scan for *missing* basics
+  returns zero rows. The condition also asks whether a value rests on a citation:
+  a row whose `phase` nobody ever stated reads `announced` and presents it as
+  though a source had said so. `gaps.provenance` has returned `DEFAULTED` for
+  exactly that all along and nothing acted on it. `country` is exempt — no article
+  about a campus in Ohio says it is in the United States, so demanding a citation
+  would fail the whole database for being right, which the hand-cleaned reference
+  row caught immediately.
+
+  `basics_defined` is reported but is **not** a tier condition, following
+  `capex.suspected_duplicates`: adding one moves every row's tier in a single commit
+  and buries the signal it exists to raise.
+
+- **Three rails that decide what the agent is never asked** (`tracker/attempts.py`,
+  `tracker/cli/enrich.py`, `tracker/ingest/enrich.py`, `tracker/gapfill.py`).
+
+  All three save by not making a call, which is the only saving worth the name at
+  ~77,000 tokens a row.
+
+  `--fields a,b` narrows the question. `gapfill.fill` has taken a `gaps=` list all
+  along — its docstring says "Passing it narrows the run — `enrich` knows which
+  fields it cares about" — and **no production caller ever passed one**, so every
+  run asked about all eight fillable fields whatever it wanted. `--basics` is its
+  first real user, asking about four.
+
+  `--max-attempts` (default 2) stops re-asking a field nobody has published.
+  `tracker/attempts.py` records a fruitless asking in `project.notes`, the prose
+  channel `upsert._merge_notes` never regenerates, for the reason
+  `audit.settled_codes` gives for having no `audit_decision` table. It is a cap and
+  not a verdict: each record carries the citation count at the time, and a row that
+  gains evidence reopens every field — `audit.settled_codes` also documents what a
+  decision that never expires costs, on the row where the muzzled detector had most
+  recently been right. `Filled.missed` exposes what `apply_facts` already computed
+  and threw away.
+
+  `--token-budget N` stops the agent pass **between** rows, using what rows have
+  actually cost this run rather than a constant. Never mid-row: aborting a call in
+  flight spends the tokens and stores nothing, which is the waste it exists to
+  prevent rather than a way to prevent it. A budget too small for a single row
+  attempts nothing and says so.
+
+  The same narrowing reaches one rung earlier: `search_queries` skips exhausted and
+  unwanted fields, because each query is an API call and every hit it returns is an
+  article to read.
+
 ### Added
 
 - **The console's version number is derived from the commit count**
@@ -415,31 +499,32 @@ initial build of the v1 PRD.
   (`tracker/declines.py`, migration `0025_model_decline`, `tracker/models.py`,
   `tracker/triage.py`, `tracker/riskcheck.py`, `tracker/audit.py`,
   `tracker/cli/duplicates.py`, `tracker/cli/logic.py`, `tracker/cli/quality.py`,
-  `tracker/cli/enrich.py`, `docs/workflows/{duplicates,enrich,logic}.md` + `.svg`,
+  `docs/workflows/{duplicates,logic}.md` + `.svg`, `docs/analysis.md`,
   `tests/test_declines.py`).
 
   The overnight loop picks its work the same way each round. Only logic's "left
-  alone" left any record, so five paid phases asked the same undecided questions
+  alone" left any record, so four paid phases asked the same undecided questions
   again. A duplicate pair the agent left alone was asked again, and so was one it
   rated below the floor, one a rail refused, or one where it could not quote a
   sentence. So were a logic ruling the rails refused, an audit finding the model
-  declined (with its search, four fetches and second call), an obstacle judged
-  unclear, and a row whose missing fields nobody has published. Each came back in
-  the same order at the same price until two rounds in a row failed to move a count.
-  Measured on the snapshot: 31 eligible pairs against a per-round limit of 25, at
-  ~45,000-260,000 tokens a pair. 141 open unquoted obstacles, 2 ever refuted. One
-  sync spent ~4.2M tokens on its agent pass to find one fact across 25 rows it would
-  pick again next time.
+  declined (with its search, four fetches and second call), and an obstacle judged
+  unclear. Each came back in the same order at the same price until two rounds in
+  a row failed to move a count. Measured on the snapshot: 31 eligible pairs against
+  a per-round limit of 25, at ~45,000-260,000 tokens a pair. 141 open unquoted
+  obstacles, 2 ever refuted.
 
   Each undecided answer is now recorded in `model_decline` with a hash of what the
-  model was shown: both rows' citations, the evidence block, the article text, the
-  empty fields. The item is held back before `--limit` is applied, so the limit buys
-  fresh questions. It comes back when that evidence changes, or after 30 days,
-  because three of these phases search the web and the web changes while the row
-  does not. `--again` on every command asks anyway. A failed call, a broken search
-  and "same site, but merging needs `--merge`" are deliberately not recorded. A
-  decline is bookkeeping about spend, not a decision about the data, so it sits
-  beside the rows rather than in their notes.
+  model was shown: both rows' citations, the evidence block, the article text. The
+  item is held back before `--limit` is applied, so the limit buys fresh questions.
+  It comes back when that evidence changes, or after 30 days, because the agent
+  phases search the web and the web changes while the row does not. `--again` on
+  every command asks anyway. A failed call, a broken search and "same site, but
+  merging needs `--merge`" are deliberately not recorded. The enrich agent's
+  version of this waste, fields nobody has published, is `tracker.attempts`,
+  which landed on `main` alongside and keeps its record in the row's notes. These
+  four stay out of the notes: a pair belongs to two rows, and ruling a claim out
+  changes what the model would be shown without adding the citation that reopens
+  an attempt.
 
   `duplicates resolve` also commits after every pair now. It was one transaction
   for the whole run, which held SQLite's write lock across every agent call while a

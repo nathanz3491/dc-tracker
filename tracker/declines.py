@@ -3,8 +3,10 @@
 Every paid phase of the overnight loop selects its work the same way each round, and
 until this module none of them remembered an undecided answer. A pair the agent left
 alone, a ruling the rails refused, an audit finding the model declined, an obstacle it
-judged unclear, a row whose missing fields nobody has published: each was selected
-again next round, in the same order, and paid for again. `scripts/overnight.sh` stops
+judged unclear: each was selected again next round, in the same order, and paid for
+again. (The enrich agent's version of the same waste — fields nobody has published —
+is `tracker.attempts`, in the row's notes, because there the thing remembered is a
+fact about a row a reader should see.) `scripts/overnight.sh` stops
 after two rounds in a row fail to move a count, so the waste was bounded by the stop
 rule rather than by anything that knew the answer was already in.
 
@@ -15,10 +17,9 @@ and a changed hash is a different question. That is the only condition under whi
 second look could reach a different answer from the same model, so it is the only
 thing worth paying for.
 
-**And it lapses after :data:`COOLDOWN_DAYS` regardless**, because three of the five
-phases let the model search the open web and the web changes while the row does not.
-An enrich pass that found nothing published in September has not learned that nothing
-will be published in October.
+**And it lapses after :data:`COOLDOWN_DAYS` regardless**, because the agent phases let
+the model search the open web and the web changes while the row does not. A pair left
+undecided in September for want of a street address may have one in October.
 
 A decline is never a decision. Nothing here touches a row, and nothing reads a
 decline as evidence about the data — the recorded decisions, the ones a reader should
@@ -44,7 +45,7 @@ from tracker.models import ModelDecline, Project, utcnow
 #: enough that a figure first published after the look is still found.
 COOLDOWN_DAYS: Final = 30
 
-KINDS: Final = ("pair", "logic", "audit", "risk", "gapfill")
+KINDS: Final = ("pair", "logic", "audit", "risk")
 
 
 def fingerprint(*parts: Any) -> str:
