@@ -129,6 +129,15 @@ candidate is already known when another spelling of it (`www.`, a trailing slash
 cited twice: 19 projects on a copy of production did, and 69 queued URLs had a
 second spelling already in the table.
 
+Prevention does not reach rows already stored, so `tracker backfill urls` repairs
+them — a preview, and `--apply` to write. A row's extra copies of one article are
+folded into its earliest by the rule `tracker merge` applies to a shared citation
+(what only a copy said is carried, a rival figure is named, milestones and
+obstacles move with it), and an article a citation shows was read leaves the retry
+pool its failed re-read had put it in. On the snapshot: 23 extra citations on 17
+rows, one of them the same report five times, and 36 read articles, with no
+figure moving. A second pass finds nothing.
+
 ## The identity arbiter
 
 `--verify-identity` is on by default. Before a phase creates a row that has a
@@ -290,7 +299,7 @@ Touching any of these means the poster is in scope. Re-render with
 | Concern | Where |
 | --- | --- |
 | Phase order, plan numbering, `--full`, the lock | `tracker/cli/sync.py` — `sync`, its `plan` list and `step` |
-| Discover, archives, search | `tracker/ingest/discover.py` — `run`, `load_sitemaps`, `sweep_sitemaps`, `queue_candidates`; `tracker/ingest/search.py`; `tracker/normalize.py` — `canonical_url`, `url_identity`, `url_variants` |
+| Discover, archives, search | `tracker/ingest/discover.py` — `run`, `load_sitemaps`, `sweep_sitemaps`, `queue_candidates`; `tracker/ingest/search.py`; `tracker/normalize.py` — `canonical_url`, `url_identity`, `url_variants`; `tracker/backfill.py` — `repair_urls` |
 | What search looks for | `tracker/ingest/search.py` — `_PLACE_TEMPLATES`, `rank_places`, `plan_queries`, `PlannedQuery.label`, `templates`; `tracker/normalize.py` — `state_name` |
 | Judging a template | `tracker/funnel.py` — `feed_group`, `survey`, `verdicts`; `tracker/ingest/search.py` — `LabelStat` |
 | Queue ordering and counts | `tracker/ingest/discover.py` — `pending`, `pending_split`, `pending_risk_count`, `failed`, `retryable`, `given_up`, `MAX_SAME_FAILURES`, `failure_summary` |

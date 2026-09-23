@@ -759,6 +759,19 @@ initial build of the v1 PRD.
   failed re-reads. It is backfilled so every URL failing today gets exactly one more
   automatic try.
 
+- **`tracker backfill urls` repairs what ingest stored before it compared URLs by
+  identity** (`tracker/backfill.py`, `tracker/cli/quality.py`,
+  `tests/test_url_repair.py`, `docs/workflows/sync.md`). The fixes above stop one
+  article being cited twice and a read article being queued for retries, but
+  neither reaches rows already stored. On the snapshot, 17 rows held 23 extra
+  citations of an article they already cited — one market report five times over,
+  each Google result carrying its own `srsltid` — and 36 articles a citation shows
+  were read sat in the retry pool, each costing a fetch and often a model call per
+  run. It previews by default. `--apply` folds each extra copy into the earliest by
+  `tracker merge`'s rule for a shared citation (10 claims only a copy held were
+  carried) and puts the read articles back to `ok`. No figure moved on the
+  snapshot, and a second pass finds nothing.
+
 ### Removed
 
 - **The console routines, and the runner code only the console used**

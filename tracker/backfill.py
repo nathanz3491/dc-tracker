@@ -762,3 +762,129 @@ def derive_basis(session: Session, *, apply: bool = False) -> BasisReport:
     if apply:
         session.flush()
     return report
+
+
+# --- one article, one citation, one queue state ---------------------------
+
+
+@dataclass
+class UrlReport:
+    """What `backfill urls` found, and with `--apply` repaired."""
+
+    #: (project id, the citation kept, the other spellings folded into it)
+    folded: list[tuple[int, str, list[str]]] = field(default_factory=list)
+    #: Claims a kept citation took from a copy folded into it.
+    claims_carried: int = 0
+    #: (url, the failed status it held) for queue rows of articles already read.
+    restored: list[tuple[str, str]] = field(default_factory=list)
+
+    def as_rows(self) -> list[tuple[str, int]]:
+        return [
+            ("rows citing one article more than once", len(self.folded)),
+            ("extra citations folded away", sum(len(f) for _, _, f in self.folded)),
+            ("claims carried from a folded copy", self.claims_carried),
+            ("read articles taken out of the retry pool", len(self.restored)),
+        ]
+
+
+def repair_urls(session: Session, *, apply: bool = False) -> UrlReport:
+    """Fold a row's second citation of one article, and unqueue articles already read.
+
+    Both are what the ingest path did before it compared URLs by identity, and it
+    now prevents both — but neither prevention reaches rows already stored:
+
+    * **One article cited twice by one row**, under two spellings that
+      `normalize.url_identity` says are the same page — a trailing slash, `www.`,
+      the scheme, or Google's `srsltid`, which gives every search result its own
+      URL. On the snapshot this was written for, 17 rows held 23 extra citations
+      that way, one of them the same market report five times. Each extra copy is
+      a second vote from one article, and where its reading differs it makes a
+      field look contested. The earliest copy is kept and absorbs the others the
+      way `tracker merge` folds a shared citation (`upsert.fold_source`): its own
+      values stand, the rival figure is named in the notes, and milestones and
+      obstacles move to it. The URLs themselves are not rewritten.
+    * **An article that was read, queued for a retry.** A failed re-read used to
+      overwrite the URL's `ok` with the failure, which put a cited article in the
+      pool `--retry-failed` and enrich's retry harvester spend a try on every run
+      (36 on the snapshot). A citation made by reading the article is proof it was
+      read, so the queue row goes back to `ok`; the failure stays recorded beside
+      it, as a failed re-read is now recorded.
+
+    Free: no model, no network. Safe to re-run — a second pass finds nothing.
+    """
+    from tracker.confidence import PLACEHOLDER_MARKER
+    from tracker.ingest.discover import RETRYABLE_STATUSES
+    from tracker.merge import _repoint
+    from tracker.models import IngestUrl
+    from tracker.normalize import url_identity
+    from tracker.upsert import (
+        SOURCE_NOTE_PREFIX,
+        fold_source,
+        recompute_from_sources,
+        record_tag,
+    )
+
+    report = UrlReport()
+    read: set[str] = set()
+    for project in session.scalars(select(Project).order_by(Project.id)).all():
+        copies: dict[str, list[Source]] = {}
+        for source in project.sources:
+            copies.setdefault(url_identity(source.url), []).append(source)
+            if _was_read(source, placeholder=PLACEHOLDER_MARKER):
+                read.add(url_identity(source.url))
+        twice = [group for group in copies.values() if len(group) > 1]
+        if not twice:
+            continue
+        rivals: list[str] = []
+        for group in twice:
+            keep, *others = sorted(group, key=lambda s: (s.fetched_at, s.id))
+            report.folded.append((project.id, keep.url, [s.url for s in others]))
+            if not apply:
+                continue
+            marker = f"{SOURCE_NOTE_PREFIX}[{record_tag([keep.url])}]"
+            for other in others:
+                lines, taken = fold_source(
+                    keep, other, given_by=f"the copy of this citation stored as {other.url}"
+                )
+                rivals += [f"{marker} {line}" for line in lines]
+                report.claims_carried += taken
+                _repoint(session, other.id, keep.id)
+                project.sources.remove(other)
+                session.delete(other)
+        if not apply:
+            continue
+        session.flush()
+        if rivals:
+            # Before the recompute, which keeps every contributed line it did not
+            # write; tagged with the kept citation, so its next reading replaces them.
+            lines = [line for line in (project.notes or "").splitlines() if line.strip()]
+            project.notes = "\n".join(
+                [*lines, *(r for r in dict.fromkeys(rivals) if r not in lines)]
+            )
+        recompute_from_sources(session, project)
+
+    for row in session.scalars(
+        select(IngestUrl).where(IngestUrl.status.in_(RETRYABLE_STATUSES)).order_by(IngestUrl.id)
+    ).all():
+        if url_identity(row.url) not in read:
+            continue
+        report.restored.append((row.url, row.status))
+        if apply:
+            row.status = "ok"
+    if apply:
+        session.flush()
+    return report
+
+
+def _was_read(source: Source, *, placeholder: str) -> bool:
+    """A citation made by reading the article, as `crawl.stale_sources` counts one.
+
+    Not a placeholder, not an ISO queue row, and not `derived:` or `inferred:`,
+    which were computed from reference data rather than read.
+    """
+    extractor = source.extractor or ""
+    return (
+        placeholder not in (source.url or "")
+        and source.source_type != "iso_queue"
+        and not extractor.startswith(("derived:", "inferred:"))
+    )

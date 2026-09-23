@@ -1239,6 +1239,46 @@ def _backfill_precision(*, apply: bool, dry_run: bool) -> None:
         console.print("\n[dim]Nothing written. `--apply` writes the precision.[/dim]")
 
 
+def _backfill_urls(*, apply: bool, dry_run: bool) -> None:
+    """Fold a row's second citation of one article, and unqueue articles already read.
+
+    Free, like `precision`: both come out of what is stored. Reports before it
+    writes, because a fold deletes citation rows and can move a figure where the
+    two copies were read differently.
+    """
+    from tracker.backfill import repair_urls
+
+    writing = apply and not dry_run
+    engine = _writable("backfill urls") if writing else _read_engine()
+    with _explain_db_locks(), session_scope(engine, commit=writing) as session:
+        report = repair_urls(session, apply=writing)
+
+    if json_mode():
+        emit(
+            {
+                "folded": [
+                    {"project": pid, "kept": kept, "folded": others}
+                    for pid, kept, others in report.folded
+                ],
+                "claims_carried": report.claims_carried,
+                "restored": [{"url": url, "was": was} for url, was in report.restored],
+                "applied": writing,
+            }
+        )
+        return
+
+    _print_report_rows(report.as_rows(), title="backfill urls" + ("" if writing else " (preview)"))
+    for pid, kept, others in report.folded:
+        console.print(f"  #{pid:<5} [dim]{kept}[/dim]")
+        for url in others:
+            console.print(f"         [dim]+ {url}[/dim]")
+    if not writing:
+        console.print(
+            "\n[dim]Nothing written. `--apply` folds each extra copy into the earliest "
+            "and puts the read articles back to `ok`.[/dim]"
+        )
+
+
 def _backfill_dates(*, limit: int, refetch: bool, apply: bool, yes: bool, everything: bool) -> None:
     """`tracker backfill dates`. No LLM, no API key, one column.
 
@@ -1382,7 +1422,9 @@ def _backfill_derive(*, project_id: int | None, dry_run: bool) -> None:
 def backfill(
     what: Annotated[
         str,
-        typer.Argument(help="`blocks`, `dates`, `derive`, `scope`, `basis` or `precision`."),
+        typer.Argument(
+            help="`blocks`, `dates`, `derive`, `scope`, `basis`, `precision` or `urls`."
+        ),
     ] = "blocks",
     limit: Annotated[
         int, typer.Option("--limit", help="Articles to read. 0 reads every one selected.")
@@ -1425,7 +1467,7 @@ def backfill(
         ),
     ] = None,
 ) -> None:
-    """Bring stored rows up to date. Three jobs, one family.
+    """Bring stored rows up to date. Several jobs, one family.
 
     * `derive` — re-derive every project from the citations it already holds. No
       LLM, no network, no migration. **Run this after any change to how something
@@ -1437,6 +1479,8 @@ def backfill(
       quote already stored beside it. Free.
     * `precision` — read how precisely each date's own sentence states it, so
       "online in 2027" stops rendering as 1 January 2027. Free.
+    * `urls` — fold a row's second citation of one article under another spelling
+      of its URL, and take articles already read out of the retry pool. Free.
     * `blocks` — re-read stored articles to fill in capacity blocks. The default,
       and the only one that spends anything.
 
@@ -1506,10 +1550,17 @@ def backfill(
                 _fail(f"{name} applies to `backfill blocks` or `dates`, not to `precision`.")
         _backfill_precision(apply=apply, dry_run=dry_run)
         return
+    if what == "urls":
+        # Free, like `precision`: compares stored URLs, reads nothing.
+        for flag, name in ((refetch, "--refetch"), (force, "--force"), (all_urls, "--all")):
+            if flag:
+                _fail(f"{name} applies to `backfill blocks` or `dates`, not to `urls`.")
+        _backfill_urls(apply=apply, dry_run=dry_run)
+        return
     if what != "blocks":
         _fail(
             f"nothing to backfill called {what!r}. Expected `blocks`, `dates`, "
-            "`derive`, `scope`, `basis` or `precision`."
+            "`derive`, `scope`, `basis`, `precision` or `urls`."
         )
 
     settings = get_settings()
