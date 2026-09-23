@@ -1412,7 +1412,9 @@ class Handler(BaseHTTPRequestHandler):
         and being read-only says nothing about where it may be pointed.
 
         A cache miss costs one ordinary request and is written back, so the second
-        reader of an article waits for nothing. It writes a file, never a row.
+        reader of an article waits for nothing. A refusal is written back too, for
+        half an hour (`article.REFUSAL_TTL_S`): a publisher that blocks us costs one
+        wait on the network, not one per open. It writes files, never a row.
         """
         url = (query.get("url") or [""])[0].strip()
         if not url:

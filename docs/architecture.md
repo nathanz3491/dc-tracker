@@ -294,6 +294,11 @@ publishers that permit it, which is why the directive lists both. `'self'` is
 listed explicitly and has to be — naming `frame-src` at all replaces the fallback
 chain to `default-src`, so `frame-src https:` alone forbade our own frame.
 
+Both answers are remembered beside the reader cache: an extracted article for good,
+and a publisher's refusal for half an hour. Before the second, every open of a
+citation from a site that blocks us waited on the network again — up to the
+25-second timeout — before showing the stored text it was always going to show.
+
 **Readability finds the article; it does not tidy it.** It ranks by text density,
 which is what makes it work on any publisher, and is indifferent to what shares a
 container with the prose. So two passes bracket it: containers named as furniture

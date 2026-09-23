@@ -44,6 +44,7 @@ from __future__ import annotations
 import html as html_mod
 import logging
 import re
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final
@@ -62,6 +63,22 @@ MAX_CHARS: Final = 600_000
 #: A highlight has to be worth drawing. Below this, a "quote" is a fragment that
 #: would speckle the page with marks that mean nothing.
 MIN_QUOTE_CHARS: Final = 24
+
+#: How long a publisher's refusal is believed before it is asked again.
+#:
+#: A site that answers 403 to the reader fetch answers 403 the next time too, and
+#: nothing remembered it: every open of one of its citations waited on the network
+#: again — up to the 25-second timeout — before showing the stored text it was
+#: always going to show. Remembered beside the reader cache, as a file whose age is
+#: its expiry, so it survives the console's frequent restarts and every process
+#: sharing the cache agrees. Short, because some refusals are transient and the
+#: reader view is worth having once the publisher relents.
+REFUSAL_TTL_S: Final = 30 * 60
+
+#: What `_extract` says when the reader extra is not installed. Never remembered as
+#: a refusal: it costs no request, and installing the extra should take effect on
+#: the next open rather than half an hour later.
+_NEEDS_READER: Final = "reader view needs `pip install dc-tracker[reader]`"
 
 #: What a sanitized article may contain. Everything else is dropped, including
 #: every attribute not named here — `on*` handlers cannot survive an allowlist.
@@ -117,10 +134,16 @@ def load(
 
     error = ""
     if fetch:
-        title, body, error = _extract(url)
-        if body:
-            _write(reader_dir / _digest(url, ".html"), f"{title}\n{body}")
-            return _marked(url, title, body, "reader", quotes)
+        refused = reader_dir / _digest(url, ".refused")
+        error = _recent_refusal(refused)
+        if not error:
+            title, body, error = _extract(url)
+            if body:
+                _write(reader_dir / _digest(url, ".html"), f"{title}\n{body}")
+                refused.unlink(missing_ok=True)
+                return _marked(url, title, body, "reader", quotes)
+            if error != _NEEDS_READER:
+                _write(refused, error or "no article could be read from that page")
 
     # Reader view unavailable — the library is absent, the fetch failed, or the
     # page had no article in it. The stored text still answers the question the
@@ -145,7 +168,7 @@ def _extract(url: str) -> tuple[str, str, str]:
     try:
         from readability import Document
     except ImportError:
-        return "", "", "reader view needs `pip install dc-tracker[reader]`"
+        return "", "", _NEEDS_READER
 
     raw, error = _get(url)
     if not raw:
@@ -855,4 +878,20 @@ def _split_title(cached: str) -> tuple[str, str]:
     return title, body
 
 
-__all__ = ["MAX_CHARS", "MIN_QUOTE_CHARS", "Reader", "load", "render"]
+def _recent_refusal(path: Path) -> str:
+    """The error a publisher gave inside the last `REFUSAL_TTL_S`, else "".
+
+    The file's modification time is when the refusal happened, so an old one
+    simply stops counting; the next failure overwrites it and a success removes
+    it.
+    """
+    try:
+        age = time.time() - path.stat().st_mtime
+    except OSError:
+        return ""
+    if age > REFUSAL_TTL_S:
+        return ""
+    return _read(path).strip() or "the publisher refused the last attempt"
+
+
+__all__ = ["MAX_CHARS", "MIN_QUOTE_CHARS", "REFUSAL_TTL_S", "Reader", "load", "render"]

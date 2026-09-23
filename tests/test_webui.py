@@ -3093,6 +3093,51 @@ def test_the_reader_falls_back_to_stored_text_rather_than_an_empty_pane(
     assert found.via == "excerpt" and "900 MW" in found.body
 
 
+def test_a_refused_fetch_is_not_retried_on_every_open(seeded_db, reader_dirs, monkeypatch):
+    """A publisher that refuses us refuses us the next time too.
+
+    Nothing remembered the refusal, so every open of a citation from such a site
+    waited on the network again — up to the 25-second timeout — before falling
+    back to the stored text it was always going to show.
+    """
+    from tracker.webui import article
+
+    calls: list[str] = []
+
+    def refused(url):
+        calls.append(url)
+        return "", "the publisher answered 403"
+
+    monkeypatch.setattr(article, "_get", refused)
+    first = _load(seeded_db, FAIRWATER, reader_dirs)
+    second = _load(seeded_db, FAIRWATER, reader_dirs)
+    assert len(calls) == 1, "the second open asked the publisher again"
+    assert first.via == second.via == "excerpt"
+    assert "900 MW" in second.body
+
+
+def test_a_refusal_is_forgotten_after_a_while(seeded_db, reader_dirs, monkeypatch):
+    """Short-lived, because a refusal can be transient and the reader view is
+    worth having when the publisher relents."""
+    import os
+    import time as clock
+
+    from tracker.webui import article
+
+    monkeypatch.setattr(article, "_get", lambda url: ("", "the publisher answered 503"))
+    _load(seeded_db, FAIRWATER, reader_dirs)
+
+    remembered = reader_dirs[1] / article._digest(FAIRWATER, ".refused")
+    assert remembered.is_file()
+    stale = clock.time() - article.REFUSAL_TTL_S - 60
+    os.utime(remembered, (stale, stale))
+
+    monkeypatch.setattr(article, "_get", lambda url: (ARTICLE_HTML, ""))
+    found = _load(seeded_db, FAIRWATER, reader_dirs)
+    assert found.via == "reader", "an old refusal still stopped the fetch"
+    assert not remembered.exists(), "a success clears the refusal"
+
+
 def test_the_rendered_document_locks_itself_down(seeded_db, reader_dirs, monkeypatch):
     from tracker.webui import article
 
