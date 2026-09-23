@@ -519,6 +519,14 @@ def _settle(
 
     Bounded by construction: at most seven tracked fields can be contested once
     identity is excluded, so at most fourteen calls for one project.
+
+    **Each answer is committed as it is applied.** It was flushed and left for the
+    caller, and the caller is not always the next thing to touch the session: `sync`
+    hands the same session to the agent pass, which rolls back on its first error —
+    and took the paid-for decisions with it (measured on a copy of production: 36
+    superseded marks, 39 after the settle, 36 again after one agent error). Holding
+    it open was also a lock: the next field's question is a model call, and it ran
+    with the last answer's writes still holding SQLite's single write lock.
     """
     from tracker import conflicts
 
@@ -531,6 +539,7 @@ def _settle(
             )
             if not dry_run:
                 conflicts.apply_outcome(session, project, outcome)
+                session.commit()
         elif outcome.verdict == "refused":
             report.refused.append(f"{dispute.field}: {outcome.reason}")
         else:
@@ -593,7 +602,13 @@ def run(
     # Stage 1: derivation. Free and certain, so it runs before anything is fetched
     # and its fields are never searched for.
     report.derived = _derive(session, project_id, census_dir=census_dir, dry_run=dry_run)
-    session.flush()
+    # Committed before the first harvest, because the harvests are network calls —
+    # a search query, a sitemap — and held open across them these writes kept every
+    # other writer out of the database for as long as the query took.
+    if dry_run:
+        session.flush()
+    else:
+        session.commit()
     project = session.get(Project, project_id)
     assert project is not None
 

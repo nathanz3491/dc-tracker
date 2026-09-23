@@ -1145,6 +1145,144 @@ def test_a_settled_field_is_never_asked_about_twice(session):
     assert second.settled == []
 
 
+def test_a_settled_field_outlives_a_later_rollback_in_the_same_session(session):
+    """What `sync` does next, in the same session: the agent pass, which rolls back
+    on its first error. Settle decisions that were paid for and only flushed went
+    with it — measured on a copy of production, 36 superseded marks became 39 and
+    then 36 again."""
+    project = _contested(session)
+    session.commit()
+    settle = SettleLLM(
+        json.dumps(
+            {
+                "pick": _key_for(project, "mw_planned", 230.0),
+                "confidence": 0.9,
+                "reason": "the filing",
+            }
+        ),
+        json.dumps({"stands": True, "reason": "stands"}),
+    )
+    report = run(session, project.id, settle_extractor=settle, target_fields=0)
+    assert any("mw_planned" in line for line in report.settled)
+
+    session.rollback()  # an agent-pass error, as `_gapfill_batch` handles one
+
+    loser = session.scalar(select(Source).where(Source.url == "https://b.test/y"))
+    assert json.loads(loser.unconfirmed_reasons or "{}").get("mw_planned") == "superseded"
+    assert session.get(Project, project.id).mw_planned == 230.0
+
+
+def _another_writer_can_write(db_path) -> bool:
+    import sqlite3
+
+    other = sqlite3.connect(db_path, timeout=0)
+    try:
+        other.execute("BEGIN IMMEDIATE")
+        other.execute("ROLLBACK")
+        return True
+    except sqlite3.OperationalError:
+        return False
+    finally:
+        other.close()
+
+
+def test_the_next_settle_call_does_not_wait_on_the_last_ones_write(session, db_path):
+    """Two contested fields, so the second is put to the model after the first was
+    applied. That call used to run with the first answer's writes still open."""
+    from tracker.ingest.records import IngestRecord, SourceRecord
+    from tracker.upsert import upsert_record
+
+    def cite(url, source_type, mw, usd, when):
+        return SourceRecord(
+            url=url,
+            source_type=source_type,
+            excerpt="e",
+            claims={"mw_planned": mw, "investment_usd": usd},
+            quotes={
+                "mw_planned": f"the campus will draw {mw} megawatts",
+                "investment_usd": f"an investment of {usd} dollars",
+            },
+            fetched_at=when,
+        )
+
+    result = upsert_record(
+        session,
+        IngestRecord(
+            project={
+                "company": "STACK Infrastructure",
+                "name": "H",
+                "city": "Hillsboro",
+                "state": "OR",
+            },
+            sources=[
+                cite("https://a.test/x", "company_filing", 230.0, 1_200_000_000, NOW),
+                cite(
+                    "https://b.test/y",
+                    "government_doc",
+                    90.0,
+                    400_000_000,
+                    NOW + dt.timedelta(days=1),
+                ),
+            ],
+        ),
+    )
+    session.commit()
+    project = session.get(Project, result.project_id)
+
+    free: list[bool] = []
+
+    class Probing(SettleLLM):
+        def complete(self, **kwargs):
+            free.append(_another_writer_can_write(db_path))
+            return super().complete(**kwargs)
+
+    picks = []
+    for field, value in (("investment_usd", 1_200_000_000), ("mw_planned", 230.0)):
+        picks += [
+            json.dumps({"pick": _key_for(project, field, value), "confidence": 0.9, "reason": "r"}),
+            json.dumps({"stands": True, "reason": "stands"}),
+        ]
+    report = run(session, project.id, settle_extractor=Probing(*picks), target_fields=0)
+
+    assert len(report.settled) == 2
+    assert free and all(free), f"a settle call ran while the last answer held the lock: {free}"
+
+
+def test_the_census_derivation_is_committed_before_anything_is_searched(session, tmp_path, db_path):
+    """Derivation writes; searching is a network call. Held open across it, the
+    derivation's writes locked every other writer out for the length of the query."""
+    import zipfile
+
+    from tests.test_geo import COUNTY_ROWS, GAZ_ROWS
+    from tracker.ingest import geo
+
+    root = tmp_path / "census"
+    root.mkdir()
+    (root / geo.COUNTY_FILE).write_text(COUNTY_ROWS, encoding="utf-8")
+    with zipfile.ZipFile(root / geo.GAZETTEER_FILE, "w") as archive:
+        archive.writestr("2024_Gaz_place_national.txt", GAZ_ROWS)
+    target = add_project(session, city="Memphis", state="TN", company="xAI", name="Colossus")
+    session.commit()
+
+    free: list[bool] = []
+
+    class ProbingSearch(FakeSearch):
+        def search(self, query, *, limit=10):
+            free.append(_another_writer_can_write(db_path))
+            return []
+
+    report = run(
+        session,
+        target.id,
+        census_dir=root,
+        skip_search=False,
+        search_provider=ProbingSearch([]),
+        skip_settle=True,
+    )
+    assert "county" in report.derived
+    assert free and all(free), "the derivation's writes held the lock through a search"
+
+
 def test_a_dry_run_asks_but_never_writes(session):
     project = _contested(session)
     settle = SettleLLM(
