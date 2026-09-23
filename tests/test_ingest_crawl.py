@@ -2936,6 +2936,142 @@ def test_the_arbiter_is_handed_the_article_the_crawl_already_read(session, _city
     assert body[:200] in sent, "the arbiter was not given the text already in hand"
 
 
+def _two_projects_reply(second_city: str | None = "Mount Pleasant", second_county=None) -> str:
+    """One article, two projects: the campus, and a phase of it named separately.
+
+    Each carries different quoted fields, so a write that keeps only one of them is
+    visible in the citation."""
+    evidence_common = [
+        {"field": "company", "quote": "Microsoft will operate the campus itself"},
+        {"field": "state", "quote": "MOUNT PLEASANT, Wis."},
+    ]
+    second = {
+        "name": "Fairwater Phase 1",
+        "company": "Microsoft",
+        "state": "WI",
+        "investment_usd": 3_300_000_000,
+        "expected_online": "2027-07-01",
+        "evidence": [
+            *evidence_common,
+            {"field": "investment_usd", "quote": "has committed $3.3 billion to the site"},
+            {
+                "field": "expected_online",
+                "quote": "Microsoft expects the\nremainder of the campus to come online by July 2027.",
+            },
+        ],
+    }
+    if second_city:
+        second["city"] = second_city
+        second["evidence"].append(
+            {"field": "city", "quote": "a data\ncenter campus in Mount Pleasant, Wisconsin"}
+        )
+    if second_county:
+        second["county"] = second_county
+        second["evidence"].append(
+            {"field": "county", "quote": "Microsoft first announced the Racine County project"}
+        )
+    return json.dumps(
+        {
+            "projects": [
+                {
+                    "name": "Fairwater",
+                    "company": "Microsoft",
+                    "city": "Mount Pleasant",
+                    # The county is what makes the row a near-match for a record filed
+                    # under the county alone, which is the arbiter's case below.
+                    "county": "Racine County",
+                    "state": "WI",
+                    "mw_planned": 900,
+                    "evidence": [
+                        *evidence_common,
+                        {
+                            "field": "city",
+                            "quote": "a data\ncenter campus in Mount Pleasant, Wisconsin",
+                        },
+                        {
+                            "field": "county",
+                            "quote": "Microsoft first announced the Racine County project",
+                        },
+                        {
+                            "field": "mw_planned",
+                            "quote": "will draw 900\nmegawatts at full buildout",
+                        },
+                    ],
+                },
+                second,
+            ]
+        }
+    )
+
+
+def test_two_projects_an_article_names_on_one_row_keep_every_claim(session):
+    """The same company and town twice over is one row, and one citation. The second
+    project's reading used to overwrite the first's on that citation."""
+    llm = FakeLLM([_two_projects_reply()])
+    report = crawl.run(session, [URL], fetcher=FakeFetcher({URL: fetched()}), extractor=llm)
+
+    assert session.scalar(select(func.count()).select_from(Project)) == 1
+    assert report.inserted == 1
+    (source,) = session.scalars(select(Source)).all()
+    claims = json.loads(source.claims)
+    assert claims["mw_planned"] == 900
+    assert claims["investment_usd"] == 3_300_000_000
+    assert claims["expected_online"] == "2027-07-01"
+    project = session.scalar(select(Project))
+    assert project.mw_planned == 900
+    assert project.investment_usd == 3_300_000_000
+
+
+def test_re_reading_a_two_project_article_changes_nothing(session):
+    """Folded before the write, so a re-read is one upsert of the same union — not a
+    replace by the first project and a restore by the second, which would report two
+    updates and move `updated_at` on an article that did not change."""
+    fetcher = FakeFetcher({URL: fetched()})
+    crawl.run(session, [URL], fetcher=fetcher, extractor=FakeLLM([_two_projects_reply()]))
+    session.commit()
+    project = session.scalar(select(Project))
+    stamped = project.updated_at
+    claims = session.scalar(select(Source)).claims
+
+    report = crawl.run(
+        session, [URL], fetcher=fetcher, extractor=FakeLLM([_two_projects_reply()]), force=True
+    )
+    assert report.unchanged == 1
+    assert report.updated == 0
+    session.refresh(project)
+    assert project.updated_at == stamped
+    assert session.scalar(select(Source)).claims == claims
+
+
+def test_a_project_the_arbiter_routes_onto_its_siblings_row_keeps_its_claims(session):
+    """The arbiter's success case, through the real `crawl.run`: the article names the
+    campus by town and again by county, the county record is judged the same site
+    and routed onto the town row — and its quoted figures must survive the trip."""
+    from tracker import gatekeeper
+
+    body = article()
+    llm = VerdictLLM(
+        [_two_projects_reply(second_city=None, second_county="Racine")],
+        quote=body.split(".")[0][:80],
+    )
+    report = crawl.run(
+        session,
+        [URL],
+        fetcher=FakeFetcher({URL: fetched(markdown=body)}),
+        extractor=llm,
+        arbiter=gatekeeper.same_site_arbiter(llm),
+    )
+
+    assert len(llm.verdicts) == 1, "the county record should have been put to the arbiter"
+    assert session.scalar(select(func.count()).select_from(Project)) == 1
+    assert report.inserted == 1
+    (source,) = session.scalars(select(Source)).all()
+    claims = json.loads(source.claims)
+    assert claims["mw_planned"] == 900, "the first project's figure was overwritten"
+    assert claims["investment_usd"] == 3_300_000_000
+    assert claims["expected_online"] == "2027-07-01"
+
+
 def test_an_unambiguous_article_costs_no_arbitration(session):
     """With no stored row to collide with there is no question, so no second call."""
     from tracker import gatekeeper

@@ -2055,3 +2055,302 @@ def test_route_to_and_force_new_are_refused_together(session):
     existing = upsert_record(session, rec())
     with pytest.raises(ValueError, match="contradict"):
         upsert_record(session, rec(), route_to=existing.project_id, force_new=True)
+
+
+# --- two projects from one article landing on one row ----------------------------
+#
+# An article naming two projects that turn out to be one site — the arbiter's
+# `same_site` success case, or two spellings of one campus — produced two records
+# for ONE citation. The second used to overwrite the first's claims, quotes, blocks
+# and parties outright. Reproduced on a copy of production: the row kept 1000 MW and
+# $3.3B, and its only citation claimed just `expected_online`, so the next recompute
+# had nothing left to hold those values up with.
+
+ONE_ARTICLE = "https://example.test/two-projects-one-site"
+
+
+def one_article_source(unconfirmed=frozenset(), reasons=(), **claims):
+    return SourceRecord(
+        url=ONE_ARTICLE,
+        source_type="trade_press",
+        fetched_at=T0,
+        excerpt="x",
+        claims=claims,
+        quotes={k: f"the campus is {v}" for k, v in claims.items() if k not in unconfirmed},
+        unconfirmed=frozenset(unconfirmed),
+        unconfirmed_reasons=tuple(reasons),
+    )
+
+
+def _two_readings(session, first_claims, second_claims, *, reading, **second_source):
+    """Upsert two records from one article onto one row: the second routed there by
+    an arbiter that judged it the same site, exactly as `crawl.run` would."""
+    first = upsert_record(
+        session,
+        rec(
+            company="Acme",
+            name="Acme Racine",
+            city="Racine",
+            state="WI",
+            sources=[one_article_source(**first_claims)],
+        ),
+        reading=reading,
+    )
+    second = upsert_record(
+        session,
+        rec(
+            company="Acme",
+            name="Acme Racine",
+            city=None,
+            county="Racine County",
+            state="WI",
+            sources=[one_article_source(**second_source, **second_claims)],
+        ),
+        arbiter=lambda *, candidate, **_: candidate.id,
+        reading=reading,
+    )
+    assert second.project_id == first.project_id, "the arbiter was meant to route it"
+    return session.get(Project, first.project_id)
+
+
+def test_a_second_project_from_one_article_adds_to_the_citation_it_shares(session):
+    row = _two_readings(
+        session,
+        {"mw_planned": 1000.0, "investment_usd": 3_300_000_000},
+        {"expected_online": "2027-06-01"},
+        reading=set(),
+    )
+    (source,) = row.sources
+    claims = json.loads(source.claims)
+    assert claims["mw_planned"] == 1000.0
+    assert claims["investment_usd"] == 3_300_000_000
+    assert claims["expected_online"] == "2027-06-01"
+    quotes = json.loads(source.quotes)
+    assert {"mw_planned", "investment_usd", "expected_online"} <= set(quotes)
+    assert {"mw_planned", "investment_usd", "expected_online"} <= set(source.fields.split(","))
+    # And the row is still held up by its citation: a recompute moves nothing.
+    recompute_from_sources(session, row)
+    assert row.mw_planned == 1000.0
+    assert row.investment_usd == 3_300_000_000
+    assert row.expected_online == dt.date(2027, 6, 1)
+
+
+def test_between_two_readings_of_one_article_the_first_value_stands(session):
+    """Two projects in one article giving different figures for one row are two
+    readings of one article about one site, and neither is the site's figure. The
+    first stays — the model lists the article's own subject first, and a fixed rule
+    keeps the result a function of the records rather than of luck — and the rival
+    is disclosed rather than dropped."""
+    row = _two_readings(session, {"mw_planned": 1000.0}, {"mw_planned": 1200.0}, reading=set())
+    (source,) = row.sources
+    assert json.loads(source.claims)["mw_planned"] == 1000.0
+    assert json.loads(source.quotes)["mw_planned"] == "the campus is 1000.0"
+    assert row.mw_planned == 1000.0
+    assert "1200" in (row.notes or ""), "the rival figure was dropped without a word"
+
+
+def test_two_quoted_readings_of_one_field_keep_the_first(session):
+    """The control for the test below: both quoted, so the first stands."""
+    row = _two_readings(
+        session,
+        {"customer": "OpenAI"},
+        {"customer": "Oracle"},
+        reading=set(),
+    )
+    assert json.loads(row.sources[0].claims)["customer"] == "OpenAI"
+
+
+def test_an_unquoted_first_reading_yields_to_a_quoted_second(session):
+    first = upsert_record(
+        session,
+        rec(
+            company="Acme",
+            name="Acme Racine",
+            city="Racine",
+            state="WI",
+            sources=[
+                one_article_source(
+                    unconfirmed={"customer"}, reasons=[("customer", "no_quote")], customer="OpenAI"
+                )
+            ],
+        ),
+        reading=(reading := set()),
+    )
+    upsert_record(
+        session,
+        rec(
+            company="Acme",
+            name="Acme Racine",
+            city="Racine",
+            state="WI",
+            sources=[one_article_source(customer="Oracle")],
+        ),
+        reading=reading,
+    )
+    source = session.get(Project, first.project_id).sources[0]
+    assert json.loads(source.claims)["customer"] == "Oracle"
+    assert "customer" in source.fields.split(",")
+    assert not source.unconfirmed_fields, "the quoted value must not inherit the unquoted flag"
+    assert "customer" not in json.loads(source.unconfirmed_reasons or "{}")
+
+
+def test_a_decision_on_the_citation_survives_a_second_reading(session):
+    """`superseded` is a ruling about this citation's claim. A second project from
+    the same article must not un-rule it by arriving with a quote."""
+    first = upsert_record(
+        session,
+        rec(
+            company="Acme",
+            name="Acme Racine",
+            city="Racine",
+            state="WI",
+            sources=[one_article_source(investment_usd=10_000_000_000)],
+        ),
+    )
+    session.commit()
+    source = session.get(Project, first.project_id).sources[0]
+    source.unconfirmed_fields = "investment_usd"
+    source.unconfirmed_reasons = json.dumps({"investment_usd": "superseded"})
+    session.flush()
+
+    reading: set = set()
+    upsert_record(
+        session,
+        rec(
+            company="Acme",
+            name="Acme Racine",
+            city="Racine",
+            state="WI",
+            sources=[one_article_source(investment_usd=10_000_000_000)],
+        ),
+        reading=reading,
+    )
+    upsert_record(
+        session,
+        rec(
+            company="Acme",
+            name="Acme Racine",
+            city="Racine",
+            state="WI",
+            sources=[one_article_source(investment_usd=12_000_000_000)],
+        ),
+        reading=reading,
+    )
+    reasons = json.loads(source.unconfirmed_reasons)
+    assert reasons["investment_usd"] == "superseded"
+    assert json.loads(source.claims)["investment_usd"] == 10_000_000_000
+
+
+def test_a_new_reading_still_replaces_the_citation(session):
+    """The boundary. Folding is for records of ONE reading; a later re-read of the
+    article is a fresh derivation and replaces what the last one said, exactly as it
+    always has — otherwise a claim an edited article withdrew could never leave."""
+    _two_readings(
+        session,
+        {"mw_planned": 1000.0},
+        {"expected_online": "2027-06-01"},
+        reading=set(),
+    )
+    reread = upsert_record(
+        session,
+        rec(
+            company="Acme",
+            name="Acme Racine",
+            city="Racine",
+            state="WI",
+            sources=[one_article_source(mw_planned=900.0)],
+        ),
+        reading=set(),
+    )
+    claims = json.loads(session.get(Project, reread.project_id).sources[0].claims)
+    assert claims["mw_planned"] == 900.0
+    assert "expected_online" not in claims
+
+
+def test_both_readings_keep_their_disclosures(session):
+    """The two records share a URL set and so a note tag. Replacing by tag used to
+    let the second record's disclosures erase the first's."""
+    reading: set = set()
+    first = upsert_record(
+        session,
+        rec(
+            company="Acme",
+            name="Acme Racine",
+            city="Racine",
+            state="WI",
+            sources=[one_article_source(mw_planned=1000.0)],
+            notes=["the first reading's disclosure"],
+        ),
+        reading=reading,
+    )
+    upsert_record(
+        session,
+        rec(
+            company="Acme",
+            name="Acme Racine",
+            city="Racine",
+            state="WI",
+            sources=[one_article_source(expected_online="2027-06-01")],
+            notes=["the second reading's disclosure"],
+        ),
+        reading=reading,
+    )
+    notes = session.get(Project, first.project_id).notes
+    assert "the first reading's disclosure" in notes
+    assert "the second reading's disclosure" in notes
+
+
+def test_blocks_and_parties_from_both_readings_are_kept(session):
+    from tracker.ingest.records import BlockRecord, PartyRecord
+
+    reading: set = set()
+    first = upsert_record(
+        session,
+        rec(
+            company="Acme",
+            name="Acme Racine",
+            city="Racine",
+            state="WI",
+            sources=[
+                SourceRecord(
+                    url=ONE_ARTICLE,
+                    source_type="trade_press",
+                    fetched_at=T0,
+                    claims={"mw_planned": 1000.0},
+                    quotes={"mw_planned": "the campus is 1000 MW"},
+                    blocks=[BlockRecord(label="Phase 1", mw=400.0)],
+                    parties=[PartyRecord(name="Acme", role="developer", quote="Acme builds it")],
+                )
+            ],
+        ),
+        reading=reading,
+    )
+    upsert_record(
+        session,
+        rec(
+            company="Acme",
+            name="Acme Racine",
+            city="Racine",
+            state="WI",
+            sources=[
+                SourceRecord(
+                    url=ONE_ARTICLE,
+                    source_type="trade_press",
+                    fetched_at=T0,
+                    claims={"expected_online": "2027-06-01"},
+                    quotes={"expected_online": "online in June 2027"},
+                    blocks=[
+                        BlockRecord(label="phase 1", mw=999.0),
+                        BlockRecord(label="Phase 2", mw=600.0),
+                    ],
+                    parties=[PartyRecord(name="OpenAI", role="tenant", quote="OpenAI leases it")],
+                )
+            ],
+        ),
+        reading=reading,
+    )
+    source = session.get(Project, first.project_id).sources[0]
+    blocks = json.loads(source.blocks)
+    assert [b["label"] for b in blocks] == ["Phase 1", "Phase 2"]
+    assert blocks[0]["mw"] == 400.0, "the first reading's block stands on a label collision"
+    assert {p["name"] for p in json.loads(source.parties)} == {"Acme", "OpenAI"}

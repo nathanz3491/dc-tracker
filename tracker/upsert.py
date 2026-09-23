@@ -812,6 +812,217 @@ def _snapshot(project: Project) -> tuple:
     return tuple(getattr(project, f) for f in (*WRITABLE_FIELDS, "confidence", "dedup_key"))
 
 
+# --- Two projects from one article, one row -------------------------------------
+#
+# One article can name two projects that turn out to be one site: two spellings of
+# a campus under one company and town, or the identity arbiter's `same_site` answer
+# routing the second onto the row the first just made. Both records carry the same
+# URL, so both are the one `(project, url)` citation. The write below used to treat
+# the second as a re-read and *replace* the first's claims, quotes, blocks and
+# parties — measured on a copy of production, a row kept 1000 MW and $3.3B while
+# its only citation claimed `expected_online` alone, which left nothing to hold the
+# values up the next time anything recomputed the row.
+#
+# They are not a re-read. They are two readings of one article about one site, and
+# the citation is what the article says about the row — the union of the two.
+
+#: Fields a second reading never reports as a disagreement. Identity fields are
+#: FILL_ONLY and differ between two projects by construction (that is why they were
+#: two projects), and `blocker` is derived from the risk rows, so a rival summary is
+#: noise rather than a contested fact.
+_NOT_A_RIVALRY: frozenset[str] = frozenset(
+    {"name", "company", "city", "county", "state", "country", "lat", "lon", "blocker", "notes"}
+)
+
+
+def fold_reading(
+    claims: dict[str, Any],
+    unconfirmed: dict[str, str | None],
+    quotes: dict[str, str],
+    meta: dict[str, Any],
+    *,
+    extra_claims: dict[str, Any],
+    extra_unconfirmed: dict[str, str | None],
+    extra_quotes: dict[str, str],
+    extra_meta: dict[str, Any],
+) -> tuple[list[tuple[str, Any, Any]], set[str]]:
+    """Fold a second reading of one article into the first, in place.
+
+    **The rule: the first reading stands, except where it has nothing to stand on.**
+    A field the first reading did not claim, or claimed without a quote, takes the
+    second's value — with its quote, its 待确认 reason and its envelope, so a value
+    never travels without the evidence that admitted it. Otherwise the first value
+    stays, and the rival is returned so the caller can disclose it.
+
+    Why not the field's own merge policy (max for `mw_built`, earliest for
+    `first_announced`): those policies choose between *sources*, and these are two
+    halves of one. Two projects one article names — "Phase 1, 1,000 MW" and "Phase 2,
+    1,200 MW" — landing on one row are each a part of the site, so neither the larger
+    nor the first is the campus figure. The first is kept because the model lists the
+    article's own subject first and because a fixed order makes the citation a pure
+    function of the records; the other is not thrown away but named in the notes,
+    which is where a person deciding whether the row should be split looks.
+
+    A field carrying a DECISION (`superseded`, `misread`) is never taken over: it is a
+    ruling about this citation's claim, and a second project arriving with a quote is
+    not new evidence against it.
+
+    Returns `(rivals, taken)`: `(field, kept, rival)` for every tracked fact the two
+    readings disagree on, and the fields the second reading supplied. `unconfirmed`
+    maps a field to its reason, or None where none was recorded.
+    """
+    rivals: list[tuple[str, Any, Any]] = []
+    taken: set[str] = set()
+    for name, value in extra_claims.items():
+        if value is None:
+            continue
+        held = claims.get(name)
+        decided = unconfirmed.get(name) in DECIDED_REASONS
+        takes = not decided and (
+            held is None or (name in unconfirmed and name not in extra_unconfirmed)
+        )
+        if not takes:
+            if held is not None and not _same(held, value) and name not in _NOT_A_RIVALRY:
+                rivals.append((name, held, value))
+            continue
+        taken.add(name)
+        claims[name] = value
+        for mine, theirs in ((quotes, extra_quotes), (meta, extra_meta)):
+            if name in theirs:
+                mine[name] = theirs[name]
+            else:
+                mine.pop(name, None)
+        if name in extra_unconfirmed:
+            unconfirmed[name] = extra_unconfirmed[name]
+        else:
+            unconfirmed.pop(name, None)
+    return rivals, taken
+
+
+def union_by_key(first: list[Any], second: list[Any], key: Any) -> list[Any]:
+    """`first`, then whatever of `second` it does not already hold, by `key`.
+
+    For the blocks and parties two readings of one article describe. On a collision
+    the first reading's entry stands, the same rule `fold_reading` applies to fields.
+    """
+    seen = {key(item) for item in first}
+    out = list(first)
+    for item in second:
+        marker = key(item)
+        if marker not in seen:
+            seen.add(marker)
+            out.append(item)
+    return out
+
+
+def _block_key(block: Any) -> str:
+    """The order `upsert_record` writes blocks in, and what counts as the same one."""
+    label = block.get("label") if isinstance(block, dict) else getattr(block, "label", "")
+    return str(label or "").lower()
+
+
+def _party_marker(party: Any) -> tuple[str, str]:
+    """(role, key) — the order `upsert_record` writes parties in, and their identity."""
+    if isinstance(party, dict):
+        return str(party.get("role") or ""), _party_key(str(party.get("name") or ""))
+    return party.role, _party_key(party.name)
+
+
+def union_blocks(first: list[Any], second: list[Any]) -> list[Any]:
+    """Blocks two readings described, one per label. Records or stored JSON alike."""
+    return union_by_key(first, second, _block_key)
+
+
+def union_parties(first: list[Any], second: list[Any]) -> list[Any]:
+    """Parties two readings named, one per (role, company). Records or JSON alike."""
+    return union_by_key(first, second, _party_marker)
+
+
+def rival_note(field_name: str, kept: Any, rival: Any) -> str:
+    """The disclosure for a figure a second reading of the same article gave."""
+    return (
+        f"this article also gave {field_name} = {rival!r} for another project it names that "
+        f"resolved to this row; the first reading's {kept!r} was kept on the citation"
+    )
+
+
+def _json_object(raw: str | None) -> dict[str, Any]:
+    try:
+        got = json.loads(raw or "{}")
+    except (TypeError, ValueError):
+        return {}
+    return got if isinstance(got, dict) else {}
+
+
+def _json_array(raw: str | None) -> list[Any]:
+    try:
+        got = json.loads(raw or "[]")
+    except (TypeError, ValueError):
+        return []
+    return got if isinstance(got, list) else []
+
+
+def _fold_into_row(row: Source, sr: Any, claims: dict[str, Any]) -> list[str]:
+    """Merge a second reading's citation into the row the first reading wrote.
+
+    The JSON-column twin of `crawl._fold_same_row`, which does the same on records
+    before they reach here; both apply `fold_reading`, so the rule has one home.
+    Returns the disclosure lines for rival figures.
+    """
+    held = _json_object(row.claims)
+    flagged = {f.strip() for f in (row.unconfirmed_fields or "").split(",") if f.strip()}
+    # `fields` is its own fact rather than "claimed and not flagged": a superseded
+    # figure keeps its place there because its quote is still real — see
+    # `conflicts.supersede` — so it has to be carried, not re-derived.
+    quoted = {f.strip() for f in (row.fields or "").split(",") if f.strip()}
+    reasons = _json_object(row.unconfirmed_reasons)
+    unconfirmed: dict[str, str | None] = {f: reasons.get(f) for f in flagged}
+    unconfirmed.update({f: r for f, r in reasons.items() if r in DECIDED_REASONS})
+    quotes = _json_object(row.quotes)
+    meta = _json_object(row.claim_meta)
+
+    incoming_reasons = dict(sr.unconfirmed_reasons)
+    extra_unconfirmed = {f: incoming_reasons.get(f) for f in sr.unconfirmed if f in claims}
+    rivals, taken = fold_reading(
+        held,
+        unconfirmed,
+        quotes,
+        meta,
+        extra_claims=claims,
+        extra_unconfirmed=extra_unconfirmed,
+        extra_quotes=dict(sr.quotes or {}),
+        extra_meta=dict(sr.claim_meta or {}),
+    )
+    quoted = {f for f in quoted if f not in taken} | {
+        f for f in taken if f not in extra_unconfirmed
+    }
+
+    row.claims = json.dumps(held, sort_keys=True, ensure_ascii=False) if held else None
+    row.fields = derive_fields({k: v for k, v in held.items() if k in quoted})
+    row.unconfirmed_fields = derive_fields({k: v for k, v in held.items() if k in unconfirmed})
+    why = {k: r for k, r in unconfirmed.items() if r and k in held}
+    row.unconfirmed_reasons = json.dumps(why, sort_keys=True, ensure_ascii=False) if why else None
+    quotes = {k: q for k, q in quotes.items() if k in held}
+    row.quotes = json.dumps(quotes, sort_keys=True, ensure_ascii=False) if quotes else None
+    meta = {k: m for k, m in meta.items() if k in held}
+    row.claim_meta = json.dumps(meta, sort_keys=True, ensure_ascii=False) if meta else None
+    if not row.excerpt and sr.excerpt:
+        row.excerpt = sr.excerpt
+
+    blocks = union_blocks(_json_array(row.blocks), [b.as_json() for b in sr.blocks])
+    row.blocks = json.dumps(sorted(blocks, key=_block_key), ensure_ascii=False) if blocks else None
+    parties = union_parties(_json_array(row.parties), [p.as_json() for p in sr.parties])
+    row.parties = (
+        json.dumps(
+            sorted(parties, key=lambda p: (*_party_marker(p), str(p.get("name") or ""))),
+            ensure_ascii=False,
+        )
+        if parties
+        else None
+    )
+    return [rival_note(name, kept, rival) for name, kept, rival in rivals]
+
+
 def upsert_record(
     session: Session,
     rec: IngestRecord,
@@ -820,10 +1031,21 @@ def upsert_record(
     existing_only: bool = False,
     route_to: int | None = None,
     arbiter: Any = None,
+    reading: set[tuple[int, str]] | None = None,
 ) -> UpsertResult:
     """Insert or update one project and its citations.
 
     Args:
+        reading: the citations this *reading* of an article has already written, as
+            `(project id, url)`, shared by a caller upserting several records from
+            one read and added to here. A citation already in it belongs to another
+            project the same article named, one that landed on this row too, so the
+            record's claims are **folded into** it by `fold_reading` rather than
+            replacing it. Absent — every caller but `crawl.run` — a citation is
+            replaced, which is right for a re-read: that is a fresh derivation of
+            the whole article, and an edited article must be able to withdraw a
+            claim.
+
         force_new: bypass cross-granularity duplicate detection and insert a
             fresh project even when a candidate match exists. The operator's
             escape hatch for two genuinely separate campuses in one locality.
@@ -1007,10 +1229,20 @@ def upsert_record(
 
     # --- Write the citations ------------------------------------------------
     existing_sources = {s.url: s for s in project.sources}
+    #: Disclosures for figures a second reading of the same article gave; see
+    #: `fold_reading`. Non-empty only when a citation was folded rather than written.
+    folded_notes: list[str] = []
+    folded = False
     for sr in rec.sources:
         claims = {k: claim_value(v) for k, v in sr.tracked_claims().items()}
         blob = json.dumps(claims, sort_keys=True, ensure_ascii=False) if claims else None
         row = existing_sources.get(sr.url)
+        if row is not None and reading is not None and (project.id, sr.url) in reading:
+            folded = True
+            folded_notes += _fold_into_row(row, sr, claims)
+            continue
+        if reading is not None:
+            reading.add((project.id, sr.url))
         if row is None:
             row = Source(project_id=project.id, url=sr.url)
             session.add(row)
@@ -1170,10 +1402,14 @@ def upsert_record(
 
     tag = record_tag([s.url for s in rec.sources])
     marker = f"{SOURCE_NOTE_PREFIX}[{tag}]"
-    contributed = [f"{marker} {line}" for line in rec.notes]
+    contributed = [f"{marker} {line}" for line in [*rec.notes, *folded_notes]]
     derived.extend(f"{NOTE_PREFIX} {line}" for line in block_notes)
     derived.extend(f"{NOTE_PREFIX} {line}" for line in party_notes)
-    project.notes = _merge_notes(project.notes, derived, contributed, tag=tag)
+    # A folded record shares its URL set, and so its tag, with the reading that wrote
+    # the citation first. Superseding by tag would let the second project's
+    # disclosures erase the first's, so a fold adds to that reading's lines instead;
+    # the next reading's first record replaces them all, which keeps a re-read exact.
+    project.notes = _merge_notes(project.notes, derived, contributed, tag=None if folded else tag)
     _note_unstated(project, unstated)
 
     # --- Events -------------------------------------------------------------
@@ -1888,6 +2124,7 @@ __all__ = [
     "claim_value",
     "claims_by_field",
     "derive_fields",
+    "fold_reading",
     "is_placeholder",
     "recompute_blocks",
     "recompute_confidence",
@@ -1896,5 +2133,9 @@ __all__ = [
     "recompute_parties",
     "record_tag",
     "resolve_field",
+    "rival_note",
+    "union_blocks",
+    "union_by_key",
+    "union_parties",
     "upsert_record",
 ]

@@ -2291,6 +2291,100 @@ def _claim_axes(
     return out
 
 
+def _fold_same_row(records: list[IngestRecord]) -> list[IngestRecord]:
+    """One record per row: fold the projects an article names that share an identity.
+
+    Two projects with the same company, locality and state have the same dedup key,
+    so they land on the same row whatever else they say — and both carry this
+    article's URL, so they are the one `(project, url)` citation. Written one after
+    the other, the second used to replace the first's claims outright; see
+    `upsert.fold_reading` for the rule that folds them instead, and why the first
+    reading's value stands where the two disagree.
+
+    Folded here, before the write, rather than only by `upsert_record(reading=...)`,
+    because that is what keeps a re-read exact. Two upserts of one citation mean the
+    first *replaces* what the last run's union said and the second restores it: two
+    "updated" rows and a moved `updated_at` for an article that did not change. One
+    upsert of the union is the same write every time. The `reading` fold remains for
+    the records only the database can pair — a county record the arbiter routes onto
+    the town row its sibling just made — which no key comparison could have seen.
+
+    Order is preserved, first appearance of each key first, so the report and the log
+    read in the order the article did.
+    """
+    from dataclasses import replace
+
+    from tracker.dedup import dedup_key
+    from tracker.upsert import fold_reading, rival_note, union_blocks, union_parties
+
+    groups: dict[str, list[IngestRecord]] = {}
+    for record in records:
+        p = record.project
+        key = dedup_key(p.get("company"), p.get("city"), p.get("county"), p.get("state"))
+        groups.setdefault(key, []).append(record)
+
+    out: list[IngestRecord] = []
+    for members in groups.values():
+        first, *rest = members
+        if not rest:
+            out.append(first)
+            continue
+        sources = list(first.sources)
+        notes = list(first.notes)
+        events = list(first.events)
+        risks = list(first.risks)
+        for other in rest:
+            events += other.events
+            risks += other.risks
+            notes += [line for line in other.notes if line not in notes]
+            for incoming in other.sources:
+                index = next((i for i, s in enumerate(sources) if s.url == incoming.url), None)
+                if index is None:
+                    sources.append(incoming)
+                    continue
+                held = sources[index]
+                claims = dict(held.claims)
+                quotes = dict(held.quotes)
+                meta = dict(held.claim_meta)
+                held_reasons = dict(held.unconfirmed_reasons)
+                unconfirmed = {f: held_reasons.get(f) for f in held.unconfirmed}
+                extra_reasons = dict(incoming.unconfirmed_reasons)
+                rivals, _taken = fold_reading(
+                    claims,
+                    unconfirmed,
+                    quotes,
+                    meta,
+                    extra_claims=dict(incoming.claims),
+                    extra_unconfirmed={f: extra_reasons.get(f) for f in incoming.unconfirmed},
+                    extra_quotes=dict(incoming.quotes),
+                    extra_meta=dict(incoming.claim_meta),
+                )
+                notes += [rival_note(name, kept, rival) for name, kept, rival in rivals]
+                sources[index] = replace(
+                    held,
+                    claims=claims,
+                    quotes=quotes,
+                    claim_meta=meta,
+                    unconfirmed=frozenset(unconfirmed),
+                    unconfirmed_reasons=tuple(sorted((f, r) for f, r in unconfirmed.items() if r)),
+                    excerpt=held.excerpt or incoming.excerpt,
+                    blocks=union_blocks(held.blocks, incoming.blocks),
+                    parties=union_parties(held.parties, incoming.parties),
+                )
+        caps = [m.confidence_cap for m in members if m.confidence_cap is not None]
+        out.append(
+            replace(
+                first,
+                sources=sources,
+                events=events,
+                risks=risks,
+                notes=notes,
+                confidence_cap=min(caps) if caps else None,
+            )
+        )
+    return out
+
+
 def _excerpt(quotes: dict[str, str]) -> str | None:
     """Up to three quotes, preferring the contested quantitative fields.
 
@@ -2769,7 +2863,11 @@ def run(
             if bind is not None:
                 record_arbiter = bind(outcome.context)
 
-        for record in outcome.records:
+        #: The citations this article has written so far, so a second project it
+        #: names that lands on the same row folds into the first's citation instead
+        #: of replacing it. See `upsert.fold_reading`.
+        reading: set[tuple[int, str]] = set()
+        for record in _fold_same_row(outcome.records):
             # Asked per record, not per run: one URL list can describe several
             # campuses, and the question "which project is this?" is only
             # answerable once the article has been read. A hook rather than a
@@ -2786,6 +2884,7 @@ def run(
                 # nothing, and on the ambiguous inserts it is the one chance to
                 # not make the duplicate. See `gatekeeper`.
                 arbiter=record_arbiter,
+                reading=reading,
             )
             if upsert.action == "refused":
                 # Named, not merely counted: a refused campus is a candidate to
