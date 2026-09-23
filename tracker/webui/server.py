@@ -1093,7 +1093,7 @@ class Handler(BaseHTTPRequestHandler):
             "2,031). Its own route so the other five views stop paying for it.",
         },
         "GET /api/dataset": {
-            "answers": "a light index of every project, plus gaps, queue, exposure and totals",
+            "answers": "a light index of every project, plus field gaps, totals and vocabularies",
             "reads": "the whole database, shallowly",
             "note": "refetched after every run. Carries no citations, milestones, "
             "tranches or provenance — see /api/projects for a page of table rows "

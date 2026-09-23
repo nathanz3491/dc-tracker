@@ -569,6 +569,11 @@ __all__ = ["build"]
 #: at all (only `tracker/tui/data.py`), and `blocker_rationale` is the sentence
 #: under the obstacle on the page. All of them arrive with `/api/project`.
 #:
+#: `notes` is the project's audit log — every duplicate warning and derivation
+#: the write path explained — and nothing in the browser reads it. It was the
+#: heaviest thing left in a row: 4.4 KB at the median on a copy of production,
+#: so a 200-row page was 433 KB gzipped with it and 198 KB without.
+#:
 #: Anything added to a project payload lands in the table row by default. That is
 #: deliberate: a new key the table cannot use should have to be named here, where
 #: a reader can see the claim that nothing reads it.
@@ -582,6 +587,7 @@ LIST_OMITS: tuple[str, ...] = (
     "basis",
     "blocker_rationale",
     "claims_by_field",
+    "notes",
 )
 
 #: The four fields the table's obstacle filters and the map's markers read. The
@@ -714,15 +720,17 @@ def light(session: Session, *, schema_version: int) -> dict[str, Any]:
     - **`db`**, the database's absolute path, which `build()` carries for the
       terminal interface. Nothing in the page read it, and on a published console
       it told every reader the host's directory layout, user name included.
+    - **`queue`, `failed`, `feeds`, `required` and `exposure`**, which `build()`
+      carries for the terminal interface's panes. Nothing in `app.js` or the
+      vendored map code reads them — views the console once had — and on a copy of
+      production they were 113 KB of every load. `tests/test_webui.py` checks the
+      front end for them before anybody puts one back.
     """
-    from tracker.models import Project, Source
+    from tracker.models import Source
 
     rows = index_rows(session)
     citations = session.scalar(select(func.count(Source.id))) or 0
     queued = session.scalar(select(IngestUrl.id).where(IngestUrl.status == "discovered").limit(1))
-    # `required.match` reads a project's identity fields off the ORM row, so the
-    # bare select is enough — no relation it touches is loaded here.
-    projects = list(session.scalars(select(Project)))
 
     return {
         "schema": "tracker/webui-1",
@@ -738,12 +746,7 @@ def light(session: Session, *, schema_version: int) -> dict[str, Any]:
             "investment_usd": sum(r["investment_usd"] or 0 for r in rows),
             "queue_has_work": queued is not None,
         },
-        "exposure": _risk_exposure(rows),
-        "queue": _queue(session),
-        "failed": _failed(session),
         "gaps": _gaps(session),
-        "required": _required(session, projects),
-        "feeds": _feeds(),
         # --- reference data, every entry owned by another module -------------
         "tracks": [
             {"key": t, "label": TRACK_LABELS[t], "milestones": list(TRACK_MILESTONES[t])}

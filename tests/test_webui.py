@@ -134,18 +134,20 @@ def test_dataset_carries_the_shape_the_page_expects(server):
     address, _ = server
     status, data = request(address, "/api/dataset")
     assert status == 200
+    # Every key here is read by `app.js` or by the vendored maps, which read
+    # `projects` and `phases` off `window.DCTRACKER` directly.
     for key in (
         "projects",
         "totals",
         "tracks",
         "riskTrack",
+        "riskCategories",
+        "riskSeverities",
         "phases",
         "sourceWeight",
         "gaps",
-        "queue",
-        "failed",
-        "required",
-        "exposure",
+        "kwPerH200",
+        "version",
     ):
         assert key in data, f"{key} missing from the dataset"
     assert data["totals"]["projects"] == 1
@@ -154,6 +156,37 @@ def test_dataset_carries_the_shape_the_page_expects(server):
     listed = data["projects"][0]
     assert listed["name"] and listed["state"]
     assert "prov" not in listed and "sources" not in listed
+
+
+def test_the_shell_payload_ships_nothing_the_page_does_not_read(server, seeded_db):
+    """`queue`, `failed`, `feeds`, `required` and `exposure` rode on every load.
+
+    Measured on a copy of production they were 113 KB of the raw payload, and
+    nothing in `app.js` or the vendored map code reads any of them — they were
+    views the console had and lost, carried forward because `light()` was built
+    by copying `build()`. The terminal interface does draw them, and it still
+    gets them from `build()`.
+    """
+    from tracker.db import open_db, session_scope
+    from tracker.webui import assets
+    from tracker.webui.dataset import build
+
+    unread = ("queue", "failed", "feeds", "required", "exposure")
+    address, _ = server
+    _status, data = request(address, "/api/dataset")
+    for key in unread:
+        assert key not in data, f"{key} is back in the shell payload"
+
+    front_end = "".join(
+        (assets.STATIC_ROOT / name).read_text(encoding="utf-8")
+        for name in ("app.js", "views-help.js", "vendor/dc-map.js", "vendor/dc-map3d.js")
+    )
+    for key in unread:
+        assert f"data.{key}" not in front_end and f"DCTRACKER.{key}" not in front_end, key
+
+    with session_scope(open_db(seeded_db), commit=False) as session:
+        whole = build(session, db_path=str(seeded_db), schema_version=1)
+    assert all(key in whole for key in unread), "the terminal interface still reads them"
 
 
 def test_the_light_index_always_carries_risks(server):
@@ -606,6 +639,30 @@ def test_a_table_row_carries_no_citation_list(server):
 
     _status, whole = request(address, f"/api/project?id={row['id']}")
     assert len(whole["project"]["sources"]) == row["n_sources"]
+
+
+def test_a_table_row_carries_no_audit_log(server, seeded_db):
+    """`notes` is a project's running audit log — every duplicate warning, every
+    derivation the write path explained — and nothing in the page reads it.
+
+    Measured on a copy of production: 4.4 KB a row at the median, so a 200-row page
+    was 433 KB gzipped with it and 198 KB without. It stays on the project's own
+    payload, which is one row and the export shape.
+    """
+    from sqlalchemy import update
+
+    from tracker.db import open_db, session_scope
+    from tracker.models import Project
+
+    with session_scope(open_db(seeded_db, readonly=False)) as session:
+        session.execute(update(Project).values(notes="possible duplicate of project #284"))
+
+    address, _ = server
+    _status, page = request(address, "/api/projects")
+    row = page["rows"][0]
+    assert "notes" not in row
+    _status, whole = request(address, f"/api/project?id={row['id']}")
+    assert whole["project"]["notes"] == "possible duplicate of project #284"
 
 
 def test_one_projects_claims_are_fetchable_on_their_own(server):

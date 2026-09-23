@@ -278,7 +278,7 @@ The three worth knowing:
 
 | route | answers | cost |
 |---|---|---|
-| `GET /api/dataset` | a light index of every project, plus gaps, queue, exposure, totals | ~275 KB at 437 projects, refetched after each run |
+| `GET /api/dataset` | a light index of every project, plus field gaps, totals and vocabularies | 385 KB raw / 67 KB gzipped at 482 projects, refetched after each run |
 | `GET /api/projects` | one page of the table, filtered and sorted by the server | 30 rows; `total` counts the whole filter |
 | `GET /api/capex` | capacity by the company buying it | ~0.4 s on a copy of production (it was ~1.0 s and 2,031 statements); its own route for that reason |
 | `GET /api/articles` | publishers, and one publisher's citations when asked | counts at rest; `?host=` for the list |
