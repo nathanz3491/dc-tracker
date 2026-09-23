@@ -831,10 +831,14 @@ def run_many(
     # whether it was needed, so `enrich 10` on a project already at `--target`
     # fetched every archive in the config and then declined to do any work —
     # a minute of requests to produce an empty report. A dry run still sweeps,
-    # because reporting what it *would* harvest is the whole point of one.
+    # because reporting what it *would* harvest is the whole point of one. A
+    # budget of zero does not: the loop below spends it before the first project,
+    # so nothing would ever read what the sweep found.
     sweep = None
     if not skip_archive:
-        if any(
+        if max_articles <= 0:
+            batch.sweep_note = "not swept — the article budget is zero"
+        elif any(
             project is None or will_harvest(project, target_fields)
             for project in (session.get(Project, pid) for pid in project_ids)
         ):

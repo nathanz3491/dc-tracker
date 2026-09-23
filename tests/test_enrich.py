@@ -958,6 +958,33 @@ def test_the_archive_is_still_swept_when_a_project_needs_it(session, monkeypatch
     assert swept == [True]
 
 
+def test_a_zero_budget_does_not_sweep_the_archives(session, monkeypatch):
+    """`enrich --budget 0` and `sync --enrich-budget 0` read nothing: the loop spends
+    the whole budget before its first project. The sweep ran before that check, so
+    a run that could not read a single article still fetched every sitemap first."""
+    swept: list[bool] = []
+
+    def spy(settings, fetcher=None):
+        swept.append(True)
+        return enrich.ArchiveSweep(candidates=[])
+
+    monkeypatch.setattr(enrich, "sweep_archives", spy)
+    project = add_project(session)
+
+    batch = enrich.run_many(
+        session,
+        [project.id],
+        target_fields=None,
+        max_articles=0,
+        fetcher=FakeFetcher(),
+        extractor=FakeLLM(),
+        skip_archive=False,
+    )
+    assert swept == [], "a budget of nothing must not fetch the archives"
+    assert batch.sweep_note and "not swept" in batch.sweep_note
+    assert batch.budget_exhausted and not batch.reports
+
+
 # --- the settle step: what the harvest disagreed about ----------------------
 
 
