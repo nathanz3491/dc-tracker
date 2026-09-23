@@ -574,6 +574,34 @@ def test_releasing_twice_does_not_delete_the_next_runs_lock(tmp_path: Path):
     assert lock.read_text(encoding="utf-8") == theirs
 
 
+def test_a_lock_it_is_not_permitted_to_create_is_reported_as_that(tmp_path: Path, monkeypatch):
+    """Windows refuses to open a name another process is still deleting, which is
+    worth waiting out. Anywhere else a PermissionError is the real answer — a data
+    directory this user cannot write — and waiting ten seconds to then blame
+    another run would hide it. On Windows too, once the wait is up, the error
+    that explains it is the one raised."""
+    import tracker.db as db_mod
+
+    real_open = os.open
+
+    def refuse(path, flags, *args, **kwargs):
+        if str(path).endswith(".lock"):
+            raise PermissionError(13, "Permission denied", str(path))
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", refuse)
+    monkeypatch.setattr(db_mod, "_WINDOWS", False, raising=False)
+    started = time.monotonic()
+    with pytest.raises(PermissionError):
+        acquire_write_lock(tmp_path / "tracker.db")
+    assert time.monotonic() - started < 2, "a permission problem is not contention"
+
+    monkeypatch.setattr(db_mod, "_WINDOWS", True, raising=False)
+    monkeypatch.setattr(db_mod, "_CONTENTION_TIMEOUT_S", 0.05)
+    with pytest.raises(PermissionError):
+        acquire_write_lock(tmp_path / "tracker.db")
+
+
 def test_an_empty_lock_file_is_a_lock_being_taken_until_it_is_old(tmp_path: Path):
     """An exclusive create and the write of the holder's pid are two calls, so a
     racing reader can catch the file empty. Reclaiming it then would delete the

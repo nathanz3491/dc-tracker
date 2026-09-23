@@ -367,6 +367,11 @@ _UNWRITTEN_GRACE_S = 10.0
 _CONTENTION_TIMEOUT_S = 10.0
 _CONTENTION_POLL_S = 0.005
 
+#: Only Windows raises PermissionError for a file that is merely busy. Everywhere
+#: else it means this user may not write there, which no amount of waiting fixes
+#: and which the operator needs to see as itself, at once.
+_WINDOWS = sys.platform == "win32"
+
 #: One step, as far as every other process can tell: create the file, or learn it
 #: is already there. `O_BINARY` stops Windows translating the holder text.
 _EXCLUSIVE_CREATE = os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_BINARY", 0)
@@ -441,10 +446,12 @@ def _claim(path: Path, command: str) -> str:
     path.parent.mkdir(parents=True, exist_ok=True)
     mine = f"{os.getpid()} {command} {utcnow_text()}"
     deadline = time.monotonic() + _CONTENTION_TIMEOUT_S
+    refused: PermissionError | None = None
     while True:
         try:
             fd = os.open(path, _EXCLUSIVE_CREATE, 0o644)
         except FileExistsError:
+            refused = None
             raw = _read_lock(path)
             if raw is not None:
                 if _held(path, raw):
@@ -460,9 +467,13 @@ def _claim(path: Path, command: str) -> str:
                     continue
             # Otherwise it changed hands under us, or vanished between the create
             # and the read because its holder was releasing it: look again shortly.
-        except PermissionError:
-            # Windows refuses to open a name another process is deleting.
-            pass
+        except PermissionError as exc:
+            # Windows refuses to open a name another process is deleting, which
+            # passes; anywhere else it is the real answer, and so is it on Windows
+            # if it is still the answer when the wait runs out.
+            if not _WINDOWS:
+                raise
+            refused = exc
         else:
             try:
                 os.write(fd, mine.encode("utf-8"))
@@ -473,6 +484,8 @@ def _claim(path: Path, command: str) -> str:
             os.close(fd)
             return mine
         if time.monotonic() > deadline:
+            if refused is not None:
+                raise refused
             raise AlreadyRunning(
                 f"could not take the write lock at {path} within "
                 f"{_CONTENTION_TIMEOUT_S:.0f}s: it kept changing hands or could not be read."
@@ -494,7 +507,7 @@ def _read_lock(path: Path, *, patient: bool = False) -> str | None:
         except FileNotFoundError:
             return None
         except PermissionError:
-            if not patient or time.monotonic() > deadline:
+            if not (patient and _WINDOWS) or time.monotonic() > deadline:
                 return None
             time.sleep(_CONTENTION_POLL_S)
 
@@ -554,7 +567,7 @@ def _reclaim_guard(path: Path) -> Iterator[None]:
     guard = path.with_name(path.name + ".guard")
     fd = os.open(guard, os.O_CREAT | os.O_RDWR | getattr(os, "O_BINARY", 0), 0o644)
     try:
-        if sys.platform == "win32":
+        if _WINDOWS:
             import msvcrt
 
             def take() -> None:
@@ -603,7 +616,7 @@ def _unlink(path: Path) -> None:
             path.unlink(missing_ok=True)
             return
         except PermissionError:
-            if time.monotonic() > deadline:
+            if not _WINDOWS or time.monotonic() > deadline:
                 raise
             time.sleep(_CONTENTION_POLL_S)
 
