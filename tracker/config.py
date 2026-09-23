@@ -522,6 +522,17 @@ class Settings(BaseSettings):
     #: is a thundering herd aimed at the endpoint that just asked for less traffic.
     llm_retry_jitter: float = Field(default=0.25, ge=0.0, le=1.0)
 
+    #: A file every paid model call appends one line to. None — the default — keeps
+    #: no ledger at all. See `tracker.llm.record_spend` for the format.
+    #:
+    #: **This is what the overnight loop's token ceiling reads.** It used to add up
+    #: the `~N tokens` summaries commands print, and only three commands print one,
+    #: so duplicate pairs, audit, risks and enrich's article reads spent without the
+    #: ceiling seeing any of it. A ledger written where the request is made counts a
+    #: call whatever the command around it chose to report. `scripts/overnight.sh`
+    #: sets `TRACKER_SPEND_LEDGER` to a fresh file per night.
+    spend_ledger: Path | None = None
+
     # --- merge policy -----------------------------------------------------
     #: Break a merge tie on when the article was *published* rather than on when
     #: the crawler fetched it (`source.published_at`, migration 0014).

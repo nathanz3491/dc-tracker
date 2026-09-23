@@ -33,8 +33,17 @@
 # WHAT IT COSTS. Measured: ~45,000-260,000 tokens per agent finding depending on how
 # many articles it reads, and one HTTP request per article on a cache miss. The free
 # phases and `audit` cost almost nothing. `--tokens` is a hard ceiling, checked
-# between phases, and defaults to one. Later rounds are far cheaper than the first:
-# every agent phase records what it answered *or declined* and never re-offers it.
+# before every paid phase, and defaults to one.
+#
+# THE CEILING READS A LEDGER, NOT THE LOG. Every paid call appends a line to the file
+# `TRACKER_SPEND_LEDGER` names (`tracker.llm.record_spend`), so a phase is counted
+# whether or not its command prints a token summary. The tally used to grep the log
+# for `~N tokens`, which three commands print and five paid phases did not — and
+# under `set -o pipefail` a grep that matched nothing *failed*, so from 2026-09-03 the
+# very first tally of every night, taken before any phase had printed anything,
+# ended the script straight after its snapshot. Twenty-one nights ran no phase at
+# all and logged no error. The morning report now breaks the night's spend down by
+# command, from the same file.
 #
 # WHAT IT CANNOT DO. Roughly 250 findings are about tranche identity —
 # `block_label_ambiguous` and relatives — and the only repair an agent has is
@@ -153,16 +162,18 @@ if [ "$STATUS_ONLY" -eq 1 ]; then
   else
     echo "not running"
   fi
-  [ -f "$LOG" ] && grep -E '^\[|^  round ' "$LOG" | tail -20
+  # `|| true`: under pipefail a log with no round lines yet is not an error.
+  [ -f "$LOG" ] && grep -E '^\[|^  round ' "$LOG" | tail -20 || true
   exit 0
 fi
 
 [ -x "$PY" ] || { echo "no venv at $PY" >&2; exit 1; }
 
 mkdir -p "$(dirname "$LOG")"
-# Where this run's output starts, so the token tally reads only its own lines.
-# Summing the whole file made a second night start at the first night's total.
-LOG_FROM=$(( $(wc -l < "$LOG" 2>/dev/null || echo 0) + 1 ))
+# One ledger per night, so the tally reads only this run's calls — summing a shared
+# file made a second night start at the first night's total. Exported, so every
+# `tracker` child below appends to it.
+export TRACKER_SPEND_LEDGER="${TRACKER_SPEND_LEDGER:-$(dirname "$LOG")/overnight-$(date '+%Y%m%d-%H%M%S').spend}"
 exec > >(tee -a "$LOG") 2>&1
 
 # One at a time. `mkdir` is the atomic primitive available everywhere; macOS has no
@@ -227,9 +238,33 @@ with session_scope(engine, commit=False) as s:
 PYEOF
 }
 
+# Prompt plus completion tokens across every paid call this run made. awk alone, and
+# never a pipeline: this runs under `set -euo pipefail`, where a stage that finds
+# nothing to match exits non-zero and takes the whole script with it — which is
+# exactly how this function used to end every night before its first phase. A
+# missing or empty ledger is a night that has spent nothing, and prints 0.
 spent_so_far() {
-  tail -n "+$LOG_FROM" "$LOG" 2>/dev/null \
-    | grep -oE '~[0-9,]+ tokens' | tr -d '~, tokens' | awk '{t+=$1} END {print t+0}'
+  if [ ! -s "$TRACKER_SPEND_LEDGER" ]; then
+    echo 0
+    return 0
+  fi
+  awk -F'\t' '{t += $5 + $6} END {printf "%d\n", t}' "$TRACKER_SPEND_LEDGER"
+}
+
+# The night's spend by command, largest first — which phase the money went to.
+spend_by_command() {
+  [ -s "$TRACKER_SPEND_LEDGER" ] || { echo "    no paid calls"; return 0; }
+  awk -F'\t' '{t[$3] += $5 + $6; n[$3]++}
+    END {for (c in t) printf "%d\t%d\t%s\n", t[c], n[c], c}' "$TRACKER_SPEND_LEDGER" \
+    | sort -rn | awk -F'\t' '{printf "    %-22s %6d call(s)  ~%d tokens\n", $3, $2, $1}'
+}
+
+# True when the ceiling is reached. Called before every paid phase rather than once a
+# round: a round is nine phases and the agent ones cost millions, so a check at the
+# top of the round let one round overshoot the ceiling by a round.
+over_ceiling() {
+  SPENT=$(spent_so_far)
+  [ "$SPENT" -ge "$TOKEN_CAP" ]
 }
 
 # --- start ------------------------------------------------------------------
@@ -238,6 +273,7 @@ STARTED=$(date +%s)
 DEADLINE=$((STARTED + HOURS * 3600))
 SPENT=0
 STALE=0
+CAPPED=0
 
 say "overnight starting  (pid $$)"
 printf '    repo      %s\n' "$REPO"
@@ -245,6 +281,7 @@ printf '    ceilings  %sh, %s rounds, %s tokens\n' "$HOURS" "$ROUNDS" "$TOKEN_CA
 printf '    per round %s findings, %s audit, %s risks, %s pairs, %s enrich\n' \
   "$FINDINGS" "$AUDIT" "$RISKS" "$PAIRS" "$ENRICH"
 printf '    merge=%s  enrich=%s  min-confidence %s\n' "$DO_MERGE" "$DO_ENRICH" "$MIN_CONF"
+printf '    spend     %s\n' "$TRACKER_SPEND_LEDGER"
 
 read -r F0 D0 B0 <<<"$(counts)"
 printf '    at start  %s finding(s), %s duplicate group(s), %s row(s) below T2\n' "$F0" "$D0" "$B0"
@@ -252,15 +289,23 @@ printf '    at start  %s finding(s), %s duplicate group(s), %s row(s) below T2\n
 say 'snapshot before anything is deleted'
 backup
 
+# Before each paid phase. `break` leaves the round loop from inside its body, so the
+# settle below still runs once for whatever the night managed.
+capped() {
+  if over_ceiling; then
+    say "token ceiling reached (~$SPENT of $TOKEN_CAP) before $1 — stopping"
+    CAPPED=1
+    return 0
+  fi
+  return 1
+}
+
 for round in $(seq 1 "$ROUNDS"); do
   now=$(date +%s)
   if [ "$now" -ge "$DEADLINE" ]; then
     say "wall-clock ceiling of ${HOURS}h reached — stopping between rounds"; break
   fi
   SPENT=$(spent_so_far)
-  if [ "$SPENT" -ge "$TOKEN_CAP" ]; then
-    say "token ceiling reached (~$SPENT) — stopping"; break
-  fi
 
   say "round $round of $ROUNDS  (~$SPENT tokens, $(( (DEADLINE - now) / 60 ))m left)"
   if [ "$round" -gt 1 ] && [ $((round % BACKUP_EVERY)) -eq 1 ]; then backup; fi
@@ -276,16 +321,20 @@ for round in $(seq 1 "$ROUNDS"); do
   tracker logic resolve --auto --apply < /dev/null || true
 
   # --- audit: a T1 gate, and cheap ----------------------------------------
+  if capped audit; then break; fi
   phase "audit — implausible figures, $AUDIT at a time"
   tracker audit resolve --no-ask --limit "$AUDIT" < /dev/null || true
 
+  if capped risks; then break; fi
   phase "risks — unquoted obstacles, $RISKS at a time"
   tracker risks confirm --limit "$RISKS" < /dev/null || true
 
   # --- the agent phases ---------------------------------------------------
+  if capped logic; then break; fi
   phase "logic — a model reads the sources, $FINDINGS at a time"
   tracker logic resolve --limit "$FINDINGS" < /dev/null || true
 
+  if capped duplicates; then break; fi
   phase "duplicates — $PAIRS pair(s)"
   if [ "$DO_MERGE" -eq 1 ]; then
     tracker duplicates resolve --merge --limit "$PAIRS" \
@@ -298,6 +347,7 @@ for round in $(seq 1 "$ROUNDS"); do
   # Every row sitting at T1 is held there by `fields_present` alone. Nothing above
   # this line can move one, because they are not wrong — they are empty.
   if [ "$DO_ENRICH" -eq 1 ]; then
+    if capped enrich; then break; fi
     phase "enrich — $ENRICH thinnest row(s), $ENRICH_BUDGET article budget"
     tracker enrich --select "$ENRICH" --target 0 --budget "$ENRICH_BUDGET" \
       < /dev/null || true
@@ -329,6 +379,14 @@ for round in $(seq 1 "$ROUNDS"); do
   fi
 done
 
+# A round cut short by the ceiling skipped its settle. It is free, and it is what
+# re-derives the rows the phases that did run just changed.
+if [ "$CAPPED" -eq 1 ]; then
+  phase 'settle — re-derive and score, after the ceiling'
+  tracker backfill derive < /dev/null || true
+  tracker clean --snapshot --since 1 < /dev/null || true
+fi
+
 # --- the morning report -----------------------------------------------------
 
 say 'what is left'
@@ -340,5 +398,6 @@ tracker duplicates < /dev/null 2>&1 | sed -n '1,2p' || true
 
 ELAPSED=$(( ($(date +%s) - STARTED) / 60 ))
 say "overnight complete — ${ELAPSED}m, ~$(spent_so_far) tokens"
+spend_by_command
 printf '    Anything still listed needs either a person or a command that does not\n'
 printf '    exist yet. The block findings are the second kind — see this header.\n'

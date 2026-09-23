@@ -40,8 +40,11 @@ from __future__ import annotations
 import atexit
 import json
 import logging
+import os
 import random
 import re
+import sys
+import threading
 import time
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -279,6 +282,71 @@ def cache_counts(usage: dict[str, Any]) -> tuple[int | None, int | None]:
     if hit is not None and miss is None and isinstance(usage.get("prompt_tokens"), int):
         miss = max(usage["prompt_tokens"] - hit, 0)
     return hit, miss
+
+
+# --- the spend ledger ---------------------------------------------------------
+#
+# One line per paid call, written at the one place every paid call passes through.
+# `scripts/overnight.sh` sums it to enforce its token ceiling, and it used to sum
+# something else: the `~N tokens` lines three commands happen to print. Five of the
+# loop's paid phases printed none — duplicate pairs, audit, risks, enrich's article
+# reads and its settle step — so the ceiling could not see most of what a round
+# spent. A ledger written here cannot drift that way: a new command, or a phase that
+# forgets its summary line, is counted anyway.
+
+_LEDGER_LOCK = threading.Lock()
+
+
+def _command() -> str:
+    """The `tracker` subcommand this process is running, for the ledger's third column.
+
+    Leading words of argv up to the first option, at most two: `logic resolve`,
+    `duplicates resolve`, `enrich`. Enough to attribute a night's spend to a phase,
+    which is the question the morning report answers with it.
+    """
+    words: list[str] = []
+    for arg in sys.argv[1:]:
+        if arg.startswith("-") or len(words) == 2:
+            break
+        words.append(arg)
+    return " ".join(words) or "-"
+
+
+def record_spend(settings: Settings, data: dict[str, Any], model: str) -> None:
+    """Append one paid call's token counts to :data:`Settings.spend_ledger`.
+
+    Tab-separated: UTC time, pid, command, model, prompt tokens, completion tokens,
+    cached prompt tokens, uncached prompt tokens. Unknown counts are written as 0 —
+    the ledger is read by `awk` in a shell script, and an empty field is one more
+    thing for it to get wrong.
+
+    **A failure to write is logged, never raised.** The call has already been paid
+    for and its answer is in hand; losing the answer because a log file could not be
+    opened would be paying twice for one piece of bookkeeping.
+    """
+    path = settings.spend_ledger
+    if path is None or not isinstance(data, dict):
+        return
+    usage = data.get("usage") or {}
+    hit, miss = cache_counts(usage)
+    fields = (
+        time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        os.getpid(),
+        _command(),
+        data.get("model") or model,
+        usage.get("prompt_tokens") or 0,
+        usage.get("completion_tokens") or 0,
+        hit or 0,
+        miss or 0,
+    )
+    line = "\t".join(str(value) for value in fields) + "\n"
+    try:
+        # One short write under a lock: `llm_concurrency` workers share a process,
+        # and O_APPEND keeps separate processes' lines whole.
+        with _LEDGER_LOCK, open(path, "a", encoding="utf-8") as handle:
+            handle.write(line)
+    except OSError as exc:
+        log.warning("could not append to the spend ledger %s: %s", path, exc)
 
 
 class Extractor(Protocol):
@@ -832,7 +900,9 @@ class DeepSeekExtractor:
                     raise LLMError(
                         f"DeepSeek returned HTTP {response.status_code}: {response.text[:500]}"
                     )
-                return response.json()
+                data = response.json()
+                record_spend(self.settings, data, self.model)
+                return data
             if attempt < attempts:
                 time.sleep(_backoff(attempt, settings=self.settings))
         raise LLMError(f"LLM request failed after {attempts} attempts: {last}")

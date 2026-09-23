@@ -273,6 +273,32 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **The nightly quality loop runs again, and its token ceiling sees what it spends**
+  (`scripts/overnight.sh`, `tracker/llm.py`, `tracker/config.py`,
+  `tests/test_overnight.py`).
+
+  From 2026-09-03 the loop did nothing. Every night at 18:00 it started, printed its
+  counts, took its snapshot and stopped. There was no round, no phase and no error
+  line. The counts it printed at each start only moved when something else changed
+  the data, and ingest kept adding to them: duplicate groups went from 4 to 24. The
+  token tally was `grep -o '~N tokens'` over the log, piped onward, under
+  `set -euo pipefail`. A commit that day moved the first tally to the top of round
+  one, before any phase had printed a line for it to match. A grep that matches
+  nothing exits 1, and pipefail plus `set -e` made that the end of the script.
+  Twenty-one nights passed that way.
+
+  The ceiling was also blind when the loop did run. Only three commands print a
+  `~N tokens` line, and five paid phases printed none: duplicate pairs, audit,
+  risks, and enrich's article reads and settle step. The ceiling was checked once a
+  round, so a single round could overshoot it by millions. Now every paid call
+  appends a line to a spend ledger at the one place such calls are made
+  (`DeepSeekExtractor._post` → `record_spend`). The script names a fresh ledger
+  each night (`TRACKER_SPEND_LEDGER`), sums it with awk alone rather than a
+  pipeline, and checks it before every paid phase. The morning report breaks the
+  night down by command. The regression tests lift the shell functions out of the
+  script and run them under its own `set -euo pipefail`, since what failed was
+  whether calling the tally could kill its caller.
+
 - **A `sync --full` run died after the search phase had been paid for**
   (`tracker/cli/sync.py`, `tests/test_cli.py`). The search block named its list of
   planned queries `plan` — which is also the name of the phase list built at the

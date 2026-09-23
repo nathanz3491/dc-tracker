@@ -159,7 +159,10 @@ until two consecutive rounds fail to reduce either count, because neither is a
 queue that drains — ruling a claim out re-derives a row and can raise a finding
 the old value hid, and merging changes the survivor's claim set and can match a
 third row. Ceilings on hours, rounds and tokens, a `VACUUM INTO` snapshot before
-the first merge, and one run at a time:
+the first merge, and one run at a time. The token ceiling is checked before every
+paid phase and counts every paid call: each one appends a line to the night's spend
+ledger (`TRACKER_SPEND_LEDGER`, which the script sets), and the morning report
+breaks the total down by command.
 
 ```bash
 tmux new -s tracker
