@@ -613,6 +613,10 @@ def logic_resolve(
         # call per finding.
         if writing:
             answered = 0
+            # Once per row and code: each of these actions repairs the whole row, so
+            # the second finding of a code on one row was being "answered" by an
+            # action with nothing left to do, and wrote `closed 0 obstacle(s)`.
+            done: set[tuple[int, str]] = set()
             for finding in list(findings):
                 choice = logic_mod.free_answer(session.get(Project, finding.project_id), finding)
                 if choice is None:
@@ -624,8 +628,10 @@ def logic_resolve(
                 )
                 if action is None or row is None:
                     continue
-                what = action.apply(session, row, finding)
-                logic_mod.record_decision(row, finding.code, what, by="rule", detail=why)
+                if (row.id, finding.code) not in done:
+                    what = action.apply(session, row, finding)
+                    logic_mod.record_decision(row, finding.code, what, by="rule", detail=why)
+                    done.add((row.id, finding.code))
                 findings.remove(finding)
                 answered += 1
             if answered:

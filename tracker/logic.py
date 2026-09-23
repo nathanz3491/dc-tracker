@@ -55,7 +55,7 @@ from sqlalchemy.orm import Session
 from tracker.dedup import looks_like_county
 from tracker.models import Project
 from tracker.normalize import is_blank
-from tracker.tracks import RISK_TRACK, TRACK_MILESTONES, standing
+from tracker.tracks import IMPLIED_BY, RISK_TRACK, TRACK_MILESTONES, standing
 from tracker.vocab import (
     BLOCK_LIVE,
     BLOCK_TERMINAL,
@@ -244,6 +244,52 @@ def _day(when: dt.datetime | None) -> str:
 
 def _reached(state) -> set[str]:
     return set(state.reached)
+
+
+def _reported_after_finish(
+    risk: Any,
+    events: list[Any],
+    track: str,
+    *,
+    today: dt.date,
+    sources_by_id: dict[int, Any] | None = None,
+) -> bool:
+    """Whether an obstacle was first reported after its track had already finished.
+
+    Such an obstacle is not a contradiction and is not stale. It is about something
+    the finished milestone does not answer: the expansion, the next phase, the
+    turbines behind the power that is already on. Colossus reads `energized` from
+    2024 and carries a 2026 lawsuit over those turbines; Stargate Abilene is
+    energised and carries a 2026 report of grid delays capping it at 1.2 GW. Both
+    were flagged as obstacles "on a finished track", and the free repair would have
+    closed both, taking them out of every exposure figure.
+
+    When the obstacle was reported comes from its own `first_seen`, else the
+    publication date of the article that reported it, else the day it was
+    discovered. That last one is later than the truth, which errs towards keeping
+    an obstacle open. With no dated milestone to compare against, the old reading
+    stands.
+    """
+    final = TRACK_MILESTONES[track][-1]
+    # The track finished no later than the first dated milestone that *implies* its
+    # last one: a campus energised in January 2024 had its permit by then, whether
+    # or not an approval was ever reported.
+    implying = {final} | {m for m, implied in IMPLIED_BY.items() if final in implied}
+    dated = [
+        e.event_date
+        for e in events
+        if e.event_type in implying and isinstance(e.event_date, dt.date) and e.event_date <= today
+    ]
+    if not dated:
+        return False
+    reported = getattr(risk, "first_seen", None)
+    if reported is None:
+        source = (sources_by_id or {}).get(getattr(risk, "source_id", None))
+        published = getattr(source, "published_at", None) if source is not None else None
+        reported = published or getattr(risk, "created_at", None)
+    if isinstance(reported, dt.datetime):
+        reported = reported.date()
+    return isinstance(reported, dt.date) and reported > min(dated)
 
 
 def _nested_blocks(blocks: list[Any]) -> list[tuple[str, str]]:
@@ -722,6 +768,7 @@ def check_rules(project: Project) -> list[Finding]:
             )
 
     # --- an obstacle on a track that is already finished ----------------------
+    sources_by_id = {s.id: s for s in getattr(project, "sources", ()) or ()}
     for risk in risks:
         if getattr(risk, "status", OPEN_RISK_STATUS) != OPEN_RISK_STATUS:
             continue
@@ -732,7 +779,9 @@ def check_rules(project: Project) -> list[Finding]:
         if not state:
             continue
         final = TRACK_MILESTONES[track][-1]
-        if final in _reached(state):
+        if final in _reached(state) and not _reported_after_finish(
+            risk, events, track, today=today_, sources_by_id=sources_by_id
+        ):
             add(
                 "obstacle_on_a_finished_track",
                 WARNING,
@@ -1545,15 +1594,29 @@ def _clear_first_announced(session: Session, project: Project, _f: Finding) -> s
 
 
 def _resolve_finished_obstacles(session: Session, project: Project, _f: Finding) -> str:
-    stand = standing(project.id, list(project.events), list(project.risks))
+    """Close the obstacles reported before their track finished — and only those.
+
+    One reported afterwards is about something the milestone does not answer; see
+    `_reported_after_finish`, which the rule that raises this finding asks too.
+    """
+    events = list(project.events)
+    stand = standing(project.id, events, list(project.risks))
     by_track = {s.track: s for s in stand.tracks}
+    sources_by_id = {s.id: s for s in project.sources}
+    today = _today()
     closed = 0
     for risk in project.risks:
         if getattr(risk, "status", OPEN_RISK_STATUS) != OPEN_RISK_STATUS:
             continue
         track = RISK_TRACK.get(risk.category)
         state = by_track.get(track) if track else None
-        if state and TRACK_MILESTONES[track][-1] in set(state.reached):
+        if (
+            state
+            and TRACK_MILESTONES[track][-1] in set(state.reached)
+            and not _reported_after_finish(
+                risk, events, track, today=today, sources_by_id=sources_by_id
+            )
+        ):
             risk.status = "resolved"
             risk.resolved_at = _today()
             closed += 1
@@ -1587,6 +1650,22 @@ def _resolve_finished_obstacles(session: Session, project: Project, _f: Finding)
 #: offered they can only be verified or skipped, which is the honest set of
 #: choices until `capacity_block` lands and the rules are re-expressed per block.
 #: See the plan: those rules are then either per-block or retired.
+#: The codes `free_answer` settles by reading stored data — and so the codes a past
+#: answer must never mark settled.
+#:
+#: Settling a judgement is right: a model or a person looked, and asking again costs.
+#: These cost nothing, and the condition they repair comes back on its own. A new
+#: article adds another open obstacle on a track that finished long ago; a re-crawl
+#: brings back a milestone dated next year. The earlier `closed 3 obstacle(s)` line
+#: then settled the code, the finding was filtered out before the free path could
+#: see it, and the obstacle stayed open and counted in every exposure figure.
+#: Measured on a production copy: 39 findings hidden that way, 36 of them open
+#: obstacles on finished tracks.
+FREE_CODES: Final[frozenset[str]] = frozenset(
+    {"obstacle_on_a_finished_track", "milestone_in_the_future", "city_holds_a_county_name"}
+)
+
+
 def free_answer(project: Project, finding: Finding) -> tuple[str, str] | None:
     """The action an unattended run may apply without asking, and why.
 

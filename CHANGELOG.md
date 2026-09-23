@@ -293,6 +293,34 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **An obstacle is only "on a finished track" if it was reported before the track
+  finished, and a free repair no longer hides the next one** (`tracker/logic.py` —
+  `_reported_after_finish`, `_resolve_finished_obstacles`, `FREE_CODES`,
+  `tracker/audit.py` — `settled_codes`, `tracker/cli/logic.py`,
+  `docs/workflows/logic.md`, `tests/test_logic.py`).
+
+  The free repair for `obstacle_on_a_finished_track` closes an open obstacle when
+  its track's last milestone is reached. Its premise is that a finished track
+  cannot still be blocked. That holds for an obstacle reported before the milestone
+  and fails for one reported after, which is about the expansion or the turbines
+  behind power already on. Colossus has been energised since 2024 and carries a
+  2026 lawsuit over those turbines. Stargate Abilene is energised and carries a
+  2026 report that grid delays capped it at 1.2 GW. Both were flagged, and the free
+  pass would have closed both along with 84 others, taking them out of every
+  exposure figure. The check and the repair now both skip an obstacle reported
+  after its track finished. An implied milestone is dated by the reported one that
+  implies it, since a site energised in January 2024 had its permit by then. On a
+  production copy the finding went from 36 to 6, and the free pass closed 9
+  obstacles, each reported before the milestone that answers it.
+
+  The muzzle was the other half. A past answer ("closed 3 obstacle(s)") marked the
+  code settled for good, so when a new article added another obstacle, the finding
+  was filtered out before the free path could see it. The three free-answered codes
+  are now never settled by a past answer; the free path re-answers them whenever
+  they fire, once per row. The second finding of a code on one row used to be
+  "answered" again by an action with nothing left to do, which wrote
+  `closed 0 obstacle(s)`.
+
 - **Duplicates filed under a misspelt town, a second spelling of a county, or no
   shared place at all are now found** (`tracker/capex.py` — `suspected_duplicates`,
   `_locality_buckets`, `_locality_word`, `_one_edit_apart`,

@@ -826,6 +826,72 @@ def test_dropping_a_future_milestone_clears_the_contradiction(session):
     assert {e.event_type for e in project.events} == {"groundbreaking"}
 
 
+def _risk(session, project, category: str, first_seen: dt.date | None) -> Risk:
+    risk = Risk(
+        project_id=project.id,
+        category=category,
+        severity="material",
+        summary=f"{category} reported",
+        status="open",
+        first_seen=first_seen,
+    )
+    session.add(risk)
+    session.flush()
+    return risk
+
+
+def test_an_obstacle_reported_after_its_track_finished_is_live_not_stale(session):
+    """Colossus: energised in 2024, and a 2026 lawsuit over the turbines behind that
+    power. The finished track does not answer it, so it is neither a contradiction
+    nor something the free repair may close."""
+    project = _project(session, name="Colossus", phase="operational")
+    _event(session, project, "energized", dt.date(2024, 1, 1))
+    later = _risk(session, project, "grid_capacity", dt.date(2026, 4, 15))
+    session.refresh(project)
+
+    assert "obstacle_on_a_finished_track" not in _codes(project)
+    logic._resolve_finished_obstacles(session, project, None)
+    assert later.status == "open"
+
+
+def test_an_obstacle_reported_before_its_track_finished_is_closed(session):
+    project = _project(session, name="Abilene", phase="operational")
+    _event(session, project, "energized", dt.date(2026, 7, 1))
+    earlier = _risk(session, project, "transmission", dt.date(2025, 9, 29))
+    session.refresh(project)
+
+    assert "obstacle_on_a_finished_track" in _codes(project)
+    logic._resolve_finished_obstacles(session, project, None)
+    assert earlier.status == "resolved"
+
+
+def test_an_implied_milestone_is_dated_by_the_one_implying_it(session):
+    """No permit approval was ever reported, but a campus energised in 2024 had one
+    by then — so a 2025 permitting obstacle is about something else."""
+    project = _project(session, name="Memphis", phase="operational")
+    _event(session, project, "energized", dt.date(2024, 1, 1))
+    _risk(session, project, "permitting", dt.date(2025, 3, 1))
+    session.refresh(project)
+    assert "obstacle_on_a_finished_track" not in _codes(project)
+
+
+def test_a_free_answer_never_settles_its_code(session):
+    """A new obstacle arrives on a row whose earlier ones were closed for free. The
+    old `closed 3 obstacle(s)` line settled the code, so the finding was filtered
+    out before the free path could see it — 36 obstacles stayed open that way."""
+    from tracker.audit import settled_codes
+
+    project = _project(session, name="A")
+    logic.record_decision(
+        project,
+        "obstacle_on_a_finished_track",
+        "closed 3 obstacle(s) on a finished track",
+        by="rule",
+    )
+    logic.record_decision(project, "milestone_in_the_future", "removed 2 milestone(s)", by="rule")
+    assert settled_codes(project) & logic.FREE_CODES == set()
+
+
 def test_closing_an_obstacle_leaves_the_others_open(session):
     project = _project(session, name="A", phase="construction")
     _event(session, project, "permit_approved", dt.date(2025, 1, 1))

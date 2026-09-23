@@ -650,8 +650,14 @@ def settled_codes(project: Project) -> set[str]:
     A dismissal is different and stays settled: it records a judgement that the
     figure is right, not an edit that could be reverted.
     """
+    from tracker.logic import FREE_CODES
+
     settled: set[str] = set()
     for code, what in _DECISION.findall(project.notes or ""):
+        if code in FREE_CODES:
+            # Answered for free whenever it fires, so a past answer settles nothing:
+            # see `logic.FREE_CODES` for the obstacles this kept open.
+            continue
         edit = _EDIT.match(what.strip())
         if edit and _no_change(edit.group(2), edit.group(3)):
             # `6750 -> 6750`: a ruling that left the value where it was answered

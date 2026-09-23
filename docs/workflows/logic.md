@@ -164,6 +164,18 @@ Three stages before anything is put to a model:
    data already stored, never a judgement between two sourced figures. Three codes
    clear it, and between them they were **448 of 536** resolvable findings — which
    is most of what makes a whole-database pass affordable.
+
+   A past free answer never settles its code (`logic.FREE_CODES`). The condition it
+   repairs comes back on its own — a new article adds another obstacle, a re-crawl
+   restores a milestone dated next year — and an old `closed 3 obstacle(s)` line
+   used to hide the new one from the very path that answers it for nothing. And an
+   obstacle counts as sitting "on a finished track" only if it was reported before
+   the track finished (`_reported_after_finish`, dating an implied milestone by the
+   one that implies it). One reported afterwards is about what the milestone does
+   not answer: Colossus is energised since 2024 and carries a 2026 lawsuit over the
+   turbines behind that power. On a production copy that took the finding from 36
+   to 6, and the free pass then closed 9 obstacles rather than the 86 the
+   unrefined rule would have.
 3. **What is left** goes to the agent (default), the older fixed menu (`--llm`), or
    to a person at the keyboard. `--auto` stops after stage 2, for scripts and for
    the console, which has no keyboard.
@@ -300,7 +312,7 @@ Touching any of these means the poster is in scope. Re-render with
 | Rules | `tracker/logic.py` — `check_rules`, `_check_stored_against_evidence`, `dedupe`, `ERROR`, `WARNING` |
 | Collisions and the per-field policy | `tracker/logic.py` — `check_collisions`, `why_decided`, `decision`; `tracker/upsert.py` — `FIELD_POLICY`, `Policy`, `resolve_field` |
 | Judgement and the evidence audit | `tracker/logic.py` — `examine`, `audit_evidence`, `parse_contradictions`, `parse_evidence_findings`, `AUDIT_VERDICTS`, `auditable_fields` |
-| Actions, and which codes have none | `tracker/logic.py` — `ACTIONS`, `_stating`, `resolvable`, `free_answer`, `record_decision`; `tracker/audit.py` — `_rule_against` |
+| Actions, and which codes have none | `tracker/logic.py` — `ACTIONS`, `_stating`, `resolvable`, `free_answer`, `FREE_CODES`, `_resolve_finished_obstacles`, `_reported_after_finish`, `record_decision`; `tracker/audit.py` — `_rule_against` |
 | Drift repair | `tracker/logic.py` — `resolve_drift`, `check_collisions`; `tracker/upsert.py` — `recompute_from_sources`; `tracker/blocks.py` — `raise_phase` |
 | Contested fields, the two calls, the write | `tracker/conflicts.py` — `disputes`, `solve`, `_challenge`, `supersede`, `apply_outcome`, `MAX_CALLS_PER_FIELD`, `MIN_CONFIDENCE`, `SUPERSEDED`, `MISREAD` |
 | The agent path | `tracker/triage.py` — `triage`, `apply_rule_out`, `_claims_value`, `rule_out_tool`, `leave_alone_tool`, `RULEABLE_FIELDS`, `SYSTEM` |
