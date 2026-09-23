@@ -570,6 +570,15 @@ initial build of the v1 PRD.
   claimed work could not show when a deploy really moved something. A project now
   counts only when a row was rewritten or a figure filled.
 
+- **A recorded decision is written where the next re-derive keeps it**
+  (`tracker/logic.py`, `tests/test_unstated.py`). A decision — a model's ruling, a
+  rule's repair, a cleared figure — was appended after the notes' generated and
+  per-source lines, and the next re-derive moved it up among the other decisions.
+  The lines were the same but the row counted as changed: the second `backfill
+  derive` after this round's deploy reported 58 rows whose notes differed only in
+  order. Each decision now goes in after the last line of prose, which is where a
+  re-derive puts it, so one derive is a fixed point.
+
 ### Changed
 
 - **Picking from a short menu no longer pays the deepest reasoning rate**

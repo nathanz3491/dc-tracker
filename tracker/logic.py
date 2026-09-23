@@ -2023,13 +2023,22 @@ def record_decision(
     string is true.
     """
     from tracker.models import utcnow
+    from tracker.upsert import NOTE_PREFIX, SOURCE_NOTE_PREFIX
 
     line = f"{utcnow().date()} {by} resolved `{code}`: {one_line(what)}"
     if detail:
         line += f" — {one_line(detail)}"
     lines = [ln for ln in (project.notes or "").splitlines() if ln.strip()]
     if line not in lines:
-        lines.append(line)
+        # After the last line of prose, which is where `upsert._merge_notes` keeps
+        # it: prose first, then the generated and per-source lines. Appended at the
+        # very end, the next re-derive moved it up, so a row "changed" twice for one
+        # decision — 58 rows on the second `backfill derive` after a deploy.
+        prose = (NOTE_PREFIX, SOURCE_NOTE_PREFIX)
+        at = max(
+            (i + 1 for i, ln in enumerate(lines) if not ln.strip().startswith(prose)), default=0
+        )
+        lines.insert(at, line)
     project.notes = "\n".join(lines)
 
 

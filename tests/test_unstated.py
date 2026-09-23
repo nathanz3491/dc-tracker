@@ -132,6 +132,30 @@ def test_the_clearing_is_recorded_once_and_reads_back_as_settled(session):
     assert "value_without_evidence" in settled_codes(project)
 
 
+def test_one_re_derive_is_a_fixed_point_even_beside_other_notes(session):
+    """The decision is written where the next re-derive would put it.
+
+    Appended after the generated and per-source lines, it was moved up among the
+    decisions by the next pass: on production the second `backfill derive` found 58
+    rows "changed" whose notes held the same lines in another order.
+    """
+    project = _row(
+        session,
+        first_announced=dt.date(2025, 10, 31),
+        notes="an operator's own remark\n[source][abcd1234] extracted summary: a campus",
+    )
+    _cite(session, project, "https://example.test/a", mw_planned=100.0)
+
+    recompute_from_sources(session, project)
+    once = project.notes
+    recompute_from_sources(session, project)
+
+    assert project.notes == once
+    lines = once.splitlines()
+    assert lines[0] == "an operator's own remark"
+    assert lines[1].endswith("(no citation on this row states it)"), lines
+
+
 def test_the_set_is_the_summed_facts_and_nothing_else():
     """Adding an identity or a derived field here would clear what is never
     re-stated by a claim — a name, a coordinate, the blocker."""
