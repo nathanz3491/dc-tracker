@@ -478,9 +478,11 @@ def users_passwd(
 ) -> None:
     """Change one account's password.
 
-    **Live sessions survive this.** They are held in the console's memory and this
-    is a different process, so an old cookie keeps working until it expires — 12
-    hours at most. Restart the console if one has to die now.
+    **Every session signed in with the old one ends**, within a few seconds, on a
+    running console and without a restart. Sessions live in the console's memory
+    and this is a different process, so it cannot reach them — but each one
+    remembers a digest of the credential it was granted on, and the console
+    re-checks that against this row every few seconds per session.
     """
     from tracker import accounts
 
@@ -498,7 +500,7 @@ def users_passwd(
         emit({"email": changed, "changed": True})
         return
     console.print(f"[green]password changed[/green] for {escape(changed)}")
-    console.print("[dim]any session already open stays valid until it expires.[/dim]")
+    console.print("[dim]sessions signed in with the old password end within a few seconds.[/dim]")
 
 
 @users_app.command("rm")
@@ -512,6 +514,9 @@ def users_rm(
     nothing without them — `ON DELETE CASCADE`, decided in migration 0021. Nothing
     about the dataset changes: an account has never owned a project, a citation or
     a figure.
+
+    Their open sessions end within a few seconds on a running console, on every
+    route: each request re-checks its session against this row.
     """
     from tracker import accounts, watchlist
 

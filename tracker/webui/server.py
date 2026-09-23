@@ -22,6 +22,7 @@ still here.
 from __future__ import annotations
 
 import gzip
+import hmac
 import json
 import logging
 import re
@@ -237,6 +238,42 @@ class Console:
         self._auth_checked_at = now
         return self._auth_required
 
+    def account_holds(self, account_id: int, stamp: str) -> bool | None:
+        """Whether a session's account still exists with the credential it signed in on.
+
+        The question `Gate.session_for` puts to the database, at most once per
+        session every `auth.SESSION_CONFIRM_S`. It exists because `tracker users
+        rm` and `tracker users passwd` run in another process and cannot reach the
+        gate's table — so without it a deleted account read every route but
+        `/api/dataset` for the rest of its session.
+
+        One primary-key read of one column. The stamp comparison is what makes it
+        more than an existence check: see `accounts.session_stamp` for why the id
+        alone cannot say whether the row is still the same person.
+
+        `None` for "could not say" — a database error of the ordinary kind — and
+        the gate refuses the request without dropping the session. A pending
+        migration or a missing file is *not* swallowed: those propagate to the
+        route's handler, which answers 503 with the fix, where a refusal here would
+        have sent every reader to a sign-in form that cannot help them.
+        """
+        from sqlalchemy import select
+
+        from tracker import accounts
+        from tracker.models import Account
+
+        try:
+            with self.read_session() as session:
+                stored = session.scalar(
+                    select(Account.password_hash).where(Account.id == account_id)
+                )
+        except OperationalError:
+            log.warning("console: could not re-read account %d; refusing this request", account_id)
+            return None
+        if stored is None:
+            return False
+        return hmac.compare_digest(accounts.session_stamp(stored), stamp)
+
 
 class Handler(BaseHTTPRequestHandler):
     console: Console  # set by serve()
@@ -358,8 +395,14 @@ class Handler(BaseHTTPRequestHandler):
         console with no accounts it means "anonymous, and that is allowed"; on one
         with accounts it means "not signed in". `_authed` is the question that
         distinguishes them, and it is the only one the routing asks.
+
+        **Confirmed against the account row, not only looked up in the gate.** A
+        session outlives nothing its account does: deleted, re-passworded, or its
+        id handed to somebody new, and the next request that finds the
+        confirmation older than `auth.SESSION_CONFIRM_S` drops it. See
+        `Console.account_holds`.
         """
-        return self.console.gate.session_for(self._session)
+        return self.console.gate.session_for(self._session, confirm=self.console.account_holds)
 
     @property
     def _authed(self) -> bool:
@@ -369,7 +412,8 @@ class Handler(BaseHTTPRequestHandler):
         unset `TRACKER_CONSOLE_PASSWORD` did before accounts existed: reaching
         loopback already means having the machine, and publishing is what refuses
         (see `cli._console_accounts`). Once one account exists, every route needs
-        a session.
+        a session whose account still exists — static files and the health check
+        included, so a deleted account loses the page shell along with the data.
         """
         if not self.console.auth_required:
             return True
@@ -591,6 +635,11 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.path == "/api/capex/overview/stream":
                 return self._capex_overview_stream(body)
             self._error(404, f"no route {parsed.path!r}")
+        except (MigrationError, FileNotFoundError) as exc:
+            # Same answer `do_GET` gives. Confirming a session reads the account
+            # row, so a database that needs `tracker init` reaches this handler
+            # too, and a 500 would hide the one-word fix.
+            self._error(503, str(exc))
         except ConnectionError:
             log.debug("POST %s: client went away", parsed.path)
         except ImportError as exc:
@@ -650,9 +699,10 @@ class Handler(BaseHTTPRequestHandler):
             accounts.touch(session, account)
             account_id = account.id
             email = account.email
+            stamp = accounts.session_stamp(account.password_hash)
 
         gate.succeed(client)
-        token = gate.grant(account_id)
+        token = gate.grant(account_id, stamp=stamp)
         log.info("console: %s signed in from %s", email, client)
         self._json({"ok": True}, extra=self._set_session_cookie(token))
 
@@ -674,7 +724,7 @@ class Handler(BaseHTTPRequestHandler):
         if locked:
             return self._json(locked, status=429)
 
-        from tracker.accounts import AccountError, redeem
+        from tracker.accounts import AccountError, redeem, session_stamp
 
         client = self._client()
         engine = open_db(self.console.db_path, readonly=False)
@@ -688,6 +738,7 @@ class Handler(BaseHTTPRequestHandler):
                     name=(str(body["name"]).strip() or None) if body.get("name") else None,
                 )
                 account_id, email = account.id, account.email
+                stamp = session_stamp(account.password_hash)
         except AccountError as exc:
             self.console.gate.fail(client)
             log.warning("console: refused registration from %s: %s", client, exc)
@@ -702,7 +753,7 @@ class Handler(BaseHTTPRequestHandler):
         # Signed in on the spot. Making somebody type the password they just chose
         # into a second form teaches them nothing and is one more place to fail.
         self.console.gate.succeed(client)
-        token = self.console.gate.grant(account_id)
+        token = self.console.gate.grant(account_id, stamp=stamp)
         log.info("console: %s registered from %s", email, client)
         self._json({"ok": True}, extra=self._set_session_cookie(token))
 
@@ -822,10 +873,11 @@ class Handler(BaseHTTPRequestHandler):
         caller is `/api/dataset` — the request every redraw makes — and
         `read_session` opens the database each time it is called.
 
-        Also the place a **deleted** account's session dies. `tracker users rm`
-        runs in another process and cannot reach the gate's dictionary, so the row
-        going missing is what invalidates the cookie — see the note in
-        `webui/auth.py` about what this does and does not cover.
+        This used to be the *only* place a deleted account's session died, which
+        is why every other route kept serving one. `_account_id` confirms the
+        session against the row on every route now (`Console.account_holds`); the
+        revoke below is for the account deleted in the moment between that
+        confirmation and this read.
         """
         account_id = self._account_id
         if account_id is None:

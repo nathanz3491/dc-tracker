@@ -1501,6 +1501,164 @@ def test_creating_an_account_closes_the_gate_without_a_restart(server, seeded_db
     assert request(address, "/api/dataset")[0] == 401
 
 
+def _delete_account(db_path, email=EMAIL):
+    """`tracker users rm`, as the CLI does it: another connection, another process."""
+    from tracker import accounts
+    from tracker.db import open_db, session_scope
+
+    with session_scope(open_db(db_path, readonly=False)) as session:
+        assert accounts.delete(session, email), f"no account {email} to delete"
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/projects",
+        "/api/project?id=1",
+        "/api/claims?project=1",
+        "/api/updates",
+        "/api/articles",
+        "/api/dataset",
+        "/api/health",
+        "/static/app.js",
+    ],
+)
+def test_a_deleted_account_stops_reading_on_its_next_request(gated, seeded_db, path):
+    """`tracker users rm` runs in another process and cannot reach the gate's table.
+
+    Measured on a copy of production before this was fixed: with the account row
+    gone, its session kept getting 200 from `/api/projects`, `/api/project`,
+    `/api/claims`, `/api/updates` and `/api/articles` for the rest of its 12-hour
+    life. Only `/api/dataset` looked the account up, so only the landing page ever
+    noticed. Every route now confirms the session against the row.
+
+    `session_confirm_s` is reached past rather than waited out, for the reason
+    `test_creating_an_account_closes_the_gate_without_a_restart` gives.
+    """
+    address, console = gated
+    console.gate.session_confirm_s = 0
+    _, cookie = sign_in(address)
+    assert raw(address, path, cookie=cookie)[0] == 200, "the fixture must read first"
+
+    _delete_account(seeded_db)
+    status, _, _ = raw(address, path, cookie=cookie)
+    assert status == 401, f"{path} still served an account that no longer exists"
+
+
+def test_a_deleted_accounts_session_is_dropped_not_merely_refused(gated, seeded_db):
+    """Refusing the request and keeping the token would leave it in the table for
+    twelve hours, one database read per request, for nobody."""
+    address, console = gated
+    console.gate.session_confirm_s = 0
+    _, cookie = sign_in(address)
+    token = cookie.split("=", 1)[1]
+    assert console.gate.session_for(token) is not None
+
+    _delete_account(seeded_db)
+    raw(address, "/api/health", cookie=cookie)
+    assert console.gate.session_for(token) is None
+
+
+def test_a_session_does_not_pass_to_whoever_inherits_the_account_id(gated, seeded_db):
+    """`account.id` is a plain `INTEGER PRIMARY KEY`, so SQLite hands a deleted id out
+    again to the next account created.
+
+    A session that remembered only the id would then sign its holder in as that
+    stranger — their watchlist, their name in the header — which is why a session
+    also remembers a digest of the credential it was granted against, and a row
+    under the same id with a different credential is not the same account.
+    """
+    address, console = gated
+    console.gate.session_confirm_s = 0
+    _, cookie = sign_in(address)
+    _status, before = as_reader(address, cookie, "/api/dataset")
+    old_id = console.gate.session_for(cookie.split("=", 1)[1])
+    assert before["account"]["email"] == EMAIL
+
+    _delete_account(seeded_db)
+    new_id = _account(seeded_db, "mallory@example.com")
+    assert new_id == old_id, "precondition: SQLite reused the id"
+
+    status, after = as_reader(address, cookie, "/api/dataset")
+    assert status == 401, f"the old cookie now reads as {after}"
+
+
+def test_changing_a_password_signs_the_old_session_out(gated, seeded_db):
+    """Somebody changes a password because they think it is known.
+
+    A cookie that outlived the change would keep the person who knew it signed in
+    for up to twelve hours, and the only way to kill it used to be restarting the
+    console for everybody.
+    """
+    from tracker import accounts
+    from tracker.db import open_db, session_scope
+
+    address, console = gated
+    console.gate.session_confirm_s = 0
+    _, cookie = sign_in(address)
+    with session_scope(open_db(seeded_db, readonly=False)) as session:
+        accounts.set_password(session, EMAIL, "a different secret")
+
+    assert raw(address, "/api/health", cookie=cookie)[0] == 401
+    status, fresh = sign_in(address, "a different secret")
+    assert status == 200
+    assert raw(address, "/api/health", cookie=fresh)[0] == 200
+
+
+def test_a_session_is_confirmed_against_its_account_at_most_once_a_window():
+    """The database is asked about a session every few seconds, not every request.
+
+    A page load is a dozen static files, all behind the gate. Each one reading the
+    account row would be a real cost for an answer that changes about never — so a
+    confirmation is good for `session_confirm_s`, and granting a session counts as
+    one, because the sign-in has just read the row.
+    """
+    from tracker.webui.auth import Gate
+
+    now = [100.0]
+    gate = Gate(clock=lambda: now[0], session_confirm_s=5)
+    asked: list[tuple[int, str]] = []
+
+    def holds(account_id: int, stamp: str) -> bool:
+        asked.append((account_id, stamp))
+        return True
+
+    token = gate.grant(7, stamp="credential")
+    assert gate.session_for(token, confirm=holds) == 7
+    assert asked == [], "a sign-in is a confirmation"
+
+    now[0] += 6
+    assert gate.session_for(token, confirm=holds) == 7
+    assert asked == [(7, "credential")]
+
+    now[0] += 1
+    assert gate.session_for(token, confirm=holds) == 7
+    assert len(asked) == 1, "inside the window again"
+
+
+def test_a_session_whose_account_cannot_be_checked_is_refused_but_kept():
+    """Three answers, not two.
+
+    `False` — the account is gone or its credential changed — drops the session.
+    `None` — the database could not be read just now — refuses *this* request and
+    keeps the session, because signing everybody out over a transient read error
+    would be a failure of its own.
+    """
+    from tracker.webui.auth import Gate
+
+    now = [0.0]
+    gate = Gate(clock=lambda: now[0], session_confirm_s=0)
+    token = gate.grant(3, stamp="s")
+
+    now[0] += 1
+    assert gate.session_for(token, confirm=lambda *_: None) is None
+    assert gate.session_for(token) == 3, "kept for when the database answers again"
+
+    now[0] += 1
+    assert gate.session_for(token, confirm=lambda *_: False) is None
+    assert gate.session_for(token) is None, "dropped"
+
+
 def test_the_password_check_is_constant_time():
     """Compare with hmac, so the secret cannot be recovered from timing."""
     import inspect

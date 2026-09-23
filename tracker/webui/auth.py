@@ -28,12 +28,22 @@ oversight: the host's poller restarts this process whenever a commit lands, and 
 session that survived a restart would have to be persisted somewhere the console
 can write — which is the one thing a read-only console does not have.
 
-One consequence worth stating rather than discovering. `tracker users` runs in a
-*different process*, so it cannot reach into this dictionary: deleting an account
-takes effect on that account's next request, because `Handler._account` resolves
-the session to a row and a missing row is not a session — but **changing a
-password does not sign the old cookie out**. The 12-hour TTL is what bounds that.
-If a token has to die now, restart the console.
+**A session is only as good as the account behind it**, and that has to be asked
+rather than assumed. `tracker users` runs in a *different process*, so it cannot
+reach into this dictionary: a session that remembered only an account id kept
+working after `tracker users rm` for the rest of its 12-hour life, on every route
+but the one that happened to look the row up — measured on a copy of production,
+`/api/projects`, `/api/project`, `/api/claims`, `/api/updates` and `/api/articles`
+all answered 200 for an account that no longer existed.
+
+So a session also carries a `stamp` — whatever the granting code says identifies
+the credential it was granted against; the console uses a digest of the stored
+password hash — and `session_for` takes a `confirm` question to put to the
+database, asked at most once every `SESSION_CONFIRM_S` per session. Deleting an
+account, changing its password, or SQLite handing a deleted account's id to the
+next account created (it is a plain `INTEGER PRIMARY KEY`, so it does) all end the
+old sessions within those few seconds, on every route, without a restart. The gate
+still touches no database itself: it is handed the question, not the connection.
 """
 
 from __future__ import annotations
@@ -42,6 +52,7 @@ import logging
 import secrets
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 log = logging.getLogger(__name__)
@@ -49,6 +60,15 @@ log = logging.getLogger(__name__)
 #: How long a sign-in lasts. Long enough to work a session, short enough that a
 #: forgotten open tab does not stay a key forever.
 SESSION_TTL_S = 12 * 60 * 60
+
+#: How long a session's account may go without being re-read.
+#:
+#: Every request is behind the gate, including every static file, so asking the
+#: database on each one would be a dozen reads per page load for an answer that
+#: changes about never. Five seconds is shorter than it takes to switch from the
+#: terminal that ran `tracker users rm` to a browser and reload — the same
+#: reasoning, and the same number, as `server.AUTH_CACHE_S`.
+SESSION_CONFIRM_S = 5.0
 
 #: Failures before the gate closes on one client, and for how long. Eight is
 #: generous for a typo and ruinous for a guesser.
@@ -93,6 +113,13 @@ class _Session:
 
     account_id: int
     expires: float
+    #: Opaque to the gate: what the granting code said identifies the credential.
+    #: `confirm` is handed it back, which is how a changed password or a reused id
+    #: is told apart from the account the session was actually granted for.
+    stamp: str = ""
+    #: When `confirm` last said this session's account still holds. Granting counts,
+    #: because the sign-in that asked for the token has just read the row.
+    confirmed_at: float = 0.0
 
 
 @dataclass
@@ -105,10 +132,14 @@ class Gate:
     """
 
     session_ttl: int = SESSION_TTL_S
+    session_confirm_s: float = SESSION_CONFIRM_S
     max_failures: int = MAX_FAILURES
     lockout_s: int = LOCKOUT_S
     global_max_failures: int = GLOBAL_MAX_FAILURES
     global_lockout_s: int = GLOBAL_LOCKOUT_S
+    #: Injectable so a test can move time rather than wait it out. Monotonic, so a
+    #: wall-clock change on the host cannot extend a session or end a lockout.
+    clock: Callable[[], float] = field(default=time.monotonic, repr=False)
 
     _sessions: dict[str, _Session] = field(default_factory=dict, repr=False)
     _attempts: dict[str, _Attempts] = field(default_factory=dict, repr=False)
@@ -125,7 +156,7 @@ class Gate:
         that is the point of the global counter, and without it an attacker just
         rotates addresses.
         """
-        now = time.monotonic()
+        now = self.clock()
         with self._lock:
             record = self._attempts.get(client)
             until = max(
@@ -137,7 +168,7 @@ class Gate:
 
     def fail(self, client: str) -> None:
         """Count one refused attempt, and close the gate if that was enough."""
-        now = time.monotonic()
+        now = self.clock()
         with self._lock:
             record = self._attempts.setdefault(client, _Attempts())
             record.count += 1
@@ -167,31 +198,80 @@ class Gate:
 
     # --- sessions ---------------------------------------------------------
 
-    def grant(self, account_id: int) -> str:
-        """A fresh token for one account."""
+    def grant(self, account_id: int, *, stamp: str = "") -> str:
+        """A fresh token for one account, remembering the credential it was granted on.
+
+        `stamp` is opaque here and is handed back to `session_for`'s `confirm`.
+        Left empty, a session can only ever be confirmed by an account id — which
+        is exactly the weakness `stamp` exists to close, so the console always
+        passes one.
+        """
         token = secrets.token_urlsafe(32)
+        now = self.clock()
         with self._lock:
-            self._prune()
-            self._sessions[token] = _Session(account_id, time.monotonic() + self.session_ttl)
+            self._prune(now)
+            self._sessions[token] = _Session(
+                account_id, now + self.session_ttl, stamp=stamp, confirmed_at=now
+            )
         return token
 
-    def session_for(self, token: str | None) -> int | None:
+    def session_for(
+        self,
+        token: str | None,
+        *,
+        confirm: Callable[[int, str], bool | None] | None = None,
+    ) -> int | None:
         """Which account this token signs in as, or None if it does not.
 
         Returns an account id rather than a boolean because that id is what every
         route downstream needs: a watchlist read is a question about one person,
         and a handler that had to ask twice could ask two different gates.
+
+        **`confirm` is how a session stays as good as the account behind it.** The
+        gate cannot see the database, so the caller hands it the question — does
+        account `id` still hold the credential `stamp` names? — and it is asked at
+        most once per `session_confirm_s` per token, outside the lock, because it
+        is a database read. Its three answers mean three different things:
+
+        * **True** — carry on, and do not ask again for a while;
+        * **False** — the account is gone, its password changed, or its id now
+          belongs to somebody else: the session is dropped, not merely refused;
+        * **None** — it could not be answered just now: this request is refused
+          and the session kept, because signing everybody out over one unreadable
+          moment would be a failure of its own.
+
+        Without `confirm` the answer is the table's alone, which is what a caller
+        with no database — a test of the lockout, say — wants.
         """
         if not token:
             return None
+        now = self.clock()
         with self._lock:
             found = self._sessions.get(token)
             if found is None:
                 return None
-            if found.expires < time.monotonic():
+            if found.expires < now:
                 del self._sessions[token]
                 return None
-            return found.account_id
+            if confirm is None or now - found.confirmed_at < self.session_confirm_s:
+                return found.account_id
+
+        verdict = confirm(found.account_id, found.stamp)
+        if verdict is None:
+            return None
+        if not verdict:
+            self.revoke(token)
+            log.info(
+                "console: dropped a session for account %d — the account was deleted, "
+                "its password changed, or its id was given to someone else",
+                found.account_id,
+            )
+            return None
+        with self._lock:
+            if self._sessions.get(token) is not found:
+                return None  # signed out while the question was being asked
+            found.confirmed_at = now
+        return found.account_id
 
     def revoke(self, token: str | None) -> None:
         if not token:
@@ -199,8 +279,7 @@ class Gate:
         with self._lock:
             self._sessions.pop(token, None)
 
-    def _prune(self) -> None:
-        now = time.monotonic()
+    def _prune(self, now: float) -> None:
         for token in [t for t, s in self._sessions.items() if s.expires < now]:
             del self._sessions[token]
 
@@ -224,6 +303,7 @@ __all__ = [
     "GLOBAL_MAX_FAILURES",
     "LOCKOUT_S",
     "MAX_FAILURES",
+    "SESSION_CONFIRM_S",
     "SESSION_TTL_S",
     "Gate",
     "cookie_value",

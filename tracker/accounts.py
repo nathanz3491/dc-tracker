@@ -276,6 +276,23 @@ def touch(session: Session, account: Account) -> None:
     session.flush()
 
 
+def session_stamp(password_hash: str) -> str:
+    """What a console session remembers about the credential it was granted on.
+
+    The console's gate holds sessions in memory and `tracker users` runs in another
+    process, so a session has to be re-checked against the row — and an account id
+    alone cannot say whether the row is still the same account. Changing a password
+    changes the stored hash; so does SQLite handing a deleted account's id to the
+    next account created, because every hash carries a fresh salt. A session whose
+    stamp no longer matches its row is therefore a session for a credential that no
+    longer exists, whichever of those happened.
+
+    A digest of the hash rather than the hash, so the gate's table holds nothing an
+    attacker could start cracking from.
+    """
+    return hashlib.sha256(password_hash.encode("utf-8")).hexdigest()
+
+
 def _unknown(session: Session, email: str) -> str:
     """The message for an address nobody holds, naming the ones somebody does.
 
@@ -380,6 +397,7 @@ __all__ = [
     "outstanding",
     "redeem",
     "require",
+    "session_stamp",
     "set_password",
     "set_watch_all",
     "touch",

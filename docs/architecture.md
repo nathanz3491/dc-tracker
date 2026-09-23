@@ -335,6 +335,13 @@ holding no claim the server has to trust. They live in memory, so a restart sign
 everybody out; the deployer restarts this process on every commit, so that happens
 often and is not worth engineering around.
 
+Living in memory also means `tracker users` — another process — cannot reach
+them. So a session remembers a digest of the credential it was granted on, and
+every request confirms it against the account row at most once every five seconds:
+deleting an account, changing its password, or SQLite reissuing a deleted
+account's id ends the old sessions within seconds, on every route. The gate itself
+still touches no database; it is handed the question (`webui/auth.py`).
+
 ---
 
 ## Two web pages, not one

@@ -153,6 +153,16 @@ and sent them is a password in a chat log.
 Nothing here is a role. Every account can do exactly what the shared password
 allowed, which is now: read the dataset, and keep a watchlist.
 
+**A session lasts only as long as its account does.** Sessions live in the
+console's memory and `tracker users` runs in another process, so each request
+re-checks its session against the account row, at most once every five seconds
+per session. `tracker users rm` and `tracker users passwd` therefore end that
+account's open sessions within seconds, on every route, with no restart — and so
+does SQLite handing a deleted account's id to the next account created, which it
+does. Before this only the landing page's data route looked the row up, and a
+deleted account went on reading every other route for the rest of its twelve-hour
+session.
+
 **The landing page answers one question: what changed on what I am
 watching.** Two pages have held this slot. The first opened on the projects
 table — filter card, coverage strip, eighteen columns, all at equal weight before
