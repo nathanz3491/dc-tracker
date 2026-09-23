@@ -1195,6 +1195,40 @@ def test_truncated_reply_is_retried(prompt):
     assert "truncated" in (outcome.error or "")
 
 
+class BudgetLLM(FakeLLM):
+    """Records the reply budget each call asked for."""
+
+    def __init__(self, replies, **kwargs):
+        super().__init__(replies, **kwargs)
+        self.budgets: list[int | None] = []
+
+    def complete(self, *, system, user, max_tokens=None):
+        self.budgets.append(max_tokens)
+        return super().complete(system=system, user=user, max_tokens=max_tokens)
+
+
+def test_a_starved_reply_is_retried_within_the_configured_ceiling(prompt):
+    """The retry after a reply that ran out of room asked for double the ceiling —
+    65,536 tokens at today's 32,768 — so one article could cost ~98,000 output tokens
+    and fail anyway: the 9 URLs failing "reply truncated" on a copy of production
+    failed that way on every one of their 66 tries. The ceiling is documented as a
+    limit; the retry now stays under it once it is that large."""
+    settings = get_settings()
+    llm = BudgetLLM(['{"projects": [', '{"projects": ['], finish_reason="length")
+    crawl.extract_one(fetched(), prompt=prompt, extractor=llm, settings=settings)
+    assert llm.budgets[0] is None, "the first call takes the provider default ceiling"
+    assert llm.budgets[1] is not None
+    assert llm.budgets[1] <= max(settings.max_completion_tokens, crawl.MAX_STARVED_RETRY_TOKENS)
+
+
+def test_a_small_ceiling_still_gets_room_to_answer_on_the_retry(prompt):
+    """The doubling was measured to rescue a reply starved at 4,096; that case keeps it."""
+    settings = get_settings().model_copy(update={"max_completion_tokens": 4096})
+    llm = BudgetLLM(['{"projects": [', '{"projects": ['], finish_reason="length")
+    crawl.extract_one(fetched(), prompt=prompt, extractor=llm, settings=settings)
+    assert llm.budgets[1] == 8192
+
+
 def test_provider_error_is_reported_not_raised(prompt):
     outcome = crawl.extract_one(fetched(), prompt=prompt, extractor=BoomLLM())
     assert outcome.status == "llm_error"

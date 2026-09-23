@@ -465,7 +465,8 @@ class Settings(BaseSettings):
     #: spends this budget before a single character of the answer appears.
     #:
     #: At 4096 that combination starves. Extraction survives it — `crawl.py`
-    #: notices an unclosed `<think>`, retries at double the budget and tells the
+    #: notices an unclosed `<think>`, retries at double the budget (capped at
+    #: `crawl.MAX_STARVED_RETRY_TOKENS`, and never below this ceiling) and tells the
     #: model not to deliberate — but the recovery costs a second paid call and
     #: suppresses the reasoning it was just given. `infer` does not survive it at
     #: all: it logs and returns an empty Analysis, so the drawer's panel simply

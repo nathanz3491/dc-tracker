@@ -764,9 +764,13 @@ def sync(
         # "0 failed" while a dozen articles sit unread.
         unread = disc.failed(session)
         unread_hosts = disc.failure_summary(session)
+        # Named in the summary rather than silently dropped from the retry: a URL
+        # that fails the same way every run is still unread, and still readable by
+        # hand. See `discover.MAX_SAME_FAILURES`.
+        given_up = disc.given_up(session)
         if retry_failed:
             room = max(0, limit - len(pending_urls))
-            pending_urls += [row.url for row in unread[:room]]
+            pending_urls += [row.url for row in disc.retryable(session, limit=room or None)][:room]
 
     if pending_urls and not breadth_first and deepening:
         detail = f", {risky} of them reporting an obstacle" if risky else ""
@@ -978,6 +982,12 @@ def sync(
             "[dim]list them with `tracker queue --failed`; re-attempt with "
             "`tracker sync --retry-failed`[/dim]"
         )
+        if given_up:
+            console.print(
+                f"[dim]{len(given_up)} of them failed the same way "
+                f"{disc.MAX_SAME_FAILURES} times running and are no longer retried "
+                "automatically; `tracker ingest crawl --url <URL>` still reads one[/dim]"
+            )
     if (totals["failed"] or unread) and not browser:
         console.print(BROWSER_HINT)
 
@@ -1658,6 +1668,12 @@ def queue(
         console.print(table)
         if total > len(rows):
             console.print(f"[dim]showing {len(rows)} of {total}; --limit to see more[/dim]")
+        if failed and (stuck := len(disc.given_up(session))):
+            console.print(
+                f"[dim]{stuck} of these failed the same way {disc.MAX_SAME_FAILURES} times "
+                "running and are no longer retried automatically; "
+                "`tracker ingest crawl --url <URL>` still reads one[/dim]"
+            )
         console.print(
             "\n[dim]crawl them:  [/dim] tracker ingest crawl --from-queue\n"
             "[dim]drop one:    [/dim] tracker queue --drop --id <ID>\n"

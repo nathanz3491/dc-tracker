@@ -546,6 +546,40 @@ def test_a_failed_url_is_not_requeued_either(session):
     assert report.already_known == 1
 
 
+# --- Retrying what failed -----------------------------------------------------
+
+
+def _failing(session, url: str, *, failures: int, status: str = "llm_error") -> IngestUrl:
+    row = IngestUrl(url=url, run_id="r", status=status, attempts=failures, failures=failures)
+    session.add(row)
+    session.flush()
+    return row
+
+
+def test_a_url_that_keeps_failing_the_same_way_is_no_longer_retried(session):
+    """Measured on a copy of production: 9 URLs "reply truncated" tried 66 times, 14
+    failing with one SSL EOF tried 190 times, all still retried on the latest run."""
+    _failing(session, "https://a.test/given-up", failures=discover.MAX_SAME_FAILURES)
+    _failing(session, "https://a.test/worth-one-more", failures=discover.MAX_SAME_FAILURES - 1)
+
+    assert [r.url for r in discover.retryable(session)] == ["https://a.test/worth-one-more"]
+    assert [r.url for r in discover.given_up(session)] == ["https://a.test/given-up"]
+    # Still listed as unread: giving up on retrying is not pretending it was read.
+    assert {r.url for r in discover.failed(session)} == {
+        "https://a.test/given-up",
+        "https://a.test/worth-one-more",
+    }
+
+
+def test_the_retry_limit_is_the_streak_not_the_request_count(session):
+    """`attempts` counts requests over a URL's whole life. A URL retried three times
+    for three different reasons has not shown that retrying repeats itself."""
+    row = _failing(session, "https://a.test/unlucky", failures=1)
+    row.attempts = 40
+    session.flush()
+    assert [r.url for r in discover.retryable(session)] == ["https://a.test/unlucky"]
+
+
 # --- Queue inspection -------------------------------------------------------
 
 

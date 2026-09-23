@@ -33,7 +33,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from tracker.config import Settings, get_settings, seed_path
@@ -897,6 +897,26 @@ def pending_risk_count(session: Session, spec: FilterSpec) -> int:
 #: `thin_content` is not settled, because a model never read the page.
 RETRYABLE_STATUSES = ("fetch_error", "parse_error", "llm_error", "thin_content")
 
+#: Failed tries in a row, the same way each time, after which a URL is no longer
+#: retried automatically (`ingest_url.failures`, migration 0025).
+#:
+#: A transient failure — a rate limit, an outage, a flaky handshake — rarely repeats
+#: identically on three separate runs; a structural one repeats every time: a page
+#: that 404s, a host whose TLS our client cannot complete, an article whose
+#: extraction always runs out of room. Measured on a copy of production, the second
+#: kind was being paid for without end: 9 URLs failing "reply truncated at the token
+#: limit" had been tried 66 times, at up to ~98,000 output tokens a try, and 14
+#: failing with one SSL "EOF" error 190 times, still retried on 2026-09-22. Three is
+#: the smallest streak that tells the two apart while giving a transient failure two
+#: more chances. It stops only the *automatic* retries — `sync --retry-failed`,
+#: enrich's retry harvester — and `tracker ingest crawl --url` still reads one.
+MAX_SAME_FAILURES = 3
+
+
+def _worth_retrying():
+    """The SQL test for a failed URL an automatic retry may still spend a try on."""
+    return and_(IngestUrl.status.in_(RETRYABLE_STATUSES), IngestUrl.failures < MAX_SAME_FAILURES)
+
 
 def failed(session: Session, limit: int | None = None) -> list[IngestUrl]:
     """URLs a previous run could not turn into a project.
@@ -905,6 +925,9 @@ def failed(session: Session, limit: int | None = None) -> list[IngestUrl]:
     discovery deliberately never re-queues a URL it has already seen. Without this
     they accumulate silently — a run can report "queue is empty, 0 failed" while a
     dozen articles sit unread.
+
+    Every one, including those no longer retried automatically: giving up on
+    retrying a URL is not the same as having read it. See `retryable`.
     """
     stmt = (
         select(IngestUrl)
@@ -914,6 +937,36 @@ def failed(session: Session, limit: int | None = None) -> list[IngestUrl]:
     if limit:
         stmt = stmt.limit(limit)
     return list(session.scalars(stmt))
+
+
+def retryable(session: Session, limit: int | None = None) -> list[IngestUrl]:
+    """The failed URLs an automatic retry should still spend a try on.
+
+    `failed` less the ones that have failed the same way :data:`MAX_SAME_FAILURES`
+    times running. Longest-untried first, like `failed`.
+    """
+    stmt = (
+        select(IngestUrl)
+        .where(_worth_retrying())
+        .order_by(IngestUrl.last_tried_at.asc(), IngestUrl.id.asc())
+    )
+    if limit:
+        stmt = stmt.limit(limit)
+    return list(session.scalars(stmt))
+
+
+def given_up(session: Session) -> list[IngestUrl]:
+    """Failed URLs no longer retried automatically, for a run summary to name."""
+    return list(
+        session.scalars(
+            select(IngestUrl)
+            .where(
+                IngestUrl.status.in_(RETRYABLE_STATUSES),
+                IngestUrl.failures >= MAX_SAME_FAILURES,
+            )
+            .order_by(IngestUrl.last_tried_at.asc(), IngestUrl.id.asc())
+        )
+    )
 
 
 def failure_summary(session: Session) -> list[tuple[str, int]]:
@@ -1234,6 +1287,7 @@ class _RawFetcher:
 __all__ = [
     "DEAD_STATUS",
     "MAX_PER_FEED",
+    "MAX_SAME_FAILURES",
     "RETRYABLE_STATUSES",
     "Candidate",
     "DiscoverError",
@@ -1251,6 +1305,7 @@ __all__ = [
     "drop_pending",
     "failed",
     "failure_summary",
+    "given_up",
     "load_config",
     "load_sitemaps",
     "matches_known_project",
@@ -1261,6 +1316,7 @@ __all__ = [
     "project_identities",
     "queue_candidates",
     "refilter_pending",
+    "retryable",
     "run",
     "select_candidates",
     "sweep_sitemaps",

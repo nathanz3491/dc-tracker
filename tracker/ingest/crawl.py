@@ -127,6 +127,19 @@ SCALE_NOTE_MARKER = "plausibility ceiling"
 #: Marker inserted where the middle of an over-long article was dropped.
 TRUNCATION_MARKER = "\n\n[... middle of article omitted for length ...]\n\n"
 
+#: The most a retry after a starved reply may ask for, when doubling the ceiling
+#: would ask for more.
+#:
+#: The doubling was sized when the ceiling was 4,096 and a reasoning model starved
+#: inside it; 8,192 plus "do not deliberate" rescued those replies. At today's
+#: 32,768 the same doubling asks for 65,536, so one article could cost ~98,000
+#: output tokens across its two calls — and a reply that spends 32,768 tokens
+#: reasoning about a 24,000-character article is rambling, not short of room: the 9
+#: URLs failing "reply truncated" on a copy of production failed on every one of
+#: their 66 tries. So the retry doubles up to this, and never below the configured
+#: ceiling, which `Settings.max_completion_tokens` documents as a limit.
+MAX_STARVED_RETRY_TOKENS: Final = 32_768
+
 #: Subdomains a company publishes its own announcements under. Only consulted
 #: when the *parent* domain is already known to belong to an operator — see
 #: `classify_source_type`.
@@ -2469,7 +2482,8 @@ def extract_one(
                 "produced an answer. Do not deliberate. Emit the JSON object immediately, "
                 "with no prose and no code fences."
             )
-            budget = settings.max_completion_tokens * 2
+            ceiling = settings.max_completion_tokens
+            budget = max(ceiling, min(ceiling * 2, MAX_STARVED_RETRY_TOKENS))
         elif attempt > 1:
             message = (
                 user + "\n\nYour previous reply was not a single valid JSON object. "

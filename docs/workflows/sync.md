@@ -229,7 +229,16 @@ to skip after a phase that added sources:
 Unread URLs are invisible to both `discover` (which never re-queues a known URL)
 and the pending queue, so without an explicit line a run would report "queue empty,
 0 failed" while articles pile up. The count is reported whether or not *this* run
-retried them. Coverage of operators we should hold is likewise a separate question
+retried them.
+
+**`--retry-failed` stops at three identical failures.** A URL that has failed the
+same way three tries running (`discover.MAX_SAME_FAILURES`) is left out of the
+retry and named in the summary instead: a transient failure rarely repeats
+identically on three separate runs, and a structural one repeats every time.
+Measured on a copy of production, 9 URLs failing "reply truncated" had been tried 66
+times and 14 failing with one SSL error 190 times. `tracker ingest crawl --url`
+still reads one, and the retry after a starved reply no longer doubles past the
+configured token ceiling. Coverage of operators we should hold is likewise a separate question
 a clean sync cannot see, so a run without `--prospect` points at `tracker coverage`.
 
 ## The other sync
@@ -273,7 +282,7 @@ Touching any of these means the poster is in scope. Re-render with
 | Discover, archives, search | `tracker/ingest/discover.py` — `run`, `load_sitemaps`, `sweep_sitemaps`, `queue_candidates`; `tracker/ingest/search.py` |
 | What search looks for | `tracker/ingest/search.py` — `_PLACE_TEMPLATES`, `rank_places`, `plan_queries`, `PlannedQuery.label`, `templates`; `tracker/normalize.py` — `state_name` |
 | Judging a template | `tracker/funnel.py` — `feed_group`, `survey`, `verdicts`; `tracker/ingest/search.py` — `LabelStat` |
-| Queue ordering and counts | `tracker/ingest/discover.py` — `pending`, `pending_split`, `pending_risk_count`, `failed`, `failure_summary` |
+| Queue ordering and counts | `tracker/ingest/discover.py` — `pending`, `pending_split`, `pending_risk_count`, `failed`, `retryable`, `given_up`, `MAX_SAME_FAILURES`, `failure_summary` |
 | Prospect | `tracker/prospect.py`; `tracker/roster.py` — `hunt_order`, `measure` |
 | Extract and refresh | `tracker/ingest/crawl.py` — `run`, `stale_sources`, `unchanged_reads`, `record_url`, `failure_reason`, `MAX_REFRESH_BACKOFF` |
 | The party gate | `tracker/ingest/crawl.py` — `_parties`, `_ROLE_MARKERS`, `_role_is_licensed` |

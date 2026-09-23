@@ -235,6 +235,20 @@ def test_the_retry_harvester_picks_up_this_projects_failures(session):
     assert enrich.harvest_retry(session, project.id).urls == ["https://x.com/stack-hillsboro-b"]
 
 
+def test_the_retry_harvester_leaves_a_url_that_keeps_failing_the_same_way(session):
+    from tracker.ingest.discover import MAX_SAME_FAILURES
+
+    project = add_project(session)
+    add_queued(session, "https://x.com/stack-hillsboro-b", "STACK Hillsboro", status="parse_error")
+    gave_up = add_queued(
+        session, "https://x.com/stack-hillsboro-c", "STACK Hillsboro", status="parse_error"
+    )
+    gave_up.failures = MAX_SAME_FAILURES
+    session.flush()
+
+    assert enrich.harvest_retry(session, project.id).urls == ["https://x.com/stack-hillsboro-b"]
+
+
 def test_refresh_excludes_placeholder_and_derived_citations(session):
     """Neither is a fetchable article, so re-reading them is wasted budget."""
     project = add_project(session)

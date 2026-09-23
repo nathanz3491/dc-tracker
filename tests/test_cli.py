@@ -762,6 +762,45 @@ def test_sync_ends_with_the_project_table(seeded: Path, monkeypatch):
     assert "project(s)" in result.output
 
 
+def test_sync_retry_failed_leaves_a_url_that_keeps_failing_the_same_way(
+    initialized: Path, monkeypatch
+):
+    """`--retry-failed` (and `--full`) used to re-read every failed URL every run,
+    however many times it had failed identically. It is still listed, and an explicit
+    `ingest crawl --url` still reads it."""
+    from tracker.db import init_db, session_scope
+    from tracker.ingest import crawl
+    from tracker.ingest.discover import MAX_SAME_FAILURES
+    from tracker.ingest.records import IngestReport
+    from tracker.models import IngestUrl
+
+    engine, _ = init_db(initialized)
+    with session_scope(engine) as session:
+        for url, failures in (
+            ("https://a.test/given-up", MAX_SAME_FAILURES),
+            ("https://a.test/one-more", 1),
+        ):
+            session.add(
+                IngestUrl(
+                    url=url, run_id="r", status="parse_error", attempts=failures, failures=failures
+                )
+            )
+    asked: list[list[str]] = []
+
+    def fake_run(session, urls, **_kw):
+        asked.append(list(urls))
+        return IngestReport()
+
+    monkeypatch.setattr(crawl, "run", fake_run)
+    set_key(monkeypatch)
+    result = invoke(
+        initialized, "sync", "--skip-discover", "--skip-refresh", "--skip-derive", "--retry-failed"
+    )
+    assert result.exit_code == 0, result.output
+    assert asked == [["https://a.test/one-more"]]
+    assert "no longer retried automatically" in result.output
+
+
 def test_sync_suggests_browser_only_when_fetches_failed(seeded: Path, monkeypatch):
     set_key(monkeypatch)
     result = invoke(seeded, "sync", "--skip-discover", "--skip-refresh")

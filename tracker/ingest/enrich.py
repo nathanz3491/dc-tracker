@@ -272,13 +272,15 @@ def harvest_retry(session: Session, project_id: int) -> Harvest:
     """This project's URLs that previously failed to fetch.
 
     Worth retrying because a failure may have been transient, and because
-    `--browser` can read pages plain HTTP cannot.
+    `--browser` can read pages plain HTTP cannot. Not once a URL has failed the same
+    way `discover.MAX_SAME_FAILURES` times running: that is a failure retrying
+    repeats, and this harvester runs every round of every enrich.
     """
     from tracker.ingest.discover import (
-        RETRYABLE_STATUSES,
         matches_known_project,
         newsroom_companies,
         project_identities,
+        retryable,
     )
 
     implied = newsroom_companies()
@@ -286,7 +288,7 @@ def harvest_retry(session: Session, project_id: int) -> Harvest:
     if not identities:
         return Harvest("retry", skipped="project has no company/locality to match on")
 
-    rows = session.scalars(select(IngestUrl).where(IngestUrl.status.in_(RETRYABLE_STATUSES))).all()
+    rows = retryable(session)
     hits = [
         r.url
         for r in rows
