@@ -12,6 +12,203 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **The nightly quality loop runs again, and its token ceiling sees what it spends**
+  (`scripts/overnight.sh`, `tracker/llm.py`, `tracker/config.py`,
+  `tests/test_overnight.py`).
+
+  From 2026-09-03 the loop did nothing. Every night at 18:00 it started, printed its
+  counts, took its snapshot and stopped. There was no round, no phase and no error
+  line. The counts it printed at each start only moved when something else changed
+  the data, and ingest kept adding to them: duplicate groups went from 4 to 24. The
+  token tally was `grep -o '~N tokens'` over the log, piped onward, under
+  `set -euo pipefail`. A commit that day moved the first tally to the top of round
+  one, before any phase had printed a line for it to match. A grep that matches
+  nothing exits 1, and pipefail plus `set -e` made that the end of the script.
+  Twenty-one nights passed that way.
+
+  The ceiling was also blind when the loop did run. Only three commands print a
+  `~N tokens` line, and five paid phases printed none: duplicate pairs, audit,
+  risks, and enrich's article reads and settle step. The ceiling was checked once a
+  round, so a single round could overshoot it by millions. Now every paid call
+  appends a line to a spend ledger at the one place such calls are made
+  (`DeepSeekExtractor._post` → `record_spend`). The script names a fresh ledger
+  each night (`TRACKER_SPEND_LEDGER`), sums it with awk alone rather than a
+  pipeline, and checks it before every paid phase. The morning report breaks the
+  night down by command. The regression tests lift the shell functions out of the
+  script and run them under its own `set -euo pipefail`, since what failed was
+  whether calling the tally could kill its caller.
+
+- **A logic repair now survives the next re-derive, and one that changed nothing is
+  refused** (`tracker/logic.py`, `tracker/triage.py`, `tracker/audit.py`,
+  `tracker/blocks.py`, `tracker/cli/logic.py`, `docs/workflows/logic.md` + `.svg`,
+  `tests/test_logic.py`, `tests/test_triage.py`).
+
+  Twenty rows said in their notes that a figure had been cleared while still holding
+  it. The worst was #72, Flexential Englewood. Its notes read `mw_built 6750 -> empty`
+  above a stored 6,750 MW on an 11 MW campus. That one row was a quarter of every
+  built megawatt in the database and 5.2M of the H200 estimate. Four menu actions
+  (`built_exceeds_planned`, `online_before_announced`, `past_its_own_date`) assigned a
+  column. A column is a cache of the citations, and the next `backfill derive` put
+  the old value back. The note stayed, and the settled-finding reader saw a revert,
+  so the finding came back. Each action now rules out the citations stating the
+  value and lets the merge policy re-derive, as `audit` and the agent already did.
+  "Raise planned to built" became "rule out the planned figures below what is
+  built": a planned figure no source states is not one this database can hold.
+
+  #72 had a second fault. The agent wrote that nothing supported 6,750 MW, then named
+  the citation stating **18 MW**. The right figure was ruled out and the wrong one
+  stood. The sentence recorded `6750 -> 6750`, which read as a repair that still
+  held, so the finding was never asked again. Twenty-eight recorded rulings on the
+  snapshot changed nothing. `apply_rule_out` now refuses, before writing, a ruling
+  none of whose citations states the value the row holds, and the agent is told the
+  rule. `settled_codes` no longer counts `X -> X` as an answer, which reopens the
+  rulings recorded before the rail.
+
+  Two smaller faults on the same path. `logic resolve --auto` reported and
+  "repaired" 48 rows every night and changed none of them. Drift was checked against
+  the claims alone, while the write path then raises `phase` to the furthest live
+  tranche. The check now asks the same question the write path answers
+  (`blocks.raise_phase`): 0 of 48 on the production copy. And the drift repairs and
+  free answers shared the agent loop's transaction, so the first refused ruling
+  rolled them back after they had been printed as done. They are now committed
+  before any model is asked.
+
+- **A figure no citation states any more is cleared, not kept** (`tracker/upsert.py`,
+  `tracker/logic.py`, `tracker/capex.py`, `docs/data-quality.md`,
+  `docs/design-decisions.md`, `docs/workflows/logic.md`, `tests/test_unstated.py`).
+
+  The merge handed back whatever the row held whenever no claim on a field took
+  part. For the identity fields that is the policy, since a name is never
+  overwritten, and for the derived ones it is harmless. For the facts a reader sums
+  it was a leak: a value outlived every claim that ever stated it. A re-extraction
+  by a better prompt dropped a figure the old one had misread. A ruling took out the
+  last claim. A merge moved a citation. In each case the figure stayed, uncited,
+  reported as fact and counted in every total. On a production copy, 68 values stood
+  this way: $487B of investment, 6,699 MW planned and 812 MW built. Among them was
+  $450B on one Michigan campus whose only article gives that figure for the whole
+  Stargate programme. `#98` held 15.5 MW built with both of its claims ruled out,
+  although `resolve`'s own docstring said a ruling "has to hold even when it is the
+  only claim left".
+
+  For the seven claim-owned fields (`CLAIM_OWNED_FIELDS`: customer, both
+  capacities, investment, phase and the two dates), no live claim now means no
+  value. Phase falls back to `announced`, as it always has. The tranche and party
+  reconciles still run afterwards and may refill a field from their own citations.
+  Each value cleared this way gets a rule's decision line in the row's notes, so the
+  history stays readable, and `value_without_evidence` now fires only until the next
+  re-derive. The deploy's `tracker init` applies it. Total investment across the
+  database moves from $3.01T to $2.52T.
+
+  On the same path, `logic check` no longer names one citation as both the kept and
+  the losing side of a disagreement. On an identity field the kept value need not be
+  any claim's, so the fallback winner and the first rival could be the same claim.
+  That happened in 74 of 1,183 reported disagreements and now happens in 0.
+
+- **A question a model could not answer is no longer paid for again every round**
+  (`tracker/declines.py`, migration `0025_model_decline`, `tracker/models.py`,
+  `tracker/triage.py`, `tracker/riskcheck.py`, `tracker/audit.py`,
+  `tracker/cli/duplicates.py`, `tracker/cli/logic.py`, `tracker/cli/quality.py`,
+  `docs/workflows/{duplicates,logic}.md` + `.svg`, `docs/analysis.md`,
+  `tests/test_declines.py`).
+
+  The overnight loop picks its work the same way each round. Only logic's "left
+  alone" left any record, so four paid phases asked the same undecided questions
+  again. A duplicate pair the agent left alone was asked again, and so was one it
+  rated below the floor, one a rail refused, or one where it could not quote a
+  sentence. So were a logic ruling the rails refused, an audit finding the model
+  declined (with its search, four fetches and second call), and an obstacle judged
+  unclear. Each came back in the same order at the same price until two rounds in
+  a row failed to move a count. Measured on the snapshot: 31 eligible pairs against
+  a per-round limit of 25, at ~45,000-260,000 tokens a pair. 141 open unquoted
+  obstacles, 2 ever refuted.
+
+  Each undecided answer is now recorded in `model_decline` with a hash of what the
+  model was shown: both rows' citations, the evidence block, the article text. The
+  item is held back before `--limit` is applied, so the limit buys fresh questions.
+  It comes back when that evidence changes, or after 30 days, because the agent
+  phases search the web and the web changes while the row does not. `--again` on
+  every command asks anyway. A failed call, a broken search and "same site, but
+  merging needs `--merge`" are deliberately not recorded. The enrich agent's
+  version of this waste, fields nobody has published, is `tracker.attempts`,
+  which landed on `main` alongside and keeps its record in the row's notes. These
+  four stay out of the notes: a pair belongs to two rows, and ruling a claim out
+  changes what the model would be shown without adding the citation that reopens
+  an attempt.
+
+  `duplicates resolve` also commits after every pair now. It was one transaction
+  for the whole run, which held SQLite's write lock across every agent call while a
+  console sign-in timed out against it.
+
+- **Duplicates filed under a misspelt town, a second spelling of a county, or no
+  shared place at all are now found** (`tracker/capex.py` — `suspected_duplicates`,
+  `_locality_buckets`, `_locality_word`, `_one_edit_apart`,
+  `docs/workflows/duplicates.md` + `.svg`, `tests/test_duplicate_detection.py`).
+
+  Stargate Michigan was stored six times. Two of the rows spelt Saline as "Salien",
+  so pass one, which buckets on the raw lowercased town, never compared them with
+  the four that did not. Project Jupiter sat under "Doña Ana" and "Doña Ana County",
+  Yondr under "Loudoun and Prince William" and "... counties". xAI's Colossus was
+  filed under `Memphis` and `孟菲斯`, TeraWulf's Lake Mariner under its real county
+  and under a town in it, Polaris Forge 1 under Ellendale and under McLean County.
+  None of them was ever reported, so each was counted twice in every total.
+
+  Pass one now folds accents, case and the words that say what kind of place a
+  locality is. Within a state it joins two localities of five or more letters that
+  are one edit apart. That only decides which rows are compared: a pair still needs
+  a signal from the evidence. A fourth pass compares rows that carry one
+  distinctive name in one state, whatever their places say. The name must hold a
+  word that is neither a place, nor industry vocabulary, nor the state, because a
+  false pair holds a real campus out of the buyer table. On a production copy this
+  raised 22 pairs never reported before, all of them real duplicates on inspection,
+  and lost none. Suspected groups went from 33 to 39.
+
+- **An obstacle is only "on a finished track" if it was reported before the track
+  finished, and a free repair no longer hides the next one** (`tracker/logic.py` —
+  `_reported_after_finish`, `_resolve_finished_obstacles`, `FREE_CODES`,
+  `tracker/audit.py` — `settled_codes`, `tracker/cli/logic.py`,
+  `docs/workflows/logic.md`, `tests/test_logic.py`).
+
+  The free repair for `obstacle_on_a_finished_track` closes an open obstacle when
+  its track's last milestone is reached. Its premise is that a finished track
+  cannot still be blocked. That holds for an obstacle reported before the milestone
+  and fails for one reported after, which is about the expansion or the turbines
+  behind power already on. Colossus has been energised since 2024 and carries a
+  2026 lawsuit over those turbines. Stargate Abilene is energised and carries a
+  2026 report that grid delays capped it at 1.2 GW. Both were flagged, and the free
+  pass would have closed both along with 84 others, taking them out of every
+  exposure figure. The check and the repair now both skip an obstacle reported
+  after its track finished. An implied milestone is dated by the reported one that
+  implies it, since a site energised in January 2024 had its permit by then. On a
+  production copy the finding went from 36 to 6, and the free pass closed 9
+  obstacles, each reported before the milestone that answers it.
+
+  The muzzle was the other half. A past answer ("closed 3 obstacle(s)") marked the
+  code settled for good, so when a new article added another obstacle, the finding
+  was filtered out before the free path could see it. The three free-answered codes
+  are now never settled by a past answer; the free path re-answers them whenever
+  they fire, once per row. The second finding of a code on one row used to be
+  "answered" again by an action with nothing left to do, which wrote
+  `closed 0 obstacle(s)`.
+
+- **"Online in 2027" no longer reads as 1 January 2027** (`tracker/normalize.py` —
+  `precision_in_quote`, `tracker/ingest/crawl.py` — `_claim_axes`,
+  `tracker/backfill.py` — `derive_date_precision`, `tracker/cli/quality.py` —
+  `backfill precision`, `docs/known-limitations.md`, `docs/data-quality.md`,
+  `tests/test_date_precision.py`).
+
+  The precision columns meant to show which dates are vague showed almost nothing:
+  2 of 482 rows, 4 of 1,455 date claims. Meanwhile 110 of 203 stored online dates
+  fell on 1 January. The extraction prompt asks for ISO dates and tells the model
+  to write a bare year as `YYYY-01-01`, so the parser saw a full day and recorded
+  none. The article's own words were still on disk in the stored quote. The
+  precision is now read from them: the words directly before the year give a day,
+  a month, a quarter, a half or a bare year. A sentence that does not narrow the
+  date, or names a period the stored date does not start, records nothing rather
+  than a guess. New extractions get it at once. `tracker backfill precision
+  [--apply]` does the same, for free, for claims already stored. On a production
+  copy 444 of 661 quoted date claims gained a precision (248 year, 130 month, 43
+  quarter, 27 half), and 153 projects' cached columns moved.
+
 - **Deleting an account, or changing its password, ends that person's console
   sessions within seconds, on every route** (`tracker/webui/auth.py`,
   `tracker/webui/server.py`, `tracker/accounts.py`, `tracker/cli/people.py`,
@@ -175,6 +372,43 @@ initial build of the v1 PRD.
   now skips it and reports "not swept — the article budget is zero".
 
 ### Changed
+
+- **Picking from a short menu no longer pays the deepest reasoning rate**
+  (`tracker/llm.py` — `judgement_extractor`, `tracker/config.py` —
+  `deepseek_judgement_effort`, `tracker/cli/quality.py`, `tracker/cli/logic.py`,
+  `tracker/cli/duplicates.py`, `tracker/ingest/enrich.py`, `.env.example`,
+  `docs/ingesting.md`, `tests/test_stream.py`).
+
+  `risks confirm`, `audit resolve`, `logic conflicts`, enrich's settle step,
+  `logic resolve --llm` and `duplicates resolve --no-agent` each make one call per
+  item. Each picks from a closed set of answers against evidence already in the
+  prompt. All six reused the factory built for `infer`, whose case for `max` effort
+  is "one call per project". Overnight that is up to a hundred `max` calls a round.
+  This is the same inherited-`max` mistake the agent tier was split out to fix,
+  measured then at 264,000 tokens a finding against an estimated 45,000. At `max`
+  on a 6,000-token reply budget, `risks confirm` also ran out of room and came back
+  unusable. They now use a judgement tier at `high` effort, the setting extraction
+  already answers this kind of question at. `infer`, `point`'s identification and
+  `logic check --read/--audit` keep `max`, because each really is one call per
+  project. `TRACKER_DEEPSEEK_JUDGEMENT_EFFORT=max` restores the old cost for anyone
+  who measures it doing better.
+
+- **The agent reads an article's close as well as its lead, and every call reports
+  its cache hits** (`tracker/agent.py`, `tracker/llm.py`, `scripts/overnight.sh`,
+  `tests/test_agent.py`, `tests/test_overnight.py`).
+
+  Every tool result is clipped from the front to 8,000 characters. For an article
+  that kept the headline, the lead and the site navigation, and dropped the close,
+  which is where a news piece puts its timeline and its objections. Extraction has
+  always read articles through `crawl.truncate`, which keeps the head and the tail.
+  The agent's `read_article` now does the same, within the same budget, and its
+  quote is still checked against exactly what it was shown.
+
+  `complete` is the most frequent call in the tool, a ~10,000-token system prompt on
+  every article extracted, and it never read the provider's cache counts, so a broken
+  prompt prefix on that path would have gone unnoticed. It reads them now, as does
+  the agent loop's retry of a truncated turn, which had dropped them. The overnight
+  morning report prints each command's cache hit rate beside its spend.
 
 - **The capex view costs half what it did, and reads the database 21 times rather
   than 2,031** (`tracker/capex.py`, `tracker/webui/dataset.py`,
@@ -448,43 +682,6 @@ initial build of the v1 PRD.
 
 ### Changed
 
-- **The agent reads an article's close as well as its lead, and every call reports
-  its cache hits** (`tracker/agent.py`, `tracker/llm.py`, `scripts/overnight.sh`,
-  `tests/test_agent.py`, `tests/test_overnight.py`).
-
-  Every tool result is clipped from the front to 8,000 characters. For an article
-  that kept the headline, the lead and the site navigation, and dropped the close,
-  which is where a news piece puts its timeline and its objections. Extraction has
-  always read articles through `crawl.truncate`, which keeps the head and the tail.
-  The agent's `read_article` now does the same, within the same budget, and its
-  quote is still checked against exactly what it was shown.
-
-  `complete` is the most frequent call in the tool, a ~10,000-token system prompt on
-  every article extracted, and it never read the provider's cache counts, so a broken
-  prompt prefix on that path would have gone unnoticed. It reads them now, as does
-  the agent loop's retry of a truncated turn, which had dropped them. The overnight
-  morning report prints each command's cache hit rate beside its spend.
-
-- **Picking from a short menu no longer pays the deepest reasoning rate**
-  (`tracker/llm.py` — `judgement_extractor`, `tracker/config.py` —
-  `deepseek_judgement_effort`, `tracker/cli/quality.py`, `tracker/cli/logic.py`,
-  `tracker/cli/duplicates.py`, `tracker/ingest/enrich.py`, `.env.example`,
-  `docs/ingesting.md`, `tests/test_stream.py`).
-
-  `risks confirm`, `audit resolve`, `logic conflicts`, enrich's settle step,
-  `logic resolve --llm` and `duplicates resolve --no-agent` each make one call per
-  item. Each picks from a closed set of answers against evidence already in the
-  prompt. All six reused the factory built for `infer`, whose case for `max` effort
-  is "one call per project". Overnight that is up to a hundred `max` calls a round.
-  This is the same inherited-`max` mistake the agent tier was split out to fix,
-  measured then at 264,000 tokens a finding against an estimated 45,000. At `max`
-  on a 6,000-token reply budget, `risks confirm` also ran out of room and came back
-  unusable. They now use a judgement tier at `high` effort, the setting extraction
-  already answers this kind of question at. `infer`, `point`'s identification and
-  `logic check --read/--audit` keep `max`, because each really is one call per
-  project. `TRACKER_DEEPSEEK_JUDGEMENT_EFFORT=max` restores the old cost for anyone
-  who measures it doing better.
-
 - **Four publishers the database nominated itself** (`tracker/seed/feeds.toml`).
   `tracker feeds` ranks hosts whose claims already decide stored values against
   what this file lists, and four of its candidates are now configured:
@@ -709,203 +906,6 @@ initial build of the v1 PRD.
   fails if it stops cutting a model that restarts.
 
 ### Fixed
-
-- **An obstacle is only "on a finished track" if it was reported before the track
-  finished, and a free repair no longer hides the next one** (`tracker/logic.py` —
-  `_reported_after_finish`, `_resolve_finished_obstacles`, `FREE_CODES`,
-  `tracker/audit.py` — `settled_codes`, `tracker/cli/logic.py`,
-  `docs/workflows/logic.md`, `tests/test_logic.py`).
-
-  The free repair for `obstacle_on_a_finished_track` closes an open obstacle when
-  its track's last milestone is reached. Its premise is that a finished track
-  cannot still be blocked. That holds for an obstacle reported before the milestone
-  and fails for one reported after, which is about the expansion or the turbines
-  behind power already on. Colossus has been energised since 2024 and carries a
-  2026 lawsuit over those turbines. Stargate Abilene is energised and carries a
-  2026 report that grid delays capped it at 1.2 GW. Both were flagged, and the free
-  pass would have closed both along with 84 others, taking them out of every
-  exposure figure. The check and the repair now both skip an obstacle reported
-  after its track finished. An implied milestone is dated by the reported one that
-  implies it, since a site energised in January 2024 had its permit by then. On a
-  production copy the finding went from 36 to 6, and the free pass closed 9
-  obstacles, each reported before the milestone that answers it.
-
-  The muzzle was the other half. A past answer ("closed 3 obstacle(s)") marked the
-  code settled for good, so when a new article added another obstacle, the finding
-  was filtered out before the free path could see it. The three free-answered codes
-  are now never settled by a past answer; the free path re-answers them whenever
-  they fire, once per row. The second finding of a code on one row used to be
-  "answered" again by an action with nothing left to do, which wrote
-  `closed 0 obstacle(s)`.
-
-- **Duplicates filed under a misspelt town, a second spelling of a county, or no
-  shared place at all are now found** (`tracker/capex.py` — `suspected_duplicates`,
-  `_locality_buckets`, `_locality_word`, `_one_edit_apart`,
-  `docs/workflows/duplicates.md` + `.svg`, `tests/test_duplicate_detection.py`).
-
-  Stargate Michigan was stored six times. Two of the rows spelt Saline as "Salien",
-  so pass one, which buckets on the raw lowercased town, never compared them with
-  the four that did not. Project Jupiter sat under "Doña Ana" and "Doña Ana County",
-  Yondr under "Loudoun and Prince William" and "... counties". xAI's Colossus was
-  filed under `Memphis` and `孟菲斯`, TeraWulf's Lake Mariner under its real county
-  and under a town in it, Polaris Forge 1 under Ellendale and under McLean County.
-  None of them was ever reported, so each was counted twice in every total.
-
-  Pass one now folds accents, case and the words that say what kind of place a
-  locality is. Within a state it joins two localities of five or more letters that
-  are one edit apart. That only decides which rows are compared: a pair still needs
-  a signal from the evidence. A fourth pass compares rows that carry one
-  distinctive name in one state, whatever their places say. The name must hold a
-  word that is neither a place, nor industry vocabulary, nor the state, because a
-  false pair holds a real campus out of the buyer table. On a production copy this
-  raised 22 pairs never reported before, all of them real duplicates on inspection,
-  and lost none. Suspected groups went from 33 to 39.
-
-- **"Online in 2027" no longer reads as 1 January 2027** (`tracker/normalize.py` —
-  `precision_in_quote`, `tracker/ingest/crawl.py` — `_claim_axes`,
-  `tracker/backfill.py` — `derive_date_precision`, `tracker/cli/quality.py` —
-  `backfill precision`, `docs/known-limitations.md`, `docs/data-quality.md`,
-  `tests/test_date_precision.py`).
-
-  The precision columns meant to show which dates are vague showed almost nothing:
-  2 of 482 rows, 4 of 1,455 date claims. Meanwhile 110 of 203 stored online dates
-  fell on 1 January. The extraction prompt asks for ISO dates and tells the model
-  to write a bare year as `YYYY-01-01`, so the parser saw a full day and recorded
-  none. The article's own words were still on disk in the stored quote. The
-  precision is now read from them: the words directly before the year give a day,
-  a month, a quarter, a half or a bare year. A sentence that does not narrow the
-  date, or names a period the stored date does not start, records nothing rather
-  than a guess. New extractions get it at once. `tracker backfill precision
-  [--apply]` does the same, for free, for claims already stored. On a production
-  copy 444 of 661 quoted date claims gained a precision (248 year, 130 month, 43
-  quarter, 27 half), and 153 projects' cached columns moved.
-
-- **A figure no citation states any more is cleared, not kept** (`tracker/upsert.py`,
-  `tracker/logic.py`, `tracker/capex.py`, `docs/data-quality.md`,
-  `docs/design-decisions.md`, `docs/workflows/logic.md`, `tests/test_unstated.py`).
-
-  The merge handed back whatever the row held whenever no claim on a field took
-  part. For the identity fields that is the policy, since a name is never
-  overwritten, and for the derived ones it is harmless. For the facts a reader sums
-  it was a leak: a value outlived every claim that ever stated it. A re-extraction
-  by a better prompt dropped a figure the old one had misread. A ruling took out the
-  last claim. A merge moved a citation. In each case the figure stayed, uncited,
-  reported as fact and counted in every total. On a production copy, 68 values stood
-  this way: $487B of investment, 6,699 MW planned and 812 MW built. Among them was
-  $450B on one Michigan campus whose only article gives that figure for the whole
-  Stargate programme. `#98` held 15.5 MW built with both of its claims ruled out,
-  although `resolve`'s own docstring said a ruling "has to hold even when it is the
-  only claim left".
-
-  For the seven claim-owned fields (`CLAIM_OWNED_FIELDS`: customer, both
-  capacities, investment, phase and the two dates), no live claim now means no
-  value. Phase falls back to `announced`, as it always has. The tranche and party
-  reconciles still run afterwards and may refill a field from their own citations.
-  Each value cleared this way gets a rule's decision line in the row's notes, so the
-  history stays readable, and `value_without_evidence` now fires only until the next
-  re-derive. The deploy's `tracker init` applies it. Total investment across the
-  database moves from $3.01T to $2.52T.
-
-  On the same path, `logic check` no longer names one citation as both the kept and
-  the losing side of a disagreement. On an identity field the kept value need not be
-  any claim's, so the fallback winner and the first rival could be the same claim.
-  That happened in 74 of 1,183 reported disagreements and now happens in 0.
-
-- **A question a model could not answer is no longer paid for again every round**
-  (`tracker/declines.py`, migration `0025_model_decline`, `tracker/models.py`,
-  `tracker/triage.py`, `tracker/riskcheck.py`, `tracker/audit.py`,
-  `tracker/cli/duplicates.py`, `tracker/cli/logic.py`, `tracker/cli/quality.py`,
-  `docs/workflows/{duplicates,logic}.md` + `.svg`, `docs/analysis.md`,
-  `tests/test_declines.py`).
-
-  The overnight loop picks its work the same way each round. Only logic's "left
-  alone" left any record, so four paid phases asked the same undecided questions
-  again. A duplicate pair the agent left alone was asked again, and so was one it
-  rated below the floor, one a rail refused, or one where it could not quote a
-  sentence. So were a logic ruling the rails refused, an audit finding the model
-  declined (with its search, four fetches and second call), and an obstacle judged
-  unclear. Each came back in the same order at the same price until two rounds in
-  a row failed to move a count. Measured on the snapshot: 31 eligible pairs against
-  a per-round limit of 25, at ~45,000-260,000 tokens a pair. 141 open unquoted
-  obstacles, 2 ever refuted.
-
-  Each undecided answer is now recorded in `model_decline` with a hash of what the
-  model was shown: both rows' citations, the evidence block, the article text. The
-  item is held back before `--limit` is applied, so the limit buys fresh questions.
-  It comes back when that evidence changes, or after 30 days, because the agent
-  phases search the web and the web changes while the row does not. `--again` on
-  every command asks anyway. A failed call, a broken search and "same site, but
-  merging needs `--merge`" are deliberately not recorded. The enrich agent's
-  version of this waste, fields nobody has published, is `tracker.attempts`,
-  which landed on `main` alongside and keeps its record in the row's notes. These
-  four stay out of the notes: a pair belongs to two rows, and ruling a claim out
-  changes what the model would be shown without adding the citation that reopens
-  an attempt.
-
-  `duplicates resolve` also commits after every pair now. It was one transaction
-  for the whole run, which held SQLite's write lock across every agent call while a
-  console sign-in timed out against it.
-
-- **A logic repair now survives the next re-derive, and one that changed nothing is
-  refused** (`tracker/logic.py`, `tracker/triage.py`, `tracker/audit.py`,
-  `tracker/blocks.py`, `tracker/cli/logic.py`, `docs/workflows/logic.md` + `.svg`,
-  `tests/test_logic.py`, `tests/test_triage.py`).
-
-  Twenty rows said in their notes that a figure had been cleared while still holding
-  it. The worst was #72, Flexential Englewood. Its notes read `mw_built 6750 -> empty`
-  above a stored 6,750 MW on an 11 MW campus. That one row was a quarter of every
-  built megawatt in the database and 5.2M of the H200 estimate. Four menu actions
-  (`built_exceeds_planned`, `online_before_announced`, `past_its_own_date`) assigned a
-  column. A column is a cache of the citations, and the next `backfill derive` put
-  the old value back. The note stayed, and the settled-finding reader saw a revert,
-  so the finding came back. Each action now rules out the citations stating the
-  value and lets the merge policy re-derive, as `audit` and the agent already did.
-  "Raise planned to built" became "rule out the planned figures below what is
-  built": a planned figure no source states is not one this database can hold.
-
-  #72 had a second fault. The agent wrote that nothing supported 6,750 MW, then named
-  the citation stating **18 MW**. The right figure was ruled out and the wrong one
-  stood. The sentence recorded `6750 -> 6750`, which read as a repair that still
-  held, so the finding was never asked again. Twenty-eight recorded rulings on the
-  snapshot changed nothing. `apply_rule_out` now refuses, before writing, a ruling
-  none of whose citations states the value the row holds, and the agent is told the
-  rule. `settled_codes` no longer counts `X -> X` as an answer, which reopens the
-  rulings recorded before the rail.
-
-  Two smaller faults on the same path. `logic resolve --auto` reported and
-  "repaired" 48 rows every night and changed none of them. Drift was checked against
-  the claims alone, while the write path then raises `phase` to the furthest live
-  tranche. The check now asks the same question the write path answers
-  (`blocks.raise_phase`): 0 of 48 on the production copy. And the drift repairs and
-  free answers shared the agent loop's transaction, so the first refused ruling
-  rolled them back after they had been printed as done. They are now committed
-  before any model is asked.
-
-- **The nightly quality loop runs again, and its token ceiling sees what it spends**
-  (`scripts/overnight.sh`, `tracker/llm.py`, `tracker/config.py`,
-  `tests/test_overnight.py`).
-
-  From 2026-09-03 the loop did nothing. Every night at 18:00 it started, printed its
-  counts, took its snapshot and stopped. There was no round, no phase and no error
-  line. The counts it printed at each start only moved when something else changed
-  the data, and ingest kept adding to them: duplicate groups went from 4 to 24. The
-  token tally was `grep -o '~N tokens'` over the log, piped onward, under
-  `set -euo pipefail`. A commit that day moved the first tally to the top of round
-  one, before any phase had printed a line for it to match. A grep that matches
-  nothing exits 1, and pipefail plus `set -e` made that the end of the script.
-  Twenty-one nights passed that way.
-
-  The ceiling was also blind when the loop did run. Only three commands print a
-  `~N tokens` line, and five paid phases printed none: duplicate pairs, audit,
-  risks, and enrich's article reads and settle step. The ceiling was checked once a
-  round, so a single round could overshoot it by millions. Now every paid call
-  appends a line to a spend ledger at the one place such calls are made
-  (`DeepSeekExtractor._post` → `record_spend`). The script names a fresh ledger
-  each night (`TRACKER_SPEND_LEDGER`), sums it with awk alone rather than a
-  pipeline, and checks it before every paid phase. The morning report breaks the
-  night down by command. The regression tests lift the shell functions out of the
-  script and run them under its own `set -euo pipefail`, since what failed was
-  whether calling the tally could kill its caller.
 
 - **A `sync --full` run died after the search phase had been paid for**
   (`tracker/cli/sync.py`, `tests/test_cli.py`). The search block named its list of
