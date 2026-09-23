@@ -398,6 +398,23 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt: str, *args: Any) -> None:
         log.debug("%s - %s", self.address_string(), fmt % args)
 
+    def handle_one_request(self) -> None:
+        """One request off the socket, and a quiet end when the peer has hung up.
+
+        The stdlib reads the next request line before any `do_*` method runs, so a
+        peer that resets a keep-alive connection *between* requests — a tab
+        closed, a client that closes with part of a response unread — raised out
+        of `readline`, past every handler here, and socketserver printed "Exception
+        occurred during processing of request" with a traceback for it. There is
+        nothing to answer and nobody to answer it to; `TimeoutError` the stdlib
+        already handles the same way.
+        """
+        try:
+            super().handle_one_request()
+        except ConnectionError:
+            log.debug("%s: connection dropped between requests", self.address_string())
+            self.close_connection = True
+
     def _send(
         self,
         status: int,

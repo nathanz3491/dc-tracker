@@ -1344,6 +1344,56 @@ def test_apologising_to_a_dead_socket_does_not_raise_again():
     handler._error(500, "internal error")  # must not raise
 
 
+def test_a_client_that_hangs_up_between_requests_is_not_a_traceback(seeded_db):
+    """The stdlib reads the next request line before any `do_*` method runs.
+
+    So a peer that resets a keep-alive connection between requests — a tab closed,
+    a client that closes with part of a response unread — raised out of
+    `readline`, past every handler here, and socketserver printed "Exception
+    occurred during processing of request" with a traceback for it. Observed in
+    this suite as ConnectionAbortedError [WinError 10053], from a test that reads
+    a response's headers and closes the socket on its body.
+    """
+    import socket
+    import struct
+    from http.server import ThreadingHTTPServer
+
+    class Recording(ThreadingHTTPServer):
+        daemon_threads = True
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.errors: list[BaseException | None] = []
+            self.finished = threading.Event()
+
+        def handle_error(self, request, client_address):
+            self.errors.append(sys.exc_info()[1])
+
+        def process_request_thread(self, request, client_address):
+            try:
+                super().process_request_thread(request, client_address)
+            finally:
+                self.finished.set()
+
+    console = Console(seeded_db)
+    httpd = Recording(("127.0.0.1", 0), type("Bound", (Handler,), {"console": console}))
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        sock = socket.create_connection(httpd.server_address, timeout=10)
+        sock.sendall(b"GET /api/health HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+        assert sock.recv(64).startswith(b"HTTP/1.1 200")
+        # Linger zero: close with a reset rather than a FIN, which is what an
+        # abandoned keep-alive socket turns into.
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+        sock.close()
+        assert httpd.finished.wait(10), "the connection's thread never ended"
+        assert httpd.errors == [], f"socketserver was handed {httpd.errors}"
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        console.close()
+
+
 def test_every_connection_failure_windows_can_raise_is_caught():
     """`ConnectionError` covers all of them; the old tuple covered two of four.
 
