@@ -61,6 +61,38 @@ TIERS: Final[tuple[tuple[int, str, tuple[str, ...]], ...]] = (
     (3, "SETTLED", ("warnings_settled", "blocks_settled", "risks_confirmed", "vintage_current")),
 )
 
+#: The fields that say what a project *is*: who, where, what stage, how big, when
+#: live. Checked by `basics_defined`, which is reported but is deliberately not a
+#: tier condition — see :func:`card`.
+#:
+#: Five of the eight can never be absent: `name`, `company`, `state`, `country` and
+#: `phase` are NOT NULL, and `ck_project_locality` forces a city or a county. So
+#: presence alone would be a check that always passes, and the condition asks about
+#: provenance too — whether the value rests on a citation or on a schema default.
+BASIC_FIELDS: Final[tuple[str, ...]] = (
+    "name",
+    "company",
+    "state",
+    "country",
+    "phase",
+    "mw_planned",
+    "mw_built",
+    "expected_online",
+)
+
+#: Basic fields where resting on the schema default is a real defect.
+#:
+#: `phase` and `country` are the only two columns that can be defaulted at all
+#: (:data:`gaps.DEFAULTABLE_FIELDS`), and `country` is deliberately not here. No
+#: trade-press article about a campus in Ohio says it is in the United States, so
+#: `US` arrives by default on essentially every row and is *correct* — demanding a
+#: citation for it would fail the whole database for being right, which the
+#: hand-cleaned reference row caught immediately.
+#:
+#: `phase` is the opposite case and the reason this condition exists: a row whose
+#: phase nobody ever stated presents `announced` as though a source had said it.
+BASIC_SOURCED_FIELDS: Final[frozenset[str]] = frozenset({"phase"})
+
 #: What each condition means, and the command that answers it. The remedy is part
 #: of the definition: a scorecard naming a failure an operator cannot act on is a
 #: complaint, and `tracker clean --plan` renders these as runnable lines.
@@ -73,6 +105,7 @@ REMEDIES: Final[dict[str, str]] = {
     "duplicates_answered": "tracker duplicates  # then merge or park",
     "fields_present": "tracker enrich {id} --target 0",
     "values_backed": "tracker ingest crawl --stale-prompt --cached-only --limit 50",
+    "basics_defined": "tracker enrich {id} --basics",
     "warnings_settled": "tracker logic resolve --project {id}",
     "blocks_settled": "tracker blocks {id}",
     "risks_confirmed": "tracker risks confirm --project {id}",
@@ -96,6 +129,7 @@ CONDITION_LABELS: Final[dict[str, str]] = {
     "duplicates_answered": "a possible duplicate nobody has ruled on",
     "fields_present": "tracked fields still empty",
     "values_backed": "a stored value with no quote",
+    "basics_defined": "a field that defines the project is empty or unsourced",
     "warnings_settled": "an open logic warning",
     "blocks_settled": "tranches that may be one thing counted twice",
     "risks_confirmed": "an obstacle with no usable quote",
@@ -274,6 +308,76 @@ def _shared(session: Session, project_ids: list[int] | None = None) -> _Shared:
     return got
 
 
+def basic_fillable() -> tuple[str, ...]:
+    """The basic fields the agent pass is allowed to write.
+
+    Four of the eight. `name`, `company`, `state` and `country` are outside
+    `gapfill.FILLABLE_FIELDS` on purpose — identity is never overwritten once set,
+    so a citation claiming it changes nothing and would only look as though it had —
+    and all four are NOT NULL regardless, so there is nothing there to fill.
+
+    Derived rather than written out, so it cannot drift from either list. Imported
+    inside the function to keep `clean` free of the write path.
+    """
+    from tracker.gapfill import FILLABLE_FIELDS
+
+    return tuple(f for f in BASIC_FIELDS if f in FILLABLE_FIELDS)
+
+
+def basics_missing(project: Project) -> tuple[list[str], list[str]]:
+    """The `basics_defined` test: (absent, never-sourced) basic fields for one row.
+
+    One implementation, two callers — :func:`card` reports it and
+    :func:`basics_worklist` orders by it. A second copy would drift, which is the
+    failure this module's own docstring says it exists not to repeat.
+
+    Two questions, because presence alone cannot be the check: five of the eight
+    basic fields are NOT NULL, so asking only "is it there" would pass every row.
+
+    A 待确认 value passes, on the same reasoning `values_backed` gives: the question
+    is whether the row is honest about what stands behind a value, not whether every
+    value is quoted. A *defaulted* value is different — nobody said it at all, and
+    the row presents it as though somebody had.
+    """
+    from tracker import gaps
+
+    missing = [s.field for s in gaps.for_project(project, fields=BASIC_FIELDS) if s.is_gap]
+    # Only a NOT NULL column with a server default can be defaulted, and of those
+    # only `phase` is a defect when it is — see BASIC_SOURCED_FIELDS. So this is one
+    # provenance lookup per row, not eight.
+    defaulted = [
+        name
+        for name in BASIC_FIELDS
+        if name in BASIC_SOURCED_FIELDS
+        and (prov := gaps.provenance(project, name)) is not None
+        and prov.tier == gaps.DEFAULTED
+    ]
+    return missing, defaulted
+
+
+def basics_worklist(session: Session, *, limit: int | None = None) -> list[int]:
+    """Projects whose defining fields are absent or unsourced, fewest gaps first.
+
+    Deliberately **not** built on :func:`scan`. `basics_defined` needs two cheap
+    reads of the row; the full sweep also runs `logic`, `audit`, `quality` and the
+    duplicate detector for the other ten conditions, none of which this question
+    consults. Asking only what is being asked is what keeps `enrich --basics` able
+    to start on the whole database without a minute of preamble.
+
+    Fewest-first for the reason :func:`tracker.ingest.enrich.select_projects` gives:
+    a bounded budget is judged on how many rows clear the bar, and taking a row from
+    one gap to none is cheaper than taking one from five.
+    """
+    ranked: list[tuple[int, int]] = []
+    for project in session.scalars(select(Project)).all():
+        missing, defaulted = basics_missing(project)
+        if missing or defaulted:
+            ranked.append((len(missing) + len(defaulted), project.id))
+    ranked.sort()
+    ids = [project_id for _count, project_id in ranked]
+    return ids[:limit] if limit else ids
+
+
 def card(session: Session, project: Project, *, shared: _Shared | None = None) -> CleanCard:
     """Every condition for one row. Free, read-only, no LLM, no network."""
     from tracker import audit, gaps, logic, quality
@@ -364,6 +468,29 @@ def card(session: Session, project: Project, *, shared: _Shared | None = None) -
     )
     add("vintage_current", not stale, f"read by {', '.join(stale)}" if stale else "")
 
+    # --- reported, but NOT a tier condition -------------------------------------
+    #
+    # `capex.suspected_duplicates` set this precedent and gave the reason: adding a
+    # condition to `TIERS` "would move every row's tier in a single commit and bury
+    # the signal it exists to raise". A number that jumps because the ruler changed
+    # is a number nobody can act on, and this one is meant to be acted on.
+    #
+    # `CleanCard.tier` and `.blocking` both iterate `TIERS` and guard with
+    # `if k in answers`, so a condition that is on the card but not in `TIERS`
+    # reaches `Sweep.failures`, `attention()` and the JSONL snapshot while moving
+    # nobody's tier. That is exactly the reporting this wants.
+    #
+    missing, defaulted = basics_missing(project)
+    detail = "; ".join(
+        part
+        for part in (
+            f"missing {', '.join(missing)}" if missing else "",
+            f"never sourced: {', '.join(defaulted)}" if defaulted else "",
+        )
+        if part
+    )
+    add("basics_defined", not (missing or defaulted), detail)
+
     return CleanCard(project_id=project.id, name=project.name, conditions=tuple(checks))
 
 
@@ -401,6 +528,8 @@ def worklist(sweep: Sweep, *, tier: int, limit: int | None = None) -> list[Clean
 
 
 __all__ = [
+    "BASIC_FIELDS",
+    "BASIC_SOURCED_FIELDS",
     "CONDITION_LABELS",
     "REMEDIES",
     "TIERS",
@@ -408,6 +537,8 @@ __all__ = [
     "Condition",
     "Sweep",
     "attention",
+    "basics_missing",
+    "basics_worklist",
     "card",
     "scan",
     "worklist",

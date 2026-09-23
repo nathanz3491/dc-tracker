@@ -169,6 +169,12 @@ DEFAULTED: Final = "defaulted"
 #: simply NULL and has no provenance to report.
 _SCHEMA_DEFAULTS: Final[dict[str, object]] = {"phase": "announced", "country": "US"}
 
+#: The fields :data:`DEFAULTED` can ever be reported for. Public because a caller
+#: asking "is this value sourced" only needs to consult `provenance` for these —
+#: every other field is NULL when nothing speaks, which is a different question and
+#: a cheaper one. Derived from the table above so the two cannot drift.
+DEFAULTABLE_FIELDS: Final[frozenset[str]] = frozenset(_SCHEMA_DEFAULTS)
+
 
 def _asserted(source, field: str) -> bool:
     """Does this source list `field` at all, confirmed or 待确认?"""
@@ -482,6 +488,7 @@ def worst(gaps: list[FieldGap], limit: int = 3) -> list[FieldGap]:
 
 
 __all__ = [
+    "DEFAULTABLE_FIELDS",
     "DEFAULTED",
     "DERIVED",
     "FILLED",

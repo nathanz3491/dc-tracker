@@ -922,6 +922,40 @@ def test_enrich_requires_a_selection(initialized: Path):
     result = invoke(initialized, "enrich")
     assert result.exit_code == 2
     assert "--all" in result.output, "the failure must advertise every way to select"
+    assert "--basics" in result.output, "including the one that needs no ids"
+
+
+def test_enrich_basics_is_a_selection_on_its_own(initialized: Path):
+    """`--basics` is a modifier, but alone it also says which rows: every one short
+    of a field that defines it. So it must not trip the "give me a selection" guard.
+    """
+    result = invoke(initialized, "enrich", "--basics")
+    assert result.exit_code == 0, result.output
+    assert "nothing to do" in result.output, "an empty database has no rows to fix"
+
+
+def test_enrich_basics_composes_with_a_selector(initialized: Path):
+    """It changes which FIELDS are chased, not how rows are picked, so unlike the
+    three selectors it is not mutually exclusive with them."""
+    result = invoke(initialized, "enrich", "--basics", "--select", "5")
+    assert result.exit_code == 0, result.output
+    assert "only one of" not in result.output
+
+
+def test_enrich_refuses_fields_and_basics_together(initialized: Path):
+    result = invoke(initialized, "enrich", "--basics", "--fields", "mw_planned", "--select", "1")
+    assert result.exit_code == 2
+    assert "not both" in result.output
+
+
+def test_enrich_refuses_a_field_the_agent_cannot_write(initialized: Path):
+    """`name` is identity — never overwritten once set, so a citation claiming it
+    changes nothing and would only look as though it had. Saying so beats a run
+    that quietly fills none of what was asked for."""
+    result = invoke(initialized, "enrich", "--select", "1", "--fields", "name")
+    assert result.exit_code == 2
+    assert "cannot fill" in result.output
+    assert "mw_planned" in result.output, "the refusal must name the choices"
 
 
 @pytest.mark.parametrize(

@@ -328,3 +328,124 @@ def test_every_condition_has_a_remedy(session):
     assert keys == set(clean.REMEDIES), "a condition without a remedy, or the reverse"
     for _level, _label, tier_keys in clean.TIERS:
         assert set(tier_keys) <= keys
+
+
+# --- basics: the fields that say what a project IS ----------------------------
+#
+# Reported, but deliberately not a tier condition — `capex.suspected_duplicates`
+# set that precedent, because a new tier condition moves every row's tier in one
+# commit and buries the signal it exists to raise. The tests below assert both
+# halves: that the condition fires on the right rows, and that it moves nobody.
+
+
+def test_basics_passes_on_a_row_that_knows_what_it_is(session):
+    project = _project(session, name="Basics Complete")
+    _source(session, project)
+    assert _card(session, project).by_key["basics_defined"].ok
+
+
+def test_basics_catches_a_capacity_nobody_has_stated(session):
+    """The presence half. Three of the eight basic fields can actually be null."""
+    project = _project(session, name="No Capacity", mw_planned=None)
+    _source(session, project)
+
+    condition = _card(session, project).by_key["basics_defined"]
+    assert not condition.ok
+    assert "mw_planned" in condition.detail
+
+
+def test_basics_catches_a_phase_nobody_ever_sourced(session):
+    """The provenance half, and the reason presence alone cannot be the check.
+
+    `phase` is NOT NULL with a server default, so a row nobody has ever described
+    still reads `announced` — and presents it as though a source had said so.
+    `gaps.provenance` already calls this DEFAULTED; nothing failed a row for it.
+    """
+    project = _project(session, name="Defaulted Phase", phase="announced")
+    # A citation that asserts everything EXCEPT the phase, so the value standing in
+    # the column came from the schema rather than from anybody.
+    _source(session, project, fields="mw_planned,mw_built,investment_usd")
+
+    condition = _card(session, project).by_key["basics_defined"]
+    assert not condition.ok
+    assert "never sourced" in condition.detail
+    assert "phase" in condition.detail
+
+
+def test_a_defaulted_country_is_not_a_defect(session):
+    """`US` arrives by default on essentially every row and is correct.
+
+    No trade-press article about a campus in Ohio says it is in the United States,
+    so demanding a citation would fail the whole database for being right. The
+    hand-cleaned reference row caught this the first time it was asked.
+    """
+    project = _project(session, name="Default Country", country="US")
+    _source(session, project)
+
+    condition = _card(session, project).by_key["basics_defined"]
+    assert condition.ok, condition.detail
+
+
+def test_basics_is_not_a_tier_condition(session):
+    """Structural, so the guarantee cannot be lost by editing TIERS.
+
+    `capex.suspected_duplicates` gives the reason it must stay out: adding one
+    "would move every row's tier in a single commit and bury the signal it exists
+    to raise".
+    """
+    assert "basics_defined" not in {key for _l, _n, keys in clean.TIERS for key in keys}
+
+
+def test_a_row_failing_only_basics_keeps_its_tier(session):
+    """A defaulted phase is the case that isolates it: the value is *present*, so
+    `fields_present` passes, and only `basics_defined` objects."""
+    project = _project(session, name="Tier Unmoved", phase="announced", mw_built=None)
+    _source(
+        session,
+        project,
+        fields="mw_planned,investment_usd,customer,first_announced,expected_online",
+    )
+    card = _card(session, project)
+
+    assert not card.by_key["basics_defined"].ok, "the row must be failing basics"
+    demoted_by = [c.key for c in card.failed if c.key != "basics_defined"]
+    assert card.tier == 3, (
+        f"a non-tier condition must not demote anything; also failed {demoted_by}"
+    )
+    assert "basics_defined" not in {c.key for c in card.blocking}
+
+
+def test_a_null_that_is_correct_is_not_a_basics_gap(session):
+    """`mw_built` on an announced project is right, so it is not a missing basic."""
+    project = _project(session, name="Nothing Built", phase="announced", mw_built=None)
+    _source(session, project, fields="mw_planned,phase,investment_usd")
+
+    condition = _card(session, project).by_key["basics_defined"]
+    assert "mw_built" not in condition.detail
+
+
+def test_the_worklist_puts_the_cheapest_rows_first(session):
+    """Fewest gaps first, for the reason `select_projects` gives: a bounded budget
+    is judged on how many rows clear the bar."""
+    far = _project(session, name="Far", mw_planned=None, mw_built=None, expected_online=None)
+    near = _project(session, name="Near", expected_online=None)
+    done = _project(session, name="Done")
+    for row in (far, near, done):
+        _source(session, row)
+
+    order = clean.basics_worklist(session)
+    assert order.index(near.id) < order.index(far.id), "one gap before three"
+    assert done.id not in order, "a row that knows what it is needs nothing"
+
+
+def test_the_worklist_and_the_condition_cannot_disagree(session):
+    """One implementation, two callers. A second copy would drift."""
+    short = _project(session, name="Short", mw_planned=None)
+    _source(session, short)
+    whole = _project(session, name="Whole")
+    _source(session, whole)
+
+    listed = set(clean.basics_worklist(session))
+    for project in (short, whole):
+        fails = not _card(session, project).by_key["basics_defined"].ok
+        assert (project.id in listed) == fails, f"#{project.id} disagrees"

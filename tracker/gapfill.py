@@ -78,6 +78,11 @@ class Filled:
     stored: list[str] = dc_field(default_factory=list)
     refused: list[str] = dc_field(default_factory=list)
     steps: list[str] = dc_field(default_factory=list)
+    #: Fields this run went after and did not fill. `apply_facts` already computes
+    #: it exactly — it discards each field it stores from the `gaps` set handed to
+    #: it — and until now the answer was thrown away. `tracker.attempts` records it
+    #: so the next run does not pay to ask the same unanswerable question again.
+    missed: tuple[str, ...] = ()
     prompt_tokens: int = 0
     completion_tokens: int = 0
     cache_hit_tokens: int = 0
@@ -437,17 +442,26 @@ def fill(
     )
     if not result.answered:
         out.verdict = "nothing" if result.outcome in {"stopped", "exhausted"} else "error"
+        # An error is not evidence that nobody published the field, so only a run
+        # that actually reached an answer reports what it missed. Recording a
+        # provider timeout as "looked and found nothing" would retire a field on
+        # the strength of a network failure.
+        out.missed = tuple(sorted(wanted)) if out.verdict == "nothing" else ()
         return out
 
     answer = result.answer or {}
     if result.tool_name == "nothing_found":
         out.verdict = "nothing"
         out.note = str(answer.get("reason") or "").strip()
+        out.missed = tuple(sorted(wanted))
         return out
 
     stored, refused = apply_facts(
         session, project, answer, articles=_articles_read(result), gaps=wanted
     )
+    # `apply_facts` discarded every field it stored, so `wanted` is now exactly what
+    # was asked for and not found.
+    out.missed = tuple(sorted(wanted))
     out.stored, out.refused = stored, refused
     out.note = str(answer.get("reason") or "").strip()
     out.verdict = "filled" if stored else "unusable"

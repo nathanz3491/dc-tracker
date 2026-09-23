@@ -14,6 +14,7 @@ import typer
 from rich.markup import escape
 from rich.table import Table
 
+from tracker import attempts as attempts_mod
 from tracker.cli._shared import (
     NA,
     TABLE_BOX,
@@ -95,6 +96,49 @@ def enrich(
             help="Do not put the disagreements this run created to a model.",
         ),
     ] = False,
+    basics: Annotated[
+        bool,
+        typer.Option(
+            "--basics",
+            help=(
+                "Go after the eight fields that say what a project IS — who, where, "
+                "what stage, how big, when live. Works the whole database when no "
+                "rows are named. Cheap: it is the narrowest question the agent can "
+                "be asked."
+            ),
+        ),
+    ] = False,
+    fields: Annotated[
+        str | None,
+        typer.Option(
+            "--fields",
+            help=(
+                "Comma-separated fields the agent pass may go after, instead of "
+                "every empty one. Narrowing is the cheapest saving there is."
+            ),
+            show_default=False,
+        ),
+    ] = None,
+    token_budget: Annotated[
+        int,
+        typer.Option(
+            "--token-budget",
+            help=(
+                "Stop the agent pass once this many tokens are spent. Checked "
+                "BETWEEN rows, never mid-row. 0 means no limit."
+            ),
+        ),
+    ] = 0,
+    max_attempts: Annotated[
+        int,
+        typer.Option(
+            "--max-attempts",
+            help=(
+                "Stop asking about a field after this many fruitless attempts, "
+                "until the row gains a citation. 0 asks every time."
+            ),
+        ),
+    ] = attempts_mod.DEFAULT_MAX_ATTEMPTS,
     browser: Annotated[
         bool,
         typer.Option(
@@ -124,6 +168,14 @@ def enrich(
         tracker enrich 90 93            two projects by id
         tracker enrich --select 30      the 30 worth finishing, chosen for you
         tracker enrich --all            everything below --target, best first
+        tracker enrich --basics         every row short of a field that defines it
+
+    `--basics` is a modifier rather than a fourth way of choosing rows, so it
+    composes with all three above. Alone it also picks the rows: every one missing
+    part of who / where / what stage / how big / when live, fewest gaps first. It is
+    the cheap mode — the agent is asked about four fields instead of eight, and
+    `tracker clean` reports the same condition for free, so you can see the size of
+    the job before paying for any of it.
 
     `--select` orders by how close a project already is to `--target`, because
     taking one project from 8 fields to 9 costs a single article while taking
@@ -137,6 +189,7 @@ def enrich(
     dry, so raise `--budget` when the point is genuinely the whole database.
     """
     _use_llm(llm_provider)
+    from tracker import clean as clean_mod
     from tracker.ingest import enrich as enrich_mod
     from tracker.ingest.fetch import (
         Crawl4AIFetcher,
@@ -157,8 +210,15 @@ def enrich(
     if len(chosen_ways) > 1:
         _fail(f"pass only one of project ids, --select or --all (got {' and '.join(chosen_ways)})")
         return
-    if not chosen_ways:
-        _fail("give at least one project id, use --select N, or --all for every project")
+    # `--basics` is a modifier, not a fourth selector: it changes which FIELDS are
+    # chased, not how rows are picked, so it composes with all three. On its own it
+    # also implies the rows — every row whose defining fields are short — because
+    # "check the whole database" is the reason the mode exists.
+    if not chosen_ways and not basics:
+        _fail(
+            "give at least one project id, use --select N, --all for every project, "
+            "or --basics for every row missing a field that defines it"
+        )
         return
 
     # The field target is a budget-sharing rule, not a definition of done: its own
@@ -171,6 +231,34 @@ def enrich(
     if target < 0:
         target = 0 if project_ids else enrich_mod.DEFAULT_TARGET_FIELDS
     target_fields = target or None
+    # `--basics` names rows that are short of a *defining* field, which is a
+    # different question from "9 of the 12 tracked". Enforcing both would stop a row
+    # at nine tracked fields while the phase nobody sourced was the thing that put
+    # it on the list, so the field target steps aside and `--budget` does the
+    # bounding — as it does when ids are named, and for the same reason.
+    if basics:
+        target_fields = None
+
+    # What the agent pass may go after. Narrowing it is the cheapest saving
+    # available: the receiving end of `gapfill.fill(gaps=...)` has existed all
+    # along and nothing ever passed it.
+    agent_fields: tuple[str, ...] | None = None
+    if fields and basics:
+        _fail("pass --fields or --basics, not both — they are two ways to say the same thing")
+        return
+    if fields:
+        from tracker.gapfill import FILLABLE_FIELDS
+
+        agent_fields = tuple(name.strip() for name in fields.split(",") if name.strip())
+        unknown = [name for name in agent_fields if name not in FILLABLE_FIELDS]
+        if unknown:
+            _fail(
+                f"the agent cannot fill {', '.join(unknown)} — "
+                f"choose from {', '.join(sorted(FILLABLE_FIELDS))}"
+            )
+            return
+    elif basics:
+        agent_fields = clean_mod.basic_fillable()
 
     if browser:
         # Checked here rather than caught around the constructor: the import
@@ -196,7 +284,21 @@ def enrich(
     try:
         with _explain_db_locks(), session_scope(engine, commit=not dry_run) as session:
             wanted = list(project_ids or [])
-            if select or enrich_all:
+            if basics and not project_ids:
+                # Rows whose defining fields are short, fewest gaps first. Not the
+                # full `clean` sweep: that also runs logic, audit, quality and the
+                # duplicate detector for ten conditions this question never asks.
+                wanted = clean_mod.basics_worklist(session, limit=select or None)
+                if not wanted:
+                    console.print(
+                        "[green]nothing to do[/green] — every row holds all "
+                        f"{len(clean_mod.BASIC_FIELDS)} fields that define it"
+                    )
+                    return
+                console.print(
+                    f"selected {len(wanted)} row(s) short of a defining field, fewest gaps first"
+                )
+            elif select or enrich_all:
                 # --all is --select with no cap: same query, same ordering, and
                 # `select_projects` already excludes projects at or past the
                 # target, so "all" never wastes budget on finished rows.
@@ -238,6 +340,12 @@ def enrich(
                 skip_archive=skip_archive,
                 skip_settle=skip_settle,
                 dry_run=dry_run,
+                # The same narrowing the agent pass gets, one rung earlier: a
+                # query is an API call and every hit it returns is an article to
+                # read, so a field nobody has published costs money every round
+                # until it stops being asked about.
+                want_fields=tuple(clean_mod.BASIC_FIELDS) if basics else None,
+                max_attempts=max_attempts,
             )
     except LookupError as exc:
         _fail(str(exc))
@@ -248,8 +356,23 @@ def enrich(
         # fields somebody wrote a query template for, and finds them for a few
         # hundred tokens; the agent costs ~77,000 a row. So it is pointed only at
         # what the templates could not reach — "where it is needed" literally.
+        #
+        # **Only the rows the harvest actually reached.** `run_many` stops when the
+        # article budget runs out and leaves the rest of `wanted` untouched, so
+        # handing it `wanted` pointed the most expensive rung in the tool at rows
+        # that had received no cheap rung at all. Measured on the shape that
+        # prompted this: `--all` over 403 rows with `--budget 200` gives each row
+        # one article a round, exhausts the budget after roughly fifty of them, and
+        # then billed the agent for all 403 — about 85% of ~31M tokens spent on
+        # rows the harvest never opened.
         with _explain_db_locks(), session_scope(engine) as session:
-            _gapfill_batch(session, wanted)
+            _gapfill_batch(
+                session,
+                [report.project_id for report in batch.reports],
+                only_fields=agent_fields,
+                token_budget=token_budget,
+                max_attempts=max_attempts,
+            )
 
     if len(batch.reports) == 1:
         _render_enrich(batch.reports[0], dry_run=dry_run)
@@ -259,12 +382,36 @@ def enrich(
     _render_batch(batch, target=target_fields or enrich_mod.DEFAULT_TARGET_FIELDS, dry_run=dry_run)
 
 
-def _gapfill_batch(session, project_ids: list[int]) -> None:
+#: What one row of the agent pass typically costs. Used only to decide whether the
+#: NEXT row fits in what is left of `--token-budget`, before any run has measured a
+#: real figure. See `README.md` for where the number comes from.
+TYPICAL_ROW_TOKENS = 77_000
+
+
+def _gapfill_batch(
+    session,
+    project_ids: list[int],
+    *,
+    only_fields: tuple[str, ...] | None = None,
+    token_budget: int = 0,
+    max_attempts: int = attempts_mod.DEFAULT_MAX_ATTEMPTS,
+) -> None:
     """Let a model find and cite what the harvest rounds left empty.
 
     Committed per project, so a provider failure on row 20 keeps the first 19.
     Rows with nothing left to fill cost nothing at all — `gapfill.fill` returns
     before making a call.
+
+    Three things keep the bill down, and all three work by *not asking*:
+
+    * `only_fields` narrows the question to the fields the caller cares about.
+      `gapfill.fill` has taken a `gaps=` list all along and no caller ever passed
+      one, so every run asked about all eight fillable fields whatever it wanted.
+    * `max_attempts` drops fields this row has already been asked about fruitlessly
+      — see `tracker.attempts`. A row with nothing left to ask costs zero tokens.
+    * `token_budget` stops the pass **between rows**. Never mid-row: aborting a run
+      in flight would spend the tokens and store nothing, which is the waste this
+      is here to prevent rather than a way to prevent it.
     """
     from tracker import gapfill
     from tracker.llm import LLMUnavailable, agent_extractor
@@ -277,15 +424,35 @@ def _gapfill_batch(session, project_ids: list[int]) -> None:
 
     console.print("\n[bold]agent pass[/bold] — what the harvest could not find")
     filled = nothing = errored = 0
-    spent = cache_hit = cache_miss = 0
+    settled_already = 0
+    spent = cache_hit = cache_miss = called = 0
+    unreached: list[int] = []
 
-    for project_id in project_ids:
+    for index, project_id in enumerate(project_ids):
         project = session.get(Project, project_id)
         if project is None:
             continue
         head = f"#{project.id} {escape(project.name[:34])}"
+
+        # Which fields this row may be asked about: empty, wanted, and not already
+        # asked about to exhaustion.
+        empty = {f for f in gapfill.FILLABLE_FIELDS if getattr(project, f, None) is None}
+        if only_fields is not None:
+            empty &= set(only_fields)
+        askable = sorted(empty - attempts_mod.exhausted(project, max_attempts=max_attempts))
+        if not askable:
+            settled_already += 1
+            continue
+
+        # Before the call, never during one. `expected` is what a row has actually
+        # cost this run; the constant only stands in until a row has been measured.
+        expected = spent // called if called else TYPICAL_ROW_TOKENS
+        if token_budget and spent + expected > token_budget:
+            unreached = project_ids[index:]
+            break
+
         try:
-            out = gapfill.fill(session, project, extractor=extractor)
+            out = gapfill.fill(session, project, extractor=extractor, gaps=askable)
         except Exception as exc:
             session.rollback()
             errored += 1
@@ -295,6 +462,14 @@ def _gapfill_batch(session, project_ids: list[int]) -> None:
         spent += out.prompt_tokens + out.completion_tokens
         cache_hit += out.cache_hit_tokens
         cache_miss += out.cache_miss_tokens
+        called += 1
+
+        # Only a run that reached an answer is evidence about the field. An error
+        # or an unusable shape says something about the call, not about whether
+        # anybody published the figure, and retiring a field on that would be a
+        # silent loss.
+        if out.verdict in {"filled", "nothing"} and out.missed:
+            attempts_mod.record(project, out.missed)
 
         if out.verdict == "filled":
             session.commit()
@@ -302,6 +477,9 @@ def _gapfill_batch(session, project_ids: list[int]) -> None:
             for line in out.stored:
                 console.print(f"  {head}  [green]{escape(line)}[/green]")
         elif out.verdict == "nothing":
+            # Commits the attempt note even though no fact landed: that note is the
+            # entire saving, and rolling it back would re-ask this row forever.
+            session.commit()
             nothing += 1
             console.print(f"  {head}  [dim]nothing published — {escape(out.note[:90])}[/dim]")
         else:
@@ -323,6 +501,22 @@ def _gapfill_batch(session, project_ids: list[int]) -> None:
     if cache_hit or cache_miss:
         rate = cache_hit / (cache_hit + cache_miss)
         console.print(f"  [dim]prompt cache: {rate:.0%} hit[/dim]")
+    if settled_already:
+        console.print(
+            f"  [dim]{settled_already} row(s) asked nothing — every field either "
+            f"filled or already looked for {max_attempts}x without success[/dim]"
+        )
+    if unreached:
+        console.print(
+            f"[yellow]token budget spent[/yellow] — {len(unreached)} row(s) not "
+            f"reached. Raise --token-budget to continue."
+            + (
+                f"\n[dim]nothing was attempted: a row costs about {TYPICAL_ROW_TOKENS:,} "
+                f"tokens and the budget is {token_budget:,}[/dim]"
+                if not called
+                else ""
+            )
+        )
 
 
 def _render_batch(batch, *, target: int, dry_run: bool) -> None:

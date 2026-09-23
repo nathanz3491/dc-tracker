@@ -12,6 +12,10 @@ The assertions that carry the design:
 * :func:`test_queries_are_anchored_on_the_project` — an unanchored gap query
   returns the industry, not the project.
 * :func:`test_a_field_a_null_is_correct_for_is_not_counted_as_failure`.
+* :func:`test_the_agent_pass_only_sees_rows_the_harvest_reached` — the expensive
+  rung must never run on a row the cheap one never opened.
+* :func:`test_the_token_budget_stops_between_rows_and_never_inside_one` — a cap
+  that aborts mid-row spends the tokens and stores nothing.
 """
 
 from __future__ import annotations
@@ -1105,3 +1109,156 @@ def test_a_dry_run_asks_but_never_writes(session):
 
     assert any("mw_planned" in line for line in report.settled)
     assert project.mw_planned == 90.0
+
+
+# --- what the agent pass is allowed to cost -----------------------------------
+#
+# Three separate savings, all of which work by not asking: the pass only sees rows
+# the harvest reached, it asks about the fields the caller named, and it stops
+# between rows rather than in the middle of one.
+
+
+class CountingGapfill:
+    """Stands in for `gapfill.fill`, recording what it was asked and charging for it."""
+
+    def __init__(self, *, tokens=77_000, verdict="nothing"):
+        self.calls: list[tuple[int, list[str] | None]] = []
+        self.tokens = tokens
+        self.verdict = verdict
+
+    def __call__(self, session, project, *, extractor, gaps=None, **kwargs):
+        from tracker.gapfill import Filled
+
+        self.calls.append((project.id, list(gaps) if gaps is not None else None))
+        if gaps is not None and not gaps:
+            return Filled(verdict="nothing", note="nothing asked")
+        return Filled(
+            verdict=self.verdict,
+            note="nobody published it",
+            missed=tuple(sorted(gaps or ())),
+            prompt_tokens=self.tokens,
+        )
+
+
+def _agent_ready(monkeypatch, fake):
+    """Point `_gapfill_batch` at a fake model and a fake filler."""
+    from tracker import gapfill
+    from tracker.cli import enrich as cli_enrich
+
+    monkeypatch.setattr(gapfill, "fill", fake)
+    monkeypatch.setattr(cli_enrich, "get_settings", lambda: object())
+    monkeypatch.setattr("tracker.llm.agent_extractor", lambda settings: object())
+    return cli_enrich
+
+
+def test_the_agent_pass_only_sees_rows_the_harvest_reached(session, monkeypatch):
+    """The measured waste this whole change started from.
+
+    `run_many` stops when the article budget runs out and leaves the rest of the
+    list untouched, but the agent pass was handed every id that had been SELECTED.
+    On the shape that prompted it — `--all` over 403 rows at `--budget 200` — that
+    billed ~77,000 tokens each for roughly 350 rows the harvest never opened.
+    """
+    reached = add_project(session, city="Reno", company="Op Reno")
+    skipped = add_project(session, city="Mesa", company="Op Mesa")
+    fake = CountingGapfill()
+    cli_enrich = _agent_ready(monkeypatch, fake)
+
+    # What the CLI now passes: the ids `run_many` actually reported on.
+    cli_enrich._gapfill_batch(session, [reached.id], max_attempts=0)
+
+    assert [pid for pid, _ in fake.calls] == [reached.id]
+    assert skipped.id not in [pid for pid, _ in fake.calls], (
+        "a row the budget never reached must not be billed the expensive rung"
+    )
+
+
+def test_the_agent_is_asked_only_about_the_fields_requested(session, monkeypatch):
+    """`gapfill.fill(gaps=...)` existed, was documented and tested, and no caller
+    ever passed it — so every run asked about all eight fillable fields."""
+    project = add_project(session, mw_planned=None, mw_built=None, customer=None)
+    fake = CountingGapfill()
+    cli_enrich = _agent_ready(monkeypatch, fake)
+
+    cli_enrich._gapfill_batch(
+        session, [project.id], only_fields=("mw_planned", "mw_built"), max_attempts=0
+    )
+
+    assert fake.calls, "the row should have been asked about"
+    _pid, asked = fake.calls[0]
+    assert asked == ["mw_built", "mw_planned"], f"asked about {asked}"
+    assert "customer" not in (asked or []), "a field nobody asked for costs money"
+
+
+def test_a_field_already_looked_for_is_not_asked_about_again(session, monkeypatch):
+    """The attempt cap. Two fruitless askings and the field is left alone."""
+    from tracker import attempts
+
+    project = add_project(session, mw_built=None)
+    attempts.record(project, ["mw_built"])
+    attempts.record(project, ["mw_built"])
+    session.flush()
+
+    fake = CountingGapfill()
+    cli_enrich = _agent_ready(monkeypatch, fake)
+    cli_enrich._gapfill_batch(session, [project.id], only_fields=("mw_built",), max_attempts=2)
+
+    assert fake.calls == [], "a row with nothing left to ask must cost nothing at all"
+
+
+def test_a_fruitless_run_is_recorded_so_the_next_one_skips_it(session, monkeypatch):
+    from tracker import attempts
+
+    project = add_project(session, mw_built=None)
+    fake = CountingGapfill(verdict="nothing")
+    cli_enrich = _agent_ready(monkeypatch, fake)
+
+    cli_enrich._gapfill_batch(session, [project.id], only_fields=("mw_built",), max_attempts=2)
+
+    assert "found nothing for `mw_built`" in (session.get(Project, project.id).notes or "")
+    assert attempts.attempts(session.get(Project, project.id))["mw_built"].attempts == 1
+
+
+def test_the_token_budget_stops_between_rows_and_never_inside_one(session, monkeypatch):
+    """A cap that aborted mid-run would spend the tokens and store nothing, which
+    is the waste it exists to prevent rather than a way to prevent it."""
+    ids = []
+    for city in ("Reno", "Mesa", "Plano", "Ames"):
+        ids.append(add_project(session, city=city, company=f"Op {city}", mw_built=None).id)
+
+    fake = CountingGapfill(tokens=50_000)
+    cli_enrich = _agent_ready(monkeypatch, fake)
+    cli_enrich._gapfill_batch(
+        session, ids, only_fields=("mw_built",), token_budget=120_000, max_attempts=0
+    )
+
+    # Two rows at 50k fit; a third would exceed 120k, so it is never started.
+    assert len(fake.calls) == 2, f"{len(fake.calls)} row(s) were charged for"
+
+
+def test_a_budget_too_small_for_one_row_attempts_nothing(session, monkeypatch):
+    """Better to say so than to spend 77,000 tokens proving the budget was wrong."""
+    project = add_project(session, mw_built=None)
+    fake = CountingGapfill()
+    cli_enrich = _agent_ready(monkeypatch, fake)
+
+    cli_enrich._gapfill_batch(
+        session, [project.id], only_fields=("mw_built",), token_budget=1_000, max_attempts=0
+    )
+    assert fake.calls == []
+
+
+def test_search_skips_a_field_already_looked_for(session):
+    """The saving one rung earlier: each query is an API call and every hit is a read."""
+    project = add_project(session, mw_built=None, customer=None)
+    gaps = enrich.for_project(project)
+
+    # Above MAX_QUERIES deliberately: at the default limit both lists are capped at
+    # twelve and the saving is invisible, which would make this assert the cap
+    # rather than the narrowing.
+    everything = enrich.search_queries(project, gaps, limit=99)
+    narrowed = enrich.search_queries(project, gaps, limit=99, skip={"mw_built", "customer"})
+
+    assert len(narrowed) < len(everything)
+    assert not any("energized operational" in q for q in narrowed), "mw_built still queried"
+    assert not any("anchor customer" in q for q in narrowed), "customer still queried"

@@ -5,7 +5,7 @@ keeping it current and wrong when you want one row *complete*. This module inver
 that: pick one project, recruit every source of URLs the system has, and keep going
 while rounds are still filling fields.
 
-Five harvesters, cheapest and most certain first, so an expensive one never runs
+Six harvesters, cheapest and most certain first, so an expensive one never runs
 for a field a free one would have filled:
 
 1. **derive** — county/lat/lon from Census reference data. No LLM, no network.
@@ -41,6 +41,7 @@ from typing import TYPE_CHECKING
 from sqlalchemy import literal, select
 from sqlalchemy.orm import Session
 
+from tracker import attempts
 from tracker.config import Settings, get_settings
 from tracker.gaps import FILLED, NOT_APPLICABLE, FieldState, for_project
 from tracker.llm import LLMUnavailable
@@ -205,13 +206,22 @@ def _label(project: Project) -> str:
 
 
 def search_queries(
-    project: Project, gaps: list[FieldState], *, limit: int = MAX_QUERIES
+    project: Project,
+    gaps: list[FieldState],
+    *,
+    limit: int = MAX_QUERIES,
+    skip: frozenset[str] | set[str] = frozenset(),
 ) -> list[str]:
     """Queries aimed at this project's *own* missing fields.
 
     Every query is anchored on the quoted company and locality, so a hit about a
     different operator in the same town cannot come back. Without that anchor,
     "data center investment billion" returns the industry, not the project.
+
+    `skip` drops fields not worth querying for — ones the caller did not ask about,
+    or that `tracker.attempts` records as already looked for without success. Each
+    query is an API call and the articles it returns are reads, so a field nobody
+    has published costs real money every round until it stops being asked about.
     """
     where = project.city or project.county
     if not project.company or not where:
@@ -220,7 +230,7 @@ def search_queries(
 
     queries: list[str] = [f"{anchor} data center"]
     for state in gaps:
-        if not state.is_gap:
+        if not state.is_gap or state.field in skip:
             continue
         for phrase in _FIELD_QUERIES.get(state.field, ()):
             candidate = f"{anchor} {phrase}"
@@ -379,6 +389,7 @@ def harvest_search(
     *,
     settings: Settings,
     provider: object | None = None,
+    skip: frozenset[str] | set[str] = frozenset(),
 ) -> Harvest:
     """The configured search backend (Serper/Google/Brave/Bocha), aimed at this
     project's gaps. Needs one key in .env.
@@ -407,7 +418,7 @@ def harvest_search(
             # thing the report can tell an operator whose enrich run came up short.
             return Harvest("search", skipped=str(exc).strip())
 
-    queries = search_queries(project, gaps)
+    queries = search_queries(project, gaps, skip=skip)
     if not queries:
         return Harvest("search", skipped="project has no company/locality to anchor a query")
 
@@ -546,6 +557,8 @@ def run(
     dry_run: bool = False,
     sweep: ArchiveSweep | None = None,
     target_fields: int | None = None,
+    want_fields: tuple[str, ...] | None = None,
+    max_attempts: int = 0,
 ) -> EnrichReport:
     """Recruit every method against one project until rounds stop paying.
 
@@ -620,8 +633,21 @@ def run(
                 )
             )
         if not skip_search:
+            # Fields not worth a query: ones this run was not asked about, and ones
+            # already looked for without success on a row that has gained no
+            # citation since. Recomputed each round because a round can add one.
+            skip_fields = set(attempts.exhausted(project, max_attempts=max_attempts))
+            if want_fields is not None:
+                skip_fields |= {s.field for s in gaps if s.field not in want_fields}
             current.harvests.append(
-                harvest_search(session, project, gaps, settings=settings, provider=search_provider)
+                harvest_search(
+                    session,
+                    project,
+                    gaps,
+                    settings=settings,
+                    provider=search_provider,
+                    skip=skip_fields,
+                )
             )
         if number == 1:
             current.harvests.append(harvest_refresh(session, project_id))
