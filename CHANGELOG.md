@@ -12,6 +12,109 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **Deleting an account, or changing its password, ends that person's console
+  sessions within seconds, on every route** (`tracker/webui/auth.py`,
+  `tracker/webui/server.py`, `tracker/accounts.py`, `tracker/cli/people.py`,
+  `tests/test_webui.py`, `docs/architecture.md`, `docs/console-and-export.md`).
+
+  Sessions live in the console's memory and `tracker users` runs in another
+  process, so only `/api/dataset` ever looked the account row up. Measured on a
+  copy of production: after `tracker users rm`, the deleted account's cookie kept
+  getting 200 from `/api/projects`, `/api/project`, `/api/claims`, `/api/updates`
+  and `/api/articles` for the rest of its twelve-hour session. `tracker users
+  passwd` did not sign old sessions out at all, and because `account.id` is a plain
+  `INTEGER PRIMARY KEY`, SQLite hands a deleted id to the next account created — an
+  old cookie would then have read as that stranger.
+
+  A session now remembers a digest of the password hash it was granted on, and
+  every request confirms it against the account row at most once every five
+  seconds (`auth.SESSION_CONFIRM_S`, one primary-key read). A missing row or a
+  changed credential drops the session; a moment the database cannot answer
+  refuses the request and keeps it.
+
+- **An anonymous request can no longer tie the console up with its body or its
+  silence** (`tracker/webui/server.py`, `tests/test_webui.py`,
+  `docs/architecture.md`).
+
+  The request body was read whole before the origin check and the sign-in, with no
+  cap: one 64 MiB POST to `/api/login` peaked at 132 MiB allocated.
+  `Content-Length: -1` reached `rfile.read(-1)` and held a thread until the client
+  let go, a chunked body was treated as empty and its chunks then parsed as the next
+  request, and with no socket timeout a connection that opened and said nothing held
+  its thread forever. Bodies are now judged on their headers first — over 64 KB
+  (sized from the largest registration any route accepts), a length that is not a
+  plain number, or a chunked body is answered 413, 400 or 411 and the connection
+  closed — and every connection has a 30-second socket timeout, which bounds each
+  wait rather than a whole response, so a streaming briefing is unaffected.
+
+- **Deleting the last account no longer opens a published console to the internet**
+  (`tracker/webui/server.py`, `tracker/cli/serve.py`, `tracker/cli/people.py`,
+  `tracker/accounts.py`, `tests/test_webui.py`, `docs/architecture.md`,
+  `docs/console-and-export.md`).
+
+  Whether a sign-in was needed was re-read every five seconds from "does any
+  account exist", and the refusal to publish with no accounts ran only at startup —
+  so `tracker users rm` of the last account put the whole dataset on the tunnel's
+  public URL within seconds, and the CLI announced "the console is open again". A
+  console started with `tracker cloudflare` or `serve --tunnel` now requires a
+  sign-in for as long as it runs; with no accounts it refuses everyone, and the
+  sign-in form says `tracker users add` is the fix. On loopback nothing changes.
+  Deleting the last account still needs no extra flag — it can now only lock a
+  published console, not open it, and the command already confirms — but the prompt
+  says it is the last account and the message after says what that did.
+
+- **The sign-in form's timing no longer says which email addresses have accounts**
+  (`tracker/accounts.py`, `tracker/webui/server.py`, `tests/test_accounts.py`).
+
+  "Wrong email or password" is one message on purpose, but the response time was
+  not: an unknown address took ~109 ms against ~56 ms for a real one on a copy of
+  production, because a miss hashed a fresh random password and then verified
+  against it — two scrypts for one. A miss now checks against a decoy hash made
+  once per process (`accounts.decoy_hash`), so every path costs one: 44.7 ms against
+  43.3 ms after, best of seven. The test counts scrypt calls per path rather than
+  timing them.
+
+- **Signing in as yourself no longer buys unlimited guesses at other people's
+  passwords** (`tracker/webui/auth.py`, `tracker/accounts.py`,
+  `tests/test_webui.py`, `docs/architecture.md`, `docs/console-and-export.md`).
+
+  A correct password reset the global failure counter along with the client's
+  own, so anybody with an account could guess seven times, sign in, and repeat —
+  never reaching the per-client limit of eight, and resetting the global forty each
+  round. A success now forgets only that client's failures. The global count is a
+  fifteen-minute window instead, which keeps what the reset stood in for (one
+  person's typos never closing the gate on everybody) and makes the documented
+  rate — forty attempts per fifteen minutes — the one enforced. The global lockout
+  itself is unchanged.
+
+- **People can sign in while a command is writing to the database**
+  (`tracker/webui/server.py`, `tests/test_webui.py`, `docs/architecture.md`).
+
+  Sign-in stamped `last_seen_at` inside its own transaction under the five-second
+  busy timeout and did not catch "database is locked", so whenever a CLI command
+  held SQLite's write lock — every transaction of a crawl — the right password
+  waited five seconds and got a 500. The password check now reads through the
+  console's read-only session, which a WAL writer never blocks, and the stamp is
+  written afterwards with a quarter-second wait, and skipped (and logged) if the
+  database is still busy.
+
+- **The console no longer tells every reader where the database lives on the host**
+  (`tracker/webui/dataset.py`, `tracker/webui/server.py`, `tests/test_webui.py`).
+
+  `/api/dataset` carried `db`, the database's absolute path — the host's directory
+  layout and user name — to every signed-in reader of the published console, and
+  nothing in the page read it. `dataset.build` keeps it for the terminal interface,
+  which runs on the machine the path describes.
+
+- **A closed browser tab no longer prints a traceback in the console's log**
+  (`tracker/webui/server.py`, `tests/test_webui.py`).
+
+  A client that reset a keep-alive connection between requests made socketserver
+  print "Exception occurred during processing of request" with a full
+  `ConnectionResetError` traceback: the stdlib reads the next request line before
+  any handler of ours runs. A dropped connection is now the end of the
+  conversation, the way the stdlib already treats a timeout.
+
 - **Only one writing run can hold the database, even when several start in the same
   instant** (`tracker/db.py`, `tests/test_db.py`, `docs/architecture.md`).
 
@@ -65,6 +168,86 @@ initial build of the v1 PRD.
   now skips it and reports "not swept — the article budget is zero".
 
 ### Changed
+
+- **The capex view costs half what it did, and reads the database 21 times rather
+  than 2,031** (`tracker/capex.py`, `tracker/webui/dataset.py`,
+  `tracker/webui/server.py`, `tests/test_capex.py`, `tests/test_webui.py`,
+  `docs/console-and-export.md`).
+
+  Three kinds of repeated work: the duplicate finder ran twice per request (once in
+  the payload, again inside `capex.rollup`); each of ~70 buyers re-scanned every
+  open risk for its worst one; and each helper's own `select(Project)` found the
+  previous helper's rows already freed — a session holds them weakly — so every
+  project's tranches, parties and citations were lazy-loaded again, one query per
+  project per helper. The finder now runs once and its pairs are handed to
+  `rollup`, one scan answers every buyer (`capex.blocking_risks`), and
+  `capex.working_set` holds the rows with their relationships for the whole
+  payload; the rollup side also memoises the pure company/customer key functions.
+  The duplicate finder's own logic is untouched.
+
+  | on a copy of production, at the route | before | after |
+  |---|---|---|
+  | `GET /api/capex` | 1,001 ms, 2,031 statements | 393 ms, 21 |
+  | hover-card briefing, uncached | 625 ms, 1,230 statements | 384 ms, 26 |
+
+  The payload is byte-identical to the old code's on the production copy, and the
+  tests hold each change to the code it replaced and the statement count to a
+  constant as the database grows.
+
+- **The console stops shipping data nothing on the page reads**
+  (`tracker/webui/dataset.py`, `tracker/webui/server.py`, `tests/test_webui.py`,
+  `docs/console-and-export.md`).
+
+  Every projects-table row carried the project's `notes` audit log — 4.4 KB at the
+  median, never read by `app.js` — and `/api/dataset` carried `queue`, `failed`,
+  `feeds`, `required` and `exposure` (113 KB raw), views the console once had. The
+  rows now omit `notes` (the project's own page keeps it) and the shell payload the
+  five keys (`dataset.build` keeps them for the terminal interface). A 200-row page
+  is 198 KB gzipped rather than 433, and `/api/dataset` 67 KB rather than 88.
+
+- **The console opens the database once, and serves its heavy answers from a cache
+  until something commits** (`tracker/webui/reads.py`, `tracker/webui/server.py`,
+  `tracker/webui/dataset.py`, `tracker/cli/serve.py`, `tests/test_webui.py`,
+  `tests/test_capex.py`, `docs/architecture.md`, `docs/console-and-export.md`).
+
+  Every request built a fresh engine — three metadata queries and a re-read of all
+  24 migration files — and never disposed it: 41 new SQLite connections for forty
+  requests. A console now holds one read-only engine, reopened only when the file
+  at the path is a different file (`scripts/sync_db.py` renames a new one over the
+  old). The shell index, the capex rollup, the publisher survey and the citations
+  list are cached until SQLite's `PRAGMA data_version` says another connection has
+  committed — the right key because the console is not the writer — and the hover
+  card shares the capex answer. Who is reading is never cached, and Updates is not
+  cached at all. Cache hits on the production copy: `/api/dataset` 7 ms (was 118),
+  `/api/capex` 2 ms, `/api/publishers` 1 ms, the hover card 5 ms; the first request
+  after a commit costs what it did.
+
+- **The publisher survey reads every citation once, not once per project**
+  (`tracker/sources.py`, `tests/test_webui.py`).
+
+  The Sources view and `tracker sources` asked for each project's citations
+  separately: 483 queries, ~285 ms on the production copy. One ordered pass now,
+  2 queries and ~185 ms, in exactly the per-project order the old queries returned
+  — which matters, because equally strong claims are ranked by arrival — and the
+  survey is identical, host for host.
+
+- **The Updates page resolves the reader's watchlist once, not twice**
+  (`tracker/feed.py`, `tracker/webui/server.py`, `tests/test_webui.py`).
+
+  The route resolved it inside `feed.digest` and again to draw the list, 35-85 ms
+  each. `feed.digest` now takes the resolved list as an optional `entities`
+  argument; `tracker digest` is unchanged. `/api/updates` best 170 ms and 11
+  statements, from ~245 ms and 14-17.
+
+- **A publisher's refusal is remembered instead of waited on at every open**
+  (`tracker/webui/article.py`, `tracker/webui/server.py`, `tests/test_webui.py`,
+  `docs/architecture.md`).
+
+  Opening a citation from a site that refuses the reader fetch waited on the
+  network each time — up to the 25-second timeout — before showing the stored text
+  it was always going to show. The refusal is now kept beside the reader cache for
+  thirty minutes (`article.REFUSAL_TTL_S`), so it survives restarts and every
+  process agrees; a success clears it.
 
 - **`enrich --select` and `sync` pass over rows with nothing left to ask**
   (`tracker/ingest/enrich.py` — `select_projects`, `tracker/cli/enrich.py`,
