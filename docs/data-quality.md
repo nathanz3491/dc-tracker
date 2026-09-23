@@ -480,6 +480,19 @@ why it matters; nothing outside that module had ever read it, so a year-only
 "in 2024" rendered as `2024-01-01`. It now renders as `2024` — shorter, and
 claiming less.
 
+That only held for dates the model *wrote* vaguely, and the prompt tells it not
+to: a bare year arrives as `YYYY-01-01`, which parses as a day. So the precision is
+also read from the stored quote — the words directly before the year — and
+`tracker backfill precision` does the same for claims already on disk:
+
+```bash
+tracker backfill precision          # preview
+tracker backfill precision --apply
+```
+
+A sentence that does not narrow the date, or names a period the stored date does
+not start, records nothing rather than a guess.
+
 ## Three kinds of megawatt in one column
 
 ```bash

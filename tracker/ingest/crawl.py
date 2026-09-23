@@ -61,6 +61,7 @@ from tracker.normalize import (
     norm_risk_severity,
     norm_state,
     norm_text,
+    precision_in_quote,
     soft,
 )
 from tracker.parallel import map_ordered
@@ -2277,6 +2278,16 @@ def _claim_axes(
     for field, precision in (precisions or {}).items():
         if field in kept and precision and precision != "day":
             out.setdefault(field, {})["date_precision"] = precision
+    # The parse only sees what the model wrote, and the prompt tells the model to
+    # write a bare year as `YYYY-01-01` — so "online in 2027" parses as a day and
+    # the parse records nothing. The stored quote still says what the article did.
+    # Same no-verification argument as above: this reads our own stored sentence,
+    # not a label the model asserted.
+    for field in ("first_announced", "expected_online"):
+        if field in kept and field in quotes and "date_precision" not in out.get(field, {}):
+            stated = precision_in_quote(kept[field], quotes[field])
+            if stated:
+                out.setdefault(field, {})["date_precision"] = stated
     return out
 
 

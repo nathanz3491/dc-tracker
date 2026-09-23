@@ -1203,6 +1203,42 @@ def _backfill_basis(*, apply: bool, dry_run: bool) -> None:
         )
 
 
+def _backfill_precision(*, apply: bool, dry_run: bool) -> None:
+    """Read how precisely each date's own sentence states it, and cache that.
+
+    Free, like `basis`: the precision comes out of the quote already stored beside
+    the date. Until this ran, "online in 2027" was a claim for 1 January 2027 with
+    no record that the article said only a year.
+    """
+    from tracker.backfill import derive_date_precision
+
+    writing = apply and not dry_run
+    engine = _writable("backfill precision") if writing else _read_engine()
+    with _explain_db_locks(), session_scope(engine, commit=writing) as session:
+        report = derive_date_precision(session, apply=writing)
+
+    if json_mode():
+        emit(
+            {
+                "claims": report.claims,
+                "changed": report.changed,
+                "found": report.found,
+                "projects_touched": report.projects_touched,
+                "applied": writing,
+            }
+        )
+        return
+
+    _print_report_rows(
+        report.as_rows(), title="backfill precision" + ("" if writing else " (preview)")
+    )
+    total = sum(report.found.values()) or 1
+    for precision, count in sorted(report.found.items(), key=lambda kv: -kv[1]):
+        console.print(f"  {precision:<8} {count:>6,}  [dim]{count / total:.1%}[/dim]")
+    if not writing:
+        console.print("\n[dim]Nothing written. `--apply` writes the precision.[/dim]")
+
+
 def _backfill_dates(*, limit: int, refetch: bool, apply: bool, yes: bool, everything: bool) -> None:
     """`tracker backfill dates`. No LLM, no API key, one column.
 
@@ -1346,7 +1382,7 @@ def _backfill_derive(*, project_id: int | None, dry_run: bool) -> None:
 def backfill(
     what: Annotated[
         str,
-        typer.Argument(help="`blocks`, `dates`, `derive`, `scope` or `basis`."),
+        typer.Argument(help="`blocks`, `dates`, `derive`, `scope`, `basis` or `precision`."),
     ] = "blocks",
     limit: Annotated[
         int, typer.Option("--limit", help="Articles to read. 0 reads every one selected.")
@@ -1399,6 +1435,8 @@ def backfill(
       is broken by publication order rather than by crawl order.
     * `basis` — derive which KIND of megawatt each capacity figure is, out of the
       quote already stored beside it. Free.
+    * `precision` — read how precisely each date's own sentence states it, so
+      "online in 2027" stops rendering as 1 January 2027. Free.
     * `blocks` — re-read stored articles to fill in capacity blocks. The default,
       and the only one that spends anything.
 
@@ -1461,10 +1499,17 @@ def backfill(
                 _fail(f"{name} applies to `backfill blocks` or `dates`, not to `basis`.")
         _backfill_basis(apply=apply, dry_run=dry_run)
         return
+    if what == "precision":
+        # Free, like `basis`: read out of the stored quote.
+        for flag, name in ((refetch, "--refetch"), (force, "--force"), (all_urls, "--all")):
+            if flag:
+                _fail(f"{name} applies to `backfill blocks` or `dates`, not to `precision`.")
+        _backfill_precision(apply=apply, dry_run=dry_run)
+        return
     if what != "blocks":
         _fail(
             f"nothing to backfill called {what!r}. Expected `blocks`, `dates`, "
-            "`derive`, `scope` or `basis`."
+            "`derive`, `scope`, `basis` or `precision`."
         )
 
     settings = get_settings()

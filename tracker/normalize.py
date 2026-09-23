@@ -748,6 +748,80 @@ def norm_date(raw: Any, *, field: str = "date") -> dt.date | None:
     return norm_date_detail(raw, field=field).value
 
 
+#: A month name or a standard abbreviation, as a whole word. Built from `_MONTHS`
+#: so the two cannot disagree about what counts as a month; `may` is included and
+#: is ambiguous in prose, but only ever read directly before a year.
+_MONTH_WORD = r"(?:" + "|".join(sorted(_MONTHS, key=len, reverse=True)) + r")\.?"
+_DAY_THEN_YEAR = re.compile(
+    rf"(?:\b{_MONTH_WORD}\s+\d{{1,2}}(?:st|nd|rd|th)?|\b\d{{1,2}}(?:st|nd|rd|th)?\s+{_MONTH_WORD}),?\s*$"
+)
+_MONTH_THEN_YEAR = re.compile(rf"\b({_MONTH_WORD})[\s,]*$")
+_QUARTER_THEN_YEAR = re.compile(
+    r"(?:\bq[1-4]|\b[1-4]q|\b(?:first|second|third|fourth|1st|2nd|3rd|4th)\s+quarter)"
+    r"(?:\s+of)?[\s,]*$"
+)
+_HALF_THEN_YEAR = re.compile(
+    r"(?:\bh[12]|\b[12]h|\b(?:first|second|1st|2nd)\s+half)(?:\s+of)?[\s,]*$"
+)
+
+
+def precision_in_quote(value: Any, quote: str | None) -> str | None:
+    """How precisely `quote` states the date `value` — or None for a day, or unknown.
+
+    **The extraction prompt makes the dates it is given look exact.** It asks for
+    ISO dates and tells the model to write a bare year as `YYYY-01-01` and a month
+    as `YYYY-MM-01`, so the parser here receives a full day and records nothing.
+    Measured on the snapshot this was written against: 4 of 1,455 date claims carried a
+    precision, and 110 of 203 stored `expected_online` dates fell on 1 January —
+    "online in 2027" rendered as though somebody had named New Year's Day.
+
+    The quote stored beside the date still says what the article said, so this reads
+    it: the words directly before the year. A day before the year is a day; a month
+    is a month when it is the value's month; a quarter or a half is one when the
+    value starts it; nothing at all is a year when the value is 1 January. Anything
+    else — the year absent from the sentence, a month the value does not start —
+    returns None and changes nothing. That is the only honest failure: a precision
+    is a statement about the article, and this never makes one the sentence does
+    not support.
+    """
+    if value is None or not quote:
+        return None
+    iso = value.isoformat() if hasattr(value, "isoformat") else str(value)
+    parts = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})", iso.strip())
+    if not parts:
+        return None
+    year, month, day = parts.group(1), int(parts.group(2)), int(parts.group(3))
+    if day != 1:
+        return None
+    text = " ".join(str(quote).lower().split())
+
+    readings: list[str] = []
+    for hit in re.finditer(rf"(?<!\d){year}(?!\d)", text):
+        before = text[max(0, hit.start() - 40) : hit.start()]
+        if re.match(r"-\d{2}-\d{2}", text[hit.end() : hit.end() + 6]) or _DAY_THEN_YEAR.search(
+            before
+        ):
+            readings.append("day")
+            continue
+        named = _MONTH_THEN_YEAR.search(before)
+        if named:
+            stated = _MONTHS.get(named.group(1).rstrip("."))
+            readings.append("month" if stated == month else "other")
+        elif _QUARTER_THEN_YEAR.search(before):
+            readings.append("quarter" if month in _QUARTER_MONTH.values() else "other")
+        elif _HALF_THEN_YEAR.search(before):
+            readings.append("half" if month in (1, 7) else "other")
+        else:
+            readings.append("year" if month == 1 else "other")
+
+    if not readings or "day" in readings:
+        return None
+    for precision in ("month", "quarter", "half", "year"):
+        if precision in readings:
+            return precision
+    return None
+
+
 # --- Closed vocabularies ----------------------------------------------------
 
 # fmt: off

@@ -576,6 +576,93 @@ class BasisReport:
         ]
 
 
+@dataclass
+class PrecisionReport:
+    """What reading date precision out of the stored quotes found."""
+
+    #: Quoted date claims examined.
+    claims: int = 0
+    #: Claims whose recorded precision moved.
+    changed: int = 0
+    #: precision -> claims that ended there; `day` includes every date the quote
+    #: does not narrow, which is stored as no precision at all.
+    found: dict[str, int] = field(default_factory=dict)
+    #: Projects whose cached `*_precision` columns moved.
+    projects_touched: int = 0
+
+    def as_rows(self) -> list[tuple[str, int]]:
+        return [
+            ("quoted date claims read", self.claims),
+            ("claims given a precision", self.changed),
+            ("projects whose cache moved", self.projects_touched),
+        ]
+
+
+def derive_date_precision(session: Session, *, apply: bool = False) -> PrecisionReport:
+    """Read how precisely each dated claim's own sentence states it. No LLM, no network.
+
+    The extraction prompt asks for ISO dates and has the model write a bare year as
+    `YYYY-01-01`, so the parser recorded a day for "online in 2027" and the row
+    showed 1 January. Four of 1,455 date claims carried a precision on the snapshot
+    this was written for. The quote beside each date is already on disk, so this is
+    the same free re-read `derive_basis` performs: `normalize.precision_in_quote`
+    looks only at the words before the year, and a date the sentence does not narrow
+    keeps no precision rather than a guessed one.
+
+    A precision the *parser* recorded is never overwritten — it saw the model's own
+    date string, and "Q3 2025" parsed as a quarter is already the right answer.
+    """
+    import json
+
+    from tracker.normalize import precision_in_quote
+    from tracker.upsert import apply_date_precision, claims_by_field
+
+    report = PrecisionReport()
+    for project in session.scalars(select(Project)).all():
+        touched_project = False
+        for source in project.sources:
+            if not source.quotes:
+                continue
+            try:
+                quotes = json.loads(source.quotes or "{}")
+                claims = json.loads(source.claims or "{}")
+                meta = json.loads(source.claim_meta or "{}")
+            except (TypeError, ValueError):
+                continue
+            if not all(isinstance(x, dict) for x in (quotes, claims, meta)):
+                continue
+            touched = False
+            for name in ("first_announced", "expected_online"):
+                quote, value = quotes.get(name), claims.get(name)
+                if not quote or not value:
+                    continue
+                report.claims += 1
+                entry = meta.get(name) if isinstance(meta.get(name), dict) else {}
+                if entry.get("date_precision"):
+                    report.found[entry["date_precision"]] = (
+                        report.found.get(entry["date_precision"], 0) + 1
+                    )
+                    continue
+                stated = precision_in_quote(value, quote)
+                report.found[stated or "day"] = report.found.get(stated or "day", 0) + 1
+                if not stated:
+                    continue
+                report.changed += 1
+                meta[name] = {**entry, "date_precision": stated}
+                touched = True
+            if touched and apply:
+                source.claim_meta = json.dumps(meta, sort_keys=True, ensure_ascii=False)
+                touched_project = True
+        if touched_project and apply:
+            before = (project.first_announced_precision, project.expected_online_precision)
+            apply_date_precision(project, claims_by_field(list(project.sources)))
+            if (project.first_announced_precision, project.expected_online_precision) != before:
+                report.projects_touched += 1
+    if apply:
+        session.flush()
+    return report
+
+
 def derive_basis(session: Session, *, apply: bool = False) -> BasisReport:
     """Fill the `basis` axis from the quotes already stored. No LLM, no network.
 

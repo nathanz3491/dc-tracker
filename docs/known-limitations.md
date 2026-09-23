@@ -89,9 +89,14 @@ exists to answer, and it cannot. A source saying "sometime in 2027" normalises t
 quarters as a shape and the years as the number.
 
 Migration `0015` added `first_announced_precision` and `expected_online_precision`
-so a reader can at least see which dates are the vague ones. What is still
-missing is a pipeline view that buckets by stated precision rather than by the
-normalised day.
+so a reader can at least see which dates are the vague ones — and for two months
+they showed almost nothing: 2 of 482 rows. The prompt has the model write a bare
+year as `YYYY-01-01`, so the parser saw a day and recorded none. The precision is
+now read from the sentence stored beside the date (`normalize.precision_in_quote`,
+at extraction and by `tracker backfill precision` for what is already stored):
+on a production copy 444 of 661 quoted date claims gained one — 248 year, 130
+month, 43 quarter, 27 half. What is still missing is a pipeline view that buckets
+by stated precision rather than by the normalised day.
 
 ### 6 — Corroboration counts syndication as independence
 

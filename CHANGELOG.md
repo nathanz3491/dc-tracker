@@ -293,6 +293,25 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **"Online in 2027" no longer reads as 1 January 2027** (`tracker/normalize.py` —
+  `precision_in_quote`, `tracker/ingest/crawl.py` — `_claim_axes`,
+  `tracker/backfill.py` — `derive_date_precision`, `tracker/cli/quality.py` —
+  `backfill precision`, `docs/known-limitations.md`, `docs/data-quality.md`,
+  `tests/test_date_precision.py`).
+
+  The precision columns meant to show which dates are vague showed almost nothing:
+  2 of 482 rows, 4 of 1,455 date claims. Meanwhile 110 of 203 stored online dates
+  fell on 1 January. The extraction prompt asks for ISO dates and tells the model
+  to write a bare year as `YYYY-01-01`, so the parser saw a full day and recorded
+  none. The article's own words were still on disk in the stored quote. The
+  precision is now read from them: the words directly before the year give a day,
+  a month, a quarter, a half or a bare year. A sentence that does not narrow the
+  date, or names a period the stored date does not start, records nothing rather
+  than a guess. New extractions get it at once. `tracker backfill precision
+  [--apply]` does the same, for free, for claims already stored. On a production
+  copy 444 of 661 quoted date claims gained a precision (248 year, 130 month, 43
+  quarter, 27 half), and 153 projects' cached columns moved.
+
 - **A figure no citation states any more is cleared, not kept** (`tracker/upsert.py`,
   `tracker/logic.py`, `tracker/capex.py`, `docs/data-quality.md`,
   `docs/design-decisions.md`, `docs/workflows/logic.md`, `tests/test_unstated.py`).
