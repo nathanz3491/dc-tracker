@@ -330,6 +330,16 @@ tunnel, where an attacker with a thousand addresses would otherwise get a thousa
 budgets. Nothing is counted per email — that would let anyone who knows an address
 lock its owner out.
 
+**What a request costs before anybody has signed in** is bounded too, because a
+login form behind a tunnel is something the whole internet can send bytes to. A
+request body is judged on its headers before a byte of it is read: over 64 KB
+(`MAX_BODY`, sized from the largest registration any route accepts), a length that
+is not a plain number, or a chunked body, and the answer is 413, 400 or 411 with
+the connection closed. It used to be read whole first — one 64 MiB POST to the
+login route peaked at 132 MiB allocated, and a length of `-1` held a thread until
+the client let go. And every connection has a 30-second socket timeout, so one
+that opens and says nothing is closed rather than holding its thread.
+
 Sessions are random server-side tokens in an `HttpOnly; SameSite=Lax` cookie,
 holding no claim the server has to trust. They live in memory, so a restart signs
 everybody out; the deployer restarts this process on every commit, so that happens

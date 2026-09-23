@@ -57,6 +57,43 @@ DEFAULT_PORT = 8765
 #: Below this, compressing costs more than it saves.
 GZIP_MIN = 8192
 
+#: The largest request body any route here accepts, refused on the header alone.
+#:
+#: Sized from the routes rather than picked: the biggest legitimate body is a
+#: registration with every field at its own limit — a 1,024-character password
+#: (`accounts.MAX_PASSWORD_LEN`), a 254-character address, a code and a name —
+#: which is a few kilobytes even if every character took four bytes. Everything
+#: else is an id, an action word or a watchlist entry.
+#:
+#: Checked before anything else because the body used to be read whole before any
+#: check, sign-in included: measured, one 64 MiB POST to `/api/login` peaked at
+#: 132 MiB allocated, from a request that needed no credential to send.
+MAX_BODY = 64 * 1024
+
+#: How long a connection may sit without sending or receiving before it is dropped.
+#:
+#: Each connection is a thread (`ThreadingHTTPServer`), and without a socket
+#: timeout one that opens and then says nothing holds its thread forever — before
+#: signing in, since nothing has been read yet. Thirty seconds is far longer than
+#: any legitimate pause inside a request; it bounds each wait, not a whole
+#: response, so a briefing that streams for a minute is unaffected. It also closes
+#: an idle keep-alive connection, which is otherwise a thread parked on `readline`.
+REQUEST_TIMEOUT_S = 30
+
+
+class _BodyRefused(ValueError):
+    """A request body that will not be read, and the status that says why.
+
+    Raised before a byte of the body is consumed, so whatever the client sent is
+    still on the socket — which is why every refusal also closes the connection
+    rather than letting the unread bytes be parsed as the next request.
+    """
+
+    def __init__(self, status: int, message: str) -> None:
+        super().__init__(message)
+        self.status = status
+
+
 #: How long `Console.auth_required` may go without re-reading the database. See
 #: that property for why it is cached at all and why the window is this short.
 AUTH_CACHE_S = 5.0
@@ -279,6 +316,8 @@ class Handler(BaseHTTPRequestHandler):
     console: Console  # set by serve()
     server_version = f"dc-tracker/{__version__}"
     protocol_version = "HTTP/1.1"
+    #: `StreamRequestHandler.setup` applies it to the socket. See `REQUEST_TIMEOUT_S`.
+    timeout = REQUEST_TIMEOUT_S
 
     # --- plumbing ---------------------------------------------------------
 
@@ -354,7 +393,7 @@ class Handler(BaseHTTPRequestHandler):
         body = json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8")
         self._send(status, body, "application/json; charset=utf-8", extra=extra)
 
-    def _error(self, status: int, message: str) -> None:
+    def _error(self, status: int, message: str, *, close: bool = False) -> None:
         """Send an error, and never become one.
 
         This is called from inside `except` blocks. If the peer has already gone —
@@ -362,19 +401,58 @@ class Handler(BaseHTTPRequestHandler):
         response raises a second time, out of an exception handler, and escapes to
         socketserver as an unhandled error. That is the second traceback in the
         report that started this: one for the aborted stream, one for the failed
-        attempt to apologise for it.
+        attempt to apologise for it. A peer that stopped reading (the socket timed
+        out) is the same case.
+
+        `close` ends the connection after this response. `send_header` notices a
+        `Connection: close` and stops the keep-alive loop, which is what a refusal
+        of an unread body needs.
         """
         try:
-            self._json({"error": message}, status=status)
-        except ConnectionError:
+            self._json(
+                {"error": message}, status=status, extra={"Connection": "close"} if close else None
+            )
+        except (ConnectionError, TimeoutError):
             log.debug("could not send %d to a client that had already gone", status)
 
     def _body(self) -> dict[str, Any]:
-        length = int(self.headers.get("Content-Length") or 0)
+        """The request body as a JSON object, or `_BodyRefused` before reading it.
+
+        **Every check happens on the headers, before a byte of the body is read**,
+        because this runs ahead of the origin check and the sign-in: whatever it
+        does, anybody can make it do. A negative length used to reach
+        `rfile.read(-1)` — read to end of stream, holding the thread until the
+        client let go — and an unbounded one was allocated in full. The digits
+        rule rejects both, and anything else `int()` would have been lenient about.
+
+        No length at all is an empty body, as before, *unless* the client says it
+        is sending one another way: a chunked body cannot be read here, and
+        treating it as empty answered the request and then parsed the chunks as the
+        next one.
+        """
+        if self.headers.get("Transfer-Encoding"):
+            raise _BodyRefused(
+                411, "send the request body with a Content-Length; chunked bodies are not read"
+            )
+        declared = self.headers.get("Content-Length")
+        if declared is None:
+            return {}
+        digits = declared.strip()
+        if not (digits.isascii() and digits.isdigit()):
+            raise _BodyRefused(400, "Content-Length must be a whole number of bytes")
+        length = int(digits)
+        if length > MAX_BODY:
+            raise _BodyRefused(
+                413,
+                f"no route here takes a body over {MAX_BODY // 1024} KB; this one is {length:,}",
+            )
         if not length:
             return {}
+        raw = self.rfile.read(length)
+        if len(raw) < length:
+            raise _BodyRefused(400, "the request body ended before its Content-Length")
         try:
-            data = json.loads(self.rfile.read(length).decode("utf-8"))
+            data = json.loads(raw.decode("utf-8"))
         except (ValueError, UnicodeDecodeError):
             raise ValueError("request body is not valid JSON") from None
         if not isinstance(data, dict):
@@ -481,12 +559,13 @@ class Handler(BaseHTTPRequestHandler):
             self._error(503, str(exc))
         except FileNotFoundError as exc:
             self._error(503, str(exc))
-        except ConnectionError:
-            # The tab closed mid-response. Must stay ahead of the catch-all below:
-            # that one tries to send a 500, and sending anything down a socket the
-            # peer has already dropped raises again — which is what escaped to
-            # socketserver and printed a second traceback under "Exception
-            # occurred during processing of request".
+        except (ConnectionError, TimeoutError):
+            # The tab closed mid-response, or stopped reading for longer than
+            # `REQUEST_TIMEOUT_S`. Must stay ahead of the catch-all below: that one
+            # tries to send a 500, and sending anything down a socket the peer has
+            # already dropped raises again — which is what escaped to socketserver
+            # and printed a second traceback under "Exception occurred during
+            # processing of request".
             log.debug("GET %s: client went away", route)
         except ImportError as exc:
             self._stale_source(f"GET {route}", exc)
@@ -601,6 +680,9 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlsplit(self.path)
         try:
             body = self._body()
+        except _BodyRefused as exc:
+            # Unread, so what is left on the socket is not a request: close it.
+            return self._error(exc.status, str(exc), close=True)
         except ValueError as exc:
             return self._error(400, str(exc))
         try:
@@ -640,7 +722,7 @@ class Handler(BaseHTTPRequestHandler):
             # row, so a database that needs `tracker init` reaches this handler
             # too, and a 500 would hide the one-word fix.
             self._error(503, str(exc))
-        except ConnectionError:
+        except (ConnectionError, TimeoutError):
             log.debug("POST %s: client went away", parsed.path)
         except ImportError as exc:
             self._stale_source(f"POST {parsed.path}", exc)

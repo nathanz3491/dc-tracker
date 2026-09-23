@@ -1112,7 +1112,10 @@ def test_every_connection_failure_windows_can_raise_is_caught():
 
     source = (assets.STATIC_ROOT.parent / "server.py").read_text(encoding="utf-8")
     assert "except (BrokenPipeError, ConnectionResetError)" not in source
-    assert source.count("except ConnectionError") >= 3, "_stream, do_GET and do_POST"
+    # A client that stopped reading is the same case as one that left, now that
+    # the socket has a timeout, so the clause names both.
+    caught = source.count("except (ConnectionError, TimeoutError)")
+    assert caught >= 3, "_error, do_GET and do_POST"
 
 
 def test_a_run_targets_the_database_the_console_is_serving(seeded_db, tmp_path):
@@ -1657,6 +1660,108 @@ def test_a_session_whose_account_cannot_be_checked_is_refused_but_kept():
     now[0] += 1
     assert gate.session_for(token, confirm=lambda *_: False) is None
     assert gate.session_for(token) is None, "dropped"
+
+
+def _exchange(address, head: bytes, *, wait: float = 5.0) -> bytes:
+    """Send bytes exactly as given; return whatever came back before `wait` ran out.
+
+    Raw rather than `http.client`, which refuses to send a negative Content-Length
+    or a length its body does not match — and those are the requests under test.
+    An empty result means the server said nothing in time, which is the failure.
+    """
+    import socket
+
+    got = b""
+    with socket.create_connection(address, timeout=wait) as sock:
+        sock.sendall(head)
+        try:
+            while chunk := sock.recv(65536):
+                got += chunk
+        except TimeoutError:
+            pass
+    return got
+
+
+def _post_head(path: str, *lines: str) -> bytes:
+    return ("\r\n".join([f"POST {path} HTTP/1.1", "Host: 127.0.0.1", *lines, "", ""])).encode(
+        "ascii"
+    )
+
+
+def test_a_negative_content_length_is_refused_at_once(gated):
+    """`Content-Length: -1` used to reach `rfile.read(-1)`, which reads to end of
+    stream — so one unauthenticated request held a server thread for as long as
+    the client cared to keep the socket open."""
+    address, _ = gated
+    reply = _exchange(address, _post_head("/api/login", "Content-Length: -1"))
+    assert reply.startswith(b"HTTP/1.1 400"), reply[:200]
+
+
+def test_an_oversized_body_is_refused_before_it_is_read(gated):
+    """The body was read whole before any check, sign-in included: measured, a 64 MiB
+    POST to `/api/login` peaked at 132 MiB allocated. The refusal now comes from the
+    header alone, so a client that announces 64 MiB and sends one byte is answered
+    at once rather than waited for."""
+    address, _ = gated
+    head = _post_head("/api/login", "Content-Type: application/json", f"Content-Length: {64 << 20}")
+    reply = _exchange(address, head + b"{")
+    assert reply.startswith(b"HTTP/1.1 413"), reply[:200]
+    assert b"Connection: close" in reply, "the unread body must not be parsed as a request"
+
+
+def test_a_body_with_no_length_is_refused_rather_than_left_on_the_wire(gated):
+    """A chunked body cannot be read by this server at all. Treating it as empty
+    answered the request and then parsed the chunks as the next one."""
+    address, _ = gated
+    reply = _exchange(
+        address, _post_head("/api/login", "Transfer-Encoding: chunked") + b'5\r\n{"a":\r\n0\r\n\r\n'
+    )
+    assert reply.startswith(b"HTTP/1.1 411"), reply[:200]
+
+
+def test_the_largest_body_any_route_takes_still_fits(gated):
+    """The cap is sized from the routes, not picked. The biggest legitimate body is a
+    registration at every field's own limit, which is a few kilobytes."""
+    from tracker.accounts import MAX_EMAIL_LEN, MAX_PASSWORD_LEN
+    from tracker.webui.server import MAX_BODY
+
+    body = {
+        "code": "x" * 64,
+        "email": "a" * (MAX_EMAIL_LEN - len("@example.com")) + "@example.com",
+        "password": "p" * MAX_PASSWORD_LEN,
+        "name": "n" * 200,
+    }
+    assert len(json.dumps(body)) * 4 < MAX_BODY, "room even if every character were 4 bytes"
+    address, _ = gated
+    status, _, _ = raw(address, "/api/register", "POST", body)
+    assert status == 400, "refused as a bad code, not as too large"
+
+
+def test_a_silent_connection_is_closed_rather_than_held(seeded_db):
+    """With no socket timeout, a client that opens a connection and stops talking
+    holds a thread forever — before signing in, since nothing has been read yet."""
+    import socket
+    import time as clock
+    from http.server import ThreadingHTTPServer
+
+    assert Handler.timeout is not None and 0 < Handler.timeout <= 60
+
+    # And it is a timeout the stdlib acts on: shown with a short one, because the
+    # real value is too long to wait out in a test.
+    handler = type("Bound", (Handler,), {"console": Console(seeded_db), "timeout": 0.5})
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    httpd.daemon_threads = True
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        with socket.create_connection(httpd.server_address, timeout=10) as sock:
+            sock.sendall(_post_head("/api/login", "Content-Length: 10") + b"{")
+            started = clock.monotonic()
+            while sock.recv(65536):
+                pass
+            assert clock.monotonic() - started < 5, "the server waited for the rest"
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
 
 
 def test_the_password_check_is_constant_time():
