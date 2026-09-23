@@ -295,9 +295,13 @@ not merely a session — an anonymous visitor to an open console gets a 403 sayi
 so rather than a list with no owner.
 
 Opens `http://127.0.0.1:8765/`. Six views — **Updates**, Projects, Sources, Map,
-Capex, Help — reading the database on every request, so it reflects what the last
-run did without re-exporting anything. Reload to pick up a run that finished while
-you were reading; nothing on the page can start one.
+Capex, Help — reading the database live, so it reflects what the last run did
+without re-exporting anything. The four heavy answers (the shell index, capex, the
+publisher survey, the citations list) are cached until a commit changes the
+database, which SQLite counts for us (`PRAGMA data_version`): a second visit to
+Capex costs a few milliseconds instead of a rollup, and the first visit after a
+run is as fresh as ever. Reload to pick up a run that finished while you were
+reading; nothing on the page can start one.
 
 **Different from `tracker export html`, and both are worth having.** The export is
 one self-contained file you can email; it is frozen at the moment it was written.

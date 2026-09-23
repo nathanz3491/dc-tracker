@@ -1544,14 +1544,17 @@ def test_the_rollup_given_its_pairs_is_the_rollup_that_finds_them(session):
     assert any(p["duplicate_rows_skipped"] for p in found), "the fixture must exercise the skip"
 
 
-def test_the_working_set_changes_what_is_asked_not_what_is_answered(session):
+def test_the_working_set_changes_what_is_asked_not_what_is_answered(session, monkeypatch):
     """The payload built from preloaded rows is the payload built by lazy loading."""
+    from contextlib import nullcontext
+
     from tracker.webui import dataset
 
     _estate(session, 12)
-    lazily = dataset._capex_payload(session)
+    preloaded = dataset.capex(session)
     session.expire_all()
-    assert dataset.capex(session) == lazily
+    monkeypatch.setattr(capex, "working_set", lambda _session: nullcontext([]))
+    assert dataset.capex(session) == preloaded
 
 
 def test_the_capex_payload_costs_the_same_statements_at_any_size(engine, session):

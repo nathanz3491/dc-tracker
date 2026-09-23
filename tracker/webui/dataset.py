@@ -235,17 +235,29 @@ def _capex(session: Session) -> dict[str, Any]:
     load of the rows now — see `capex.working_set` — for the same payload,
     byte for byte (`tests/test_capex.py` holds it to that).
     """
+    return capex_bundle(session)[0]
+
+
+def capex_bundle(session: Session) -> tuple[dict[str, Any], list[Any]]:
+    """The capex payload, and the `capex.Position`s it was built from.
+
+    One computation for both, because both readers want the same rollup: the
+    view draws the payload, and the hover card's briefing needs one `Position`
+    object. The console caches this pair (`webui/reads.py`), so a hover after
+    the view has opened costs a lookup rather than a second rollup — and cannot
+    describe a position the table is not showing.
+    """
     from tracker import capex as capex_mod
 
     with capex_mod.working_set(session):
-        return _capex_payload(session)
+        pairs = capex_mod.suspected_duplicates(session)
+        positions = capex_mod.rollup(session, pairs=pairs)
+        return _capex_payload(session, pairs, positions), positions
 
 
-def _capex_payload(session: Session) -> dict[str, Any]:
+def _capex_payload(session: Session, pairs: list[Any], positions: list[Any]) -> dict[str, Any]:
     from tracker import capex as capex_mod
 
-    pairs = capex_mod.suspected_duplicates(session)
-    positions = capex_mod.rollup(session, pairs=pairs)
     worst = capex_mod.blocking_risks(session)
     as_of = capex_mod.as_of()
     as_of_quarter = f"{as_of.year}Q{(as_of.month - 1) // 3 + 1}"
@@ -772,21 +784,6 @@ def capex(session: Session) -> dict[str, Any]:
     what it costs now.
     """
     return _capex(session)
-
-
-def capex_positions(session: Session) -> list[Any]:
-    """The buyer positions alone, computed exactly as the capex payload computes them.
-
-    For the hover card's briefing, which needs one `capex.Position` and used to
-    call `capex.rollup` bare: the duplicate finder run inside it, and every
-    project's relationships lazy-loaded again — 1,229 statements per hover on a
-    copy of production. Same working set and one finder run as `_capex`, so the
-    card cannot describe a position the table is not showing.
-    """
-    from tracker import capex as capex_mod
-
-    with capex_mod.working_set(session):
-        return capex_mod.rollup(session, pairs=capex_mod.suspected_duplicates(session))
 
 
 #: What an article row carries. `excerpt` is deliberately absent from the row —

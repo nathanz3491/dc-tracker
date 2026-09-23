@@ -29,6 +29,8 @@ import re
 import threading
 import time
 import webbrowser
+from collections.abc import Callable, Hashable, Iterator
+from contextlib import contextmanager
 from functools import lru_cache
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -40,9 +42,10 @@ from sqlalchemy.exc import OperationalError
 
 from tracker import __version__
 from tracker.config import home
-from tracker.db import MigrationError, open_db, schema_version, session_scope
+from tracker.db import MigrationError, make_engine, session_scope
 from tracker.webui import assets
 from tracker.webui.auth import COOKIE, Gate, cookie_value
+from tracker.webui.reads import ReadSide
 
 log = logging.getLogger(__name__)
 
@@ -252,19 +255,52 @@ class Console:
         #: replace. See `Handler._watch`.
         self.allow_watch = allow_watch
         self.gate = Gate()
-        self._schema_version: int | None = None
+        #: One engine, one version probe and one cache for the life of the process.
+        #: See `webui/reads.py` for why each exists and what is never cached.
+        self.reads = ReadSide(db_path)
         self._accounts_exist = False
         self._auth_checked_at = 0.0
 
     def read_session(self):
-        engine = open_db(self.db_path)
-        if self._schema_version is None:
-            self._schema_version = schema_version(engine)
-        return session_scope(engine, commit=False)
+        """A read-only session on the console's one engine."""
+        return self.reads.session()
+
+    def cached(self, key: Hashable, compute: Callable[[], Any]) -> Any:
+        """A reader-independent answer, recomputed only after the database changes.
+
+        Never pass anything that depends on who is asking: the value is served to
+        every account on the console. See `webui/reads.py`.
+        """
+        return self.reads.cached(key, compute)
+
+    @contextmanager
+    def write_session(self, *, busy_timeout_ms: int | None = None) -> Iterator[Any]:
+        """A read-write session on an engine made for this one write, then disposed.
+
+        The four writes a console performs — a watchlist edit, a `watch_all`
+        toggle, a redeemed invite, a sign-in's last-seen stamp — each used
+        `open_db(readonly=False)`, re-checking every migration per write, and the
+        watchlist's never disposed its engine. The read engine has already checked
+        the file, so this goes straight to `make_engine`; and it is thrown away
+        after one write, so a shortened `busy_timeout` cannot leak into the next.
+        """
+        self.reads.engine()  # the file exists and its migrations are current
+        engine = make_engine(self.db_path)
+        try:
+            with session_scope(engine) as session:
+                if busy_timeout_ms is not None:
+                    session.execute(text(f"PRAGMA busy_timeout = {int(busy_timeout_ms)}"))
+                yield session
+        finally:
+            engine.dispose()
+
+    def close(self) -> None:
+        """Release the engine and the probe. Safe to call twice."""
+        self.reads.close()
 
     @property
     def schema_version(self) -> int:
-        return self._schema_version or 0
+        return self.reads.schema_version
 
     @property
     def auth_required(self) -> bool:
@@ -853,17 +889,16 @@ class Handler(BaseHTTPRequestHandler):
         The stamp is a convenience for `tracker users`; the sign-in is the thing
         the reader asked for.
 
-        Its own short-lived engine, so the shortened busy timeout cannot leak into
-        any other connection. A database busy for longer than `STAMP_WAIT_MS` just
-        means this sign-in goes unrecorded, and says so in the log.
+        Its own short-lived engine (`Console.write_session`), so the shortened busy
+        timeout cannot leak into any other connection. A database busy for longer
+        than `STAMP_WAIT_MS` just means this sign-in goes unrecorded, and says so in
+        the log.
         """
         from tracker import accounts
         from tracker.models import Account
 
-        engine = open_db(self.console.db_path, readonly=False)
         try:
-            with session_scope(engine) as session:
-                session.execute(text(f"PRAGMA busy_timeout = {int(self.STAMP_WAIT_MS)}"))
+            with self.console.write_session(busy_timeout_ms=self.STAMP_WAIT_MS) as session:
                 account = session.get(Account, account_id)
                 if account is not None:
                     accounts.touch(session, account)
@@ -875,8 +910,6 @@ class Handler(BaseHTTPRequestHandler):
                 "busy writing",
                 account_id,
             )
-        finally:
-            engine.dispose()
 
     def _register(self, body: dict[str, Any]) -> None:
         """Spend an invite code and sign the new account straight in.
@@ -899,9 +932,8 @@ class Handler(BaseHTTPRequestHandler):
         from tracker.accounts import AccountError, redeem, session_stamp
 
         client = self._client()
-        engine = open_db(self.console.db_path, readonly=False)
         try:
-            with session_scope(engine) as session:
+            with self.console.write_session() as session:
                 account = redeem(
                     session,
                     str(body.get("code") or ""),
@@ -1009,19 +1041,26 @@ class Handler(BaseHTTPRequestHandler):
         The index it does still carry is not optional — `window.DCTRACKER.projects`
         is what the vendored map elements read, directly, and the maps plot every
         project at once by definition.
-        """
-        from tracker.webui.dataset import light
 
-        # One session for both, because `read_session` opens the database each
-        # time it is called and this is the request every redraw makes.
+        **Cached until the database changes**, and only the part that is the same
+        for everybody. The reader's own four keys are added to a copy per request,
+        so one account's name can never reach another's page from the cache.
+        """
+        from tracker.webui import dataset
+
+        def fresh() -> dict[str, Any]:
+            with self.console.read_session() as session:
+                return dataset.light(session, schema_version=self.console.schema_version)
+
+        shared = self.console.cached(("dataset",), fresh)
         with self.console.read_session() as session:
-            payload = light(session, schema_version=self.console.schema_version)
             # Who is reading, so the header can say so and the watchlist knows
             # whether it has an owner. None on an open console with no accounts,
             # which the page reads as "no watchlist here" rather than "signed out".
             #
             # Resolved before `allow_watch`, because that flag depends on it.
             account = self._account_json(session)
+        payload = dict(shared)
         payload["allow_ai"] = self.console.allow_ai
         payload["auth_required"] = self.console.auth_required
         payload["account"] = account
@@ -1037,9 +1076,9 @@ class Handler(BaseHTTPRequestHandler):
     def _account_json(self, session: Any) -> dict[str, Any] | None:
         """The signed-in account as the page needs it, or None for nobody.
 
-        Takes the caller's session rather than opening one, because its only
-        caller is `/api/dataset` — the request every redraw makes — and
-        `read_session` opens the database each time it is called.
+        Takes the caller's session rather than opening one. Its only caller is
+        `/api/dataset`, the request every redraw makes; this is the part of that
+        response the cache must never hold, so it is read fresh every time.
 
         This used to be the *only* place a deleted account's session died, which
         is why every other route kept serving one. `_account_id` confirms the
@@ -1084,20 +1123,24 @@ class Handler(BaseHTTPRequestHandler):
             "publisher's articles. ?q=<text>: matches a publisher, a URL or an excerpt, "
             "returned expanded. Grouped by the same registrable domain the CLI prints. "
             "Split off /api/dataset, where the citations were 30% of the payload for "
-            "one view of six.",
+            "one view of six. The resting list and each publisher's are cached until "
+            "the database changes; a search is not.",
         },
         "GET /api/capex": {
             "answers": "capacity by the company buying it, with the duplicate warning",
             "reads": "capex.rollup and capex.suspected_duplicates",
-            "note": "~0.4 s and ~20 statements on a copy of production (it was ~1.0 s and "
-            "2,031). Its own route so the other five views stop paying for it.",
+            "note": "~0.4 s and ~20 statements on a copy of production when the database "
+            "has changed (it was ~1.0 s and 2,031); a few ms from the cache otherwise, "
+            "and the hover card's briefing shares it. Its own route so the other five "
+            "views stop paying for it.",
         },
         "GET /api/dataset": {
             "answers": "a light index of every project, plus field gaps, totals and vocabularies",
             "reads": "the whole database, shallowly",
-            "note": "refetched after every run. Carries no citations, milestones, "
-            "tranches or provenance — see /api/projects for a page of table rows "
-            "and /api/project for one project whole.",
+            "note": "refetched after every run; cached until the database changes, with "
+            "the reader's own account added per request. Carries no citations, "
+            "milestones, tranches or provenance — see /api/projects for a page of table "
+            "rows and /api/project for one project whole.",
         },
         "GET /api/projects": {
             "answers": "one page of the projects table, filtered and sorted",
@@ -1116,7 +1159,8 @@ class Handler(BaseHTTPRequestHandler):
         "GET /api/publishers": {
             "answers": "which publishers actually decide a stored value",
             "reads": "sources.survey",
-            "note": "~0.24s. Its own route so /api/dataset stays fast.",
+            "note": "~0.24s, then cached until the database changes. Its own route so "
+            "/api/dataset stays fast.",
         },
         "GET /api/updates": {
             "answers": "what changed on the watchlist, signed good or bad, most material first",
@@ -1246,13 +1290,28 @@ class Handler(BaseHTTPRequestHandler):
 
         Measured on a copy of production, best of seven: ~390 ms and 21
         statements, from ~1,000 ms and 2,031 — see `dataset._capex` for where the
-        difference went.
+        difference went. And that is the first visit after a change: the answer is
+        cached until the database changes (`_capex_bundle`).
         """
-        from tracker.webui.dataset import capex
-
-        with self.console.read_session() as session:
-            payload = capex(session)
+        payload, _positions = self._capex_bundle()
         self._json(payload)
+
+    def _capex_bundle(self) -> tuple[dict[str, Any], list[Any]]:
+        """The capex payload and its positions, from the cache when nothing changed.
+
+        Keyed on the day as well as the database, because the year and quarter
+        columns start at today's date: a rollup cached before midnight would
+        otherwise keep last year's first column after New Year until something
+        was committed.
+        """
+        from tracker import capex as capex_mod
+        from tracker.webui import dataset
+
+        def fresh() -> tuple[dict[str, Any], list[Any]]:
+            with self.console.read_session() as session:
+                return dataset.capex_bundle(session)
+
+        return self.console.cached(("capex", capex_mod.as_of()), fresh)
 
     def _articles(self, query: dict[str, list[str]]) -> None:
         """Every cited article, grouped by publisher.
@@ -1267,15 +1326,22 @@ class Handler(BaseHTTPRequestHandler):
         expands that card, and `?q=` searches across all of them and returns the
         matches expanded.
         """
-        from tracker.webui.dataset import articles
+        from tracker.webui import dataset
 
-        with self.console.read_session() as session:
-            payload = articles(
-                session,
-                q=(query.get("q") or [""])[0],
-                host=(query.get("host") or [""])[0],
-            )
-        self._json(payload)
+        q = (query.get("q") or [""])[0]
+        host = (query.get("host") or [""])[0]
+
+        def fresh() -> dict[str, Any]:
+            with self.console.read_session() as session:
+                return dataset.articles(session, q=q, host=host)
+
+        # The resting list and each publisher's expansion are asked for again and
+        # again, so they are cached. A search is not: the box refetches as it is
+        # typed, every keystroke a new question, and caching those would only push
+        # the answers worth keeping out of a bounded cache.
+        if q.strip():
+            return self._json(fresh())
+        self._json(self.console.cached(("articles", host), fresh))
 
     def _project(self, query: dict[str, list[str]]) -> None:
         """One project, everything about it, for that project's own page.
@@ -1378,16 +1444,15 @@ class Handler(BaseHTTPRequestHandler):
 
         Nothing is computed here. The survey is the same function the CLI calls,
         for the reason `docs/architecture.md` states: the console makes no
-        judgements of its own.
+        judgements of its own. It is cached until the database changes.
         """
         from tracker import sources
 
-        with self.console.read_session() as session:
-            survey = sources.survey(session)
-
-        top = survey.ranked(by="decisive")[:8]
-        self._json(
-            {
+        def fresh() -> dict[str, Any]:
+            with self.console.read_session() as session:
+                survey = sources.survey(session)
+            top = survey.ranked(by="decisive")[:8]
+            return {
                 "sources": {
                     "publishers": len(survey.hosts),
                     "citations": survey.sources_read,
@@ -1396,7 +1461,8 @@ class Handler(BaseHTTPRequestHandler):
                     "top": [h.as_json() for h in top],
                 },
             }
-        )
+
+        self._json(self.console.cached(("publishers",), fresh))
 
     def _updates(self, query: dict[str, list[str]]) -> None:
         """What changed on the watchlist, and whether it was good news.
@@ -1482,9 +1548,8 @@ class Handler(BaseHTTPRequestHandler):
         """
         from tracker.models import Account
 
-        engine = open_db(self.console.db_path, readonly=False)
         try:
-            with session_scope(engine) as session:
+            with self.console.write_session() as session:
                 account = session.get(Account, account_id)
                 if account is None:
                     return self._error(404, "that account no longer exists; sign in again")
@@ -1498,8 +1563,6 @@ class Handler(BaseHTTPRequestHandler):
             if "locked" not in str(exc).lower():
                 raise
             return self._error(503, "the database is busy writing; try again in a moment")
-        finally:
-            engine.dispose()
         return self._json(result)
 
     def _watchlist_json(self, session: Any, account_id: int | None) -> list[dict[str, Any]]:
@@ -1575,9 +1638,8 @@ class Handler(BaseHTTPRequestHandler):
         if note is not None and not isinstance(note, str):
             return self._error(400, "note must be a string")
 
-        engine = open_db(self.console.db_path, readonly=False)
         try:
-            with session_scope(engine) as session:
+            with self.console.write_session() as session:
                 if action == "add":
                     row, created = add(session, entry, account_id=account_id, note=(note or None))
                     result = {"entry": row.entry, "created": created}
@@ -1804,19 +1866,23 @@ class Handler(BaseHTTPRequestHandler):
 
         Same contract as `_overview_stream` — POST because it can spend, a
         confirm token, cached briefings sent as one frame — over a derived
-        subject: the position is recomputed from the database on every request,
-        so the reading can never describe a rollup the table is not showing.
+        subject: the position comes from the same rollup the table was drawn
+        from, so the reading can never describe a rollup the table is not showing.
+
+        It used to recompute that rollup on every hover — the card fires 450 ms
+        after the pointer settles, so sweeping down the table cost half a second
+        per row. The rollup is the cached one now (`_capex_bundle`), recomputed
+        only when the database changes; the projects are read fresh, a few rows.
         """
         from tracker import overview as overview_mod
         from tracker.models import Project
-        from tracker.webui.dataset import capex_positions
 
         if "key" not in body:
             return self._error(400, "key is required (the position's buyer key; empty is valid)")
         key = str(body.get("key") or "")
 
+        _payload, positions = self._capex_bundle()
         with self.console.read_session() as session:
-            positions = capex_positions(session)
             position = next((p for p in positions if p.key == key), None)
             if position is None:
                 return self._error(404, f"no buyer position {key!r}")
@@ -1915,6 +1981,7 @@ def serve(
         pass
     finally:
         httpd.server_close()
+        console.close()
 
 
 __all__ = ["DEFAULT_HOST", "DEFAULT_PORT", "Console", "Handler", "serve"]

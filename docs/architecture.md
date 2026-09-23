@@ -241,6 +241,18 @@ afterwards, on its own connection with a quarter-second wait: while a command ho
 the write lock the stamp is skipped, where it used to wait five seconds and turn
 the right password into a 500.
 
+**And it is opened once.** One read-only engine serves the console for as long as
+it runs, reopened only when the file at the path is a different file —
+`scripts/sync_db.py` renames a new one over the old, and a connection opened
+before that goes on reading the old one. The four heavy answers — the shell index,
+the capex rollup, the publisher survey, the citations list — are cached until
+SQLite's `PRAGMA data_version` says another connection has committed. That is the
+right key because the console is not the writer: a `tracker` command in another
+process can commit at any moment, and a cache on a timer would be stale or
+pointless. Who is reading — their account, their watchlist — is never cached. It
+used to be a new engine per request, never disposed: ~6 ms of setup each time and
+twelve SQLite connections open after a hundred requests. See `webui/reads.py`.
+
 **On the write side only one thing runs at a time.**
 
 SQLite takes one writer, and a `tracker` command holds a lock file for the hours a
@@ -370,7 +382,7 @@ Easy to confuse:
 | | `tracker export html` | `tracker serve` |
 | --- | --- | --- |
 | What it is | a file | a server |
-| Data | frozen at export time | re-read every request |
+| Data | frozen at export time | live; heavy answers cached until the database changes |
 | Per-reader watchlist | no | yes |
 | Can be emailed | yes, opens by double-click | no |
 | Needs anything running | no | yes |

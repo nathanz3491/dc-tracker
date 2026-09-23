@@ -102,6 +102,7 @@ def server(seeded_db):
     finally:
         httpd.shutdown()
         httpd.server_close()
+        console.close()
 
 
 def headers_for(address, path):
@@ -413,6 +414,196 @@ def test_reading_the_dataset_does_not_write(server, seeded_db, logical_snapshot)
     ):
         assert request(address, path)[0] == 200
     assert logical_snapshot(seeded_db) == before
+
+
+# --- one engine, and a cache a commit anywhere invalidates ---------------------
+
+
+def _second_project(db_path):
+    """A commit from another connection, the way a `tracker` command makes one."""
+    from tracker.db import open_db, session_scope
+
+    with session_scope(open_db(db_path, readonly=False)) as session:
+        upsert_record(
+            session,
+            IngestRecord(
+                project={"company": "xAI", "name": "Colossus", "city": "Memphis", "state": "TN"},
+                sources=[
+                    SourceRecord(
+                        url="https://x.ai/colossus",
+                        source_type="company_filing",
+                        fetched_at=T0,
+                        excerpt="Colossus will draw 300 MW.",
+                        claims={
+                            "name": "Colossus",
+                            "company": "xAI",
+                            "city": "Memphis",
+                            "state": "TN",
+                            "mw_planned": 300.0,
+                        },
+                    )
+                ],
+            ),
+        )
+
+
+def test_the_console_opens_the_database_once_rather_than_per_request(server):
+    """Every request used to build a new engine: three metadata queries and a read
+    of every migration file first (~6 ms), and the engines were never disposed —
+    twelve SQLite connections open after a hundred requests, measured. Counted here
+    as new DB-API connections, which a per-request engine makes every time."""
+    from sqlalchemy import event
+    from sqlalchemy.pool import Pool
+
+    connected: list[int] = []
+
+    def count(*_args) -> None:
+        connected.append(1)
+
+    address, _ = server
+    event.listen(Pool, "connect", count)
+    try:
+        for _ in range(10):
+            for path in ("/api/dataset", "/api/projects", "/api/updates", "/api/project?id=1"):
+                assert request(address, path)[0] == 200
+    finally:
+        event.remove(Pool, "connect", count)
+    assert len(connected) <= 2, f"{len(connected)} new connections for forty requests"
+
+
+def test_an_unchanged_database_is_answered_from_the_cache(server, monkeypatch):
+    """The four heavy reads are computed once while nothing commits."""
+    from tracker import sources
+    from tracker.webui import dataset
+
+    calls: dict[str, int] = {}
+
+    def counting(name, real):
+        def wrapped(*args, **kwargs):
+            calls[name] = calls.get(name, 0) + 1
+            return real(*args, **kwargs)
+
+        return wrapped
+
+    monkeypatch.setattr(dataset, "light", counting("light", dataset.light))
+    monkeypatch.setattr(dataset, "capex_bundle", counting("capex", dataset.capex_bundle))
+    monkeypatch.setattr(dataset, "articles", counting("articles", dataset.articles))
+    monkeypatch.setattr(sources, "survey", counting("survey", sources.survey))
+
+    address, _ = server
+    for _ in range(3):
+        for path in ("/api/dataset", "/api/capex", "/api/articles", "/api/publishers"):
+            assert request(address, path)[0] == 200
+        request(address, "/api/capex/overview/stream", "POST", {"key": "microsoft"})
+    assert calls == {"light": 1, "capex": 1, "articles": 1, "survey": 1}, (
+        "the hover card shares the capex rollup rather than computing its own"
+    )
+
+
+def test_a_commit_from_another_process_is_seen_on_the_next_request(server, seeded_db):
+    """The console is not the writer, so the cache is keyed on SQLite's own count of
+    other connections' commits (`PRAGMA data_version`) rather than on a timer."""
+    address, _ = server
+    paths = ("/api/dataset", "/api/capex", "/api/articles", "/api/publishers")
+    before = {path: request(address, path)[1] for path in paths}
+    assert before["/api/dataset"]["totals"]["projects"] == 1
+    assert before["/api/articles"]["totals"]["publishers"] == 1
+
+    _second_project(seeded_db)
+
+    assert request(address, "/api/dataset")[1]["totals"]["projects"] == 2
+    buyers = {p["key"] for p in request(address, "/api/capex")[1]["positions"]}
+    assert "xai" in buyers, "the capex rollup was served from before the commit"
+    assert request(address, "/api/articles")[1]["totals"]["publishers"] == 2
+    citations = request(address, "/api/publishers")[1]["sources"]["citations"]
+    assert citations == before["/api/publishers"]["sources"]["citations"] + 1
+
+
+def test_the_cache_never_carries_one_readers_account_to_another(seeded_db):
+    """The shell payload is cached; who is reading it is not."""
+    from http.server import ThreadingHTTPServer
+
+    _account(seeded_db, "alice@example.com")
+    _account(seeded_db, "bob@example.com")
+    console = Console(seeded_db)
+    handler = type("Bound", (Handler,), {"console": console})
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    httpd.daemon_threads = True
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        address = httpd.server_address
+        _, alice = sign_in(address, email="alice@example.com")
+        _, bob = sign_in(address, email="bob@example.com")
+        for cookie, email in ((alice, "alice@example.com"), (bob, "bob@example.com")) * 2:
+            _status, data = as_reader(address, cookie, "/api/dataset")
+            assert data["account"]["email"] == email
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        console.close()
+
+
+def test_a_replaced_database_file_gets_a_new_engine(server, seeded_db, monkeypatch):
+    """`scripts/sync_db.py` renames a new file over the old one, and a connection
+    opened before the rename reads the old file for as long as it lives. The file's
+    identity is checked on every use, and a different file is opened afresh.
+
+    The identity is faked rather than the file replaced, because Windows refuses to
+    rename over a file that is open — the host is where this happens for real."""
+    from tracker.webui import reads
+
+    address, console = server
+    assert request(address, "/api/dataset")[0] == 200
+    first = console.reads.engine()
+
+    real = reads.file_identity
+    monkeypatch.setattr(reads, "file_identity", lambda path: (*real(path)[:1], -1))
+    assert request(address, "/api/dataset")[0] == 200
+    assert console.reads.engine() is not first, "the replaced file is still being read"
+
+
+def test_twenty_readers_at_once_cost_one_computation(seeded_db):
+    """A miss is computed once however many requests arrive for it together."""
+    import time as clock
+
+    from tracker.webui.reads import ReadSide
+
+    side = ReadSide(seeded_db)
+    computed: list[int] = []
+
+    def slow() -> str:
+        computed.append(1)
+        clock.sleep(0.2)
+        return "answer"
+
+    results: list[str] = []
+    threads = [
+        threading.Thread(target=lambda: results.append(side.cached("k", slow))) for _ in range(20)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    side.close()
+    assert computed == [1]
+    assert results == ["answer"] * 20
+
+
+def test_an_answer_computed_across_a_commit_is_not_served_after_it(seeded_db):
+    """Stored under the version read *before* computing, so a commit that lands
+    mid-computation leaves an entry the next request does not match."""
+    from tracker.webui.reads import ReadSide
+
+    side = ReadSide(seeded_db)
+    answers = iter(["during the commit", "after it"])
+
+    def committing() -> str:
+        _second_project(seeded_db)
+        return next(answers)
+
+    assert side.cached("k", committing) == "during the commit"
+    assert side.cached("k", lambda: next(answers)) == "after it"
+    side.close()
 
 
 def test_the_publishers_route_answers_who_decided(server):
@@ -1343,6 +1534,7 @@ def gated(seeded_db):
     finally:
         httpd.shutdown()
         httpd.server_close()
+        console.close()
 
 
 def raw(address, path, method="GET", body=None, cookie=None, headers=None):
@@ -1833,6 +2025,7 @@ def published(seeded_db):
     finally:
         httpd.shutdown()
         httpd.server_close()
+        console.close()
 
 
 def test_a_published_console_fails_closed_when_its_last_account_goes(published, seeded_db):
@@ -3232,6 +3425,7 @@ def reader(seeded_db):
     finally:
         httpd.shutdown()
         httpd.server_close()
+        console.close()
 
 
 def as_reader(address, cookie, path, method="GET", body=None):
@@ -3594,6 +3788,7 @@ def paged(many):
     finally:
         httpd.shutdown()
         httpd.server_close()
+        console.close()
 
 
 def test_the_table_arrives_thirty_rows_at_a_time(paged):

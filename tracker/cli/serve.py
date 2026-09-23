@@ -169,7 +169,8 @@ def serve(
 
     Different from `tracker export html`, and both are worth having. The export is
     one self-contained file you can email, frozen at the moment it was written.
-    This re-reads the database on every request.
+    This reads the database live, and keeps its heavy answers only until a
+    command commits a change.
 
     **It cannot change the data.** Nothing here writes a project, a citation or a
     figure — that is the CLI's job, and `tracker tui` is the version of this with
