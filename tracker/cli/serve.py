@@ -24,6 +24,9 @@ from tracker.cli._shared import (
 from tracker.config import get_settings
 from tracker.db import MigrationError, open_db, session_scope
 
+#: Addresses only this machine can reach.
+_LOOPBACK = frozenset({"127.0.0.1", "localhost", "::1"})
+
 
 @app.command()
 def tui(
@@ -324,7 +327,7 @@ def _run_console(
 
     accounts_held = _console_accounts()
 
-    if host not in {"127.0.0.1", "localhost", "::1"} and not allow_remote:
+    if host not in _LOOPBACK and not allow_remote:
         _fail(
             f"--host {host} would expose this console to the network.\n"
             "It cannot run commands, but anyone who can reach that address could "
@@ -414,7 +417,11 @@ def _run_console(
             open_browser=open_browser and not publish,
             allow_ai=ai,
             allow_watch=watch_edits,
-            published=bool(publish),
+            # A console on a network address that started gated stays gated, for
+            # the reason a tunnel does: deleting the last account must not open it
+            # to everyone who can reach the address. One started open there, with
+            # no accounts, was an explicit `--allow-remote` choice and stays open.
+            published=bool(publish) or (host not in _LOOPBACK and bool(accounts_held)),
         )
     finally:
         if public is not None:

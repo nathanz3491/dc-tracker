@@ -2177,6 +2177,13 @@ def test_publishing_tells_the_console_it_is_published(seeded_db, monkeypatch):
     assert runner.invoke(app, ["--db", str(seeded_db), "serve", "--no-open"]).exit_code == 0
     assert started[0]["published"] is False
 
+    # A network address that started gated keeps its gate too: the same trap as a
+    # tunnel, reached by `--allow-remote` instead.
+    started.clear()
+    argv = ["serve", "--no-open", "--host", "0.0.0.0", "--allow-remote"]
+    assert runner.invoke(app, ["--db", str(seeded_db), *argv]).exit_code == 0
+    assert started[0]["published"] is True
+
 
 def test_deleting_the_last_account_says_what_it_does_to_a_published_console(seeded_db):
     """It used to announce "the console is open again", which on the host — the

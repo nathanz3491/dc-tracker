@@ -63,6 +63,13 @@ initial build of the v1 PRD.
   published console, not open it, and the command already confirms — but the prompt
   says it is the last account and the message after says what that did.
 
+- **A console on a network address keeps its gate when its last account goes, too**
+  (`tracker/cli/serve.py`, `tests/test_webui.py`). The fail-closed rule above was
+  wired to the tunnel only, so `serve --host 0.0.0.0 --allow-remote` started with
+  accounts opened to everyone on the network once the last one was deleted. It is
+  now treated as published when it starts gated. One started open, with no
+  accounts, was an explicit `--allow-remote` choice and stays open.
+
 - **The sign-in form's timing no longer says which email addresses have accounts**
   (`tracker/accounts.py`, `tracker/webui/server.py`, `tests/test_accounts.py`).
 
