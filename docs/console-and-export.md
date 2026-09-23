@@ -280,7 +280,7 @@ The three worth knowing:
 |---|---|---|
 | `GET /api/dataset` | a light index of every project, plus gaps, queue, exposure, totals | ~275 KB at 437 projects, refetched after each run |
 | `GET /api/projects` | one page of the table, filtered and sorted by the server | 30 rows; `total` counts the whole filter |
-| `GET /api/capex` | capacity by the company buying it | 304 ms — its own route for that reason |
+| `GET /api/capex` | capacity by the company buying it | ~0.4 s on a copy of production (it was ~1.0 s and 2,031 statements); its own route for that reason |
 | `GET /api/articles` | publishers, and one publisher's citations when asked | counts at rest; `?host=` for the list |
 | `GET /api/updates` | what changed on the watchlist, signed and ranked | one pass over projects, events and risks |
 | `POST /api/watch` | adds or drops a watchlist entry | **the only write there is** |

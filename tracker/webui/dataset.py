@@ -226,11 +226,27 @@ def _capex(session: Session) -> dict[str, Any]:
     browser: which years the grid shows — including an empty 2029 between a
     dated 2028 and 2030 — is a judgement, and the browser never re-implements a
     judgement (docs/architecture.md).
+
+    **What it costs, and why it used to cost twice that.** Measured on a copy of
+    production: ~1,000 ms and 2,031 statements before, because the duplicate
+    finder ran twice (once here, once inside `rollup`), every buyer re-scanned
+    every open risk for its worst one, and each helper lazy-loaded every
+    project's relationships afresh. It is one finder run, one risk scan and one
+    load of the rows now — see `capex.working_set` — for the same payload,
+    byte for byte (`tests/test_capex.py` holds it to that).
     """
     from tracker import capex as capex_mod
 
-    positions = capex_mod.rollup(session)
+    with capex_mod.working_set(session):
+        return _capex_payload(session)
+
+
+def _capex_payload(session: Session) -> dict[str, Any]:
+    from tracker import capex as capex_mod
+
     pairs = capex_mod.suspected_duplicates(session)
+    positions = capex_mod.rollup(session, pairs=pairs)
+    worst = capex_mod.blocking_risks(session)
     as_of = capex_mod.as_of()
     as_of_quarter = f"{as_of.year}Q{(as_of.month - 1) // 3 + 1}"
     return {
@@ -297,7 +313,7 @@ def _capex(session: Session) -> dict[str, Any]:
                 "mw_at_risk": p.mw_at_risk,
                 "projects_at_risk_unconfirmed": p.at_risk_unconfirmed,
                 "slipped": p.slipped,
-                "worst_open_risk": capex_mod.blocking_risk(session, p.key) if p.key else None,
+                "worst_open_risk": worst.get(p.key) if p.key else None,
                 "phases": p.phases,
             }
             for p in positions
@@ -692,8 +708,9 @@ def light(session: Session, *, schema_version: int) -> dict[str, Any]:
     end needs before it can draw anything. What is *not* here, and why:
 
     - **per-project detail** — the table asks `/api/projects` for a page of 30
-    - **`capex`** — 304 ms of `build()`'s 406 ms, for one view of six. It moved to
-      `/api/capex`, which that view asks for when it opens.
+    - **`capex`** — the costliest thing `build()` computes, for one view of six. It
+      moved to `/api/capex`, which that view asks for when it opens. (It was 304 ms
+      of a 406 ms build when it moved; see `_capex` for what it costs now.)
     - **`db`**, the database's absolute path, which `build()` carries for the
       terminal interface. Nothing in the page read it, and on a published console
       it told every reader the host's directory layout, user name included.
@@ -747,10 +764,26 @@ def light(session: Session, *, schema_version: int) -> dict[str, Any]:
 def capex(session: Session) -> dict[str, Any]:
     """The capex rollup on its own, for the one view that draws it.
 
-    Its own route because it is 304 ms of a 406 ms payload — every visit to every
-    other view was paying for a rollup it never shows.
+    Its own route because it was most of the shell payload's cost, and every visit
+    to every other view was paying for a rollup it never shows. See `_capex` for
+    what it costs now.
     """
     return _capex(session)
+
+
+def capex_positions(session: Session) -> list[Any]:
+    """The buyer positions alone, computed exactly as the capex payload computes them.
+
+    For the hover card's briefing, which needs one `capex.Position` and used to
+    call `capex.rollup` bare: the duplicate finder run inside it, and every
+    project's relationships lazy-loaded again — 1,229 statements per hover on a
+    copy of production. Same working set and one finder run as `_capex`, so the
+    card cannot describe a position the table is not showing.
+    """
+    from tracker import capex as capex_mod
+
+    with capex_mod.working_set(session):
+        return capex_mod.rollup(session, pairs=capex_mod.suspected_duplicates(session))
 
 
 #: What an article row carries. `excerpt` is deliberately absent from the row —

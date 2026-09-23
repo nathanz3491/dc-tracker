@@ -1395,3 +1395,191 @@ def test_the_basis_census_counts_a_recorded_basis_against_an_absent_one(session)
     got = capex.basis_census(session)
     assert got.get(capex.BASIS_UNRECORDED) == 1
     assert got.get("unspecified") == 1
+
+
+# --- what the console's capex payload costs ---------------------------------
+#
+# Measured on a copy of production: ~1,000 ms and 2,031 statements per visit to
+# the capex view, and ~0.5 s per hover card. The duplicate finder ran twice, every
+# buyer re-scanned every open risk, and each helper lazy-loaded every project's
+# relationships afresh. The tests below hold each saving to the same answer as the
+# code it replaced, and hold the statement count to the size of the schema rather
+# than of the database.
+
+
+def _estate(session, sites: int, *, tag: str = "a") -> None:
+    """A database with every shape the payload reads, `sites` campuses of it.
+
+    Tenants on tranches and in the parties table, one campus stored three times,
+    open obstacles at tied severities, demoted and out-of-scope money, a slip.
+    `tag` keeps a second estate's rows apart from the first's.
+    """
+    import json
+
+    from tracker.models import CapacityBlock, ProjectParty, Source, utcnow
+
+    buyers = ("OpenAI", "Meta", "Microsoft", "Oracle", "CoreWeave")
+    for i in range(sites):
+        company = ("Crusoe", "Vantage", "Meta", "QTS")[i % 4]
+        project = _project(
+            session,
+            name=f"Campus {tag}{i}",
+            company=company,
+            dedup_key=f"{tag}|{company}|{i}",
+            customer=buyers[i % len(buyers)] if i % 3 else None,
+            city=f"Town {tag}{i}",
+            mw_planned=100.0 + i,
+            mw_built=float(i % 3) * 10,
+            investment_usd=(i + 1) * 1_000_000_000,
+            expected_online=dt.date(2027 + i % 3, 1 + i % 12, 1),
+        )
+        session.add(
+            CapacityBlock(
+                project_id=project.id,
+                block_key=f"hall-{tag}{i}",
+                label=f"Hall {tag}{i}",
+                mw=40.0,
+                status="planned",
+                customer=buyers[(i + 1) % len(buyers)],
+            )
+        )
+        session.add(
+            ProjectParty(
+                project_id=project.id,
+                name=buyers[(i + 2) % len(buyers)],
+                party_key=customer_key(buyers[(i + 2) % len(buyers)]),
+                role="customer",
+            )
+        )
+        # Two open obstacles at the same severity, so the tie-break is exercised.
+        for category in ("grid_capacity", "permitting"):
+            session.add(
+                Risk(
+                    project_id=project.id,
+                    category=category,
+                    severity=("material", "blocking", "watch")[i % 3],
+                    summary=f"{category} at campus {i}",
+                )
+            )
+        session.add(
+            Source(
+                project_id=project.id,
+                url=f"https://example.com/campus-{tag}{i}",
+                source_type="trade_press",
+                fetched_at=utcnow(),
+                claims=json.dumps({"investment_usd": (i + 1) * 1_000_000_000}),
+                fields="investment_usd" if i % 4 else None,
+                unconfirmed_fields=None if i % 4 else "investment_usd",
+                unconfirmed_reasons=None
+                if i % 4
+                else json.dumps({"investment_usd": "out_of_scale"}),
+                claim_meta=json.dumps(
+                    {"investment_usd": {"scope": "programme" if i % 5 == 0 else "this_site"}}
+                ),
+            )
+        )
+        if i % 4 == 1:
+            session.add(
+                Event(
+                    project_id=project.id,
+                    event_date=dt.date(2026, 3, 1),
+                    event_type="delayed",
+                    description="slipped a year",
+                )
+            )
+    for company in ("Crusoe", "OpenAI", "Oracle"):
+        _project(
+            session,
+            name="Stargate",
+            company=company,
+            dedup_key=f"{tag}|stargate|{company}",
+            city=f"Abilene {tag}",
+            customer="OpenAI",
+            mw_planned=1200,
+        )
+    session.flush()
+    session.expire_all()
+
+
+def _worst_open_risk_one_buyer_at_a_time(session, key: str) -> str | None:
+    """`blocking_risk` as it was, kept here as the oracle `blocking_risks` must match."""
+    from sqlalchemy import select
+
+    from tracker.dedup import company_key as company_key_of
+    from tracker.vocab import OPEN_RISK_STATUS, severity_rank
+
+    rows = session.execute(
+        select(Risk.category, Risk.severity, Project.company, Project.customer)
+        .join(Project, Risk.project_id == Project.id)
+        .where(Risk.status == OPEN_RISK_STATUS)
+    ).all()
+    mine = [
+        (category, severity)
+        for category, severity, company, customer in rows
+        if (customer_key(customer) or company_key_of(company)) == key
+    ]
+    if not mine:
+        return None
+    category, severity = max(mine, key=lambda r: severity_rank(r[1]))
+    return f"{category}/{severity}"
+
+
+def test_one_risk_scan_answers_every_buyer_as_one_scan_per_buyer_did(session):
+    _estate(session, 12)
+    keys = {p.key for p in capex.rollup(session)} | {"nobody-at-all"}
+    once = capex.blocking_risks(session)
+    for key in keys:
+        assert once.get(key) == _worst_open_risk_one_buyer_at_a_time(session, key), key
+        assert capex.blocking_risk(session, key) == once.get(key), key
+
+
+def test_the_rollup_given_its_pairs_is_the_rollup_that_finds_them(session):
+    """The console finds the pairs once and hands them in; nothing may move."""
+    from dataclasses import asdict
+
+    _estate(session, 12)
+    found = [asdict(p) for p in capex.rollup(session)]
+    given = [asdict(p) for p in capex.rollup(session, pairs=capex.suspected_duplicates(session))]
+    assert found == given
+    assert any(p["duplicate_rows_skipped"] for p in found), "the fixture must exercise the skip"
+
+
+def test_the_working_set_changes_what_is_asked_not_what_is_answered(session):
+    """The payload built from preloaded rows is the payload built by lazy loading."""
+    from tracker.webui import dataset
+
+    _estate(session, 12)
+    lazily = dataset._capex_payload(session)
+    session.expire_all()
+    assert dataset.capex(session) == lazily
+
+
+def test_the_capex_payload_costs_the_same_statements_at_any_size(engine, session):
+    """It was ~4 statements per project — 2,031 on the production copy — because
+    every helper lazy-loaded every project's tranches, parties and citations again.
+    Now the count is a property of the payload, not of the database.
+    """
+    from sqlalchemy import event
+
+    from tracker.webui import dataset
+
+    issued: list[str] = []
+
+    def count(_conn, _cursor, statement, *_rest) -> None:
+        issued.append(statement)
+
+    def statements() -> int:
+        session.expire_all()
+        issued.clear()
+        event.listen(engine, "before_cursor_execute", count)
+        try:
+            dataset.capex(session)
+        finally:
+            event.remove(engine, "before_cursor_execute", count)
+        return len(issued)
+
+    _estate(session, 6)
+    small = statements()
+    _estate(session, 12, tag="b")  # the same shapes again, and twice as many of them
+    assert statements() == small, "the statement count grew with the number of projects"
+    assert small < 40

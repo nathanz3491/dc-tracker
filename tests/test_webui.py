@@ -3683,7 +3683,7 @@ def test_the_shell_payload_carries_no_per_project_detail(server):
     for absent in ("sources", "events", "blocks", "parties", "prov", "standing", "claims_by_field"):
         assert absent not in listed, f"{absent} is back in the shell payload"
     assert len(json.dumps(listed)) < 1500, "an index row has grown into a project"
-    assert "capex" not in data, "the rollup is 304ms and one view of six reads it"
+    assert "capex" not in data, "the rollup is the costliest read and one view of six reads it"
 
 
 def test_the_shell_payload_does_not_say_where_the_database_is(server, seeded_db):

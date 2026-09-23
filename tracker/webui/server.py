@@ -1089,7 +1089,8 @@ class Handler(BaseHTTPRequestHandler):
         "GET /api/capex": {
             "answers": "capacity by the company buying it, with the duplicate warning",
             "reads": "capex.rollup and capex.suspected_duplicates",
-            "note": "304ms. Its own route so the other five views stop paying for it.",
+            "note": "~0.4 s and ~20 statements on a copy of production (it was ~1.0 s and "
+            "2,031). Its own route so the other five views stop paying for it.",
         },
         "GET /api/dataset": {
             "answers": "a light index of every project, plus gaps, queue, exposure and totals",
@@ -1239,9 +1240,13 @@ class Handler(BaseHTTPRequestHandler):
     def _capex(self) -> None:
         """The capex rollup, on its own route.
 
-        It was a key on `/api/dataset` and it is 304 ms of that payload's 406 ms —
-        so every visit to every other view paid for a rollup it does not draw.
-        One view reads this, and it asks when it opens.
+        It was a key on `/api/dataset`, 304 ms of that payload's 406 ms at the
+        time, so every visit to every other view paid for a rollup it does not
+        draw. One view reads this, and it asks when it opens.
+
+        Measured on a copy of production, best of seven: ~390 ms and 21
+        statements, from ~1,000 ms and 2,031 — see `dataset._capex` for where the
+        difference went.
         """
         from tracker.webui.dataset import capex
 
@@ -1802,16 +1807,16 @@ class Handler(BaseHTTPRequestHandler):
         subject: the position is recomputed from the database on every request,
         so the reading can never describe a rollup the table is not showing.
         """
-        from tracker import capex as capex_mod
         from tracker import overview as overview_mod
         from tracker.models import Project
+        from tracker.webui.dataset import capex_positions
 
         if "key" not in body:
             return self._error(400, "key is required (the position's buyer key; empty is valid)")
         key = str(body.get("key") or "")
 
         with self.console.read_session() as session:
-            positions = capex_mod.rollup(session)
+            positions = capex_positions(session)
             position = next((p for p in positions if p.key == key), None)
             if position is None:
                 return self._error(404, f"no buyer position {key!r}")

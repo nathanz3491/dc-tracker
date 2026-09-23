@@ -37,14 +37,17 @@ from __future__ import annotations
 
 import datetime as _dt
 import json
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Any
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
-from tracker.dedup import company_key, customer_key, is_undisclosed, is_vocabulary_block_key
+from tracker import dedup
+from tracker.dedup import is_undisclosed, is_vocabulary_block_key
 from tracker.models import Event, Project, Risk, Source
 from tracker.vocab import (
     BLOCK_LIVE,
@@ -53,6 +56,22 @@ from tracker.vocab import (
     PHASE_TERMINAL,
     severity_rank,
 )
+
+#: `dedup.company_key` and `dedup.customer_key`, remembered for the process.
+#:
+#: Both are pure functions of one string — NFKD folding, a regex, and a suffix
+#: and alias table fixed at import — and this module's rollup side calls them
+#: thousands of times per capex payload on a few hundred distinct names: every
+#: buyer attribution, every tranche's tenant, every open risk's buyer, and the
+#: coverage, suspect and programme sweeps. On a copy of production the payload
+#: made ~13,800 calls to the pair of them, ~200 ms of its ~470. Bounded, because
+#: the console runs for weeks.
+#:
+#: The duplicate finder does not use these. `suspected_duplicates` reaches the
+#: key functions through `dedup` and `parties` directly, and how pairs are found
+#: is not this module's rollup to change.
+company_key = lru_cache(maxsize=8192)(dedup.company_key)
+customer_key = lru_cache(maxsize=8192)(dedup.customer_key)
 
 #: Attribution bucket for capacity with no identifiable buyer.
 UNATTRIBUTED = "(no named customer)"
@@ -317,13 +336,55 @@ def block_shares(project: Project) -> tuple[list[BlockShare], float]:
     return shares, max(0.0, float(project.mw_planned or 0.0) - claimed)
 
 
-def rollup(session: Session, *, include_terminal: bool = False) -> list[Position]:
+@contextmanager
+def working_set(session: Session) -> Iterator[list[Project]]:
+    """Hold every project, with what the rollup reads, for a block of work.
+
+    **Held, not merely loaded, and that is the whole point.** A session's identity
+    map references its rows weakly, so each helper here — `rollup`,
+    `suspected_duplicates`, `out_of_scope_investment_ids`, `coverage`, each of
+    which runs its own `select(Project)` — found the previous helper's rows already
+    freed, and lazy-loaded every project's tranches, parties and citations again,
+    one query per project per helper. Measured on a copy of production: 2,031
+    statements for one visit to the capex view, and the same count on a second
+    pass in the same session, because nothing had been kept.
+
+    Inside this block those `select(Project)` calls return the instances loaded
+    here, relationships and all, so a relationship is read once per payload.
+    Nothing a helper computes changes — this decides only how often the database
+    is asked — and the collections load in the same order either way: a lazy load
+    and a `selectinload` both read through the `project_id` index, so rows arrive
+    in id order, which matters where the first party or tranche names a buyer.
+    """
+    projects = list(
+        session.scalars(
+            select(Project).options(
+                selectinload(Project.blocks),
+                selectinload(Project.parties),
+                selectinload(Project.sources),
+            )
+        ).all()
+    )
+    yield projects
+
+
+def rollup(
+    session: Session,
+    *,
+    include_terminal: bool = False,
+    pairs: list[DuplicatePair] | None = None,
+) -> list[Position]:
     """Every buyer's position, largest planned capacity first.
 
     Args:
         include_terminal: count cancelled and paused projects. Off by default —
             a cancelled campus is not part of anybody's forward pipeline, and
             leaving it in overstates the very number this table exists to give.
+        pairs: `suspected_duplicates(session)`, when the caller has it already.
+            Finding the pairs is the expensive half of this function, and the
+            console's payload needs them for its duplicate warning too — it ran
+            the finder twice per request, the second time 227 ms on the
+            production copy. Must be the unparked list; None finds it here.
     """
     projects = session.scalars(select(Project)).all()
 
@@ -363,7 +424,9 @@ def rollup(session: Session, *, include_terminal: bool = False) -> list[Position
     # synthetic row no citation backs.
     eligible = {p.id: p for p in projects if include_terminal or p.phase not in PHASE_TERMINAL}
     skip_ids: set[int] = set()
-    for group in duplicate_groups(suspected_duplicates(session)):
+    if pairs is None:
+        pairs = suspected_duplicates(session)
+    for group in duplicate_groups(pairs):
         members = [eligible[pid] for pid in group if pid in eligible]
         if len(members) < 2:
             continue
@@ -373,8 +436,10 @@ def rollup(session: Session, *, include_terminal: bool = False) -> list[Position
         )
         skip_ids.update(p.id for p in members if p.id != representative.id)
 
-    demoted_investment = unconfirmed_investment_ids(session)
-    unquoted_investment = unquoted_investment_ids(session)
+    # One pass for both halves. `unconfirmed_investment_ids` and
+    # `unquoted_investment_ids` each run the same scan of every citation and keep
+    # one half of its answer, so calling both here read the table twice.
+    demoted_investment, unquoted_investment = _demoted_investment(session)
     out_of_scope_investment = out_of_scope_investment_ids(session)
 
     positions: dict[str, Position] = {}
@@ -695,22 +760,40 @@ def date_precision(session: Session) -> dict[str, float]:
     }
 
 
-def blocking_risk(session: Session, key: str) -> str | None:
-    """The most severe open obstacle across one buyer's projects."""
+def blocking_risks(session: Session) -> dict[str, str]:
+    """The most severe open obstacle per buyer key, for every buyer at once.
+
+    `blocking_risk` asks this one key at a time, and the capex payload asked it
+    once per position — re-reading every open risk in the database and
+    re-normalising every company name each time: 70 identical scans, 153 ms, on a
+    copy of production. One scan answers every key identically: the same rows in
+    the same order, and the same tie-break, because `max` keeps the first of equal
+    maxima and so does replacing a held answer only on a strictly worse severity.
+
+    Keyed as `blocking_risk` matches — the tenant's key, else the operator's — so
+    a key with no open obstacle is simply absent.
+    """
     rows = session.execute(
         select(Risk.category, Risk.severity, Project.company, Project.customer)
         .join(Project, Risk.project_id == Project.id)
         .where(Risk.status == OPEN_RISK_STATUS)
     ).all()
-    mine = [
-        (category, severity)
-        for category, severity, company, customer in rows
-        if (customer_key(customer) or company_key(company)) == key
-    ]
-    if not mine:
-        return None
-    category, severity = max(mine, key=lambda r: severity_rank(r[1]))
-    return f"{category}/{severity}"
+    worst: dict[str, tuple[str, str]] = {}
+    for category, severity, company, customer in rows:
+        key = customer_key(customer) or company_key(company)
+        held = worst.get(key)
+        if held is None or severity_rank(severity) > severity_rank(held[1]):
+            worst[key] = (category, severity)
+    return {key: f"{category}/{severity}" for key, (category, severity) in worst.items()}
+
+
+def blocking_risk(session: Session, key: str) -> str | None:
+    """The most severe open obstacle across one buyer's projects.
+
+    One scan per call. For more than one buyer, `blocking_risks` answers all of
+    them in the same scan.
+    """
+    return blocking_risks(session).get(key)
 
 
 def suspect_attributions(session: Session) -> list[tuple[int, str, str]]:
@@ -1588,6 +1671,7 @@ __all__ = [
     "attribute",
     "basis_census",
     "blocking_risk",
+    "blocking_risks",
     "coverage",
     "date_precision",
     "double_counted_mw",
@@ -1603,5 +1687,6 @@ __all__ = [
     "suspected_duplicates",
     "unconfirmed_investment_ids",
     "unquoted_investment_ids",
+    "working_set",
     "year_columns",
 ]
