@@ -280,6 +280,11 @@ class IngestReport:
     #: reported for the same reason `refused_new` is: a run that silently declined
     #: a quarter of its worklist reads as a run that covered it.
     skipped_ignored: int = 0
+    #: Pages fetched and found byte-identical to the last good read, under the prompt
+    #: that read them, so not put to the model again (`crawl.run(skip_unchanged=)`).
+    #: A saving, reported like the others so a refresh that re-read nothing still
+    #: says how much it checked.
+    skipped_unchanged: int = 0
     events: int = 0
     risks: int = 0
     #: What the run actually spent. `ExtractionOutcome` has carried these per URL
@@ -315,6 +320,11 @@ class IngestReport:
         """
         refused = [("new projects refused", self.refused_new)] if self.refused_new else []
         ignored = [("publisher ignored", self.skipped_ignored)] if self.skipped_ignored else []
+        same = (
+            [("page unchanged, not re-read", self.skipped_unchanged)]
+            if self.skipped_unchanged
+            else []
+        )
         return [
             ("read", self.read),
             ("filtered out", self.filtered),
@@ -330,6 +340,7 @@ class IngestReport:
             ("parse errors", self.parse_error),
             ("not an article", self.thin_content),
             ("not cached", self.skipped_uncached),
+            *same,
             *ignored,
             *refused,
         ]

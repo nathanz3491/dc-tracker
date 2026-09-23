@@ -213,6 +213,10 @@ class ExtractionOutcome:
     #: otherwise re-fetch this article to answer a question about it. None on every
     #: refusal and every failure: there is nothing to hand on.
     context: ExtractionContext | None = None
+    #: The page matched the last good read, under the prompt that read it, so it was
+    #: not put to the model; see `run(skip_unchanged=)`. Recorded as `ok` so the
+    #: bookkeeping moves and the URL goes to the back of the refresh line.
+    unchanged: bool = False
 
 
 def classify_source_type(url: str, *, operator_hosts: frozenset[str] | None = None) -> str:
@@ -2642,6 +2646,13 @@ def already_done(session: Session, urls: list[str]) -> set[str]:
     return {r.url for r in rows}
 
 
+#: How many doublings of the refresh interval a failing URL can accumulate. Four
+#: means a URL whose re-read has failed four or more times in a row waits sixteen
+#: intervals — 480 days at the default 30 — which takes it out of every ordinary
+#: run without ever giving up on it: a page that comes back is read again.
+MAX_REFRESH_BACKOFF: Final = 4
+
+
 def stale_sources(session: Session, *, older_than_days: int, limit: int | None = None) -> list[str]:
     """Source URLs of existing projects that have not been re-read recently.
 
@@ -2650,23 +2661,60 @@ def stale_sources(session: Session, *, older_than_days: int, limit: int | None =
     under construction now. Re-running a known citation through the same extract
     path refreshes every field it supports.
 
-    Placeholder URLs are excluded — they are not fetchable and never will be.
-    Oldest first, so a capped run always makes progress on the most stale rows.
+    **Ordered by when the URL was last tried**, longest ago first, from
+    `ingest_url.last_tried_at` and falling back to the citation's own `fetched_at`
+    for a URL no crawl has recorded. It used to be the oldest citation row, which
+    only a *successful* write of *every* row citing the URL ever moves — so a re-read
+    that failed, or that refreshed two of the six rows citing a page, left it at the
+    head of the line for good. Measured on a copy of production: the fifteen URLs
+    sync took every run were 11 `llm_error`, 3 `fetch_error` and 1 `ok`, tried 4 to
+    24 times each, and the other 1,945 stale URLs were never reached. Every try moves
+    `last_tried_at`, success or not, so the phase now rotates through them all.
+
+    **A URL that keeps failing waits longer each time**: its interval doubles for
+    each failed try in a row (`ingest_url.failures`), up to
+    :data:`MAX_REFRESH_BACKOFF` doublings. A page behind a WAF the ladder cannot
+    clear stops costing a try — and, for a model failure, a paid call — every run.
+
+    Only citations an article reading produced are refreshed. Placeholders are not
+    fetchable; `derived:` and `inferred:` rows were computed rather than read, and at
+    the head of the old order sat the Census reference file behind 365 derived
+    citations, fetched and sent through extraction on every run; and an ISO queue
+    row's URL is the queue's listing page, which the article extractor can only waste
+    a call on.
     """
     from tracker.confidence import PLACEHOLDER_MARKER
     from tracker.models import Source
 
-    cutoff = utcnow() - dt.timedelta(days=older_than_days)
-    stmt = (
-        select(Source.url, func.min(Source.fetched_at).label("oldest"))
-        .where(Source.fetched_at < cutoff)
+    rows = session.execute(
+        select(
+            Source.url,
+            func.min(Source.fetched_at),
+            IngestUrl.last_tried_at,
+            IngestUrl.failures,
+        )
+        .outerjoin(IngestUrl, IngestUrl.url == Source.url)
         .where(Source.url.not_like(f"%{PLACEHOLDER_MARKER}%"))
+        .where(Source.source_type != "iso_queue")
+        .where(
+            (Source.extractor.is_(None))
+            | (Source.extractor.not_like("derived:%") & Source.extractor.not_like("inferred:%"))
+        )
         .group_by(Source.url)
-        .order_by("oldest")
-    )
-    if limit:
-        stmt = stmt.limit(limit)
-    return [row[0] for row in session.execute(stmt)]
+    ).all()
+
+    now = utcnow()
+    due: list[tuple[dt.datetime, str]] = []
+    for url, oldest, tried, failures in rows:
+        last = tried or oldest
+        if last is None:
+            continue
+        wait = dt.timedelta(days=older_than_days) * 2 ** min(failures or 0, MAX_REFRESH_BACKOFF)
+        if last < now - wait:
+            due.append((last, url))
+    due.sort()
+    urls = [url for _, url in due]
+    return urls[:limit] if limit else urls
 
 
 def stale_by_prompt(session: Session, *, stamp: str, limit: int | None = None) -> list[str]:
@@ -2713,6 +2761,51 @@ def stale_by_prompt(session: Session, *, stamp: str, limit: int | None = None) -
     return [row[0] for row in session.execute(stmt)]
 
 
+def unchanged_reads(session: Session, urls: list[str], *, stamp: str) -> dict[str, str]:
+    """url -> the page hash of its last good read, where re-reading it is pointless.
+
+    A URL qualifies when its last good read is on record (`ingest_url` settled as
+    `ok`, with a `content_sha1`) and **every** citation that read produced carries
+    this prompt's stamp. A page that hashes the same under the same prompt gives the
+    model nothing it has not already answered, so `run(skip_unchanged=True)` does
+    not send it — the refresh phase's whole question is "did the article change",
+    and the hash has answered it for free since migration 0001 put it there "for
+    change detection" and nothing ever compared it.
+
+    Citations not produced by the crawl reader (a derived lookup, the agent's
+    gap-fill) have no stamp to be stale against and do not count either way, but a
+    URL needs at least one crawl citation: with none, nothing was read to compare.
+    """
+    from tracker.models import Source
+
+    if not urls:
+        return {}
+    good = dict(
+        session.execute(
+            select(IngestUrl.url, IngestUrl.content_sha1).where(
+                IngestUrl.url.in_(urls),
+                IngestUrl.status == "ok",
+                IngestUrl.content_sha1.is_not(None),
+            )
+        ).all()
+    )
+    if not good:
+        return {}
+    current = f"crawl:{stamp}:"
+    stamps: dict[str, list[str]] = {}
+    for url, extractor in session.execute(
+        select(Source.url, Source.extractor).where(
+            Source.url.in_(list(good)), Source.extractor.like("crawl:%")
+        )
+    ):
+        stamps.setdefault(url, []).append(extractor)
+    return {
+        url: sha
+        for url, sha in good.items()
+        if stamps.get(url) and all(e.startswith(current) for e in stamps[url])
+    }
+
+
 def read_urls(path: Path) -> list[str]:
     """One URL per line; `#` comments and blanks ignored."""
     urls: list[str] = []
@@ -2748,8 +2841,16 @@ def run(
     run_id: str | None = None,
     route: Callable[[IngestRecord], int | None] | None = None,
     arbiter: Any = None,
+    skip_unchanged: bool = False,
 ) -> IngestReport:
     """Fetch, extract and upsert a list of article URLs.
+
+    `skip_unchanged` does not put a page to the model when it hashes the same as
+    the last good read and that read was this prompt's — see `unchanged_reads`. The
+    URL is still recorded as tried, which is what moves it to the back of the
+    refresh line, and it is counted in `report.skipped_unchanged`. The refresh phase
+    asks for it; an explicit `ingest crawl --force` does not, because naming a URL
+    is asking for it to be read.
 
     `extractor` is injectable and is resolved *before* any fetch, so a missing API
     key fails immediately rather than after paying for forty page loads — and so
@@ -2850,6 +2951,13 @@ def run(
     # already paying for an LLM call each time round, and one query is easier to
     # reason about than N.
     published = published_dates(session, [r.url for r in [*cached, *fetched] if r.ok])
+    # Read here, on this thread, for the same reason as `published`: the workers
+    # below must not touch the session.
+    last_good = (
+        unchanged_reads(session, [r.url for r in [*cached, *fetched] if r.ok], stamp=prompt.stamp)
+        if skip_unchanged
+        else {}
+    )
 
     def outcome_for(result: FetchResult) -> ExtractionOutcome:
         """One article's outcome, with no database in sight.
@@ -2874,6 +2982,17 @@ def run(
                 via=result.via,
                 attempts=result.attempts,
             )
+        if last_good and last_good.get(result.url) == result.sha1:
+            return ExtractionOutcome(
+                url=result.url,
+                status="ok",
+                via=result.via,
+                attempts=result.attempts,
+                http_status=result.status,
+                content_sha1=result.sha1,
+                published_at=result.published_at,
+                unchanged=True,
+            )
         return extract_one(
             result,
             prompt=prompt,
@@ -2897,6 +3016,13 @@ def run(
         if not result.ok:
             report.fetch_error += 1
             log.warning("fetch failed: %s (%s)", result.url, result.error)
+            record_url(session, run_id, outcome)
+            _checkpoint(session, dry_run)
+            continue
+
+        if outcome.unchanged:
+            report.skipped_unchanged += 1
+            log.info("unchanged since its last read under this prompt: %s", result.url)
             record_url(session, run_id, outcome)
             _checkpoint(session, dry_run)
             continue

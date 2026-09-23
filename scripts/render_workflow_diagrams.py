@@ -483,7 +483,7 @@ def sync() -> Canvas:
         ("1 · discover", ["poll the feeds, sweep", "archives, run searches"], "cool", "--since-days 45", False),
         ("2 · prospect", ["chase operators the", "roster says we lack"], "orange", "--prospect · off", True),
         ("3 · extract", ["crawl the queue into", "new project rows"], "orange", "--limit 15", False),
-        ("4 · refresh", ["re-read sources nobody", "has looked at lately"], "orange", "--refresh-limit 15", False),
+        ("4 · refresh", ["re-read the cited pages", "tried longest ago"], "orange", "--refresh-limit 15", False),
         ("5 · enrich", ["every method at the", "thinnest rows we hold"], "orange", "--enrich · off", True),
         ("6 · settle", ["re-derive, then", "rescore confidence"], "teal", "free · pure functions", False),
         ("7 · projects", ["list the result, and", "what is still unread"], "cool", "--rows 30", False),
@@ -548,7 +548,7 @@ def sync() -> Canvas:
 
     c.box(
         1266, 560, 186, 164, "Refresh, separately",
-        ["phase 4 re-reads stale sources", "with the cache turned off.", "", "The point is finding out whether", "the article changed, and serving", "it from the local cache would", "guarantee the answer is no"],
+        ["phase 4 re-reads the cited pages", "tried longest ago, cache off.", "", "A page unchanged since a read", "by today's prompt is not paid", "for again; one that keeps failing", "waits twice as long each time"],
         role="orange2", title_size=12,
     )
 

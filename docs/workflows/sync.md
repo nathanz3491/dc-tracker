@@ -29,7 +29,7 @@ numbering a long run is that somebody watching it knows how much is left.
 | 1 | **discover** — poll feeds, sweep archives (`--deep`), run place-anchored searches | on | `--since-days 45`, `--search` |
 | 2 | **prospect** — chase operators the roster says we hold no rows for | **off** | `--prospect N` |
 | 3 | **extract** — crawl the queue into new project rows | on | `--limit 15` |
-| 4 | **refresh** — re-read sources nobody has looked at lately | on | `--refresh-days 30`, `--refresh-limit 15` |
+| 4 | **refresh** — re-read the cited articles tried longest ago | on | `--refresh-days 30`, `--refresh-limit 15` |
 | 5 | **enrich** — every method at the thinnest rows we hold | **off** | `--enrich N`, `--enrich-budget 60` |
 | 6 | **settle** — re-derive, then rescore confidence | on | free |
 | 7 | **projects** — list the result, and what is still unread | on | `--rows 30` |
@@ -177,6 +177,33 @@ born in extract.
 See [duplicates](duplicates.md) for what the same judgement costs once the row
 exists: 47 stored groups took a ten-hour agent run.
 
+## What the refresh phase re-reads
+
+The cited articles **tried longest ago**, by `ingest_url.last_tried_at` — falling
+back to the citation's own `fetched_at` for a URL no crawl has recorded. It used to
+be the URL with the oldest *citation row*, which only a successful write of every
+row citing it ever moves: a re-read that failed, or that refreshed two of the six
+rows citing a page, left that URL at the head for good. Measured on a copy of
+production, the fifteen URLs the phase took every run were 11 `llm_error`, 3
+`fetch_error` and 1 `ok`, tried 4 to 24 times each, and the other 1,945 stale URLs
+were never reached. Any try now moves the URL to the back.
+
+* **A URL that keeps failing waits longer each time.** Each failed re-read in a row
+  doubles its interval (`ingest_url.failures`), up to sixteen intervals, so a page
+  behind a WAF the ladder cannot clear stops costing a try every run without being
+  given up on.
+* **A failed re-read does not unread the URL.** It keeps the `ok` its good read
+  earned — the citations still stand — and records the failure beside it. Demoting
+  it had put 35 cited URLs into the pool `--retry-failed` works.
+* **An unchanged page is not paid for twice.** When a page hashes the same as its
+  last good read, and every citation that read produced carries today's prompt
+  stamp, the model is not asked again (`crawl.run(skip_unchanged=True)`); the URL is
+  recorded as tried and counted as `page unchanged, not re-read`.
+* **Only what an article reading produced.** `derived:` and `inferred:` citations
+  were computed, not read — the Census reference file behind 365 derived citations
+  sat at the head of the old order and was fetched and sent through extraction on
+  every run — and an ISO queue row's URL is the queue's listing page.
+
 ## Two deliberate cache decisions
 
 * **Discover writes into the cache the extract phase reads.** Feeds that syndicate
@@ -248,7 +275,7 @@ Touching any of these means the poster is in scope. Re-render with
 | Judging a template | `tracker/funnel.py` — `feed_group`, `survey`, `verdicts`; `tracker/ingest/search.py` — `LabelStat` |
 | Queue ordering and counts | `tracker/ingest/discover.py` — `pending`, `pending_split`, `pending_risk_count`, `failed`, `failure_summary` |
 | Prospect | `tracker/prospect.py`; `tracker/roster.py` — `hunt_order`, `measure` |
-| Extract and refresh | `tracker/ingest/crawl.py` — `run`, `stale_sources` |
+| Extract and refresh | `tracker/ingest/crawl.py` — `run`, `stale_sources`, `unchanged_reads`, `record_url`, `failure_reason`, `MAX_REFRESH_BACKOFF` |
 | The party gate | `tracker/ingest/crawl.py` — `_parties`, `_ROLE_MARKERS`, `_role_is_licensed` |
 | Identity arbiter | `tracker/cli/ingest.py` — `_identity_arbiter`, `_report_arbiter`; `tracker/gatekeeper.py` — `same_site_arbiter`, `_warm_verdict`, `_cold_verdict`, `_rejection`, `_suspicion`, `_verdict_tools`, `RULES`, `MIN_CONFIDENCE`; `tracker/triage.py` — `CONTRADICTIONS`; `tracker/ingest/crawl.py` — `ExtractionContext` |
 | Enrich phase | `tracker/ingest/enrich.py` — `select_projects`, `run_many`; and [enrich](enrich.md) |

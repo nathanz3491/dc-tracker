@@ -32,8 +32,8 @@
 <text x="533.0" y="328.0" font-size="10" fill="#D9891F" text-anchor="middle" font-weight="700">--limit 15</text>
 <rect x="642.0" y="200.0" width="178.0" height="106.0" rx="7" fill="#FBF2E4" stroke="#D9891F" stroke-width="1.3"/>
 <text x="731.0" y="243.9" font-size="12.5" fill="#16242E" text-anchor="middle" font-weight="700">4 · refresh</text>
-<text x="731.0" y="260.9" font-size="10" fill="#5C6B73" text-anchor="middle">re-read sources nobody</text>
-<text x="731.0" y="274.5" font-size="10" fill="#5C6B73" text-anchor="middle">has looked at lately</text>
+<text x="731.0" y="260.9" font-size="10" fill="#5C6B73" text-anchor="middle">re-read the cited pages</text>
+<text x="731.0" y="274.5" font-size="10" fill="#5C6B73" text-anchor="middle">tried longest ago</text>
 <text x="731.0" y="328.0" font-size="10" fill="#D9891F" text-anchor="middle" font-weight="700">--refresh-limit 15</text>
 <rect x="840.0" y="200.0" width="178.0" height="106.0" rx="7" fill="#FBF2E4" stroke="#D9891F" stroke-width="1.3" stroke-dasharray="5 4"/>
 <text x="929.0" y="243.9" font-size="12.5" fill="#16242E" text-anchor="middle" font-weight="700">5 · enrich</text>
@@ -133,13 +133,13 @@
 <polyline points="966.0,690.0 1016.0,690.0" fill="none" stroke="#5C6B73" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#a5C6B73)"/>
 <rect x="1266.0" y="560.0" width="186.0" height="164.0" rx="7" fill="#FDF6E9" stroke="#D9891F" stroke-width="1.3"/>
 <text x="1359.0" y="598.9" font-size="12" fill="#16242E" text-anchor="middle" font-weight="700">Refresh, separately</text>
-<text x="1359.0" y="615.9" font-size="10" fill="#5C6B73" text-anchor="middle">phase 4 re-reads stale sources</text>
-<text x="1359.0" y="629.5" font-size="10" fill="#5C6B73" text-anchor="middle">with the cache turned off.</text>
+<text x="1359.0" y="615.9" font-size="10" fill="#5C6B73" text-anchor="middle">phase 4 re-reads the cited pages</text>
+<text x="1359.0" y="629.5" font-size="10" fill="#5C6B73" text-anchor="middle">tried longest ago, cache off.</text>
 <text x="1359.0" y="643.1" font-size="10" fill="#5C6B73" text-anchor="middle"></text>
-<text x="1359.0" y="656.7" font-size="10" fill="#5C6B73" text-anchor="middle">The point is finding out whether</text>
-<text x="1359.0" y="670.3" font-size="10" fill="#5C6B73" text-anchor="middle">the article changed, and serving</text>
-<text x="1359.0" y="683.9" font-size="10" fill="#5C6B73" text-anchor="middle">it from the local cache would</text>
-<text x="1359.0" y="697.5" font-size="10" fill="#5C6B73" text-anchor="middle">guarantee the answer is no</text>
+<text x="1359.0" y="656.7" font-size="10" fill="#5C6B73" text-anchor="middle">A page unchanged since a read</text>
+<text x="1359.0" y="670.3" font-size="10" fill="#5C6B73" text-anchor="middle">by today's prompt is not paid</text>
+<text x="1359.0" y="683.9" font-size="10" fill="#5C6B73" text-anchor="middle">for again; one that keeps failing</text>
+<text x="1359.0" y="697.5" font-size="10" fill="#5C6B73" text-anchor="middle">waits twice as long each time</text>
 <text x="48.0" y="826.0" font-size="10.5" fill="#A83E33" text-anchor="start" font-weight="700">Not this command: scripts/sync_db.py moves the database file between machines. It shares only the word. See docs/workflows/sync.md.</text>
 <line x1="48" y1="858" x2="1452" y2="858" stroke="#B9C6CC" stroke-width="1"/>
 <text x="48.0" y="886.0" font-size="12.5" fill="#16242E" text-anchor="start">One write lock is held for the whole run, because SQLite takes one writer and two overlapping syncs fail partway — after the second has already paid for its model calls.</text>

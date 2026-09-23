@@ -831,7 +831,10 @@ def sync(
         if not stale:
             console.print(f"no source read more than {refresh_days} day(s) ago — all current")
         else:
-            console.print(f"re-reading {len(stale)} source(s) not seen in {refresh_days} day(s)")
+            console.print(
+                f"re-reading {len(stale)} source(s) not tried in {refresh_days} day(s), "
+                "longest first"
+            )
             with _explain_db_locks(), session_scope(engine) as session:
                 # cache_dir=None on purpose: the point of refreshing is to find out
                 # whether the article changed, and serving it from the local cache
@@ -845,6 +848,10 @@ def sync(
                     dry_run=dry_run,
                     force=True,
                     cache_dir=None,
+                    # A page that hashes the same as its last good read, under the
+                    # prompt that read it, has already been answered: it is recorded
+                    # as tried, so it rotates to the back, and not paid for again.
+                    skip_unchanged=True,
                     # A refresh re-reads urls already attached, so these match by
                     # key and the arbiter almost never fires. It is passed anyway
                     # because `force=True` means this path *can* still create a

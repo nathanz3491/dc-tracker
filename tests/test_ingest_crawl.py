@@ -1602,6 +1602,179 @@ def test_a_failure_whose_wording_varies_is_still_the_same_failure(session):
     )
 
 
+# --- what the refresh phase picks ------------------------------------------------
+#
+# Measured on a copy of production: the fifteen URLs sync's refresh took every run
+# were 11 llm_error, 3 fetch_error and 1 ok, tried 4 to 24 times each — because the
+# order was the oldest *citation*, which only a successful write of every row citing
+# the URL ever moves. The other 1,945 stale URLs were never reached. At the head
+# sat the Census reference file behind 365 derived citations, fetched and put
+# through extraction on every run.
+
+DAY = dt.timedelta(days=1)
+
+
+def _cited(session, url, *, fetched_days_ago, extractor="crawl:extract-v1@x:m:httpx", **kw):
+    project = session.scalar(select(Project)) or _a_project(session)
+    session.add(
+        Source(
+            project_id=project.id,
+            url=url,
+            source_type=kw.pop("source_type", "trade_press"),
+            fetched_at=crawl.utcnow() - fetched_days_ago * DAY,
+            extractor=extractor,
+        )
+    )
+    session.flush()
+
+
+def _a_project(session) -> Project:
+    project = Project(
+        name="Fairwater",
+        company="Microsoft",
+        city="Mount Pleasant",
+        state="WI",
+        dedup_key="microsoft|city:mount pleasant|WI",
+        phase="construction",
+    )
+    session.add(project)
+    session.flush()
+    return project
+
+
+def _tried(session, url, *, days_ago, status="ok", failures=0):
+    session.add(
+        IngestUrl(
+            url=url,
+            run_id="t",
+            status=status,
+            attempts=1,
+            failures=failures,
+            last_tried_at=crawl.utcnow() - days_ago * DAY,
+        )
+    )
+    session.flush()
+
+
+def test_refresh_never_picks_reference_data(session):
+    _cited(
+        session,
+        "https://www2.census.gov/places.txt",
+        fetched_days_ago=400,
+        extractor="derived:census-place-2020",
+    )
+    _cited(session, "https://news.test/inferred", fetched_days_ago=400, extractor="inferred:v1")
+    _cited(session, "https://news.test/article", fetched_days_ago=40)
+    assert crawl.stale_sources(session, older_than_days=30) == ["https://news.test/article"]
+
+
+def test_refresh_goes_by_when_a_url_was_last_tried(session):
+    """A URL tried last week is not "not seen lately" however old its oldest row."""
+    _cited(session, "https://news.test/old-row", fetched_days_ago=300)
+    _tried(session, "https://news.test/old-row", days_ago=7)
+    _cited(session, "https://news.test/newer-row", fetched_days_ago=60)
+    _tried(session, "https://news.test/newer-row", days_ago=60)
+    assert crawl.stale_sources(session, older_than_days=30) == ["https://news.test/newer-row"]
+
+
+def test_refresh_takes_the_longest_untried_first(session):
+    for url, days in (("https://a.test/1", 50), ("https://a.test/2", 90), ("https://a.test/3", 70)):
+        _cited(session, url, fetched_days_ago=400)
+        _tried(session, url, days_ago=days)
+    _cited(session, "https://a.test/never-tried", fetched_days_ago=80)
+    assert crawl.stale_sources(session, older_than_days=30) == [
+        "https://a.test/2",
+        "https://a.test/never-tried",
+        "https://a.test/3",
+        "https://a.test/1",
+    ]
+
+
+def test_a_url_that_keeps_failing_waits_longer_each_time(session):
+    """Each failed re-read in a row doubles the wait, so a 403 the ladder cannot
+    clear stops costing a try every run without ever being given up on."""
+    _cited(session, "https://a.test/failing", fetched_days_ago=400)
+    _tried(session, "https://a.test/failing", days_ago=100, failures=2)
+    assert crawl.stale_sources(session, older_than_days=30) == [], "needs 30 x 2**2 days"
+
+    session.query(IngestUrl).update({IngestUrl.last_tried_at: crawl.utcnow() - 130 * DAY})
+    session.flush()
+    assert crawl.stale_sources(session, older_than_days=30) == ["https://a.test/failing"]
+
+
+def test_refresh_leaves_an_iso_queue_row_alone(session):
+    """A queue row's URL is the ISO's listing page. Reading it through the article
+    extractor buys a model call on a table of generator requests."""
+    _cited(
+        session,
+        "https://www.pjm.com/queue#AB1-001",
+        fetched_days_ago=400,
+        extractor="pjm:v1:sha256=x:row=2",
+        source_type="iso_queue",
+    )
+    assert crawl.stale_sources(session, older_than_days=30) == []
+
+
+# --- a refresh that finds nothing changed ----------------------------------------
+#
+# The page hash has been stored on `ingest_url.content_sha1` since 0001, "for change
+# detection", and nothing ever compared it: an unchanged page was re-extracted at full
+# model cost every time the refresh came round to it.
+
+
+def _read_twice(session, second_markdown=None, *, skip_unchanged=True, stamp_override=None):
+    first_llm = FakeLLM([canned("llm_response_microsoft_wi.json")])
+    crawl.run(session, [URL], fetcher=FakeFetcher({URL: fetched()}), extractor=first_llm)
+    session.commit()
+    if stamp_override:
+        for source in session.scalars(select(Source)):
+            source.extractor = stamp_override
+        session.commit()
+    # A day back, because `utcnow` has one-second resolution and both runs fit in one.
+    first = session.scalar(select(IngestUrl))
+    first.last_tried_at -= DAY
+    session.commit()
+    before = first.last_tried_at
+    second_llm = FakeLLM([canned("llm_response_microsoft_wi.json")])
+    report = crawl.run(
+        session,
+        [URL],
+        fetcher=FakeFetcher({URL: fetched(markdown=second_markdown)}),
+        extractor=second_llm,
+        force=True,
+        skip_unchanged=skip_unchanged,
+    )
+    return report, second_llm, before
+
+
+def test_an_unchanged_page_on_the_current_prompt_is_not_extracted_again(session):
+    report, llm, before = _read_twice(session)
+    assert llm.seen == [], "paid to re-extract a page that had not changed"
+    assert report.skipped_unchanged == 1
+    assert report.llm_calls == 0
+    row = session.scalar(select(IngestUrl))
+    assert row.status == "ok"
+    assert row.last_tried_at > before, "the bookkeeping must still move, or it never rotates"
+
+
+def test_a_changed_page_is_extracted(session):
+    report, llm, _ = _read_twice(session, article() + "\n\nUpdate: the second phase is energized.")
+    assert len(llm.seen) == 1
+    assert report.skipped_unchanged == 0
+
+
+def test_a_page_last_read_under_another_prompt_is_extracted(session):
+    report, llm, _ = _read_twice(session, stamp_override="crawl:extract-v1@0ld:fake-model:httpx")
+    assert len(llm.seen) == 1, "the point of a re-read under a new prompt is the new prompt"
+    assert report.skipped_unchanged == 0
+
+
+def test_without_the_flag_every_read_is_extracted(session):
+    """`ingest crawl --force` on a URL means read it; only the refresh opts in."""
+    _report, llm, _ = _read_twice(session, skip_unchanged=False)
+    assert len(llm.seen) == 1
+
+
 def test_rerunning_skips_urls_already_done(session):
     fetcher = FakeFetcher({URL: fetched()})
     llm = FakeLLM([canned("llm_response_microsoft_wi.json")])

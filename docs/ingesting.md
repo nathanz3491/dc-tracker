@@ -165,7 +165,10 @@ The refresh phase is what keeps data current rather than merely growing: article
 get edited, and a campus that was "announced" last quarter is under construction
 now. Re-reading a known citation updates every field it supports. It deliberately
 bypasses the article cache — serving a cached copy would guarantee the answer is
-"nothing changed".
+"nothing changed". It takes the cited pages tried longest ago, waits twice as long
+before retrying a page each time its re-read fails, and does not pay the model to
+re-read a page that hashes the same as its last good read under today's prompt —
+see [the sync workflow](workflows/sync.md#what-the-refresh-phase-re-reads).
 
 The settle phase is free and deterministic. Every derived value — county,
 coordinates, capacity block rollups — is a function of the row's citations and is
