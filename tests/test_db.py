@@ -174,6 +174,72 @@ def test_modified_applied_migration_is_refused(tmp_path: Path):
         run_migrations(engine, discover_migrations(mig_dir))
 
 
+@pytest.mark.parametrize(
+    ("broken", "fixed", "leftover"),
+    [
+        (
+            "CREATE TABLE b (id INTEGER PRIMARY KEY);\nCREATE TABLE a (id INTEGER PRIMARY KEY);",
+            "CREATE TABLE b (id INTEGER PRIMARY KEY);\nCREATE TABLE c (id INTEGER PRIMARY KEY);",
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'b'",
+        ),
+        (
+            "ALTER TABLE a ADD COLUMN note TEXT;\nALTER TABLE a ADD COLUMN note TEXT;",
+            "ALTER TABLE a ADD COLUMN note TEXT;\nALTER TABLE a ADD COLUMN seen TEXT;",
+            "SELECT 1 FROM pragma_table_info('a') WHERE name = 'note'",
+        ),
+    ],
+    ids=["create-table", "add-column"],
+)
+def test_a_failed_migration_leaves_no_trace_and_the_fixed_one_applies(
+    tmp_path: Path, broken: str, fixed: str, leftover: str
+):
+    """A migration is one transaction, DDL included.
+
+    Python's sqlite3 driver opens a transaction only before INSERT, UPDATE and
+    DELETE, so a CREATE TABLE or ALTER TABLE ran outside `engine.begin()` and
+    committed on the spot. A migration whose second statement failed left its
+    first behind with no version row, and every later `tracker init` died on
+    "already exists" — with the console refusing the database meanwhile, because
+    it is behind on migrations, until somebody undid the half by hand.
+    """
+    mig_dir = tmp_path / "migrations"
+    mig_dir.mkdir()
+    first = mig_dir / "0001_init.sql"
+    first.write_text("CREATE TABLE a (id INTEGER PRIMARY KEY);", encoding="utf-8")
+    second = mig_dir / "0002_second.sql"
+    second.write_text(broken, encoding="utf-8")
+    engine = make_engine(tmp_path / "t.db")
+
+    with pytest.raises(OperationalError):
+        run_migrations(engine, discover_migrations(mig_dir))
+    with engine.connect() as conn:
+        assert conn.execute(text(leftover)).first() is None, "the half that ran must not stay"
+    assert schema_version(engine) == 1
+
+    second.write_text(fixed, encoding="utf-8")
+    assert run_migrations(engine, discover_migrations(mig_dir)) == [2]
+    assert schema_version(engine) == 2
+
+
+def test_a_migration_another_process_applied_meanwhile_is_not_applied_twice(
+    tmp_path: Path, monkeypatch
+):
+    """Every writing command runs `init_db`, and so does the deployer, so two can
+    find the same migration pending at once. The second used to run it anyway and
+    die on "already exists" as it started. Pending is now re-read inside the write
+    transaction, which cannot begin until the first has committed."""
+    import tracker.db as db_mod
+
+    db = tmp_path / "t.db"
+    engine, applied = init_db(db)
+    assert applied, "applied by the first process"
+    # The second process's view, taken before the first committed.
+    monkeypatch.setattr(db_mod, "applied_versions", lambda _engine: {})
+
+    assert run_migrations(make_engine(db)) == []
+    assert schema_version(engine) == max(applied)
+
+
 def test_0003_upgrades_an_existing_database_without_losing_rows(tmp_path: Path):
     """0003 rebuilds ingest_url via DROP TABLE, so the copy step must be right.
 

@@ -21,7 +21,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
-from sqlalchemy import Engine, create_engine, event, text
+from sqlalchemy import Connection, Engine, create_engine, event, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from tracker.config import package_root
@@ -256,7 +256,8 @@ def run_migrations(engine: Engine, migrations: list[Migration] | None = None) ->
     """Apply pending migrations in order. Returns the versions applied.
 
     Each migration runs in its own transaction, so a failure half-way leaves the
-    DB at the last complete version rather than in an undefined state.
+    DB at the last complete version rather than in an undefined state — see
+    `_transactional_ddl` for why that took more than `engine.begin()`.
     """
     migrations = migrations if migrations is not None else discover_migrations()
     already = applied_versions(engine)
@@ -272,25 +273,82 @@ def run_migrations(engine: Engine, migrations: list[Migration] | None = None) ->
 
     pending = [m for m in migrations if m.version not in already]
     applied: list[int] = []
-    for m in pending:
-        statements = split_sql(m.sql)
-        if not statements:
-            raise MigrationError(f"{m.path.name} contains no executable statements")
-        log.info("applying migration %04d_%s (%d statements)", m.version, m.name, len(statements))
-        with engine.begin() as conn:
-            for stmt in statements:
-                # exec_driver_sql, NOT text(): text() scans for `:name` bind
-                # parameters even inside SQL comments, so a comment containing
-                # something like "row=1274" preceded by a colon becomes a
-                # phantom required bind. Migrations are literal SQL by
-                # definition and must never be parameterized.
-                conn.exec_driver_sql(stmt)
-            conn.execute(
-                text("INSERT INTO schema_version (version, name, checksum) VALUES (:v, :n, :c)"),
-                {"v": m.version, "n": m.name, "c": m.checksum},
-            )
-        applied.append(m.version)
+    if not pending:
+        return applied
+    with engine.connect() as conn:
+        conn.execution_options(isolation_level="AUTOCOMMIT")
+        for m in pending:
+            if _apply(conn, m):
+                applied.append(m.version)
     return applied
+
+
+def _apply(conn: Connection, m: Migration) -> bool:
+    """One migration and its version row, as one transaction. False if already there.
+
+    `BEGIN IMMEDIATE` takes the write lock before anything is read, which is what
+    makes the re-check below mean something. Every writing command runs `init_db`,
+    and so does the deployer, so two processes can find the same migration pending
+    at once; the second's transaction cannot begin until the first's has
+    committed, and then it finds the version row and applies nothing, instead of
+    dying on "already exists" as it starts. A deferred `BEGIN` would not do: its
+    first read would pin a snapshot from before the other commit.
+    """
+    statements = split_sql(m.sql)
+    if not statements:
+        raise MigrationError(f"{m.path.name} contains no executable statements")
+    with _transactional_ddl(conn):
+        done = conn.execute(
+            text("SELECT 1 FROM schema_version WHERE version = :v"), {"v": m.version}
+        ).first()
+        if done:
+            log.info("migration %04d_%s was applied by another process", m.version, m.name)
+            return False
+        log.info("applying migration %04d_%s (%d statements)", m.version, m.name, len(statements))
+        for stmt in statements:
+            # exec_driver_sql, NOT text(): text() scans for `:name` bind
+            # parameters even inside SQL comments, so a comment containing
+            # something like "row=1274" preceded by a colon becomes a
+            # phantom required bind. Migrations are literal SQL by
+            # definition and must never be parameterized.
+            conn.exec_driver_sql(stmt)
+        conn.execute(
+            text("INSERT INTO schema_version (version, name, checksum) VALUES (:v, :n, :c)"),
+            {"v": m.version, "n": m.name, "c": m.checksum},
+        )
+    return True
+
+
+@contextmanager
+def _transactional_ddl(conn: Connection) -> Iterator[None]:
+    """A real SQLite transaction around everything inside it, DDL included.
+
+    **`engine.begin()` did not provide one for schema changes.** Python's sqlite3
+    driver opens a transaction itself, and only before INSERT, UPDATE and DELETE,
+    so a CREATE TABLE or ALTER TABLE ran in autocommit and was permanent the
+    instant it ran. A migration whose second statement failed left its first
+    behind with no version row, every later `tracker init` died on "already
+    exists", and the console — which refuses a database behind on migrations —
+    stayed down until somebody undid the half by hand.
+
+    This is SQLAlchemy's documented pysqlite recipe ("Serializable isolation /
+    Savepoints / Transactional DDL"), scoped to this one connection: the caller
+    puts it in AUTOCOMMIT, which is pysqlite's `isolation_level = None` and stops
+    the driver issuing BEGIN and COMMIT of its own, and the statements here are
+    the only ones there are. Safe for every migration so far because none uses a
+    statement SQLite refuses inside a transaction — no VACUUM, and no PRAGMA that
+    a transaction would silently ignore.
+    """
+    conn.exec_driver_sql("BEGIN IMMEDIATE")
+    try:
+        yield
+    except BaseException:
+        # Some failures (disk full, I/O) make SQLite roll back by itself, and a
+        # second ROLLBACK would raise over the error that explains what happened.
+        if conn.connection.dbapi_connection.in_transaction:
+            conn.exec_driver_sql("ROLLBACK")
+        raise
+    conn.exec_driver_sql("COMMIT")
 
 
 class AlreadyRunning(RuntimeError):
