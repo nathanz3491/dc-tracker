@@ -362,6 +362,54 @@ def test_the_block_cache_is_consistent_after_a_recompute(session):
     assert recompute_blocks(session) == 0
 
 
+def test_a_disclosure_is_not_counted_as_a_rebuild(session):
+    """The contract above on a row reconcile has something to say about.
+
+    On an empty database it holds trivially. On a copy of production `tracker init`
+    reported 187 projects' blocks and 160 projects' parties "rebuilt" on every run
+    with not one row or value moving: it counted the rows whose rebuild returned a
+    disclosure, and a disclosure is returned every time the rows warrant one.
+    """
+    import datetime as dt
+
+    from sqlalchemy import select
+
+    from tracker import parties
+    from tracker.ingest.records import BlockRecord, IngestRecord, PartyRecord, SourceRecord
+    from tracker.models import Project
+    from tracker.upsert import recompute_blocks, recompute_parties, upsert_record
+
+    upsert_record(
+        session,
+        IngestRecord(
+            project={"company": "Meta", "name": "Understated", "city": "Mesa", "state": "AZ"},
+            sources=[
+                SourceRecord(
+                    url="https://example.test/mesa",
+                    source_type="trade_press",
+                    fetched_at=dt.datetime(2026, 1, 1),
+                    claims={"mw_planned": 100.0},
+                    quotes={"mw_planned": "the campus is 100 MW"},
+                    blocks=[
+                        BlockRecord(label="Building A", mw=150.0, quotes={"mw": "A is 150 MW"}),
+                        BlockRecord(label="Building B", mw=150.0, quotes={"mw": "B is 150 MW"}),
+                    ],
+                    parties=[
+                        PartyRecord(name="OpenAI", role="customer", quote="OpenAI leases it"),
+                        PartyRecord(name="Microsoft", role="customer", quote="Microsoft too"),
+                    ],
+                )
+            ],
+        ),
+    )
+    row = session.scalar(select(Project))
+    assert any("kept the cited figure" in n for n in blocks.reconcile(row)), "the premise"
+    assert any("tenants" in n for n in parties.reconcile(row)), "the premise"
+
+    assert recompute_blocks(session) == 0
+    assert recompute_parties(session) == 0
+
+
 def test_a_project_with_no_blocks_is_left_exactly_as_it_was(session):
     """The guarantee that let migration 0009 land on 227 live rows.
 

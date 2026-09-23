@@ -561,6 +561,15 @@ initial build of the v1 PRD.
   ~77,000-token agent every chosen row; even `--enrich-budget 0` paid for one call
   per chosen row. It now sees only the rows the harvest reached.
 
+- **`tracker init` no longer reports rebuilding rows it left alone**
+  (`tracker/upsert.py`, `tests/test_blocks.py`). Every run, including the one each
+  deploy makes, printed "rebuilt capacity blocks on 187 project(s)" and "rebuilt
+  parties on 160 project(s)" on a copy of production where not one row or value
+  moved. It counted the projects whose rebuild had a disclosure to make, and a
+  disclosure comes back whenever the rows warrant one, so a deploy log that always
+  claimed work could not show when a deploy really moved something. A project now
+  counts only when a row was rewritten or a figure filled.
+
 ### Changed
 
 - **Picking from a short menu no longer pays the deepest reasoning rate**

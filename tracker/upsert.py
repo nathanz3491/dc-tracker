@@ -2163,9 +2163,10 @@ def recompute_blocks(session: Session) -> int:
 
     changed = 0
     for project in session.scalars(select(Project)).all():
+        before = _reconciled(project)
         touched = blocks_mod.rebuild(session, project)
-        notes = blocks_mod.reconcile(project)
-        if touched or notes:
+        blocks_mod.reconcile(project)
+        if touched or _reconciled(project) != before:
             changed += 1
     session.flush()
     return changed
@@ -2182,12 +2183,25 @@ def recompute_parties(session: Session) -> int:
 
     changed = 0
     for project in session.scalars(select(Project)).all():
+        before = _reconciled(project)
         touched = parties_mod.rebuild(session, project)
-        notes = parties_mod.reconcile(project)
-        if touched or notes:
+        parties_mod.reconcile(project)
+        if touched or _reconciled(project) != before:
             changed += 1
     session.flush()
     return changed
+
+
+def _reconciled(project: Project) -> tuple[Any, ...]:
+    """The scalars `blocks.reconcile` and `parties.reconcile` may fill.
+
+    What a rebuild's count compares, rather than whether reconcile had anything to
+    *say*: its disclosures are a description of the rows, returned every time the
+    rows warrant one, so counting them reported a change on every `tracker init` —
+    187 projects' blocks and 160 projects' parties "rebuilt" on a copy of production
+    where not one row or value moved.
+    """
+    return (project.mw_planned, project.mw_built, project.phase, project.customer)
 
 
 def recompute_h200(session: Session) -> int:
