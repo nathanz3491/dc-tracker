@@ -916,7 +916,7 @@ def pending_risk_count(session: Session, spec: FilterSpec) -> int:
 RETRYABLE_STATUSES = ("fetch_error", "parse_error", "llm_error", "thin_content")
 
 #: Failed tries in a row, the same way each time, after which a URL is no longer
-#: retried automatically (`ingest_url.failures`, migration 0025).
+#: retried automatically (`ingest_url.failures`, migration 0027).
 #:
 #: A transient failure — a rate limit, an outage, a flaky handshake — rarely repeats
 #: identically on three separate runs; a structural one repeats every time: a page

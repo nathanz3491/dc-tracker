@@ -394,8 +394,8 @@ def enrich() -> Canvas:
 
     c.text(
         48, 612,
-        "The other four stops, each reported by name: every field is filled · the row is already at the target, which is a refusal "
-        "phrased so it cannot read as success · no harvester found an unread article · the six-round ceiling.",
+        "The other five stops, each reported by name: every field is filled · the row is already at the target (a refusal phrased "
+        "so it cannot read as success) · no harvester found an unread article · the six-round ceiling · its budget share is read.",
         size=10.5, colour=SLATE,
     )
 

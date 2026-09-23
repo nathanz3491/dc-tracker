@@ -83,7 +83,7 @@ debug log.
 | --- | --- | --- | --- |
 | derive | free, no network | once, before round 1 | Census reference data |
 | queue | free | every round | `ingest_url` rows still `discovered` |
-| retry | one fetch each | every round | this project's URLs in `RETRYABLE_STATUSES` |
+| retry | one fetch each | every round | this project's URLs in `RETRYABLE_STATUSES`, less any that failed the same way three times running (`discover.retryable`) |
 | archive | ~30 requests, once per batch | round 1 only | configured `[[sitemap]]` entries |
 | search | one query each, sent once a run, capped at `MAX_QUERIES` = 12 | every round | Serper / Google / Brave / Bocha |
 | refresh | one fetch each | round 1 only | the project's own citations |
@@ -126,6 +126,11 @@ Every still-contested field — not only the ones this run added — goes to
 `conflicts.solve` on the **judgement** tier (the reasoning model at `high`, one call
 per field), deliberately not the extractor that read the articles. It writes, unlike `tracker logic conflicts`, which proposes;
 `--dry-run` suppresses the write along with everything else.
+
+**Each answer is committed as it is applied.** `sync` hands the same session to the
+agent pass, which rolls back on its first error, so an answer left flushed was paid
+for and then lost: on a copy of production one row went from 36 superseded marks to
+39 and back to 36.
 
 It needs no bookkeeping to avoid re-asking. Applying an answer marks the losing
 claims `superseded`, which demotes them out of `confirmed`, and a dispute needs two
