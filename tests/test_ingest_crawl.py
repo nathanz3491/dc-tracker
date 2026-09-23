@@ -2287,13 +2287,9 @@ async def test_the_retry_backoff_does_not_hold_a_slot(monkeypatch):
     )
 
 
-def _serve_with(monkeypatch, handler):
-    """Make `fetch_all`'s own HttpxFetcher answer from `handler`, over no network."""
-    import httpx
-
+def _serve_through(monkeypatch, transport):
+    """Make `fetch_all`'s own HttpxFetcher use `transport` as its connection pool."""
     from tracker.ingest import fetch as fetch_mod
-
-    transport = httpx.MockTransport(handler)
 
     class Served(fetch_mod.HttpxFetcher):
         def __init__(self, settings=None):
@@ -2302,33 +2298,67 @@ def _serve_with(monkeypatch, handler):
     monkeypatch.setattr(fetch_mod, "HttpxFetcher", Served)
 
 
-async def test_one_run_reuses_one_http_client(monkeypatch):
-    """Each request opened its own client, and so its own connection."""
+async def test_one_run_shares_one_connection_pool(monkeypatch):
+    """Each request opened its own client, and so its own pool and connection — a
+    TLS handshake per page. The run's requests now share one pool, which the run
+    closes once at the end rather than each request closing it after itself."""
     import httpx
 
     from tracker.ingest.fetch import fetch_all
 
-    made: list[object] = []
-    real = httpx.AsyncClient
+    class Pool(httpx.MockTransport):
+        def __init__(self):
+            super().__init__(
+                lambda request: httpx.Response(
+                    200, text="<p>" + "an article sentence. " * 30 + "</p>"
+                )
+            )
+            self.requests = 0
+            self.closed = 0
 
-    class Counting(real):
-        def __init__(self, *args, **kwargs):
-            made.append(self)
-            super().__init__(*args, **kwargs)
+        async def handle_async_request(self, request):
+            self.requests += 1
+            return await super().handle_async_request(request)
 
-    monkeypatch.setattr(httpx, "AsyncClient", Counting)
-    _serve_with(
-        monkeypatch,
-        lambda request: httpx.Response(200, text="<p>" + "an article sentence. " * 30 + "</p>"),
-    )
+        async def aclose(self):
+            self.closed += 1
+
+    pool = Pool()
+    _serve_through(monkeypatch, pool)
     results = await fetch_all([f"https://a.test/{i}" for i in range(4)], settings=get_settings())
     assert all(r.ok for r in results)
-    assert len(made) == 1, f"{len(made)} clients for one run"
+    assert pool.requests == 4
+    assert pool.closed == 1, "a request closed the pool the rest of the run was using"
 
 
-async def test_the_shared_client_keeps_no_cookies_between_requests(monkeypatch):
-    """A fresh client per request never carried a cookie from one page to the next.
-    Sharing one must not start to: a WAF's challenge cookie is not ours to replay."""
+async def test_a_cookie_set_on_a_redirect_still_reaches_the_page_it_redirects_to(
+    monkeypatch,
+):
+    """Within one request a client keeps what the redirect chain sets — a cookie
+    wall's "set this, then come back" works because of it. Sharing the connection
+    pool must not change that; only the pool is shared, never the cookies."""
+    import httpx
+
+    from tracker.ingest.fetch import fetch_all
+
+    def handler(request):
+        if request.url.path == "/start":
+            return httpx.Response(
+                302, headers={"location": "/landing", "set-cookie": "gate=ok; Path=/"}
+            )
+        if "gate=ok" in (request.headers.get("cookie") or ""):
+            return httpx.Response(200, text="<p>" + "an article sentence. " * 30 + "</p>")
+        return httpx.Response(403, text="come back through the front door")
+
+    _serve_through(monkeypatch, httpx.MockTransport(handler))
+    (result,) = await fetch_all(["https://a.test/start"], settings=get_settings())
+    assert result.ok, result.error
+
+
+async def test_no_cookie_is_carried_from_one_page_to_the_next(monkeypatch):
+    """A fresh client per request never carried a cookie from one page to the next,
+    and a shared pool must not start to: a WAF's challenge cookie or a paywall's
+    meter set by one article is not ours to replay on the next."""
     import httpx
 
     from tracker.ingest.fetch import fetch_all
@@ -2343,7 +2373,7 @@ async def test_the_shared_client_keeps_no_cookies_between_requests(monkeypatch):
             text="<p>" + "an article sentence. " * 30 + "</p>",
         )
 
-    _serve_with(monkeypatch, handler)
+    _serve_through(monkeypatch, httpx.MockTransport(handler))
     await fetch_all(["https://a.test/1", "https://a.test/2"], settings=get_settings())
     assert seen == [None, None]
 

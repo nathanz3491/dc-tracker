@@ -26,7 +26,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
 from html import unescape
-from http.cookiejar import CookieJar, DefaultCookiePolicy
 from pathlib import Path
 from typing import Final, Protocol
 from urllib.parse import urlsplit
@@ -299,30 +298,40 @@ def html_to_text(html: str) -> str:
 # --- Implementations --------------------------------------------------------
 
 
-def _no_cookies() -> CookieJar:
-    """A cookie jar that keeps nothing.
+class _LentPool(httpx.AsyncBaseTransport):
+    """The run's connection pool, lent to one short-lived client per request.
 
-    A client per request never carried a cookie from one page to the next, and a
-    shared one must not start to: a WAF's challenge cookie or a paywall's metering
-    cookie set by one article would ride on the next request to that host, changing
-    what the page serves for reasons that are nothing to do with the page.
-    `allowed_domains=[]` refuses every domain, so `Set-Cookie` is ignored.
+    A client closes its transport when it closes, so handing it the pool directly
+    would have the first request shut it for the rest of the run. The borrower's
+    `aclose` is therefore a no-op, and `HttpxFetcher.__aexit__` closes the pool.
     """
-    return CookieJar(policy=DefaultCookiePolicy(allowed_domains=[]))
+
+    def __init__(self, pool: httpx.AsyncBaseTransport) -> None:
+        self._pool = pool
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        return await self._pool.handle_async_request(request)
+
+    async def aclose(self) -> None:
+        """The run closes the pool, not the request that borrowed it."""
 
 
 class HttpxFetcher:
     """Plain HTTP. The default: fast, free, no browser.
 
-    **Entered as a context manager it holds one client for the run**, and `fetch_all`
-    enters the one it creates. Each request used to open its own client and so its
-    own connection — a TLS handshake per page, on a queue where 115 of the first 200
-    URLs are one host. The shared client keeps no cookies (see `_no_cookies`), so a
-    page is fetched exactly as it was before; only the connection is reused. Used
-    without entering, `fetch` opens a client per call, as it always did — which is
-    what the one-off callers (`agent`, `backfill`) do.
+    **Entered as a context manager it keeps one connection pool for the run**, and
+    `fetch_all` enters the one it creates. Each request used to open its own client
+    and with it its own pool — a new connection and TLS handshake per page, on a
+    queue where 115 of the first 200 URLs are one host. What is shared is the pool
+    and nothing else: every request still gets a client of its own, and so a cookie
+    jar of its own. That keeps a page fetched exactly as before — a cookie wall's
+    "set this on the redirect, then come back" still works within one request, and
+    no cookie one article set rides along to the next — which is why the pool is
+    shared rather than a single client. Used without entering, `fetch` builds its
+    own pool per call, as it always did; the one-off callers (`agent`, `backfill`)
+    do that.
 
-    `transport` is for tests, which serve pages without a network.
+    `transport` stands in for the pool, for tests that serve pages without a network.
     """
 
     def __init__(
@@ -330,9 +339,11 @@ class HttpxFetcher:
     ) -> None:
         self.settings = settings or get_settings()
         self._transport = transport
-        self._client: httpx.AsyncClient | None = None
+        self._pool: httpx.AsyncBaseTransport | None = None
 
-    def _new_client(self) -> httpx.AsyncClient:
+    def _client(self) -> httpx.AsyncClient:
+        """A client for one request, on the run's pool when there is one."""
+        pool = self._pool if self._pool is not None else self._transport
         return httpx.AsyncClient(
             timeout=httpx.Timeout(self.settings.fetch_timeout_s, connect=10.0),
             follow_redirects=True,
@@ -341,26 +352,22 @@ class HttpxFetcher:
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                 "Accept-Language": "en-US,en;q=0.9",
             },
-            cookies=_no_cookies(),
-            transport=self._transport,
+            transport=_LentPool(pool) if self._pool is not None else pool,
         )
 
     async def __aenter__(self) -> HttpxFetcher:
-        self._client = self._new_client()
+        self._pool = self._transport or httpx.AsyncHTTPTransport()
         return self
 
     async def __aexit__(self, *exc_info: object) -> None:
-        if self._client is not None:
-            await self._client.aclose()
-            self._client = None
+        if self._pool is not None:
+            await self._pool.aclose()
+            self._pool = None
 
     async def fetch(self, url: str) -> FetchResult:
         try:
-            if self._client is not None:
-                response = await self._client.get(url)
-            else:
-                async with self._new_client() as client:
-                    response = await client.get(url)
+            async with self._client() as client:
+                response = await client.get(url)
         # `InvalidURL` is not a `RequestError`: a URL httpx cannot parse raises it
         # before any request, and it used to escape here and take the whole batch.
         except (httpx.RequestError, httpx.InvalidURL) as exc:
