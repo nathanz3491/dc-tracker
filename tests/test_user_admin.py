@@ -385,3 +385,9 @@ def test_notify_preview_sends_nothing(db, monkeypatch):
     monkeypatch.setattr(notify, "ResendTransport", refuse)
     result = invoke(db, "users", "notify", "someone@example.com", "--about", READER, "--preview")
     assert result.exit_code == 0 and READER in result.output
+
+
+def test_show_prints_its_markup_rather_than_the_tags(db):
+    result = invoke(db, "users", "show", OTHER)
+    assert result.exit_code == 0
+    assert "[dim]" not in result.output and "none" in result.output

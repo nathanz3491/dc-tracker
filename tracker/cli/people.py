@@ -586,27 +586,31 @@ def _one_account(session, email: str):
 
 
 def _print_detail(detail: dict) -> None:
+    def when(value: str | None) -> str:
+        return escape(value[:16].replace("T", " ")) if value else "[dim]never[/dim]"
+
     table = Table(show_header=False, box=TABLE_BOX)
     table.add_column("field", style="dim")
     table.add_column("value")
     status = (
-        f"[red]disabled[/red] since {detail['disabled_at'][:16]}"
+        f"[red]disabled[/red] since {when(detail['disabled_at'])}"
         if detail["disabled"]
         else "active"
     )
+    count = detail["watches"]
     for label, value in (
-        ("email", detail["email"]),
-        ("name", detail["name"] or "[dim]none[/dim]"),
+        ("email", escape(detail["email"])),
+        ("name", escape(detail["name"]) if detail["name"] else "[dim]none[/dim]"),
         ("role", "admin" if detail["admin"] else "reader"),
         ("status", status),
         ("sees", "the whole database" if detail["watch_all"] else "its watchlist only"),
-        ("watchlist", f"{detail['watches']} entr{'y' if detail['watches'] == 1 else 'ies'}"),
-        ("joined", detail["joined"]),
-        ("created", (detail["created_at"] or "")[:16]),
-        ("last signed in", (detail["last_seen_at"] or "never")[:16]),
-        ("last changed", (detail["updated_at"] or "never")[:16]),
+        ("watchlist", f"{count} entr{'y' if count == 1 else 'ies'}"),
+        ("joined", escape(detail["joined"])),
+        ("created", when(detail["created_at"])),
+        ("last signed in", when(detail["last_seen_at"])),
+        ("last changed", when(detail["updated_at"])),
     ):
-        table.add_row(label, value if label == "status" else escape(str(value)))
+        table.add_row(label, value)
     console.print(table)
 
 
