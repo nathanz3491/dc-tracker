@@ -26,6 +26,7 @@ import datetime as _dt
 import hashlib
 import json
 import logging
+import re
 from dataclasses import dataclass
 from dataclasses import field as dc_field
 from enum import Enum
@@ -80,6 +81,59 @@ _INGEST_ONLY_NOTES: tuple[str, ...] = (
     "possible duplicate of project #",
     "a record arriving as ",
 )
+
+#: The warning an ingest writes when a record looked like another row's twin.
+_DUPLICATE_NOTE = re.compile(r"possible duplicate of project #(\d+)")
+
+
+def _duplicate_standing(session: Session, project: Project, other: int) -> bool:
+    """Whether a recorded "possible duplicate of #other" is still an open question."""
+    return (
+        other != project.id
+        and session.get(Project, other) is not None
+        and not is_parked(session, project.id, other)
+    )
+
+
+def standing_duplicate(session: Session, project: Project) -> int | None:
+    """The row this one is recorded as possibly duplicating, if that still stands.
+
+    The warning is written by an ingest, from the arriving record, and a re-derive
+    cannot recompute it — it has no record — so it is kept (`_INGEST_ONLY_NOTES`).
+    What was not kept was its consequence: the ingest caps such a row's confidence
+    at 1, the re-derive and `tracker init` did not, so the row read 1 after every
+    article and 3 again after every night, while its notes said "possible
+    duplicate" throughout. This is what both re-derivations now read, so all three
+    paths agree.
+    """
+    for line in (project.notes or "").splitlines():
+        match = _DUPLICATE_NOTE.search(line) if line.startswith(NOTE_PREFIX) else None
+        if match and _duplicate_standing(session, project, int(match.group(1))):
+            return int(match.group(1))
+    return None
+
+
+def _settle_duplicate_note(session: Session, project: Project) -> int | None:
+    """Drop a duplicate warning that no longer stands; return the id of one that does.
+
+    Stale two ways, both measured on production: the other row was since merged
+    away (24 of 62 warnings), or a person or model already ruled the pair out (8).
+    Either way the question is answered, and a warning that outlives its answer
+    goes on capping the row's confidence for nothing.
+    """
+    keep: list[str] = []
+    standing: int | None = None
+    for line in (project.notes or "").splitlines():
+        match = _DUPLICATE_NOTE.search(line) if line.startswith(NOTE_PREFIX) else None
+        if match is None:
+            keep.append(line)
+        elif _duplicate_standing(session, project, int(match.group(1))):
+            standing = standing or int(match.group(1))
+            keep.append(line)
+    notes = "\n".join(keep) or None
+    if notes != (project.notes or None):
+        project.notes = notes
+    return standing
 
 
 class Policy(Enum):
@@ -2120,14 +2174,17 @@ def recompute_from_sources(session: Session, project: Project) -> list[str]:
     # first. A derivation that is not a pure function of what is stored is the one
     # thing this path cannot be.
     project.blocker = _derive_blocker(session, project)
+    duplicate_of = _settle_duplicate_note(session, project)
 
     views = [conf.SourceView.from_row(s) for s in project.sources]
     populated = sum(1 for f in TRACKED_FIELDS if getattr(project, f, None) is not None)
-    project.confidence = conf.compute(
+    value = conf.compute(
         views,
         operator_verified=project.last_verified_at is not None,
         populated_tracked_fields=populated,
     ).value
+    # The same cap an ingest applies — see `standing_duplicate`.
+    project.confidence = min(value, 1) if duplicate_of is not None else value
     session.flush()
     return conflict_fields
 
@@ -2141,9 +2198,11 @@ def recompute_confidence(session: Session) -> int:
     """
     changed = 0
     for project in session.scalars(select(Project)).all():
-        score = conf.compute_for_project(project, project.sources)
-        if project.confidence != score.value:
-            project.confidence = score.value
+        value = conf.compute_for_project(project, project.sources).value
+        if standing_duplicate(session, project) is not None:
+            value = min(value, 1)
+        if project.confidence != value:
+            project.confidence = value
             changed += 1
     session.flush()
     return changed

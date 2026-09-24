@@ -12,6 +12,17 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **A row flagged as a possible duplicate keeps one confidence, whichever path last
+  wrote it** (`tracker/upsert.py`, `tests/test_upsert.py`,
+  `docs/design-decisions.md`). An ingest that found a likely twin capped the row's
+  confidence at 1, and the two re-derivations — nightly `backfill derive` and the
+  `tracker init` every deploy runs — computed it without the cap. So a flagged row
+  read 1 after every article and its full score again after every night, while its
+  notes said "possible duplicate" throughout: one re-read of 37 articles moved four
+  rows from 3 or 2 to 1. Both re-derivations now apply the cap wherever the warning
+  stands, and drop a warning whose question has been answered. On production 24 of
+  62 warnings pointed at a row since merged away and 8 at a pair already ruled out.
+
 - **A page not in English is no longer paid for and read into a row**
   (`tracker/ingest/crawl.py`, `tracker/ingest/records.py`, `tracker/funnel.py`,
   `tests/test_ingest_crawl.py`, `docs/workflows/sync.md`). Search filtered

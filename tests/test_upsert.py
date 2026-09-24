@@ -675,6 +675,64 @@ def test_duplicate_proposal_survives_reingest(session):
     assert county_row.notes.count("possible duplicate") == 1, "must not accumulate"
 
 
+def _flagged_pair(session):
+    """A city row and a county row for one site, the county row flagged against it."""
+    rich = [
+        SourceRecord(
+            url=f"https://news.example/{n}",
+            source_type="company_filing",
+            fetched_at=T0,
+            claims={"mw_planned": 900.0, "investment_usd": 3_300_000_000},
+            quotes={"mw_planned": "900 MW", "investment_usd": "$3.3 billion"},
+        )
+        for n in ("a", "b")
+    ]
+    city = upsert_record(session, rec(city="Racine", county=None))
+    county = upsert_record(session, rec(city=None, county="Racine County", sources=rich))
+    assert county.duplicate_of == city.project_id
+    return session.get(Project, city.project_id), session.get(Project, county.project_id)
+
+
+def test_a_standing_duplicate_warning_caps_confidence_on_every_path(session):
+    """The ingest capped a flagged row at 1 and the two re-derivations did not, so
+    it read 1 after every article and its full score after every night — measured,
+    four rows went 3 -> 1 on one re-read — while its notes said "possible
+    duplicate" throughout. Every path now reads the same warning the same way."""
+    from tracker.upsert import recompute_confidence
+
+    _, county_row = _flagged_pair(session)
+    assert county_row.confidence == 1
+
+    recompute_from_sources(session, county_row)
+    assert county_row.confidence == 1
+    assert "possible duplicate of project #" in county_row.notes
+    assert recompute_confidence(session) == 0, "tracker init must not undo it"
+
+
+def test_a_warning_about_a_row_since_merged_away_is_dropped(session):
+    from tracker.merge import merge_projects
+
+    city_row, county_row = _flagged_pair(session)
+    third = upsert_record(session, rec(company="Other Co", city="Kenosha"))
+    merge_projects(session, third.project_id, [city_row.id])
+    session.refresh(county_row)
+
+    recompute_from_sources(session, county_row)
+    assert "possible duplicate" not in (county_row.notes or "")
+    assert county_row.confidence > 1, "the question it capped for has been answered"
+
+
+def test_a_warning_about_a_pair_ruled_out_is_dropped(session):
+    from tracker.pairs import park
+
+    city_row, county_row = _flagged_pair(session)
+    park(session, [city_row.id, county_row.id], reason="two sites")
+
+    recompute_from_sources(session, county_row)
+    assert "possible duplicate" not in (county_row.notes or "")
+    assert county_row.confidence > 1
+
+
 # --- recompute_from_sources rewrites the notes it can regenerate -------------
 #
 # It used to compute the derived lines and throw them away, so a row re-derived by

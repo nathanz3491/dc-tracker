@@ -496,6 +496,14 @@ the row to `tracker review`. `dedup.all_keys` is what connects "Mount Pleasant, 
 names alone cannot, because "mount pleasant" and "racine" share nothing.
 `--force-new` is the escape hatch for two genuinely separate campuses.
 
+The warning is written by an ingest, from the arriving record, so a re-derive
+cannot recompute it and keeps it instead — and it now keeps the cap with it
+(`upsert.standing_duplicate`). It used not to: every article capped the row at 1
+and every night's `backfill derive` restored its full score, while the notes said
+"possible duplicate" throughout. A warning whose question has been answered — the
+other row merged away, or the pair ruled out — is dropped on the next re-derive
+rather than capping the row for nothing.
+
 Accepted residual risk: two distinct campuses for one company in one city merge.
 That has not bitten yet; the fix if it does is a `campus` column.
 
