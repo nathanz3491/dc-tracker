@@ -308,6 +308,25 @@ class Gate:
             found.confirmed_at = now
         return found.account_id
 
+    def restamp(self, token: str | None, stamp: str) -> bool:
+        """Keep one session valid across a change to its own credential.
+
+        A password change stales every session's stamp, which is how the other
+        devices get signed out. The one the change was made in is the exception:
+        it is handed the new stamp here, so the person who just chose a password is
+        not sent straight to a sign-in form to type it. False if it is not a live
+        session.
+        """
+        if not token:
+            return False
+        with self._lock:
+            found = self._sessions.get(token)
+            if found is None:
+                return False
+            found.stamp = stamp
+            found.confirmed_at = self.clock()
+            return True
+
     def revoke(self, token: str | None) -> None:
         if not token:
             return

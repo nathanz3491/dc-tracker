@@ -124,6 +124,13 @@ BLOCKED: dict[str, str] = {
     "users passwd": "it prompts for a password — run it in a terminal",
     "users rm": "accounts are managed at a terminal",
     "users invite": "accounts are managed at a terminal",
+    "users show": "accounts are managed at a terminal or on the admin page",
+    "users edit": "accounts are managed at a terminal or on the admin page",
+    "users disable": "accounts are managed at a terminal or on the admin page",
+    "users enable": "accounts are managed at a terminal or on the admin page",
+    "users signout": "accounts are managed at a terminal or on the admin page",
+    "users admin": "only a terminal on the host can grant admin",
+    "users notify": "it sends email to an address you type — run it in a terminal",
 }
 
 #: Flags that make no sense from a browser, or that would hand the request control
@@ -280,7 +287,23 @@ GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ),
     # Every one of these is in BLOCKED as well. They are listed so their argv can
     # be copied into a terminal, which is the only place they can run.
-    ("Accounts", ("users", "users add", "users passwd", "users rm", "users invite")),
+    (
+        "Accounts",
+        (
+            "users",
+            "users add",
+            "users invite",
+            "users show",
+            "users edit",
+            "users passwd",
+            "users disable",
+            "users enable",
+            "users signout",
+            "users admin",
+            "users rm",
+            "users notify",
+        ),
+    ),
 )
 
 

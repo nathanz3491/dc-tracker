@@ -123,7 +123,7 @@ tracker discover      # poll news feeds, queue candidates
 tracker ingest crawl  # extract the tracked fields, gated on quoted evidence
 tracker gaps          # see what is thin
 tracker coverage      # which operators we hold no rows for at all
-tracker users add you@example.com   # who may read the console
+tracker users add you@example.com   # who may read the console (and `users admin`, `edit`, `disable`…)
 tracker watch add xAI --user you@example.com   # what you want to be told about
 tracker digest --user you@example.com          # what changed on it, good and bad
 tracker serve         # the same dataset as a live console
@@ -387,7 +387,7 @@ directory, which is what lets `tracker init` work from anywhere.
 .venv/Scripts/python -m pytest
 ```
 
-3,247 tests, about three minutes. **A fresh clone with no API key and no network access
+3,269 tests, about three minutes. **A fresh clone with no API key and no network access
 must produce a green run.** Tests that would hit the network or spend DeepSeek
 tokens are marked `network` / `llm` and deselected by default; run them
 explicitly with `-m network` or `-m llm`. An unmarked test that reaches for the

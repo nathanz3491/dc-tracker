@@ -755,6 +755,28 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **An admin can manage every account from the console as well as the terminal,
+  and anyone can change their own password there** (`tracker/accounts.py`,
+  `tracker/webui/server.py`, `tracker/webui/auth.py`,
+  `tracker/webui/static/views-account.js`, `tracker/webui/static/app.js`,
+  `tracker/cli/people.py`, `tracker/account_notice.py`,
+  `tracker/migrations/0028_account_admin.sql`, `tracker/webui/catalog.py`,
+  `tests/test_user_admin.py`, `docs/console-and-export.md`, `docs/architecture.md`).
+
+  Accounts could be added, re-passworded and deleted at the terminal, and nothing
+  else: an address could not be corrected, an account could not be locked without
+  deleting its watchlist, and nobody could end somebody's sessions or change their
+  own password. Now `tracker users` also has `show`, `edit` (email, name, whether
+  it sees the whole database), `disable`/`enable`, `signout` and `admin`, and an
+  admin gets the same controls on a new admin page (`/admin`). Granting admin is
+  terminal-only, so a stolen admin session cannot make itself permanent, and an
+  admin cannot lock or delete their own account from the page. A signed-in person
+  changes their own password at `/account` with no current password asked; every
+  other session of the account ends and theirs stays signed in.
+  `tracker users notify <address> --about <account>` emails the account's current
+  settings to an address you type — after an address change, usually the old one —
+  and never a password.
+
 - **A test that reaches for the network fails, and names the host**
   (`tests/conftest.py`, `tests/test_cli.py`, `README.md`). "A fresh clone with no
   network produces a green run" was stated but never checked: the two `sync` tests

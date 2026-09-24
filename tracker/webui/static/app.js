@@ -14,6 +14,7 @@
  */
 
 import { HelpView } from "/static/views-help.js";
+import { AccountView, AdminView } from "/static/views-account.js";
 
 const html = htm.bind(React.createElement);
 const { useState, useEffect, useMemo, useRef, useCallback } = React;
@@ -5013,6 +5014,10 @@ const VIEWS = [
   ["map", "Map"], ["capex", "Capex"], ["help", "Help"],
 ];
 
+/* Pages about the reader's account rather than the data, reached from the header
+   rather than the nav: `server.ACCOUNT_VIEWS`, the same two names. */
+const ACCOUNT_VIEWS = ["account", "admin"];
+
 /* One cited article, opened.
  *
  * **The frame will be blank for a lot of publishers, and that is not a bug we can
@@ -5433,7 +5438,8 @@ function App() {
       const match = /^\/projects\/(\d+)$/.exec(path);
       if (match) return openProject(Number(match[1]), { push: false });
       const key = path.replace(/^\//, "");
-      goto(VIEWS.some(([v]) => v === key) ? key : "updates", { push: false });
+      const known = VIEWS.some(([v]) => v === key) || ACCOUNT_VIEWS.includes(key);
+      goto(known ? key : "updates", { push: false });
     };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
@@ -5540,12 +5546,16 @@ function App() {
             ${/* Who is reading, and the way out. `account` is null on a console
                   with no accounts at all, where there is nobody to sign out. */ ""}
             ${data.account && html`
-              <span class="dc-head-counts" style=${{ fontSize: 12, color: "var(--muted-foreground)",
-                                                     maxWidth: 200, overflow: "hidden",
-                                                     textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-                    title=${data.account.email}>
+              ${data.account.admin && html`
+                <${Button} size="sm" variant=${view === "admin" ? "secondary" : "ghost"}
+                           onClick=${() => goto("admin")}>Admin<//>`}
+              <button type="button" class="dc-link dc-head-counts"
+                      style=${{ fontSize: 12, color: "var(--muted-foreground)", maxWidth: 200,
+                                overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                      title=${`${data.account.email} — your account and password`}
+                      onClick=${() => goto("account")}>
                 ${data.account.name || data.account.email}
-              </span>
+              </button>
               <${Button} size="sm" variant="ghost" onClick=${async () => {
                 await api("/api/logout", { method: "POST", body: {} });
                 window.location.reload();
@@ -5565,6 +5575,8 @@ function App() {
         ${view === "capex" && html`
           <${CapexView} data=${data} allowAi=${data.allow_ai} onOpen=${openProject} />`}
         ${view === "help" && html`<${HelpView} data=${data} />`}
+        ${view === "account" && html`<${AccountView} data=${data} api=${api} />`}
+        ${view === "admin" && html`<${AdminView} data=${data} api=${api} />`}
       </div>
 
     </div>`;

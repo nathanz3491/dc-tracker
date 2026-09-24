@@ -675,9 +675,11 @@ class Account(Base):
     reasoning as `watch.entry`/`company_key` — a normalized key cannot be shown
     and text as typed cannot be matched.
 
-    **Not a role table.** Every account can do the same things, because what the
-    console may do at all is a property of the server (`--ai`, `--watch-edits`)
-    rather than of whoever signed in. Migration 0020 has the argument.
+    **One role, and it is about accounts only.** Every account reads the same
+    dataset, because what the console may do with it is a property of the server
+    (`--ai`, `--watch-edits`) rather than of whoever signed in — migration 0020 has
+    the argument. `is_admin` adds exactly one thing, the admin page that manages
+    accounts, and only `tracker users admin` on the host can grant it (0028).
     """
 
     __tablename__ = "account"
@@ -712,6 +714,25 @@ class Account(Base):
     watch_all: Mapped[bool] = mapped_column(
         Integer, nullable=False, server_default=text("0"), default=0
     )
+
+    #: May manage accounts from the console's admin page. The only role there is
+    #: (migration 0028), granted and revoked only by `tracker users admin`.
+    is_admin: Mapped[bool] = mapped_column(
+        Integer, nullable=False, server_default=text("0"), default=0
+    )
+
+    #: When the account was switched off; NULL is enabled. A disabled account keeps
+    #: its watchlist and cannot sign in.
+    disabled_at: Mapped[dt.datetime | None] = mapped_column(DateTime)
+
+    #: Folded into every session's stamp, so raising it signs the account out
+    #: everywhere without changing its password. See `accounts.session_stamp`.
+    session_epoch: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0"), default=0
+    )
+
+    #: When an operator last changed the account. NULL for a row nobody has edited.
+    updated_at: Mapped[dt.datetime | None] = mapped_column(DateTime)
 
     watches: Mapped[list[Watch]] = relationship(
         back_populates="account", cascade="all, delete-orphan", passive_deletes=True

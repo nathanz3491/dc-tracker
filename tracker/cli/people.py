@@ -355,7 +355,11 @@ def _ask_password(prompt: str = "Password") -> str:
 
 @users_app.callback(invoke_without_command=True)
 def users(ctx: typer.Context) -> None:
-    """Who may sign in to the console. `add`, `passwd`, `rm` and `invite` change it.
+    """Who may sign in to the console, and everything an operator can change about them.
+
+    `add`, `invite`, `show`, `edit`, `passwd`, `disable`, `enable`, `signout`,
+    `admin`, `rm`, and `notify` to tell somebody how their account is now set up.
+    An admin can do the same from the console's admin page, except grant admin.
 
     **Zero accounts is a legitimate state**, and it is the one a fresh install is
     in: the console then opens with no sign-in, exactly as it did with no
@@ -390,6 +394,8 @@ def users(ctx: typer.Context) -> None:
                         {
                             "email": row.email,
                             "name": row.name,
+                            "admin": bool(row.is_admin),
+                            "disabled": row.disabled_at is not None,
                             "watches": watches.get(row.id, 0),
                             "created_at": row.created_at.isoformat() if row.created_at else None,
                             "last_seen_at": (
@@ -415,12 +421,16 @@ def users(ctx: typer.Context) -> None:
             table = Table(header_style="bold", title_justify="left", box=TABLE_BOX)
             table.add_column("email")
             table.add_column("name")
+            table.add_column("role")
+            table.add_column("status")
             table.add_column("watches", justify="right")
             table.add_column("last seen")
             for row in rows:
                 table.add_row(
                     row.email,
                     row.name or "",
+                    "admin" if row.is_admin else "",
+                    "[red]disabled[/red]" if row.disabled_at is not None else "active",
                     str(watches.get(row.id, 0)),
                     row.last_seen_at.strftime("%Y-%m-%d")
                     if row.last_seen_at
@@ -562,6 +572,253 @@ def users_rm(
             "refuses every sign-in until `tracker users add` makes another; one on "
             "loopback opens without a sign-in, and cannot be published.[/dim]"
         )
+
+
+def _one_account(session, email: str):
+    """`accounts.require`, with the refusal printed the CLI's way."""
+    from tracker import accounts
+
+    try:
+        return accounts.require(session, email)
+    except accounts.AccountError as exc:
+        _fail(str(exc))
+        raise
+
+
+def _print_detail(detail: dict) -> None:
+    table = Table(show_header=False, box=TABLE_BOX)
+    table.add_column("field", style="dim")
+    table.add_column("value")
+    status = (
+        f"[red]disabled[/red] since {detail['disabled_at'][:16]}"
+        if detail["disabled"]
+        else "active"
+    )
+    for label, value in (
+        ("email", detail["email"]),
+        ("name", detail["name"] or "[dim]none[/dim]"),
+        ("role", "admin" if detail["admin"] else "reader"),
+        ("status", status),
+        ("sees", "the whole database" if detail["watch_all"] else "its watchlist only"),
+        ("watchlist", f"{detail['watches']} entr{'y' if detail['watches'] == 1 else 'ies'}"),
+        ("joined", detail["joined"]),
+        ("created", (detail["created_at"] or "")[:16]),
+        ("last signed in", (detail["last_seen_at"] or "never")[:16]),
+        ("last changed", (detail["updated_at"] or "never")[:16]),
+    ):
+        table.add_row(label, value if label == "status" else escape(str(value)))
+    console.print(table)
+
+
+@users_app.command("show")
+def users_show(
+    email: Annotated[str, typer.Argument(help="Whose account to show.")],
+) -> None:
+    """Everything about one account: role, status, reach, how it joined, when it was used."""
+    from tracker import accounts
+
+    with session_scope(_read_engine(), commit=False) as session:
+        detail = accounts.detail(session, _one_account(session, email))
+    if json_mode():
+        emit(detail)
+        return
+    _print_detail(detail)
+
+
+@users_app.command("edit")
+def users_edit(
+    email: Annotated[str, typer.Argument(help="Whose account to change.")],
+    new_email: Annotated[
+        str | None,
+        typer.Option("--email", help="Their new sign-in address.", show_default=False),
+    ] = None,
+    name: Annotated[
+        str | None, typer.Option("--name", help="Their display name.", show_default=False)
+    ] = None,
+    clear_name: Annotated[bool, typer.Option("--clear-name", help="Remove the name.")] = False,
+    see_all: Annotated[
+        bool | None,
+        typer.Option(
+            "--see-all/--watchlist-only",
+            help="Whether they read the whole database or only their watchlist.",
+            show_default=False,
+        ),
+    ] = None,
+) -> None:
+    """Change an account's sign-in address, display name, or what it sees.
+
+    Their sessions survive: a session is bound to the password, not the address.
+    Nobody is emailed — `tracker users notify` does that, to whichever address you
+    type, which after an address change is usually the old one.
+    """
+    from tracker import accounts
+
+    if new_email is None and name is None and not clear_name and see_all is None:
+        _fail("nothing to change. Pass --email, --name, --clear-name or --see-all.")
+    with _explain_db_locks(), session_scope(_watch_engine()) as session:
+        row = _one_account(session, email)
+        try:
+            changes = accounts.update(
+                session, row, email=new_email, name=name, clear_name=clear_name, watch_all=see_all
+            )
+        except accounts.AccountError as exc:
+            _fail(str(exc))
+            raise
+        detail = accounts.detail(session, row)
+    if json_mode():
+        emit({"account": detail, "changes": changes})
+        return
+    if not changes:
+        console.print("[dim]nothing changed — those are already its settings.[/dim]")
+        return
+    for change in changes:
+        console.print(f"[green]changed[/green] {escape(change)}")
+    console.print(
+        f"[dim]to tell them: tracker users notify <address> --about {escape(detail['email'])}[/dim]"
+    )
+
+
+def _switch(email: str, *, disable: bool) -> None:
+    from tracker import accounts
+
+    with _explain_db_locks(), session_scope(_watch_engine()) as session:
+        row = _one_account(session, email)
+        changed = accounts.set_disabled(session, row, disable)
+        target = row.email
+    verb = "disabled" if disable else "enabled"
+    if json_mode():
+        emit({"email": target, verb: True, "changed": changed})
+        return
+    if not changed:
+        console.print(f"[dim]{escape(target)} is already {verb}.[/dim]")
+        return
+    console.print(f"[green]{verb}[/green] {escape(target)}")
+    if disable:
+        console.print(
+            "[dim]it keeps its watchlist and cannot sign in; its open sessions end within "
+            "a few seconds. `tracker users enable` switches it back on.[/dim]"
+        )
+
+
+@users_app.command("disable")
+def users_disable(email: Annotated[str, typer.Argument(help="Whose account to lock.")]) -> None:
+    """Lock an account without deleting it or its watchlist. `enable` undoes it."""
+    _switch(email, disable=True)
+
+
+@users_app.command("enable")
+def users_enable(email: Annotated[str, typer.Argument(help="Whose account to unlock.")]) -> None:
+    """Switch a disabled account back on."""
+    _switch(email, disable=False)
+
+
+@users_app.command("signout")
+def users_signout(
+    email: Annotated[str, typer.Argument(help="Whose sessions to end.")],
+) -> None:
+    """End every session an account has open, without changing its password.
+
+    Within a few seconds on a running console: each session re-checks its account
+    against the row, and this changes what it is checked against.
+    """
+    from tracker import accounts
+
+    with _explain_db_locks(), session_scope(_watch_engine()) as session:
+        row = _one_account(session, email)
+        accounts.sign_out_everywhere(session, row)
+        target = row.email
+    if json_mode():
+        emit({"email": target, "signed_out": True})
+        return
+    console.print(f"[green]signed out everywhere[/green] {escape(target)}")
+
+
+@users_app.command("admin")
+def users_admin(
+    email: Annotated[str, typer.Argument(help="Whose role to change.")],
+    revoke: Annotated[bool, typer.Option("--revoke", help="Take admin away instead.")] = False,
+) -> None:
+    """Grant an account the console's admin page, or take it away.
+
+    **Only here, never from the console.** The admin page can edit, lock and delete
+    accounts, but it cannot make an admin, so a stolen admin session cannot make
+    itself permanent. Takes effect on the next request.
+    """
+    from tracker import accounts
+
+    with _explain_db_locks(), session_scope(_watch_engine()) as session:
+        row = _one_account(session, email)
+        changed = accounts.set_admin(session, row, not revoke)
+        target, left = row.email, len(accounts.admins(session))
+    if json_mode():
+        emit({"email": target, "admin": not revoke, "changed": changed})
+        return
+    state = "no longer an admin" if revoke else "an admin"
+    if not changed:
+        console.print(f"[dim]{escape(target)} is already {state}.[/dim]")
+        return
+    console.print(f"[green]{escape(target)}[/green] is now {state}")
+    if revoke and not left:
+        console.print("[dim]no admins remain, so nobody can open the admin page.[/dim]")
+
+
+@users_app.command("notify")
+def users_notify(
+    to: Annotated[str, typer.Argument(help="Where to send it. Typed by you, never looked up.")],
+    about: Annotated[
+        str, typer.Option("--about", help="The account the notice describes, by its current email.")
+    ],
+    note: Annotated[
+        str | None,
+        typer.Option("--note", help="A sentence of your own, shown above the settings."),
+    ] = None,
+    preview: Annotated[
+        bool, typer.Option("--preview", help="Print the message instead of sending it.")
+    ] = False,
+) -> None:
+    """Email somebody how an account is now set up. Never a password.
+
+    **You choose the address.** After changing someone's sign-in email, the person
+    to tell is at the old one, which the account no longer records — so this sends
+    wherever it is pointed, and nothing sends it on its own. The notice lists the
+    account's current settings: sign-in email, name, status, what it sees, role.
+    """
+    from tracker import account_notice, accounts
+    from tracker import notify as notify_mod
+
+    try:
+        recipient = accounts.normalize_email(to)
+    except accounts.AccountError as exc:
+        _fail(str(exc))
+        raise
+    with session_scope(_read_engine(), commit=False) as session:
+        detail = accounts.detail(session, _one_account(session, about))
+    settings = get_settings()
+    message = account_notice.render(
+        detail, note=note, console_url=settings.notify_console_url or None
+    )
+    if preview:
+        if json_mode():
+            emit({"to": recipient, "subject": message.subject, "text": message.text_body})
+            return
+        console.print(f"[bold]to[/bold] {escape(recipient)}")
+        console.print(f"[bold]subject[/bold] {escape(message.subject)}\n")
+        console.print(escape(message.text_body))
+        return
+    try:
+        message_id = notify_mod.ResendTransport(settings).send(
+            to=recipient,
+            subject=message.subject,
+            html_body=message.html_body,
+            text_body=message.text_body,
+        )
+    except notify_mod.EmailError as exc:
+        _fail(str(exc))
+        raise
+    if json_mode():
+        emit({"to": recipient, "about": detail["email"], "sent": True, "id": message_id})
+        return
+    console.print(f"[green]sent[/green] to {escape(recipient)} about {escape(detail['email'])}")
 
 
 @users_app.command("invite")

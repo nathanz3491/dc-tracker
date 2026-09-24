@@ -89,7 +89,13 @@ property of the database rather than of the reader.
 `tracker users add` creates an account — an email, a password hashed with
 `scrypt`, and nothing else. Every account can do exactly what the shared password
 allowed, which after the change above is: read the dataset, and keep a watchlist.
-There are no roles, because there is nothing left to have a role *about*.
+
+**One role, and it is about accounts only** (migration 0028). An admin also gets
+the admin page, which edits, locks, signs out and deletes accounts — the same
+functions `tracker users` calls, so the two cannot disagree about what an edit
+means. Granting admin is not among them: only `tracker users admin`, at a terminal
+on the host, can do it, so a stolen admin session cannot make itself permanent.
+Every admin route re-reads the role from the row rather than trusting the session.
 
 **Zero accounts is a legitimate state and means an open console.** That is what a
 fresh install is in, and it is right for loopback: reaching 127.0.0.1 already

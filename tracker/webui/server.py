@@ -126,6 +126,12 @@ AUTH_CACHE_S = 5.0
 #: sit.
 READ_VIEWS: frozenset[str] = frozenset({"updates", "projects", "sources", "map", "capex", "help"})
 
+#: Pages about the reader's own account rather than the dataset, so not tabs in the
+#: nav: `/account` is anybody's own (their password), `/admin` manages every account
+#: and draws only for an admin. Literals, like `READ_VIEWS`, for the reason `_page`
+#: gives — a view name reaches an unescaped interpolation.
+ACCOUNT_VIEWS: frozenset[str] = frozenset({"account", "admin"})
+
 #: `/projects/<id>` — one project's own page, which `READ_VIEWS` cannot express
 #: because it is a set of whole paths and this one carries an id.
 #:
@@ -375,15 +381,19 @@ class Console:
 
         try:
             with self.read_session() as session:
-                stored = session.scalar(
-                    select(Account.password_hash).where(Account.id == account_id)
-                )
+                row = session.execute(
+                    select(Account.password_hash, Account.session_epoch, Account.disabled_at).where(
+                        Account.id == account_id
+                    )
+                ).first()
         except OperationalError:
             log.warning("console: could not re-read account %d; refusing this request", account_id)
             return None
-        if stored is None:
+        if row is None or row.disabled_at is not None:
             return False
-        return hmac.compare_digest(accounts.session_stamp(stored), stamp)
+        return hmac.compare_digest(
+            accounts.session_stamp(row.password_hash, row.session_epoch or 0), stamp
+        )
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -725,7 +735,7 @@ class Handler(BaseHTTPRequestHandler):
         # paths as you navigate. Anything else 404s rather than silently serving
         # the console, so a typo is visible instead of landing on Updates.
         page = route.strip("/")
-        if page in READ_VIEWS:
+        if page in READ_VIEWS or page in ACCOUNT_VIEWS:
             return self._page(view=page)
         # One project, its own page. `READ_VIEWS` cannot express this: the check
         # above is a set membership over whole paths, and this one carries an id.
@@ -765,6 +775,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._updates(query)
         if route == "/api/health":
             return self._json({"ok": True, "version": __version__, "commit": deployed_commit()})
+        if route == "/api/admin/users":
+            return self._admin_users()
         self._error(404, f"no route {route!r}")
 
     def do_POST(self) -> None:
@@ -799,6 +811,20 @@ class Handler(BaseHTTPRequestHandler):
             # written with a second `self._body()` and hung exactly like that.
             if parsed.path == "/api/watch":
                 return self._watch(body)
+            if parsed.path == "/api/account/password":
+                return self._own_password(body)
+            if parsed.path == "/api/admin/users/update":
+                return self._admin_act("update", body)
+            if parsed.path == "/api/admin/users/password":
+                return self._admin_act("password", body)
+            if parsed.path == "/api/admin/users/disable":
+                return self._admin_act("disable", body)
+            if parsed.path == "/api/admin/users/enable":
+                return self._admin_act("enable", body)
+            if parsed.path == "/api/admin/users/signout":
+                return self._admin_act("signout", body)
+            if parsed.path == "/api/admin/users/delete":
+                return self._admin_act("delete", body)
             if parsed.path == "/api/infer":
                 return self._infer(body)
             if parsed.path == "/api/overview":
@@ -883,9 +909,18 @@ class Handler(BaseHTTPRequestHandler):
                 # `accounts.verify` spends the same one scrypt either way, so
                 # neither the wording nor the timing says which addresses exist.
                 return self._json({"error": "Wrong email or password."}, status=401)
+            if accounts.is_disabled(account):
+                # After the password check, so only somebody who knows the password
+                # learns the account exists. Not a failure for the lockout: nothing
+                # was guessed.
+                log.info("console: refused sign-in to disabled account %s", account.email)
+                return self._json(
+                    {"error": "This account is disabled. Ask whoever runs the console."},
+                    status=403,
+                )
             account_id = account.id
             email = account.email
-            stamp = accounts.session_stamp(account.password_hash)
+            stamp = accounts.stamp_for(account)
 
         self._stamp_sign_in(account_id)
         gate.succeed(client)
@@ -946,7 +981,7 @@ class Handler(BaseHTTPRequestHandler):
         if locked:
             return self._json(locked, status=429)
 
-        from tracker.accounts import AccountError, redeem, session_stamp
+        from tracker.accounts import AccountError, redeem, stamp_for
 
         client = self._client()
         try:
@@ -959,7 +994,7 @@ class Handler(BaseHTTPRequestHandler):
                     name=(str(body["name"]).strip() or None) if body.get("name") else None,
                 )
                 account_id, email = account.id, account.email
-                stamp = session_stamp(account.password_hash)
+                stamp = stamp_for(account)
         except AccountError as exc:
             self.console.gate.fail(client)
             log.warning("console: refused registration from %s: %s", client, exc)
@@ -977,6 +1012,150 @@ class Handler(BaseHTTPRequestHandler):
         token = self.console.gate.grant(account_id, stamp=stamp)
         log.info("console: %s registered from %s", email, client)
         self._json({"ok": True}, extra=self._set_session_cookie(token))
+
+    # --- accounts: one's own, and the admin page's -------------------------------
+
+    def _own_password(self, body: dict[str, Any]) -> None:
+        """Set the signed-in account's password. Being signed in is the authentication.
+
+        **No current password is asked for**, by the operator's decision: a person
+        at their own open session changes it in one step. What keeps that from
+        leaving a stolen password useful is the other half — every *other* session
+        of the account ends (its stamp no longer matches), while this one is handed
+        the new stamp and stays signed in (`Gate.restamp`).
+        """
+        account_id = self._account_id
+        if account_id is None:
+            return self._error(403, "a password belongs to an account, and this console has none")
+        password = body.get("password")
+        if not isinstance(password, str):
+            return self._error(400, "password is required")
+
+        from tracker import accounts
+
+        try:
+            with self.console.write_session() as session:
+                row = accounts.by_id(session, account_id)
+                if row is None or accounts.is_disabled(row):
+                    return self._error(403, "this account can no longer sign in")
+                accounts.reset_password(session, row, password)
+                stamp, email = accounts.stamp_for(row), row.email
+        except accounts.AccountError as exc:
+            return self._error(400, str(exc))
+        except OperationalError as exc:
+            if not _database_busy(exc):
+                raise
+            return self._error(503, "the database is busy writing; try again in a moment")
+        self.console.gate.restamp(self._session, stamp)
+        log.info("console: %s changed their own password", email)
+        self._json({"ok": True, "note": "Password changed. Every other device is signed out."})
+
+    def _admin(self, session: Any) -> Any:
+        """The signed-in account if it may use the admin page, else None.
+
+        Read from the row on every call, never remembered in the session: revoking
+        admin at the terminal takes effect on the next request, not the next
+        sign-in.
+        """
+        account_id = self._account_id
+        if account_id is None:
+            return None
+        from tracker import accounts
+
+        row = accounts.by_id(session, account_id)
+        if row is None or not row.is_admin or accounts.is_disabled(row):
+            return None
+        return row
+
+    def _admin_users(self) -> None:
+        from tracker import accounts
+
+        with self.console.read_session() as session:
+            if self._admin(session) is None:
+                return self._error(403, "the admin page is for admins")
+            rows = [accounts.detail(session, row) for row in accounts.listing(session)]
+            invites = [
+                {"note": i.note, "expires_at": i.expires_at.isoformat()}
+                for i in accounts.outstanding(session)
+            ]
+        self._json({"accounts": rows, "invites": invites})
+
+    def _admin_act(self, action: str, body: dict[str, Any]) -> None:
+        """One change to one account, by an admin.
+
+        Two refusals that are about the admin themselves rather than the target:
+        they cannot disable or delete their own account here, since that is the
+        one edit that could leave nobody able to open this page — the terminal
+        (`tracker users`) still can. Every change is logged with who made it.
+        """
+        from tracker import accounts
+
+        target = body.get("id")
+        if not isinstance(target, int) or isinstance(target, bool):
+            return self._error(400, "id must be an account id")
+        try:
+            with self.console.write_session() as session:
+                admin = self._admin(session)
+                if admin is None:
+                    return self._error(403, "the admin page is for admins")
+                row = accounts.by_id(session, target)
+                if row is None:
+                    return self._error(404, f"no account {target}")
+                if row.id == admin.id and action in {"disable", "delete"}:
+                    return self._error(
+                        400, f"you cannot {action} your own account here; use the terminal"
+                    )
+                changes: list[str] = []
+                if action == "update":
+                    watch_all = body.get("watch_all")
+                    if watch_all is not None and not isinstance(watch_all, bool):
+                        return self._error(400, "watch_all must be true or false")
+                    email, name = body.get("email"), body.get("name")
+                    if email is not None and not isinstance(email, str):
+                        return self._error(400, "email must be a string")
+                    if name is not None and not isinstance(name, str):
+                        return self._error(400, "name must be a string")
+                    changes = accounts.update(
+                        session,
+                        row,
+                        email=email,
+                        name=name,
+                        clear_name=name is not None and not name.strip(),
+                        watch_all=watch_all,
+                    )
+                elif action == "password":
+                    password = body.get("password")
+                    if not isinstance(password, str):
+                        return self._error(400, "password is required")
+                    accounts.reset_password(session, row, password)
+                    changes = ["password reset; its sessions end"]
+                elif action in {"disable", "enable"}:
+                    if accounts.set_disabled(session, row, action == "disable"):
+                        changes = [f"{action}d"]
+                elif action == "signout":
+                    accounts.sign_out_everywhere(session, row)
+                    changes = ["signed out everywhere"]
+                elif action == "delete":
+                    email = row.email
+                    accounts.delete(session, row.email)
+                    log.info("console: admin %s deleted account %s", admin.email, email)
+                    return self._json({"ok": True, "deleted": email})
+                result = accounts.detail(session, row)
+                who = admin.email
+                # Acting on yourself ends your other sessions, not this one: the
+                # same rule as changing your own password.
+                own = accounts.stamp_for(row) if row.id == admin.id else None
+        except accounts.AccountError as exc:
+            return self._error(400, str(exc))
+        except OperationalError as exc:
+            if not _database_busy(exc):
+                raise
+            return self._error(503, "the database is busy writing; try again in a moment")
+        if own is not None:
+            self.console.gate.restamp(self._session, own)
+        for change in changes:
+            log.info("console: admin %s changed %s: %s", who, result["email"], change)
+        self._json({"ok": True, "account": result, "changes": changes})
 
     def _page(self, *, view: str = "", project: int | None = None) -> None:
         """The console shell. One face now.
@@ -1112,7 +1291,7 @@ class Handler(BaseHTTPRequestHandler):
         if row is None:
             self.console.gate.revoke(self._session)
             return None
-        return {"email": row.email, "name": row.name}
+        return {"id": row.id, "email": row.email, "name": row.name, "admin": bool(row.is_admin)}
 
     #: Every route, what it answers, and what it costs. Hand-written on purpose,
     #: for the reason `catalog.GROUPS` is: a derived list describes the code, and
@@ -1216,6 +1395,49 @@ class Handler(BaseHTTPRequestHandler):
             "come from `tracker users invite`, at a terminal.",
         },
         "POST /api/logout": {"answers": "clears it"},
+        "POST /api/account/password": {
+            "answers": "sets the signed-in account's own password",
+            "writes": True,
+            "note": "Body: {password}. No current password is asked: being signed in "
+            "is the authentication. Every other session of the account ends; this one "
+            "stays signed in.",
+        },
+        "GET /api/admin/users": {
+            "answers": "every account in full, and the unredeemed invites",
+            "reads": "the account table",
+            "note": "Admins only. Never a password hash.",
+        },
+        "POST /api/admin/users/update": {
+            "answers": "changes one account's email, name or whole-database reach",
+            "writes": True,
+            "note": "Admins only. Body: {id, email?, name?, watch_all?}. Returns what "
+            "changed, in words.",
+        },
+        "POST /api/admin/users/password": {
+            "answers": "sets one account's password",
+            "writes": True,
+            "note": "Admins only. Body: {id, password}. Its sessions end.",
+        },
+        "POST /api/admin/users/disable": {
+            "answers": "switches one account off; it keeps its watchlist",
+            "writes": True,
+            "note": "Admins only. Body: {id}. Not your own account.",
+        },
+        "POST /api/admin/users/enable": {
+            "answers": "switches one account back on",
+            "writes": True,
+            "note": "Admins only. Body: {id}.",
+        },
+        "POST /api/admin/users/signout": {
+            "answers": "ends every session one account has open",
+            "writes": True,
+            "note": "Admins only. Body: {id}. The password is unchanged.",
+        },
+        "POST /api/admin/users/delete": {
+            "answers": "deletes one account and its watchlist",
+            "writes": True,
+            "note": "Admins only. Body: {id}. Not your own account.",
+        },
     }
 
     def _api_index(self) -> None:

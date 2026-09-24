@@ -125,10 +125,16 @@ answered by ssh rather than by a cookie. See [the terminal interface](tui.md).
 
 ```bash
 tracker users add you@example.com     # prompts for a password
-tracker users                         # who exists, and how much each watches
+tracker users                         # who exists: role, status, how much each watches
 tracker users invite --note carol     # a single-use code, printed once
+tracker users show you@example.com    # everything about one account
+tracker users edit you@example.com --email new@example.com --name "Ann" --see-all
 tracker users passwd you@example.com
+tracker users disable you@example.com # locks it; keeps the watchlist; `enable` undoes it
+tracker users signout you@example.com # ends every session, password unchanged
+tracker users admin you@example.com   # grants the admin page; --revoke takes it away
 tracker users rm you@example.com      # takes their watchlist with it
+tracker users notify old@example.com --about new@example.com --note "Your sign-in changed."
 ```
 
 The console used to have one shared password. That made every reader the same
@@ -159,16 +165,41 @@ holder chooses their own email and password on the sign-in page. Use the invite
 when you are not the person who will be typing the password: a password you picked
 and sent them is a password in a chat log.
 
-Nothing here is a role. Every account can do exactly what the shared password
-allowed, which is now: read the dataset, and keep a watchlist.
+**One role, and it is about accounts only.** Every account reads the same
+dataset and keeps its own watchlist. An *admin* also gets the admin page (`/admin`,
+behind the **Admin** button in the header), which does what the `users` commands
+above do, except two things: an admin cannot disable or delete their own account
+there, and **nobody can grant admin from a browser**. Only `tracker users admin` on
+the host does that, so a stolen admin session can manage accounts but cannot make
+itself permanent. Every admin route re-reads the role from the row, so revoking it
+at the terminal takes effect on the next request.
+
+**Changing your own password asks for nothing but the new one.** Being signed in
+is the authentication, by the operator's decision. Click your name in the header
+to reach `/account`. Every *other* session of the account ends; the one the change
+was made in stays signed in. The same rule applies to an admin who signs
+themselves out everywhere, or resets their own password from the admin page.
+
+**A disabled account keeps everything and cannot sign in.** Deleting used to be the
+only way to lock somebody out, and the cascade took their watchlist with it. A
+correct password for a disabled account is answered "this account is disabled";
+a wrong one still gets the same message as an unknown address.
+
+**The notice email is sent only by hand.** `tracker users notify <address> --about
+<account>` describes the account as it is now — sign-in email, name, status, what
+it sees, role — with an optional `--note`, and never a password. You type the
+address because after an address change the person to tell is at the *old* one,
+which the account no longer records. `--preview` prints it instead of sending. It
+goes through the same Resend key and sender as the watchlist notifications.
 
 **A session lasts only as long as its account does.** Sessions live in the
 console's memory and `tracker users` runs in another process, so each request
 re-checks its session against the account row, at most once every five seconds
-per session. `tracker users rm` and `tracker users passwd` therefore end that
-account's open sessions within seconds, on every route, with no restart — and so
-does SQLite handing a deleted account's id to the next account created, which it
-does. Before this only the landing page's data route looked the row up, and a
+per session. `tracker users rm`, `passwd`, `disable` and `signout` therefore end
+that account's open sessions within seconds, on every route, with no restart — and
+so does SQLite handing a deleted account's id to the next account created, which it
+does. `signout` works by raising a counter folded into what each session is checked
+against (`account.session_epoch`), so it needs no password change. Before this only the landing page's data route looked the row up, and a
 deleted account went on reading every other route for the rest of its twelve-hour
 session.
 

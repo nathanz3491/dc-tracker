@@ -1805,7 +1805,20 @@ def test_managing_accounts_is_blocked_from_the_console_and_the_tui(seeded: Path)
     """
     from tracker.webui import catalog
 
-    for name in ("users", "users add", "users passwd", "users rm", "users invite"):
+    for name in (
+        "users",
+        "users add",
+        "users passwd",
+        "users rm",
+        "users invite",
+        "users show",
+        "users edit",
+        "users disable",
+        "users enable",
+        "users signout",
+        "users admin",
+        "users notify",
+    ):
         assert catalog.by_name()[name].blocked, f"{name} is runnable from a browser"
 
 

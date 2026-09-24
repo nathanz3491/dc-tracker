@@ -243,9 +243,7 @@ def set_password(session: Session, email: str, password: str) -> Account:
     row = by_email(session, email)
     if row is None:
         raise AccountError(_unknown(session, email))
-    check_password_length(password)
-    row.password_hash = hash_password(password)
-    session.flush()
+    reset_password(session, row, password)
     return row
 
 
@@ -299,7 +297,7 @@ def touch(session: Session, account: Account) -> None:
     session.flush()
 
 
-def session_stamp(password_hash: str) -> str:
+def session_stamp(password_hash: str, epoch: int = 0) -> str:
     """What a console session remembers about the credential it was granted on.
 
     The console's gate holds sessions in memory and `tracker users` runs in another
@@ -312,8 +310,18 @@ def session_stamp(password_hash: str) -> str:
 
     A digest of the hash rather than the hash, so the gate's table holds nothing an
     attacker could start cracking from.
+
+    `epoch` is the account's `session_epoch`, folded in so that raising it — "sign
+    out everywhere" — stales every outstanding stamp without touching the password.
+    Epoch 0 digests the hash alone, as every stamp did before migration 0028.
     """
-    return hashlib.sha256(password_hash.encode("utf-8")).hexdigest()
+    material = password_hash if not epoch else f"{password_hash}#{int(epoch)}"
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
+def stamp_for(account: Account) -> str:
+    """`session_stamp` for one row: its password hash and its session epoch."""
+    return session_stamp(account.password_hash, account.session_epoch or 0)
 
 
 def _unknown(session: Session, email: str) -> str:
@@ -335,6 +343,158 @@ def require(session: Session, email: str) -> Account:
     if row is None:
         raise AccountError(_unknown(session, email))
     return row
+
+
+# --- managing an account -----------------------------------------------------
+#
+# What the operator does to somebody's account, from `tracker users` or the
+# console's admin page. Both call these, so the two can never disagree about what
+# an edit means. Each records `updated_at`, which the detail view shows.
+
+
+def by_id(session: Session, account_id: int) -> Account | None:
+    return session.get(Account, account_id)
+
+
+def is_disabled(account: Account) -> bool:
+    return account.disabled_at is not None
+
+
+def admins(session: Session) -> list[Account]:
+    """Accounts that may use the admin page, oldest first."""
+    return [row for row in listing(session) if row.is_admin]
+
+
+def _edited(account: Account) -> None:
+    account.updated_at = utcnow()
+
+
+def update(
+    session: Session,
+    account: Account,
+    *,
+    email: str | None = None,
+    name: str | None = None,
+    clear_name: bool = False,
+    watch_all: bool | None = None,
+) -> list[str]:
+    """Change an account's address, display name or reach. Returns what changed.
+
+    Each change is described in words — `email a@x -> b@y` — because both callers
+    report it. Changing nothing returns an empty list rather than raising: an edit
+    that restates the current value is not a mistake worth refusing.
+
+    **A new address is checked exactly as a new account's is** — normalized, and
+    refused if somebody else holds it — because it becomes the identity every
+    lookup and every sign-in uses. The account's sessions survive it: they are
+    bound to the credential, not the address.
+    """
+    changes: list[str] = []
+    if email is not None:
+        key = normalize_email(email)
+        if key != account.email_key:
+            holder = session.scalar(select(Account).where(Account.email_key == key))
+            if holder is not None and holder.id != account.id:
+                raise AccountError(f"{key} already has an account.")
+        if email.strip() != account.email:
+            changes.append(f"email {account.email} -> {email.strip()}")
+            account.email = email.strip()
+            account.email_key = key
+    if clear_name or name is not None:
+        new_name = None if clear_name else ((name or "").strip() or None)
+        if new_name != account.name:
+            changes.append(f"name {account.name or '(none)'} -> {new_name or '(none)'}")
+            account.name = new_name
+    if watch_all is not None and bool(watch_all) != bool(account.watch_all):
+        reach = "the whole database" if watch_all else "only its watchlist"
+        changes.append(f"reads {reach}")
+        account.watch_all = bool(watch_all)
+    if changes:
+        _edited(account)
+        session.flush()
+    return changes
+
+
+def reset_password(session: Session, account: Account, password: str) -> None:
+    """Give one account a new password. Every session signed in with the old one ends."""
+    check_password_length(password)
+    account.password_hash = hash_password(password)
+    _edited(account)
+    session.flush()
+
+
+def set_disabled(session: Session, account: Account, disabled: bool) -> bool:
+    """Switch an account off or back on. Returns whether anything changed.
+
+    Off keeps the row and its watchlist and refuses its sign-ins; its open sessions
+    end within the console's confirm interval, the way a deleted account's do.
+    """
+    if disabled == is_disabled(account):
+        return False
+    account.disabled_at = utcnow() if disabled else None
+    _edited(account)
+    session.flush()
+    return True
+
+
+def sign_out_everywhere(session: Session, account: Account) -> None:
+    """End every session this account has open, without changing its password."""
+    account.session_epoch = (account.session_epoch or 0) + 1
+    _edited(account)
+    session.flush()
+
+
+def set_admin(session: Session, account: Account, value: bool) -> bool:
+    """Grant or revoke the admin page. Returns whether anything changed.
+
+    Only `tracker users admin` calls this — the console has no route to it, so an
+    admin session that was stolen can manage accounts but cannot make more admins.
+    """
+    if bool(value) == bool(account.is_admin):
+        return False
+    account.is_admin = bool(value)
+    _edited(account)
+    session.flush()
+    return True
+
+
+def joined_via(session: Session, account: Account) -> str:
+    """How this account came to exist: an invite (named by its note) or the terminal."""
+    invite = session.scalar(select(Invite).where(Invite.redeemed_by == account.id).limit(1))
+    if invite is None:
+        return "added at the terminal"
+    return f"redeemed an invite ({invite.note or 'no note'})"
+
+
+def detail(session: Session, account: Account) -> dict[str, object]:
+    """Everything about one account, for `tracker users show` and the admin page.
+
+    Never the password hash, nor anything derived from it: this is sent to a
+    browser.
+    """
+    from tracker.models import Watch
+
+    watches = session.scalar(
+        select(func.count()).select_from(Watch).where(Watch.account_id == account.id)
+    )
+
+    def when(value: dt.datetime | None) -> str | None:
+        return value.isoformat() if value else None
+
+    return {
+        "id": account.id,
+        "email": account.email,
+        "name": account.name,
+        "admin": bool(account.is_admin),
+        "disabled": is_disabled(account),
+        "disabled_at": when(account.disabled_at),
+        "watch_all": bool(account.watch_all),
+        "watches": int(watches or 0),
+        "created_at": when(account.created_at),
+        "last_seen_at": when(account.last_seen_at),
+        "updated_at": when(account.updated_at),
+        "joined": joined_via(session, account),
+    }
 
 
 # --- invites ---------------------------------------------------------------
@@ -407,24 +567,35 @@ __all__ = [
     "MAX_PASSWORD_LEN",
     "MIN_PASSWORD_LEN",
     "AccountError",
+    "admins",
     "any_exist",
     "by_email",
+    "by_id",
     "check_password_length",
     "count",
     "create",
     "decoy_hash",
     "delete",
+    "detail",
     "hash_password",
+    "is_disabled",
+    "joined_via",
     "listing",
     "mint_invite",
     "normalize_email",
     "outstanding",
     "redeem",
     "require",
+    "reset_password",
     "session_stamp",
+    "set_admin",
+    "set_disabled",
     "set_password",
     "set_watch_all",
+    "sign_out_everywhere",
+    "stamp_for",
     "touch",
+    "update",
     "verify",
     "verify_password",
 ]
