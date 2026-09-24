@@ -23,6 +23,12 @@ initial build of the v1 PRD.
   stands, and drop a warning whose question has been answered. On production 24 of
   62 warnings pointed at a row since merged away and 8 at a pair already ruled out.
 
+- **`tracker users show` prints its own styling instead of the raw markup**
+  (`tracker/cli/people.py`, `tests/test_user_admin.py`). Every field was escaped
+  before printing, including the `[dim]…[/dim]` tags the detail view wrapped
+  around itself, so an account with no name read `[dim]none[/dim]` on screen
+  instead of the word in dim gray. Only the underlying values are escaped now.
+
 - **A page not in English is no longer paid for and read into a row**
   (`tracker/ingest/crawl.py`, `tracker/ingest/records.py`, `tracker/funnel.py`,
   `tests/test_ingest_crawl.py`, `docs/workflows/sync.md`). Search filtered
