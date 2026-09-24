@@ -138,6 +138,15 @@ pool its failed re-read had put it in. On the snapshot: 23 extra citations on 17
 rows, one of them the same report five times, and 36 read articles, with no
 figure moving. A second pass finds nothing.
 
+**A page not in English is refused before extraction.** Search already dropped
+non-English hits by their title and snippet; a feed or an archive had no such
+test, and a translated repost is read for its identity, which is the part that
+comes back wrong. Of 70 stored citations from Chinese-language pages, 68 carried a
+"confirmed" city — "孟菲斯" for Memphis, "Salien" for Saline — and seven rows
+rested on nothing else, each a garbled duplicate of a campus held under its
+English name. `crawl.extract_one` marks such a page `skipped` before the call, the
+run summary counts it as "not in English", and it is not retried.
+
 ## The identity arbiter
 
 `--verify-identity` is on by default. Before a phase creates a row that has a

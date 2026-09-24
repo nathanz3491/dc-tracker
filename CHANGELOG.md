@@ -12,6 +12,17 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **A page not in English is no longer paid for and read into a row**
+  (`tracker/ingest/crawl.py`, `tracker/ingest/records.py`, `tracker/funnel.py`,
+  `tests/test_ingest_crawl.py`, `docs/workflows/sync.md`). Search filtered
+  non-English hits, but a feed or an archive could still hand the crawl a
+  translated repost, and what the gate let through from one was its identity: of 70
+  stored citations from Chinese-language pages, 68 carried a "confirmed" city —
+  "孟菲斯" for Memphis, "Salien" for Saline — and seven rows rested on nothing else,
+  each a garbled duplicate of a campus already held under its English name. Such a
+  page is now marked `skipped` before the model is called, counted as "not in
+  English" in the run summary, and not retried.
+
 - **The nightly quality loop runs again, and its token ceiling sees what it spends**
   (`scripts/overnight.sh`, `tracker/llm.py`, `tracker/config.py`,
   `tests/test_overnight.py`).

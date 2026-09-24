@@ -50,7 +50,7 @@ REACHED_THE_MODEL: tuple[str, ...] = (
 )
 
 #: Statuses that mean the URL is spent — read, and it will not be read again.
-TERMINAL: tuple[str, ...] = ("ok", "no_project", "thin_content")
+TERMINAL: tuple[str, ...] = ("ok", "no_project", "thin_content", "skipped")
 
 
 @dataclass

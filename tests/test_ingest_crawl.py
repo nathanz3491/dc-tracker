@@ -1396,6 +1396,39 @@ def test_prose_is_measured_in_characters_so_chinese_is_not_scored_at_zero():
     assert crawl.prose_length(unbroken) == len(unbroken)
 
 
+def test_a_page_not_in_english_is_refused_before_it_costs_a_call(session, prompt):
+    """A translated repost is read for its identity, and its identity is the part
+    that comes back wrong: 68 of 70 stored citations from Chinese pages carried a
+    "confirmed" city, "孟菲斯" for Memphis among them, and seven rows rested on
+    nothing else. Terminal rather than retryable, because the language will not
+    change on a second fetch."""
+    from tracker.ingest import discover as disc
+
+    repost = (
+        "IT之家 3 月 9 日消息，Oracle 甲骨文北京时间今日在 X 平台表示，近期媒体关于"
+        "“星际之门”首个站点 —— 得克萨斯州阿比林 (Abilene) 园区的报道存在虚假与不实内容。\n"
+        "Oracle 澄清称，该企业正与 Crusoe 紧密协作，以创纪录的速度建设阿比林站点，"
+        "两栋建筑已全面投入运营，园区其余部分也按计划推进；Oracle 还已完成额外 4.5GW 的"
+        "租赁签约，以兑现对 OpenAI 的承诺。\n"
+    )
+    assert crawl.prose_length(repost) > crawl.MIN_PROSE_CHARS, "not refused as thin"
+
+    llm = FakeLLM([canned("llm_response_microsoft_wi.json")])
+    report = crawl.run(
+        session,
+        [URL],
+        fetcher=FakeFetcher({URL: fetched(markdown=repost)}),
+        extractor=llm,
+        run_id="zh",
+    )
+
+    assert llm.seen == [], "nothing was spent"
+    assert (report.not_english, report.written) == (1, 0)
+    assert ("not in English", 1) in report.as_rows()
+    assert session.scalar(select(IngestUrl)).status == "skipped"
+    assert disc.failed(session) == []
+
+
 def test_a_refused_page_is_retryable_not_settled(session, prompt):
     """A site that serves a teaser today may serve the article tomorrow.
 

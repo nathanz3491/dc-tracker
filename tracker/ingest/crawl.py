@@ -350,6 +350,13 @@ _PROSE_LINE_CHARS: Final = 60
 #: — `looks_english` refuses its summary fields and its phase wording, and no
 #: quantity pattern matches its numerals. A per-script floor would be the fix if
 #: that ever stops being true.
+#:
+#: That judgement — barely usable, so harmless — did not survive the data. Such a
+#: page is now refused before the call anyway, by `looks_english` (see
+#: `extract_one`), because what the gate lets through is the identity: of 70 stored
+#: citations from Chinese-language pages, 68 carried a "confirmed" city — "孟菲斯"
+#: for Memphis, "Salien" for Saline — and seven rows rested on nothing else, every
+#: one a garbled duplicate of a campus already held under its English name.
 #: A refusal is recorded as `thin_content`, which is visible in
 #: `tracker queue --failed` and retried by `--retry-failed`, so a page a site
 #: later serves in full is recoverable rather than lost.
@@ -2460,6 +2467,17 @@ def extract_one(
         )
         return outcome
 
+    # Also before the call, for the reason in the note above `MIN_PROSE_CHARS`: a
+    # translated repost yields a mistransliterated identity and figures the gate
+    # cannot confirm, and the English original is the source worth reading.
+    # `skipped` is terminal — not retried — since the language will not change;
+    # `tracker ingest crawl --url` still reads one deliberately.
+    if not looks_english(result.markdown):
+        outcome.status = "skipped"
+        outcome.error = "not an English-language article"
+        log.warning("not in English, refused before the LLM call: %s", result.url)
+        return outcome
+
     body = truncate(result.markdown, settings.max_input_chars)
     user = prompt.render_user(
         url=result.url,
@@ -3055,6 +3073,8 @@ def run(
             log.error("LLM error for %s: %s", result.url, outcome.error)
         elif outcome.status == "thin_content":
             report.thin_content += 1
+        elif outcome.status == "skipped":
+            report.not_english += 1
 
         # Counted for every outcome, including the failures: a reply that ran out
         # of budget mid-reasoning is the most expensive kind there is, and leaving

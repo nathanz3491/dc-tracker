@@ -267,6 +267,10 @@ class IngestReport:
     #: because it is a saving, not a failure — and because a run reporting eight
     #: of these from one host is how the operator sees the pattern.
     thin_content: int = 0
+    #: Pages refused before the LLM call because they are not in English — a
+    #: translated repost, whose identity comes back mistransliterated. A saving, and
+    #: shown only when there are some. See `crawl.extract_one`.
+    not_english: int = 0
     #: URLs `--cached-only` declined to fetch. A saving, like `thin_content`, and
     #: reported for the same reason: a re-extraction run that silently skipped
     #: three quarters of its worklist reads as a run that covered it.
@@ -325,6 +329,7 @@ class IngestReport:
             if self.skipped_unchanged
             else []
         )
+        foreign = [("not in English", self.not_english)] if self.not_english else []
         return [
             ("read", self.read),
             ("filtered out", self.filtered),
@@ -340,6 +345,7 @@ class IngestReport:
             ("parse errors", self.parse_error),
             ("not an article", self.thin_content),
             ("not cached", self.skipped_uncached),
+            *foreign,
             *same,
             *ignored,
             *refused,
