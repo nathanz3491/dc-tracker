@@ -110,13 +110,14 @@ _LIMITS = httpx.Limits(max_connections=32, max_keepalive_connections=16)
 _CLIENTS: dict[tuple[str, float], httpx.Client] = {}
 
 
-def api_client() -> httpx.Client:
+def api_client(timeout_s: float = 600.0) -> httpx.Client:
     """Pooled client for the API provider.
 
     Keeps httpx's default proxy handling: reaching a remote API may be exactly what
-    a configured proxy is for.
+    a configured proxy is for. The timeout is `deepseek_timeout_s`, passed in by the
+    caller; see that setting for why two minutes was too short.
     """
-    return _client("api", 120.0, trust_env=True)
+    return _client("api", timeout_s, trust_env=True)
 
 
 def local_client(timeout_s: float) -> httpx.Client:
@@ -844,7 +845,7 @@ class DeepSeekExtractor:
         }
         filter_ = _ThinkFilter()
         try:
-            with api_client().stream(
+            with api_client(self.settings.deepseek_timeout_s).stream(
                 "POST",
                 self.endpoint,
                 json=payload,
@@ -873,14 +874,22 @@ class DeepSeekExtractor:
         last: Exception | None = None
         for attempt in range(1, attempts + 1):
             try:
-                response = api_client().post(
+                response = api_client(self.settings.deepseek_timeout_s).post(
                     self.endpoint,
                     json=payload,
                     headers=headers,
                 )
             except httpx.RequestError as exc:
                 last = exc
-                log.warning("LLM request error (attempt %d/%d): %s", attempt, attempts, exc)
+                # By type as well: a timeout's message is empty, and "LLM request
+                # error: " with nothing after it hid which failure this was.
+                log.warning(
+                    "LLM request error (attempt %d/%d): %s %s",
+                    attempt,
+                    attempts,
+                    type(exc).__name__,
+                    exc,
+                )
             else:
                 if response.status_code in RETRYABLE_STATUS and attempt < attempts:
                     delay = _backoff(attempt, settings=self.settings, after=_retry_after(response))
@@ -911,7 +920,9 @@ class DeepSeekExtractor:
                 return data
             if attempt < attempts:
                 time.sleep(_backoff(attempt, settings=self.settings))
-        raise LLMError(f"LLM request failed after {attempts} attempts: {last}")
+        raise LLMError(
+            f"LLM request failed after {attempts} attempts: {type(last).__name__} {last}".rstrip()
+        )
 
     def check(self) -> dict[str, Any]:
         """Cheap round-trip, for `tracker ingest crawl --check`.

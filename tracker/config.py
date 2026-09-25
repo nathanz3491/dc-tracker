@@ -259,6 +259,17 @@ class Settings(BaseSettings):
     #: away for anyone who measures it doing better.
     deepseek_judgement_effort: Literal["low", "high", "max"] = "high"
 
+    #: How long one API call may go without the reply, seconds.
+    #:
+    #: It was a fixed 120, and a non-streamed reply arrives only when it is finished,
+    #: so any call that reasoned for longer than two minutes was cut off — and every
+    #: retry reasoned as long again and was cut off the same way. `logic conflicts`
+    #: on the judgement tier writes answers past 30,000 tokens; on one run 52 of 197
+    #: fields failed like that, and 24 of the 54 retried failed again, the same
+    #: fields each time. Ten minutes matches `ollama_timeout_s`; a call that is
+    #: genuinely stuck still ends.
+    deepseek_timeout_s: float = Field(default=600.0, gt=0)
+
     #: Model for the drawer's written briefing — the one call a person waits for.
     #:
     #: A third setting, because this job's constraint is neither volume nor depth

@@ -12,6 +12,18 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **A model call that reasons for more than two minutes is no longer cut off, and
+  a timeout says it is one** (`tracker/llm.py`, `tracker/config.py`, `.env.example`,
+  `tests/test_llm_timeout.py`). Every API call had a fixed 120-second timeout, and
+  a reply that is not streamed arrives only when it is finished, so the judgement
+  tier's longest answers — past 30,000 tokens — were abandoned, and every retry
+  reasoned as long again and was abandoned the same way. On one `logic conflicts`
+  run 52 of 197 fields failed like that, and 24 of the 54 retried failed again, the
+  same fields each time. The log read "LLM request error:" with nothing after it,
+  because a timeout's message is empty, so it looked like a flaky network. The
+  timeout is now `TRACKER_DEEPSEEK_TIMEOUT_S`, ten minutes by default, and every
+  failure is logged with its type.
+
 - **A row flagged as a possible duplicate keeps one confidence, whichever path last
   wrote it** (`tracker/upsert.py`, `tests/test_upsert.py`,
   `docs/design-decisions.md`). An ingest that found a likely twin capped the row's
