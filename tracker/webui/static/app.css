@@ -1169,3 +1169,55 @@ tr.dc-row--skel > .dc-cell { vertical-align: middle; }
   .dc-pending--on::after { animation: none; width: 100%; opacity: 0.5; }
   .dc-paged { transition: none; }
 }
+
+/* Summary tiles: the four numbers each page leads with. Buttons when they filter
+   or navigate, so a tile you can act on looks like one and a keyboard reaches it. */
+.dc-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
+.dc-tile {
+  display: grid; gap: 4px; padding: 14px 16px; border-radius: var(--radius);
+  background: var(--card); border: 1px solid var(--border); color: inherit; font: inherit;
+}
+button.dc-tile:not(:disabled) { cursor: pointer; }
+button.dc-tile:not(:disabled):hover { border-color: var(--primary); }
+button.dc-tile:disabled { cursor: default; }
+.dc-tile-label {
+  font-family: var(--font-mono); font-size: 11px; letter-spacing: .1em;
+  text-transform: uppercase; color: var(--muted-foreground);
+}
+.dc-tile-value { font-family: var(--font-display); font-size: 32px; line-height: 1.05; }
+.dc-tile-hint { font-size: 12px; line-height: 17px; color: var(--muted-foreground); }
+
+/* One day of the "earlier this week" list. */
+.dc-dayhead {
+  display: flex; gap: 10px; align-items: baseline; justify-content: space-between; flex-wrap: wrap;
+  padding: 6px 0 2px; border-bottom: 1px solid var(--border);
+  font-size: 13px; font-weight: 500;
+}
+.dc-dayhead .dc-num { font-size: 12px; font-weight: 400; color: var(--muted-foreground); }
+
+/* The Watch for page. */
+.dc-wf-card {
+  display: grid; gap: 12px; padding: 16px 18px; border-radius: var(--radius);
+  background: var(--card); border: 1px solid var(--border);
+}
+.dc-wf-name { font-family: var(--font-display); font-size: 21px; line-height: 1.2; text-align: left; }
+.dc-wf-meta { font-size: 12px; color: var(--muted-foreground); }
+.dc-wf-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+.dc-wf-blocker { display: grid; gap: 4px; padding-left: 12px; border-left: 2px solid var(--border); }
+.dc-wf-signposts {
+  display: grid; gap: 4px; padding: 10px 12px; border-radius: calc(var(--radius) - 2px);
+  background: var(--accent-soft); color: var(--accent-foreground); font-size: 13px; line-height: 20px;
+}
+.dc-wf-tracks { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 4px; }
+.dc-wf-track {
+  display: grid; gap: 1px; padding: 5px 7px; border-radius: 6px; font-size: 11px; line-height: 15px;
+  background: var(--muted); color: var(--muted-foreground); min-width: 0;
+}
+.dc-wf-track b { font-weight: 500; color: var(--foreground); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dc-wf-track span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dc-wf-track--done { background: color-mix(in oklab, var(--success) 14%, transparent); }
+.dc-wf-track--blocked { background: color-mix(in oklab, var(--danger) 14%, transparent); color: var(--danger); }
+.dc-wf-track--moving { background: color-mix(in oklab, var(--primary) 10%, transparent); }
+@media (max-width: 560px) {
+  .dc-wf-tracks { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

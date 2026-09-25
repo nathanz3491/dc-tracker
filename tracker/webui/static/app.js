@@ -15,6 +15,7 @@
 
 import { HelpView } from "/static/views-help.js";
 import { AccountView, AdminView } from "/static/views-account.js";
+import { WatchForView } from "/static/views-watchfor.js";
 
 const html = htm.bind(React.createElement);
 const { useState, useEffect, useMemo, useRef, useCallback } = React;
@@ -4766,10 +4767,15 @@ function SignalCard({ signal, onOpen }) {
         ${signal.unblocks &&
         html`<span style=${{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.08em",
                              color: "var(--success)" }}>the blocker moved</span>`}
-        ${signal.notify &&
-        html`<span title="this crosses the notification bar: tracker digest --notify"
-                   style=${{ fontSize: 11, fontFamily: "var(--font-mono)",
-                             color: "var(--muted-foreground)" }}>would notify</span>`}
+        ${/* From the mailer's own ledger, not a guess from dates: this reader
+             was sent it. "worth emailing" is the bar a morning email applies. */ ""}
+        ${signal.emailed
+          ? html`<span title="this was in one of your morning emails"
+                       style=${chip("--success")}>✓ emailed</span>`
+          : signal.notify &&
+            html`<span title="this crosses the bar the morning email applies"
+                       style=${{ fontSize: 11, fontFamily: "var(--font-mono)",
+                                 color: "var(--muted-foreground)" }}>worth emailing</span>`}
       </div>
 
       ${signal.effect &&
@@ -4799,19 +4805,157 @@ function SignalCard({ signal, onOpen }) {
     </article>`;
 }
 
-function UpdatesView({ data, onOpen }) {
+/* Stored times are naive UTC. Read as local, so "today" and "yesterday" are the
+   reader's days — the same days the 8 a.m. email is sent on. */
+function localDate(iso) {
+  if (!iso) return null;
+  const d = new Date(iso.endsWith("Z") ? iso : `${iso}Z`);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function dayKey(iso) {
+  const d = localDate(iso);
+  if (!d) return "undated";
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function dayLabel(key) {
+  if (key === "undated") return "date unknown";
+  const [y, m, d] = key.split("-").map(Number);
+  const day = new Date(y, m - 1, d);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const diff = Math.round((today - day) / 864e5);
+  const named = day.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
+  if (diff === 0) return `Today · ${named}`;
+  if (diff === 1) return `Yesterday · ${named}`;
+  return named;
+}
+
+function whenLabel(iso) {
+  const d = localDate(iso);
+  if (!d) return "";
+  return d.toLocaleString("en-GB", { weekday: "short", day: "numeric", month: "short",
+                                       hour: "2-digit", minute: "2-digit" });
+}
+
+/* A section heading inside the page: small caps, a count, and a line of why. */
+function SectionHead({ title, count, children }) {
+  return html`
+    <div style=${{ display: "grid", gap: 3 }}>
+      <div style=${{ display: "flex", gap: 10, alignItems: "baseline", flexWrap: "wrap" }}>
+        <h2 style=${{ margin: 0, fontFamily: "var(--font-mono)", fontSize: 12, fontWeight: 500,
+                      textTransform: "uppercase", letterSpacing: "0.12em" }}>${title}</h2>
+        ${count != null && html`<span class="dc-num" style=${{ fontSize: 12,
+                                  color: "var(--muted-foreground)" }}>${count}</span>`}
+      </div>
+      ${children && html`<div style=${{ fontSize: 13, color: "var(--muted-foreground)" }}>${children}</div>`}
+    </div>`;
+}
+
+/* Filters the signal list by which way it cuts. "worth emailing" is the morning
+   email's bar, so a reader can see exactly what would be sent. */
+const TONES = [
+  ["all", "all"],
+  ["bad", "needs attention"],
+  ["good", "good news"],
+  ["email", "worth emailing"],
+];
+
+const SEVERITY_TONE = { blocking: "--danger", material: "--warning", watch: "--muted-foreground" };
+
+/* One row per watch: how its week went, what is still open, and where it stands.
+ *
+ * The table a reader wants after the list, not before it: "which of my companies
+ * had the bad week, and which is stuck" — the question the list cannot answer
+ * without reading every card. Tallies are the digest's own (`entities`), and what
+ * is open comes from `/api/watch-for`, the same report the email is built from. */
+function Scoreboard({ payload, watch, onFilter, onGoto }) {
+  const rows = useMemo(() => {
+    const byEntry = new Map();
+    for (const project of watch?.projects || []) {
+      const key = project.entry || "";
+      const row = byEntry.get(key) || { blockers: 0, worst: null, lead: null };
+      row.blockers += project.blockers.length;
+      if (!row.lead && project.blockers.length) row.lead = project;
+      const rank = { blocking: 2, material: 1, watch: 0 };
+      if (project.worst && (row.worst == null || rank[project.worst] > rank[row.worst])) row.worst = project.worst;
+      byEntry.set(key, row);
+    }
+    return (payload?.entities || []).map((e) => ({ ...e, open: byEntry.get(e.entry) || { blockers: 0 } }));
+  }, [payload, watch]);
+  if (!rows.length) return null;
+  const standing = (lead) => {
+    const sign = lead?.signposts?.[0];
+    if (!sign) return lead ? lead.stage || "" : "nothing open";
+    return `${sign.track_label}: waiting on ${sign.milestone_label}`;
+  };
+  return html`
+    <div style=${{ display: "grid", gap: 10 }}>
+      <${SectionHead} title="By company" count=${`${rows.length} watch${rows.length === 1 ? "" : "es"}`}>
+        How each watch's window went, and what is still holding it.
+        <button type="button" class="dc-linkish" style=${{ marginLeft: 6 }}
+                onClick=${() => onGoto("watch-for")}>Everything to watch for →</button>
+      <//>
+      <div style=${{ overflowX: "auto" }}>
+        <${Table}>
+          <${TableHeader}><${TableRow}>
+            <${TableHead}>watch<//>
+            <${TableHead} style=${{ textAlign: "right" }}>projects<//>
+            <${TableHead} style=${{ textAlign: "right" }}>needs attention<//>
+            <${TableHead} style=${{ textAlign: "right" }}>good<//>
+            <${TableHead} style=${{ textAlign: "right" }}>open blockers<//>
+            <${TableHead}>where it stands<//>
+          <//><//>
+          <${TableBody}>
+            ${rows.map((r) => html`
+              <${TableRow} key=${r.entry}>
+                <td>
+                  <button type="button" class="dc-linkish" onClick=${() => onFilter(r.entry)}>${r.entry}</button>
+                </td>
+                <td class="dc-num" style=${{ textAlign: "right" }}>${r.projects}</td>
+                <td class="dc-num" style=${{ textAlign: "right",
+                    color: r.bad ? "var(--danger)" : "var(--muted-foreground)" }}>${r.bad ? `▼ ${r.bad}` : "—"}</td>
+                <td class="dc-num" style=${{ textAlign: "right",
+                    color: r.good ? "var(--success)" : "var(--muted-foreground)" }}>${r.good ? `▲ ${r.good}` : "—"}</td>
+                <td class="dc-num" style=${{ textAlign: "right" }}>
+                  ${r.open.blockers
+                    ? html`<span style=${chip(SEVERITY_TONE[r.open.worst] || "--muted-foreground")}>${r.open.blockers}</span>`
+                    : html`<span style=${{ color: "var(--muted-foreground)" }}>0</span>`}
+                </td>
+                <td style=${{ fontSize: 13, color: "var(--muted-foreground)" }}>
+                  ${standing(r.open.lead)}
+                </td>
+              <//>`)}
+          <//>
+        <//>
+      </div>
+    </div>`;
+}
+
+/* The landing page, attention first.
+ *
+ * **It leads with what needs a decision, not with a feed.** Four numbers — new
+ * since your last email, needing attention, good news, still open — then the new
+ * items, then the rest of the window grouped by day for anybody who skipped an
+ * email, then the per-company table. A reader who stops after the tiles has had
+ * the week.
+ *
+ * **"New since your last email" is the mailer's own record.** `last_email` and
+ * each signal's `emailed` come from the ledger the morning run writes, so the split
+ * is exactly what arrived in the inbox and what did not — never a guess from
+ * dates. With no email yet it means the last day, which is the rule the email
+ * itself uses. */
+function UpdatesView({ data, onOpen, onGoto }) {
   const [days, setDays] = useState(7);
   const [payload, setPayload] = useState(null);
+  const [watch, setWatch] = useState(null);
   const [failed, setFailed] = useState(null);
   const [showHeld, setShowHeld] = useState(false);
   /* Which watch the list is narrowed to, if any. Held here rather than in the
      chip strip because the signal list below is what it filters. */
   const [only, setOnly] = useState(null);
-  /* Off by default: the page is the place that shows everything, and the whole
-     argument for a notification bar is that it is *higher* than this one. The
-     toggle is for the reader who wants to see what a nightly `--notify` would
-     have sent. */
-  const [onlyAlerts, setOnlyAlerts] = useState(false);
+  const [tone, setTone] = useState("all");
 
   /* `nonce` is how an edit to the watchlist re-reads the digest. Patching the
      new entry into the payload in place would leave every tally beside it
@@ -4832,29 +4976,70 @@ function UpdatesView({ data, onOpen }) {
     return () => { cancelled = true; };
   }, [days, nonce]);
 
+  /* The per-company "where it stands" column. Its own request, and a failure is
+     only a missing column: the updates are the page. */
+  useEffect(() => {
+    let cancelled = false;
+    api("/api/watch-for")
+      .then((body) => { if (!cancelled) setWatch(body); })
+      .catch(() => { if (!cancelled) setWatch(null); });
+    return () => { cancelled = true; };
+  }, [nonce]);
+
   const stale = hoursSince(payload?.last_crawl);
-  const counts = payload?.counts;
-  const shown = useMemo(
-    () =>
-      payload
-        ? payload.signals.filter(
-            (s) => (!onlyAlerts || s.notify) && (!only || s.entry === only),
-          )
-        : [],
-    [payload, onlyAlerts, only],
+  const lastEmail = payload?.last_email;
+  const cutoff = useMemo(() => {
+    const d = localDate(lastEmail?.at);
+    return d ? d.getTime() : Date.now() - 864e5;
+  }, [lastEmail]);
+
+  const matches = useCallback(
+    (s) =>
+      (!only || s.entry === only) &&
+      (tone === "all" ||
+        (tone === "bad" && s.sign === "bad") ||
+        (tone === "good" && s.sign === "good") ||
+        (tone === "email" && s.notify)),
+    [only, tone],
   );
+  const signals = payload?.signals || [];
+  const shown = useMemo(() => signals.filter(matches), [signals, matches]);
+  const fresh = useMemo(
+    () => shown.filter((s) => (localDate(s.at)?.getTime() ?? 0) > cutoff),
+    [shown, cutoff],
+  );
+  const earlier = useMemo(() => {
+    const groups = new Map();
+    for (const s of shown) {
+      if ((localDate(s.at)?.getTime() ?? 0) > cutoff) continue;
+      const key = dayKey(s.at);
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(s);
+    }
+    return [...groups.entries()].sort((a, b) => (a[0] < b[0] ? 1 : -1));
+  }, [shown, cutoff]);
+
+  const freshAll = signals.filter((s) => (localDate(s.at)?.getTime() ?? 0) > cutoff);
+  const counts = payload?.counts;
+  const open = payload?.watch;
+  const windowWord = days === 1 ? "today" : days === 7 ? "this week" : `the last ${days} days`;
+  const tile = (label, value, hint, onClick, color) => html`
+    <button type="button" class="dc-tile" onClick=${onClick} disabled=${!onClick}
+            style=${{ textAlign: "left" }}>
+      <span class="dc-tile-label">${label}</span>
+      <span class="dc-tile-value dc-num" style=${{ color: color || "var(--foreground)" }}>${value}</span>
+      <span class="dc-tile-hint">${hint}</span>
+    </button>`;
 
   return html`
     <div class="dc-view dc-rise" style=${{ display: "grid", gap: 24, padding: "26px 26px 60px",
-                                            maxWidth: 820 }}>
+                                            maxWidth: 920 }}>
       <${Eyebrow} figure="fig. 00 — updates" title="What changed on what you are watching">
-        Good news and bad, most material first, for the companies and projects on your list.
-        The window is on when <em>we</em> learned something — a crawl reads one article and
-        imports a whole back-history, so a milestone from 2022 can be this morning's news.
-        Every line carries both dates. The ones marked <b>would notify</b> are what a nightly
-        <code>tracker digest --notify</code> sends: a blocker moving, a decisive milestone, a
-        dated slip, or an obstacle of material severity opening or clearing. Everything else
-        is here to be read, not to interrupt you.
+        What moved on the companies and projects on your list, and whether it was good or
+        bad. "New" means new to <em>us</em> — a crawl can import a whole back-history, so every
+        line carries both the date it happened and the date we learned it. A morning email goes
+        out at 8:00 with everything <b>worth emailing</b> you have not already been sent; this
+        page keeps the whole week, so nothing is lost if you skip one.
       <//>
 
       <div class="dc-band">
@@ -4879,34 +5064,39 @@ function UpdatesView({ data, onOpen }) {
                       }} />
       </div>
 
+      ${payload && html`
+        <div class="dc-tiles">
+          ${tile(
+            lastEmail ? "New since your last email" : "New in the last day",
+            freshAll.length,
+            lastEmail ? `email went ${whenLabel(lastEmail.sent_at || lastEmail.at)}` : "no email sent to you yet",
+          )}
+          ${tile("Needs attention", counts?.bad ?? 0, `obstacles and slips ${windowWord}`,
+                 counts?.bad ? () => setTone(tone === "bad" ? "all" : "bad") : null,
+                 counts?.bad ? "var(--danger)" : undefined)}
+          ${tile("Good news", counts?.good ?? 0, `milestones and cleared obstacles ${windowWord}`,
+                 counts?.good ? () => setTone(tone === "good" ? "all" : "good") : null,
+                 counts?.good ? "var(--success)" : undefined)}
+          ${tile("Still open", open?.blockers ?? 0,
+                 open ? `blockers on ${open.blocked} of ${open.projects} projects — see what to watch for`
+                      : "blockers on the projects you follow",
+                 () => onGoto("watch-for"),
+                 open?.severity?.blocking ? "var(--danger)" : open?.blockers ? "var(--warning)" : undefined)}
+        </div>`}
+
       <div class="dc-band" style=${{ display: "flex", gap: 14, alignItems: "center",
                                      flexWrap: "wrap", paddingBottom: 18 }}>
-        <div class="dc-seg">
+        <div class="dc-seg" aria-label="window">
           ${WINDOWS.map(([n, label]) => html`
             <button key=${n} type="button" class="dc-seg-btn" aria-pressed=${days === n}
                     onClick=${() => setDays(n)}>${label}</button>`)}
         </div>
-        ${counts && loading &&
-        html`<span style=${{ fontSize: 13, color: "var(--muted-foreground)" }}>counting…</span>`}
-        ${counts && !loading &&
-        html`<span style=${{ fontSize: 13 }}>
-          <b>${counts.total}</b> update${counts.total === 1 ? "" : "s"} —
-          <span style=${{ color: "var(--success)" }}>${counts.good} good</span>,
-          <span style=${{ color: "var(--danger)" }}>${counts.bad} bad</span>
-        </span>`}
-        ${/* Only offered when it would leave something on screen. "0 worth
-             telling you about" was rendered as a button, so the one control on
-             the page invited a click that empties it. */ ""}
-        ${!!counts?.total && !loading && (counts.notify > 0 || onlyAlerts) &&
-        html`<button type="button" class="dc-linkish" aria-pressed=${onlyAlerts}
-                     onClick=${() => setOnlyAlerts((v) => !v)}>
-          ${onlyAlerts ? "show all" : `${counts.notify} worth telling you about`}
-        </button>`}
-        ${!!counts?.total && !loading && !counts.notify && !onlyAlerts &&
-        html`<span style=${{ fontSize: 13, color: "var(--muted-foreground)" }}
-                   title="Nothing in this window is an obstacle, a delay or a capacity change on a project you watch.">
-          nothing here needs you
-        </span>`}
+        <div class="dc-seg" aria-label="which updates">
+          ${TONES.map(([key, label]) => html`
+            <button key=${key} type="button" class="dc-seg-btn" aria-pressed=${tone === key}
+                    onClick=${() => setTone(key)}>${label}</button>`)}
+        </div>
+        ${loading && html`<span style=${{ fontSize: 13, color: "var(--muted-foreground)" }}>counting…</span>`}
         <span style=${{ flex: "1 1 20px" }} />
         ${payload &&
         html`<span style=${{ fontSize: 12, color: stale != null && stale > STALE_HOURS
@@ -4930,51 +5120,62 @@ function UpdatesView({ data, onOpen }) {
         ${[0, 1, 2].map((i) => html`<${Skeleton} key=${i} style=${{ height: 96 }} />`)}
       </div>`}
 
-      ${payload && !!payload.signals.length && !shown.length &&
-      html`<${EmptyState} variant="dashed"
-                          title=${only ? `Nothing for ${only} in this window` : "Nothing crossed the notification bar"}
-                          description=${only
-                            ? "Other watches did move. Click the chip again to see everything."
-                            : "Everything in this window is worth knowing and none of it is worth interrupting you for. Show all to read it."} />`}
-
-      ${payload && !payload.signals.length &&
-      html`<${EmptyState} variant="dashed" title="Nothing new in this window"
+      ${payload && !signals.length &&
+      html`<${EmptyState} variant="dashed" title=${`Nothing new ${windowWord}`}
                           description=${payload.last_crawl
-                            ? "The crawl ran and nothing on your list moved. Widen the window, or add a company."
+                            ? "The crawl ran and nothing on your list moved. Widen the window, add a company, or see what is still open on the Watch for page."
                             : "No citation has ever been fetched, so there is nothing to compare against."} />`}
 
-      ${/* Dimmed rather than replaced while the next window loads: the previous
-           answer is still true, and a page that empties itself on every click
-           reads as slower than it is. */ ""}
-      ${/* The shape of the window, before the window itself.
-           A feed answers "what happened, one item at a time" and cannot answer
-           "what kind of week was this" — which is the first thing a reader wants
-           and the only one a list of 25 near-identical cards actively hides. Same
-           counting the cards do, done once at the top. */ ""}
-      ${payload && shown.length > 3 && html`
-        <div class="dc-band" style=${{ display: "flex", flexWrap: "wrap", gap: "6px 8px",
-                                       alignItems: "center", paddingBottom: 14 }}>
-          <span style=${{ fontFamily: "var(--font-mono)", fontSize: 11,
-                          letterSpacing: ".06em", textTransform: "uppercase",
-                          color: "var(--muted-foreground)", marginRight: 4 }}>this window</span>
-          ${Object.entries(shown.reduce((acc, s) => {
-              const key = s.headline || s.label || s.kind;
-              acc[key] = (acc[key] || 0) + 1;
-              return acc;
-            }, {}))
-            .sort((a, b) => b[1] - a[1])
-            .slice(0, 6)
-            .map(([label, n]) => html`
-              <span key=${label} style=${chip("--muted-foreground", true)}>
-                <b style=${{ fontWeight: 600, marginRight: 5 }}>${n}</b>${label}</span>`)}
+      ${payload && !!signals.length && !shown.length &&
+      html`<${EmptyState} variant="dashed"
+                          title=${only ? `Nothing for ${only} ${windowWord}` : "Nothing matches this filter"}
+                          description=${only
+                            ? "Other watches did move. Click the chip again to see everything."
+                            : "Pick “all” to read everything in the window."} />`}
+
+      ${payload && !!shown.length && html`
+        <div style=${{ display: "grid", gap: 12, opacity: loading ? 0.55 : 1,
+                       transition: "opacity var(--duration-fast, .12s)" }}>
+          <${SectionHead}
+            title=${lastEmail ? "New since your last email" : "New in the last day"}
+            count=${fresh.length}>
+            ${lastEmail
+              ? html`Recorded after your email of ${whenLabel(lastEmail.at)}. What is worth it goes in tomorrow's.`
+              : "Nothing has been emailed to you yet, so this is the last 24 hours."}
+          <//>
+          ${fresh.map((s, i) => html`
+            <${SignalCard} key=${s.key || `${s.project_id}-${s.kind}-${s.label}-${i}`} signal=${s} onOpen=${onOpen} />`)}
+          ${!fresh.length && html`
+            <div style=${{ fontSize: 13, color: "var(--muted-foreground)", padding: "4px 0 8px" }}>
+              Nothing new since then${earlier.length ? " — the rest of the window is below" : ""}.
+            </div>`}
         </div>`}
 
-      ${payload &&
-      html`<div style=${{ display: "grid", gap: 12, opacity: loading ? 0.55 : 1,
-                          transition: "opacity var(--duration-fast, .12s)" }}>
-        ${shown.map((s, i) => html`
-          <${SignalCard} key=${`${s.project_id}-${s.kind}-${s.label}-${i}`} signal=${s} onOpen=${onOpen} />`)}
-      </div>`}
+      ${payload && !!earlier.length && html`
+        <div style=${{ display: "grid", gap: 12, opacity: loading ? 0.55 : 1 }}>
+          <${SectionHead} title=${`Earlier ${windowWord}`}
+                          count=${earlier.reduce((n, [, group]) => n + group.length, 0)}>
+            In case you missed an email. A tick means it was in one.
+          <//>
+          ${earlier.map(([key, group]) => html`
+            <div key=${key} style=${{ display: "grid", gap: 10 }}>
+              <div class="dc-dayhead">
+                <span>${dayLabel(key)}</span>
+                <span class="dc-num">
+                  ${group.length} update${group.length === 1 ? "" : "s"}
+                  ${group.some((s) => s.sign === "bad") ? html` · <span style=${{ color: "var(--danger)" }}>▼ ${group.filter((s) => s.sign === "bad").length}</span>` : null}
+                  ${group.some((s) => s.sign === "good") ? html` · <span style=${{ color: "var(--success)" }}>▲ ${group.filter((s) => s.sign === "good").length}</span>` : null}
+                  ${group.some((s) => s.emailed) ? ` · ${group.filter((s) => s.emailed).length} emailed` : ""}
+                </span>
+              </div>
+              ${group.map((s, i) => html`
+                <${SignalCard} key=${s.key || `${key}-${i}`} signal=${s} onOpen=${onOpen} />`)}
+            </div>`)}
+        </div>`}
+
+      ${payload && html`<${Scoreboard} payload=${payload} watch=${watch}
+                                         onFilter=${(entry) => { setOnly(entry); window.scrollTo({ top: 0, behavior: "smooth" }); }}
+                                         onGoto=${onGoto} />`}
 
       ${/* Held back rather than hidden. These are signals the evidence gate could
            not confirm — the model asserted them and no quote stood up — and the
@@ -4990,7 +5191,7 @@ function UpdatesView({ data, onOpen }) {
         ${showHeld &&
         html`<div style=${{ display: "grid", gap: 12, opacity: 0.75 }}>
           ${payload.held.map((s, i) => html`
-            <${SignalCard} key=${`held-${s.project_id}-${s.label}-${i}`} signal=${s} onOpen=${onOpen} />`)}
+            <${SignalCard} key=${`held-${s.key || i}`} signal=${s} onOpen=${onOpen} />`)}
         </div>`}
       </div>`}
     </div>`;
@@ -5010,8 +5211,8 @@ function UpdatesView({ data, onOpen }) {
  * Kept in step with `server.READ_VIEWS`, which decides which paths are pages
  * rather than 404s; a test asserts the two agree. */
 const VIEWS = [
-  ["updates", "Updates"], ["projects", "Projects"], ["sources", "Sources"],
-  ["map", "Map"], ["capex", "Capex"], ["help", "Help"],
+  ["updates", "Updates"], ["watch-for", "Watch for"], ["projects", "Projects"],
+  ["sources", "Sources"], ["map", "Map"], ["capex", "Capex"], ["help", "Help"],
 ];
 
 /* Pages about the reader's account rather than the data, reached from the header
@@ -5563,7 +5764,8 @@ function App() {
           </div>
         </header>
 
-        ${view === "updates" && html`<${UpdatesView} data=${data} onOpen=${openProject} />`}
+        ${view === "updates" && html`<${UpdatesView} data=${data} onOpen=${openProject} onGoto=${goto} />`}
+        ${view === "watch-for" && html`<${WatchForView} api=${api} onOpen=${openProject} onGoto=${goto} />`}
         ${/* One project's page, or the table. The page fetches its own detail, so it
               needs the id rather than a row out of the list payload. */ ""}
         ${view === "projects" && projectId != null

@@ -662,6 +662,14 @@ initial build of the v1 PRD.
   Disabled accounts are no longer emailed. `notify send --days` is accepted and
   ignored, so an existing schedule keeps working.
 
+- **The Updates page leads with what needs attention** (`tracker/webui/static/app.js`,
+  `tracker/webui/static/app.css`, `tracker/webui/server.py`, `tests/test_webui.py`,
+  `docs/console-and-export.md`). Four tiles — new since your last email, needing
+  attention, good news, still open — then what is new since your last email, then the
+  rest of the window grouped by day for anyone who skipped an email, then a
+  per-company table of how each watch's window went and what is still holding it.
+  Each update says whether it was emailed to you, from the mailer's own record.
+
 - **Picking from a short menu no longer pays the deepest reasoning rate**
   (`tracker/llm.py` — `judgement_extractor`, `tracker/config.py` —
   `deepseek_judgement_effort`, `tracker/cli/quality.py`, `tracker/cli/logic.py`,
@@ -830,6 +838,13 @@ initial build of the v1 PRD.
   obstacle on every followed project, however old, with how long it has been open
   and the milestone that would clear it. A day with news carries a short version
   under the news. Both link to the full list and to the week on the Updates page.
+
+- **A Watch for page in the console** (`tracker/webui/static/views-watchfor.js`,
+  `tracker/webui/server.py` — `/api/watch-for`, `tests/test_webui.py`). The full
+  list the email links to: each followed project's open obstacles, most obstructed
+  first, with the track each one holds, its source and quote, the milestone that
+  would clear it, and unconfirmed obstacles kept apart. Filters by severity and by
+  company.
 
 - **`tracker notify status`** (`tracker/cli/people.py`, `tracker/webui/catalog.py`).
   Every run and every email sent or failed, per person, from the mailer's own
