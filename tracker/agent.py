@@ -430,6 +430,51 @@ def evidence_toolkit(
     return tools
 
 
+#: The claims `list_sources` shows beside each citation: the figures and dates a
+#: ruling can take out of the merge, and the two identity-adjacent fields a reader
+#: of a contradiction needs. Not every claim — the list is re-sent every turn.
+_LISTED_CLAIMS: tuple[str, ...] = (
+    "mw_planned",
+    "mw_built",
+    "investment_usd",
+    "first_announced",
+    "expected_online",
+    "phase",
+    "customer",
+)
+
+
+def _claims_line(src: Any) -> str:
+    """What one citation claims, and which of those claims are already ruled out.
+
+    **The agent could not see either, and paid for it.** `list_sources` showed a
+    citation's link and excerpt, so a model settling a contradiction picked
+    citations by reading them — and on one night 7 of the 10 findings it read came
+    back unusable, because the citations it named were already filed `misread` and
+    ruling them out again changes nothing. A claim already out of the merge is now
+    marked as such, so the model can pick among the ones still in it.
+    """
+    import json
+
+    try:
+        claims = json.loads(src.claims or "{}")
+        reasons = json.loads(src.unconfirmed_reasons or "{}")
+    except (TypeError, ValueError):
+        return ""
+    if not isinstance(claims, dict):
+        return ""
+    reasons = reasons if isinstance(reasons, dict) else {}
+    parts = []
+    for name in _LISTED_CLAIMS:
+        value = claims.get(name)
+        if value is None:
+            continue
+        why = reasons.get(name)
+        out = f" (ruled out: {why})" if why in ("misread", "superseded") else ""
+        parts.append(f"{name} {value}{out}")
+    return " · ".join(parts)
+
+
 def _list_sources(session: Any, project_id: int) -> str:
     from tracker.models import Project
 
@@ -443,6 +488,9 @@ def _list_sources(session: Any, project_id: int) -> str:
             f"- [{src.id}] {src.source_type or 'unknown'} "
             f"{src.published_at or 'undated'}  {src.url}"
         )
+        claimed = _claims_line(src)
+        if claimed:
+            lines.append(f"    claims: {claimed}")
         if excerpt:
             lines.append(f'    "{excerpt[:300]}"')
     return "\n".join(lines)

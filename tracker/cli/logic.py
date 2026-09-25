@@ -758,6 +758,18 @@ def _triage_by_agent(
             f"not sent to the model — {escape(listed)}.\n"
             "They are still worth reading: `tracker logic check`.[/dim]\n"
         )
+    # And no finding whose row has nothing left to rule out: every claim on its
+    # fields is already filed `misread`, so the only possible answer is "unusable",
+    # known before the call. See `triage.has_live_claim`.
+    spent_out = [
+        f for f in findings if not triage_mod.has_live_claim(session.get(Project, f.project_id), f)
+    ]
+    if spent_out:
+        findings = [f for f in findings if f not in spent_out]
+        console.print(
+            f"[dim]{len(spent_out)} finding(s) have nothing left to rule out — every claim "
+            "on their fields already is — and were not sent to the model.[/dim]\n"
+        )
     if not findings:
         console.print("[yellow]nothing here a ruling could answer[/yellow]")
         return

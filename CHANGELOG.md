@@ -12,6 +12,19 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **The model settling a contradiction can see which citations are already ruled
+  out, so it stops naming them** (`tracker/agent.py`, `tracker/triage.py`,
+  `tracker/cli/logic.py`, `tests/test_agent.py`, `tests/test_triage.py`,
+  `docs/workflows/logic.md`). The list of citations it reads showed each one's
+  link and excerpt but not what it claims, nor whether that claim had already been
+  taken out of the merge. So it chose citations by reading them, often named ones
+  already filed as misread, and the answer was refused as changing nothing — after
+  the call was paid for. On the night of 2026-09-25, 7 of the 10 findings it read
+  came back unusable that way, for about 2.75M tokens. Each citation now lists its
+  figures and dates, marked "ruled out" where they are, and the instructions say a
+  ruled-out claim cannot be ruled out again. A finding whose every claim is
+  already out is now skipped before any call is made.
+
 - **A model call that reasons for more than two minutes is no longer cut off, and
   a timeout says it is one** (`tracker/llm.py`, `tracker/config.py`, `.env.example`,
   `tests/test_llm_timeout.py`). Every API call had a fixed 120-second timeout, and

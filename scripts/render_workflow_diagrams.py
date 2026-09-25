@@ -793,7 +793,7 @@ def logic() -> Canvas:
     )
     c.box(
         1140, 792, 312, 204, "Why an agent, and its two limits",
-        ["The fixed menu could only answer with a key from", "ACTIONS[code], and 16 of the 22 codes have none — a", "property of the menu, not of the finding. It declined", "432 of 526 findings before calling a model at all.", "", "An agent rules claims out of the merge instead, and a", "ruling survives the next backfill derive. But it moves", "a project scalar and nothing else, so the ~250 tranche", "findings are withheld rather than read at 45k-260k", "tokens each to reach the only answer available.", "", "It may never mark a row verified: that means an", "operator says so, and it feeds confidence. And its", "edits are recorded as 'agent', never as 'operator'."],
+        ["The fixed menu could only answer with a key from", "ACTIONS[code], and 16 of the 22 codes have none — a", "property of the menu, not of the finding. It declined", "432 of 526 findings before calling a model at all.", "", "An agent rules claims out of the merge instead, and a", "ruling survives the next backfill derive. But it moves", "a project scalar and nothing else, so the ~250 tranche", "findings are withheld rather than read at 45k-260k", "tokens each to reach the only answer available — as is", "one whose every claim is already ruled out, and it is", "shown which claims those are.", "", "It may never mark a row verified: that means an", "operator says so, and it feeds confidence. And its", "edits are recorded as 'agent', never as 'operator'."],
         role="red", title_size=13, align="left", sub_size=10.2,
     )
 

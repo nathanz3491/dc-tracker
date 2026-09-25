@@ -112,6 +112,33 @@ def can_rule_on(finding: Any) -> bool:
     return bool(RULEABLE_FIELDS.intersection(getattr(finding, "fields", ()) or ()))
 
 
+def has_live_claim(project: Any, finding: Any) -> bool:
+    """Whether a ruling could still take anything out of the merge for this finding.
+
+    `can_rule_on` asks whether the *kind* of finding is one a ruling can reach; this
+    asks whether *this row* still has anything to rule out. A ruling supersedes a
+    claim as `misread`, so a field whose every claim is already filed that way — or
+    which no citation claims at all — has no ruling left in it, and
+    `apply_rule_out` refuses the answer as unusable after the model has been paid to
+    give it. A free guard: the answer is decided before the call. (It was not the
+    cause of the night that prompted it — those seven findings had live claims, and
+    the model named citations already ruled out because `list_sources` did not say
+    which were; see `agent._claims_line`.)
+    """
+    fields = RULEABLE_FIELDS.intersection(getattr(finding, "fields", ()) or ())
+    for source in getattr(project, "sources", ()) or ():
+        try:
+            claims = json.loads(source.claims or "{}")
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(claims, dict):
+            continue
+        for name in fields:
+            if claims.get(name) is not None and not _already_misread(source, name):
+                return True
+    return False
+
+
 @dataclass
 class Outcome:
     """What one triage run concluded and what it changed."""
@@ -425,6 +452,8 @@ How to work:
 Rule out the citations whose claim IS the value the row holds. If the row says
 6750 and you believe 6750 is wrong, name the citation that states 6750 — ruling out
 a citation that states some other figure changes nothing, and is refused.
+`list_sources` shows what each citation claims; a claim marked "ruled out" is
+already out of the merge, and naming it again changes nothing and is refused.
 
 The commonest real cause of these contradictions is SCOPE: a figure that describes
 one building, or a whole programme, stored as if it described this campus. A
@@ -996,6 +1025,7 @@ __all__ = [
     "Outcome",
     "apply_rule_out",
     "can_rule_on",
+    "has_live_claim",
     "leave_alone_tool",
     "pair_triage",
     "pair_verdict_tools",

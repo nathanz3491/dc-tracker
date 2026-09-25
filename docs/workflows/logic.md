@@ -237,6 +237,16 @@ that raises it.
 The honest ceiling is unchanged: the repair those findings need is an edit to a
 `capacity_block` row, and no such command exists.
 
+**Two more things the agent is spared, both measured on one night that spent ~2.75M
+tokens on ten findings and fixed none.** Seven came back unusable because the
+citations the model named were already filed `misread`, and ruling a claim out twice
+changes nothing. It could not have known: `list_sources` showed each citation's link
+and excerpt but not what it claimed or that the claim was already out. It now shows
+both (`claims: mw_planned 300 (ruled out: misread) · …`, `agent._claims_line`), and
+the system prompt says a claim marked ruled out cannot be named again. And a finding
+whose fields have no live claim left at all is withheld before the call
+(`triage.has_live_claim`), since its only possible answer is known in advance.
+
 ### A ruling has to be readable back as an answer
 
 Decisions are recorded as prose in the row's notes and parsed back by
@@ -316,7 +326,7 @@ Touching any of these means the poster is in scope. Re-render with
 | Drift repair | `tracker/logic.py` — `resolve_drift`, `check_collisions`; `tracker/upsert.py` — `recompute_from_sources`; `tracker/blocks.py` — `raise_phase` |
 | Contested fields, the two calls, the write | `tracker/conflicts.py` — `disputes`, `solve`, `_challenge`, `supersede`, `apply_outcome`, `MAX_CALLS_PER_FIELD`, `MIN_CONFIDENCE`, `SUPERSEDED`, `MISREAD` |
 | The agent path | `tracker/triage.py` — `triage`, `apply_rule_out`, `_claims_value`, `rule_out_tool`, `leave_alone_tool`, `RULEABLE_FIELDS`, `SYSTEM` |
-| What a ruling cannot reach | `tracker/triage.py` — `can_rule_on`, `UNANSWERABLE_BY_RULING` |
+| What a ruling cannot reach | `tracker/triage.py` — `can_rule_on`, `UNANSWERABLE_BY_RULING`, `has_live_claim`; `tracker/agent.py` — `_list_sources`, `_claims_line` |
 | The fixed menu and the keyboard walk | `tracker/logic.py` — `decide`, `TRIAGE_MIN_CONFIDENCE`; `tracker/cli/logic.py` — `_triage_by_agent`, `_triage_by_model`, `_triage` |
 | Settled-finding bookkeeping | `tracker/audit.py` — `settled_codes`, `_no_change`, `free_answer`, `fmt_value` |
 | CLI | `tracker/cli/logic.py` — `logic_check`, `logic_conflicts`, `logic_resolve` |

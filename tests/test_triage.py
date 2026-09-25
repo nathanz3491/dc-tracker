@@ -805,18 +805,21 @@ def test_the_agent_walk_applies_the_limit_after_the_filter(session, row, monkeyp
             summary="230 MW built against 19.2 MW planned",
             fields=("mw_built", "mw_planned"),
         ),
+        # A field the row's citations claim: one nobody claims is filtered out as
+        # having nothing to rule out (`triage.has_live_claim`), which is not what
+        # this test is about.
         Finding(
             project_id=project.id,
-            code="online_before_announced",
+            code="operational_without_built_capacity",
             severity="error",
-            summary="online before it was announced",
-            fields=("expected_online", "first_announced"),
+            summary="operational, yet no built capacity is cited",
+            fields=("mw_built",),
         ),
     ]
     cli_logic._triage_by_agent(session, padding + real, extractor=None, limit=2)
     assert len(seen) == 2, "the limit was spent on findings that cannot be answered"
     assert any("built_exceeds_planned" in q for q in seen)
-    assert any("online_before_announced" in q for q in seen)
+    assert any("operational_without_built_capacity" in q for q in seen)
 
 
 def test_the_agent_is_told_which_obstacle_the_finding_is_about(session, row, monkeypatch):
@@ -850,3 +853,34 @@ def test_the_agent_is_told_which_obstacle_the_finding_is_about(session, row, mon
         extractor=None,
     )
     assert seen and "About: risk:grid_capacity, track:power" in seen[0]
+
+
+def test_a_finding_with_nothing_left_to_rule_out_never_reaches_a_model(session, row, monkeypatch):
+    """Every claim on the finding's field already filed `misread`: the only answer
+    possible is "unusable", so it is known before the call rather than paid for.
+    One night spent ~2.75M tokens on ten findings, seven of them this shape."""
+    import json
+
+    from tracker.cli import logic as cli_logic
+    from tracker.logic import Finding
+
+    project, _campus, _building = row
+    for source in project.sources:
+        claims = json.loads(source.claims or "{}")
+        if claims.get("mw_planned") is not None:
+            source.unconfirmed_reasons = json.dumps({"mw_planned": "misread"})
+    session.flush()
+
+    def _never_called(session, project, *, question, extractor, min_confidence):
+        raise AssertionError("a finding with nothing left to rule out reached a model")
+
+    monkeypatch.setattr("tracker.triage.triage", _never_called)
+    finding = Finding(
+        project_id=project.id,
+        code="built_exceeds_planned",
+        severity="warning",
+        summary="more is built than planned",
+        fields=("mw_planned",),
+    )
+    assert not triage.has_live_claim(project, finding)
+    cli_logic._triage_by_agent(session, [finding], extractor=None, limit=30)

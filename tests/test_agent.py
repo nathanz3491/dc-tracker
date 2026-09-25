@@ -653,3 +653,43 @@ def test_an_extraction_call_reports_its_cache_hits(monkeypatch):
     }
     got = _deepseek(monkeypatch, reply).complete(system="s", user="u")
     assert (got.cache_hit_tokens, got.cache_miss_tokens) == (9_000, 1_000)
+
+
+def test_the_citation_list_says_what_each_claims_and_what_is_already_ruled_out(session):
+    """Without it the model named citations already filed `misread`, and the rail
+    refused the answer after a full paid run: 7 of 10 findings on one night."""
+    from tracker.models import Project, Source
+
+    project = Project(
+        name="Campus",
+        company="Acme",
+        state="WI",
+        city="Racine",
+        dedup_key="acme|city:racine|WI",
+        phase="announced",
+    )
+    session.add(project)
+    session.flush()
+    session.add_all(
+        [
+            Source(
+                project_id=project.id,
+                url="https://a.example/1",
+                source_type="trade_press",
+                claims=json.dumps({"mw_planned": 300.0, "investment_usd": 2_500_000_000}),
+                unconfirmed_reasons=json.dumps({"mw_planned": "misread"}),
+            ),
+            Source(
+                project_id=project.id,
+                url="https://a.example/2",
+                source_type="trade_press",
+                claims=json.dumps({"mw_planned": 1400.0}),
+            ),
+        ]
+    )
+    session.flush()
+
+    listed = agent._list_sources(session, project.id)
+    assert "claims: mw_planned 300.0 (ruled out: misread) · investment_usd 2500000000" in listed
+    assert "claims: mw_planned 1400.0" in listed
+    assert listed.count("ruled out") == 1
