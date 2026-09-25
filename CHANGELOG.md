@@ -784,9 +784,11 @@ initial build of the v1 PRD.
   admin cannot lock or delete their own account from the page. A signed-in person
   changes their own password at `/account` with no current password asked; every
   other session of the account ends and theirs stays signed in.
-  `tracker users notify <address> --about <account>` emails the account's current
-  settings to an address you type — after an address change, usually the old one —
-  and never a password.
+  `tracker users notify --to <address>` emails an account's current settings to an
+  address you type — after an address change, usually the old one — with an
+  optional subject, message and old address. It carries a password only when given
+  `--new-password` or `--ask-password`, which also set it on the account, so the
+  email and the account cannot disagree; a failed send undoes the change.
 
 - **A test that reaches for the network fails, and names the host**
   (`tests/conftest.py`, `tests/test_cli.py`, `README.md`). "A fresh clone with no

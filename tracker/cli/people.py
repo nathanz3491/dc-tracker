@@ -768,61 +768,160 @@ def users_admin(
 
 @users_app.command("notify")
 def users_notify(
-    to: Annotated[str, typer.Argument(help="Where to send it. Typed by you, never looked up.")],
-    about: Annotated[
-        str, typer.Option("--about", help="The account the notice describes, by its current email.")
+    to: Annotated[
+        str, typer.Option("--to", help="Where to send it. Typed by you, never looked up.")
     ],
-    note: Annotated[
+    about: Annotated[
         str | None,
-        typer.Option("--note", help="A sentence of your own, shown above the settings."),
+        typer.Option(
+            "--about",
+            help="The account it describes, by its current sign-in email. Defaults to --to.",
+            show_default=False,
+        ),
     ] = None,
+    subject: Annotated[
+        str | None,
+        typer.Option(
+            "--subject", help="The subject line. Has a sensible default.", show_default=False
+        ),
+    ] = None,
+    message: Annotated[
+        str | None,
+        typer.Option(
+            "--message",
+            "--note",
+            help="A paragraph of your own, shown above the settings.",
+            show_default=False,
+        ),
+    ] = None,
+    old_email: Annotated[
+        str | None,
+        typer.Option(
+            "--old-email",
+            help="The address the account moved away from. The email then opens by "
+            "saying the sign-in changed from this to the current one.",
+            show_default=False,
+        ),
+    ] = None,
+    new_password: Annotated[
+        str | None,
+        typer.Option(
+            "--new-password",
+            help="Set this as the account's password AND include it in the email. It lands "
+            "in your shell history; --ask-password avoids that.",
+            show_default=False,
+        ),
+    ] = None,
+    ask_password: Annotated[
+        bool,
+        typer.Option("--ask-password", help="Like --new-password, but typed hidden, twice."),
+    ] = False,
     preview: Annotated[
-        bool, typer.Option("--preview", help="Print the message instead of sending it.")
+        bool,
+        typer.Option("--preview", help="Print the message instead of sending it. Changes nothing."),
     ] = False,
 ) -> None:
-    """Email somebody how an account is now set up. Never a password.
+    """Email somebody how an account is now set up, with whatever you add to it.
 
     **You choose the address.** After changing someone's sign-in email, the person
     to tell is at the old one, which the account no longer records — so this sends
-    wherever it is pointed, and nothing sends it on its own. The notice lists the
-    account's current settings: sign-in email, name, status, what it sees, role.
+    wherever `--to` points, and nothing sends it on its own. The email lists the
+    account's current settings (sign-in email, name, status, what it sees, role),
+    after your `--message` if you give one.
+
+    **A password is included only if you pass one**, and passing one also sets it
+    on the account, so the email and the account cannot disagree. If the send
+    fails, the password change is undone. The email tells them to change it after
+    signing in.
+
+    \b
+    Examples:
+      tracker users notify --to old@x.com --about new@x.com --old-email old@x.com
+      tracker users notify --to ann@x.com --ask-password --message "Welcome aboard."
     """
     from tracker import account_notice, accounts
     from tracker import notify as notify_mod
 
+    if new_password is not None and ask_password:
+        _fail("pass --new-password or --ask-password, not both.")
     try:
         recipient = accounts.normalize_email(to)
     except accounts.AccountError as exc:
         _fail(str(exc))
         raise
-    with session_scope(_read_engine(), commit=False) as session:
-        detail = accounts.detail(session, _one_account(session, about))
+    password = _ask_password("New password") if ask_password else new_password
+    if password is not None:
+        try:
+            accounts.check_password_length(password)
+        except accounts.AccountError as exc:
+            _fail(str(exc))
+            raise
     settings = get_settings()
-    message = account_notice.render(
-        detail, note=note, console_url=settings.notify_console_url or None
-    )
+
+    def compose(detail: dict) -> account_notice.Notice:
+        return account_notice.render(
+            detail,
+            note=message,
+            console_url=settings.notify_console_url or None,
+            subject=subject,
+            old_email=old_email,
+            new_password=password,
+        )
+
     if preview:
+        with session_scope(_read_engine(), commit=False) as session:
+            notice = compose(accounts.detail(session, _one_account(session, about or to)))
         if json_mode():
-            emit({"to": recipient, "subject": message.subject, "text": message.text_body})
+            emit({"to": recipient, "subject": notice.subject, "text": notice.text_body})
             return
         console.print(f"[bold]to[/bold] {escape(recipient)}")
-        console.print(f"[bold]subject[/bold] {escape(message.subject)}\n")
-        console.print(escape(message.text_body))
+        console.print(f"[bold]subject[/bold] {escape(notice.subject)}\n")
+        console.print(escape(notice.text_body))
+        if password is not None:
+            console.print("\n[dim]preview only: the password was not set.[/dim]")
         return
+
     try:
-        message_id = notify_mod.ResendTransport(settings).send(
-            to=recipient,
-            subject=message.subject,
-            html_body=message.html_body,
-            text_body=message.text_body,
-        )
+        transport = notify_mod.ResendTransport(settings)
     except notify_mod.EmailError as exc:
         _fail(str(exc))
         raise
+    # One transaction around the password change and the send: a send that fails
+    # raises out of it, so the account keeps the password it had rather than one
+    # that was never delivered to anybody.
+    try:
+        with _explain_db_locks(), session_scope(_watch_engine()) as session:
+            row = _one_account(session, about or to)
+            if password is not None:
+                accounts.reset_password(session, row, password)
+            notice = compose(accounts.detail(session, row))
+            message_id = transport.send(
+                to=recipient,
+                subject=notice.subject,
+                html_body=notice.html_body,
+                text_body=notice.text_body,
+            )
+            described = row.email
+    except notify_mod.EmailError as exc:
+        _fail(f"{exc}\nNothing was changed.")
+        raise
     if json_mode():
-        emit({"to": recipient, "about": detail["email"], "sent": True, "id": message_id})
+        emit(
+            {
+                "to": recipient,
+                "about": described,
+                "sent": True,
+                "id": message_id,
+                "password_set": password is not None,
+            }
+        )
         return
-    console.print(f"[green]sent[/green] to {escape(recipient)} about {escape(detail['email'])}")
+    console.print(f"[green]sent[/green] to {escape(recipient)} about {escape(described)}")
+    if password is not None:
+        console.print(
+            "[dim]its password is now the one in the email, and its open sessions end "
+            "within a few seconds.[/dim]"
+        )
 
 
 @users_app.command("invite")

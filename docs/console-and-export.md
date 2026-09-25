@@ -134,7 +134,8 @@ tracker users disable you@example.com # locks it; keeps the watchlist; `enable` 
 tracker users signout you@example.com # ends every session, password unchanged
 tracker users admin you@example.com   # grants the admin page; --revoke takes it away
 tracker users rm you@example.com      # takes their watchlist with it
-tracker users notify old@example.com --about new@example.com --note "Your sign-in changed."
+tracker users notify --to old@example.com --about new@example.com --old-email old@example.com
+tracker users notify --to ann@example.com --ask-password --message "Welcome aboard."
 ```
 
 The console used to have one shared password. That made every reader the same
@@ -185,12 +186,25 @@ only way to lock somebody out, and the cascade took their watchlist with it. A
 correct password for a disabled account is answered "this account is disabled";
 a wrong one still gets the same message as an unknown address.
 
-**The notice email is sent only by hand.** `tracker users notify <address> --about
-<account>` describes the account as it is now — sign-in email, name, status, what
-it sees, role — with an optional `--note`, and never a password. You type the
-address because after an address change the person to tell is at the *old* one,
-which the account no longer records. `--preview` prints it instead of sending. It
-goes through the same Resend key and sender as the watchlist notifications.
+**The notice email is sent only by hand.** `tracker users notify --to <address>`
+describes an account as it is now — sign-in email, name, status, what it sees,
+role. `--about <account>` names which account when it is not the one at `--to`:
+you type the address because after an address change the person to tell is at
+the *old* one, which the account no longer records. The rest is yours to add:
+
+| flag | what it does |
+| --- | --- |
+| `--subject` | replaces the default subject line |
+| `--message` (or `--note`) | a paragraph of your own, above the settings |
+| `--old-email` | opens with "your sign-in changed from this to the current one" |
+| `--new-password` | **sets** that password on the account and puts it in the email |
+| `--ask-password` | the same, typed hidden, so it stays out of shell history |
+| `--preview` | prints the message instead of sending; changes nothing |
+
+A password goes in only when you pass one, and passing one sets it, so the email
+and the account cannot disagree; if the send fails, the change is undone. The
+email then tells them to change it after signing in. It goes through the same
+Resend key and sender as the watchlist notifications.
 
 **A session lasts only as long as its account does.** Sessions live in the
 console's memory and `tracker users` runs in another process, so each request

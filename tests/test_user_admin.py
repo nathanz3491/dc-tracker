@@ -355,7 +355,8 @@ def test_the_notice_describes_the_account_as_it_is_now_and_escapes_the_note():
     assert "https://console.example" in message.html_body
 
 
-def test_notify_sends_to_the_address_typed_not_the_account(db, monkeypatch):
+def _recorder(monkeypatch, *, fail: bool = False):
+    """Stand in for Resend, recording each message; `fail` makes the send refuse."""
     from tracker import notify
 
     sent = []
@@ -365,26 +366,103 @@ def test_notify_sends_to_the_address_typed_not_the_account(db, monkeypatch):
             pass
 
         def send(self, *, to, subject, html_body, text_body):
-            sent.append((to, subject, text_body))
+            if fail:
+                raise notify.EmailError("Resend refused it")
+            sent.append({"to": to, "subject": subject, "html": html_body, "text": text_body})
             return "id-1"
 
     monkeypatch.setattr(notify, "ResendTransport", Recorder)
+    return sent
+
+
+def test_notify_sends_to_the_address_typed_not_the_account(db, monkeypatch):
+    sent = _recorder(monkeypatch)
     invoke(db, "users", "edit", READER, "--email", "moved@example.com")
-    result = invoke(db, "users", "notify", READER, "--about", "moved@example.com", "--note", "hi")
+    result = invoke(
+        db, "users", "notify", "--to", READER, "--about", "moved@example.com", "--message", "hi"
+    )
     assert result.exit_code == 0, result.output
-    assert [(to, subject) for to, subject, _ in sent] == [(READER, account_notice.SUBJECT)]
-    assert "moved@example.com" in sent[0][2] and "hi" in sent[0][2]
+    assert [(m["to"], m["subject"]) for m in sent] == [(READER, account_notice.SUBJECT)]
+    assert "moved@example.com" in sent[0]["text"] and "hi" in sent[0]["text"]
+    assert "never contains a password" in sent[0]["text"]
 
 
-def test_notify_preview_sends_nothing(db, monkeypatch):
+def test_the_account_defaults_to_the_address_it_is_sent_to(db, monkeypatch):
+    sent = _recorder(monkeypatch)
+    assert invoke(db, "users", "notify", "--to", READER).exit_code == 0
+    assert sent[0]["to"] == READER and f"Sign-in email: {READER}" in sent[0]["text"]
+
+
+def test_subject_and_old_address_shape_the_message(db, monkeypatch):
+    sent = _recorder(monkeypatch)
+    invoke(db, "users", "edit", READER, "--email", "moved@example.com")
+    result = invoke(
+        db,
+        "users",
+        "notify",
+        "--to",
+        READER,
+        "--about",
+        "moved@example.com",
+        "--old-email",
+        READER,
+        "--subject",
+        "Your sign-in changed",
+    )
+    assert result.exit_code == 0, result.output
+    assert sent[0]["subject"] == "Your sign-in changed"
+    assert f"has changed from {READER} to moved@example.com" in sent[0]["text"]
+
+
+def test_a_new_password_is_set_and_sent_together(db, monkeypatch):
+    sent = _recorder(monkeypatch)
+    result = invoke(db, "users", "notify", "--to", READER, "--new-password", "fresh-pass-42")
+    assert result.exit_code == 0, result.output
+    assert "Your new password: fresh-pass-42" in sent[0]["text"]
+    assert "fresh-pass-42" in sent[0]["html"] and "contains a password" in sent[0]["text"]
+    with session_scope(open_db(db, readonly=True), commit=False) as session:
+        row = accounts.require(session, READER)
+        assert accounts.verify_password("fresh-pass-42", row.password_hash)
+
+
+def test_a_failed_send_leaves_the_old_password(db, monkeypatch):
+    _recorder(monkeypatch, fail=True)
+    result = invoke(db, "users", "notify", "--to", READER, "--new-password", "fresh-pass-42")
+    assert result.exit_code != 0 and "Nothing was changed" in result.output
+    with session_scope(open_db(db, readonly=True), commit=False) as session:
+        row = accounts.require(session, READER)
+        assert accounts.verify_password(PASSWORD, row.password_hash), "it kept the old one"
+
+
+def test_a_short_new_password_is_refused_before_anything_is_sent(db, monkeypatch):
+    sent = _recorder(monkeypatch)
+    result = invoke(db, "users", "notify", "--to", READER, "--new-password", "x")
+    assert result.exit_code != 0 and sent == []
+
+
+def test_notify_preview_sends_nothing_and_sets_nothing(db, monkeypatch):
     from tracker import notify
 
     def refuse(*args, **kwargs):
         raise AssertionError("a preview reached the transport")
 
     monkeypatch.setattr(notify, "ResendTransport", refuse)
-    result = invoke(db, "users", "notify", "someone@example.com", "--about", READER, "--preview")
+    result = invoke(
+        db,
+        "users",
+        "notify",
+        "--to",
+        "someone@example.com",
+        "--about",
+        READER,
+        "--new-password",
+        "fresh-pass-42",
+        "--preview",
+    )
     assert result.exit_code == 0 and READER in result.output
+    assert "password was not set" in result.output
+    with session_scope(open_db(db, readonly=True), commit=False) as session:
+        assert accounts.verify_password(PASSWORD, accounts.require(session, READER).password_hash)
 
 
 def test_show_prints_its_markup_rather_than_the_tags(db):
