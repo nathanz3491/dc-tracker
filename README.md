@@ -261,6 +261,7 @@ This file is the tour. The detail lives in [`docs/`](docs/README.md):
 | [Ingesting](docs/ingesting.md) | The API key, the one-command loop, the operators we are missing, depth versus breadth, operator press releases, optional search, SEC filings |
 | [Sources and feeds](docs/sources-and-feeds.md) | Which publishers are worth crawling, what discovery costs, and the command that acts on the measurement |
 | [Data quality](docs/data-quality.md) | Numbers that cannot be true, contradictions, three kinds of megawatt, and what each stored value actually rests on |
+| [What duplicates look like](docs/duplicate-shapes.md) | Measured against hand-merged pairs and model-ruled-out pairs on production — which detection rules actually catch a duplicate, and which don't |
 | [Known limitations](docs/known-limitations.md) | What this gets wrong or cannot yet say, each dated and marked open or fixed. Read it before trusting a number |
 | [Backfill and gaps](docs/backfill-and-gaps.md) | Finding thin data and filling it — capacity blocks, county and coordinates |
 | [Analysis](docs/analysis.md) | Who is buying the capacity, what could stop these projects, slippage |
