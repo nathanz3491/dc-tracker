@@ -8,9 +8,15 @@ the PRD's framing. The reasons:
   hundreds of megabytes of install to fetch HTML that `httpx` already gets.
 * Crawl4AI hard-pins a third-party fork of litellm. Keeping it out of the default
   path keeps that out of the dependency graph for everyone who does not need it.
-* It is still genuinely useful where it earns its weight: Cloudflare interstitials
-  and JS-rendered shells. So it stays, as an opt-in `[crawl]` extra reached
-  automatically when httpx comes back with a 403 or a suspiciously empty body.
+* It is still genuinely useful where it earns its weight: JS-rendered shells. So
+  a browser stays, as the top rung of an escalation ladder reached only when the
+  cheaper fetchers come back with a 403 or a suspiciously empty body.
+
+**The browser is now plain Playwright** (the `[browser]` extra, Chrome's headless
+shell), with Crawl4AI kept only where it is the one installed. Crawl4AI 0.9 pulls
+Patchright — a Playwright fork built to hide automation — alongside Playwright
+itself, and a disguised browser is the one thing this project will not run: see
+`PlaywrightFetcher` for the line and how `robots.txt` enforces it.
 """
 
 from __future__ import annotations
@@ -653,6 +659,259 @@ class Crawl4AIFetcher:
         )
 
 
+_MISSING_PLAYWRIGHT = (
+    "Playwright is not installed. It is an optional extra:\n"
+    '  python -m pip install -e ".[browser]"\n'
+    "  PLAYWRIGHT_BROWSERS_PATH=.cache/ms-playwright \\\n"
+    "    python -m playwright install --only-shell chromium   # run from the checkout\n\n"
+    "That is Chrome's headless shell, about 150 MB, kept in the checkout's ignored\n"
+    "`.cache/` beside the article cache. The default fetchers need neither."
+)
+
+
+def browsers_path() -> Path:
+    """Where the headless Chrome shell lives: `PLAYWRIGHT_BROWSERS_PATH`, else `.cache/`.
+
+    Inside the checkout's ignored `.cache/` by default, beside the article cache,
+    rather than Playwright's own default under `~/Library/Caches`: everything this
+    project keeps on the host lives under its own directory (`CLAUDE.md` §5).
+    """
+    import os
+
+    configured = os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
+    if configured:
+        return Path(configured)
+    from tracker.config import home
+
+    return home() / ".cache" / "ms-playwright"
+
+
+class PlaywrightFetcher:
+    """A real headless Chrome, for pages that assemble themselves after they load.
+
+    **The top rung, and only for what the two below it could not read.** httpx and
+    `curl_cffi` fetch HTML; a page that builds its article with JavaScript comes
+    back as a shell — Applied Digital's campus updates at 74 characters of prose,
+    Iron Mountain's investor releases at 140 — and a browser is the only thing
+    that reads it. It costs seconds and a browser process, so it runs only when
+    both cheaper rungs have fallen short (`should_escalate`).
+
+    **Plain, and named.** Chrome's headless shell with nothing disguised: every
+    request says `settings.user_agent`, the same identity the other rungs send, and
+    nothing patches away the signs of automation. A site that refuses a browser it
+    can see is a crawler has made a decision, and this does not argue with it.
+
+    **It asks `robots.txt` first.** The line this project draws — rendering a page
+    a site permits but an over-broad firewall refuses is fine, getting past a site
+    that refuses crawlers is not (`docs/ingesting.md`, the DataCenterDynamics
+    section) — is written down in `robots.txt`, so the browser opens a page only
+    if that file permits this crawler to. A `robots.txt` that cannot be read counts
+    as not permitting it: a site whose firewall refuses even that file is the case
+    the line is about, and guessing "allowed" would cross it by default.
+
+    Each article gets a fresh browser context, so no cookie or storage carries from
+    one publisher's page to the next; images, media and fonts are not downloaded,
+    because the text is all this reads.
+    """
+
+    VIA = "playwright"
+
+    #: Resource types never downloaded. The article is text; these are most of the
+    #: bytes of a modern page and none of its words.
+    _SKIPPED_RESOURCES: Final = frozenset({"image", "media", "font"})
+
+    def __init__(self, settings: Settings | None = None) -> None:
+        self.settings = settings or get_settings()
+        self._playwright = None
+        self._browser = None
+        self._robots: dict[str, object | None] = {}
+        self._robots_lock = asyncio.Lock()
+
+    @staticmethod
+    def available() -> bool:
+        """Whether the extra is importable and the Chrome shell is on disk."""
+        try:
+            import playwright.async_api  # noqa: F401
+        except ImportError:
+            return False
+        root = browsers_path()
+        return root.is_dir() and any(root.glob("chromium_headless_shell-*"))
+
+    async def __aenter__(self) -> PlaywrightFetcher:
+        import os
+
+        try:
+            from playwright.async_api import async_playwright
+        except ImportError as exc:
+            raise MissingDependency(_MISSING_PLAYWRIGHT) from exc
+        _assert_proactor_loop()
+        # Set only while the driver starts: it reads the variable once, at spawn,
+        # and leaving it set would make every later `available()` in this process
+        # agree with whichever home was active first.
+        previous = os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
+        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(browsers_path())
+        try:
+            self._playwright = await async_playwright().start()
+        finally:
+            if previous is None:
+                os.environ.pop("PLAYWRIGHT_BROWSERS_PATH", None)
+            else:
+                os.environ["PLAYWRIGHT_BROWSERS_PATH"] = previous
+        try:
+            self._browser = await self._playwright.chromium.launch(headless=True)
+        except Exception:
+            await self._playwright.stop()
+            self._playwright = None
+            raise
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        if self._browser is not None:
+            with contextlib.suppress(Exception):
+                await self._browser.close()
+            self._browser = None
+        if self._playwright is not None:
+            with contextlib.suppress(Exception):
+                await self._playwright.stop()
+            self._playwright = None
+
+    async def fetch(self, url: str) -> FetchResult:
+        if self._browser is None:
+            raise RuntimeError("PlaywrightFetcher must be used as an async context manager")
+        if not await self.permitted(url):
+            return FetchResult(
+                url,
+                False,
+                error="robots.txt does not permit this crawler, or could not be read; "
+                "the browser was not used",
+                fetched_at=utcnow(),
+                via=self.VIA,
+            )
+
+        context = await self._browser.new_context(
+            user_agent=self.settings.user_agent, locale="en-US"
+        )
+        try:
+            page = await context.new_page()
+
+            async def trim(route) -> None:
+                if route.request.resource_type in self._SKIPPED_RESOURCES:
+                    await route.abort()
+                else:
+                    await route.continue_()
+
+            await page.route("**/*", trim)
+            response = await page.goto(
+                url,
+                wait_until="domcontentloaded",
+                timeout=int(self.settings.fetch_timeout_s * 1000),
+            )
+            await page.wait_for_timeout(int(JS_SETTLE_S * 1000))
+            status = response.status if response is not None else None
+            # Published date from the page as served, before the furniture goes:
+            # `<time>` and JSON-LD often sit in exactly the tags removed below.
+            raw = await page.content()
+            await page.evaluate(
+                "(tags) => tags.forEach(t => document.querySelectorAll(t)"
+                ".forEach(e => e.remove()))",
+                list(_BOILERPLATE_TAGS),
+            )
+            text = html_to_text(await page.content())
+        except Exception as exc:  # a timeout, a crashed tab, a refused navigation
+            return FetchResult(url, False, error=str(exc), fetched_at=utcnow(), via=self.VIA)
+        finally:
+            with contextlib.suppress(Exception):
+                await context.close()
+
+        if status is not None and status >= 400:
+            return FetchResult(
+                url,
+                False,
+                status=status,
+                error=f"HTTP {status}",
+                fetched_at=utcnow(),
+                via=self.VIA,
+            )
+        return FetchResult(
+            url,
+            bool(text.strip()),
+            markdown=text,
+            status=status,
+            fetched_at=utcnow(),
+            via=self.VIA,
+            published_at=published_date(raw, url),
+        )
+
+    async def permitted(self, url: str) -> bool:
+        """Whether `robots.txt` lets this crawler read `url`. Read once per origin."""
+        parts = urlsplit(url)
+        origin = f"{parts.scheme}://{parts.netloc}"
+        async with self._robots_lock:
+            if origin not in self._robots:
+                self._robots[origin] = await self._read_robots(origin)
+        parser = self._robots[origin]
+        if parser is None:
+            return False
+        return bool(parser.can_fetch(self.settings.user_agent, url))
+
+    async def _read_robots(self, origin: str):
+        """A parser for `origin/robots.txt`, or None if it could not be read.
+
+        A 404 or 410 means there is no file and so no restriction, which is how
+        the convention reads it. Anything else that is not a 200 — a 403, a 429,
+        a timeout — is an answer this cannot read, and the caller treats it as a
+        refusal. Fetched through the same browser-fingerprint client as the rung
+        below, so a TLS-fingerprinting firewall does not hide a permissive file.
+        """
+        from urllib.robotparser import RobotFileParser
+
+        status, body = await _get_text(f"{origin}/robots.txt", self.settings)
+        parser = RobotFileParser()
+        if status in (404, 410):
+            parser.parse([])
+            return parser
+        if status != 200:
+            log.info(
+                "robots.txt at %s answered %s; not opening its pages in a browser", origin, status
+            )
+            return None
+        parser.parse(body.splitlines())
+        return parser
+
+
+async def _get_text(url: str, settings: Settings) -> tuple[int | None, str]:
+    """(status, body) for one small GET, through curl_cffi when it is installed."""
+    headers = {"User-Agent": settings.user_agent}
+    try:
+        if CurlCffiFetcher.available():
+            from curl_cffi.requests import AsyncSession
+
+            async with AsyncSession(impersonate=CurlCffiFetcher.IMPERSONATE) as session:
+                response = await session.get(url, headers=headers, timeout=15)
+                return response.status_code, _decode(response)
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+            response = await client.get(url, headers=headers)
+            return response.status_code, response.text
+    except Exception as exc:
+        log.info("could not read %s: %s", url, exc)
+        return None, ""
+
+
+def ensure_browser_available() -> None:
+    """Raise now if `--browser` was asked for and no browser rung can run.
+
+    Playwright is the browser rung; Crawl4AI is still accepted where it is the one
+    installed. Checked before the command starts, so the failure lands on the flag
+    rather than twenty pages in.
+    """
+    if PlaywrightFetcher.available():
+        return
+    try:
+        import crawl4ai  # noqa: F401
+    except ImportError as exc:
+        raise MissingDependency(_MISSING_PLAYWRIGHT) from exc
+
+
 def _assert_proactor_loop() -> None:
     """Playwright on Windows needs the Proactor loop to spawn a browser.
 
@@ -732,8 +991,8 @@ def should_escalate(result: FetchResult) -> bool:
     httpx": the Blue Owl press release returns 200 and 106 characters through
     `curl_cffi` and needs the browser above it.
     """
-    if result.via == "crawl4ai":
-        return False  # nothing left to escalate to
+    if result.via in ("playwright", "crawl4ai"):
+        return False  # a browser is the top rung; nothing left to escalate to
     if result.status in BROWSER_WORTHY_STATUS:
         return True
     return result.ok and result.looks_thin
@@ -744,15 +1003,22 @@ def escalation_ladder(settings: Settings | None = None, *, browser: bool = False
 
     `curl_cffi` is included whenever it is installed, without a flag: it costs
     one ordinary request and recovers a whole class of 403s that are a WAF's TLS
-    fingerprinting rather than anybody's policy. The browser stays behind
-    `--browser` because Chromium is seconds and hundreds of megabytes, which is
-    the same cost-proportionate ordering `enrich` uses for its harvesters.
+    fingerprinting rather than anybody's policy.
+
+    **The Playwright rung is included whenever it is installed too**, which the
+    Crawl4AI rung never was. It runs only for a page both rungs below it fell
+    short on, so its seconds are spent on a handful of pages a run, and it asks
+    `robots.txt` before it opens one — so installing it is the decision, and no
+    command has to remember a flag. `browser=True` (`--browser`) still asks for a
+    browser rung, and falls back to Crawl4AI where that is the one installed.
     """
     settings = settings or get_settings()
     rungs: list[Fetcher] = []
     if CurlCffiFetcher.available():
         rungs.append(CurlCffiFetcher(settings))
-    if browser:
+    if PlaywrightFetcher.available():
+        rungs.append(PlaywrightFetcher(settings))
+    elif browser:
         rungs.append(Crawl4AIFetcher(settings))
     return rungs
 

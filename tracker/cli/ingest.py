@@ -301,13 +301,13 @@ def ingest_crawl(
         _fail(str(exc))
         return
 
-    from tracker.ingest.fetch import Crawl4AIFetcher, MissingDependency, escalation_ladder
+    from tracker.ingest.fetch import MissingDependency, ensure_browser_available, escalation_ladder
 
     if browser:
         # Fail on the flag, not twenty pages in. `__aenter__` holds the import,
         # so nothing before this point would have noticed the extra was absent.
         try:
-            Crawl4AIFetcher.ensure_available()
+            ensure_browser_available()
         except MissingDependency as exc:
             _fail(str(exc))
             return

@@ -183,12 +183,13 @@ err = Console(stderr=True, width=_width(), **_forced_colour())
 #: Rendered for a NULL field. Deliberately ASCII, for the same reason as TABLE_BOX.
 NA = "-"
 
-#: Shown when a fetch was blocked. The backslash escapes the bracket for Rich,
-#: which would otherwise read "[crawl]" as a style tag and delete the extra's
-#: name from the very message telling the operator what to install.
+#: Shown when a fetch failed and no browser rung is installed. The backslash
+#: escapes the bracket for Rich, which would otherwise read "[browser]" as a style
+#: tag and delete the extra's name from the very message saying what to install.
 BROWSER_HINT = (
-    "[dim]some fetches failed. Several trade-press sites block plain HTTP; "
-    r'retry with --browser after: pip install -e ".\[crawl]" && crawl4ai-setup[/dim]'
+    "[dim]some fetches failed. Pages that assemble themselves with JavaScript need a "
+    r'headless browser: pip install -e ".\[browser]", then PLAYWRIGHT_BROWSERS_PATH='
+    ".cache/ms-playwright python -m playwright install --only-shell chromium[/dim]"
 )
 
 LOCKED_HELP = """the database is locked by another process.

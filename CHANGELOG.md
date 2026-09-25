@@ -784,6 +784,22 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **A real headless browser reads pages that only exist once their JavaScript
+  runs** (`tracker/ingest/fetch.py`, `pyproject.toml`, `tracker/cli/_shared.py`,
+  `tracker/cli/sync.py`, `tracker/cli/enrich.py`, `tracker/cli/ingest.py`,
+  `tests/test_browser_fetch.py`, `README.md`, `docs/design-decisions.md`,
+  `docs/ingesting.md`). Of the 1,340 URLs the crawl could not read, 180 came back
+  as empty shells — an Applied Digital campus update is 74 characters of prose over
+  HTTP. The new `[browser]` extra drives Chrome's headless shell through plain
+  Playwright as the top escalation rung: the same page reads 4,090 characters. It
+  runs only for pages both cheaper rungs fell short on, and it is used
+  automatically once installed rather than behind `--browser`. It disguises
+  nothing — it sends the crawler's own user agent — and it asks `robots.txt` first,
+  treating a file it cannot read as a refusal, so a site that refuses crawlers
+  (DataCenterDynamics) stays refused. Crawl4AI remains a fallback where it is the
+  one installed; it now bundles Patchright, a fork built to hide automation, which
+  this project will not use.
+
 - **An admin can manage every account from the console as well as the terminal,
   and anyone can change their own password there** (`tracker/accounts.py`,
   `tracker/webui/server.py`, `tracker/webui/auth.py`,

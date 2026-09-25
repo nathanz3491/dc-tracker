@@ -440,6 +440,17 @@ extra used only for fetching**, and `httpx` is the default:
 It stays for the case where it earns its weight: `should_escalate()` sends a
 403/429/503, or an ok-but-suspiciously-thin body, to a real browser.
 
+**The browser rung is now plain Playwright, and Crawl4AI only a fallback.** Crawl4AI
+0.9 installs Patchright — a Playwright fork built to hide that a browser is
+automated — beside Playwright itself, and a disguised browser is the one thing
+this project will not run. `PlaywrightFetcher` drives Chrome's headless shell with
+nothing patched, sends the same user agent every other rung sends, and asks
+`robots.txt` before it opens a page: rendering a page a site permits is the job;
+getting past a site that refuses crawlers is not (see "Why DataCenterDynamics is
+discovery-only" in `ingesting.md`). A `robots.txt` that cannot be read counts as a
+refusal, because a firewall that refuses even that file is the case the line is
+about. It is on the ladder whenever it is installed — the flag is the install.
+
 ## Project fields are recomputed from claims, not merged incrementally
 
 Each `source` row records what *it* asserts in `source.claims`. After the sources

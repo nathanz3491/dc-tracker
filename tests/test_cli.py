@@ -852,7 +852,7 @@ def test_the_extras_name_survives_rich_markup():
 
     buffer = io.StringIO()
     Console(file=buffer, width=200, no_color=True).print(BROWSER_HINT)
-    assert '".[crawl]"' in buffer.getvalue()
+    assert '".[browser]"' in buffer.getvalue()
 
 
 def test_list_limit_shows_the_total(seeded: Path):
@@ -1403,7 +1403,7 @@ def test_an_error_message_is_not_eaten_by_rich_markup(initialized: Path, monkeyp
     hide_crawl4ai(monkeypatch)
     result = invoke(initialized, "ingest", "crawl", "--url", "https://a.test/x", "--browser")
     assert result.exit_code == 2
-    assert '".[crawl]"' in result.output
+    assert '".[browser]"' in result.output
 
 
 def test_browser_without_the_extra_fails_on_the_flag(initialized: Path, monkeypatch):
@@ -1416,7 +1416,7 @@ def test_browser_without_the_extra_fails_on_the_flag(initialized: Path, monkeypa
     set_key(monkeypatch)
     hide_crawl4ai(monkeypatch)
     result = invoke(initialized, "ingest", "crawl", "--url", "https://a.test/x", "--browser")
-    assert "crawl4ai is not installed" in result.output
+    assert "Playwright is not installed" in result.output
     assert "context manager" not in result.output
 
 

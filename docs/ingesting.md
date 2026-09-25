@@ -139,7 +139,7 @@ whichever phase ran first.
 ```bash
 tracker sync --limit 25 --refresh-limit 25 --refresh-days 14
 tracker sync --dry-run          # write nothing; see the note below on cost
-tracker sync --browser          # escalate blocked pages, needs the 'crawl' extra
+tracker sync --browser          # insist on a browser rung (automatic once the 'browser' extra is installed)
 tracker sync --skip-discover    # work the existing queue only
 tracker sync --skip-refresh     # new projects only
 tracker sync --skip-derive      # leave the derived values alone
@@ -370,8 +370,8 @@ locality-or-name-token requirement stays, so a careers page still matches nothin
 Several operators serve their child sitemaps only to browser-like clients — curl
 gets 200 and httpx 403 on the same URL, a TLS-fingerprint rule. Their robots.txt
 explicitly permits crawling and advertises the sitemap, so this is an over-broad
-WAF rule rather than a policy; `--browser` reaches them once the `[crawl]` extra is
-installed. They are listed with their status in
+WAF rule rather than a policy; the browser rung reaches them once the `[browser]`
+extra is installed, and reads their `robots.txt` before it does. They are listed with their status in
 [tracker/seed/feeds.toml](../tracker/seed/feeds.toml) rather than failing every run.
 
 ## Search: an optional alternative that needs keys

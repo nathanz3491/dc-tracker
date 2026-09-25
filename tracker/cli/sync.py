@@ -340,7 +340,8 @@ def sync(
     browser: Annotated[
         bool,
         typer.Option(
-            "--browser", help="Escalate blocked pages to Crawl4AI. Needs the 'crawl' extra."
+            "--browser",
+            help="Require a headless browser for pages that need JavaScript. Used automatically once the 'browser' extra is installed.",
         ),
     ] = False,
     breadth_first: Annotated[
@@ -479,13 +480,18 @@ def sync(
         _fail(str(exc))
         return
 
-    from tracker.ingest.fetch import Crawl4AIFetcher, MissingDependency, escalation_ladder
+    from tracker.ingest.fetch import (
+        MissingDependency,
+        PlaywrightFetcher,
+        ensure_browser_available,
+        escalation_ladder,
+    )
 
     if browser:
         # Fail on the flag, not twenty pages in. `__aenter__` holds the import,
         # so nothing before this point would have noticed the extra was absent.
         try:
-            Crawl4AIFetcher.ensure_available()
+            ensure_browser_available()
         except MissingDependency as exc:
             _fail(str(exc))
             return
@@ -995,7 +1001,7 @@ def sync(
                 f"{disc.MAX_SAME_FAILURES} times running and are no longer retried "
                 "automatically; `tracker ingest crawl --url <URL>` still reads one[/dim]"
             )
-    if (totals["failed"] or unread) and not browser:
+    if (totals["failed"] or unread) and not browser and not PlaywrightFetcher.available():
         console.print(BROWSER_HINT)
 
     release_lock()
@@ -1181,7 +1187,8 @@ def prospect(
     browser: Annotated[
         bool,
         typer.Option(
-            "--browser", help="Escalate blocked pages to Crawl4AI. Needs the 'crawl' extra."
+            "--browser",
+            help="Require a headless browser for pages that need JavaScript. Used automatically once the 'browser' extra is installed.",
         ),
     ] = False,
     dry_run: Annotated[
@@ -1251,13 +1258,13 @@ def prospect(
     from tracker import roster as roster_mod
     from tracker.ingest import enrich as enrich_mod
     from tracker.ingest import search as srch
-    from tracker.ingest.fetch import Crawl4AIFetcher, MissingDependency, escalation_ladder
+    from tracker.ingest.fetch import MissingDependency, ensure_browser_available, escalation_ladder
     from tracker.llm import LLMUnavailable, build_extractor
 
     settings = get_settings()
     if browser:
         try:
-            Crawl4AIFetcher.ensure_available()
+            ensure_browser_available()
         except MissingDependency as exc:
             _fail(str(exc))
             return

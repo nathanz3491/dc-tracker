@@ -225,6 +225,10 @@ def _fast_and_keyless_settings(monkeypatch, tmp_path_factory):
 
     monkeypatch.setenv("TRACKER_HOME", str(tmp_path_factory.mktemp("home")))
     home.cache_clear()
+    # And no browser, so no test's escalation ladder grows a real Chrome, whose
+    # own traffic the no-network guard below cannot see. The one test that means
+    # to launch it sets the path itself (`tests/test_browser_fetch.py`).
+    monkeypatch.delenv("PLAYWRIGHT_BROWSERS_PATH", raising=False)
 
     get_settings.cache_clear()
     yield

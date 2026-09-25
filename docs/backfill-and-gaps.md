@@ -134,7 +134,7 @@ it is worth an LLM call, and two things break that promise quietly:
 
 * **`check`** fetches every queued URL and reports which are gone. Conservative
   about what "gone" means: 404 and 410 are dead, **403 and 429 are not** — a
-  newsroom answering 403 to a non-browser is what `ingest crawl --browser` is for,
+  newsroom answering 403 to a non-browser is what the browser rung is for,
   and on the live queue that was 55 URLs across seven publishers, which is to say
   the best-defended sources. A name that does not resolve counts as gone only when
   other names in the same check did — a DNS outage makes every URL fail its lookup

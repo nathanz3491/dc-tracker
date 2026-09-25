@@ -334,10 +334,14 @@ Four optional extras, none required:
   is on the TLS handshake, not on who we say we are — and one live `enrich` run
   lost six of about thirty-one fetches that way. It costs one ordinary request, so
   it is used automatically once installed, with no flag.
-- `.[crawl]` adds Crawl4AI plus a Chromium download (`python -m playwright
-  install chromium`), the last escalation rung, for pages that assemble themselves
-  after load. Reached only with `--browser`. Heavy — Chromium plus ~70 transitive
-  packages — which is why it stays opt-in, and why the cheap rung above it exists.
+- `.[browser]` adds Playwright, the last escalation rung: a real headless Chrome
+  for pages that assemble themselves with JavaScript (an Applied Digital campus
+  update is 74 characters of prose over HTTP and 4,090 in the browser). Download
+  Chrome's headless shell, about 150 MB, into the checkout's ignored `.cache/`:
+  `PLAYWRIGHT_BROWSERS_PATH=.cache/ms-playwright python -m playwright install
+  --only-shell chromium`. Used automatically once installed, only for pages both
+  cheaper rungs fell short on, and only where the site's `robots.txt` permits this
+  crawler. `.[crawl]` (Crawl4AI) still works where it is the one installed.
 - `.[reader]` adds `readability-lxml`, which is what the console's sources page
   uses to show a cited article. Ten of the fifteen most-cited publishers refuse to
   be framed, so the modal extracts the article from their HTML and renders it
@@ -387,7 +391,7 @@ directory, which is what lets `tracker init` work from anywhere.
 .venv/Scripts/python -m pytest
 ```
 
-3,280 tests, about three minutes. **A fresh clone with no API key and no network access
+3,292 tests, about three minutes. **A fresh clone with no API key and no network access
 must produce a green run.** Tests that would hit the network or spend DeepSeek
 tokens are marked `network` / `llm` and deselected by default; run them
 explicitly with `-m network` or `-m llm`. An unmarked test that reaches for the

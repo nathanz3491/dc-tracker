@@ -142,7 +142,8 @@ def enrich(
     browser: Annotated[
         bool,
         typer.Option(
-            "--browser", help="Escalate blocked pages to Crawl4AI. Needs the 'crawl' extra."
+            "--browser",
+            help="Require a headless browser for pages that need JavaScript. Used automatically once the 'browser' extra is installed.",
         ),
     ] = False,
     dry_run: Annotated[
@@ -192,8 +193,8 @@ def enrich(
     from tracker import clean as clean_mod
     from tracker.ingest import enrich as enrich_mod
     from tracker.ingest.fetch import (
-        Crawl4AIFetcher,
         MissingDependency,
+        ensure_browser_available,
         escalation_ladder,
     )
     from tracker.vocab import TRACKED_FIELDS
@@ -265,7 +266,7 @@ def enrich(
         # lives in `__aenter__`, so building the fetcher never raises and the
         # friendly message below was unreachable.
         try:
-            Crawl4AIFetcher.ensure_available()
+            ensure_browser_available()
         except MissingDependency as exc:
             _fail(str(exc))
             return
