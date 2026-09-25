@@ -12,6 +12,28 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **Updates are no longer lost because they were written after their article was
+  fetched** (`tracker/migrations/0029_notify_ledger.sql`, `tracker/models.py`,
+  `tracker/upsert.py`, `tracker/feed.py`, `tests/test_feed.py`). A milestone or
+  obstacle was dated by when its article was *fetched*, and enrichment re-reads saved
+  articles, so a fact written today could carry a date three weeks old and land in a
+  window that had already been shown and mailed — never new on the page, never sent.
+  Between 2026-08-31 and 09-25 that happened to 46 of 246 new milestones and 21 of
+  50 new obstacles; a quoted, material permitting obstacle on a client's watchlist
+  was one of them. Every row now records when it was written (`recorded_at`, with a
+  lower-bound backfill) and when an obstacle closed (`closed_at`), and the page, the
+  digest and the email all read those.
+
+- **A slip to a future date counts as news** (`tracker/feed.py`). A `delayed` event
+  is dated by the date the project slipped *to*, so it read as a schedule and could
+  never be emailed — 56 of 146 slips on the live database. It now counts as having
+  happened when we recorded it.
+
+- **`tracker users notify --new-password` can no longer email a password the account
+  never got** (`tracker/cli/people.py`). The password was saved only after the email
+  had gone, so a busy database at that moment left the email naming a password that
+  did not work. It is now written first, and a failure stops before anything is sent.
+
 - **A model call that reasons for more than two minutes is no longer cut off, and
   a timeout says it is one** (`tracker/llm.py`, `tracker/config.py`, `.env.example`,
   `tests/test_llm_timeout.py`). Every API call had a fixed 120-second timeout, and
@@ -621,6 +643,25 @@ initial build of the v1 PRD.
 
 ### Changed
 
+- **The morning email goes to each person once a day, remembers what it sent, and
+  never sends anything twice** (`tracker/notify.py`, `tracker/cli/people.py`,
+  `tracker/migrations/0029_notify_ledger.sql`, `tracker/models.py`,
+  `tests/test_notify.py`, `tests/test_cli.py`, `docs/analysis.md`, `.env.example`).
+  It used to choose by the clock — "whatever we learned in the last N days" — and on
+  production eight runs over three weeks sent one email. A failed or missed run lost
+  its updates for good, a reboot reset the timer, the window's midnight was read in
+  the wrong time zone, a re-run sent everything again, and the first address the
+  provider refused stopped everyone after it. Now an update goes in if the person has
+  not had it, it is worth interrupting them for, and either it was recorded since
+  their last email and happened within 45 days, or it happened within the last two
+  weeks (the catch-up for a new watch or a failed morning). Each message is retried
+  through rate limits and provider errors with an idempotency key so a retry cannot
+  deliver twice; a person still not reached is recorded as failed and owed those
+  updates the next morning, while everyone else is still sent and the administrators
+  are emailed. The age limit on anything emailed is now 45 days, down from 90.
+  Disabled accounts are no longer emailed. `notify send --days` is accepted and
+  ignored, so an existing schedule keeps working.
+
 - **Picking from a short menu no longer pays the deepest reasoning rate**
   (`tracker/llm.py` — `judgement_extractor`, `tracker/config.py` —
   `deepseek_judgement_effort`, `tracker/cli/quality.py`, `tracker/cli/logic.py`,
@@ -783,6 +824,16 @@ initial build of the v1 PRD.
   migrating still build from nothing.
 
 ### Added
+
+- **A day with no news still gets an email: what to watch for on each project**
+  (`tracker/watchfor.py`, `tracker/notify.py`, `tests/test_notify.py`). Every open
+  obstacle on every followed project, however old, with how long it has been open
+  and the milestone that would clear it. A day with news carries a short version
+  under the news. Both link to the full list and to the week on the Updates page.
+
+- **`tracker notify status`** (`tracker/cli/people.py`, `tracker/webui/catalog.py`).
+  Every run and every email sent or failed, per person, from the mailer's own
+  record: the answer to "did they get Tuesday's email?".
 
 - **A real headless browser reads pages that only exist once their JavaScript
   runs** (`tracker/ingest/fetch.py`, `pyproject.toml`, `tracker/cli/_shared.py`,

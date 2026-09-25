@@ -242,6 +242,8 @@ GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
             # Renders the email `notify send` would post, and sends nothing. A
             # read, so it belongs here rather than beside the command that mails.
             "notify preview",
+            # What the mailer sent, failed to send, and when. A read of its ledger.
+            "notify status",
         ),
     ),
     ("Judge", ("review", "verify", "infer", "logic check", "audit", "audit check")),
@@ -268,9 +270,9 @@ GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     # `watch add`/`watch rm` write, but what they write is a preference rather than
     # a fact about a project, which is why they sit here and not under Repair.
     #
-    # `notify send` writes nothing to the database at all — it reads a digest and
-    # posts email. It is here because it is the one command whose effect leaves the
-    # machine, which makes it maintenance of the channel rather than of the data.
+    # `notify send` writes only its own ledger — who was sent what — never a fact
+    # about a project. It is here because it is the one command whose effect leaves
+    # the machine, which makes it maintenance of the channel rather than of the data.
     (
         "Maintain",
         (

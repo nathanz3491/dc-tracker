@@ -894,6 +894,10 @@ def users_notify(
             row = _one_account(session, about or to)
             if password is not None:
                 accounts.reset_password(session, row, password)
+                # Written before the email goes, so a locked database fails here —
+                # with nothing sent — rather than at commit, after an email that
+                # names a password the account never got.
+                session.flush()
             notice = compose(accounts.detail(session, row))
             message_id = transport.send(
                 to=recipient,
@@ -1247,24 +1251,27 @@ def digest_markdown(brief, *, held: bool = False) -> list[str]:
 def notify_preview(
     user: Annotated[
         str | None,
-        typer.Option("--user", help="Render this account's message.", show_default=False),
+        typer.Option(
+            "--user",
+            help="Render this account's message. The first account that would get one, by default.",
+            show_default=False,
+        ),
     ] = None,
-    days: Annotated[int, typer.Option("--days", help="Window, in days.")] = 1,
     out: Annotated[
         Path | None,
         typer.Option("--out", help="Write the HTML here instead of to stdout."),
     ] = None,
 ) -> None:
-    """Render what would be sent, and send nothing.
+    """Render the email a person would get this morning, and send nothing.
 
-    Free and offline: no key, no network, no write lock. The template is a pure
-    function of the digest, so this is the *same* HTML `notify send` would post to
-    Resend rather than an approximation of it — which is the only kind of preview
-    worth having.
+    Free and offline: no key, no network, no write. It is the same `compose` the
+    morning run calls, so this is the message itself — the news if there is any,
+    otherwise the list of what to watch for — rather than an approximation of it.
+    It ignores "already emailed today", so it still shows something after the
+    morning's run has gone.
     """
     from tracker import accounts
     from tracker import notify as notify_mod
-    from tracker.feed import digest as build_digest
 
     engine = _read_engine()
     with session_scope(engine, commit=False) as session:
@@ -1279,103 +1286,128 @@ def notify_preview(
             _fail("no accounts yet. Make one with `tracker users add you@example.com`.")
             return
 
-        account = people[0]
-        brief = build_digest(session, days=days, account_id=account.id)
-        if brief.watching_everything:
+        message = None
+        reasons: list[tuple[str, str]] = []
+        for account in people:
+            plan = notify_mod.compose(
+                session,
+                account,
+                console_url=get_settings().notify_console_url or None,
+                force=True,
+            )
+            if isinstance(plan, str):
+                reasons.append((account.email, plan))
+                continue
+            message = plan
+            break
+
+    if message is None:
+        if user and reasons[0][1].startswith("watches the whole database"):
             _fail(
-                f"{account.email} has no watchlist, so there is nothing to be "
-                'selective about. Add one: tracker watch add "Nscale" '
-                f"--user {account.email}"
+                f"{reasons[0][0]} watches the whole database, which is not mailed: every "
+                "project every morning is a firehose. Give it a watchlist instead."
             )
             return
-
-        sending = brief.notifying
-        if not sending:
+        for email, reason in reasons:
             console.print(
-                f"[yellow]nothing worth sending to {escape(account.email)}[/yellow] "
-                f"[dim]in the last {days} day(s). Widen it with --days.[/dim]"
+                f"[yellow]nothing for {escape(email)}[/yellow] [dim]— {escape(reason)}[/dim]"
             )
-            raise typer.Exit(1)
-
-        # Every update, never a truncated preview: this has to be the same bytes
-        # `notify send` would post, or it is not a preview of anything.
-        body = notify_mod.render(
-            brief,
-            sending,
-            name=account.name,
-            console_url=get_settings().notify_console_url or None,
-        )
-        subject = notify_mod.subject_for(brief, sending)
-        # Read off the row before the session closes. An ORM instance is detached
-        # at that point and touching it raises DetachedInstanceError — which is
-        # the same hazard `parallel.map_ordered` documents about worker threads,
-        # arriving here through scope rather than through concurrency.
-        recipient, cards = account.email, len(sending)
+        raise typer.Exit(1)
 
     if out:
-        out.write_text(body, encoding="utf-8")
-        console.print(f"[green]wrote[/green] {escape(str(out))} [dim]({len(body):,} bytes)[/dim]")
-        console.print(f"[dim]subject:[/dim] {escape(subject)}")
-        console.print(f"[dim]to:[/dim] {escape(recipient)}  [dim]cards:[/dim] {cards}")
+        out.write_text(message.html_body, encoding="utf-8")
+        size = len(message.html_body)
+        console.print(f"[green]wrote[/green] {escape(str(out))} [dim]({size:,} bytes)[/dim]")
+        console.print(f"[dim]subject:[/dim] {escape(message.subject)}")
+        console.print(
+            f"[dim]to:[/dim] {escape(message.email)}  [dim]kind:[/dim] {message.kind}  "
+            f"[dim]updates:[/dim] {len(message.signals)}  [dim]blockers:[/dim] {message.blockers}"
+        )
     else:
-        print(body)
+        print(message.html_body)
+
+
+def _outcome_words(outcome) -> str:
+    if outcome.failed:
+        return f"FAILED after {outcome.attempts} attempt(s): {outcome.error}"
+    if outcome.sent:
+        return f"sent {outcome.kind} {outcome.message_id or ''}".strip()
+    return outcome.skipped or ""
 
 
 @notify_app.command("send")
 def notify_send(
-    days: Annotated[int, typer.Option("--days", help="Window, in days.")] = 1,
     user: Annotated[
         str | None,
         typer.Option("--user", help="Only this account. Everyone, by default.", show_default=False),
     ] = None,
     dry_run: Annotated[
         bool,
-        typer.Option("--dry-run", help="Say who would get what, and send nothing."),
+        typer.Option("--dry-run", help="Say who would get what, and send and record nothing."),
     ] = False,
+    force: Annotated[
+        bool,
+        typer.Option("--force", help="Send even to somebody already emailed today."),
+    ] = False,
+    days: Annotated[
+        int | None,
+        typer.Option(
+            "--days",
+            hidden=True,
+            help="Accepted and ignored. What goes in is decided by what each person was "
+            "already sent, not by a window; the flag stays so a scheduler written "
+            "before that keeps working.",
+        ),
+    ] = None,
 ) -> None:
-    """Send each person one email carrying everything on their watchlist that moved.
+    """Send each person this morning's one email, and remember what was sent.
 
-    **One message per person, never one per change.** Fourteen updates is one
-    email with fourteen cards; a channel that sends fourteen separate messages is
-    one people filter away, and a filtered channel protects nobody.
+    **What goes in**: every update worth interrupting them for that they have not
+    been sent — recorded since their last email and no more than 45 days old, or
+    happened in the past two weeks. Nothing is ever sent to anybody twice.
 
-    Silence is the default: an account whose window is quiet gets nothing, and an
-    account with no watchlist is skipped rather than mailed the whole database —
-    the same rule `digest --notify` enforces, for the same reason. A page is
-    opened deliberately; mail arrives uninvited.
+    **A day with no news still sends**: the list of what to watch for on each
+    followed project. Nobody gets two emails in one day (`--force` overrides it),
+    an account with no watchlist gets nothing, and one that watches the whole
+    database is not mailed.
 
-    What crosses the bar is `feed.notable`: quote-backed, already happened,
-    recently, and material. `notify preview` shows the exact message first, for
-    free.
+    **One person's failure is theirs alone.** Every message is retried through
+    rate limits and provider errors, and a person still not delivered to is
+    recorded as failed and owed those updates tomorrow; everybody else is still
+    sent, and the administrators are emailed about it. Exit 2 when anybody
+    failed, 1 when nobody was sent anything, 0 otherwise.
+
+    `notify preview` shows one person's message first, for free; `notify status`
+    shows what went out.
     """
     from tracker import notify as notify_mod
 
     settings = get_settings()
-    engine = _read_engine()
+    console_url = settings.notify_console_url or None
 
     if dry_run:
         # A recorder rather than the real transport, so a dry run cannot need a
         # key and cannot reach the network — the two ways a "safe" preview
-        # historically stops being safe.
+        # historically stops being safe — and `record=False`, so it cannot use
+        # up anybody's updates.
         planned: list[tuple[str, str, int]] = []
 
         class Recorder:
-            def send(self, *, to, subject, html_body, text_body):
+            def send(self, *, to, subject, html_body, text_body, idempotency_key=None):
                 planned.append((to, subject, len(html_body)))
-                return ""
+                return "dry-run"
 
-        with session_scope(engine, commit=False) as session:
+        with session_scope(_read_engine(), commit=False) as session:
             outcomes = notify_mod.send_all(
-                session, transport=Recorder(), days=days, only_email=user
+                session,
+                transport=Recorder(),
+                console_url=console_url,
+                only_email=user,
+                record=False,
+                force=force,
+                sleep=lambda _s: None,
             )
-        rows = [
-            (
-                o.email,
-                str(o.signals),
-                o.skipped or "would send",
-            )
-            for o in outcomes
-        ]
+        rows = [(o.email, str(o.signals), o.skipped or f"would send {o.kind}") for o in outcomes]
         _print_notify_rows(rows, title="notify (dry run)")
         for to, subject, size in planned:
             console.print(f"  [dim]{escape(to)}[/dim] — {escape(subject)} [dim]({size:,} b)[/dim]")
@@ -1389,26 +1421,144 @@ def notify_send(
         _fail(str(exc))
         return
 
-    with session_scope(engine, commit=False) as session:
-        try:
-            outcomes = notify_mod.send_all(
-                session,
-                transport=transport,
-                days=days,
-                console_url=settings.notify_console_url or None,
-                only_email=user,
+    with _explain_db_locks(), session_scope(_watch_engine()) as session:
+        outcomes = notify_mod.send_all(
+            session,
+            transport=transport,
+            console_url=console_url,
+            only_email=user,
+            force=force,
+        )
+
+    if json_mode():
+        emit(
+            [
+                {
+                    "email": o.email,
+                    "kind": o.kind,
+                    "updates": o.signals,
+                    "blockers": o.blockers,
+                    "sent": o.sent,
+                    "message_id": o.message_id,
+                    "skipped": o.skipped,
+                    "error": o.error,
+                    "attempts": o.attempts,
+                }
+                for o in outcomes
+            ]
+        )
+    else:
+        _print_notify_rows(
+            [(o.email, str(o.signals), _outcome_words(o)) for o in outcomes], title="notify"
+        )
+    if any(o.failed for o in outcomes):
+        raise typer.Exit(2)
+    if not any(o.sent for o in outcomes):
+        # Exit 1 on "nobody to send to", so a scheduled job can tell it from a
+        # failure. With a quiet-day email this means no account has a watchlist.
+        raise typer.Exit(1)
+
+
+@notify_app.command("status")
+def notify_status(
+    user: Annotated[
+        str | None,
+        typer.Option("--user", help="Only this address.", show_default=False),
+    ] = None,
+    days: Annotated[int, typer.Option("--days", help="How far back, in days.")] = 14,
+) -> None:
+    """What the mailer did: every run, and every email it sent or failed to send.
+
+    The answer to "did they get Tuesday's email?", from the mailer's own record
+    rather than from a log line. Times are this machine's, which is the schedule's.
+    A run with no finish time died partway through; anybody it did not reach is
+    owed their updates and gets them on the next run. Reads only.
+    """
+    import datetime as dt
+
+    from tracker import accounts
+    from tracker import notify as notify_mod
+    from tracker.models import NotifyDelivery, NotifyRun, utcnow
+
+    since = utcnow() - dt.timedelta(days=days)
+
+    def when(ts) -> str:
+        return notify_mod.local_time(ts).strftime("%Y-%m-%d %H:%M") if ts else "—"
+
+    with session_scope(_read_engine(), commit=False) as session:
+        runs = session.scalars(
+            select(NotifyRun).where(NotifyRun.started_at >= since).order_by(NotifyRun.id.desc())
+        ).all()
+        query = select(NotifyDelivery).where(NotifyDelivery.prepared_at >= since)
+        if user:
+            query = query.where(NotifyDelivery.email.ilike(accounts.normalize_email(user)))
+        deliveries = session.scalars(query.order_by(NotifyDelivery.id.desc())).all()
+
+        if json_mode():
+            emit(
+                {
+                    "runs": [
+                        {
+                            "id": r.id,
+                            "started_at": r.started_at.isoformat(),
+                            "finished_at": r.finished_at.isoformat() if r.finished_at else None,
+                            "sent": r.sent,
+                            "failed": r.failed,
+                            "skipped": r.skipped,
+                        }
+                        for r in runs
+                    ],
+                    "deliveries": [
+                        {
+                            "run_id": d.run_id,
+                            "email": d.email,
+                            "kind": d.kind,
+                            "status": d.status,
+                            "prepared_at": d.prepared_at.isoformat(),
+                            "sent_at": d.sent_at.isoformat() if d.sent_at else None,
+                            "updates": d.updates,
+                            "blockers": d.blockers,
+                            "subject": d.subject,
+                            "message_id": d.message_id,
+                            "attempts": d.attempts,
+                            "error": d.error,
+                        }
+                        for d in deliveries
+                    ],
+                }
             )
-        except notify_mod.EmailError as exc:
-            _fail(str(exc))
             return
 
-    sent = [o for o in outcomes if o.sent]
-    rows = [
-        (o.email, str(o.signals), o.skipped or f"sent {o.message_id or ''}".strip())
-        for o in outcomes
-    ]
-    _print_notify_rows(rows, title="notify")
-    if not sent:
-        # Exit 1 on "nothing to say", matching `digest --notify`, so a scheduled
-        # job can tell a quiet night from a failure.
-        raise typer.Exit(1)
+        if not runs and not deliveries:
+            console.print(f"[yellow]nothing sent in the last {days} day(s)[/yellow]")
+            raise typer.Exit(1)
+
+        if not user:
+            table = Table(title="runs", box=box.SIMPLE_HEAVY, title_style="bold")
+            for column in ("started", "finished", "sent", "failed", "skipped"):
+                table.add_column(column, justify="right" if column != "started" else "left")
+            for r in runs:
+                finished = when(r.finished_at) if r.finished_at else "[red]did not finish[/red]"
+                failed = f"[red]{r.failed}[/red]" if r.failed else "0"
+                table.add_row(when(r.started_at), finished, str(r.sent), failed, str(r.skipped))
+            console.print(table)
+
+        table = Table(title="emails", box=box.SIMPLE_HEAVY, title_style="bold")
+        for column in ("when", "to", "kind", "updates", "blockers", "outcome"):
+            table.add_column(
+                column, justify="right" if column in ("updates", "blockers") else "left"
+            )
+        for d in deliveries:
+            if d.status == "sent":
+                outcome = f"[green]sent[/green] {escape(d.subject or '')}"
+            else:
+                outcome = f"[red]failed[/red] ({d.attempts} tries) {escape(d.error or '')}"
+            table.add_row(
+                when(d.sent_at or d.prepared_at),
+                escape(d.email),
+                d.kind,
+                str(d.updates),
+                str(d.blockers),
+                outcome,
+            )
+        console.print(table)
