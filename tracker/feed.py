@@ -15,10 +15,15 @@ Three ideas do the work.
 **1. "New" means new to us, not new in the world.** Both clocks are reported, and
 they are wildly different on this dataset: a crawl reads one article and imports a
 project's whole back-history, so `event_date` spans 1997 to 2040 while the rows
-themselves arrived last night. `created_at` (migration 0018) is what the window
+themselves arrived last night. `recorded_at` (migration 0029) is what the window
 filters on, because "tell me what changed since Friday" is a question about our
 knowledge. `happened` rides along beside it so a 2022 milestone we only learned
 yesterday reads as what it is, rather than as this morning's news.
+
+It used to be `created_at`, which is when the article was *fetched*. Enrichment
+re-reads cached pages, so a fact written today could carry a fetch from three weeks
+ago and land in a window that had already been read and mailed — never shown as
+new and never sent. The row's own insert time cannot land behind anything.
 
 **2. Good and bad are properties of the vocabulary, not of a model's opinion.**
 An `energized` event is good news, a `delayed` event is bad, an obstacle opening
@@ -42,8 +47,8 @@ moving, a decisive milestone, a dated slip, and an obstacle of `material` severi
 or worse opening or clearing. An announcement is not one of them.
 
 That third gate is idea 1 applied to interruption, and it was missing. The window
-is on `created_at`, so back-history imported by a crawl arrived "today" and paged
-somebody about 2021. The page can afford to carry it because it prints both dates
+is on when we recorded a row, so back-history imported by a crawl arrived "today"
+and paged somebody about 2021. The page can afford to carry it because it prints both dates
 and a reader sees them before caring; a notification is read *after* it has already
 interrupted. :func:`stale` carries the measurement.
 """
@@ -150,11 +155,12 @@ NOTIFY_WEIGHT: Final[int] = 3
 
 #: How old the thing itself may be and still interrupt somebody, in days.
 #:
-#: Separate from the window, which is on `created_at` and asks "did we learn this
+#: Separate from the window, which is on `recorded_at` and asks "did we learn this
 #: recently". This asks "did it *happen* recently", and the two diverge every time
-#: a crawl imports a project's back-history. See :func:`stale` for the measurement
-#: that chose 90.
-NOTIFY_MAX_AGE_DAYS: Final[int] = 90
+#: a crawl imports a project's back-history. 45 is the product's rule for mail —
+#: anything that happened more than a month and a half ago is not news — and
+#: :func:`stale` has the measurement that showed why the gate exists at all.
+NOTIFY_MAX_AGE_DAYS: Final[int] = 45
 
 #: Most notifications one run will send before it stops listing and starts
 #: counting. A backstop rather than a filter: ingest arrives in bursts by nature,
@@ -176,7 +182,8 @@ class Signal:
     label: str
     #: The sentence a reader actually reads. The stored description or summary.
     detail: str
-    #: When WE learned it (`created_at`), which is what the window filters on.
+    #: When WE learned it: the row's `recorded_at`, or for a cleared obstacle the
+    #: moment it was closed (`closed_at`). What the window filters on.
     at: dt.datetime | None = None
     #: When it happened, or the date the source puts on it. Not the same question.
     happened: dt.date | None = None
@@ -207,6 +214,14 @@ class Signal:
     #: Which watchlist entry brought this project in, and how it matched.
     entry: str | None = None
     via: str | None = None
+    #: Which stored fact this is: `event:<id>`, `risk:<id>:opened`,
+    #: `risk:<id>:cleared`, `project:<id>:new`. What the mailer remembers having
+    #: sent, so it must not change when a row is re-read or re-parented by a merge
+    #: — and row ids do not.
+    key: str = ""
+    #: This key and those of the rows `fold` merged into it. Sending the card means
+    #: sending all of them; see `notify`.
+    keys: tuple[str, ...] = ()
 
     @property
     def confirmed(self) -> bool:
@@ -260,7 +275,14 @@ class Signal:
             "notify": self.notify,
             "entry": self.entry,
             "via": self.via,
+            "key": self.key,
+            "keys": list(self.all_keys),
         }
+
+    @property
+    def all_keys(self) -> tuple[str, ...]:
+        """Every stored fact this card stands for, its own key first."""
+        return self.keys or ((self.key,) if self.key else ())
 
 
 @dataclass(frozen=True)
@@ -456,11 +478,12 @@ def signals_for(
                 weight=2,
                 entry=entry,
                 via=via,
+                key=f"project:{project.id}:new",
             )
         )
 
     for event in project.events:
-        at = _as_datetime(event.created_at)
+        at = _recorded(event)
         if at is None or at < since:
             continue
         happened = _as_date(event.event_date)
@@ -468,6 +491,13 @@ def signals_for(
         # which is a different problem from one scheduled for next year. Same call
         # `tracks.standing` makes.
         expected = happened is not None and happened > as_of
+        if event.event_type == "delayed" and expected:
+            # A slip is keyed on the date it slipped TO (`upsert._record_slippage`),
+            # so its date is the new target, not when it happened. Read as a
+            # schedule, every slip to a future date — 56 of 146 on the live
+            # database — was ranked a non-event and could never be mailed. It
+            # happened when we recorded it; the target is in its description.
+            expected, happened = False, None
         effect, track, unblocks = _milestone_effect(event.event_type, awaited, expected=expected)
         url, publisher, published = _citation(sources, event.source_id)
         out.append(
@@ -497,18 +527,24 @@ def signals_for(
                 ),
                 entry=entry,
                 via=via,
+                key=f"event:{event.id}",
             )
         )
 
     for risk in project.risks:
         url, publisher, published = _citation(sources, risk.source_id)
         resolved = _as_date(risk.resolved_at)
-        # An obstacle clears on the date the source dates the resolution: unlike a
-        # new row, nothing records when we *read* that it had cleared. So the
-        # cleared branch filters on `resolved_at` and says so, rather than
-        # pretending `created_at` — the date the obstacle first appeared — is the
-        # date it went away.
-        if risk.status != "open" and resolved is not None and resolved >= since.date():
+        # A cleared obstacle is new on the day we recorded it clearing, which is
+        # `closed_at` (0029) — not `resolved_at`, the source's date, which could
+        # put a resolution we only learned today behind a window that already ran.
+        # Rows closed before 0029 carry `resolved_at` there, at midnight.
+        cleared_at = _as_datetime(getattr(risk, "closed_at", None)) or _as_datetime(resolved)
+        if (
+            risk.status != "open"
+            and resolved is not None
+            and cleared_at is not None
+            and cleared_at >= since
+        ):
             effect, track = _obstacle_effect(risk.category, risk.severity, cleared=True)
             out.append(
                 Signal(
@@ -519,7 +555,7 @@ def signals_for(
                     project=project.name,
                     label=risk.category,
                     detail=risk.summary,
-                    at=None,
+                    at=cleared_at,
                     happened=resolved,
                     effect=effect,
                     track=track,
@@ -531,11 +567,12 @@ def signals_for(
                     weight=severity_rank(risk.severity) + OBSTACLE_OFFSET,
                     entry=entry,
                     via=via,
+                    key=f"risk:{risk.id}:cleared",
                 )
             )
             continue
 
-        at = _as_datetime(risk.created_at)
+        at = _recorded(risk)
         if risk.status == "open" and at is not None and at >= since:
             effect, track = _obstacle_effect(risk.category, risk.severity, cleared=False)
             out.append(
@@ -559,10 +596,20 @@ def signals_for(
                     weight=severity_rank(risk.severity) + OBSTACLE_OFFSET,
                     entry=entry,
                     via=via,
+                    key=f"risk:{risk.id}:opened",
                 )
             )
 
     return out
+
+
+def _recorded(row: Any) -> dt.datetime | None:
+    """When a milestone or obstacle entered our database.
+
+    `recorded_at`, falling back to `created_at` for a row written by something
+    that predates 0029 and did not set it — a test fixture, a hand-written row.
+    """
+    return _as_datetime(getattr(row, "recorded_at", None)) or _as_datetime(row.created_at)
 
 
 def notable(signal: Signal, *, max_age_days: int = NOTIFY_MAX_AGE_DAYS) -> bool:
@@ -599,10 +646,9 @@ def notable(signal: Signal, *, max_age_days: int = NOTIFY_MAX_AGE_DAYS) -> bool:
     those are on the page, and none of them is a reason to look up from something
     else. A watch-severity obstacle is a heads-up, not an alarm.
 
-    **Nothing here remembers what it already sent, and it does not need to.** The
-    window is on `created_at`, so a row falls inside exactly one `--days 1` window
-    and a nightly job notifies about it exactly once. State would only be needed if
-    the schedule overlapped itself, and the fix for that is the schedule.
+    **This decides what is worth sending, not who has had it.** It used to claim
+    that a nightly window made memory unnecessary; it did not — a missed run, a
+    reboot and a backdated row each broke it. `notify` keeps a ledger instead.
     """
     if not signal.confirmed or signal.expected:
         return False
@@ -632,14 +678,23 @@ def stale(signal: Signal, *, max_age_days: int = NOTIFY_MAX_AGE_DAYS) -> bool:
     129, the nightly average falls from 11.8 to 4.3, and the worst night — a large
     sync on 2026-08-11 — falls from **135 to 21**.
 
-    **An undated signal is kept.** `happened` is None for an obstacle nobody put a
-    date on, and an open obstacle is a statement about now: treating "no date" as
-    "old" would silently drop the live risks this channel exists to carry. 25 of
-    the 354 were undated.
+    **An undated signal is judged by when we recorded it.** `happened` is None for
+    an obstacle nobody put a date on, and an open obstacle is a statement about
+    now: treating "no date" as "old" would silently drop the live risks this
+    channel exists to carry (25 of the 354 were undated). The day we recorded it is
+    the most recent it can have been reported, so that is its age.
     """
-    if signal.happened is None:
+    when = occurred(signal)
+    if when is None:
         return False
-    return (dt.date.today() - signal.happened).days > max_age_days
+    return (dt.date.today() - when).days > max_age_days
+
+
+def occurred(signal: Signal) -> dt.date | None:
+    """When it happened, or — undated — the day we recorded it."""
+    if signal.happened is not None:
+        return signal.happened
+    return signal.at.date() if signal.at else None
 
 
 def fold(signals: list[Signal]) -> list[Signal]:
@@ -663,7 +718,8 @@ def fold(signals: list[Signal]) -> list[Signal]:
     out: list[Signal] = []
     for group in groups.values():
         best, *rest = rank(group)
-        out.append(best if not rest else replace(best, restatements=len(rest)))
+        keys = tuple(k for s in (best, *rest) for k in s.all_keys)
+        out.append(replace(best, restatements=len(rest), keys=keys))
     return out
 
 
@@ -854,6 +910,7 @@ __all__ = [
     "digest",
     "fold",
     "notable",
+    "occurred",
     "rank",
     "signals_for",
     "stale",

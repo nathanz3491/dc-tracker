@@ -795,7 +795,7 @@ def test_every_view_has_its_own_url(server):
     and swapping.
     """
     address, _ = server
-    for path in ("/updates", "/projects", "/sources", "/map", "/capex", "/help"):
+    for path in ("/updates", "/watch-for", "/projects", "/sources", "/map", "/capex", "/help"):
         status, body = request(address, path)
         assert status == 200, path
         assert f'window.DC_VIEW="{path.strip("/")}"' in body
@@ -829,7 +829,7 @@ def test_the_server_and_the_front_end_agree_on_the_view_names(server):
 
     block = re.search(r"const VIEWS = \[(.*?)\];", app, re.S)
     assert block, "app.js no longer declares a VIEWS array"
-    drawn = set(re.findall(r'\["([a-z]+)", "', block.group(1)))
+    drawn = set(re.findall(r'\["([a-z-]+)", "', block.group(1)))
     assert drawn == set(server_module.READ_VIEWS), f"nav={drawn} routed={server_module.READ_VIEWS}"
 
 
@@ -4316,3 +4316,55 @@ def test_a_half_written_briefing_renders_what_arrived():
     crash."""
     for cut in ("## Read of the b", "| Track | Reach", "```\nlet x =", "- **Power"):
         assert _parse_markdown(cut), f"{cut!r} rendered nothing"
+
+
+# --- the email ledger on the page, and the watch-for page ---------------------
+
+
+def test_watch_for_lists_every_open_blocker_on_the_readers_projects(reader):
+    """The page the morning email links to: each followed project, its open
+    obstacles, and the milestone that would clear the blocked track."""
+    address, _console, cookie, _id = reader
+    as_reader(address, cookie, "/api/watch", "POST", {"action": "add", "entry": "Microsoft"})
+
+    status, body = as_reader(address, cookie, "/api/watch-for")
+    assert status == 200
+    [project] = body["projects"]
+    assert project["company"] == "Microsoft"
+    assert [b["category"] for b in project["blockers"]] == ["transmission"]
+    assert project["signposts"][0]["track"] == "power"
+    assert project["signposts"][0]["blocked"] is True
+    assert body["counts"]["blocked"] == 1
+    assert body["last_email"] is None, "nothing has been emailed yet"
+
+
+def test_watch_for_is_empty_for_a_reader_following_nothing(reader):
+    address, _console, cookie, _id = reader
+    status, body = as_reader(address, cookie, "/api/watch-for")
+    assert status == 200
+    assert body["projects"] == [] and body["counts"]["projects"] == 0
+
+
+def test_updates_say_what_was_emailed_and_when(reader, seeded_db):
+    """ "New since your last email" is the mailer's own record, not a guess."""
+    from tracker import notify
+    from tracker.db import open_db, session_scope
+
+    address, _console, cookie, _id = reader
+    as_reader(address, cookie, "/api/watch", "POST", {"action": "add", "entry": "Microsoft"})
+
+    _status, before = as_reader(address, cookie, "/api/updates?days=36500")
+    assert before["last_email"] is None
+    assert before["watch"]["blockers"] == 1
+    assert all(s["emailed"] is False for s in before["signals"])
+
+    class Recorder:
+        def send(self, *, to, subject, html_body, text_body, idempotency_key=None):
+            return "msg_1"
+
+    with session_scope(open_db(seeded_db, readonly=False)) as session:
+        notify.send_all(session, transport=Recorder(), sleep=lambda _s: None, force=True)
+
+    _status, after = as_reader(address, cookie, "/api/updates?days=36500")
+    assert after["last_email"] is not None
+    assert after["last_email"]["kind"] in ("updates", "quiet")

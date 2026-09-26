@@ -45,7 +45,7 @@ from typing import Any, Final
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from tracker.models import Project, Risk, Source
+from tracker.models import Project, Risk, Source, utcnow
 from tracker.vocab import OPEN_RISK_STATUS
 
 log = logging.getLogger(__name__)
@@ -353,6 +353,7 @@ def apply_judgement(risk: Risk, judgement: Judgement, article: str) -> str:
 
     if judgement.verdict == "refuted":
         risk.status = REFUTED_STATUS
+        risk.closed_at = utcnow()
         return "refuted"
     return "unclear"
 

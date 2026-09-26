@@ -126,6 +126,7 @@ tracker coverage      # which operators we hold no rows for at all
 tracker users add you@example.com   # who may read the console (and `users admin`, `edit`, `disable`…)
 tracker watch add xAI --user you@example.com   # what you want to be told about
 tracker digest --user you@example.com          # what changed on it, good and bad
+tracker notify send   # everyone's 8 a.m. email: what is new, or what to watch for
 tracker serve         # the same dataset as a live console
 ```
 
@@ -242,9 +243,9 @@ however authoritative — independence is counted by domain.
 
 **"New" means new to us.** A crawl reads one article and imports a project's whole
 back-history, so stored milestones run from 1997 to 2040 while the rows themselves
-arrived last night. `tracker digest` and the console's landing page filter on when
-we learned a fact and print both dates, because either one alone reads as a
-different claim than the evidence supports.
+arrived last night. `tracker digest`, the console's landing page and the morning
+email filter on when we recorded a fact and print both dates, because either one
+alone reads as a different claim than the evidence supports.
 
 **Coverage is a question the sources cannot answer.** Discovery finds what was
 published, so an operator nobody wrote about last month is indistinguishable from
@@ -391,7 +392,7 @@ directory, which is what lets `tracker init` work from anywhere.
 .venv/Scripts/python -m pytest
 ```
 
-3,294 tests, about three minutes. **A fresh clone with no API key and no network access
+3,322 tests, about three minutes. **A fresh clone with no API key and no network access
 must produce a green run.** Tests that would hit the network or spend DeepSeek
 tokens are marked `network` / `llm` and deselected by default; run them
 explicitly with `-m network` or `-m llm`. An unmarked test that reaches for the

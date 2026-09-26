@@ -305,18 +305,23 @@ class Event(Base):
     #: `vocab.UNCONFIRMED_REASONS`. NULL means it did — a claim that is only true
     #: for rows written after migration 0017, which is what the backfill encodes.
     unconfirmed: Mapped[str | None] = mapped_column(Text)
-    #: When this row entered OUR database, as against `event_date`, which is when
-    #: the milestone happened. The briefing's "new since I last looked" reads
-    #: this; nothing else can answer that question, because a crawl of one
-    #: article imports a project's whole back-history at once (migration 0018).
+    #: When the article this milestone was read from was fetched (migration 0018).
+    #: Not when the row was written: enrichment re-reads cached pages, so a fact
+    #: can be written weeks after its page was fetched. See `recorded_at`.
     #:
     #: Nullable with no server default because SQLite's ALTER TABLE refuses a
-    #: CURRENT_TIMESTAMP default, so `upsert` sets it. NULL means "we do not know
-    #: when we learned this", which the feed treats as undated rather than new.
+    #: CURRENT_TIMESTAMP default, so `upsert` sets it.
     created_at: Mapped[dt.datetime | None] = mapped_column(DateTime)
     source_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("source.id", ondelete="SET NULL")
     )
+
+    #: When this row entered OUR database, as against `event_date` (when the
+    #: milestone happened) and `created_at` (when its page was fetched). The
+    #: briefing's "new since I last looked" and the mailer read this, because it is
+    #: the only date that cannot land behind a window that already ran (0029).
+    #: NULL reads as undated rather than as new.
+    recorded_at: Mapped[dt.datetime | None] = mapped_column(DateTime)
 
     project: Mapped[Project] = relationship(back_populates="events")
 
@@ -329,6 +334,7 @@ class Event(Base):
         Index("ix_event_project_id", "project_id"),
         Index("ix_event_date", "event_date"),
         Index("ix_event_created_at", "created_at"),
+        Index("ix_event_recorded_at", "recorded_at"),
     )
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
@@ -367,14 +373,21 @@ class Risk(Base):
     resolved_at: Mapped[dt.date | None] = mapped_column(Date)
     delay_days: Mapped[int | None] = mapped_column(Integer)
 
-    #: When we learned of this obstacle, as against `first_seen`, which is the
-    #: date the *source* puts on it. See `Event.created_at`; same column, same
-    #: reason, same migration.
+    #: When the article this obstacle was read from was fetched, as against
+    #: `first_seen`, which is the date the *source* puts on it. See
+    #: `Event.created_at`; same column, same caveat, same migration.
     created_at: Mapped[dt.datetime | None] = mapped_column(DateTime)
 
     source_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("source.id", ondelete="SET NULL")
     )
+
+    #: When this row entered our database. See `Event.recorded_at`.
+    recorded_at: Mapped[dt.datetime | None] = mapped_column(DateTime)
+
+    #: When we recorded this obstacle leaving `open` — the clock, not the source's
+    #: date, which is `resolved_at`. "Cleared since your last email" reads this.
+    closed_at: Mapped[dt.datetime | None] = mapped_column(DateTime)
 
     project: Mapped[Project] = relationship(back_populates="risks")
 
@@ -392,6 +405,7 @@ class Risk(Base):
         Index("ix_risk_category", "category"),
         Index("ix_risk_status", "status"),
         Index("ix_risk_created_at", "created_at"),
+        Index("ix_risk_recorded_at", "recorded_at"),
     )
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
@@ -850,3 +864,92 @@ class Watch(Base):
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return f"<Watch {self.entry!r} of account {self.account_id}>"
+
+
+class NotifyRun(Base):
+    """One `tracker notify send`. `finished_at` NULL after the fact means it died."""
+
+    __tablename__ = "notify_run"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    started_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False, server_default=_NOW)
+    finished_at: Mapped[dt.datetime | None] = mapped_column(DateTime)
+    sent: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"), default=0)
+    failed: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0"), default=0
+    )
+    skipped: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0"), default=0
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return f"<NotifyRun {self.id} sent={self.sent} failed={self.failed}>"
+
+
+class NotifyDelivery(Base):
+    """One message the mailer attempted, to one address, and how it ended.
+
+    `prepared_at` is the clock the message's contents were chosen against, and it
+    is where that person's next "new since your last email" begins — migration
+    0029 has the argument for it over `sent_at`.
+    """
+
+    __tablename__ = "notify_delivery"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    run_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("notify_run.id", ondelete="SET NULL")
+    )
+    account_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("account.id", ondelete="CASCADE")
+    )
+    #: The address it went to, as it was then.
+    email: Mapped[str] = mapped_column(Text, nullable=False)
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    prepared_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False)
+    sent_at: Mapped[dt.datetime | None] = mapped_column(DateTime)
+    updates: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0"), default=0
+    )
+    blockers: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0"), default=0
+    )
+    subject: Mapped[str | None] = mapped_column(Text)
+    message_id: Mapped[str | None] = mapped_column(Text)
+    attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0"), default=0
+    )
+    error: Mapped[str | None] = mapped_column(Text)
+
+    __table_args__ = (
+        CheckConstraint("kind IN ('updates', 'quiet', 'alert')", name="ck_notify_delivery_kind"),
+        CheckConstraint("status IN ('sent', 'failed')", name="ck_notify_delivery_status"),
+        Index("ix_notify_delivery_account", "account_id", "prepared_at"),
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return f"<NotifyDelivery {self.kind} {self.status} to {self.email!r}>"
+
+
+class NotifySent(Base):
+    """One update one person has been sent. Never sent to them again."""
+
+    __tablename__ = "notify_sent"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    account_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("account.id", ondelete="CASCADE"), nullable=False
+    )
+    #: `feed.Signal.key`.
+    signal_key: Mapped[str] = mapped_column(Text, nullable=False)
+    delivery_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("notify_delivery.id", ondelete="CASCADE"), nullable=False
+    )
+
+    __table_args__ = (
+        UniqueConstraint("account_id", "signal_key", name="uq_notify_sent_account_signal"),
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return f"<NotifySent {self.signal_key} to account {self.account_id}>"
