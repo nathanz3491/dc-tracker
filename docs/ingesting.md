@@ -33,6 +33,28 @@ Keys come from `platform.deepseek.com` and work against the single host
 `tracker ingest crawl --check` verifies the key in one cheap call, before you
 spend a run's worth of fetches.
 
+### A reserve for when the balance runs out
+
+```
+TRACKER_OPENCODE_GO_API_KEY=your-opencode-go-key
+```
+
+When DeepSeek answers that the balance is empty (HTTP 402), the call is sent
+again to [OpenCode Go](https://opencode.ai/docs/go/), which serves the same
+DeepSeek models through the same kind of API, and the rest of that command stays
+there. Nothing else moves it: a rate limit or a server error is retried on DeepSeek
+as before. Each new command asks DeepSeek first, so topping up takes effect by
+itself, with no setting to flip back.
+
+Without a reserve, an empty balance ends a night where it happens: every call
+after it fails the same way, and the loop stops with the rest of its work undone.
+With one, the night finishes on Go, and the spend ledger names the model that
+answered (`deepseek-v4.1-flash` by default, `TRACKER_OPENCODE_GO_MODEL`), so the
+morning report shows which calls went there. Go caps spending per model by the
+month, the week and five hours; a full overnight loop is about $5 at its
+off-peak rates, well inside the five-hour cap. When the reserve is exhausted too,
+calls fail as they did before there was one.
+
 ## Or a local model, on any command that spends LLM calls
 
 Every command that costs LLM calls takes the same flag:

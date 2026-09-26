@@ -82,6 +82,23 @@ command that spends LLM calls, against an Ollama server. See docs/ingesting.md.
 #: HTTP statuses worth retrying.
 RETRYABLE_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504})
 
+#: DeepSeek's answer when the account's balance is empty. Not retried — waiting
+#: does not refill it — and the one status that moves a process onto the reserve
+#: (`Settings.opencode_go_api_key`) when one is configured.
+INSUFFICIENT_BALANCE = 402
+
+#: Set by the first empty-balance answer in this process, so every later call goes
+#: straight to the reserve instead of asking DeepSeek again and being refused.
+#: Per process, not stored anywhere: each `tracker` command the nightly loop runs
+#: asks DeepSeek once, so the first command after a top-up is back on it.
+_ON_RESERVE = threading.Event()
+
+RESERVE_HELP = (
+    "DeepSeek's balance is empty (HTTP 402). Top it up at platform.deepseek.com, or "
+    "set TRACKER_OPENCODE_GO_API_KEY in .env so calls move to OpenCode Go when it "
+    "runs out."
+)
+
 
 #: The providers `--llm` and TRACKER_LLM_PROVIDER accept.
 LLM_PROVIDERS = ("deepseek", "ollama")
@@ -690,6 +707,68 @@ class DeepSeekExtractor:
     def endpoint(self) -> str:
         return f"{self.base_url}/chat/completions"
 
+    # --- which provider answers ---------------------------------------------
+    #
+    # DeepSeek, until it says the balance is empty; then the reserve, for the rest
+    # of the process. Resolved per request rather than in `__init__`, because the
+    # switch happens mid-run and an extractor built before it must follow it too.
+
+    @property
+    def on_reserve(self) -> bool:
+        return _ON_RESERVE.is_set() and self.settings.has_reserve_key()
+
+    @property
+    def provider(self) -> str:
+        return "opencode-go (reserve)" if self.on_reserve else "deepseek"
+
+    def _route(self, payload: dict[str, Any]) -> tuple[str, dict[str, str], dict[str, Any]]:
+        """`(endpoint, headers, body)` for whichever provider answers now."""
+        if self.on_reserve:
+            url = self.settings.opencode_go_base_url.rstrip("/") + "/chat/completions"
+            key = self.settings.opencode_go_api_key
+            payload = {**payload, "model": self.settings.opencode_go_model}
+        else:
+            url, key = self.endpoint, self.settings.deepseek_api_key
+        headers = {
+            "Authorization": f"Bearer {key.get_secret_value()}",
+            "Content-Type": "application/json",
+        }
+        return url, headers, payload
+
+    def _fall_back(self, response: httpx.Response) -> None:
+        """Move this process onto the reserve after DeepSeek's empty-balance answer.
+
+        Raises when there is nowhere to go — no reserve configured, or the reserve
+        itself answered 402 — so the caller never loops between the two.
+        """
+        if self.on_reserve or not self.settings.has_reserve_key():
+            raise LLMError(f"{RESERVE_HELP}\n{response.text[:300]}")
+        if not _ON_RESERVE.is_set():
+            log.warning(
+                "DeepSeek's balance is empty; this run continues on OpenCode Go (%s)",
+                self.settings.opencode_go_model,
+            )
+        _ON_RESERVE.set()
+
+    def _refused(self, response: httpx.Response) -> Exception:
+        """The exception for a non-retryable error status, named for who sent it."""
+        if response.status_code == 401 and self.on_reserve:
+            return LLMUnavailable(
+                "OpenCode Go rejected the reserve key (HTTP 401). Check "
+                "TRACKER_OPENCODE_GO_API_KEY; keys are issued at opencode.ai."
+            )
+        if response.status_code == 401:
+            return MissingApiKey(
+                "DeepSeek rejected the key (HTTP 401).\n\n"
+                f"Base URL in use: {self.base_url}\n"
+                "The most common cause after the MiniMax migration is a "
+                "leftover MiniMax key in TRACKER_DEEPSEEK_API_KEY: the two "
+                "providers issue their own keys and neither accepts the "
+                "other's.\n\n" + KEY_HELP
+            )
+        who = "OpenCode Go" if self.on_reserve else "DeepSeek"
+        return LLMError(f"{who} returned HTTP {response.status_code}: {response.text[:500]}")
+
     def complete(self, *, system: str, user: str, max_tokens: int | None = None) -> LLMReply:
         data = self._post(
             self._payload(system=system, user=user, max_tokens=max_tokens, stream=False)
@@ -839,44 +918,43 @@ class DeepSeekExtractor:
         private deliberation into the drawer and then have to erase it.
         """
         payload = self._payload(system=system, user=user, max_tokens=max_tokens, stream=True)
-        headers = {
-            "Authorization": f"Bearer {self.settings.deepseek_api_key.get_secret_value()}",
-            "Content-Type": "application/json",
-        }
+        url, headers, body = self._route(payload)
         filter_ = _ThinkFilter()
         try:
             with api_client(self.settings.deepseek_timeout_s).stream(
                 "POST",
-                self.endpoint,
-                json=payload,
+                url,
+                json=body,
                 headers=headers,
             ) as response:
                 if response.status_code >= 400:
                     response.read()
-                    if response.status_code == 401:
-                        raise MissingApiKey(KEY_HELP)
-                    raise LLMError(
-                        f"DeepSeek returned HTTP {response.status_code}: {response.text[:500]}"
-                    )
-                for line in response.iter_lines():
-                    piece = _sse_delta(line)
-                    if piece:
-                        yield from filter_.feed(piece)
+                    if response.status_code != INSUFFICIENT_BALANCE:
+                        raise self._refused(response)
+                    # Nothing has been shown yet, so moving to the reserve and
+                    # asking again cannot restart a paragraph mid-sentence.
+                    self._fall_back(response)
+                else:
+                    for line in response.iter_lines():
+                        piece = _sse_delta(line)
+                        if piece:
+                            yield from filter_.feed(piece)
+                    yield from filter_.finish()
+                    return
         except httpx.RequestError as exc:
             raise LLMError(f"LLM stream failed: {exc}") from exc
-        yield from filter_.finish()
+        yield from self.stream(system=system, user=user, max_tokens=max_tokens)
 
     def _post(self, payload: dict[str, Any], *, attempts: int = 3) -> dict[str, Any]:
-        headers = {
-            "Authorization": f"Bearer {self.settings.deepseek_api_key.get_secret_value()}",
-            "Content-Type": "application/json",
-        }
         last: Exception | None = None
         for attempt in range(1, attempts + 1):
+            # Inside the loop: another worker in this process may have moved it
+            # onto the reserve while this one was waiting out a backoff.
+            url, headers, body = self._route(payload)
             try:
                 response = api_client(self.settings.deepseek_timeout_s).post(
-                    self.endpoint,
-                    json=payload,
+                    url,
+                    json=body,
                     headers=headers,
                 )
             except httpx.RequestError as exc:
@@ -902,21 +980,15 @@ class DeepSeekExtractor:
                     )
                     time.sleep(delay)
                     continue
-                if response.status_code == 401:
-                    raise MissingApiKey(
-                        "DeepSeek rejected the key (HTTP 401).\n\n"
-                        f"Base URL in use: {self.base_url}\n"
-                        "The most common cause after the MiniMax migration is a "
-                        "leftover MiniMax key in TRACKER_DEEPSEEK_API_KEY: the two "
-                        "providers issue their own keys and neither accepts the "
-                        "other's.\n\n" + KEY_HELP
-                    )
+                if response.status_code == INSUFFICIENT_BALANCE:
+                    # Raises unless there is a reserve to move to. The retry is a
+                    # fresh set of attempts there, not one of DeepSeek's.
+                    self._fall_back(response)
+                    return self._post(payload, attempts=attempts)
                 if response.status_code >= 400:
-                    raise LLMError(
-                        f"DeepSeek returned HTTP {response.status_code}: {response.text[:500]}"
-                    )
+                    raise self._refused(response)
                 data = response.json()
-                record_spend(self.settings, data, self.model)
+                record_spend(self.settings, data, body["model"])
                 return data
             if attempt < attempts:
                 time.sleep(_backoff(attempt, settings=self.settings))
@@ -941,7 +1013,8 @@ class DeepSeekExtractor:
         reply = self.complete(system="Reply with the single word OK.", user="ping", max_tokens=512)
         answer, thinking = split_thinking(reply.text)
         return {
-            "base_url": self.base_url,
+            "provider": self.provider,
+            "base_url": self.settings.opencode_go_base_url if self.on_reserve else self.base_url,
             "model": reply.model,
             "latency_s": round(time.monotonic() - started, 2),
             "reply": (answer or "(empty)")[:80],

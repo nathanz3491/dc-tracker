@@ -857,6 +857,17 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **When DeepSeek's balance runs out, the night carries on on a reserve**
+  (`tracker/llm.py`, `tracker/config.py`, `.env.example`, `docs/ingesting.md`,
+  `tests/test_llm_reserve.py`). An empty balance used to end the loop where it
+  happened: every later call failed the same way, and a night that had spent half
+  its budget stopped with half its work undone. With `TRACKER_OPENCODE_GO_API_KEY`
+  set, DeepSeek's "balance empty" answer (HTTP 402) sends the same request to
+  OpenCode Go, which serves the same DeepSeek models, and the rest of that command
+  stays there. Nothing else triggers it, the two never bounce between each other,
+  and each new command asks DeepSeek first, so a top-up takes effect by itself.
+  The spend ledger names the model that answered.
+
 - **A day with no news still gets an email: what to watch for on each project**
   (`tracker/watchfor.py`, `tracker/notify.py`, `tests/test_notify.py`). Every open
   obstacle on every followed project, however old, with how long it has been open

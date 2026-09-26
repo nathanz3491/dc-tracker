@@ -270,6 +270,27 @@ class Settings(BaseSettings):
     #: genuinely stuck still ends.
     deepseek_timeout_s: float = Field(default=600.0, gt=0)
 
+    # --- The reserve: OpenCode Go -----------------------------------------
+    #: A second provider, used **only once DeepSeek answers that the balance is
+    #: empty** (HTTP 402), never in place of it. An empty balance used to end the
+    #: night where it happened: every later call failed the same way, and a loop
+    #: that had spent half its budget stopped with half its work undone.
+    #:
+    #: OpenCode Go serves the same DeepSeek models through the same OpenAI-style
+    #: API, so nothing about a request changes but the address, the key and the
+    #: model's name. It is a subscription with dollar ceilings per model — a month,
+    #: a week at half of that, five hours at a fifth — and a full overnight loop is
+    #: about $5 at its off-peak rates. When it is exhausted too, calls fail as they
+    #: did before there was a reserve.
+    #:
+    #: Unset, there is no reserve and an empty balance fails as it always did.
+    opencode_go_api_key: SecretStr | None = None
+    opencode_go_base_url: str = "https://opencode.ai/zen/go/v1"
+    #: Every tier goes to this one model on the reserve. The tiers here differ by
+    #: reasoning effort, not by model, so one name covers them. The 4.1 flash model
+    #: rather than 4: same price, and twice the monthly ceiling on Go.
+    opencode_go_model: str = "deepseek-v4.1-flash"
+
     #: Model for the drawer's written briefing — the one call a person waits for.
     #:
     #: A third setting, because this job's constraint is neither volume nor depth
@@ -604,6 +625,11 @@ class Settings(BaseSettings):
 
     def has_api_key(self) -> bool:
         return bool(self.deepseek_api_key and self.deepseek_api_key.get_secret_value().strip())
+
+    def has_reserve_key(self) -> bool:
+        return bool(
+            self.opencode_go_api_key and self.opencode_go_api_key.get_secret_value().strip()
+        )
 
     def llm_workers(self, provider: str | None = None) -> int:
         """Calls to keep in flight for the provider that will actually answer.
