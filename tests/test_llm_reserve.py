@@ -74,6 +74,21 @@ def test_an_empty_balance_moves_the_same_request_to_the_reserve(settings):
     assert extractor.provider == "opencode-go (reserve)"
 
 
+def test_the_reserve_is_told_the_session_and_who_is_asking(settings):
+    """Go refuses a request without `x-opencode-session` (HTTP 400, MissingSessionID)."""
+    from tracker import __version__, llm
+
+    with respx.mock:
+        first = respx.post(DEEPSEEK).respond(402, json=EMPTY)
+        reserve = respx.post(RESERVE).respond(200, json=_reply("deepseek-v4.1-flash"))
+        llm.DeepSeekExtractor(settings).complete(system="s", user="u")
+        llm.DeepSeekExtractor(settings).complete(system="s", user="u")
+    one, two = (call.request.headers for call in reserve.calls)
+    assert one["x-opencode-session"] and one["x-opencode-session"] == two["x-opencode-session"]
+    assert one["User-Agent"] == f"dc-tracker/{__version__}"
+    assert "x-opencode-session" not in first.calls[0].request.headers, "DeepSeek is not told"
+
+
 def test_the_ledger_names_the_reserve_model(settings):
     from tracker import llm
 

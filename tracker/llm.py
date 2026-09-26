@@ -46,6 +46,7 @@ import re
 import sys
 import threading
 import time
+import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -92,6 +93,13 @@ INSUFFICIENT_BALANCE = 402
 #: Per process, not stored anywhere: each `tracker` command the nightly loop runs
 #: asks DeepSeek once, so the first command after a top-up is back on it.
 _ON_RESERVE = threading.Event()
+
+#: What OpenCode Go asks of every client, and refuses a request without (HTTP 400,
+#: `MissingSessionID`): a stable session ID per conversation, which it routes and
+#: caches by, and a user agent naming the client rather than the HTTP library.
+#: One session per process — one `tracker` command — and the name is this tool's
+#: own. Go describes itself as meant for coding agents; the tool says what it is.
+_RESERVE_SESSION = uuid.uuid4().hex
 
 RESERVE_HELP = (
     "DeepSeek's balance is empty (HTTP 402). Top it up at platform.deepseek.com, or "
@@ -724,14 +732,21 @@ class DeepSeekExtractor:
     def _route(self, payload: dict[str, Any]) -> tuple[str, dict[str, str], dict[str, Any]]:
         """`(endpoint, headers, body)` for whichever provider answers now."""
         if self.on_reserve:
+            from tracker import __version__
+
             url = self.settings.opencode_go_base_url.rstrip("/") + "/chat/completions"
             key = self.settings.opencode_go_api_key
             payload = {**payload, "model": self.settings.opencode_go_model}
+            extra = {
+                "x-opencode-session": _RESERVE_SESSION,
+                "User-Agent": f"dc-tracker/{__version__}",
+            }
         else:
-            url, key = self.endpoint, self.settings.deepseek_api_key
+            url, key, extra = self.endpoint, self.settings.deepseek_api_key, {}
         headers = {
             "Authorization": f"Bearer {key.get_secret_value()}",
             "Content-Type": "application/json",
+            **extra,
         }
         return url, headers, payload
 

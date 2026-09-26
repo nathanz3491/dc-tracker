@@ -866,7 +866,10 @@ initial build of the v1 PRD.
   OpenCode Go, which serves the same DeepSeek models, and the rest of that command
   stays there. Nothing else triggers it, the two never bounce between each other,
   and each new command asks DeepSeek first, so a top-up takes effect by itself.
-  The spend ledger names the model that answered.
+  The spend ledger names the model that answered. Go refuses a request without
+  a session ID, so the tool sends one per command and names itself as
+  `dc-tracker`; Go says it is meant for coding agents, which is a known risk
+  to the operator's Go account (`docs/ingesting.md`).
 
 - **A day with no news still gets an email: what to watch for on each project**
   (`tracker/watchfor.py`, `tracker/notify.py`, `tests/test_notify.py`). Every open

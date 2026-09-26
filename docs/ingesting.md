@@ -55,6 +55,15 @@ month, the week and five hours; a full overnight loop is about $5 at its
 off-peak rates, well inside the five-hour cap. When the reserve is exhausted too,
 calls fail as they did before there was one.
 
+**Go says it is meant for coding agents, and this is not one.** Its docs ask every
+client for typical coding-agent traffic, a user agent naming the client, and a
+session ID per conversation, and say traffic is monitored for abuse. Without the
+session header it refuses the request outright. The tool sends a session ID per
+command and identifies itself as `dc-tracker/<version>`; it does not pretend to be
+anything else. That is a known risk the operator chose to accept: a night of
+article reading does not look like a coding session, and an account Go flags is
+the operator's own Go account.
+
 ## Or a local model, on any command that spends LLM calls
 
 Every command that costs LLM calls takes the same flag:
