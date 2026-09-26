@@ -125,6 +125,22 @@ tr.dc-enter { animation-name: fade-in; }
 .dc-seg-btn:hover      { color: var(--foreground); }
 .dc-seg-btn[aria-pressed="true"] { background: var(--surface); color: var(--foreground); }
 
+/* ---- App header: what gives way as the window narrows ---------------------
+   One row needs ~1,535px with every item in it: logo 166, seven views 523, and
+   counts, theme, Admin, account and Sign out 693. A seventh view (Watch for)
+   pushed that past a common 1,510px window, and the whole right-hand group fell to
+   a second row under the logo. So the least useful item goes first — the states
+   and citations counts, then the project count, then the views' padding and the
+   account name's width — and the row wraps only below ~1,150px. When it does, the
+   account group keeps to the right rather than landing under the logo. */
+.dc-head-actions { margin-left: auto; }
+@media (max-width: 1599px) { .dc-head-extra { display: none; } }
+@media (max-width: 1359px) { .dc-head-stats { display: none; } }
+@media (max-width: 1259px) {
+  .dc-head .dc-seg-btn { padding: 0 10px; }
+  .dc-head-who         { max-width: 140px !important; }
+}
+
 /* ---- Table rows and the sticky identity columns -------------------------- */
 .dc-row            { cursor: pointer; background: var(--surface); }
 .dc-row:hover      { background: color-mix(in oklab, var(--muted) 60%, var(--surface)); }
@@ -857,6 +873,9 @@ h5.dc-md-h {
   background: none; border: 0; padding: 0; cursor: pointer; font: inherit;
   font-size: 12px; color: var(--muted-foreground); text-decoration: underline;
   text-underline-offset: 3px; justify-self: start;
+  /* The eyebrow is a flex column, where `justify-self` does nothing and a child
+     stretches to the column's width — which centred the label under the heading. */
+  align-self: flex-start;
 }
 
 /* ---- Map zoom -------------------------------------------------------------

@@ -5738,9 +5738,12 @@ function App() {
 
           <span style=${{ flex: "1 1 40px" }} />
 
+          ${/* The bar gives way in order of importance as the window narrows — the
+                states and citations counts, then the project count, then tab padding —
+                and only then wraps. See `.dc-head-stats` in app.css. */ ""}
           <div class="dc-head-actions" style=${{ display: "flex", alignItems: "center", gap: 10, flex: "none" }}>
-            <span class="dc-num dc-head-counts" style=${{ fontSize: 12, color: "var(--muted-foreground)" }}>
-              <${Counted} value=${t.projects} /> projects · <${Counted} value=${t.states} /> states · <${Counted} value=${t.citations} /> citations
+            <span class="dc-num dc-head-counts dc-head-stats" style=${{ fontSize: 12, color: "var(--muted-foreground)" }}>
+              <${Counted} value=${t.projects} /> projects<span class="dc-head-extra"> · <${Counted} value=${t.states} /> states · <${Counted} value=${t.citations} /> citations</span>
             </span>
             <${Button} size="icon" variant="outline" aria-label="Toggle theme"
                        onClick=${() => setDark((d) => !d)}>${dark ? "☀" : "☾"}<//>
@@ -5750,7 +5753,7 @@ function App() {
               ${data.account.admin && html`
                 <${Button} size="sm" variant=${view === "admin" ? "secondary" : "ghost"}
                            onClick=${() => goto("admin")}>Admin<//>`}
-              <button type="button" class="dc-link dc-head-counts"
+              <button type="button" class="dc-link dc-head-counts dc-head-who"
                       style=${{ fontSize: 12, color: "var(--muted-foreground)", maxWidth: 200,
                                 overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
                       title=${`${data.account.email} — your account and password`}

@@ -12,6 +12,17 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **The console's top bar stays on one row on an ordinary laptop screen**
+  (`tracker/webui/static/app.js`, `tracker/webui/static/app.css`). With every item
+  in it the bar needs about 1,535px, and the new Watch for tab pushed it past a
+  common 1,510px window, so the counts, Admin, account and Sign out dropped to a
+  second row under the logo. The least useful items now give way first as the
+  window narrows: the states and citations counts, then the project count, then
+  the tabs' padding and the account name's width. The bar wraps only below about
+  1,150px, and then keeps the account group on the right. The "what is this?"
+  link under each page heading also sat centred rather than under the heading's
+  first word; it is left-aligned again.
+
 - **The model settling a contradiction can see which citations are already ruled
   out, so it stops naming them** (`tracker/agent.py`, `tracker/triage.py`,
   `tracker/cli/logic.py`, `tests/test_agent.py`, `tests/test_triage.py`,
