@@ -129,6 +129,62 @@ def test_the_window_filters_on_when_we_learned_it(session):
     assert result.signals[0].at == NOW
 
 
+def test_a_fact_written_long_after_its_page_was_fetched_is_new_when_written(session):
+    """The bug that lost updates: enrichment re-reads cached pages, so a row written
+    today can carry a fetch from weeks ago. Its insert time is what is new."""
+    project = _project(session)
+    _event(session, project, created_at=BEFORE, recorded_at=NOW)
+
+    [signal] = feed.digest(session, since=SINCE).signals
+    assert signal.at == NOW
+    assert signal.key.startswith("event:")
+
+
+def test_a_cleared_obstacle_is_new_when_we_recorded_it_clearing(session):
+    """A resolution the source dates in July, recorded today, is today's news."""
+    project = _project(session)
+    _risk(
+        session,
+        project,
+        status="resolved",
+        resolved_at=dt.date(2026, 7, 1),
+        closed_at=NOW,
+        created_at=BEFORE,
+    )
+    [signal] = feed.digest(session, since=SINCE).signals
+    assert signal.kind == "obstacle_cleared"
+    assert signal.at == NOW and signal.happened == dt.date(2026, 7, 1)
+    assert signal.key.endswith(":cleared")
+
+
+def test_a_slip_to_a_future_date_is_news_not_a_schedule(session):
+    """A slip is dated by the date it slipped TO. Read as a schedule, it could never
+    be sent — 56 of 146 on the live database."""
+    project = _project(session)
+    _event(
+        session,
+        project,
+        event_type="delayed",
+        event_date=dt.date.today() + dt.timedelta(days=700),
+        description="expected_online moved from 2026-01-01 to 2028-10-01 (+1004 days)",
+        quote=None,
+    )
+    [signal] = feed.digest(session, since=SINCE).signals
+    assert not signal.expected
+    assert signal.happened is None
+    assert signal.sign == "bad" and signal.weight == 3
+
+
+def test_a_folded_card_carries_the_key_of_every_row_behind_it(session):
+    """Sending the card means sending all of them, or the restatement goes tomorrow."""
+    project = _project(session)
+    first = _event(session, project, event_type="delayed", event_date=dt.date(2026, 8, 20))
+    second = _event(session, project, event_type="delayed", event_date=dt.date(2026, 8, 21))
+
+    [signal] = feed.digest(session, since=SINCE).signals
+    assert set(signal.all_keys) == {f"event:{first.id}", f"event:{second.id}"}
+
+
 def test_an_event_with_no_discovery_date_is_not_news(session):
     """NULL means "we do not know when we learned this" (migration 0018)."""
     project = _project(session)
@@ -159,7 +215,7 @@ def test_an_announcement_is_neither_good_nor_bad(session):
 
 
 def test_a_cleared_obstacle_is_good_news_dated_by_its_resolution(session):
-    """Nothing records when we *read* that a risk cleared, so `resolved_at` is the clock."""
+    """A row closed before 0029 has no `closed_at`, so `resolved_at` stands in for it."""
     project = _project(session)
     _risk(
         session,

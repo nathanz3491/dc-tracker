@@ -2358,7 +2358,7 @@ def _seed_watcher(db: Path, *, email: str = "reader@example.com", events: int = 
 
     from tracker import accounts, watchlist
     from tracker.db import open_db, session_scope
-    from tracker.models import Event, Project
+    from tracker.models import Event, Project, utcnow
 
     with session_scope(open_db(db, readonly=False)) as session:
         account = accounts.create(session, email, "correct horse battery", name="Reader")
@@ -2382,7 +2382,8 @@ def _seed_watcher(db: Path, *, email: str = "reader@example.com", events: int = 
                     event_type="energized",
                     description=f"Monarch {n} energized.",
                     quote=f"Monarch {n} was energized on Friday.",
-                    created_at=when.datetime.now(),
+                    created_at=utcnow(),
+                    recorded_at=utcnow(),
                 )
             )
 
@@ -2398,13 +2399,14 @@ def test_notify_commands_are_registered(initialized: Path):
     assert result.exit_code == 0, result.output
     assert "preview" in result.output
     assert "send" in result.output
+    assert "status" in result.output
 
 
 def test_notify_preview_renders_every_update_and_sends_nothing(initialized: Path, tmp_path: Path):
     _seed_watcher(initialized, events=3)
     out = tmp_path / "mail.html"
 
-    result = invoke(initialized, "notify", "preview", "--days", "2", "--out", str(out))
+    result = invoke(initialized, "notify", "preview", "--out", str(out))
 
     assert result.exit_code == 0, result.output
     body = out.read_text(encoding="utf-8")
@@ -2414,45 +2416,100 @@ def test_notify_preview_renders_every_update_and_sends_nothing(initialized: Path
 
 
 def test_notify_send_dry_run_names_the_recipient_and_sends_nothing(initialized: Path):
-    """A dry run needs no key and opens no socket — the two ways a "safe" preview
-    stops being safe."""
+    """A dry run needs no key, opens no socket and records nothing — the ways a
+    "safe" preview stops being safe."""
     _seed_watcher(initialized, events=2)
 
-    result = invoke(initialized, "notify", "send", "--dry-run", "--days", "2")
+    result = invoke(initialized, "notify", "send", "--dry-run")
 
     assert result.exit_code == 0, result.output
     assert "reader@example.com" in result.output
-    assert "would send" in result.output
+    assert "would send updates" in result.output
+    again = invoke(initialized, "notify", "send", "--dry-run")
+    assert "would send updates" in again.output, "a dry run used nobody's updates up"
+
+
+def test_notify_send_still_accepts_the_old_days_flag(initialized: Path):
+    """A scheduler written before the ledger passes `--days`; it must keep working."""
+    _seed_watcher(initialized, events=1)
+    result = invoke(initialized, "notify", "send", "--dry-run", "--days", "3")
+    assert result.exit_code == 0, result.output
 
 
 def test_notify_send_without_a_key_says_which_variable(initialized: Path):
     _seed_watcher(initialized, events=1)
-    result = invoke(initialized, "notify", "send", "--days", "2")
+    result = invoke(initialized, "notify", "send")
     assert result.exit_code == 2
     assert "TRACKER_RESEND_API_KEY" in result.output
 
 
+def test_notify_send_records_what_it_sent_and_status_shows_it(initialized: Path, monkeypatch):
+    """The whole path from the command to the ledger and back, with a fake Resend."""
+    from tracker import notify
+
+    sent: list[str] = []
+
+    class Fake:
+        def __init__(self, settings=None) -> None:
+            pass
+
+        def send(self, *, to, subject, html_body, text_body, idempotency_key=None):
+            sent.append(to)
+            return "msg_1"
+
+    monkeypatch.setattr(notify, "ResendTransport", Fake)
+    _seed_watcher(initialized, events=2)
+
+    result = invoke(initialized, "notify", "send")
+    assert result.exit_code == 0, result.output
+    assert sent == ["reader@example.com"]
+
+    status = invoke(initialized, "notify", "status")
+    assert status.exit_code == 0, status.output
+    assert "reader@example.com" in status.output
+    assert "sent" in status.output
+
+    again = invoke(initialized, "notify", "send")
+    assert sent == ["reader@example.com"], "one email a day"
+    assert "already emailed today" in again.output
+
+
+def test_notify_send_exits_2_when_anybody_failed(initialized: Path, monkeypatch):
+    from tracker import notify
+
+    class Refuses:
+        def __init__(self, settings=None) -> None:
+            pass
+
+        def send(self, *, to, subject, html_body, text_body, idempotency_key=None):
+            raise notify.EmailError("Resend returned HTTP 422: invalid recipient")
+
+    monkeypatch.setattr(notify, "ResendTransport", Refuses)
+    _seed_watcher(initialized, events=1)
+
+    result = invoke(initialized, "notify", "send")
+    assert result.exit_code == 2
+    assert "FAILED" in result.output
+
+
 def test_notify_preview_is_quiet_for_an_account_watching_nothing(initialized: Path):
-    """Exit 1, not a refusal. An empty list now means nothing is watched, so there
-    is simply nothing to preview — the digest is empty by arithmetic rather than
-    by a guard."""
+    """Exit 1, not a refusal: an account with no watchlist gets no email, and there
+    is simply nothing to preview."""
     from tracker import accounts
     from tracker.db import open_db, session_scope
 
     with session_scope(open_db(initialized, readonly=False)) as session:
         accounts.create(session, "nolist@example.com", "correct horse battery")
 
-    result = invoke(initialized, "notify", "preview", "--days", "2")
+    result = invoke(initialized, "notify", "preview")
     assert result.exit_code == 1
-    assert "nothing worth sending" in result.output
+    assert "no watchlist" in result.output
 
 
 def test_notify_preview_refuses_an_account_watching_everything(initialized: Path):
-    """The guard that survives 0022, and the case it was really written for.
-
-    Wanting the whole database on a page is a reasonable thing to turn on; having
-    it rendered as mail is a firehose, so `preview` says so rather than building a
-    message about every project that moved.
+    """Wanting the whole database on a page is a reasonable thing to turn on;
+    having it rendered as mail every morning is a firehose, so `preview` says so
+    rather than building a message about every project that moved.
     """
     from tracker import accounts
     from tracker.db import open_db, session_scope
@@ -2461,6 +2518,6 @@ def test_notify_preview_refuses_an_account_watching_everything(initialized: Path
         account = accounts.create(session, "all@example.com", "correct horse battery")
         account.watch_all = True
 
-    result = invoke(initialized, "notify", "preview", "--days", "2")
+    result = invoke(initialized, "notify", "preview", "--user", "all@example.com")
     assert result.exit_code == 2
-    assert "no watchlist" in result.output
+    assert "watches the whole database" in result.output

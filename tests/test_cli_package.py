@@ -68,6 +68,7 @@ COMMANDS = {
     "notify",
     "notify preview",
     "notify send",
+    "notify status",
     "paths",
     "point",
     "prospect",

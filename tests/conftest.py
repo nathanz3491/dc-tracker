@@ -230,8 +230,15 @@ def _fast_and_keyless_settings(monkeypatch, tmp_path_factory):
     # to launch it sets the path itself (`tests/test_browser_fetch.py`).
     monkeypatch.delenv("PLAYWRIGHT_BROWSERS_PATH", raising=False)
 
+    # And on DeepSeek, not the reserve: the switch is per process, so one test that
+    # triggers it would otherwise send every later test's calls to OpenCode Go.
+    from tracker import llm
+
+    llm._ON_RESERVE.clear()
+
     get_settings.cache_clear()
     yield
+    llm._ON_RESERVE.clear()
     get_settings.cache_clear()
     home.cache_clear()
 

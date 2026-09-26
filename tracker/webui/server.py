@@ -124,7 +124,9 @@ AUTH_CACHE_S = 5.0
 #: tracks and confidence — what a reader needs in order not to misread the data —
 #: and was only filed under the machinery because that is where the tab happened to
 #: sit.
-READ_VIEWS: frozenset[str] = frozenset({"updates", "projects", "sources", "map", "capex", "help"})
+READ_VIEWS: frozenset[str] = frozenset(
+    {"updates", "watch-for", "projects", "sources", "map", "capex", "help"}
+)
 
 #: Pages about the reader's own account rather than the dataset, so not tabs in the
 #: nav: `/account` is anybody's own (their password), `/admin` manages every account
@@ -773,6 +775,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._publishers()
         if route == "/api/updates":
             return self._updates(query)
+        if route == "/api/watch-for":
+            return self._watch_for()
         if route == "/api/health":
             return self._json({"ok": True, "version": __version__, "commit": deployed_commit()})
         if route == "/api/admin/users":
@@ -1360,9 +1364,20 @@ class Handler(BaseHTTPRequestHandler):
         },
         "GET /api/updates": {
             "answers": "what changed on the watchlist, signed good or bad, most material first",
-            "reads": "feed.digest — every project with its events, risks and citations",
+            "reads": "feed.digest — every project with its events, risks and citations — "
+            "plus this reader's email ledger and the watch-for tally",
             "note": "?days=<n> or ?since=<iso>, ?limit=<n>. The window is on when we "
-            "learned a fact, not when it happened: see tracker/feed.py.",
+            "recorded a fact, not when it happened: see tracker/feed.py. Each signal "
+            "says whether it was emailed to this reader, and `last_email` says when "
+            "their last one went, so the page can split 'new since your email' from "
+            "the rest of the week.",
+        },
+        "GET /api/watch-for": {
+            "answers": "every followed project's open obstacles and the milestone that "
+            "would clear each, most obstructed first",
+            "reads": "watchfor.report — the followed projects with their events and risks",
+            "note": "The page the daily email links to. Every open obstacle, however "
+            "old; unconfirmed ones apart and labelled.",
         },
         "POST /api/watch": {
             "answers": "adds or drops one watchlist entry; returns the list",
@@ -1715,7 +1730,7 @@ class Handler(BaseHTTPRequestHandler):
         **Not folded into `/api/dataset`.** The dataset already ships every
         project's events and risks, so a page *could* assemble this in the
         browser, and an earlier draft did. Two things decided against it: the
-        window has to be applied to `created_at`, which means re-deriving in
+        window has to be applied to `recorded_at`, which means re-deriving in
         JavaScript the one rule this feature exists to get right, and
         `feed.digest` calls `tracks.standing` per project to find what a blocked
         track was waiting for — the judgement `docs/architecture.md` says the
@@ -1769,7 +1784,7 @@ class Handler(BaseHTTPRequestHandler):
         # copy of production — so the route used to pay that twice. With nobody
         # signed in there is no list to draw, and the digest resolves its own
         # every-account view exactly as it always has.
-        from tracker import watchlist
+        from tracker import watchfor, watchlist
 
         account_id = self._account_id
         with self.console.read_session() as session:
@@ -1793,9 +1808,59 @@ class Handler(BaseHTTPRequestHandler):
             payload["watch_all"] = (
                 bool(feed.watches_all(session, account_id)) if account_id is not None else False
             )
+            payload.update(self._email_json(session, account_id, payload))
+            payload["watch"] = watchfor.report(
+                session, account_id=account_id, entities=entities
+            ).as_json()["counts"]
 
         payload["days"] = days
         payload["allow_watch"] = self.console.allow_watch and account_id is not None
+        self._json(payload)
+
+    def _email_json(
+        self, session: Any, account_id: int | None, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        """This reader's last email, and which of the listed signals it carried.
+
+        Marks each signal in place with `emailed`, from the mailer's own ledger,
+        so the page can say "new since your email" and "already in your inbox"
+        without guessing from dates. Nobody signed in has no inbox.
+        """
+        from tracker import notify
+
+        last = notify.last_email(session, account_id) if account_id is not None else None
+        sent = notify.sent_keys(session, account_id) if account_id is not None else set()
+        for group in ("signals", "held"):
+            for item in payload.get(group, []):
+                keys = item.get("keys") or ([item["key"]] if item.get("key") else [])
+                item["emailed"] = any(k in sent for k in keys)
+        return {
+            "last_email": (
+                {
+                    "at": last.prepared_at.isoformat(),
+                    "sent_at": last.sent_at.isoformat() if last.sent_at else None,
+                    "kind": last.kind,
+                    "updates": last.updates,
+                }
+                if last is not None
+                else None
+            )
+        }
+
+    def _watch_for(self) -> None:
+        """Every followed project's open obstacles, and what would clear each.
+
+        The page the daily email's "see the full list" button opens. Derived like
+        `/api/updates` — `tracker.watchfor` stores nothing — and per reader, so
+        never cached across accounts.
+        """
+        from tracker import notify, watchfor
+
+        account_id = self._account_id
+        with self.console.read_session() as session:
+            payload = watchfor.report(session, account_id=account_id).as_json()
+            last = notify.last_email(session, account_id) if account_id is not None else None
+        payload["last_email"] = last.prepared_at.isoformat() if last is not None else None
         self._json(payload)
 
     def _set_watch_all(self, account_id: int, value: bool) -> None:

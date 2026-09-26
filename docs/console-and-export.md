@@ -232,7 +232,7 @@ bad and the same obstacle clearing is good — all four are closed enums, so the
 sign is a lookup rather than an opinion. `tracker/feed.py` has the reasoning, and
 three parts of it are worth knowing here:
 
-* **The window is on when *we* learned a fact.** A crawl reads one article and
+* **The window is on when *we* recorded a fact.** A crawl reads one article and
   imports a project's whole back-history, so stored milestones run from 1997 to
   2040 while the rows themselves arrived last night. Filtering on the milestone's
   own date would report 2022 every morning. Every line therefore carries both
@@ -251,12 +251,26 @@ Signals whose evidence the gate could not confirm are held in their own tray,
 counted separately, never mixed in — the console's standing rule is that a model's
 answer is not a fact, and a briefing is the last place to abandon it.
 
-**Showing and notifying are different bars.** Lines marked *would notify* are what
-a nightly `tracker digest --notify` sends: the blocker moving, a decisive milestone,
-a dated slip, or an obstacle of material severity opening or clearing. Everything
-else is there to be read. The count beside the window control toggles the page down
-to just those, which is how you check what the schedule would have sent without
-waiting for it.
+**It leads with what needs a decision.** Four tiles — new since your last email,
+needing attention, good news, still open — then what is new since your last email,
+then the rest of the window grouped by day for anybody who skipped one, then a
+per-company table: how each watch's window went, how many blockers it still has,
+and where it stands. "New since your last email" and the ✓ *emailed* mark come
+from the mailer's own ledger (`notify_sent`), never from comparing dates, so the
+split is exactly what reached the inbox. With no email yet it is the last day.
+
+**Showing and emailing are different bars.** Lines marked *worth emailing* clear
+the bar the 8 a.m. email applies: the blocker moving, a decisive milestone, a dated
+slip, or an obstacle of material severity opening or clearing. Everything else is
+there to be read. The *worth emailing* filter narrows the page to just those.
+
+**Watch for** is the page the email's "see the full list" button opens: every open
+obstacle on every project you follow, however old, with how long it has been open,
+the track it holds, its source and quote, and the milestone that would clear it —
+"power — energized: look for an energization or service-start announcement from the
+utility". Unconfirmed obstacles sit in their own fold on each project, labelled.
+It is `tracker/watchfor.py`, the same report the email is built from, served at
+`/api/watch-for`.
 
 **The watchlist is editable here, and it is the only thing on the console that
 writes.** A `watch` row says whose news to show: nothing derives from it, no

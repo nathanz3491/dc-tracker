@@ -415,10 +415,18 @@ obstacle, `source.published_at` is when a publisher published — and none of th
 is when the row appeared in our database. A crawl reads one article and imports a
 project's whole back-history, so stored milestones span 1997 to 2040 while the rows
 arrived last night. Migration 0018 added `created_at` to `event` and `risk` for
-exactly this, backfilled from each citation's `fetched_at` and left NULL where
-nothing ever recorded it.
+exactly this, backfilled from each citation's `fetched_at`.
 
-So the window filters on when we learned something, and every line prints both
+That turned out to be the wrong clock, and migration 0029 replaced it. The fetch is
+not when a fact enters the database: enrichment and the overnight loop re-read
+cached articles, so a fact is routinely written days or weeks after its page was
+fetched. Measured on the live database from 2026-08-31 to 09-25, 46 of 246 new
+milestones and 21 of 50 new obstacles were written more than three days after their
+`created_at` — every one of them landing behind a window that had already been read
+and mailed. `recorded_at` is the row's own insert time, and a cleared obstacle's is
+`closed_at`, the moment it left `open`.
+
+So the window filters on when we recorded something, and every line prints both
 dates. `tracker/feed.py` carries the rest of the reasoning: the sign comes from the
 vocabulary rather than from a model, a future-dated milestone is a schedule and not
 an achievement, and a signal that reaches the milestone a *blocked* track was
@@ -451,11 +459,17 @@ on the live database over thirty days:
 | --- | --- | --- |
 | no recency gate | 354 | 135 |
 | happened within a year | 192 | 52 |
-| **happened within 90 days** (`NOTIFY_MAX_AGE_DAYS`) | **129** | **21** |
+| **happened within 90 days** | **129** | **21** |
 
-107 of that original 354 described something more than three years old. An
-*undated* signal is kept — `happened` is None for an obstacle nobody dated, and an
-open obstacle is a statement about now.
+107 of that original 354 described something more than three years old. The gate
+is now **45 days** (`NOTIFY_MAX_AGE_DAYS`), the product's rule for the morning
+email: anything that happened more than a month and a half ago is not news. An
+*undated* signal is judged by the day we recorded it — `happened` is None for an
+obstacle nobody dated, and an open obstacle is a statement about now.
+
+A slip is dated by the date it slipped *to*, so it used to read as a schedule and
+could never be sent — 56 of 146 on the live database. A `delayed` event dated in
+the future now counts as having happened when we recorded it.
 
 **An empty watchlist is refused.** Showing the whole database until somebody
 configures a list is right for a page, which is opened deliberately, and wrong for
@@ -483,21 +497,60 @@ there is nobody whose preference to read.
 ```bash
 tracker notify preview --user you@example.com --out /tmp/mail.html  # free, offline
 tracker notify send --dry-run                                       # who would get what
-tracker notify send --days 1                                        # the nightly run
+tracker notify send                                                 # the 8 a.m. run
+tracker notify status --user you@example.com                        # what went out
 ```
 
-**One email per person, containing everything.** The loop is over people, not
-signals: fourteen updates on your watchlist is one message with fourteen cards,
-and a quiet window sends nothing at all. An account with no watchlist is skipped
-rather than mailed the whole database — the same rule `digest --notify` enforces.
+**One email per person, every morning at 8:00 (China time), and nothing sent
+twice.** The loop is over people, not signals: fourteen updates on your watchlist
+is one message with fourteen cards. An update goes in if you have never been sent
+it, it clears `feed.notable`, and either
+
+* we **recorded it since your last email** and it happened within the last 45
+  days, or
+* it **happened within the last two weeks** — the catch-up for a company you only
+  just started watching, or a morning whose email failed. A milestone recorded
+  *before* its own date was a schedule when we read it, and is not caught up.
+
+With no earlier email, "since your last email" means the last day.
+
+**A day with no news still sends**, and it is not an apology: it is every open
+blocker on every project you follow, and the milestone that would clear each —
+`tracker/watchfor.py`, the same report the console's *Watch for* page draws. A day
+with news carries a short version of it under the news (the five most obstructed
+projects, two blockers each). Both link to the full list and to the week on the
+*Updates* page, for anybody who skipped an email. An account with no watchlist
+gets nothing; one that watches the whole database is not mailed, because every
+project every morning is a firehose.
+
+**Why it has a memory now.** The mailer used to choose by the clock — "whatever we
+learned in the last N days" — and the production run showed every way that goes
+wrong: eight runs from 09-03 to 09-24 sent one email, a quoted, material obstacle
+written three weeks after its fetch was never sent, a failed or skipped run's
+updates were gone for good, a reboot reset the three-day timer, the window's
+midnight was read in the wrong time zone, and one refused recipient stopped
+everybody after them. Now every update a person is sent is recorded against them
+(`notify_sent`), every message attempted is a row (`notify_delivery`, sent or
+failed, with the provider's id or error), and every run is a row (`notify_run`).
+
+**One person's failure is theirs alone.** Each message is posted on its own,
+retried through rate limits, provider errors and dropped connections, with an
+idempotency key so a retry can never deliver twice. A person whose message still
+fails is recorded as failed and owed those updates the next morning; everybody
+else is still sent, and every administrator is emailed about it. The same alert
+fires when nothing has been fetched for 48 hours, because a dead crawler makes
+every email a quiet one for a reason nobody reading it would guess. `send` exits 2
+when anybody failed, 1 when nobody was sent anything, and 0 otherwise.
+
+`notify status` is the answer to "did they get Tuesday's email?" — from the
+mailer's own record rather than a log line.
 
 **The message is never truncated.** `digest --notify` caps its terminal output and
 counts the remainder, which suits a stream scrolling past; an email is a document
 somebody works, and one ending "…and 3 more, not listed" sends them elsewhere to
 find the rest. So every update is listed. Measured: a card is 2.2 KB, twenty-five
-render to 54.8 KB, and **Gmail clips past ~102 KB — about 46 updates**. A nightly
-run averages 4.3. A `--days 30` catch-up after an outage would cross it, which is
-an argument for running it nightly.
+render to 54.8 KB, and **Gmail clips past ~102 KB — about 46 updates**. A daily
+run averages 4.3. A catch-up after a long outage could cross it.
 
 It carries the Meridian palette inlined — cream canvas, espresso ink, honey
 primary, with `good`/`bad` taken from `feed.EVENT_SIGN` so the colour cannot
@@ -507,11 +560,12 @@ default, so a message depending on any of it is broken on first open. There is
 always a plain-text part — what a screen reader reads and what a spam filter
 scores.
 
-`preview` renders the exact bytes `send` would post, needs no key and opens no
-socket.
+`preview` renders the exact message `send` would post this morning — the news, or
+the watch list — needs no key, opens no socket and writes nothing.
 
-It exits 1 when it printed nothing and 2 when it refused, so a shell can tell a
-quiet night from a misconfiguration:
+`digest --notify` is the terminal's version of the same bar, and predates the
+mailer. It exits 1 when it printed nothing and 2 when it refused, so a shell can
+tell a quiet night from a misconfiguration:
 
 ```bash
 tracker watch add "Nscale" --user you@example.com
@@ -519,9 +573,8 @@ tracker digest --notify --markdown --days 1 --user you@example.com \
   | mail -s "dc-tracker" you@example.com
 ```
 
-Nothing records what was already sent, and nothing needs to: the window is on when
-we learned a fact, so a row falls inside exactly one `--days 1` window and a nightly
-job reports it once.
+`digest --notify` remembers nothing, so a job built on it reports by window; the
+mailer is the one with the ledger.
 
 The same reading is the console's landing page, where the watchlist can also be
 edited — see `docs/console-and-export.md`.

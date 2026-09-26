@@ -1627,13 +1627,16 @@ def _template_for(name: str) -> Any:
 
 
 def _discovered_at(source: Source | None) -> _dt.datetime:
-    """When we learned a milestone or an obstacle: the fetch that carried it.
+    """`created_at` for a milestone or an obstacle: the fetch that carried it.
 
-    The citation's `fetched_at` rather than the clock, for two reasons. It is what
-    migration 0018 backfilled every pre-existing row from, so the column means one
-    thing across the whole table; and a re-read of a cached page keeps the date we
-    actually first saw the fact, because `_upsert_sources` only ever advances
-    `fetched_at` for a genuinely newer fetch.
+    The citation's `fetched_at` rather than the clock, because it is what migration
+    0018 backfilled every pre-existing row from, so the column means one thing
+    across the whole table.
+
+    **It is not when the row was written**, and nothing that asks "what is new"
+    should read it: enrichment re-reads cached pages, so a fact is often written
+    weeks after its page was fetched. Every insert here also stamps `recorded_at`
+    with the clock, which is what the briefing and the mailer read (0029).
 
     Falls back to now for a row with no citation — `ingest manual` and the derived
     `delayed` event — where now is the truth.
@@ -1681,6 +1684,7 @@ def _upsert_events(session: Session, project: Project, rec: IngestRecord) -> int
                 unconfirmed=ev.unconfirmed,
                 source_id=source_id,
                 created_at=_discovered_at(by_url.get(key)),
+                recorded_at=utcnow(),
             )
             session.add(row)
             # Registered immediately, because ONE record can carry two events
@@ -1753,6 +1757,7 @@ def _upsert_risks(session: Session, project: Project, rec: IngestRecord) -> int:
                 source_id=source_id,
                 unconfirmed=risk.unconfirmed,
                 created_at=_discovered_at(source_row),
+                recorded_at=utcnow(),
             )
             session.add(row)
             # Registered immediately, for the same reason as in `_upsert_events`:
@@ -1840,6 +1845,7 @@ def _record_slippage(session: Session, project: Project, previous: _dt.date | No
                 # No source: this milestone is derived from two citations
                 # disagreeing, so the moment we learned it really is now.
                 created_at=utcnow(),
+                recorded_at=utcnow(),
             )
         )
         written = 1

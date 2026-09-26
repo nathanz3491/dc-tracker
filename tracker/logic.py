@@ -53,7 +53,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from tracker.dedup import looks_like_county
-from tracker.models import Project
+from tracker.models import Project, utcnow
 from tracker.normalize import is_blank
 from tracker.tracks import IMPLIED_BY, RISK_TRACK, TRACK_MILESTONES, standing
 from tracker.vocab import (
@@ -1619,6 +1619,7 @@ def _resolve_finished_obstacles(session: Session, project: Project, _f: Finding)
         ):
             risk.status = "resolved"
             risk.resolved_at = _today()
+            risk.closed_at = utcnow()
             closed += 1
     session.flush()
     return f"closed {closed} obstacle(s) on a finished track"
