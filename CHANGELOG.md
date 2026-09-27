@@ -667,6 +667,18 @@ initial build of the v1 PRD.
 
 ### Changed
 
+- **The sign-in page is a drawing sheet rather than a small card on dots**
+  (`tracker/webui/static/login.html`). It read as temporary. The page is now one
+  sheet with a drafting border: an illustrative data-center site plan draws itself
+  in on load, with Phase 1 halls built, Phase 2 planned, and the transmission line
+  and substation last, in the console's amber. The form sits where a drawing keeps
+  its title block, and each cell of that block is true: the sheet you are on, today's
+  date, and that the plan is not to scale. The plan says it is not a real campus.
+  The console's own display and label faces are embedded (~70 KB), since the page
+  still cannot load anything from behind the sign-in; a password can be shown while
+  typing, the invite code field opens on request, the button says what it is doing,
+  and the drawing holds still for anyone who prefers reduced motion.
+
 - **The morning email goes to each person once a day, remembers what it sent, and
   never sends anything twice** (`tracker/notify.py`, `tracker/cli/people.py`,
   `tracker/migrations/0029_notify_ledger.sql`, `tracker/models.py`,
