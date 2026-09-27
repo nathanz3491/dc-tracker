@@ -857,6 +857,25 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **Anyone can ask for an account on the sign-in page, and an admin decides who gets
+  one** (`tracker/accounts.py`, `tracker/account_mail.py`,
+  `tracker/migrations/0030_self_signup.sql`, `tracker/models.py`,
+  `tracker/webui/server.py`, `tracker/webui/auth.py`, `tracker/webui/static/login.html`,
+  `tracker/webui/static/views-account.js`, `tracker/cli/people.py`, `tracker/notify.py`,
+  `tests/test_self_signup.py`, `docs/console-and-export.md`, `docs/architecture.md`,
+  `.env.example`). Accounts could only be made at the host or by an invite code.
+  **Create an account** now takes an email and a password: the address is confirmed
+  by a mailed link, every admin is emailed, and the account waits on the admin page
+  (or `tracker users approve`) until an admin lets it in, which emails them. It
+  starts without the AI panels, which spend tokens on every click; an admin switches
+  them on, per account, in the same step or later. An invite code on the same form
+  still signs somebody straight in, with the panels. **Forgot password?** emails a
+  one-hour, single-use link. The forms answer the same whether or not an address has
+  an account, links are built only from the configured console address and stored
+  hashed, a guessed link counts toward the sign-in lockout, and mail is budgeted per
+  visitor, overall and per address. Every existing account keeps full access,
+  panels included, and the morning email skips accounts not yet approved.
+
 - **When DeepSeek's balance runs out, the night carries on on a reserve**
   (`tracker/llm.py`, `tracker/config.py`, `.env.example`, `docs/ingesting.md`,
   `tests/test_llm_reserve.py`). An empty balance used to end the loop where it

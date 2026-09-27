@@ -37,13 +37,14 @@ import hashlib
 import hmac
 import logging
 import secrets
+from dataclasses import dataclass
 from functools import lru_cache
 from typing import Final
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from tracker.models import Account, Invite, utcnow
+from tracker.models import Account, AccountToken, Invite, utcnow
 
 log = logging.getLogger(__name__)
 
@@ -79,9 +80,28 @@ _INVITE_BYTES: Final = 20
 #: How long a fresh invite is good for, unless the caller says otherwise.
 DEFAULT_INVITE_DAYS: Final = 7
 
+#: 256 bits, for a link in an email. Stored as sha256 only, like an invite's code.
+_TOKEN_BYTES: Final = 32
+
+#: How long a mailed link works. A confirmation waits for somebody to find the
+#: email; a reset link is a credential in a mailbox, so it lives an hour.
+LINK_TTL: Final = {"confirm": dt.timedelta(hours=24), "reset": dt.timedelta(hours=1)}
+
+#: Links of one kind one address may be sent in an hour. The sign-up and reset
+#: forms answer anyone, so without this they would mail an address as often as a
+#: stranger pressed the button.
+MAX_LINKS_PER_HOUR: Final = 3
+
+#: A sign-up nobody confirmed is deleted after this, freeing the address.
+UNCONFIRMED_DAYS: Final = 7
+
 
 class AccountError(ValueError):
     """Something an operator did wrong, with a message written for them."""
+
+
+class Throttled(AccountError):
+    """This address has been sent enough links for now."""
 
 
 # --- passwords -------------------------------------------------------------
@@ -221,17 +241,30 @@ def any_exist(session: Session) -> bool:
 
 
 def create(session: Session, email: str, password: str, *, name: str | None = None) -> Account:
-    """Add one account. Raises `AccountError` on a bad address, password or clash."""
+    """Add one trusted account — let in, with the model panels. Raises `AccountError`.
+
+    The terminal and an invite both come through here, and both are trusted: the
+    person was chosen at the host. A plain sign-up goes through `sign_up` instead.
+    An address held only by a sign-up nobody confirmed is taken over, because that
+    row proves nothing about who owns the address.
+    """
     key = normalize_email(email)
     check_password_length(password)
-    if session.scalar(select(Account).where(Account.email_key == key)) is not None:
+    holder = session.scalar(select(Account).where(Account.email_key == key))
+    if holder is not None and _unconfirmed_signup(holder):
+        session.delete(holder)
+        session.flush()
+    elif holder is not None:
         raise AccountError(f"{key} already has an account. `tracker users passwd` changes it.")
+    now = utcnow()
     row = Account(
         email=email.strip(),
         email_key=key,
         name=(name or None),
         password_hash=hash_password(password),
-        created_at=utcnow(),
+        created_at=now,
+        approved_at=now,
+        ai_allowed=True,
     )
     session.add(row)
     session.flush()
@@ -360,6 +393,22 @@ def is_disabled(account: Account) -> bool:
     return account.disabled_at is not None
 
 
+def status(account: Account) -> str:
+    """`active`, `disabled`, `unconfirmed` (a sign-up whose link is unclicked) or
+    `pending` (confirmed, waiting for an administrator)."""
+    if is_disabled(account):
+        return "disabled"
+    if account.approved_at is not None:
+        return "active"
+    if account.self_signup and account.email_verified_at is None:
+        return "unconfirmed"
+    return "pending"
+
+
+def _unconfirmed_signup(account: Account) -> bool:
+    return status(account) == "unconfirmed"
+
+
 def admins(session: Session) -> list[Account]:
     """Accounts that may use the admin page, oldest first."""
     return [row for row in listing(session) if row.is_admin]
@@ -377,6 +426,7 @@ def update(
     name: str | None = None,
     clear_name: bool = False,
     watch_all: bool | None = None,
+    ai: bool | None = None,
 ) -> list[str]:
     """Change an account's address, display name or reach. Returns what changed.
 
@@ -409,6 +459,9 @@ def update(
         reach = "the whole database" if watch_all else "only its watchlist"
         changes.append(f"reads {reach}")
         account.watch_all = bool(watch_all)
+    if ai is not None and bool(ai) != bool(account.ai_allowed):
+        changes.append("model panels on" if ai else "model panels off")
+        account.ai_allowed = bool(ai)
     if changes:
         _edited(account)
         session.flush()
@@ -461,9 +514,11 @@ def set_admin(session: Session, account: Account, value: bool) -> bool:
 def joined_via(session: Session, account: Account) -> str:
     """How this account came to exist: an invite (named by its note) or the terminal."""
     invite = session.scalar(select(Invite).where(Invite.redeemed_by == account.id).limit(1))
-    if invite is None:
-        return "added at the terminal"
-    return f"redeemed an invite ({invite.note or 'no note'})"
+    if invite is not None:
+        return f"redeemed an invite ({invite.note or 'no note'})"
+    if account.self_signup:
+        return "signed up on the sign-in page"
+    return "added at the terminal"
 
 
 def detail(session: Session, account: Account) -> dict[str, object]:
@@ -486,8 +541,12 @@ def detail(session: Session, account: Account) -> dict[str, object]:
         "email": account.email,
         "name": account.name,
         "admin": bool(account.is_admin),
+        "status": status(account),
         "disabled": is_disabled(account),
         "disabled_at": when(account.disabled_at),
+        "approved_at": when(account.approved_at),
+        "email_verified_at": when(account.email_verified_at),
+        "ai": bool(account.ai_allowed),
         "watch_all": bool(account.watch_all),
         "watches": int(watches or 0),
         "created_at": when(account.created_at),
@@ -561,30 +620,273 @@ def redeem(
     return account
 
 
+# --- sign-up, mailed links, approval -------------------------------------------
+#
+# The sign-in page answers anyone, so every function here is written for a caller
+# that must not say which addresses have accounts: they return what to mail and to
+# whom, and the route answers the same sentence whatever happened.
+
+
+@dataclass(frozen=True)
+class SignUp:
+    """What a sign-up produced, for the route to mail.
+
+    Exactly one of the two is set. `pending` is the new (or re-submitted) account
+    and `token` its confirmation link; `existing` is an account that already holds
+    the address, which is told so — with a reset link, in case it was them — while
+    the form says the same thing it says to anybody.
+    """
+
+    pending: Account | None = None
+    token: str | None = None
+    existing: Account | None = None
+    existing_token: str | None = None
+
+
+def _token_hash(token: str) -> str:
+    return hashlib.sha256((token or "").strip().encode("utf-8")).hexdigest()
+
+
+def issue_link(session: Session, account: Account, purpose: str) -> str:
+    """A fresh single-use link token for this account. Raises `Throttled`.
+
+    Any earlier unused link of the same kind stops working, so only the newest email
+    is live. Past `MAX_LINKS_PER_HOUR` for this address and kind, nothing is issued.
+    """
+    if purpose not in LINK_TTL:
+        raise ValueError(f"unknown link purpose {purpose!r}")
+    now = utcnow()
+    recent = session.scalar(
+        select(func.count())
+        .select_from(AccountToken)
+        .where(
+            AccountToken.account_id == account.id,
+            AccountToken.purpose == purpose,
+            AccountToken.created_at > now - dt.timedelta(hours=1),
+        )
+    )
+    if (recent or 0) >= MAX_LINKS_PER_HOUR:
+        raise Throttled(f"{account.email_key} was sent {recent} {purpose} link(s) this hour")
+    for old in session.scalars(
+        select(AccountToken).where(
+            AccountToken.account_id == account.id,
+            AccountToken.purpose == purpose,
+            AccountToken.used_at.is_(None),
+        )
+    ):
+        old.used_at = now
+    token = secrets.token_urlsafe(_TOKEN_BYTES)
+    session.add(
+        AccountToken(
+            account_id=account.id,
+            purpose=purpose,
+            token_hash=_token_hash(token),
+            created_at=now,
+            expires_at=now + LINK_TTL[purpose],
+        )
+    )
+    session.flush()
+    return token
+
+
+def _live_link(session: Session, token: str, purpose: str) -> AccountToken | None:
+    row = session.scalar(select(AccountToken).where(AccountToken.token_hash == _token_hash(token)))
+    if row is None or row.purpose != purpose:
+        return None
+    return row
+
+
+def expire_unconfirmed(session: Session) -> int:
+    """Delete sign-ups nobody confirmed within `UNCONFIRMED_DAYS`. Returns how many."""
+    cutoff = utcnow() - dt.timedelta(days=UNCONFIRMED_DAYS)
+    stale = list(
+        session.scalars(
+            select(Account).where(
+                Account.self_signup.is_(True),
+                Account.email_verified_at.is_(None),
+                Account.approved_at.is_(None),
+                Account.created_at < cutoff,
+            )
+        )
+    )
+    for row in stale:
+        session.delete(row)
+    session.flush()
+    return len(stale)
+
+
+def sign_up(session: Session, email: str, password: str, *, name: str | None = None) -> SignUp:
+    """Ask for an account without an invite. Raises `AccountError` on bad input.
+
+    The account cannot sign in until its address is confirmed and an administrator
+    approves it, and it starts without the model panels. Submitting again for an
+    address still unconfirmed replaces the password and sends a fresh link, so a
+    sign-up somebody else started with your address cannot hold it.
+    """
+    key = normalize_email(email)
+    check_password_length(password)
+    expire_unconfirmed(session)
+    holder = session.scalar(select(Account).where(Account.email_key == key))
+    if holder is not None and not _unconfirmed_signup(holder):
+        # The one scrypt the other branch spends, so the response time does not say
+        # which addresses already have an account.
+        hash_password(password)
+        try:
+            return SignUp(existing=holder, existing_token=issue_link(session, holder, "reset"))
+        except Throttled:
+            return SignUp(existing=holder)
+    if holder is not None:
+        holder.email = email.strip()
+        holder.name = (name or "").strip() or None
+        holder.password_hash = hash_password(password)
+        row = holder
+    else:
+        row = Account(
+            email=email.strip(),
+            email_key=key,
+            name=(name or "").strip() or None,
+            password_hash=hash_password(password),
+            created_at=utcnow(),
+            self_signup=True,
+        )
+        session.add(row)
+    session.flush()
+    return SignUp(pending=row, token=issue_link(session, row, "confirm"))
+
+
+def confirm_email(session: Session, token: str) -> tuple[Account, bool]:
+    """Prove the address a confirmation link was mailed to. Raises `AccountError`.
+
+    Returns the account and whether this click is what confirmed it — the moment to
+    tell an administrator, once. Clicking a link twice is not an error, since mail
+    scanners open links before people do: a used link for an address already
+    confirmed answers as a success, and says it was not the first.
+    """
+    unusable = AccountError("that link is not usable. Sign up again for a fresh one.")
+    row = _live_link(session, token, "confirm")
+    if row is None:
+        raise unusable
+    account = session.get(Account, row.account_id)
+    if account is None:
+        raise unusable
+    if row.used_at is not None:
+        if account.email_verified_at is not None:
+            return account, False
+        raise unusable
+    if row.expires_at <= utcnow():
+        raise unusable
+    row.used_at = utcnow()
+    first = account.email_verified_at is None
+    account.email_verified_at = account.email_verified_at or utcnow()
+    session.flush()
+    return account, first
+
+
+def request_reset(session: Session, email: str) -> tuple[Account, str] | None:
+    """A reset link for this address, or None — unknown, disabled or throttled.
+
+    None for all three, because the route answers the same either way.
+    """
+    account = by_email(session, email)
+    if account is None or is_disabled(account):
+        return None
+    try:
+        return account, issue_link(session, account, "reset")
+    except Throttled:
+        return None
+
+
+def finish_reset(session: Session, token: str, password: str) -> tuple[Account, bool]:
+    """Set a new password from a reset link. Raises `AccountError`.
+
+    The password is checked before the link is spent, so a too-short one can be
+    corrected. Every session the account had ends, as any password change does,
+    and the address counts as confirmed: the link could only be opened from it.
+    Returns the account and whether this is what confirmed its address — a sign-up
+    that never clicked its confirmation link but reset its password instead, whose
+    administrators have not been told about it yet.
+    """
+    check_password_length(password)
+    unusable = AccountError("that reset link is not usable. Ask for a fresh one.")
+    row = _live_link(session, token, "reset")
+    if row is None or row.used_at is not None or row.expires_at <= utcnow():
+        raise unusable
+    account = session.get(Account, row.account_id)
+    if account is None or is_disabled(account):
+        raise unusable
+    row.used_at = utcnow()
+    reset_password(session, account, password)
+    first = account.self_signup and account.email_verified_at is None
+    account.email_verified_at = account.email_verified_at or utcnow()
+    session.flush()
+    return account, first
+
+
+def pending(session: Session) -> list[Account]:
+    """Confirmed sign-ups waiting for an administrator, oldest first."""
+    return [
+        row
+        for row in session.scalars(
+            select(Account)
+            .where(Account.approved_at.is_(None), Account.disabled_at.is_(None))
+            .order_by(Account.created_at.asc())
+        )
+        if status(row) == "pending"
+    ]
+
+
+def approve(session: Session, account: Account) -> bool:
+    """Let a waiting account sign in. Returns whether anything changed.
+
+    Refused for a sign-up whose address is not confirmed yet: approving it would let
+    in an address nobody has shown they own.
+    """
+    if account.approved_at is not None:
+        return False
+    if status(account) == "unconfirmed":
+        raise AccountError(f"{account.email} has not confirmed the address yet.")
+    account.approved_at = utcnow()
+    _edited(account)
+    session.flush()
+    return True
+
+
 __all__ = [
     "DEFAULT_INVITE_DAYS",
+    "LINK_TTL",
     "MAX_EMAIL_LEN",
+    "MAX_LINKS_PER_HOUR",
     "MAX_PASSWORD_LEN",
     "MIN_PASSWORD_LEN",
+    "UNCONFIRMED_DAYS",
     "AccountError",
+    "SignUp",
+    "Throttled",
     "admins",
     "any_exist",
+    "approve",
     "by_email",
     "by_id",
     "check_password_length",
+    "confirm_email",
     "count",
     "create",
     "decoy_hash",
     "delete",
     "detail",
+    "expire_unconfirmed",
+    "finish_reset",
     "hash_password",
     "is_disabled",
+    "issue_link",
     "joined_via",
     "listing",
     "mint_invite",
     "normalize_email",
     "outstanding",
+    "pending",
     "redeem",
+    "request_reset",
     "require",
     "reset_password",
     "session_stamp",
@@ -593,7 +895,9 @@ __all__ = [
     "set_password",
     "set_watch_all",
     "sign_out_everywhere",
+    "sign_up",
     "stamp_for",
+    "status",
     "touch",
     "update",
     "verify",

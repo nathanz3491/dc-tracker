@@ -90,6 +90,7 @@ COMMANDS = {
     "users",
     "users add",
     "users admin",
+    "users approve",
     "users disable",
     "users edit",
     "users enable",

@@ -357,6 +357,39 @@ class Console:
             )
         return self._accounts_exist
 
+    def send_mail(self, to: str, notice: Any, *, key: str | None = None) -> None:
+        """Mail one account notice on a thread of its own, and return at once.
+
+        **The form's answer must not wait on it**, for two reasons. A mail server
+        taking ten seconds would be ten seconds of a spinner for somebody who only
+        needs to be told to check their inbox. And the sign-up and forgot-password
+        answers are worded to say nothing about which addresses exist; a response
+        that took longer whenever an email went out would say it anyway.
+        """
+        from tracker import account_mail
+
+        threading.Thread(
+            target=account_mail.send, args=(to, notice), kwargs={"key": key}, daemon=True
+        ).start()
+
+    def mail_ready(self) -> str | None:
+        """The console's public address, if this console can mail links; else None.
+
+        Links come only from `TRACKER_NOTIFY_CONSOLE_URL` — see `account_mail` for why
+        never from the request — and need the Resend key and sender the morning email
+        already uses.
+        """
+        from tracker.config import get_settings
+
+        settings = get_settings()
+        url = (settings.notify_console_url or "").strip()
+        key = settings.resend_api_key
+        if not url or not (key and key.get_secret_value().strip()):
+            return None
+        if not (settings.notify_from or "").strip():
+            return None
+        return url
+
     def account_holds(self, account_id: int, stamp: str) -> bool | None:
         """Whether a session's account still exists with the credential it signed in on.
 
@@ -384,14 +417,17 @@ class Console:
         try:
             with self.read_session() as session:
                 row = session.execute(
-                    select(Account.password_hash, Account.session_epoch, Account.disabled_at).where(
-                        Account.id == account_id
-                    )
+                    select(
+                        Account.password_hash,
+                        Account.session_epoch,
+                        Account.disabled_at,
+                        Account.approved_at,
+                    ).where(Account.id == account_id)
                 ).first()
         except OperationalError:
             log.warning("console: could not re-read account %d; refusing this request", account_id)
             return None
-        if row is None or row.disabled_at is not None:
+        if row is None or row.disabled_at is not None or row.approved_at is None:
             return False
         return hmac.compare_digest(
             accounts.session_stamp(row.password_hash, row.session_epoch or 0), stamp
@@ -731,6 +767,14 @@ class Handler(BaseHTTPRequestHandler):
     def _route_get(self, route: str, query: dict[str, list[str]]) -> None:
         if route in {"/", "/index.html"}:
             return self._page()
+        # A mailed link opens the sign-in page, which reads the token and posts it.
+        # A GET that spent the token would be spent by the first mail scanner to
+        # open the link, before the person ever saw it. Served signed in too: the
+        # link is somebody's whether or not this browser is.
+        if route in {"/confirm", "/reset"}:
+            return self._send(
+                200, (assets.STATIC_ROOT / "login.html").read_bytes(), "text/html; charset=utf-8"
+            )
         # One shell per view, so a page can be linked to, refreshed and reached
         # with the back button. The server does not render them differently — it
         # tells the front end which to open, and the front end pushes the same
@@ -795,14 +839,23 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if not self._same_origin():
                 return self._error(403, "cross-site request refused")
-            # The two unauthenticated POSTs, and the only two there will be. Both
-            # go through the gate's lockout counters — see `_login` and
-            # `_register` — because an unauthenticated route that either hands out
-            # a session or writes a row is exactly what a rate limit is for.
+            # The unauthenticated POSTs: signing in, and the sign-up and reset forms
+            # beside it. Every one goes through the gate's lockout counters, and the
+            # ones that send mail through its mail budget too, because an
+            # unauthenticated route that hands out a session, writes a row or sends
+            # an email is exactly what a rate limit is for.
             if parsed.path == "/api/login":
                 return self._login(body)
             if parsed.path == "/api/register":
                 return self._register(body)
+            if parsed.path == "/api/signup":
+                return self._signup(body)
+            if parsed.path == "/api/confirm":
+                return self._confirm(body)
+            if parsed.path == "/api/forgot":
+                return self._forgot(body)
+            if parsed.path == "/api/reset":
+                return self._reset(body)
             if not self._authed:
                 return self._error(401, "sign in first")
             if parsed.path == "/api/logout":
@@ -829,6 +882,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._admin_act("signout", body)
             if parsed.path == "/api/admin/users/delete":
                 return self._admin_act("delete", body)
+            if parsed.path == "/api/admin/users/approve":
+                return self._admin_act("approve", body)
             if parsed.path == "/api/infer":
                 return self._infer(body)
             if parsed.path == "/api/overview":
@@ -913,15 +968,13 @@ class Handler(BaseHTTPRequestHandler):
                 # `accounts.verify` spends the same one scrypt either way, so
                 # neither the wording nor the timing says which addresses exist.
                 return self._json({"error": "Wrong email or password."}, status=401)
-            if accounts.is_disabled(account):
-                # After the password check, so only somebody who knows the password
-                # learns the account exists. Not a failure for the lockout: nothing
-                # was guessed.
-                log.info("console: refused sign-in to disabled account %s", account.email)
-                return self._json(
-                    {"error": "This account is disabled. Ask whoever runs the console."},
-                    status=403,
-                )
+            # After the password check, so only somebody who knows the password
+            # learns the account exists. Not failures for the lockout: nothing was
+            # guessed.
+            standing = accounts.status(account)
+            if standing != "active":
+                log.info("console: refused sign-in to %s account %s", standing, account.email)
+                return self._json({"error": self._NOT_YET[standing]}, status=403)
             account_id = account.id
             email = account.email
             stamp = accounts.stamp_for(account)
@@ -931,6 +984,15 @@ class Handler(BaseHTTPRequestHandler):
         token = gate.grant(account_id, stamp=stamp)
         log.info("console: %s signed in from %s", email, client)
         self._json({"ok": True}, extra=self._set_session_cookie(token))
+
+    #: Why a correct password did not sign somebody in, as the page shows it.
+    _NOT_YET: ClassVar[dict[str, str]] = {
+        "disabled": "This account is disabled. Ask whoever runs the console.",
+        "unconfirmed": "Confirm your email first: open the link we sent you. Didn't get "
+        "it? Sign up again with the same address and we'll send a fresh one.",
+        "pending": "Your account is waiting for an administrator to approve it. "
+        "We'll email you when it's ready.",
+    }
 
     #: How long a sign-in waits for SQLite's write lock to record `last_seen_at`.
     STAMP_WAIT_MS: ClassVar[int] = 250
@@ -1016,6 +1078,217 @@ class Handler(BaseHTTPRequestHandler):
         token = self.console.gate.grant(account_id, stamp=stamp)
         log.info("console: %s registered from %s", email, client)
         self._json({"ok": True}, extra=self._set_session_cookie(token))
+
+    # --- the sign-up and reset forms -------------------------------------------
+    #
+    # Each answers the same sentence whatever it found, so none of them says which
+    # addresses have accounts; the mail goes out on a thread (`Console.send_mail`)
+    # so the answer's timing does not say it either.
+
+    #: The one answer a sign-up gets, whether or not the address was new.
+    _CHECK_INBOX: ClassVar[str] = (
+        "Check your inbox: we've sent a link to confirm the address. It works for 24 "
+        "hours. After that, an administrator reviews the request."
+    )
+    _RESET_SENT: ClassVar[str] = (
+        "If an account uses that address, we've sent it a link to choose a new password. "
+        "It works for one hour."
+    )
+    _NO_MAIL: ClassVar[str] = (
+        "This console can't send email yet, so it can't take sign-ups or reset "
+        "passwords. Ask whoever runs it for an invite code, or for a new password."
+    )
+
+    def _forms_open(self) -> tuple[str | None, dict[str, Any] | None, int]:
+        """`(console_url, refusal, status)`: the address links are built on, or why not."""
+        locked = self._locked_out()
+        if locked:
+            return None, locked, 429
+        url = self.console.mail_ready()
+        if url is None:
+            return None, {"error": self._NO_MAIL}, 503
+        return url, None, 200
+
+    def _signup(self, body: dict[str, Any]) -> None:
+        """Ask for an account. With an invite code this is `_register`, as before.
+
+        Without one, the address must be confirmed by a mailed link and an
+        administrator must approve the account before it can sign in (`accounts
+        .sign_up`). Refused outright on a console with no administrator, since
+        nobody could ever approve it.
+        """
+        if str(body.get("code") or "").strip():
+            return self._register(body)
+        from tracker import account_mail, accounts
+
+        url, refusal, status = self._forms_open()
+        if refusal:
+            return self._json(refusal, status=status)
+        try:
+            accounts.normalize_email(str(body.get("email") or ""))
+            accounts.check_password_length(str(body.get("password") or ""))
+        except accounts.AccountError as exc:
+            # A bad address or a short password: a mistake to show, not a guess.
+            return self._json({"error": str(exc)}, status=400)
+        client = self._client()
+        # Before anything is written: a visitor past the mail budget would otherwise
+        # still leave a row per attempt, for a link nobody will ever be sent.
+        if not self.console.gate.may_mail(client):
+            log.info("console: sign-up from %s over the mail budget; nothing done", client)
+            return self._json({"ok": True, "message": self._CHECK_INBOX})
+        try:
+            with self.console.write_session() as session:
+                if not self._admin_addresses(session):
+                    return self._json(
+                        {"error": "This console isn't taking sign-ups. Ask for an invite."},
+                        status=503,
+                    )
+                outcome = accounts.sign_up(
+                    session,
+                    str(body.get("email") or ""),
+                    str(body.get("password") or ""),
+                    name=str(body.get("name") or "") or None,
+                )
+                if outcome.pending is not None and outcome.token:
+                    to, notice = outcome.pending.email, account_mail.confirm(url, outcome.token)
+                elif outcome.existing is not None and outcome.existing_token:
+                    to = outcome.existing.email
+                    notice = account_mail.already_registered(url, outcome.existing_token)
+                else:
+                    to, notice = None, None
+        except accounts.Throttled:
+            to, notice = None, None
+        except accounts.AccountError as exc:
+            # A bad address or a short password: a mistake to show, not a guess.
+            return self._json({"error": str(exc)}, status=400)
+        except OperationalError as exc:
+            if not _database_busy(exc):
+                raise
+            return self._json({"error": "the console is busy; try again in a moment"}, status=503)
+        if to and notice:
+            self.console.send_mail(to, notice)
+            log.info("console: sign-up mail for %s from %s", to, client)
+        self._json({"ok": True, "message": self._CHECK_INBOX})
+
+    @staticmethod
+    def _admin_addresses(session: Any) -> list[str]:
+        """Where "a sign-up is waiting" goes: every admin who can still sign in."""
+        from tracker import accounts
+
+        return [a.email for a in accounts.admins(session) if accounts.status(a) == "active"]
+
+    def _tell_admins(self, admins: list[str], email: str, name: str | None) -> None:
+        from tracker import account_mail
+
+        notice = account_mail.pending_for_admin(self.console.mail_ready(), email, name)
+        for admin in admins:
+            self.console.send_mail(admin, notice)
+        log.info("console: %s confirmed; told %d administrator(s)", email, len(admins))
+
+    def _confirm(self, body: dict[str, Any]) -> None:
+        """Spend a confirmation link, and tell the administrators — once."""
+        from tracker import accounts
+
+        locked = self._locked_out()
+        if locked:
+            return self._json(locked, status=429)
+        client = self._client()
+        try:
+            with self.console.write_session() as session:
+                account, first = accounts.confirm_email(session, str(body.get("token") or ""))
+                standing = accounts.status(account)
+                email, name = account.email, account.name
+                admins = self._admin_addresses(session)
+        except accounts.AccountError as exc:
+            # A link that does not work is the one thing here that can be guessed.
+            self.console.gate.fail(client)
+            return self._json({"error": str(exc)}, status=400)
+        except OperationalError as exc:
+            if not _database_busy(exc):
+                raise
+            return self._json({"error": "the console is busy; try again in a moment"}, status=503)
+        if first and standing == "pending":
+            self._tell_admins(admins, email, name)
+        message = (
+            "Your email is confirmed. You can sign in now."
+            if standing == "active"
+            else "Your email is confirmed. An administrator will review your account, and "
+            "we'll email you when it's ready."
+        )
+        self._json({"ok": True, "status": standing, "message": message})
+
+    def _forgot(self, body: dict[str, Any]) -> None:
+        """Mail a reset link if the address has an account. Answers the same either way."""
+        from tracker import account_mail, accounts
+
+        url, refusal, status = self._forms_open()
+        if refusal:
+            return self._json(refusal, status=status)
+        client = self._client()
+        if not self.console.gate.may_mail(client):
+            log.info("console: reset request from %s over the mail budget; nothing done", client)
+            return self._json({"ok": True, "message": self._RESET_SENT})
+        try:
+            with self.console.write_session() as session:
+                found = accounts.request_reset(session, str(body.get("email") or ""))
+                if found is not None:
+                    to, notice = found[0].email, account_mail.reset(url, found[1])
+                else:
+                    to, notice = None, None
+        except OperationalError as exc:
+            if not _database_busy(exc):
+                raise
+            return self._json({"error": "the console is busy; try again in a moment"}, status=503)
+        if to and notice:
+            self.console.send_mail(to, notice)
+            log.info("console: reset mail for %s from %s", to, client)
+        self._json({"ok": True, "message": self._RESET_SENT})
+
+    def _reset(self, body: dict[str, Any]) -> None:
+        """Set a new password from a reset link, and sign in if the account may."""
+        from tracker import accounts
+
+        locked = self._locked_out()
+        if locked:
+            return self._json(locked, status=429)
+        password = str(body.get("password") or "")
+        try:
+            accounts.check_password_length(password)
+        except accounts.AccountError as exc:
+            return self._json({"error": str(exc)}, status=400)
+        client = self._client()
+        try:
+            with self.console.write_session() as session:
+                account, first = accounts.finish_reset(
+                    session, str(body.get("token") or ""), password
+                )
+                standing = accounts.status(account)
+                account_id, email, name = account.id, account.email, account.name
+                stamp = accounts.stamp_for(account)
+                admins = self._admin_addresses(session)
+        except accounts.AccountError as exc:
+            self.console.gate.fail(client)
+            return self._json({"error": str(exc)}, status=400)
+        except OperationalError as exc:
+            if not _database_busy(exc):
+                raise
+            return self._json({"error": "the console is busy; try again in a moment"}, status=503)
+        log.info("console: %s set a new password from a reset link (%s)", email, client)
+        if first and standing == "pending":
+            # The reset link confirmed the address, so this is the moment the
+            # confirmation link would have been.
+            self._tell_admins(admins, email, name)
+        if standing != "active":
+            return self._json(
+                {
+                    "ok": True,
+                    "signed_in": False,
+                    "message": "Password set. " + self._NOT_YET[standing],
+                }
+            )
+        self.console.gate.succeed(client)
+        token = self.console.gate.grant(account_id, stamp=stamp)
+        self._json({"ok": True, "signed_in": True}, extra=self._set_session_cookie(token))
 
     # --- accounts: one's own, and the admin page's -------------------------------
 
@@ -1110,10 +1383,14 @@ class Handler(BaseHTTPRequestHandler):
                         400, f"you cannot {action} your own account here; use the terminal"
                     )
                 changes: list[str] = []
+                approved_now = False
                 if action == "update":
                     watch_all = body.get("watch_all")
                     if watch_all is not None and not isinstance(watch_all, bool):
                         return self._error(400, "watch_all must be true or false")
+                    ai = body.get("ai")
+                    if ai is not None and not isinstance(ai, bool):
+                        return self._error(400, "ai must be true or false")
                     email, name = body.get("email"), body.get("name")
                     if email is not None and not isinstance(email, str):
                         return self._error(400, "email must be a string")
@@ -1126,7 +1403,17 @@ class Handler(BaseHTTPRequestHandler):
                         name=name,
                         clear_name=name is not None and not name.strip(),
                         watch_all=watch_all,
+                        ai=ai,
                     )
+                elif action == "approve":
+                    ai = body.get("ai")
+                    if ai is not None and not isinstance(ai, bool):
+                        return self._error(400, "ai must be true or false")
+                    if accounts.approve(session, row):
+                        approved_now = True
+                        changes = ["approved; they can sign in"]
+                    if ai is not None:
+                        changes += accounts.update(session, row, ai=ai)
                 elif action == "password":
                     password = body.get("password")
                     if not isinstance(password, str):
@@ -1159,6 +1446,13 @@ class Handler(BaseHTTPRequestHandler):
             self.console.gate.restamp(self._session, own)
         for change in changes:
             log.info("console: admin %s changed %s: %s", who, result["email"], change)
+        if approved_now and self.console.mail_ready() is not None:
+            from tracker import account_mail
+
+            self.console.send_mail(
+                result["email"], account_mail.approved(self.console.mail_ready(), result["name"])
+            )
+            changes.append("told them by email")
         self._json({"ok": True, "account": result, "changes": changes})
 
     def _page(self, *, view: str = "", project: int | None = None) -> None:
@@ -1261,7 +1555,9 @@ class Handler(BaseHTTPRequestHandler):
             # Resolved before `allow_watch`, because that flag depends on it.
             account = self._account_json(session)
         payload = dict(shared)
-        payload["allow_ai"] = self.console.allow_ai
+        # The panels are drawn only where they would answer: the console's `--ai`
+        # and this reader's own switch (`_ai_refused` enforces the same pair).
+        payload["allow_ai"] = self.console.allow_ai and (account is None or account["ai"])
         payload["auth_required"] = self.console.auth_required
         payload["account"] = account
         # **`allow_watch` answers "may *this reader* edit a watchlist", not "is the
@@ -1295,7 +1591,33 @@ class Handler(BaseHTTPRequestHandler):
         if row is None:
             self.console.gate.revoke(self._session)
             return None
-        return {"id": row.id, "email": row.email, "name": row.name, "admin": bool(row.is_admin)}
+        return {
+            "id": row.id,
+            "email": row.email,
+            "name": row.name,
+            "admin": bool(row.is_admin),
+            "ai": bool(row.ai_allowed),
+        }
+
+    def _ai_refused(self, session: Any) -> str | None:
+        """Why this reader may not use the model panels, or None if they may.
+
+        Two switches, both needed: the console's `--ai`, which decides whether the
+        panels exist at all, and the account's own `ai_allowed` (0030), because a
+        panel spends tokens on every click and a stranger's sign-up should not be
+        able to run up that bill. An open console has no accounts to ask.
+        """
+        if not self.console.allow_ai:
+            return "this console was started with --no-ai"
+        account_id = self._account_id
+        if account_id is None:
+            return None
+        from tracker.models import Account
+
+        row = session.get(Account, account_id)
+        if row is None or not row.ai_allowed:
+            return "the AI panels are not switched on for your account; ask an administrator"
+        return None
 
     #: Every route, what it answers, and what it costs. Hand-written on purpose,
     #: for the reason `catalog.GROUPS` is: a derived list describes the code, and
@@ -1451,7 +1773,36 @@ class Handler(BaseHTTPRequestHandler):
         "POST /api/admin/users/delete": {
             "answers": "deletes one account and its watchlist",
             "writes": True,
-            "note": "Admins only. Body: {id}. Not your own account.",
+            "note": "Admins only. Body: {id}. Not your own account. Also how a sign-up is "
+            "turned down.",
+        },
+        "POST /api/admin/users/approve": {
+            "answers": "lets a waiting sign-up sign in, and emails them",
+            "writes": True,
+            "note": "Admins only. Body: {id, ai?}. Refused until the address is confirmed. "
+            "`ai: true` switches the model panels on in the same step.",
+        },
+        "POST /api/signup": {
+            "answers": "asks for an account; with an invite code, is /api/register",
+            "writes": True,
+            "note": "Body: {email, password, name?, code?}. Without a code the address "
+            "is confirmed by a mailed link and an administrator approves the account. "
+            "Answers the same sentence whether or not the address was new.",
+        },
+        "POST /api/confirm": {
+            "answers": "spends a confirmation link and tells the administrators",
+            "writes": True,
+            "note": "Body: {token}. The link in the email opens /confirm, which posts it.",
+        },
+        "POST /api/forgot": {
+            "answers": "mails a password-reset link if the address has an account",
+            "writes": True,
+            "note": "Body: {email}. Answers the same either way. One hour, one use.",
+        },
+        "POST /api/reset": {
+            "answers": "sets a new password from a reset link, and signs in if allowed",
+            "writes": True,
+            "note": "Body: {token, password}. Every other session of the account ends.",
         },
     }
 
@@ -2027,8 +2378,9 @@ class Handler(BaseHTTPRequestHandler):
             if project is None:
                 return self._error(404, f"no project #{project_id}")
 
-            if not self.console.allow_ai:
-                return self._error(403, "this console was started with --no-ai")
+            refused = self._ai_refused(session)
+            if refused:
+                return self._error(403, refused)
             if str(body.get("confirm") or "").strip() != "infer":
                 return self._error(
                     400, 'Running an inference spends LLM tokens. Re-send with confirm="infer".'
@@ -2098,8 +2450,9 @@ class Handler(BaseHTTPRequestHandler):
             if ready is not None:
                 return self._json({**ready.as_json(), "cached": True})
 
-            if not self.console.allow_ai:
-                return self._error(403, "this console was started with --no-ai")
+            refused = self._ai_refused(session)
+            if refused:
+                return self._error(403, refused)
             if str(body.get("confirm") or "").strip() != "overview":
                 return self._error(
                     400, 'Writing a briefing spends LLM tokens. Re-send with confirm="overview".'
@@ -2154,8 +2507,9 @@ class Handler(BaseHTTPRequestHandler):
                     "text/event-stream; charset=utf-8",
                 )
 
-            if not self.console.allow_ai:
-                return self._error(403, "this console was started with --no-ai")
+            refused = self._ai_refused(session)
+            if refused:
+                return self._error(403, refused)
             if str(body.get("confirm") or "").strip() != "overview":
                 return self._error(
                     400, 'Writing a briefing spends LLM tokens. Re-send with confirm="overview".'
@@ -2234,8 +2588,9 @@ class Handler(BaseHTTPRequestHandler):
                     "text/event-stream; charset=utf-8",
                 )
 
-            if not self.console.allow_ai:
-                return self._error(403, "this console was started with --no-ai")
+            refused = self._ai_refused(session)
+            if refused:
+                return self._error(403, refused)
             if str(body.get("confirm") or "").strip() != "overview":
                 return self._error(
                     400, 'Writing a briefing spends LLM tokens. Re-send with confirm="overview".'

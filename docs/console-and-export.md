@@ -127,8 +127,9 @@ answered by ssh rather than by a cookie. See [the terminal interface](tui.md).
 tracker users add you@example.com     # prompts for a password
 tracker users                         # who exists: role, status, how much each watches
 tracker users invite --note carol     # a single-use code, printed once
+tracker users approve new@example.com # let a waiting sign-up in; --ai for the AI panels
 tracker users show you@example.com    # everything about one account
-tracker users edit you@example.com --email new@example.com --name "Ann" --see-all
+tracker users edit you@example.com --email new@example.com --name "Ann" --see-all --ai
 tracker users passwd you@example.com
 tracker users disable you@example.com # locks it; keeps the watchlist; `enable` undoes it
 tracker users signout you@example.com # ends every session, password unchanged
@@ -158,13 +159,55 @@ refused to publish ran only at startup, so `tracker users rm` of the last accoun
 put the whole dataset on the public URL within five seconds, and the CLI reported
 that the console was "open again".
 
-There is no open registration. Behind a tunnel the login page is a public URL, and
-while an account cannot run a command it can still read the whole dataset. So an
-account is made either at a terminal or by redeeming a code that was minted at
-one — `tracker users invite` prints it once, stores only its sha256, and the
-holder chooses their own email and password on the sign-in page. Use the invite
-when you are not the person who will be typing the password: a password you picked
-and sent them is a password in a chat log.
+### Three ways in
+
+Behind a tunnel the sign-in page is a public URL, and every account reads the whole
+dataset. So how an account is made decides how much it is trusted:
+
+| way in | confirms the email | needs approval | AI panels |
+| --- | --- | --- | --- |
+| `tracker users add`, at the host | no | no | on |
+| an invite code (`tracker users invite`), on the sign-in page | no | no | on |
+| **Create an account** on the sign-in page, no code | yes, by a mailed link | yes, by an admin | off until an admin switches them on |
+
+An invite is still the way to let somebody straight in: `tracker users invite`
+prints the code once and stores only its sha256, and the holder chooses their own
+email and password. Use it rather than `users add` when you are not the person who
+will be typing the password — a password you picked and sent them is a password in
+a chat log.
+
+**A plain sign-up waits twice.** The person asks for an account with an email and a
+password, and is emailed a link to confirm the address — it works for 24 hours, and
+an unconfirmed request is deleted after a week. Once they click it, every admin is
+emailed, and the account waits on the admin page's **Waiting for approval** list
+(or `tracker users`, which shows it as pending). **Approve** lets them in and emails
+them; **Approve with AI panels** does both in one step; **Turn down** deletes the
+request. Until then a correct password is answered with where they are — confirm
+your email, or waiting for approval — and nothing else.
+
+Why both steps. The confirmation is because the morning email goes to that address,
+so it must belong to the person asking; the approval is because a stranger's
+account would otherwise read the whole dataset the moment they clicked the link.
+The AI panels start off because each click spends tokens.
+
+**Forgot password?** on the sign-in page emails a link that sets a new password: one
+hour, one use, and every other session of the account ends. It works for any
+account that is not disabled, including ones made at the terminal.
+
+**What the forms never say.** Signing up and asking for a reset answer the same
+sentence whether or not the address has an account, and the mail goes out on a
+thread of its own so the answer's timing does not say it either; signing up with a
+taken address emails its owner a reset link instead. The links are built from
+`TRACKER_NOTIFY_CONSOLE_URL`, never from the request, so nobody can have a reset
+link for your address pointed at their own server. Stored links are sha256 only,
+like invite codes. The forms share the sign-in lockout, a mistyped or guessed link
+counts toward it, and mail is budgeted: 5 emails an hour per visitor, 60 an hour in
+total, and 3 links of one kind per address per hour.
+
+**Without email set up, there is no sign-up and no reset.** Both need
+`TRACKER_NOTIFY_CONSOLE_URL`, `TRACKER_RESEND_API_KEY` and `TRACKER_NOTIFY_FROM` —
+the morning email's settings — and say so plainly when one is missing. Invites and
+signing in are unaffected.
 
 **One role, and it is about accounts only.** Every account reads the same
 dataset and keeps its own watchlist. An *admin* also gets the admin page (`/admin`,
@@ -345,6 +388,9 @@ The three worth knowing:
 | `POST /api/watch` | adds or drops a watchlist entry | **the only write there is** |
 | `POST /api/login` | exchanges an email and password for a session cookie | — |
 | `POST /api/register` | spends an invite code and creates the account | — |
+| `POST /api/signup` | asks for an account; with a `code`, is `/api/register` | one email, from the mail budget |
+| `POST /api/confirm` | spends a confirmation link; emails the admins once | one email per admin |
+| `POST /api/forgot` / `POST /api/reset` | mails a reset link / sets the password from one | one email |
 
 `POST /api/run` is gone, along with `/api/runs`, `/api/commands` and
 `/api/discover`. They 404 rather than 403: there is no runner to refuse.

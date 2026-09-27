@@ -748,6 +748,24 @@ class Account(Base):
     #: When an operator last changed the account. NULL for a row nobody has edited.
     updated_at: Mapped[dt.datetime | None] = mapped_column(DateTime)
 
+    #: When a mailed link proved the address belongs to this person (0030). NULL on
+    #: accounts made at the terminal or by invite, which never needed one.
+    email_verified_at: Mapped[dt.datetime | None] = mapped_column(DateTime)
+
+    #: When the account was let in; NULL means it may not sign in yet (0030). A
+    #: plain sign-up waits here for an administrator.
+    approved_at: Mapped[dt.datetime | None] = mapped_column(DateTime)
+
+    #: May use the console's model panels, which spend tokens per click (0030).
+    ai_allowed: Mapped[bool] = mapped_column(
+        Integer, nullable=False, server_default=text("0"), default=0
+    )
+
+    #: Came from the sign-up form rather than the terminal or an invite (0030).
+    self_signup: Mapped[bool] = mapped_column(
+        Integer, nullable=False, server_default=text("0"), default=0
+    )
+
     watches: Mapped[list[Watch]] = relationship(
         back_populates="account", cascade="all, delete-orphan", passive_deletes=True
     )
@@ -764,6 +782,32 @@ class Account(Base):
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return f"<Account {self.email!r}>"
+
+
+class AccountToken(Base):
+    """One link mailed to an account: a confirmation or a password reset (0030).
+
+    Only the token's sha256 is stored, like an invite's code. Single use, with its
+    own expiry, and the rows double as the per-address throttle on mail sent.
+    """
+
+    __tablename__ = "account_token"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    account_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("account.id", ondelete="CASCADE"), nullable=False
+    )
+    purpose: Mapped[str] = mapped_column(Text, nullable=False)
+    token_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False, server_default=_NOW)
+    expires_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False)
+    used_at: Mapped[dt.datetime | None] = mapped_column(DateTime)
+
+    __table_args__ = (
+        UniqueConstraint("token_hash", name="uq_account_token_hash"),
+        CheckConstraint("purpose IN ('confirm', 'reset')", name="ck_account_token_purpose"),
+        Index("ix_account_token_account", "account_id", "purpose", "created_at"),
+    )
 
 
 class Invite(Base):

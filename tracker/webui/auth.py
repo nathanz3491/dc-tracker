@@ -106,6 +106,17 @@ GLOBAL_MAX_FAILURES = 40
 GLOBAL_WINDOW_S = 15 * 60
 GLOBAL_LOCKOUT_S = 15 * 60
 
+#: Emails one client may cause in an hour, and all clients together.
+#:
+#: The sign-up and forgot-password forms answer anybody and send mail, so without
+#: a budget they are a way to make this server mail strangers — as often as a
+#: script can press the button — and to spend the sending domain's reputation
+#: doing it. Per client first; the global figure is what a distributed attempt
+#: meets. Each address is also limited on its own (`accounts.MAX_LINKS_PER_HOUR`).
+MAIL_MAX_PER_CLIENT = 5
+MAIL_WINDOW_S = 60 * 60
+GLOBAL_MAIL_MAX = 60
+
 #: The cookie holds a lookup key, never a claim. Named for the app so it cannot
 #: collide with anything else on localhost.
 COOKIE = "dc_console_session"
@@ -148,6 +159,9 @@ class Gate:
     global_max_failures: int = GLOBAL_MAX_FAILURES
     global_window_s: int = GLOBAL_WINDOW_S
     global_lockout_s: int = GLOBAL_LOCKOUT_S
+    mail_max: int = MAIL_MAX_PER_CLIENT
+    mail_window_s: int = MAIL_WINDOW_S
+    global_mail_max: int = GLOBAL_MAIL_MAX
     #: Injectable so a test can move time rather than wait it out. Monotonic, so a
     #: wall-clock change on the host cannot extend a session or end a lockout.
     clock: Callable[[], float] = field(default=time.monotonic, repr=False)
@@ -157,6 +171,9 @@ class Gate:
     #: When each failure inside the current global window happened, oldest first.
     _failures: deque[float] = field(default_factory=deque, repr=False)
     _global_locked_until: float = field(default=0.0, repr=False)
+    #: When each email inside the current window was caused, per client and overall.
+    _mails: dict[str, deque[float]] = field(default_factory=dict, repr=False)
+    _all_mails: deque[float] = field(default_factory=deque, repr=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     # --- attempts ---------------------------------------------------------
@@ -230,6 +247,30 @@ class Gate:
         horizon = now - self.global_window_s
         while self._failures and self._failures[0] <= horizon:
             self._failures.popleft()
+
+    def may_mail(self, client: str) -> bool:
+        """Whether this client may cause one more email now; counts it if so.
+
+        Asked before a form sends anything. A refusal is not a failure for the
+        lockout — nothing was guessed — and the form still answers as it always does.
+        """
+        now = self.clock()
+        horizon = now - self.mail_window_s
+        with self._lock:
+            if len(self._mails) > 1000:
+                # Clients whose last email left the window, so a stream of one-off
+                # addresses cannot grow this without bound.
+                for key in [k for k, q in self._mails.items() if not q or q[-1] <= horizon]:
+                    del self._mails[key]
+            mine = self._mails.setdefault(client, deque())
+            for queue in (mine, self._all_mails):
+                while queue and queue[0] <= horizon:
+                    queue.popleft()
+            if len(mine) >= self.mail_max or len(self._all_mails) >= self.global_mail_max:
+                return False
+            mine.append(now)
+            self._all_mails.append(now)
+            return True
 
     # --- sessions ---------------------------------------------------------
 

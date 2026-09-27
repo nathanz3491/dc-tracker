@@ -4,6 +4,8 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <meta name="robots" content="noindex, nofollow" />
+<!-- A reset link's token is in this page's address; nothing it loads may be told. -->
+<meta name="referrer" content="no-referrer" />
 <title>dc-tracker console</title>
 
 <!--
@@ -82,6 +84,9 @@
   }
   .msg--err  { display:block; background:var(--danger-soft);  color:var(--danger); }
   .msg--warn { display:block; background:var(--warning-soft); color:var(--warning); }
+  .msg--ok   { display:block; background:var(--muted);        color:var(--foreground); }
+  .hint { margin:6px 0 0; font-size:12px; color:var(--muted-foreground); }
+  .links { display:flex; flex-wrap:wrap; gap:4px 16px; }
   .note {
     margin:20px 0 0; padding-top:16px; border-top:1px solid var(--border);
     font-size:12px; line-height:18px; color:var(--muted-foreground);
@@ -121,110 +126,198 @@
       keeps its own watchlist.</p>
 
     <form id="f" autocomplete="off">
-      <!-- The invite field is first when it is showing, because somebody
-           redeeming a code has it on their clipboard and nothing else yet. -->
-      <div id="codewrap" hidden>
-        <label for="code">Invite code</label>
-        <input id="code" name="code" type="text" autocomplete="off" spellcheck="false" />
+      <div id="emailwrap">
+        <label for="email">Email</label>
+        <input id="email" name="email" type="email" autocomplete="username"
+               spellcheck="false" autofocus />
       </div>
-
-      <label for="email">Email</label>
-      <input id="email" name="email" type="email" autocomplete="username"
-             spellcheck="false" autofocus required />
 
       <div id="namewrap" hidden>
         <label for="name">Name <span style="text-transform:none;letter-spacing:0">(optional)</span></label>
         <input id="name" name="name" type="text" autocomplete="name" />
       </div>
 
-      <label for="pw" id="pwlabel">Password</label>
-      <input id="pw" name="password" type="password" autocomplete="current-password" required />
+      <div id="pwwrap">
+        <label for="pw" id="pwlabel">Password</label>
+        <input id="pw" name="password" type="password" autocomplete="current-password" />
+      </div>
+
+      <div id="pw2wrap" hidden>
+        <label for="pw2">Type it again</label>
+        <input id="pw2" name="password2" type="password" autocomplete="new-password" />
+        <p class="hint">At least 6 characters.</p>
+      </div>
+
+      <div id="codewrap" hidden>
+        <label for="code">Invite code <span style="text-transform:none;letter-spacing:0">(optional)</span></label>
+        <input id="code" name="code" type="text" autocomplete="off" spellcheck="false" />
+        <p class="hint">With a code you're in straight away. Without one, we email you a
+          link to confirm the address, then an administrator reviews the request.</p>
+      </div>
+
       <button id="go" type="submit">Sign in</button>
     </form>
 
     <div id="msg" class="msg"></div>
 
-    <p class="note">
-      <button type="button" id="toggle" class="linkish">I have an invite code</button><br />
-      Sessions last 12 hours. Repeated failures lock the gate for 15 minutes —
-      if you are locked out and it was you, wait rather than retrying.
-    </p>
+    <div class="note">
+      <div class="links">
+        <button type="button" id="to-signup" class="linkish">Create an account</button>
+        <button type="button" id="to-forgot" class="linkish">Forgot password?</button>
+        <button type="button" id="to-signin" class="linkish" hidden>Back to sign in</button>
+      </div>
+      <span id="footnote">Sessions last 12 hours. Repeated failures lock the gate for 15
+        minutes — if you are locked out and it was you, wait rather than retrying.</span>
+    </div>
   </main>
 
 <script>
-  const form  = document.getElementById("f");
-  const email = document.getElementById("email");
-  const pw    = document.getElementById("pw");
-  const code  = document.getElementById("code");
-  const name  = document.getElementById("name");
-  const button = document.getElementById("go");
-  const msg   = document.getElementById("msg");
-  const toggle = document.getElementById("toggle");
+  const $ = (id) => document.getElementById(id);
+  const form = $("f"), email = $("email"), name = $("name"), pw = $("pw"), pw2 = $("pw2");
+  const code = $("code"), button = $("go"), msg = $("msg");
 
-  /* One form, two modes, one file.
+  /* One page, five modes.
    *
-   * A separate /register page would be a second thing an unauthenticated request
-   * can fetch, and the whole point of this page is that there is exactly one —
-   * self-contained, describing nothing about what is behind it. So redeeming an
-   * invite shows two more fields and posts somewhere else. */
-  let registering = false;
+   * An unauthenticated request can fetch exactly one thing, this file, and it
+   * describes nothing about what is behind it — so signing up, asking for a reset,
+   * and the two pages a mailed link opens are all modes of it rather than pages of
+   * their own. A link's token is read from the address and then removed from it, so
+   * it does not sit in the history or on screen. */
+  const params = new URLSearchParams(window.location.search);
+  const token = params.get("t");
+  if (token) window.history.replaceState(null, "", window.location.pathname);
 
-  const setMode = (on) => {
-    registering = on;
-    document.getElementById("codewrap").hidden = !on;
-    document.getElementById("namewrap").hidden = !on;
-    code.required = on;
-    document.getElementById("title").textContent = on ? "Redeem an invite" : "Sign in";
-    document.getElementById("lede").textContent = on
-      ? "Your code came from whoever runs this. Choose the email and password you will sign in with."
-      : "The whole dataset is behind this, and each account keeps its own watchlist.";
-    document.getElementById("pwlabel").textContent = on ? "Choose a password" : "Password";
-    pw.setAttribute("autocomplete", on ? "new-password" : "current-password");
-    button.textContent = on ? "Create account" : "Sign in";
-    toggle.textContent = on ? "I already have an account" : "I have an invite code";
-    msg.className = "msg";
-    (on ? code : email).focus();
+  const MODES = {
+    signin: {
+      title: "Sign in", button: "Sign in", route: "/api/login",
+      lede: "The whole dataset is behind this, and each account keeps its own watchlist.",
+      show: ["emailwrap", "pwwrap"], links: ["to-signup", "to-forgot"], footnote: true,
+    },
+    signup: {
+      title: "Create an account", button: "Create account", route: "/api/signup",
+      lede: "Choose the email and password you'll sign in with.",
+      show: ["emailwrap", "namewrap", "pwwrap", "pw2wrap", "codewrap"], links: ["to-signin"],
+    },
+    forgot: {
+      title: "Forgot your password?", button: "Send me a link", route: "/api/forgot",
+      lede: "Enter your email and we'll send you a link to choose a new password.",
+      show: ["emailwrap"], links: ["to-signin"],
+    },
+    reset: {
+      title: "Choose a new password", button: "Set password", route: "/api/reset",
+      lede: "Setting it signs you out on every other device.",
+      show: ["pwwrap", "pw2wrap"], links: ["to-signin"],
+    },
+    confirm: {
+      title: "Confirming your email…", button: null, route: "/api/confirm",
+      lede: "", show: [], links: ["to-signin"],
+    },
+  };
+  const WRAPS = ["emailwrap", "namewrap", "pwwrap", "pw2wrap", "codewrap"];
+  const LINKS = ["to-signup", "to-forgot", "to-signin"];
+  let mode = "signin";
+
+  // The server's refusals are written for a terminal too, so they start lowercase.
+  const show = (text, kind) => {
+    msg.textContent = text ? text.charAt(0).toUpperCase() + text.slice(1) : "";
+    msg.className = text ? "msg msg--" + kind : "msg";
   };
 
-  toggle.addEventListener("click", () => setMode(!registering));
+  const setMode = (next) => {
+    mode = next;
+    const m = MODES[next];
+    $("title").textContent = m.title;
+    $("lede").textContent = m.lede;
+    $("lede").hidden = !m.lede;
+    WRAPS.forEach((id) => { $(id).hidden = !m.show.includes(id); });
+    LINKS.forEach((id) => { $(id).hidden = !m.links.includes(id); });
+    $("footnote").hidden = !m.footnote;
+    form.hidden = !m.button;
+    button.textContent = m.button || "";
+    const choosing = next === "signup" || next === "reset";
+    $("pwlabel").textContent = choosing ? (next === "reset" ? "New password" : "Choose a password") : "Password";
+    pw.setAttribute("autocomplete", choosing ? "new-password" : "current-password");
+    show("", "ok");
+    (m.show.includes("emailwrap") ? email : pw).focus();
+  };
 
-  const show = (text, kind) => {
-    msg.textContent = text;
-    msg.className = "msg msg--" + kind;
+  $("to-signup").addEventListener("click", () => setMode("signup"));
+  $("to-forgot").addEventListener("click", () => setMode("forgot"));
+  $("to-signin").addEventListener("click", () => setMode("signin"));
+
+  const post = async (route, body) => {
+    const res = await fetch(route, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Console": "1" },
+      body: JSON.stringify(body),
+    });
+    return { res, payload: await res.json().catch(() => ({})) };
+  };
+
+  // Done with a form: say so, and leave only the way back to signing in.
+  const finish = (text) => {
+    form.hidden = true;
+    show(text, "ok");
+    LINKS.forEach((id) => { $(id).hidden = id !== "to-signin"; });
   };
 
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
+    if ((mode === "signup" || mode === "reset") && pw.value !== pw2.value) {
+      show("The two passwords don't match.", "err");
+      pw2.focus();
+      return;
+    }
+    const bodies = {
+      signin: { email: email.value, password: pw.value },
+      signup: { email: email.value, password: pw.value, name: name.value, code: code.value.trim() },
+      forgot: { email: email.value },
+      reset: { token, password: pw.value },
+    };
     button.disabled = true;
-    msg.className = "msg";
-    const route = registering ? "/api/register" : "/api/login";
-    const body = registering
-      ? { code: code.value.trim(), email: email.value, password: pw.value, name: name.value }
-      : { email: email.value, password: pw.value };
+    show("", "ok");
     try {
-      const res = await fetch(route, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Console": "1" },
-        body: JSON.stringify(body),
-      });
+      const { res, payload } = await post(MODES[mode].route, bodies[mode]);
       if (res.ok) {
-        // Replace rather than assign: the login page should not sit in history
-        // behind the console. Registering signs you straight in, so both land here.
-        window.location.replace("/");
+        // Signed in — by signing in, an invite code, or a reset of an account that
+        // may. Replace rather than assign, so this page is not behind the console
+        // in the history.
+        if (mode === "signin" || (mode === "signup" && !payload.message) || payload.signed_in) {
+          window.location.replace("/");
+          return;
+        }
+        finish(payload.message || "Done.");
         return;
       }
-      const payload = await res.json().catch(() => ({}));
       show(payload.error || "That did not work.", res.status === 429 ? "warn" : "err");
-      // Keep what they typed except the password — retyping an email to fix a
+      // Keep what they typed except the passwords — retyping an email to fix a
       // password is the kind of small insult that makes people write it down.
       pw.value = "";
-      pw.focus();
+      pw2.value = "";
+      if (!$("pwwrap").hidden) pw.focus();
     } catch {
       show("The console did not answer. Is it still running?", "err");
     } finally {
       button.disabled = false;
     }
   });
+
+  const path = window.location.pathname;
+  if (path === "/reset" && token) {
+    setMode("reset");
+  } else if (path === "/confirm" && token) {
+    setMode("confirm");
+    post("/api/confirm", { token })
+      .then(({ res, payload }) => {
+        $("title").textContent = res.ok ? "Email confirmed" : "That link didn't work";
+        if (res.ok) finish(payload.message);
+        else show(payload.error || "That link didn't work.", "err");
+      })
+      .catch(() => show("The console did not answer. Is it still running?", "err"));
+  } else {
+    if (path === "/reset" || path === "/confirm") window.history.replaceState(null, "", "/");
+    setMode("signin");
+  }
 </script>
 </body>
 </html>

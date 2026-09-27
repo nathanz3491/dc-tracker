@@ -116,6 +116,63 @@ function when(value) {
   return value ? value.slice(0, 16).replace("T", " ") : "never";
 }
 
+/* `accounts.status`, in words and a colour. */
+const STATUS_WORDS = {
+  active: "active", disabled: "disabled",
+  pending: "waiting for approval", unconfirmed: "email not confirmed",
+};
+const STATUS_TONE = {
+  disabled: "var(--danger)", pending: "var(--warning)", unconfirmed: "var(--muted-foreground)",
+};
+
+/* Sign-ups that confirmed their address and are waiting for an admin. Approving
+   emails them; turning one down deletes the request. The AI panels are a separate
+   choice because they spend tokens on every click. */
+function Waiting({ rows, act }) {
+  const [busy, setBusy] = useState(null);
+  const [error, setError] = useState(null);
+  if (!rows.length) return null;
+  const run = async (a, verb, body, confirmText) => {
+    if (confirmText && !window.confirm(confirmText)) return;
+    setBusy(a.id);
+    setError(null);
+    try {
+      await act(verb, { id: a.id, ...body });
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(null);
+    }
+  };
+  return html`
+    <${Card}>
+      <div style=${pad}>
+        <div style=${{ fontWeight: 600, fontSize: 15 }}>
+          Waiting for approval <span style=${{ color: "var(--muted-foreground)", fontWeight: 400 }}>${rows.length}</span>
+        </div>
+        <${Notice} tone="danger">${error}<//>
+        ${rows.map((a) => html`
+          <div key=${a.id} style=${{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "8px 14px",
+                                     paddingTop: 8, borderTop: "1px solid var(--border)" }}>
+            <div style=${{ flex: "1 1 220px", minWidth: 0 }}>
+              <div style=${{ fontWeight: 600, overflowWrap: "anywhere" }}>${a.email}</div>
+              <div style=${{ fontSize: 12, color: "var(--muted-foreground)" }}>
+                ${a.name ? `${a.name} · ` : ""}signed up ${when(a.created_at)} · confirmed ${when(a.email_verified_at)}
+              </div>
+            </div>
+            <div style=${{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+              <${Button} size="sm" disabled=${busy === a.id} onClick=${() => run(a, "approve", {})}>Approve<//>
+              <${Button} size="sm" variant="outline" disabled=${busy === a.id}
+                onClick=${() => run(a, "approve", { ai: true })}>Approve with AI panels<//>
+              <${Button} size="sm" variant="ghost" disabled=${busy === a.id} style=${{ color: "var(--danger)" }}
+                onClick=${() => run(a, "delete", {}, `Turn down ${a.email}? Their request is deleted.`)}>
+                Turn down<//>
+            </div>
+          </div>`)}
+      </div>
+    <//>`;
+}
+
 function Row({ a, active, onPick }) {
   return html`
     <tr class="dc-row" role="button" tabindex="0" aria-pressed=${active}
@@ -125,8 +182,7 @@ function Row({ a, active, onPick }) {
       <td class="dc-cell" style=${{ fontWeight: 600 }}>${a.email}</td>
       <td class="dc-cell">${a.name || ""}</td>
       <td class="dc-cell">${a.admin ? "admin" : ""}</td>
-      <td class="dc-cell" style=${{ color: a.disabled ? "var(--danger)" : undefined }}>
-        ${a.disabled ? "disabled" : "active"}</td>
+      <td class="dc-cell" style=${{ color: STATUS_TONE[a.status] }}>${STATUS_WORDS[a.status]}</td>
       <td class="dc-cell">${a.watch_all ? "everything" : `${a.watches} watched`}</td>
       <td class="dc-cell dc-num" style=${{ fontSize: 12 }}>${when(a.last_seen_at)}</td>
     </tr>`;
@@ -138,6 +194,7 @@ function Editor({ a, self, act, onDeleted }) {
   const [email, setEmail] = useState(a.email);
   const [name, setName] = useState(a.name || "");
   const [watchAll, setWatchAll] = useState(!!a.watch_all);
+  const [ai, setAi] = useState(!!a.ai);
   const [message, setMessage] = useState(null);
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -158,7 +215,7 @@ function Editor({ a, self, act, onDeleted }) {
     }
   };
   const dirty = email.trim() !== a.email || (name.trim() || null) !== (a.name || null)
-    || watchAll !== !!a.watch_all;
+    || watchAll !== !!a.watch_all || ai !== !!a.ai;
 
   return html`
     <${Card}>
@@ -171,7 +228,7 @@ function Editor({ a, self, act, onDeleted }) {
         <div style=${{ display: "grid", gridTemplateColumns: "max-content 1fr", gap: "4px 14px",
                        fontSize: 13 }}>
           <span style=${label}>status</span>
-          <span>${a.disabled ? `disabled since ${when(a.disabled_at)}` : "active"}</span>
+          <span>${a.disabled ? `disabled since ${when(a.disabled_at)}` : STATUS_WORDS[a.status]}</span>
           <span style=${label}>joined</span><span>${a.joined}</span>
           <span style=${label}>created</span><span>${when(a.created_at)}</span>
           <span style=${label}>last signed in</span><span>${when(a.last_seen_at)}</span>
@@ -189,8 +246,10 @@ function Editor({ a, self, act, onDeleted }) {
                     onChange=${(e) => setName(e.target.value)} />
           <${Switch} size="sm" label="Sees the whole database" checked=${watchAll}
                      onCheckedChange=${(v) => setWatchAll(!!v)} />
+          <${Switch} size="sm" label="May use the AI panels (they spend tokens)" checked=${ai}
+                     onCheckedChange=${(v) => setAi(!!v)} />
           <div><${Button} size="sm" disabled=${busy || !dirty}
-            onClick=${() => run("update", { email: email.trim(), name, watch_all: watchAll }, "saved")}>
+            onClick=${() => run("update", { email: email.trim(), name, watch_all: watchAll, ai }, "saved")}>
             Save changes<//></div>
         </div>
 
@@ -250,6 +309,7 @@ export function AdminView({ data, api }) {
                                             gap: 16, padding: "22px 26px 60px" }}>
       <${Heading} figure="admin" title="Accounts" />
       <${Notice} tone="danger">${state.error}<//>
+      <${Waiting} rows=${accounts.filter((a) => a.status === "pending")} act=${act} />
       <${Card}>
         ${/* Scrolls inside its card on a phone rather than widening the page. */ ""}
         <div style=${{ overflowX: "auto" }}>

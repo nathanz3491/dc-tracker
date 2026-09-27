@@ -895,6 +895,10 @@ def compose(
     now = now or utcnow()
     if account.disabled_at is not None:
         return "account disabled"
+    if account.approved_at is None:
+        # A sign-up waiting for an administrator (0030): it cannot sign in, so the
+        # console its email links to would only show it a sign-in form.
+        return "not approved yet"
     if account.watch_all:
         # Wanting the whole database on a page is reasonable; having all of it
         # mailed every morning is a firehose, and mail arrives uninvited.

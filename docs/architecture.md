@@ -112,20 +112,29 @@ read once would leave a published console open until somebody noticed.
 
 ### Getting an account without a terminal
 
-Two routes, and neither is open registration. Behind a tunnel the login page is a
-public URL, and while an account can no longer run a command it can still read the
-whole dataset.
+Three routes. Behind a tunnel the login page is a public URL, and while an account
+can no longer run a command it can still read the whole dataset — so the route
+decides how much an account is trusted (migration 0030).
 
-- `tracker users add` — at a terminal, prompting for the password.
+- `tracker users add` — at a terminal, prompting for the password. Let in at once,
+  with the AI panels.
 - `tracker users invite` — mints a single-use code, printed once. The holder
   redeems it on the console's own sign-in page and chooses their own email and
-  password. That is the one worth using when you are not the person who will be
-  typing the password: a password you picked and sent them is a password in a chat
-  log.
+  password, and is let in at once with the AI panels. That is the one worth using
+  when you are not the person who will be typing the password: a password you
+  picked and sent them is a password in a chat log.
+- **Create an account** on the sign-in page, with no code. The address is confirmed
+  by a mailed link, then an admin approves the account; it starts without the AI
+  panels, which spend tokens on every click. `accounts.status` names the four
+  states — `unconfirmed`, `pending`, `active`, `disabled` — and sign-in and every
+  session check refuse anything but `active`.
 
 The code is stored as a sha256 and never in the clear, because this database
 travels between machines through `scripts/sync_db.py` and sits in `backups/` —
-a plaintext code in it would be a live credential in every copy.
+a plaintext code in it would be a live credential in every copy. Mailed links
+(`account_token`) are stored the same way, and are built only from
+`TRACKER_NOTIFY_CONSOLE_URL`, never from the request's Host header. See
+[the console](console-and-export.md#three-ways-in) for the whole flow.
 
 ### The one write, and why it does not break the split
 
@@ -237,8 +246,10 @@ to one question is the failure this whole section is about.
 **On the read side the database is opened read-only.**
 
 Not by convention — the handle itself rejects writes. A bug in display code
-raises instead of quietly changing a row. Every route except `POST /api/watch`,
-`POST /api/login` and `POST /api/register` opens it `mode=ro`.
+raises instead of quietly changing a row. Every route opens it `mode=ro` except
+`POST /api/watch`, the account routes — signing in, `register`, `signup`,
+`confirm`, `forgot`, `reset`, one's own password and the admin page's — none of
+which touch a project, a citation or a figure.
 
 The three that do not are as narrow as their jobs: one row of `watch`, one
 `last_seen_at` stamp on a successful sign-in, and one `account` row created by
