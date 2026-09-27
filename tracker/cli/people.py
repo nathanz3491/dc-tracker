@@ -360,8 +360,8 @@ def users(ctx: typer.Context) -> None:
     `add`, `invite`, `approve`, `show`, `edit`, `passwd`, `disable`, `enable`,
     `signout`, `admin`, `rm`, and `notify` to tell somebody how their account is now
     set up. An admin can do the same from the console's admin page, except grant
-    admin. Anyone may also ask for an account on the sign-in page; that account
-    waits, listed here as pending, until `approve` lets it in.
+    admin. Anyone may also ask for an account at the console's `/register`; that
+    account waits, listed here as pending, until `approve` lets it in.
 
     **Zero accounts is a legitimate state**, and it is the one a fresh install is
     in: the console then opens with no sign-in, exactly as it did with no
@@ -1029,7 +1029,7 @@ def users_invite(
     because this database is copied between machines and kept in backups, where a
     plaintext code would be a live credential in every copy.
 
-    They redeem it on the console's own login page, where they choose their own
+    They redeem it on the console's /register page, where they choose their own
     email and password. That is the point of an invite over `users add`: a password
     you picked and sent them is a password in a chat log.
     """
@@ -1050,7 +1050,7 @@ def users_invite(
     console.print(f"[bold]{escape(code)}[/bold]")
     console.print(
         f"[dim]single use, expires {expires:%Y-%m-%d %H:%M} UTC. Shown once — "
-        "only its hash is stored. They redeem it on the console's sign-in page.[/dim]"
+        "only its hash is stored. They redeem it on the console's /register page.[/dim]"
     )
 
 
@@ -1089,7 +1089,7 @@ def digest(
 ) -> None:
     """What changed on the watchlist, good and bad, since a date.
 
-    The same reading the console's landing page renders, in a form that can be
+    The same reading the console's Updates page renders, in a form that can be
     sent: `tracker digest --markdown --days 1` is the nightly note. Reads only, so
     it is safe on either machine.
 
@@ -1515,6 +1515,14 @@ def notify_send(
             only_email=user,
             force=force,
         )
+        # The confirmation email promises an unconfirmed request is removed after a
+        # week. A sign-up also sweeps them, but a quiet console may see none for a
+        # month; this run is daily, so it is what keeps the promise.
+        from tracker import accounts
+
+        swept = accounts.expire_unconfirmed(session)
+    if swept and not json_mode():
+        console.print(f"[dim]removed {swept} sign-up(s) nobody confirmed within a week[/dim]")
 
     if json_mode():
         emit(

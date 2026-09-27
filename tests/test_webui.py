@@ -16,6 +16,7 @@ import os
 import re
 import sys
 import threading
+from html.parser import HTMLParser
 from http.client import HTTPConnection
 from pathlib import Path
 
@@ -754,13 +755,19 @@ def test_the_read_routes_do_not_collide_with_the_ai_overview(server):
     assert request(address, "/api/overview")[0] == 404
 
 
-def test_the_page_references_no_external_host(server):
-    """Same guarantee `tracker export html` makes, for the same reason."""
-    address, _ = server
-    status, body = request(address, "/")
-    assert status == 200
-    for host in ("unpkg.com", "cdn.jsdelivr.net", "fonts.googleapis.com", "fonts.gstatic.com"):
-        assert host not in body, f"the shell reaches out to {host}"
+def test_the_page_references_no_external_host(gated):
+    """Same guarantee `tracker export html` makes, for the same reason — and for the
+    public pages too, which a stranger's browser loads before anything else."""
+    address, _ = gated
+    _, cookie = sign_in(address)
+    status, _, shell = raw(address, "/", cookie=cookie)
+    assert status == 200 and "window.DC_VIEW" in shell
+    served = {"the shell": shell}
+    for path in [*PUBLIC_DOCUMENTS, "/static/public/site.css", "/static/public/site.js"]:
+        served[path] = raw(address, path)[2]
+    for where, body in served.items():
+        for host in ("unpkg.com", "cdn.jsdelivr.net", "fonts.googleapis.com", "fonts.gstatic.com"):
+            assert host not in body, f"{where} reaches out to {host}"
 
 
 def test_the_csp_stays_shut_except_for_framing(server):
@@ -1079,8 +1086,15 @@ def test_a_current_token_is_cacheable_and_anything_else_is_not(server):
     address, _ = server
     token = assets.version_token(assets.STATIC_ROOT / "app.js")
 
-    fresh = headers_for(address, f"/static/app.js?v={token}")
-    assert "immutable" in fresh.get("cache-control", "")
+    # `private` for the console's own code: an edge cache in front of a published
+    # console would otherwise keep app.js and hand it to anybody who asked for it.
+    fresh = headers_for(address, f"/static/app.js?v={token}").get("cache-control", "")
+    assert fresh.startswith("private") and "immutable" in fresh
+
+    # `public` only for a file every stranger may have anyway.
+    site = assets.version_token(assets.PUBLIC_ROOT / "site.css")
+    fresh = headers_for(address, f"/static/public/site.css?v={site}").get("cache-control", "")
+    assert fresh.startswith("public") and "immutable" in fresh
 
     for path in ("/static/app.js", "/static/app.js?v=stale-1"):
         assert "immutable" not in headers_for(address, path).get("cache-control", ""), path
@@ -1646,14 +1660,28 @@ def sign_in(address, password=PASSWORD, email=EMAIL):
         "/api/health",
         "/static/app.js",
         "/static/app.css",
+        "/api",
+        "/api/admin/users",
+        "/static/vendor/meridian/styles.css",
+        # The pages live beside the public files, and are never served from there.
+        "/static/public/signin.html",
+        "/static/public/home.html",
+        # Every spelling that could reach past the allowlist: traversal, encoded
+        # traversal, a case the filesystem folds, and a trailing slash.
+        "/static/public/../app.js",
+        "/static/public/%2e%2e/app.js",
+        "/static/PUBLIC/site.css",
+        "/static/public/site.css/",
+        # The latin-ext subset of a public face: only the Latin files are public.
+        "/static/vendor/fonts/jizBRFtNs2ka5fXjeivQ4LroWlx-6zsTjmbI.woff2",
     ],
 )
 def test_nothing_is_served_before_signing_in(gated, path):
-    """Blanket, not just the page.
+    """Blanket, not just the page: an anonymous request reaches the public pages and
+    `assets.PUBLIC_STATIC` and nothing else.
 
-    An anonymous request reaches exactly one file. Serving the app bundle or a
-    health check to the open internet would leak the shape of what is behind the
-    gate for no benefit.
+    Serving the app bundle or a health check to the open internet would leak the
+    shape of what is behind the gate for no benefit.
     """
     address, _ = gated
     status, _, body = raw(address, path)
@@ -1663,24 +1691,68 @@ def test_nothing_is_served_before_signing_in(gated, path):
     assert "React" not in body and "dc-tracker console" not in body
 
 
-def test_a_navigation_gets_the_form_but_an_asset_gets_a_401(gated):
-    """Both withhold the asset; only one of them is usable.
+def test_a_stranger_gets_the_front_page_and_a_401_for_assets(gated):
+    """Both withhold the console; only one of them is usable.
 
-    Answering a request for `app.js` with the login page and a 200 hands a
-    browser HTML where it asked for a script, so an expired session surfaces as a
-    parse error rather than as "you are signed out".
+    Answering a request for `app.js` with a page and a 200 hands a browser HTML
+    where it asked for a script, so an expired session surfaces as a parse error
+    rather than as "you are signed out".
     """
     address, _ = gated
     status, _, body = raw(address, "/")
-    assert status == 200 and "Sign in" in body
+    assert status == 200
+    assert 'href="/signin"' in body and 'href="/register"' in body
+    assert "window.DC_VIEW" not in body and "/static/app.js" not in body, "the console shell"
+    status, _, body = raw(address, "/signin")
+    assert status == 200 and 'data-page="signin"' in body
     assert raw(address, "/static/app.js")[0] == 401
 
 
-def test_the_login_page_leaks_nothing(gated):
+#: Every public page at a URL that serves it to a stranger, by `PUBLIC_PAGES` key.
+#: The two token pages need a token, or they redirect to the page that mails one.
+PUBLIC_URLS = {
+    "": "/",
+    "index.html": "/index.html",
+    "signin": "/signin",
+    "register": "/register",
+    "forgot": "/forgot",
+    "reset": "/reset?t=x",
+    "confirm": "/confirm?t=x",
+}
+
+#: The public pages above plus the 404 page, which a stranger reads just as often.
+PUBLIC_DOCUMENTS = [*PUBLIC_URLS.values(), "/nonsense"]
+
+
+def test_every_public_page_has_a_url_here():
+    """So a page added to `PUBLIC_PAGES` cannot be missed by the tests below."""
+    assert set(PUBLIC_URLS) == set(assets.PUBLIC_PAGES)
+
+
+@pytest.mark.parametrize(
+    "path", [*PUBLIC_DOCUMENTS, "/static/public/site.css", "/static/public/site.js"]
+)
+def test_no_public_file_leaks_anything(gated, path):
+    """Nothing a stranger can fetch names the data, the console's code or how to run it.
+
+    `vendor/` is not on the list: `site.css` names `vendor/fonts` legitimately, and
+    `test_everything_a_public_page_asks_for_is_public` is what says which of those
+    files a stranger may have.
+    """
     address, _ = gated
-    _, _, body = raw(address, "/")
-    for leak in ("Fairwater", "Microsoft", "/api/dataset", "vendor/", "tracker serve"):
-        assert leak not in body, f"the login page mentions {leak}"
+    status, _, body = raw(address, path)
+    assert status == (404 if path == "/nonsense" else 200), path
+    for leak in (
+        "Fairwater",
+        "Microsoft",
+        "/api/dataset",
+        "tracker serve",
+        "_ds_bundle",
+        "app.js",
+        "DC_VIEW",
+        "React",
+    ):
+        assert leak not in body, f"{path} mentions {leak}"
 
 
 def test_signing_in_sets_an_httponly_lax_session_cookie(gated):
@@ -1703,7 +1775,7 @@ def test_a_session_opens_every_route(gated):
         status, _, _ = raw(address, path, cookie=cookie)
         assert status == 200, path
     status, _, body = raw(address, "/", cookie=cookie)
-    assert "Redeem an invite" not in body, "still on the login page"
+    assert status == 200 and 'window.DC_VIEW=""' in body, "still on the front page"
 
 
 def test_a_wrong_password_is_401_and_grants_nothing(gated):
@@ -1913,6 +1985,16 @@ def test_no_accounts_means_no_gate(server):
     assert console.auth_required is False
     assert request(address, "/api/dataset")[0] == 200
 
+    # The account pages have nothing to do on a console with no accounts, and no
+    # link to one can exist, so each goes into the console — and `next` still works.
+    for path in ("/signin", "/register", "/forgot", "/reset?t=x", "/confirm?t=x"):
+        status, headers, _ = raw(address, path)
+        assert status == 303 and headers["Location"] == "/", path
+    status, headers, _ = raw(address, "/signin?next=/map")
+    assert status == 303 and headers["Location"] == "/map"
+    status, _, body = raw(address, "/")
+    assert status == 200 and 'window.DC_VIEW=""' in body, "still the console shell"
+
 
 def test_creating_an_account_closes_the_gate_without_a_restart(server, seeded_db):
     """`tracker users add` runs in another process.
@@ -2116,7 +2198,8 @@ def test_a_published_console_fails_closed_when_its_last_account_goes(published, 
     console into an open one — the whole dataset on a public URL — and the CLI
     said so as if it were good news ("open again"). A published console now
     requires a sign-in whatever the account count, so with none left it refuses
-    everyone and says why on the one form it still serves.
+    everyone and says why on the sign-in form. The public pages stay what they are
+    for everybody else: a stranger is still shown the front page, not the console.
     """
     address, console = published
     console.gate.session_confirm_s = 0
@@ -2130,7 +2213,11 @@ def test_a_published_console_fails_closed_when_its_last_account_goes(published, 
         assert raw(address, path)[0] == 401, f"{path} was served on a published console"
         assert raw(address, path, cookie=cookie)[0] == 401, f"{path}: the old session too"
     status, _, body = raw(address, "/")
-    assert status == 200 and "Sign in" in body, "the form, and nothing else"
+    assert status == 200 and 'href="/signin"' in body, "the front page, and not the console"
+    assert raw(address, "/signin")[0] == 200
+    status, headers, _ = raw(address, "/updates")
+    assert status == 303 and headers["Location"] == "/signin?next=/updates"
+    assert raw(address, "/static/public/site.css")[0] == 200
 
     status, _, body = raw(address, "/api/login", "POST", {"email": EMAIL, "password": PASSWORD})
     assert status == 503
@@ -2206,6 +2293,586 @@ def test_deleting_the_last_account_says_what_it_does_to_a_published_console(seed
     assert removed.exit_code == 0, removed.output
     assert "refuses every sign-in" in said(removed)
     assert "open again" not in said(removed)
+
+
+# --- the public surface ------------------------------------------------------------
+#
+# Before signing in, a browser may have the seven public pages at their own routes
+# and the five files in `assets.PUBLIC_STATIC`, and nothing else. A signed-out link to
+# a console page comes back to that page after signing in, and `next` can never send
+# anybody off the site.
+
+#: Every path a stranger is redirected from, and one a signed-in reader is. The
+#: cache, length and keep-alive tests run over all of them.
+ANONYMOUS_REDIRECTS = (
+    "/updates",
+    "/admin/",
+    "/projects/42",
+    "/login",
+    "/signup",
+    "/reset",
+    "/confirm",
+    "/signin?next=//evil.example",
+)
+SIGNED_IN_REDIRECTS = ("/signin", "/signin?next=/map", "/register", "/forgot", "/login", "/signup")
+
+
+def _fetch(address, path, method="GET", cookie=None):
+    """`raw` for any file: the body stays bytes, so a font is not decoded as text."""
+    conn = HTTPConnection(*address, timeout=30)
+    conn.request(method, path, headers={"Cookie": cookie} if cookie else {})
+    response = conn.getresponse()
+    body = response.read()
+    conn.close()
+    return response.status, dict(response.getheaders()), body
+
+
+def _redirects_to(address, path, cookie=None) -> str:
+    """Where the 303 that `path` must answer points."""
+    status, headers, body = raw(address, path, cookie=cookie)
+    assert status == 303, f"{path}: {status}"
+    assert body == "", f"{path}: a redirect carries no body"
+    return headers["Location"]
+
+
+def test_safe_next_accepts_only_the_consoles_own_pages():
+    """`next` is an allowlist of whole paths, so no spelling a browser would read as
+    another host, a script or some other page can survive it."""
+    from tracker.webui.server import safe_next
+
+    for good in ("/", "/updates", "/admin", "/projects/42"):
+        assert safe_next(good) == good
+    assert safe_next("/projects/0042") == "/projects/42", "canonical: one page, one URL"
+
+    for bad in (
+        None,
+        "",
+        123,
+        ["/"],
+        # Another host, however it is spelled.
+        "//evil.example",
+        "/\\evil.example",
+        "\\\\evil",
+        "https://evil.example/updates",
+        "javascript:alert(1)",
+        # A path with something riding on it.
+        "/updates?x=1",
+        "/updates#x",
+        "/%2F%2Fevil.example",
+        "/\t/evil.example",
+        "/updates\r\nSet-Cookie: x",
+        # Near misses, which are not normalised into a hit.
+        " /updates",
+        "/updates/",
+        "/projects/42/",
+        "/projects/-1",
+        "/projects/٤٢",  # Arabic-Indic 42: `\d` matches it and int() reads it
+        "/projects/" + "9" * 19,
+        "/" + "a" * 9_999,
+        # Pages that are not the console, or not pages.
+        "/signin",
+        "/register",
+        "/login",
+        "/api/dataset",
+        "/static/app.js",
+    ):
+        assert safe_next(bad) is None, repr(bad)
+
+
+def test_a_signed_out_deep_link_comes_back_after_signing_in(gated):
+    """The morning email, the admin's "a sign-up is waiting" link and a tab whose
+    session died in a deploy all used to land on Updates after signing in."""
+    address, _ = gated
+    assert _redirects_to(address, "/projects/42") == "/signin?next=/projects/42"
+    assert _redirects_to(address, "/admin/") == "/signin?next=/admin"
+
+    credentials = {"email": EMAIL, "password": PASSWORD, "next": "/projects/42"}
+    status, headers, body = raw(address, "/api/login", "POST", credentials)
+    assert status == 200 and json.loads(body)["next"] == "/projects/42"
+    cookie = headers["Set-Cookie"].split(";")[0]
+    status, _, page = raw(address, "/projects/42", cookie=cookie)
+    assert status == 200 and "window.DC_PROJECT=42" in page
+
+
+def test_a_redirect_says_nothing_about_whether_a_project_exists(gated, seeded_db):
+    """Decided by the path alone, so a stranger cannot walk the ids to count them."""
+    from sqlalchemy import select
+
+    from tracker.db import open_db, session_scope
+    from tracker.models import Project
+
+    with session_scope(open_db(seeded_db), commit=False) as session:
+        real = session.scalar(select(Project.id))
+    assert real is not None
+
+    address, _ = gated
+    answers = []
+    for project in (real, 999_999_999):
+        status, headers, body = raw(address, f"/projects/{project}")
+        location = headers.get("Location", "").replace(str(project), "<id>")
+        answers.append((status, location, headers.get("Content-Length"), body))
+    assert answers[0] == answers[1]
+    assert answers[0][:2] == (303, "/signin?next=/projects/<id>")
+
+
+def test_a_sign_in_will_not_send_you_off_the_site(gated):
+    address, _ = gated
+    for evil in ("//evil.example", "https://evil.example/"):
+        credentials = {"email": EMAIL, "password": PASSWORD, "next": evil}
+        status, _, body = raw(address, "/api/login", "POST", credentials)
+        assert status == 200 and json.loads(body)["next"] == "/", evil
+
+    # A crafted link visibly loses its payload rather than carrying it into the form.
+    assert _redirects_to(address, "/signin?next=//evil.example") == "/signin"
+    _, cookie = sign_in(address)
+    assert _redirects_to(address, "/signin?next=//evil.example", cookie=cookie) == "/"
+
+
+def test_signed_in_readers_skip_the_forms(gated):
+    address, _ = gated
+    _, cookie = sign_in(address)
+    for path, where in (
+        ("/signin", "/"),
+        ("/signin?next=/map", "/map"),
+        ("/register", "/"),
+        ("/forgot", "/account"),
+    ):
+        assert _redirects_to(address, path, cookie=cookie) == where, path
+
+    # The old names go to the new ones, signed in or not, without their query.
+    for who in (None, cookie):
+        assert _redirects_to(address, "/login", cookie=who) == "/signin"
+        assert _redirects_to(address, "/signup", cookie=who) == "/register"
+        assert _redirects_to(address, "/login?next=/map", cookie=who) == "/signin"
+
+
+def test_a_public_page_is_fixed_bytes(gated):
+    """Nothing from the request reaches a public page, so a crafted link cannot put
+    anything on one."""
+    address, _ = gated
+    status, _, to_map = raw(address, "/signin?next=/map")
+    assert status == 200
+    status, _, to_help = raw(address, "/signin?next=/help")
+    assert status == 200
+    assert to_map == to_help
+    assert "/map" not in to_map and "/help" not in to_help
+
+
+@pytest.mark.parametrize("path", PUBLIC_DOCUMENTS)
+def test_the_public_pages_run_no_inline_script(gated, path):
+    """Under `PUBLIC_CSP` an inline script would not run, so a page that had one
+    would be a dead form — and an injected one would not run either.
+
+    `method="post"` on every form is for the browser with scripts off: a form
+    without it submits as a GET, with the password in the address bar.
+    """
+    from tracker.webui.server import PUBLIC_CSP
+
+    address, _ = gated
+    _, headers, body = raw(address, path)
+    for tag in re.findall(r"<script\b[^>]*>", body):
+        assert "src=" in tag, f"{path}: an inline script, {tag}"
+    handler = re.search(r"\son[a-z]+=", body)
+    assert handler is None, f"{path}: an inline event handler, {handler and handler[0]}"
+    for form in re.findall(r"<form\b[^>]*>", body):
+        assert 'method="post"' in form, f"{path}: {form}"
+
+    csp = headers["Content-Security-Policy"]
+    assert csp == PUBLIC_CSP
+    (scripts,) = [d.strip() for d in csp.split(";") if d.strip().startswith("script-src")]
+    assert scripts == "script-src 'self'" and "unsafe-inline" not in scripts
+    assert "frame-ancestors 'none'" in csp
+    cache = headers["Cache-Control"]
+    assert "no-store" in cache and "no-transform" in cache
+
+
+def test_everything_a_public_page_asks_for_is_public(gated):
+    """A reference a stranger cannot fetch is a page that renders without its fonts or
+    its form script, for exactly the visitor it was written for."""
+    address, _ = gated
+    served = [raw(address, path)[2] for path in PUBLIC_DOCUMENTS]
+    served.append(raw(address, "/static/public/site.css")[2])
+
+    asked: set[str] = set()
+    for text in served:
+        for reference in re.findall(r"/static/[^\s\"'()<>]+", text):
+            path, _, query = reference.partition("?")
+            assert query.startswith("v="), f"{reference} is not stamped with its version"
+            relative = path[len("/static/") :]
+            assert relative in assets.PUBLIC_STATIC, f"{reference} would 401 for a stranger"
+            asked.add(relative)
+    assert asked == set(assets.PUBLIC_STATIC), "an allowlisted file that nothing asks for"
+    for relative in assets.PUBLIC_STATIC:
+        assert _fetch(address, f"/static/{relative}")[0] == 200, relative
+
+    pages = {*assets.PUBLIC_PAGES.values(), assets.NOT_FOUND_PAGE}
+    on_disk = {
+        path.relative_to(assets.STATIC_ROOT).as_posix()
+        for path in assets.PUBLIC_ROOT.rglob("*")
+        if path.is_file()
+    }
+    listed = {name for name in assets.PUBLIC_STATIC if name.startswith("public/")}
+    assert on_disk == listed | {f"public/{page}" for page in pages}, "a stray public file"
+    assert not [name for name in assets.PUBLIC_STATIC if name.endswith(".html")]
+
+
+def test_the_anonymous_surface_is_exactly_the_allowlist(gated):
+    """Every file under `static/`, not a hand-picked few: a file added to the tree
+    later is private until somebody lists it."""
+    from urllib.parse import quote
+
+    address, _ = gated
+    files = sorted(
+        path.relative_to(assets.STATIC_ROOT).as_posix()
+        for path in assets.STATIC_ROOT.rglob("*")
+        if path.is_file()
+    )
+    assert set(assets.PUBLIC_STATIC) <= set(files)
+    for relative in files:
+        status = _fetch(address, "/static/" + quote(relative))[0]
+        assert status == (200 if relative in assets.PUBLIC_STATIC else 401), relative
+    # The filesystems both machines have fold case, and `%2e` is a dot to one; the
+    # allowlist is compared as sent, so neither reaches a real file.
+    for relative in assets.PUBLIC_STATIC:
+        for variant in (relative.upper(), relative.replace(".", "%2e", 1)):
+            assert _fetch(address, "/static/" + variant)[0] == 401, variant
+
+
+def test_a_public_stylesheet_cannot_pull_in_a_private_one(gated, tmp_path, monkeypatch, caplog):
+    """A stylesheet is served with its `@import`s folded in, so a public one that
+    imported a gated layer would hand that layer to anybody. It is refused loudly."""
+    import logging
+
+    real = assets.PUBLIC_ROOT / "site.css"
+    assert assets.css_parts(real) == [real], "the real one is one file"
+
+    root = tmp_path / "static"
+    (root / "public").mkdir(parents=True)
+    (root / "public" / "site.css").write_text(
+        '@import url("../private.css");\n.open-rule{color:red}\n', encoding="utf-8"
+    )
+    (root / "private.css").write_text(".gated-rule{color:blue}\n", encoding="utf-8")
+    monkeypatch.setattr(assets, "STATIC_ROOT", root)
+    monkeypatch.setattr(assets, "PUBLIC_STATIC", frozenset({"public/site.css"}))
+
+    address, _ = gated
+    with caplog.at_level(logging.ERROR):
+        status, _, body = raw(address, "/static/public/site.css")
+    assert status == 500
+    assert "gated-rule" not in body and "open-rule" not in body
+    assert "private.css" in caplog.text, "and the log names the file"
+
+
+def test_a_font_inside_a_stylesheet_is_versioned(gated, tmp_path, monkeypatch):
+    """Fonts named inside a stylesheet were fetched at bare URLs answered `no-cache`,
+    so every page load downloaded them again."""
+    root = tmp_path / "static"
+    (root / "public").mkdir(parents=True)
+    (root / "fonts").mkdir()
+    font = root / "fonts" / "face.woff2"
+    font.write_bytes(b"wOF2 stand-in")
+    sheet = root / "public" / "site.css"
+    sheet.write_text(
+        '@font-face{font-family:F;src:url("../fonts/face.woff2") format("woff2")}\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(assets, "STATIC_ROOT", root)
+    monkeypatch.setattr(assets, "PUBLIC_STATIC", frozenset({"public/site.css", "fonts/face.woff2"}))
+
+    token = assets.version_token(font)
+    assert f'url("/static/fonts/face.woff2?v={token}")' in assets.bundle_css(sheet)
+
+    # The served stylesheet carries the font's token, so its own must move with it.
+    before = assets.version_token(sheet)
+    stat = font.stat()
+    os.utime(font, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
+    touched = assets.version_token(sheet)
+    assert touched != before, "a replaced font kept the stylesheet's URL"
+    sheet.write_text(sheet.read_text(encoding="utf-8") + ".x{}\n", encoding="utf-8")
+    assert assets.version_token(sheet) != touched
+
+    # One bad path must not turn the token into "0", which a request asking with
+    # "0" would then match and be told to cache for a year.
+    broken = root / "public" / "broken.css"
+    broken.write_text(
+        '@font-face{src:url("../fonts/face.woff2")}\n@font-face{src:url("../fonts/gone.woff2")}\n',
+        encoding="utf-8",
+    )
+    assert assets.version_token(broken) != "0"
+
+    address, _ = gated
+    status, headers, _ = _fetch(address, f"/static/public/site.css?v={assets.version_token(sheet)}")
+    assert status == 200 and "immutable" in headers["Cache-Control"]
+
+
+def test_a_same_document_reference_in_css_is_left_alone(tmp_path, monkeypatch):
+    """`url(#hatch)` names an element of the page. Rewritten, it became a URL under
+    `/static/` that no file answers."""
+    root = tmp_path / "static"
+    root.mkdir()
+    font = root / "a.woff2"
+    font.write_bytes(b"font")
+    sheet = root / "s.css"
+    sheet.write_text(
+        '.plan .hatch{fill: url(#hatch)}\n@font-face{src:url("a.woff2?x=1#y")}\n', encoding="utf-8"
+    )
+    monkeypatch.setattr(assets, "STATIC_ROOT", root)
+
+    bundled = assets.bundle_css(sheet)
+    assert "fill: url(#hatch)" in bundled
+    assert f'url("/static/a.woff2?v={assets.version_token(font)}#y")' in bundled
+    assert "x=1" not in bundled, "the source's own query is replaced by the token"
+
+
+def test_the_front_page_is_never_cached_and_varies_by_cookie(gated):
+    """`/` is two documents, the front page and the console, chosen by the cookie."""
+    address, _ = gated
+    _, cookie = sign_in(address)
+    for who in (None, cookie):
+        status, headers, _ = raw(address, "/", cookie=who)
+        assert status == 200
+        assert "no-store" in headers["Cache-Control"] and headers.get("Vary") == "Cookie"
+
+    for path, who in [(p, None) for p in ANONYMOUS_REDIRECTS] + [
+        (p, cookie) for p in SIGNED_IN_REDIRECTS
+    ]:
+        status, headers, _ = raw(address, path, cookie=who)
+        assert status == 303 and "no-store" in headers["Cache-Control"], path
+
+
+def test_a_forged_or_revoked_cookie_gets_the_front_page(gated):
+    from tracker.webui.auth import COOKIE
+
+    address, _ = gated
+    _, revoked = sign_in(address)
+    assert raw(address, "/api/logout", "POST", {}, cookie=revoked)[0] == 200
+    for cookie in (f"{COOKIE}=x", f"{COOKIE}=", f"{COOKIE}=" + "a" * 43, "other=1", revoked):
+        status, _, body = raw(address, "/", cookie=cookie)
+        assert status == 200 and 'href="/signin"' in body, cookie
+        assert "DC_VIEW" not in body, cookie
+
+
+def _head(address, path: str) -> tuple[bytes, bytes]:
+    """`(headers, body)` of a HEAD over a raw socket, so a stray body is seen rather
+    than skipped the way `http.client` skips it."""
+    reply = _exchange(
+        address,
+        f"HEAD {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n".encode("ascii"),
+    )
+    head, _, body = reply.partition(b"\r\n\r\n")
+    return head, body
+
+
+def test_head_follows_the_same_routes(gated):
+    address, _ = gated
+    head, body = _head(address, "/updates")
+    assert head.startswith(b"HTTP/1.1 303"), head[:200]
+    assert b"\r\nLocation: /signin?next=/updates" in head
+    assert b"\r\nContent-Length: 0" in head and body == b""
+
+    head, body = _head(address, "/")
+    assert head.startswith(b"HTTP/1.1 200"), head[:200]
+    assert body == b""
+
+
+def test_a_redirect_has_a_length(gated):
+    """Without one, a client on this keep-alive server waits for a body until the
+    request timeout — every redirect, thirty seconds."""
+    import time as clock
+
+    address, _ = gated
+    _, cookie = sign_in(address)
+    for path, who in [(p, None) for p in ANONYMOUS_REDIRECTS] + [
+        (p, cookie) for p in SIGNED_IN_REDIRECTS
+    ]:
+        status, headers, _ = raw(address, path, cookie=who)
+        assert status == 303 and headers["Content-Length"] == "0", path
+
+    conn = HTTPConnection(*address, timeout=10)
+    try:
+        started = clock.monotonic()
+        conn.request("GET", "/updates")
+        first = conn.getresponse()
+        assert first.status == 303 and first.read() == b""
+        sock = conn.sock
+        conn.request("GET", "/projects/42")
+        second = conn.getresponse()
+        assert second.status == 303 and second.read() == b""
+        assert conn.sock is sock, "the connection was not kept"
+        assert clock.monotonic() - started < 3
+    finally:
+        conn.close()
+
+
+def test_an_unknown_path_is_a_404_for_a_stranger_too(gated):
+    """A page a person can read, and still a 404, so a typo is still visible."""
+    address, _ = gated
+    for path in ("/nonsense", "/dev", "/projects/abc"):
+        status, headers, body = raw(address, path)
+        assert status == 404 and headers["Content-Type"].startswith("text/html"), path
+        assert 'data-page="notfound"' in body, path
+    assert raw(address, "/api/nope")[0] == 401
+
+
+def test_the_view_sets_and_the_public_pages_do_not_overlap():
+    """A name in both would be a console page a stranger is shown, or a form a reader
+    cannot reach."""
+    views = server_module.READ_VIEWS | server_module.ACCOUNT_VIEWS
+    assert not set(assets.PUBLIC_PAGES) & views
+    for old in ("login", "signup"):
+        assert old not in assets.PUBLIC_PAGES and old not in views
+
+
+def test_a_leading_double_slash_is_the_same_path(gated):
+    """The stdlib folds a leading `//` before routing (gh-87389), so `//signin` is
+    `/signin`. Pinned, so a change in that is noticed rather than inherited."""
+    address, _ = gated
+    status, _, body = raw(address, "//signin")
+    assert status == 200 and 'data-page="signin"' in body
+
+
+def _js_function(source: str, start: str) -> str:
+    """One top-level function of a bundle: from `start` to the next top-level one."""
+    begin = source.index(start)
+    ends = [
+        found
+        for found in (source.find("\nfunction ", begin), source.find("\nasync function ", begin))
+        if found != -1
+    ]
+    return source[begin : min(ends)] if ends else source[begin:]
+
+
+def test_the_front_end_goes_to_sign_in_not_the_front_page():
+    """`/` is the public front page for a signed-out browser, so it is no longer the
+    way back into the console, and a reload after signing out would show the next
+    person where the last one was."""
+    app = (assets.STATIC_ROOT / "app.js").read_text(encoding="utf-8")
+    site = (assets.PUBLIC_ROOT / "site.js").read_text(encoding="utf-8")
+
+    to_sign_in = _js_function(app, "function toSignIn()")
+    assert '"/signin?next=" + encodeURIComponent(window.location.pathname)' in to_sign_in
+    for name in ("async function api(", "async function apiStream("):
+        body = _js_function(app, name)
+        assert "toSignIn()" in body, name
+        assert 'location.replace("/")' not in body, name
+    sign_out = _js_function(app, "function SignOut()")
+    assert "location.reload()" not in sign_out
+    assert 'location.replace("/signin?out=1")' in sign_out
+
+    assert "payload.next" in site
+    # A confirmation link waits for a press: a mail filter that runs scripts must
+    # not be able to confirm an address by opening it.
+    assert site.count('"/api/confirm"') == 1
+    confirm = site[site.index("const confirmEmail") : site.index("const PAGES")]
+    listener = confirm.index('addEventListener("submit"')
+    assert confirm.index('"/api/confirm"') > listener
+    assert "post(" not in confirm[:listener]
+
+
+def test_signing_out_without_a_session_still_clears_the_cookie(gated):
+    """Behind the sign-in check, a session that could not be re-read got a 401 and
+    kept both itself and the cookie, so "Sign out" silently did nothing."""
+    from tracker.webui.auth import COOKIE
+
+    address, console = gated
+    for cookie in (None, f"{COOKIE}=" + "a" * 43):
+        status, headers, _ = raw(address, "/api/logout", "POST", {}, cookie=cookie)
+        assert status == 200 and "Max-Age=0" in headers["Set-Cookie"], cookie
+
+    _, cookie = sign_in(address)
+    token = cookie.split("=", 1)[1]
+    assert console.gate.session_for(token) is not None
+    status, headers, _ = raw(address, "/api/logout", "POST", {}, cookie=cookie)
+    assert status == 200 and "Max-Age=0" in headers["Set-Cookie"]
+    assert console.gate.session_for(token) is None, "revoked, not merely forgotten"
+    assert raw(address, "/api/dataset", cookie=cookie)[0] == 401
+
+
+class _Elements(HTMLParser):
+    """Every element of a page, flat: its tag, attributes, classes, the elements it
+    sits inside, and its text."""
+
+    VOID = frozenset({"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta"})
+
+    def __init__(self, html: str) -> None:
+        super().__init__(convert_charrefs=True)
+        self.all: list[dict] = []
+        self._open: list[dict] = []
+        self.feed(html)
+        self.close()
+
+    def handle_starttag(self, tag, attrs):
+        named = dict(attrs)
+        element = {
+            "tag": tag,
+            "attrs": named,
+            "classes": set((named.get("class") or "").split()),
+            "within": list(self._open),
+            "text": "",
+        }
+        self.all.append(element)
+        if tag not in self.VOID:
+            self._open.append(element)
+
+    def handle_endtag(self, tag):
+        for depth in range(len(self._open) - 1, -1, -1):
+            if self._open[depth]["tag"] == tag:
+                del self._open[depth:]
+                return
+
+    def handle_data(self, data):
+        for element in self._open:
+            element["text"] += data
+
+
+@pytest.mark.parametrize("page", ["signin", "register", "forgot", "reset", "confirm"])
+def test_every_auth_page_has_the_same_head(gated, page):
+    """The forms keep their balance only while every page has the same head, so the
+    first field starts at the same height on each — and a result replaces a form
+    without anything above it moving."""
+    address, _ = gated
+    status, _, body = raw(address, PUBLIC_URLS[page])
+    assert status == 200
+    elements = _Elements(body).all
+
+    def text(element) -> str:
+        return " ".join(element["text"].split())
+
+    (head,) = [e for e in elements if "card-head" in e["classes"]]
+    inside = [e for e in elements if any(outer is head for outer in e["within"])]
+    (eyebrow,) = [e for e in elements if "eyebrow" in e["classes"]]
+    (title,) = [e for e in elements if e["tag"] == "h1"]
+    (lede,) = [e for e in elements if "lede" in e["classes"]]
+    for part in (eyebrow, title, lede):
+        assert any(part is e for e in inside), f"{page}: {part['tag']} is outside .card-head"
+    assert title["attrs"].get("id") == "title"
+    assert len(text(eyebrow)) <= 28, text(eyebrow)
+    assert len(text(title)) <= 22, text(title)
+    assert len(text(lede)) <= 76, text(lede)
+
+    # Everything the page may ever show is there from the start, and only the three
+    # places a result arrives start hidden — so the invite-code field is visible.
+    hidden = {e["attrs"].get("id") for e in elements if "hidden" in e["attrs"]}
+    assert hidden == {"result", "action", "msg"}, f"{page}: {hidden}"
+    if page in {"signin", "register"}:
+        fields = [e["attrs"].get("id") for e in elements if e["tag"] == "input"]
+        assert fields[:2] == ["email", "password"], fields
+
+
+def test_the_copy_matches_the_rules_it_describes():
+    """Each sentence states a number the code decides, so a changed rule shows up
+    here rather than as a page that tells people something untrue."""
+    from tracker import accounts
+
+    def page(name: str) -> str:
+        return (assets.PUBLIC_ROOT / name).read_text(encoding="utf-8")
+
+    for name in ("register.html", "reset.html"):
+        assert f"At least {accounts.MIN_PASSWORD_LEN} characters" in page(name), name
+    assert "an hour" in page("forgot.html")
+    assert accounts.LINK_TTL["reset"] == dt.timedelta(hours=1)
+    assert "24 hours" in Handler._CHECK_INBOX
+    assert accounts.LINK_TTL["confirm"] == dt.timedelta(hours=24)
 
 
 def _exchange(address, head: bytes, *, wait: float = 5.0) -> bytes:
@@ -2382,10 +3049,12 @@ def test_a_log_line_is_as_wide_as_its_content():
 
 
 def test_every_file_the_page_needs_is_vendored():
-    """A half-vendored install must fail with names, not a blank page."""
+    """A half-vendored install must fail with names, not a blank page — and one
+    missing a public page would answer every signed-out visit with a 500."""
     from tracker.webui import assets
 
     assert assets.missing_vendor() == []
+    assert assets.missing_public() == []
 
 
 # --- publishing through cloudflared -----------------------------------------

@@ -1,6 +1,6 @@
 # The console, and exporting
 
-One page for the whole dataset, the live console and its two modes, driving it without a browser, and publishing it.
+One page for the whole dataset, the live console and its two modes, accounts and what a stranger sees before signing in, driving it without a browser, and publishing it.
 
 Part of the [dc-tracker documentation](README.md).
 
@@ -140,9 +140,9 @@ tracker users notify --to ann@example.com --ask-password --message "Welcome aboa
 ```
 
 The console used to have one shared password. That made every reader the same
-principal, and the cost was not only authentication: **the landing page could only
-ever draw one watchlist**, because with no way to tell two people apart "the
-things I am watching" was not a sentence the data could express.
+principal, and the cost was not only authentication: **Updates could only ever draw
+one watchlist**, because with no way to tell two people apart "the things I am
+watching" was not a sentence the data could express.
 
 **Zero accounts means an open console**, which is what a fresh install is in and
 is right on loopback — reaching 127.0.0.1 already means having the machine. What
@@ -153,22 +153,112 @@ console within a few seconds, without a restart.
 **A console that is already published never opens.** Behind a tunnel every
 request arrives from 127.0.0.1, so the loopback argument is simply false there,
 and the console requires a sign-in for as long as it runs whatever the account
-count. Deleting the last account therefore refuses everyone, and the sign-in form
+count. Deleting the last account therefore refuses everyone, and the sign-in page
 says `tracker users add` is the fix. It used to do the opposite: the check that
 refused to publish ran only at startup, so `tracker users rm` of the last account
 put the whole dataset on the public URL within five seconds, and the CLI reported
 that the console was "open again".
 
+### Before signing in
+
+Once an account exists, a stranger at the console's address gets a short front
+page: what the console follows, one drawing, the six pages it holds, and two
+buttons, **Create an account** and **Sign in**. Each form is a page of its own, and
+every one of them is built on the same frame, so a form's first field sits at the
+same height on every page and going from signing in to creating an account moves
+nothing above the password. Nothing on a form appears or disappears while you fill
+it in; the server's answer goes under the button, and a finished form is replaced
+by its result.
+
+| address | signed out | signed in | open console (no accounts) |
+| --- | --- | --- | --- |
+| `/` | the front page | the console, on Updates | the console |
+| `/signin`, `/register` | the form | on to `next`, or `/` | on to `next`, or `/` |
+| `/forgot` | the form | `/account`, where you set a new password | `/` |
+| `/reset?t=…`, `/confirm?t=…` | the page the mailed link is for | the same page | `/` |
+| `/reset`, `/confirm` with no link | `/forgot`, `/signin` | the same | `/` |
+| `/login`, `/signup`, the old names | `/signin`, `/register` | the same | the same |
+| a console page: `/updates`, `/projects/42`, `/admin`… | `/signin?next=<that page>` | the page | the page |
+| any other address | the "Nothing here" page, as a 404 | a JSON 404 | a JSON 404 |
+| `/api/…` | 401, except the `POST`s the account pages and signing out make | the API | the API |
+| `/static/…` | 401, except the five public files | the file | the file |
+
+Every redirect is a 303. **The front page, the five account pages and the 404 page
+are the whole of what a stranger can read**, and each was written to be public: the
+same bytes for everyone, with nothing from the request, the database or the
+environment in them, so they describe nothing about the data and cannot echo a
+crafted link back. They are served under a stricter policy than the console (no
+inline script, and no other site may frame them), never cached, and with no
+referrer. The console's code, its data and its health check stay behind the
+sign-in.
+
+**Five files under `/static/` are public, and they are named one by one**
+(`assets.PUBLIC_STATIC`): `public/site.css` and `public/site.js`, which were
+written for those pages and carry no console code, and the Latin subsets of the
+console's three typefaces. The fonts are the console's own files at the console's
+own addresses, so somebody who then signs in already has them. The list is exact
+rather than a directory or a prefix because a directory makes public whatever is
+put in it later, and because both machines' filesystems ignore case:
+`/static/PUBLIC/site.css` names a real file that a check on the `public/` prefix
+would have let through. Each request is compared against the list as sent, before
+the disk is looked at. The pages live in `static/public/` beside those two files
+but are served only at their own addresses, never as `/static/public/signin.html`.
+A public stylesheet that pulled in a file not on the list would be refused with a
+500 and a log line rather than served.
+
+**A console link opened while signed out comes back after you sign in.** The page
+you asked for rides along as `next`, as in `/signin?next=/projects/42`, and signing
+in, or creating an account with an invite code, goes there. `next` is accepted only
+if it is one of the console's own pages, checked against the list of them rather
+than parsed, so no way of spelling it can send anybody to another site. Anything
+else goes to `/`, and a `/signin` or `/register` link carrying an unacceptable one
+is redirected to the plain page, so the link visibly loses it. The query string is
+never carried, `next` never goes to `/forgot`, `/reset` or `/confirm`, and it is
+never written into a page. Whether `/projects/<id>` redirects depends on the
+address's shape alone, never on a lookup, so a stranger cannot learn which ids
+exist.
+
+**Signing out goes to `/signin`**, which says "You're signed out." and carries no
+`next`, so the next person at that computer does not land where the last one was.
+**A session that ends mid-visit** (a deploy restarts the console, or its twelve
+hours are up) sends the tab to `/signin?next=<the page it was on>`.
+
+**An address that is none of these** gets a small "Nothing here" page linking to
+the front page, answered as a 404 so a typo still reads as one. Signed in, an
+unknown address is the JSON 404 it always was.
+
+**A console with no accounts has no front page.** On loopback it is open, so `/` is
+the console itself and every account page sends you there: there is nobody to sign
+in as. A *published* console with no accounts is different. It stays gated (above),
+so everybody gets the front page, and a sign-in there is answered with the fix,
+`tracker users add`.
+
+**To look at these pages, use a scratch home**, since they only appear once an
+account exists:
+
+```bash
+TRACKER_HOME=~/dc-preview tracker init
+TRACKER_HOME=~/dc-preview tracker users add you@example.com
+TRACKER_HOME=~/dc-preview tracker serve
+```
+
+Never add an account to the copy pulled down with `scripts/sync_db.py` instead.
+That copy would then hold a row the host's does not, and the next pull refuses for
+exactly that reason (`CLAUDE.md` §3). Without the mail settings below, `/register`
+and `/forgot` answer that the console can't send email yet, which is one of the
+states worth seeing; an invite code from `tracker users invite` still works.
+
 ### Three ways in
 
-Behind a tunnel the sign-in page is a public URL, and every account reads the whole
-dataset. So how an account is made decides how much it is trusted:
+Behind a tunnel the front page and the account pages are public URLs, and every
+account reads the whole dataset. So how an account is made decides how much it is
+trusted:
 
 | way in | confirms the email | needs approval | AI panels |
 | --- | --- | --- | --- |
 | `tracker users add`, at the host | no | no | on |
-| an invite code (`tracker users invite`), on the sign-in page | no | no | on |
-| **Create an account** on the sign-in page, no code | yes, by a mailed link | yes, by an admin | off until an admin switches them on |
+| an invite code (`tracker users invite`), on `/register` | no | no | on |
+| **Create an account** on `/register`, no code | yes, by a mailed link | yes, by an admin | off until an admin switches them on |
 
 An invite is still the way to let somebody straight in: `tracker users invite`
 prints the code once and stores only its sha256, and the holder chooses their own
@@ -178,7 +268,10 @@ a chat log.
 
 **A plain sign-up waits twice.** The person asks for an account with an email and a
 password, and is emailed a link to confirm the address — it works for 24 hours, and
-an unconfirmed request is deleted after a week. Once they click it, every admin is
+an unconfirmed request is removed after a week, by the next sign-up or the daily
+email run, whichever comes first. An address that already has an account is sent a
+reset link instead, and a disabled one is sent nothing; the form answers the same
+sentence in every case. Once they click it, every admin is
 emailed, and the account waits on the admin page's **Waiting for approval** list
 (or `tracker users`, which shows it as pending). **Approve** lets them in and emails
 them; **Approve with AI panels** does both in one step; **Turn down** deletes the
@@ -190,9 +283,9 @@ so it must belong to the person asking; the approval is because a stranger's
 account would otherwise read the whole dataset the moment they clicked the link.
 The AI panels start off because each click spends tokens.
 
-**Forgot password?** on the sign-in page emails a link that sets a new password: one
-hour, one use, and every other session of the account ends. It works for any
-account that is not disabled, including ones made at the terminal.
+`/forgot` emails a link that sets a new password: one hour, one use, and every
+other session of the account ends. It works for any account that is not disabled,
+including ones made at the terminal.
 
 **What the forms never say.** Signing up and asking for a reset answer the same
 sentence whether or not the address has an account, and the mail goes out on a
@@ -256,14 +349,14 @@ per session. `tracker users rm`, `passwd`, `disable` and `signout` therefore end
 that account's open sessions within seconds, on every route, with no restart — and
 so does SQLite handing a deleted account's id to the next account created, which it
 does. `signout` works by raising a counter folded into what each session is checked
-against (`account.session_epoch`), so it needs no password change. Before this only the landing page's data route looked the row up, and a
+against (`account.session_epoch`), so it needs no password change. Before this only the data route behind Updates looked the row up, and a
 deleted account went on reading every other route for the rest of its twelve-hour
 session.
 
-**The landing page answers one question: what changed on what I am
-watching.** Two pages have held this slot. The first opened on the projects
-table — filter card, coverage strip, eighteen columns, all at equal weight before
-you had read a number. The second asked "can these numbers be quoted?" and
+**Updates, the page a signed-in reader opens on, answers one question: what
+changed on what I am watching.** Two pages have held this slot. The first opened on
+the projects table — filter card, coverage strip, eighteen columns, all at equal
+weight before you had read a number. The second asked "can these numbers be quoted?" and
 answered it well, but it described the *dataset*, and a reader arriving in the
 morning is not asking about the dataset. Projects already carries the inventory
 and carries it better.
@@ -322,7 +415,7 @@ It has its own flag — `serve --no-watch-edits` — because these are different
 from spending a token and deserve different switches.
 
 **It is your list, not the database's.** Each account keeps its own, so two people
-reading the same console get two different landing pages, and neither can drop the
+reading the same console get two different Updates pages, and neither can drop the
 other's entry. A visitor to a console with *no* accounts has no list to keep —
 there is nobody to own one — and gets the whole-database digest instead, which is
 the same fallback an empty watchlist has always had.
@@ -349,7 +442,7 @@ The header carries the last citation fetch, and complains after two days. A craw
 that died on Tuesday and a genuinely quiet week look identical on a page like this,
 and only one of them is good news.
 
-The evidence census and tier sweep the previous landing page led with have not gone
+The evidence census and tier sweep the page before Updates led with have not gone
 anywhere: they are `tracker stats` and `tracker clean`, which is where they were
 computed from all along.
 
@@ -386,11 +479,12 @@ The three worth knowing:
 | `GET /api/articles` | publishers, and one publisher's citations when asked | counts at rest; `?host=` for the list |
 | `GET /api/updates` | what changed on the watchlist, signed and ranked | one pass over projects, events and risks |
 | `POST /api/watch` | adds or drops a watchlist entry | **the only write there is** |
-| `POST /api/login` | exchanges an email and password for a session cookie | — |
-| `POST /api/register` | spends an invite code and creates the account | — |
+| `POST /api/login` | exchanges an email and password for a session cookie; takes a `next` and answers the checked one, `/` if it was refused | — |
+| `POST /api/register` | spends an invite code and creates the account; takes and answers `next` the same way | — |
 | `POST /api/signup` | asks for an account; with a `code`, is `/api/register` | one email, from the mail budget |
 | `POST /api/confirm` | spends a confirmation link; emails the admins once | one email per admin |
 | `POST /api/forgot` / `POST /api/reset` | mails a reset link / sets the password from one | one email |
+| `POST /api/logout` | ends the session and clears the cookie; needs no session, so it works even for one that already ended | — |
 
 `POST /api/run` is gone, along with `/api/runs`, `/api/commands` and
 `/api/discover`. They 404 rather than 403: there is no runner to refuse.
@@ -518,10 +612,10 @@ no build step and the repo has no `package.json`: React is a UMD global, the
 Meridian component bundle is already compiled, and `htm` supplies JSX-like
 templates from tagged template literals.
 
-**The mark**, beside the wordmark in the header, on the sign-in card and in the
-tab, is a citation bracket whose bar stops where the evidence stops — the empty
-half of the bracket is this project's one rule drawn literally: a figure nobody
-published stays null rather than guessed. It is 168 bytes of inline SVG filled
+**The mark**, beside the wordmark in the header of the console and of every public
+page, and in the tab, is a citation bracket whose bar stops where the evidence
+stops — the empty half of the bracket is this project's one rule drawn literally: a
+figure nobody published stays null rather than guessed. It is 168 bytes of inline SVG filled
 from `currentColor`, which is what lets a single copy serve both themes (`--primary`
 is honey `#a05e1c` on cream and `#dca75f` on espresso) at no request. The favicon
 is the same two paths with **no background plate** — a honey tile would sit lit in
@@ -608,9 +702,9 @@ account could buy unlimited guesses by signing in as themselves between them.
 **`--check` before you need it.** It verifies that an account exists, that
 `cloudflared` is
 present *and actually executes*, that a `--name` tunnel exists on the account, and
-that the database and front-end files are there — then exits. Worth running once,
-because two of those fail in ways that are otherwise discovered at the worst
-moment: a truncated `cloudflared.exe` is a valid PE file that dies with WinError
+that the database, the front-end files and the public pages are there — then
+exits. Worth running once, because two of those fail in ways that are otherwise
+discovered at the worst moment: a truncated `cloudflared.exe` is a valid PE file that dies with WinError
 193 and no output, and npm's `.CMD` shim on Windows swallows both.
 
 **Behind a proxy, the quick tunnel is relayed.** cloudflared builds its own

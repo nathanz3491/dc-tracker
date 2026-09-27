@@ -130,6 +130,12 @@ tracker notify send   # everyone's 8 a.m. email: what is new, or what to watch f
 tracker serve         # the same dataset as a live console
 ```
 
+With no account the console opens straight away, which is right on loopback. Once
+one exists, a stranger at `/` gets a short public front page and the console waits
+behind `/signin`; anyone can ask for an account at `/register`, and a forgotten
+password is reset at `/forgot`. See
+[Before signing in](docs/console-and-export.md#before-signing-in).
+
 `tracker sync` is the one command for all of it: discover → prospect → extract →
 refresh → enrich → settle → list. A bare run does the cheap five and `--full` does
 every phase, because the two that hunt for what is absent — `--prospect` for
@@ -243,7 +249,7 @@ however authoritative — independence is counted by domain.
 
 **"New" means new to us.** A crawl reads one article and imports a project's whole
 back-history, so stored milestones run from 1997 to 2040 while the rows themselves
-arrived last night. `tracker digest`, the console's landing page and the morning
+arrived last night. `tracker digest`, the console's Updates page and the morning
 email filter on when we recorded a fact and print both dates, because either one
 alone reads as a different claim than the evidence supports.
 
@@ -392,7 +398,7 @@ directory, which is what lets `tracker init` work from anywhere.
 .venv/Scripts/python -m pytest
 ```
 
-3,359 tests, about three minutes. **A fresh clone with no API key and no network access
+3,419 tests, about three minutes. **A fresh clone with no API key and no network access
 must produce a green run.** Tests that would hit the network or spend DeepSeek
 tokens are marked `network` / `llm` and deselected by default; run them
 explicitly with `-m network` or `-m llm`. An unmarked test that reaches for the

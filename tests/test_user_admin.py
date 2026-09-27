@@ -299,6 +299,16 @@ def test_the_account_and_admin_pages_have_their_own_urls(live):
         status, body, _ = call(address, f"/{view}", cookie=cookie)
         assert status == 200 and f'window.DC_VIEW="{view}"' in body
 
+        # Signed out, the page is where the sign-in comes back to — which is what the
+        # "a sign-up is waiting" email's link to /admin relies on.
+        conn = HTTPConnection(*address, timeout=30)
+        conn.request("GET", f"/{view}")
+        response = conn.getresponse()
+        response.read()
+        conn.close()
+        assert response.status == 303
+        assert response.getheader("Location") == f"/signin?next=/{view}"
+
 
 def test_the_page_is_told_who_is_an_admin(live):
     address, _ = live
@@ -352,7 +362,21 @@ def test_the_notice_describes_the_account_as_it_is_now_and_escapes_the_note():
     assert (
         "&lt;b&gt;moved&lt;/b&gt;" in message.html_body and "<b>moved</b>" not in message.html_body
     )
-    assert "https://console.example" in message.html_body
+    # The sign-in page, not the root: that is the public front page when signed out.
+    assert 'href="https://console.example/signin"' in message.html_body
+    assert ">Sign in</a>" in message.html_body and "Open the console" not in message.html_body
+    assert "Sign in: https://console.example/signin" in message.text_body
+
+
+def test_a_notice_with_a_new_password_comes_back_to_the_account_page():
+    """The reader's next step is choosing their own password, so the sign-in returns
+    to the page where that is done."""
+    detail = {"email": "new@example.com", "name": None, "disabled": False, "admin": False}
+    message = account_notice.render(
+        detail, console_url="https://console.example", new_password="a temporary one"
+    )
+    for text in (message.html_body, message.text_body):
+        assert "https://console.example/signin?next=/account" in text
 
 
 def _recorder(monkeypatch, *, fail: bool = False):

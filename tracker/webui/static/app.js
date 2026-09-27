@@ -293,6 +293,20 @@ function quoteOf(p, key) {
 
 /* ---- api ----------------------------------------------------------------- */
 
+/* The session is gone: go to the sign-in page, and come back to this one after.
+ *
+ * `/` is no longer the way back — for a signed-out browser it is the public front
+ * page — so the path rides along as `next`, which the server checks against the
+ * console's own pages before it will send anybody there. Only the path: a query
+ * is never carried.
+ *
+ * Never settles: the navigation is already in flight, and resolving here would let
+ * callers paint an error for the frame before it happens. */
+function toSignIn() {
+  window.location.replace("/signin?next=" + encodeURIComponent(window.location.pathname));
+  return new Promise(() => {});
+}
+
 async function api(path, options) {
   const res = await fetch(path, {
     headers: { "Content-Type": "application/json" },
@@ -304,13 +318,8 @@ async function api(path, options) {
   // had, every request 401'd silently, and each feature reported its own
   // misleading local reason — the 3D map said "unavailable offline" when what
   // had actually happened was that the cookie ran out. Stale numbers that look
-  // live are worse than no page, so go back to the gate.
-  if (res.status === 401 && !path.endsWith("/login")) {
-    window.location.replace("/");
-    // Never settles: the reload is already in flight and resolving here would
-    // let callers render an error for the frame before it happens.
-    return new Promise(() => {});
-  }
+  // live are worse than no page, so go to /signin and come back.
+  if (res.status === 401) return toSignIn();
 
   const text = await res.text();
   let payload = null;
@@ -369,7 +378,7 @@ async function apiStream(path, body, onEvent, signal) {
     body: JSON.stringify(body),
     signal,
   });
-  if (res.status === 401) { window.location.replace("/"); return new Promise(() => {}); }
+  if (res.status === 401) return toSignIn();
   if (!res.ok) {
     const text = await res.text();
     let payload = null;
@@ -5566,6 +5575,39 @@ function SourcesView({ data }) {
     </div>`;
 }
 
+/* Sign out, and say so when it did not happen.
+ *
+ * A plain fetch rather than `api()`, whose 401 handling would bounce an already
+ * expired session through the sign-in page with this page as `next`. The server
+ * answers a sign-out 200 whatever the cookie holds, so anything but ok means the
+ * request never landed — and the button says so instead of pretending.
+ *
+ * Only ever a replace to `/signin?out=1`, never a reload: reloading /projects/42
+ * signed out is the server's redirect to /signin?next=/projects/42, which would
+ * show the next person at this computer where the last one was. */
+function SignOut() {
+  const [failed, setFailed] = useState(false);
+  const signOut = async () => {
+    try {
+      const res = await fetch("/api/logout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      if (res.ok) {
+        window.location.replace("/signin?out=1");
+        return;
+      }
+    } catch {
+      // A network error: the same as a refusal, as far as the reader is concerned.
+    }
+    setFailed(true);
+  };
+  return html`<${Button} size="sm" variant="ghost" onClick=${signOut}
+    title=${failed ? "Couldn't sign out. Check your connection, then try again." : undefined}>
+    ${failed ? "Retry sign-out" : "Sign out"}<//>`;
+}
+
 function App() {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
@@ -5760,10 +5802,7 @@ function App() {
                       onClick=${() => goto("account")}>
                 ${data.account.name || data.account.email}
               </button>
-              <${Button} size="sm" variant="ghost" onClick=${async () => {
-                await api("/api/logout", { method: "POST", body: {} });
-                window.location.reload();
-              }}>Sign out<//>`}
+              <${SignOut} />`}
           </div>
         </header>
 

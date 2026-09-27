@@ -285,6 +285,11 @@ def test_the_whole_plain_sign_up_over_http(live, mailed):
     )
     assert status == 200 and mailed[-1][0] == "new@example.com"
 
+    # The approval links the sign-in page, not the root — which is the public front
+    # page for somebody not yet signed in — and says where a forgotten password goes.
+    approval = mailed[-1][1].text_body
+    assert f"{CONSOLE_URL}/signin" in approval and f"{CONSOLE_URL}/forgot" in approval
+
     status, _, reader = call(
         address, "/api/login", "POST", {"email": "new@example.com", "password": PASSWORD}
     )
@@ -299,6 +304,37 @@ def test_a_taken_address_gets_the_same_answer(live, mailed):
     assert mailed[1][0] == ADMIN and "already have" in mailed[1][1].subject
 
 
+def test_a_disabled_address_is_sent_nothing_and_answered_the_same(live, mailed, db):
+    """A reset link a disabled account could not use would be an email that lies."""
+    address, _ = live
+    with _session(db) as session:
+        locked = accounts.create(session, "locked@example.com", PASSWORD)
+        accounts.set_disabled(session, locked, True)
+    new = call(address, "/api/signup", "POST", {"email": "new@example.com", "password": PASSWORD})
+    taken = call(
+        address, "/api/signup", "POST", {"email": "locked@example.com", "password": PASSWORD}
+    )
+    assert new[:2] == taken[:2]
+    assert [to for to, _ in mailed] == ["new@example.com"]
+
+
+def test_a_waiting_account_is_not_told_to_just_sign_in(db):
+    from tracker import account_mail
+
+    waiting = account_mail.already_registered(CONSOLE_URL, "t", waiting=True)
+    assert "waiting for an administrator" in waiting.text_body
+    assert "just sign in" not in waiting.text_body
+    assert "just sign in" in account_mail.already_registered(CONSOLE_URL, "t").text_body
+
+
+def test_tab_goes_from_email_to_password_not_to_the_reset_link():
+    """Someone typing their way through the form must not send a password to a link."""
+    from tracker.webui import assets
+
+    page = (assets.PUBLIC_ROOT / "signin.html").read_text(encoding="utf-8")
+    assert page.index('id="email"') < page.index('id="password"') < page.index('href="/forgot"')
+
+
 def test_an_invite_code_still_signs_straight_in(live, mailed, db):
     address, _ = live
     with _session(db) as session:
@@ -310,6 +346,21 @@ def test_an_invite_code_still_signs_straight_in(live, mailed, db):
         {"email": "friend@example.com", "password": PASSWORD, "code": code},
     )
     assert status == 200 and cookie and not mailed
+
+
+def test_an_invite_code_brings_you_back_where_you_started(live, mailed, db):
+    """/register carries `next` from the link that sent somebody there, as /signin
+    does, so a code redeemed from a signed-out deep link lands on that page."""
+    address, _ = live
+    with _session(db) as session:
+        _, code = accounts.mint_invite(session)
+    status, body, cookie = call(
+        address,
+        "/api/signup",
+        "POST",
+        {"email": "friend@example.com", "password": PASSWORD, "code": code, "next": "/watch-for"},
+    )
+    assert status == 200 and body["next"] == "/watch-for" and cookie
 
 
 def test_forgot_password_answers_the_same_and_the_link_signs_in(live, mailed):
@@ -338,7 +389,9 @@ def test_links_come_from_the_setting_never_from_the_request(live, mailed):
     assert "attacker.example" not in mailed[0][1].text_body
 
 
-def test_without_mail_set_up_the_forms_say_so(live, monkeypatch):
+def test_without_mail_set_up_the_forms_say_so(live, monkeypatch, db):
+    """And why, as a `reason` the page acts on — it moves to the invite-code field,
+    the one way in that still works — rather than a sentence it would have to match."""
     from tracker.config import get_settings
 
     get_settings.cache_clear()
@@ -349,6 +402,24 @@ def test_without_mail_set_up_the_forms_say_so(live, monkeypatch):
     ):
         status, payload, _ = call(address, route, "POST", body)
         assert status == 503 and "can't send email" in payload["error"]
+        assert payload["reason"] == "mail_off"
+
+    # Mail works, but nobody could approve a sign-up.
+    monkeypatch.setenv("TRACKER_NOTIFY_CONSOLE_URL", CONSOLE_URL)
+    monkeypatch.setenv("TRACKER_RESEND_API_KEY", "re_test_not_real")
+    monkeypatch.setenv("TRACKER_NOTIFY_FROM", "dc-tracker <console@console.example>")
+    monkeypatch.setattr(Console, "send_mail", lambda self, to, notice, key=None: None)
+    get_settings.cache_clear()
+    try:
+        with _session(db) as session:
+            accounts.set_admin(session, accounts.require(session, ADMIN), False)
+        status, payload, _ = call(
+            address, "/api/signup", "POST", {"email": "a@example.com", "password": PASSWORD}
+        )
+        assert status == 503 and "isn't taking sign-ups" in payload["error"]
+        assert payload["reason"] == "no_admin"
+    finally:
+        get_settings.cache_clear()
 
 
 def test_one_visitor_cannot_mail_without_limit(live, mailed):
@@ -408,11 +479,58 @@ def test_a_guessed_link_counts_toward_the_lockout(live, mailed):
     assert status == 429
 
 
-def test_a_mailed_link_opens_the_sign_in_page(live):
+def _get(address, path, cookie=None):
+    """`(status, headers, text)` of a GET, for the header assertions `call` drops."""
+    conn = HTTPConnection(*address, timeout=30)
+    conn.request("GET", path, headers={"Cookie": cookie} if cookie else {})
+    response = conn.getresponse()
+    text = response.read().decode("utf-8")
+    conn.close()
+    return response.status, dict(response.getheaders()), text
+
+
+def test_a_mailed_link_opens_its_own_page(live):
+    """Each link opens the page for what it does, and neither spends its token on
+    load. The token is in the address, so the page is never cached and never sent
+    on as a referrer."""
     address, _ = live
-    for path in ("/confirm?t=abc", "/reset?t=abc"):
-        status, page, _ = call(address, path)
-        assert status == 200 and "Choose a new password" in page
+    _, _, signed_in = call(address, "/api/login", "POST", {"email": ADMIN, "password": PASSWORD})
+    for path, page, words in (
+        ("/reset?t=abc", "reset", "Choose a new password"),
+        ("/confirm?t=abc", "confirm", "Confirm my email"),
+    ):
+        status, headers, body = _get(address, path)
+        assert status == 200 and f'data-page="{page}"' in body and words in body, path
+        assert "no-store" in headers["Cache-Control"], path
+        assert headers["Referrer-Policy"] == "no-referrer", path
+        # The link is somebody's whether or not this browser is signed in.
+        assert _get(address, path, cookie=signed_in)[0] == 200, path
+
+    # No token, nothing to do here: each goes to the page that mails one.
+    for path, where in (("/reset", "/forgot"), ("/confirm", "/signin")):
+        status, headers, _ = _get(address, path)
+        assert status == 303 and headers["Location"] == where, path
+
+
+def test_every_account_email_links_the_page_it_is_about():
+    """Never the console's root, which is the public front page for anybody signed out."""
+    from tracker import account_mail
+
+    approved = account_mail.approved(CONSOLE_URL, "New")
+    for part in (approved.text_body, approved.html_body):
+        assert f"{CONSOLE_URL}/signin" in part
+        assert f"{CONSOLE_URL}/forgot" in part, "the footer says where a lost password goes"
+    assert f'href="{CONSOLE_URL}"' not in approved.html_body
+    assert f'href="{CONSOLE_URL}/"' not in approved.html_body
+
+    waiting = account_mail.pending_for_admin(CONSOLE_URL, "new@example.com", "New")
+    assert f'href="{CONSOLE_URL}/admin"' in waiting.html_body
+    assert f"{CONSOLE_URL}/confirm?t=tok" in account_mail.confirm(CONSOLE_URL, "tok").text_body
+    for notice in (
+        account_mail.reset(CONSOLE_URL, "tok"),
+        account_mail.already_registered(CONSOLE_URL, "tok"),
+    ):
+        assert f"{CONSOLE_URL}/reset?t=tok" in notice.text_body, notice.subject
 
 
 def test_the_panels_follow_the_account_switch(live, mailed, db):

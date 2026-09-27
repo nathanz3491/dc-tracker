@@ -1,5 +1,10 @@
-"""The emails the sign-in page causes: confirm an address, reset a password, and
+"""The emails the account pages cause: confirm an address, reset a password, and
 tell an administrator — then the person — about a sign-up.
+
+Each links the page it is about — `/confirm?t=`, `/reset?t=`, `/admin`, and
+`/signin` with a `/forgot` footer for an approval — never the console's root, which
+is the public front page for anybody not yet signed in. `/admin` needs a session,
+so an administrator who is signed out goes by `/signin?next=/admin` and comes back.
 
 Rendering is pure, like `account_notice` and `notify.render`: each function returns
 a `Notice` and opens no socket. `send` is the one place that mails one, through the
@@ -99,19 +104,27 @@ def confirm(console_url: str, token: str) -> Notice:
             "when your account is ready to use.",
         ],
         button=("Confirm my email", link(console_url, "confirm", token)),
-        footer="If this wasn't you, ignore this email: nothing is created until the "
-        "address is confirmed, and the request is deleted after a week.",
+        footer="If this wasn't you, ignore this email: nobody can sign in with this "
+        "address until it is confirmed, and an unconfirmed request is removed after a week.",
     )
 
 
-def already_registered(console_url: str, token: str) -> Notice:
+def already_registered(console_url: str, token: str, *, waiting: bool = False) -> Notice:
+    """`waiting`: the account exists but an administrator has not approved it yet, so
+    "just sign in" would be refused — say where it stands instead."""
+    after = (
+        "Your account is still waiting for an administrator's approval; we'll email "
+        "you when it's ready."
+        if waiting
+        else "Otherwise, just sign in as usual."
+    )
     return _frame(
         "You already have a dc-tracker account",
         [
             "Somebody — hopefully you — tried to sign up for the dc-tracker console with "
             "this address, but it already has an account.",
             "If you've forgotten the password, set a new one with the button below. The "
-            "link works for one hour. Otherwise, just sign in as usual.",
+            "link works for one hour. " + after,
         ],
         button=("Set a new password", link(console_url, "reset", token)),
         footer="If this wasn't you, ignore this email. Your password has not changed.",
@@ -155,8 +168,12 @@ def approved(console_url: str | None, name: str | None) -> Notice:
             "An administrator has approved your dc-tracker console account. Sign in with "
             "the email and password you signed up with.",
         ],
-        button=("Sign in", link(console_url, "")) if console_url else None,
-        footer='Forgotten the password? Use "Forgot password?" on the sign-in page.',
+        button=("Sign in", link(console_url, "signin")) if console_url else None,
+        footer=(
+            "Forgotten the password? Choose a new one at " + link(console_url, "forgot")
+            if console_url
+            else 'Forgotten the password? Use "Forgot password?" on the sign-in page.'
+        ),
     )
 
 

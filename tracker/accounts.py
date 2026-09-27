@@ -190,11 +190,11 @@ def normalize_email(email: str) -> str:
     if len(key) > MAX_EMAIL_LEN:
         raise AccountError(f"that address is over {MAX_EMAIL_LEN} characters, so it is not one.")
     if any(character.isspace() for character in key):
-        raise AccountError(f"{email!r} contains whitespace, so it is not an email address.")
+        raise AccountError(f"“{email.strip()}” contains a space, so it is not an email address.")
     local, separator, domain = key.partition("@")
     if not separator or not local or not domain or "@" in domain:
         raise AccountError(
-            f"{email!r} is not an email address — it needs one @ with text on both sides."
+            f"“{email.strip()}” is not an email address — it needs one @ with text on both sides."
         )
     return key
 
@@ -517,7 +517,7 @@ def joined_via(session: Session, account: Account) -> str:
     if invite is not None:
         return f"redeemed an invite ({invite.note or 'no note'})"
     if account.self_signup:
-        return "signed up on the sign-in page"
+        return "asked for an account on the console"
     return "added at the terminal"
 
 
@@ -622,7 +622,7 @@ def redeem(
 
 # --- sign-up, mailed links, approval -------------------------------------------
 #
-# The sign-in page answers anyone, so every function here is written for a caller
+# The account pages answer anyone, so every function here is written for a caller
 # that must not say which addresses have accounts: they return what to mail and to
 # whom, and the route answers the same sentence whatever happened.
 
@@ -731,6 +731,10 @@ def sign_up(session: Session, email: str, password: str, *, name: str | None = N
         # The one scrypt the other branch spends, so the response time does not say
         # which addresses already have an account.
         hash_password(password)
+        # A disabled account is sent nothing, as `request_reset` sends it nothing: a
+        # reset link it could not use would be an email that lies.
+        if is_disabled(holder):
+            return SignUp(existing=holder)
         try:
             return SignUp(existing=holder, existing_token=issue_link(session, holder, "reset"))
         except Throttled:
@@ -762,7 +766,9 @@ def confirm_email(session: Session, token: str) -> tuple[Account, bool]:
     scanners open links before people do: a used link for an address already
     confirmed answers as a success, and says it was not the first.
     """
-    unusable = AccountError("that link is not usable. Sign up again for a fresh one.")
+    unusable = AccountError(
+        "that link is not usable. Create an account again with the same address for a fresh one."
+    )
     row = _live_link(session, token, "confirm")
     if row is None:
         raise unusable

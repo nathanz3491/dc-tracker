@@ -81,9 +81,9 @@ routines in `webui/workflows.py` and `Runner.start_workflow` that ran them,
 ### Why there are accounts at all
 
 The console was gated by one shared password. That made every reader the same
-principal, and it had a consequence beyond authentication: **the landing page
-could only ever draw one watchlist.** With no way to tell two people apart, "the
-things I am watching" was not a sentence the data could express, so `watch` was a
+principal, and it had a consequence beyond authentication: **Updates could only
+ever draw one watchlist.** With no way to tell two people apart, "the things I am
+watching" was not a sentence the data could express, so `watch` was a
 property of the database rather than of the reader.
 
 `tracker users add` creates an account — an email, a password hashed with
@@ -112,18 +112,18 @@ read once would leave a published console open until somebody noticed.
 
 ### Getting an account without a terminal
 
-Three routes. Behind a tunnel the login page is a public URL, and while an account
+Three routes. Behind a tunnel `/register` is a public URL, and while an account
 can no longer run a command it can still read the whole dataset — so the route
 decides how much an account is trusted (migration 0030).
 
 - `tracker users add` — at a terminal, prompting for the password. Let in at once,
   with the AI panels.
 - `tracker users invite` — mints a single-use code, printed once. The holder
-  redeems it on the console's own sign-in page and chooses their own email and
+  redeems it on the console's `/register` and chooses their own email and
   password, and is let in at once with the AI panels. That is the one worth using
   when you are not the person who will be typing the password: a password you
   picked and sent them is a password in a chat log.
-- **Create an account** on the sign-in page, with no code. The address is confirmed
+- **Create an account** on `/register`, with no code. The address is confirmed
   by a mailed link, then an admin approves the account; it starts without the AI
   panels, which spend tokens on every click. `accounts.status` names the four
   states — `unconfirmed`, `pending`, `active`, `disabled` — and sign-in and every
@@ -360,8 +360,17 @@ and — with `--ai` — a model panel that spends real tokens per click.
 proxy — loopback stops meaning anything, because a tunnel connects from the local
 machine and so every request looks local. Publishing therefore *requires* an
 account; without one the command refuses to start, and once published the console
-stays gated even if every account is later deleted (`Console.published`). Before
-signing in, the entire site is a login page — not even the frontend code is served.
+stays gated even if every account is later deleted (`Console.published`).
+
+**Before signing in, a browser can have a front page, five account pages, a 404
+page and the five files they need, and nothing else.** Every one was written to be
+public: the same bytes for everybody, nothing from the request or the database in
+them. The console's code, its data and its health check stay unreachable. Both
+lists are exact names, compared before the disk is touched, not a directory: a
+directory would make public whatever was put in it later, and on the case-folding
+filesystems this runs on `/static/PUBLIC/site.css` is a real file that a prefix
+check would have let through (`webui/assets.py`, `Handler._unauthenticated`). See
+[the console](console-and-export.md#before-signing-in) for the whole table.
 
 What makes a short password safe is not its length, it is the rate: eight failures
 lock one client out for fifteen minutes, and forty across *all* clients within any
@@ -374,7 +383,7 @@ themselves every seventh attempt. Nothing is counted per email — that would le
 lock its owner out.
 
 **What a request costs before anybody has signed in** is bounded too, because a
-login form behind a tunnel is something the whole internet can send bytes to. A
+sign-in page behind a tunnel is something the whole internet can send bytes to. A
 request body is judged on its headers before a byte of it is read: over 64 KB
 (`MAX_BODY`, sized from the largest registration any route accepts), a length that
 is not a plain number, or a chunked body, and the answer is 413, 400 or 411 with

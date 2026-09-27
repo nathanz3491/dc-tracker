@@ -1,0 +1,675 @@
+/* dc-tracker's public pages: the front page, the five account pages and the 404 page.
+
+   HOW THE ACCOUNT PAGES STAY BALANCED
+   Moving between /signin, /register, /forgot, /reset and /confirm must move nothing a
+   reader compares. Each rule below is why a line further down looks odd:
+
+   1. Separate documents. Going from one form to another is a real page load, never a
+      swap inside one page, so no mode can grow a card in place.
+   2. One card width and one top offset, top-anchored rather than vertically centred.
+      A longer card only reaches further down, below where the reader is looking.
+   3. A fixed head: eyebrow one line, heading one line, lede two lines of space (the
+      lede's min-height, and the heading's line-height in px). So the first control
+      starts at the same distance from the card's top on every page.
+   4. No in-form toggles. Every field is there from the start; a hint sits in its
+      label row's right-hand slot, so every field is one row of the same height. A
+      form whose only control is its button leaves the label row's space above it
+      (--row), so that button sits where every other page's first field sits.
+   5. Messages appear below the button, so nothing anyone is using moves when the
+      server answers.
+   6. A finished form is replaced in place by its result, so a card only gets shorter.
+   7. The card's foot is one line; the page footer is pinned to the bottom (body grid).
+   8. No card entrance animation. Each page is its own load, and a card that rose every
+      time would look like the layout moving, which is the thing being fixed.
+
+   COLOUR: amber means two things only, something you can do and power on the drawing.
+*/
+
+@font-face {
+  font-family: "Instrument Serif";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("../vendor/fonts/jizBRFtNs2ka5fXjeivQ4LroWlx-6zUTjg.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url("../vendor/fonts/UcC73FwrK3iLTeHuS_nVMrMxCp50SjIa1ZL7.woff2") format("woff2");
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 400 600;
+  font-display: swap;
+  src: url("../vendor/fonts/tDbv2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8yKwBNntkaToggR7BYRbKPxDcwg.woff2") format("woff2");
+}
+
+/* ---- tokens ------------------------------------------------------------------ */
+
+:root {
+  --paper: #faf6ef;
+  --plate: #f5efe4;
+  --surface: #fffdf8;
+  --ink: #2e2620;
+  --muted: #6b5c4f;
+  --rule: #eae0d0;
+  --rule-strong: #d9ccb6;
+  --input: #e0d3be;
+  --amber: #a05e1c;
+  --amber-hover: #8a5115;
+  --on-amber: #fffaf2;
+  --danger: #b8433a;
+  --danger-soft: #f9deda;
+  --warning: #8a680a;
+  --warning-soft: #f5ebc4;
+  --ok-soft: #efe7d8;
+  --line: rgb(46 38 32 / .55);
+  --line-faint: rgb(46 38 32 / .22);
+  --grid: rgb(46 38 32 / .045);
+  --shadow: 0 18px 40px -24px rgb(84 58 24 / .35);
+  --focus: color-mix(in oklab, var(--amber) 22%, transparent);
+
+  --serif: "Instrument Serif", Georgia, serif;
+  --sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  --gutter: 40px;
+  /* A label row (18px) plus its gap to the input (7px): see balance rule 4. */
+  --row: 25px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #1b1410;
+    --plate: #1f1712;
+    --surface: #251b14;
+    --ink: #f3eadb;
+    --muted: #b0a089;
+    --rule: #372a1f;
+    --rule-strong: #4a3a2b;
+    --input: #4a3a2b;
+    --amber: #dca75f;
+    --amber-hover: #e9b87a;
+    --on-amber: #2a1d0e;
+    --danger: #e0806f;
+    --danger-soft: rgb(224 128 111 / .14);
+    --warning: #dfb75c;
+    --warning-soft: rgb(223 183 92 / .14);
+    --ok-soft: #2d231b;
+    --line: rgb(243 234 219 / .5);
+    --line-faint: rgb(243 234 219 / .2);
+    --grid: rgb(243 234 219 / .04);
+    /* No shadow in the dark. Written as an empty shadow, not `none`: the card lists
+       it after its double rule, and `none` inside a list voids the whole box-shadow. */
+    --shadow: 0 0 transparent;
+  }
+}
+
+@media (max-width: 1023.98px) {
+  :root { --gutter: 24px; }
+}
+@media (max-width: 639.98px) {
+  :root { --gutter: 16px; }
+}
+
+/* ---- base -------------------------------------------------------------------- */
+
+*, *::before, *::after { box-sizing: border-box; }
+[hidden] { display: none !important; }
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+/* The minmax(0, 1fr) column is load-bearing: without it the 440px card sets the
+   page's minimum width, and the page scrolls sideways on a 360px phone. */
+body {
+  margin: 0;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  grid-template-columns: minmax(0, 1fr);
+  min-height: 100vh;
+  min-height: 100svh;
+  background: var(--paper);
+  color: var(--ink);
+  font: 400 15px/1.5 var(--sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+h1, h2, h3, p, ol, figure { margin: 0; }
+ol { padding: 0; list-style: none; }
+
+a {
+  color: var(--amber);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  transition: color 150ms;
+}
+a:hover { color: var(--amber-hover); }
+
+:focus-visible {
+  outline: 2px solid var(--amber);
+  outline-offset: 3px;
+}
+/* A heading takes focus only when a result replaces its form, so a screen reader
+   announces the new state. It is not a control, so it draws no ring. */
+h1[tabindex="-1"]:focus { outline: none; }
+
+.wrap {
+  max-width: calc(1120px + 2 * var(--gutter));
+  margin: 0 auto;
+  padding: 0 var(--gutter);
+}
+
+.eyebrow {
+  font: 500 12px/16px var(--mono);
+  letter-spacing: .16em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.label {
+  font: 500 11px/1 var(--mono);
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* ---- header ------------------------------------------------------------------ */
+
+.bar { border-bottom: 1px solid var(--rule); }
+.bar .wrap {
+  height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--ink);
+  text-decoration: none;
+}
+.brand:hover { color: var(--ink); }
+.brand svg { display: block; flex: none; color: var(--amber); }
+.brand b {
+  font: 400 24px/1 var(--serif);
+  letter-spacing: -.01em;
+}
+.bar nav {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+.bar-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 500;
+  text-decoration: none;
+}
+.bar-link:hover { color: var(--ink); text-decoration: underline; }
+
+/* ---- buttons ----------------------------------------------------------------- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  height: 48px;
+  margin: 0;
+  padding: 0 22px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  font: 600 15px/1 var(--sans);
+  white-space: nowrap;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background-color 150ms, border-color 150ms, color 150ms;
+}
+.btn--primary { background: var(--amber); color: var(--on-amber); }
+.btn--primary:hover { background: var(--amber-hover); color: var(--on-amber); }
+.btn--secondary { background: transparent; border-color: var(--rule-strong); color: var(--ink); }
+.btn--secondary:hover { background: var(--ok-soft); color: var(--ink); }
+.btn--sm { height: 36px; padding: 0 14px; font-size: 14px; }
+.btn:disabled { opacity: .6; cursor: progress; }
+.btn .arrow {
+  display: inline-block;
+  transition: transform 200ms cubic-bezier(.2, .7, .2, 1);
+}
+.btn:hover:not(:disabled) .arrow { transform: translateX(3px); }
+
+/* ---- landing: hero ----------------------------------------------------------- */
+
+.hero { padding: 56px 0 88px; }
+.hero .wrap,
+.contents .wrap {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  column-gap: 24px;
+}
+.hero .wrap { align-items: center; }
+.hero-text { grid-column: 1 / span 5; }
+.fig { grid-column: 6 / span 7; }
+
+.hero h1 {
+  margin-top: 20px;
+  font: 400 clamp(40px, 4.4vw, 58px)/1.02 var(--serif);
+  letter-spacing: -.02em;
+  text-wrap: balance;
+}
+.hero .lede {
+  margin-top: 24px;
+  max-width: 44ch;
+  font-size: 17px;
+  line-height: 1.6;
+  color: var(--muted);
+  text-wrap: pretty;
+}
+.cta {
+  margin-top: 32px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.note {
+  margin-top: 16px;
+  max-width: 44ch;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--muted);
+  text-wrap: pretty;
+}
+
+/* ---- landing: Fig. 1 --------------------------------------------------------- */
+
+/* A drawing's border is two lines, a heavy one and a light one just inside it. */
+.plate {
+  padding: 6px;
+  border: 1px solid var(--rule-strong);
+  background: var(--paper);
+  box-shadow: inset 0 0 0 5px var(--paper), inset 0 0 0 6px var(--rule);
+}
+/* The power line and the road come in from off the sheet: the drawing runs on into
+   the padding and is cut at the frame, not at its own box. */
+.plate-area {
+  padding: 20px;
+  overflow: hidden;
+  background-color: var(--plate);
+  background-image:
+    linear-gradient(var(--grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+.plan { display: block; width: 100%; height: auto; overflow: visible; }
+
+/* The title-block strip on the plate's bottom edge. The legend lives here, outside
+   the drawing, so it can never collide with the power line. */
+.strip {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  border-top: 1px solid var(--rule-strong);
+  background: var(--surface);
+}
+.strip > div {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 12px 16px;
+}
+.strip > div + div { border-left: 1px solid var(--rule-strong); }
+.legend {
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  font: 400 13px/1 var(--sans);
+  color: var(--ink);
+}
+.legend span { display: inline-flex; align-items: center; gap: 8px; }
+.legend svg { display: block; flex: none; }
+/* No `fill` here: the Built swatch takes its hatch from its SVG fill attribute, and
+   any CSS fill would override that attribute. */
+.sw { stroke: var(--line); stroke-width: 1.1; }
+.sw.dash { fill: none; stroke-dasharray: 4 3; }
+.sw.power { stroke: var(--amber); stroke-width: 1.8; }
+
+.fig figcaption {
+  margin-top: 14px;
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.fig figcaption .label { flex: none; color: var(--ink); }
+
+/* The drawing. The hatch is set by the SVG fill attribute, never from CSS. */
+.plan .l { fill: none; stroke: var(--line); stroke-width: 1.1; vector-effect: non-scaling-stroke; }
+.plan .f { fill: none; stroke: var(--line-faint); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.plan .prop { stroke-dasharray: 18 5 3 5; }
+.plan .dash { stroke-dasharray: 5 4; }
+.plan .power { stroke: var(--amber); stroke-width: 1.6; }
+.plan .hatch { stroke: none; }
+.plan .road-edge { fill: none; stroke: var(--line); stroke-width: 20; stroke-linecap: butt; }
+.plan .road-bed { fill: none; stroke: var(--plate); stroke-width: 18; stroke-linecap: butt; }
+#hatch line { stroke: var(--line-faint); stroke-width: 1; }
+/* Each label carries a halo in the plate's colour, so a line behind it is masked. */
+.plan text {
+  font: 500 13px var(--mono);
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  fill: var(--muted);
+  paint-order: stroke fill;
+  stroke: var(--plate);
+  stroke-width: 3px;
+  stroke-linejoin: round;
+}
+.plan text.amber { fill: var(--amber); }
+
+/* ---- landing: contents ------------------------------------------------------- */
+
+.contents {
+  padding: 64px 0 88px;
+  border-top: 1px solid var(--rule-strong);
+}
+.contents-head { grid-column: 1 / span 4; }
+.contents h2 {
+  margin-top: 12px;
+  font: 400 clamp(28px, 3vw, 36px)/1.1 var(--serif);
+  letter-spacing: -.015em;
+  text-wrap: balance;
+}
+.toc {
+  grid-column: 5 / span 8;
+  border-bottom: 1px solid var(--rule-strong);
+}
+.toc li {
+  display: grid;
+  grid-template-columns: 40px 140px minmax(0, 1fr);
+  column-gap: 24px;
+  align-items: baseline;
+  padding: 16px 0;
+  border-top: 1px solid var(--rule);
+}
+.toc .num {
+  font: 500 12px/1 var(--mono);
+  letter-spacing: .12em;
+  color: var(--muted);
+}
+.toc h3 { font: 400 22px/1.25 var(--serif); }
+.toc p {
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--muted);
+  text-wrap: pretty;
+}
+
+/* ---- footer ------------------------------------------------------------------ */
+
+.foot-site { border-top: 1px solid var(--rule); }
+.foot-site .wrap {
+  padding-top: 24px;
+  padding-bottom: 28px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px 24px;
+}
+.foot-site .brand svg { width: 18px; height: 18px; }
+.foot-site .brand b { font-size: 20px; }
+.foot-site nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  font-size: 14px;
+}
+.foot-site .label { flex-basis: 100%; line-height: 1.6; text-wrap: balance; }
+.foot-site--compact .wrap { padding-top: 20px; padding-bottom: 20px; }
+
+/* ---- account pages ----------------------------------------------------------- */
+
+.auth { padding: clamp(24px, 6vh, 56px) var(--gutter); }
+.card {
+  width: 440px;
+  max-width: 100%;
+  margin: 0 auto;
+  border: 1px solid var(--rule-strong);
+  background: var(--surface);
+  box-shadow: inset 0 0 0 5px var(--surface), inset 0 0 0 6px var(--rule), var(--shadow);
+}
+
+/* The fixed head, 157px: 36 + eyebrow 16 + 12 + heading 38 + 10 + lede 45. */
+.card-head { padding: 36px 36px 0; }
+.card-head h1 {
+  margin-top: 12px;
+  font: 400 36px/38px var(--serif);
+  letter-spacing: -.015em;
+}
+.card-head .lede {
+  margin-top: 10px;
+  min-height: 45px;
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--muted);
+  text-wrap: pretty;
+}
+/* A result or a refusal clears the lede. Its two-line reserve only keeps a form's
+   first field in place, so with no form below it would be a gap that reads as a
+   missing sentence. */
+.card-head .lede:empty { min-height: 0; margin-top: 0; }
+.card-body { padding: 24px 36px 32px; }
+/* The foot's rule runs between the card's inner lines, as a title block's cells do. */
+.card-foot {
+  margin: 0 6px;
+  padding: 16px 30px 18px;
+  border-top: 1px solid var(--rule-strong);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+form { display: grid; gap: 16px; }
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: baseline;
+  align-content: flex-end;
+  gap: 4px 12px;
+  min-height: 18px;
+  margin-bottom: 7px;
+}
+.aux {
+  font-size: 12.5px;
+  line-height: 1;
+  color: var(--muted);
+}
+/* A link beside a label ("Forgot password?") comes after its input in the source, so
+   Tab goes from Email to Password rather than to the link — someone typing their way
+   through the form must not send their password to a link. The grid puts it back in
+   the label row. */
+.has-link {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: "label link" "input input";
+  column-gap: 12px;
+}
+.has-link > .row { grid-area: label; }
+.has-link > .field { grid-area: input; }
+.has-link > a.aux { grid-area: link; align-self: end; margin-bottom: 7px; }
+a.aux { font-size: 13px; color: var(--amber); }
+a.aux:hover { color: var(--amber-hover); }
+
+input {
+  display: block;
+  width: 100%;
+  height: 44px;
+  margin: 0;
+  padding: 0 12px;
+  border: 1px solid var(--input);
+  border-radius: 8px;
+  background: var(--paper);
+  color: var(--ink);
+  font: 400 15px var(--sans);
+  outline: none;
+  transition: border-color 150ms, box-shadow 150ms;
+}
+/* Inputs show focus with the ring, not the outline every other control uses. */
+input:focus,
+input:focus-visible { outline: none; border-color: var(--amber); box-shadow: 0 0 0 3px var(--focus); }
+/* A browser's autofill paints its own background; keep the paper and the ring. */
+input:-webkit-autofill {
+  -webkit-text-fill-color: var(--ink);
+  caret-color: var(--ink);
+  box-shadow: inset 0 0 0 40px var(--paper);
+}
+input:-webkit-autofill:focus { box-shadow: inset 0 0 0 40px var(--paper), 0 0 0 3px var(--focus); }
+
+.field { position: relative; }
+.field input { padding-right: 68px; }
+.reveal {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  height: 32px;
+  margin: 0;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  font: 500 11px/1 var(--mono);
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  cursor: pointer;
+  transition: background-color 150ms, color 150ms;
+}
+.reveal:hover { color: var(--ink); background: var(--ok-soft); }
+/* The button sits 6px inside the field, so the usual 3px-offset ring would press on
+   the field's own border. */
+.reveal:focus-visible { outline-offset: -2px; }
+
+.go { width: 100%; height: 46px; }
+form > .go { margin-top: 4px; }
+/* Balance rule 4: a button that is the first control sits where a first field would. */
+form > .go:first-child,
+.card-body > .go:first-child { margin-top: var(--row); }
+.result + .go { margin-top: 24px; }
+
+.msg {
+  margin: 16px 0 0;
+  padding: 11px 14px;
+  border-left: 3px solid;
+  border-radius: 4px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+/* With the form gone (a spent confirmation link), the message leads the body and
+   starts where a result would. */
+form[hidden] ~ .msg { margin-top: 0; }
+.msg--err { background: var(--danger-soft); border-color: var(--danger); color: var(--danger); }
+.msg--warn { background: var(--warning-soft); border-color: var(--warning); color: var(--warning); }
+.msg--ok { background: var(--ok-soft); border-color: var(--amber); color: var(--ink); }
+.result {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--ink);
+}
+
+/* ---- tablet: one column ------------------------------------------------------ */
+
+/* 1100 rather than 1024: between the two, two columns squeeze the figure until its
+   labels fall to about 7.5px, smaller than at any width on either side. */
+@media (max-width: 1099.98px) {
+  .hero .wrap,
+  .contents .wrap { display: block; }
+  .fig { margin-top: 48px; max-width: 760px; }
+  .toc { margin-top: 32px; }
+}
+
+/* ---- phone ------------------------------------------------------------------- */
+
+@media (max-width: 639.98px) {
+  .bar .wrap { height: 56px; }
+  .hero { padding: 32px 0 56px; }
+  .hero .lede { font-size: 16px; }
+  .fig { margin-top: 36px; }
+  .plate-area { padding: 10px; }
+  /* At this width the labels would render under 5px; the strip's legend carries them.
+     `visibility`, not `display: none`: taking them out of the layout restarts their
+     fade whenever a rotation crosses this width, and the drawing never replays. */
+  .plan text { visibility: hidden; }
+  .strip { grid-template-columns: minmax(0, 1fr); }
+  .strip > div + div { border-left: 0; border-top: 1px solid var(--rule-strong); }
+
+  .contents { padding: 48px 0 56px; }
+  .toc li {
+    grid-template-columns: 32px minmax(0, 1fr);
+    column-gap: 12px;
+    row-gap: 4px;
+  }
+  .toc li p { grid-column: 2; }
+
+  .foot-site .wrap {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+  .foot-site nav { flex-direction: column; gap: 0; }
+  .foot-site nav a { display: flex; align-items: center; min-height: 44px; }
+  .foot-site .label { margin-top: 8px; }
+}
+
+@media (max-width: 479.98px) {
+  .bar .btn { display: none; }
+  .cta { flex-direction: column; }
+  .cta .btn { width: 100%; }
+
+  .card-head { padding: 28px 20px 0; }
+  .card-head h1 { font-size: 32px; line-height: 34px; }
+  .card-body { padding: 20px 20px 24px; }
+  .card-foot { padding: 14px 14px 16px; }
+  .card { box-shadow: inset 0 0 0 5px var(--surface), inset 0 0 0 6px var(--rule); }
+}
+
+/* ---- motion: the drawing draws itself once ----------------------------------- */
+
+/* The hidden starting state exists only when the script has run (.js) and motion is
+   welcome, so the plate is either drawn or drawing: never stuck blank. */
+@media (prefers-reduced-motion: no-preference) {
+  .js .plate:not(.is-drawn) .draw { stroke-dasharray: 1; stroke-dashoffset: 1; }
+  .js .plate:not(.is-drawn) .fade { opacity: 0; }
+  .js .plate.is-drawn .draw {
+    stroke-dasharray: 1;
+    stroke-dashoffset: 1;
+    animation: draw 900ms cubic-bezier(.4, .1, .2, 1) forwards;
+  }
+  .js .plate.is-drawn .fade { opacity: 0; animation: fade 700ms ease-out forwards; }
+  .js .plate.is-drawn .hatch.fade { animation-duration: 400ms; }
+  .js .plate.is-drawn .power.draw { animation-duration: 1100ms; }
+
+  .msg.is-new { animation: msg-in 160ms ease-out; }
+  .result.is-new { animation: result-in 220ms ease-out; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .btn .arrow { transition: none; }
+  .btn:hover:not(:disabled) .arrow { transform: none; }
+}
+
+@keyframes draw { to { stroke-dashoffset: 0; } }
+@keyframes fade { to { opacity: 1; } }
+@keyframes msg-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes result-in { from { opacity: .35; } to { opacity: 1; } }

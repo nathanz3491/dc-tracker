@@ -9,7 +9,8 @@ tokens on a model panel.
 So the rules here are deliberately not "good enough for localhost":
 
 * **Everything is behind it.** Not just the page — every API route, every static
-  asset. An unauthenticated request gets the login form or a 401 and nothing else.
+  asset. An unauthenticated request gets one of the public pages, one of the files
+  on the public list, or a 401, and nothing else.
 * **A lockout, not just a check.** A published URL means an unattended login form.
   A short human-memorable password is only safe if guessing is slow, so failures
   are counted and the gate closes for a while.
