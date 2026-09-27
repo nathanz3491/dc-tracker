@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<meta name="referrer" content="no-referrer">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#faf6ef" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#1b1410" media="(prefers-color-scheme: dark)">
+<meta name="description" content="A private console tracking US data-center construction: capacity planned and built, the money behind it, what could hold it up, and where each figure came from.">
+<title>dc-tracker — US data-center construction</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23a05e1c'><path d='M2 2h6v3H5v14h3v3H2zM22 2h-6v3h3v14h-3v3h6z'/><path d='M5 10h8v4H5z'/></svg>">
+<link rel="preload" href="/static/vendor/fonts/jizBRFtNs2ka5fXjeivQ4LroWlx-6zUTjg.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/static/public/site.css">
+<script src="/static/public/site.js"></script>
+</head>
+<body data-page="home">
+
+<header class="bar">
+  <div class="wrap">
+    <a class="brand" href="/" aria-label="dc-tracker, front page"><svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true"><path d="M2 2h6v3H5v14h3v3H2zM22 2h-6v3h3v14h-3v3h6z"/><path d="M5 10h8v4H5z"/></svg><b>dc-tracker</b></a>
+    <nav aria-label="Account">
+      <a class="bar-link" href="/signin">Sign in</a>
+      <a class="btn btn--primary btn--sm" href="/register">Create an account</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <section class="hero" aria-labelledby="hero-h">
+    <div class="wrap">
+      <div class="hero-text">
+        <p class="eyebrow">US data-center construction</p>
+        <h1 id="hero-h">Who is building what, where — and who said so.</h1>
+        <p class="lede">dc-tracker follows data-center campuses across the US: capacity planned and built, the money behind it, and what could hold it up. Every figure shows where it came from, down to the sentence where there is one.</p>
+        <div class="cta">
+          <a class="btn btn--primary" href="/register">Create an account<span class="arrow" aria-hidden="true">→</span></a>
+          <a class="btn btn--secondary" href="/signin">Sign in</a>
+        </div>
+        <p class="note">Accounts are approved by an administrator. With an invite code, you're in straight away.</p>
+      </div>
+
+      <figure class="fig">
+        <div class="plate">
+          <div class="plate-area">
+            <!-- An invented campus, drawn the way a site plan is. It draws itself once:
+                 the land, then what is built, then what is only planned, the power last. -->
+            <svg class="plan" viewBox="70 30 840 570" role="img" aria-labelledby="plan-t plan-d">
+              <title id="plan-t">Illustrative site plan</title>
+              <desc id="plan-d">An invented data-center campus: four built data halls, two planned ones, generators, a stormwater pond, and a substation fed by a transmission line. Not a real campus.</desc>
+              <defs>
+                <pattern id="hatch" width="7" height="7" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="7"/></pattern>
+              </defs>
+
+              <polygon class="l prop fade" style="animation-delay:0ms" points="90,128 606,74 792,206 770,524 302,566 118,474"/>
+              <polygon class="f dash fade" style="animation-delay:150ms" points="132,158 590,112 746,226 728,494 314,530 158,448"/>
+              <text class="fade" style="animation-delay:300ms" x="104" y="112">Property line</text>
+
+              <path class="road-edge draw" pathLength="1" style="animation-delay:250ms" d="M 402 700 L 402 640 C 402 560 408 520 440 500 L 642 494"/>
+              <path class="road-bed draw" pathLength="1" style="animation-delay:250ms" d="M 402 700 L 402 640 C 402 560 408 520 440 500 L 642 494"/>
+              <line class="l fade" style="animation-delay:1000ms" x1="641.7" y1="484" x2="642.3" y2="504"/>
+
+              <rect class="hatch fade" fill="url(#hatch)" style="animation-delay:1050ms" x="198" y="176" width="136" height="96"/>
+              <rect class="hatch fade" fill="url(#hatch)" style="animation-delay:1160ms" x="352" y="176" width="136" height="96"/>
+              <rect class="hatch fade" fill="url(#hatch)" style="animation-delay:1270ms" x="198" y="292" width="136" height="96"/>
+              <rect class="hatch fade" fill="url(#hatch)" style="animation-delay:1380ms" x="352" y="292" width="136" height="96"/>
+              <rect class="l draw" pathLength="1" style="animation-delay:450ms" x="198" y="176" width="136" height="96"/>
+              <rect class="l draw" pathLength="1" style="animation-delay:560ms" x="352" y="176" width="136" height="96"/>
+              <rect class="l draw" pathLength="1" style="animation-delay:670ms" x="198" y="292" width="136" height="96"/>
+              <rect class="l draw" pathLength="1" style="animation-delay:780ms" x="352" y="292" width="136" height="96"/>
+              <text class="fade" style="animation-delay:900ms" x="198" y="164">Phase 1</text>
+
+              <rect class="l dash fade" style="animation-delay:950ms" x="506" y="176" width="136" height="96"/>
+              <rect class="l dash fade" style="animation-delay:1050ms" x="506" y="292" width="136" height="96"/>
+              <text class="fade" style="animation-delay:1150ms" x="506" y="164">Phase 2 — future</text>
+
+              <g class="fade" style="animation-delay:1000ms">
+                <rect class="f" x="200" y="410" width="22" height="14"/><rect class="f" x="230" y="410" width="22" height="14"/>
+                <rect class="f" x="260" y="410" width="22" height="14"/><rect class="f" x="290" y="410" width="22" height="14"/>
+                <rect class="f" x="320" y="410" width="22" height="14"/><rect class="f" x="350" y="410" width="22" height="14"/>
+                <rect class="f" x="380" y="410" width="22" height="14"/><rect class="f" x="410" y="410" width="22" height="14"/>
+              </g>
+
+              <path class="f dash fade" style="animation-delay:1100ms" d="M 530 428 q 30 -26 80 -14 q 44 12 26 36 q -30 22 -82 10 q -40 -10 -24 -32 z"/>
+
+              <line class="l power draw" pathLength="1" style="animation-delay:1200ms" x1="1000" y1="-40" x2="706" y2="140"/>
+              <g class="fade" style="animation-delay:1700ms">
+                <line class="l power" x1="851" y1="37" x2="861" y2="53"/>
+                <line class="l power" x1="806" y1="65" x2="816" y2="81"/>
+                <line class="l power" x1="761" y1="92" x2="771" y2="108"/>
+              </g>
+              <rect class="l power draw" pathLength="1" style="animation-delay:1500ms" x="648" y="134" width="62" height="46"/>
+              <line class="l power draw" pathLength="1" style="animation-delay:1750ms" x1="648" y1="134" x2="710" y2="180"/>
+              <line class="l power draw" pathLength="1" style="animation-delay:1750ms" x1="710" y1="134" x2="648" y2="180"/>
+              <text class="amber fade" style="animation-delay:1900ms" x="646" y="198">Substation</text>
+
+              <g class="fade" style="animation-delay:600ms" transform="translate(836 560)">
+                <circle class="f" r="20"/>
+                <path class="l" d="M 0 -15 L 7 9 L 0 4 L -7 9 Z"/>
+                <text x="-4" y="-26" style="letter-spacing:0">N</text>
+              </g>
+            </svg>
+          </div>
+          <div class="strip">
+            <div class="legend" aria-hidden="true">
+              <span><svg width="26" height="16"><rect class="sw" fill="url(#hatch)" x="1" y="1" width="24" height="14"/></svg>Built</span>
+              <span><svg width="26" height="16"><rect class="sw dash" x="1" y="1" width="24" height="14"/></svg>Planned</span>
+              <span><svg width="26" height="16"><line class="sw power" x1="1" y1="8" x2="25" y2="8"/></svg>Power</span>
+            </div>
+            <div><span class="label">Not to scale</span></div>
+          </div>
+        </div>
+        <figcaption><span class="label">Fig. 1</span><span>An invented campus. On real ones, the console keeps the same three things apart: what is built, what is only planned, and whether the grid has reached it.</span></figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section class="contents" aria-labelledby="contents-h">
+    <div class="wrap">
+      <div class="contents-head">
+        <p class="eyebrow">Contents</p>
+        <h2 id="contents-h">What's in the console</h2>
+      </div>
+      <ol class="toc">
+        <li><span class="num" aria-hidden="true">01</span><h3>Updates</h3><p>Follow an operator, a tenant or a campus and see what moved on it, good news and bad. One email a day.</p></li>
+        <li><span class="num" aria-hidden="true">02</span><h3>Watch for</h3><p>Every open obstacle on what you follow — permits, grid capacity, water, local opposition — and the milestone that would clear it.</p></li>
+        <li><span class="num" aria-hidden="true">03</span><h3>Projects</h3><p>Megawatts planned and running as separate figures, five tracks from site control to customer &amp; finance, and the sentence behind any figure, a hover or tap away.</p></li>
+        <li><span class="num" aria-hidden="true">04</span><h3>Sources</h3><p>The articles behind the figures, grouped by publisher, each one readable in a clean reader view.</p></li>
+        <li><span class="num" aria-hidden="true">05</span><h3>Map</h3><p>Roughly where each campus is: its dot sits on the town, not the site. A hollow ring means nobody has said how big it is.</p></li>
+        <li><span class="num" aria-hidden="true">06</span><h3>Capex</h3><p>Who is actually paying: the same projects, grouped by the company buying the capacity rather than by where they are.</p></li>
+      </ol>
+    </div>
+  </section>
+</main>
+
+<footer class="foot-site">
+  <div class="wrap">
+    <a class="brand" href="/" aria-label="dc-tracker, front page"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M2 2h6v3H5v14h3v3H2zM22 2h-6v3h3v14h-3v3h6z"/><path d="M5 10h8v4H5z"/></svg><b>dc-tracker</b></a>
+    <nav aria-label="Footer">
+      <a href="/signin">Sign in</a>
+      <a href="/register">Create an account</a>
+      <a href="/forgot">Forgot password?</a>
+    </nav>
+    <p class="label">Private console · US data-center construction</p>
+  </div>
+</footer>
+
+</body>
+</html>

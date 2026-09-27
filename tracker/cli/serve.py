@@ -153,7 +153,7 @@ def serve(
         bool,
         typer.Option(
             "--watch-edits/--no-watch-edits",
-            help="Allow the landing page to edit the signed-in account's watchlist.",
+            help="Allow the Updates page to edit the signed-in account's watchlist.",
         ),
     ] = True,
     allow_remote: Annotated[
@@ -241,6 +241,16 @@ def _console_preflight() -> Path:
     if missing:
         _fail(
             "the console's vendored front-end files are missing:\n  "
+            + "\n  ".join(missing)
+            + f"\n\nExpected under {assets.STATIC_ROOT}. This is an incomplete "
+            "install rather than a configuration problem."
+        )
+    # The pages a stranger is shown before signing in. Without them every signed-out
+    # visit is a 500, so the console would start and then turn everyone away.
+    missing = assets.missing_public()
+    if missing:
+        _fail(
+            "the console's public pages are missing:\n  "
             + "\n  ".join(missing)
             + f"\n\nExpected under {assets.STATIC_ROOT}. This is an incomplete "
             "install rather than a configuration problem."
@@ -466,7 +476,7 @@ def cloudflare(
         bool,
         typer.Option(
             "--watch-edits/--no-watch-edits",
-            help="Allow the landing page to edit the signed-in account's watchlist.",
+            help="Allow the Updates page to edit the signed-in account's watchlist.",
         ),
     ] = True,
     proxy: Annotated[
@@ -642,6 +652,18 @@ def _cloudflare_check(name: str | None, hostname: str | None = None) -> None:
     missing = assets.missing_vendor()
     rows.append(
         (not missing, "front end", "vendored" if not missing else f"{len(missing)} file(s) missing")
+    )
+    # A published console's signed-out visitors see only these, so publishing
+    # without them would put a 500 on the public URL.
+    missing = assets.missing_public()
+    rows.append(
+        (
+            not missing,
+            "public",
+            "the front page and account pages are present"
+            if not missing
+            else f"{len(missing)} file(s) missing — an incomplete install",
+        )
     )
 
     for ok, label, detail in rows:

@@ -131,6 +131,7 @@ BLOCKED: dict[str, str] = {
     "users signout": "accounts are managed at a terminal or on the admin page",
     "users admin": "only a terminal on the host can grant admin",
     "users notify": "it sends email to an address you type — run it in a terminal",
+    "users approve": "accounts are managed at a terminal or on the admin page",
 }
 
 #: Flags that make no sense from a browser, or that would hand the request control
@@ -295,6 +296,7 @@ GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "users",
             "users add",
             "users invite",
+            "users approve",
             "users show",
             "users edit",
             "users passwd",

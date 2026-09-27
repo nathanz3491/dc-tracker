@@ -12,6 +12,31 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **The sign-in page shows its own typefaces** (`tracker/webui/static/public/`).
+  They never loaded: they were embedded in a form the console's own security policy
+  refuses (`data:` URIs, against `font-src 'self'`), so the page showed Georgia and
+  the system monospace. They are ordinary files now, the console's own, so a reader
+  who signs in already has them.
+
+- **Fonts inside the console's stylesheets are versioned, so they are cached instead
+  of downloaded again on every page load** (`tracker/webui/assets.py`). Every other
+  asset URL carried its file's version; a font named inside a stylesheet was
+  rewritten to a bare address, answered `no-cache`, and fetched again each time. A
+  stylesheet's own version now changes when a font it names does.
+
+- **The console's own code and styles are marked private, so a cache in front of a
+  published console cannot keep a copy and hand it to someone who is not signed in**
+  (`tracker/webui/server.py`). Every static file was answered `public` for a year,
+  which tells an edge cache it may store the app bundle and serve it to anyone who
+  asks for that URL. Only the five files the public pages use are `public` now.
+
+- **Signing out always clears the cookie, even when the session had already ended**
+  (`tracker/webui/server.py`, `tracker/webui/static/app.js`). Sign-out sat behind the
+  sign-in check, so a session whose account could not be read at that moment was
+  refused, stayed alive and kept its cookie, while the page moved on as if it had
+  worked. It is answered before that check now, and the button says "Retry sign-out"
+  when the request did not arrive.
+
 - **The console's top bar stays on one row on an ordinary laptop screen**
   (`tracker/webui/static/app.js`, `tracker/webui/static/app.css`). With every item
   in it the bar needs about 1,535px, and the new Watch for tab pushed it past a
@@ -667,6 +692,33 @@ initial build of the v1 PRD.
 
 ### Changed
 
+- **The console's address now opens on a short front page, and signing in, asking
+  for an account and resetting a password are pages of their own** (`/signin`,
+  `/register`, `/forgot`). The old single page grew when you switched to creating an
+  account, which knocked its whole layout off balance. Now each form starts at the
+  same place on its own page, and nothing on a form appears or disappears while you
+  fill it in. The site-plan drawing moved to the front page as its one illustration.
+
+  A console link you open while signed out now brings you back to that page after
+  you sign in. That covers the links in the morning email, the one an admin is sent
+  when a sign-up is waiting, and any tab a deploy signed out. Before, you landed on
+  Updates. Signing out goes to the sign-in page and says so. Signed-in readers still
+  get the console at `/`. The approval email and `tracker users notify` link the
+  sign-in page rather than the console's address, which is now the front page.
+
+  Creating an account and choosing a new password no longer ask for the password
+  twice: the field has Show, and a mistyped one is recovered at `/forgot`. A
+  confirmation link now waits for a click instead of confirming when opened, so a
+  mail filter that opens links cannot confirm an address for someone.
+
+  Files: `tracker/webui/static/public/`, `tracker/webui/server.py`,
+  `tracker/webui/assets.py`, `tracker/webui/static/app.js`, `tracker/account_mail.py`,
+  `tracker/account_notice.py`, `tracker/accounts.py`, `tracker/cli/people.py`,
+  `tracker/cli/serve.py`, `tests/test_webui.py`, `tests/test_self_signup.py`,
+  `tests/test_user_admin.py`, `README.md`, `docs/README.md`,
+  `docs/console-and-export.md`, `docs/architecture.md`, `docs/analysis.md`,
+  `.env.example`; `tracker/webui/static/login.html` deleted.
+
 - **The morning email goes to each person once a day, remembers what it sent, and
   never sends anything twice** (`tracker/notify.py`, `tracker/cli/people.py`,
   `tracker/migrations/0029_notify_ledger.sql`, `tracker/models.py`,
@@ -856,6 +908,25 @@ initial build of the v1 PRD.
   migrating still build from nothing.
 
 ### Added
+
+- **Anyone can ask for an account on `/register`, and an admin decides who gets
+  one** (`tracker/accounts.py`, `tracker/account_mail.py`,
+  `tracker/migrations/0030_self_signup.sql`, `tracker/models.py`,
+  `tracker/webui/server.py`, `tracker/webui/auth.py`,
+  `tracker/webui/static/views-account.js`, `tracker/cli/people.py`, `tracker/notify.py`,
+  `tests/test_self_signup.py`, `docs/console-and-export.md`, `docs/architecture.md`,
+  `.env.example`). Accounts could only be made at the host or by an invite code.
+  **Create an account** now takes an email and a password: the address is confirmed
+  by a mailed link, every admin is emailed, and the account waits on the admin page
+  (or `tracker users approve`) until an admin lets it in, which emails them. It
+  starts without the AI panels, which spend tokens on every click; an admin switches
+  them on, per account, in the same step or later. An invite code on the same form
+  still signs somebody straight in, with the panels. **Forgot password?** emails a
+  one-hour, single-use link. The forms answer the same whether or not an address has
+  an account, links are built only from the configured console address and stored
+  hashed, a guessed link counts toward the sign-in lockout, and mail is budgeted per
+  visitor, overall and per address. Every existing account keeps full access,
+  panels included, and the morning email skips accounts not yet approved.
 
 - **When DeepSeek's balance runs out, the night carries on on a reserve**
   (`tracker/llm.py`, `tracker/config.py`, `.env.example`, `docs/ingesting.md`,

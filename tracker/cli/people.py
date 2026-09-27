@@ -357,9 +357,11 @@ def _ask_password(prompt: str = "Password") -> str:
 def users(ctx: typer.Context) -> None:
     """Who may sign in to the console, and everything an operator can change about them.
 
-    `add`, `invite`, `show`, `edit`, `passwd`, `disable`, `enable`, `signout`,
-    `admin`, `rm`, and `notify` to tell somebody how their account is now set up.
-    An admin can do the same from the console's admin page, except grant admin.
+    `add`, `invite`, `approve`, `show`, `edit`, `passwd`, `disable`, `enable`,
+    `signout`, `admin`, `rm`, and `notify` to tell somebody how their account is now
+    set up. An admin can do the same from the console's admin page, except grant
+    admin. Anyone may also ask for an account at the console's `/register`; that
+    account waits, listed here as pending, until `approve` lets it in.
 
     **Zero accounts is a legitimate state**, and it is the one a fresh install is
     in: the console then opens with no sign-in, exactly as it did with no
@@ -395,7 +397,9 @@ def users(ctx: typer.Context) -> None:
                             "email": row.email,
                             "name": row.name,
                             "admin": bool(row.is_admin),
+                            "status": accounts.status(row),
                             "disabled": row.disabled_at is not None,
+                            "ai": bool(row.ai_allowed),
                             "watches": watches.get(row.id, 0),
                             "created_at": row.created_at.isoformat() if row.created_at else None,
                             "last_seen_at": (
@@ -430,7 +434,7 @@ def users(ctx: typer.Context) -> None:
                     row.email,
                     row.name or "",
                     "admin" if row.is_admin else "",
-                    "[red]disabled[/red]" if row.disabled_at is not None else "active",
+                    _STATUS_STYLE[accounts.status(row)],
                     str(watches.get(row.id, 0)),
                     row.last_seen_at.strftime("%Y-%m-%d")
                     if row.last_seen_at
@@ -438,6 +442,12 @@ def users(ctx: typer.Context) -> None:
                 )
             console.print(table)
 
+        waiting = [row for row in rows if accounts.status(row) == "pending"]
+        if waiting:
+            console.print(
+                f"\n[yellow]{len(waiting)} waiting for approval[/yellow][dim] — "
+                f"tracker users approve {escape(waiting[0].email)}[/dim]"
+            )
         if pending:
             console.print(
                 f"\n[dim]{len(pending)} unredeemed invite(s): "
@@ -585,6 +595,15 @@ def _one_account(session, email: str):
         raise
 
 
+#: How each `accounts.status` reads in a table.
+_STATUS_STYLE = {
+    "active": "active",
+    "disabled": "[red]disabled[/red]",
+    "pending": "[yellow]pending approval[/yellow]",
+    "unconfirmed": "[dim]email not confirmed[/dim]",
+}
+
+
 def _print_detail(detail: dict) -> None:
     def when(value: str | None) -> str:
         return escape(value[:16].replace("T", " ")) if value else "[dim]never[/dim]"
@@ -595,7 +614,7 @@ def _print_detail(detail: dict) -> None:
     status = (
         f"[red]disabled[/red] since {when(detail['disabled_at'])}"
         if detail["disabled"]
-        else "active"
+        else _STATUS_STYLE[detail["status"]]
     )
     count = detail["watches"]
     for label, value in (
@@ -604,6 +623,9 @@ def _print_detail(detail: dict) -> None:
         ("role", "admin" if detail["admin"] else "reader"),
         ("status", status),
         ("sees", "the whole database" if detail["watch_all"] else "its watchlist only"),
+        ("AI panels", "on" if detail["ai"] else "off"),
+        ("email confirmed", when(detail["email_verified_at"])),
+        ("approved", when(detail["approved_at"])),
         ("watchlist", f"{count} entr{'y' if count == 1 else 'ies'}"),
         ("joined", escape(detail["joined"])),
         ("created", when(detail["created_at"])),
@@ -648,8 +670,16 @@ def users_edit(
             show_default=False,
         ),
     ] = None,
+    ai: Annotated[
+        bool | None,
+        typer.Option(
+            "--ai/--no-ai",
+            help="Whether they may use the console's AI panels, which spend tokens.",
+            show_default=False,
+        ),
+    ] = None,
 ) -> None:
-    """Change an account's sign-in address, display name, or what it sees.
+    """Change an account's sign-in address, display name, what it sees, or its AI panels.
 
     Their sessions survive: a session is bound to the password, not the address.
     Nobody is emailed — `tracker users notify` does that, to whichever address you
@@ -657,13 +687,19 @@ def users_edit(
     """
     from tracker import accounts
 
-    if new_email is None and name is None and not clear_name and see_all is None:
-        _fail("nothing to change. Pass --email, --name, --clear-name or --see-all.")
+    if new_email is None and name is None and not clear_name and see_all is None and ai is None:
+        _fail("nothing to change. Pass --email, --name, --clear-name, --see-all or --ai.")
     with _explain_db_locks(), session_scope(_watch_engine()) as session:
         row = _one_account(session, email)
         try:
             changes = accounts.update(
-                session, row, email=new_email, name=name, clear_name=clear_name, watch_all=see_all
+                session,
+                row,
+                email=new_email,
+                name=name,
+                clear_name=clear_name,
+                watch_all=see_all,
+                ai=ai,
             )
         except accounts.AccountError as exc:
             _fail(str(exc))
@@ -680,6 +716,56 @@ def users_edit(
     console.print(
         f"[dim]to tell them: tracker users notify <address> --about {escape(detail['email'])}[/dim]"
     )
+
+
+@users_app.command("approve")
+def users_approve(
+    email: Annotated[str, typer.Argument(help="Whose sign-up to let in.")],
+    ai: Annotated[
+        bool, typer.Option("--ai", help="Switch their AI panels on at the same time.")
+    ] = False,
+    quiet: Annotated[
+        bool, typer.Option("--quiet", help="Do not email them that they are in.")
+    ] = False,
+) -> None:
+    """Let a waiting sign-up sign in, and email them that they can.
+
+    Refused until they have confirmed the address, since approving would let in an
+    address nobody has shown they own. They start without the AI panels unless
+    `--ai` is passed, because a panel spends tokens on every click. Turning a sign-up
+    down is `tracker users rm`.
+    """
+    from tracker import account_mail, accounts
+    from tracker.config import get_settings
+
+    with _explain_db_locks(), session_scope(_watch_engine()) as session:
+        row = _one_account(session, email)
+        try:
+            changed = accounts.approve(session, row)
+        except accounts.AccountError as exc:
+            _fail(str(exc))
+            raise
+        if ai:
+            accounts.update(session, row, ai=True)
+        target, name = row.email, row.name
+    mailed = False
+    if changed and not quiet:
+        url = (get_settings().notify_console_url or "").strip() or None
+        mailed = account_mail.send(target, account_mail.approved(url, name))
+    if json_mode():
+        emit({"email": target, "approved": True, "changed": changed, "ai": ai, "mailed": mailed})
+        return
+    if not changed:
+        console.print(f"[dim]{escape(target)} was already approved.[/dim]")
+        return
+    console.print(f"[green]approved[/green] {escape(target)}" + (" with AI panels" if ai else ""))
+    if not quiet:
+        console.print(
+            "[dim]told them by email.[/dim]"
+            if mailed
+            else "[yellow]could not email them[/yellow][dim] — see the log; they can sign "
+            "in regardless.[/dim]"
+        )
 
 
 def _switch(email: str, *, disable: bool) -> None:
@@ -943,7 +1029,7 @@ def users_invite(
     because this database is copied between machines and kept in backups, where a
     plaintext code would be a live credential in every copy.
 
-    They redeem it on the console's own login page, where they choose their own
+    They redeem it on the console's /register page, where they choose their own
     email and password. That is the point of an invite over `users add`: a password
     you picked and sent them is a password in a chat log.
     """
@@ -964,7 +1050,7 @@ def users_invite(
     console.print(f"[bold]{escape(code)}[/bold]")
     console.print(
         f"[dim]single use, expires {expires:%Y-%m-%d %H:%M} UTC. Shown once — "
-        "only its hash is stored. They redeem it on the console's sign-in page.[/dim]"
+        "only its hash is stored. They redeem it on the console's /register page.[/dim]"
     )
 
 
@@ -1003,7 +1089,7 @@ def digest(
 ) -> None:
     """What changed on the watchlist, good and bad, since a date.
 
-    The same reading the console's landing page renders, in a form that can be
+    The same reading the console's Updates page renders, in a form that can be
     sent: `tracker digest --markdown --days 1` is the nightly note. Reads only, so
     it is safe on either machine.
 
@@ -1429,6 +1515,14 @@ def notify_send(
             only_email=user,
             force=force,
         )
+        # The confirmation email promises an unconfirmed request is removed after a
+        # week. A sign-up also sweeps them, but a quiet console may see none for a
+        # month; this run is daily, so it is what keeps the promise.
+        from tracker import accounts
+
+        swept = accounts.expire_unconfirmed(session)
+    if swept and not json_mode():
+        console.print(f"[dim]removed {swept} sign-up(s) nobody confirmed within a week[/dim]")
 
     if json_mode():
         emit(

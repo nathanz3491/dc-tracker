@@ -12,7 +12,7 @@ detail behind it.
 | [Sources and feeds](sources-and-feeds.md) | Which publishers actually decide stored values, what discovery costs per feed, feeds worth adding and retiring, and `tracker sources policy` |
 | [Backfill and gaps](backfill-and-gaps.md) | Seeing where the data is thin, filling capacity blocks on older rows, deriving county and coordinates without an LLM |
 | [The terminal interface](tui.md) | `tracker tui` — six panes over the same data, the run pane that reads the CLI rather than listing it, and how it is verified over ssh |
-| [The console, and exporting](console-and-export.md) | The whole dataset as one page, the live console and its two modes, driving it without a browser, and publishing it |
+| [The console, and exporting](console-and-export.md) | The whole dataset as one page, the live console and its two modes, accounts and what a stranger sees before signing in, driving it without a browser, and publishing it |
 | [Analysis](analysis.md) | Who is buying the capacity, what could stop these projects being built, `tracker infer`, and how slippage is measured |
 
 ## Understanding it

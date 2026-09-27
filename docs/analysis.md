@@ -576,7 +576,7 @@ tracker digest --notify --markdown --days 1 --user you@example.com \
 `digest --notify` remembers nothing, so a job built on it reports by window; the
 mailer is the one with the ledger.
 
-The same reading is the console's landing page, where the watchlist can also be
+The same reading is the console's Updates page, where the watchlist can also be
 edited — see `docs/console-and-export.md`.
 
 ## What no article says: `tracker infer`

@@ -118,15 +118,24 @@ def render(
           </td></tr>
         </table>
       </td></tr>"""
-    button = ""
+    # The sign-in page rather than the console's root, which is the public front
+    # page for anybody not signed in. With a new password the reader's next step is
+    # choosing their own, so the link comes back to `/account` after signing in.
+    sign_in = None
     if console_url:
+        # Here rather than at the top: `account_mail` imports `Notice` from this module.
+        from tracker.account_mail import link
+
+        sign_in = link(console_url, "signin") + ("?next=/account" if new_password else "")
+    button = ""
+    if sign_in:
         button = f"""
       <tr><td align="center" style="padding:22px 0 6px 0;">
-        <a href="{esc(console_url)}"
+        <a href="{esc(sign_in)}"
            style="display:inline-block;background:{TOKENS["primary"]};
                   color:{TOKENS["primary_foreground"]};font-family:{FONT_SANS};
                   font-size:14px;font-weight:600;text-decoration:none;
-                  padding:11px 22px;border-radius:10px;">Open the console</a>
+                  padding:11px 22px;border-radius:10px;">Sign in</a>
       </td></tr>"""
     footer = (
         "This message contains a password. Change it after you sign in, and delete "
@@ -200,8 +209,8 @@ def render(
             "",
         ]
     lines += [f"  {label}: {value}" for label, value in rows]
-    if console_url:
-        lines += ["", f"Open the console: {console_url}"]
+    if sign_in:
+        lines += ["", f"Sign in: {sign_in}"]
     lines += ["", footer]
     return Notice(title, html_body, "\n".join(lines))
 
