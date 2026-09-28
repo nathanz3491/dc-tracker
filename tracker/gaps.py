@@ -222,6 +222,9 @@ class FieldProvenance:
     #: function, so a value and the qualifiers on it cannot drift apart between
     #: the terminal and the browser.
     axes: dict[str, str] = dc_field(default_factory=dict)
+    #: For a value no citation's claim holds, what set it instead, in words — the
+    #: named buildings that lifted a campus's `phase`. None when a claim holds it.
+    via: str | None = None
 
     @property
     def bound(self) -> str:
@@ -324,6 +327,8 @@ def _reconciled_from(project, field: str, value) -> FieldProvenance | None:
     the whole site; a tranche's tenant is a statement about part of it, so where
     both exist the broader one is what the campus column is reporting.
     """
+    if field == "phase" and isinstance(value, str):
+        return _phase_from_blocks(project, value)
     if field != "customer" or not isinstance(value, str):
         return None
     wanted = value.strip().lower()
@@ -349,6 +354,46 @@ def _reconciled_from(project, field: str, value) -> FieldProvenance | None:
         return FieldProvenance(field, DERIVED, quote=quote, quote_is_exact=bool(quote))
 
     return None
+
+
+def _phase_from_blocks(project, value: str) -> FieldProvenance | None:
+    """The named buildings that lifted a campus's phase to `value`, if they did.
+
+    `blocks.phase_after_blocks` raises the campus after the claim merge, and no
+    block status carries a quote — so the honest tier is DERIVED with no sentence,
+    and `via` names the buildings. Before this the panel credited the strongest
+    source that mentioned the field and printed *its* sentence: "operational",
+    marked quoted, over "Switch has unveiled plans".
+    """
+    from tracker.vocab import BLOCK_STATUS_TO_PHASE
+
+    lifting = [
+        block
+        for block in getattr(project, "blocks", ()) or ()
+        if not getattr(block, "generic", False) and BLOCK_STATUS_TO_PHASE.get(block.status) == value
+    ]
+    if not lifting:
+        return None
+    names = ", ".join((b.label or b.block_key) for b in lifting[:4])
+    more = f" and {len(lifting) - 4} more" if len(lifting) > 4 else ""
+    return FieldProvenance(
+        "phase",
+        DERIVED,
+        via=f"set by its buildings, not by a quote: {names}{more} ({lifting[0].status})",
+    )
+
+
+def _states(source, field: str, value) -> bool:
+    """Whether this source's own claim for `field` is `value`."""
+    from tracker.upsert import claim_value
+
+    try:
+        claims = json.loads(source.claims or "{}")
+    except (TypeError, ValueError):
+        return False
+    if not isinstance(claims, dict) or field not in claims:
+        return False
+    return _same_value(claims[field], claim_value(value))
 
 
 def provenance(project, field: str, by_field=None) -> FieldProvenance | None:
@@ -384,6 +429,27 @@ def provenance(project, field: str, by_field=None) -> FieldProvenance | None:
 
     ordered = sorted(getattr(project, "sources", ()) or (), key=lambda s: s.url)
     index = next((i for i, s in enumerate(ordered) if s.url == source.url), None)
+
+    from tracker.upsert import DERIVED_FIELDS
+
+    if field == "phase" and _tier_of(source, field) != REPORTED:
+        # A phase no quoted claim holds, credited to an unquoted one that happens to
+        # agree. The merge discarded that claim; what actually set the value is the
+        # campus's named buildings, when they did.
+        derived = _phase_from_blocks(project, value)
+        if derived is not None:
+            return derived
+
+    if field not in DERIVED_FIELDS and not _states(source, field, value):
+        # The fallback: no claim holds the stored value, so this is the strongest
+        # source that merely mentions the field. Its tier and its sentence are about
+        # the value IT claimed, not this one — so neither may be shown as this
+        # value's. Something that is not a claim may have set it (a campus lifted by
+        # its buildings); otherwise nothing quotable backs it.
+        derived = _reconciled_from(project, field, value)
+        if derived is not None:
+            return derived
+        return FieldProvenance(field, UNCONFIRMED, None, False, source.url, index)
 
     quote: str | None = None
     exact = False

@@ -156,10 +156,16 @@ Three stages before anything is put to a model:
    not recompute. Re-running the policy is arithmetic.
 
    "The answer that policy gives" includes what happens after the merge. For
-   `phase`, a tranche further along raises the campus (`blocks.raise_phase`), so a
-   row whose claims say `construction` and whose serving hall says `operational`
-   has not drifted. Compared against the claims alone, 48 such rows were reported
-   and "repaired" every night, and every recompute raised them straight back.
+   `phase`, a *named* building further along raises the campus
+   (`blocks.phase_after_blocks`), so a row whose claims say `construction` and whose
+   serving TX-1 hall says `operational` has not drifted. Compared against the claims
+   alone, 48 such rows were reported and "repaired" every night, and every
+   recompute raised them straight back. An unnamed tranche ("Phase 1") no longer
+   lifts a campus: no block status carries a quote, and on Switch's The Rock two
+   unnamed "serving" phases — a neighbour's finished building, from a city page
+   listing several operators — made it read `operational` over four quotes saying
+   `announced`. The check and the recompute call the same function, so they cannot
+   disagree about it.
 2. **Answered by comparison, free.** Held to `audit.free_answer`'s bar: a read of
    data already stored, never a judgement between two sourced figures. Three codes
    clear it, and between them they were **448 of 536** resolvable findings — which
@@ -323,7 +329,7 @@ Touching any of these means the poster is in scope. Re-render with
 | Collisions and the per-field policy | `tracker/logic.py` — `check_collisions`, `why_decided`, `decision`; `tracker/upsert.py` — `FIELD_POLICY`, `Policy`, `resolve_field` |
 | Judgement and the evidence audit | `tracker/logic.py` — `examine`, `audit_evidence`, `parse_contradictions`, `parse_evidence_findings`, `AUDIT_VERDICTS`, `auditable_fields` |
 | Actions, and which codes have none | `tracker/logic.py` — `ACTIONS`, `_stating`, `resolvable`, `free_answer`, `FREE_CODES`, `_resolve_finished_obstacles`, `_reported_after_finish`, `record_decision`; `tracker/audit.py` — `_rule_against` |
-| Drift repair | `tracker/logic.py` — `resolve_drift`, `check_collisions`; `tracker/upsert.py` — `recompute_from_sources`; `tracker/blocks.py` — `raise_phase` |
+| Drift repair | `tracker/logic.py` — `resolve_drift`, `check_collisions`; `tracker/upsert.py` — `recompute_from_sources`; `tracker/blocks.py` — `phase_after_blocks`, `raise_phase` |
 | Contested fields, the two calls, the write | `tracker/conflicts.py` — `disputes`, `solve`, `_challenge`, `supersede`, `apply_outcome`, `MAX_CALLS_PER_FIELD`, `MIN_CONFIDENCE`, `SUPERSEDED`, `MISREAD` |
 | The agent path | `tracker/triage.py` — `triage`, `apply_rule_out`, `_claims_value`, `rule_out_tool`, `leave_alone_tool`, `RULEABLE_FIELDS`, `SYSTEM` |
 | What a ruling cannot reach | `tracker/triage.py` — `can_rule_on`, `UNANSWERABLE_BY_RULING`, `has_live_claim`; `tracker/agent.py` — `_list_sources`, `_claims_line` |

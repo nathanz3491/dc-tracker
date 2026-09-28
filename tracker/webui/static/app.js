@@ -288,6 +288,10 @@ function quoteOf(p, key) {
     return { text: TIER_NOTE.missing, exact: false };
   }
   if (pr?.quote) return { text: pr.quote, exact: !!pr.quote_is_exact, url: pr.source_url };
+  // A value no citation's claim holds — a campus phase its named buildings lifted.
+  // The server says what set it; there is no sentence to show, and borrowing another
+  // claim's is how "operational" once sat over "Switch has unveiled plans".
+  if (pr?.via) return { text: pr.via.charAt(0).toUpperCase() + pr.via.slice(1) + ".", exact: false };
   return { text: TIER_NOTE[tier] || "No excerpt recorded for this value.", exact: false };
 }
 
@@ -2489,7 +2493,11 @@ function Timeline({ p, data }) {
                         title=${e.quote ? `“${e.quote}”` : undefined}>
                     ${e.description}
                     ${e.unconfirmed && html`
-                      <span style=${{ ...chip("--warning"), marginLeft: 8 }}>not cited</span>`}
+                      <span style=${{ ...chip("--warning"), marginLeft: 8 }}
+                            title=${e.unconfirmed === "forecast"
+                              ? "The article only expected this, so no track counts it as reached."
+                              : undefined}>
+                        ${e.unconfirmed === "forecast" ? "expected, not reported done" : "not cited"}</span>`}
                   </span>
                 </div>`)}
               ${moreEvents}
@@ -2534,11 +2542,18 @@ function ClaimTable({ claims, field }) {
       </button>
       ${env.stored_unsupported && html`
         <span style=${{ ...chip("--danger"), marginLeft: 8 }}>no claim supports the stored value</span>`}
+      ${!env.stored_unsupported && env.stored_differs && html`
+        <span style=${{ ...chip("--warning"), marginLeft: 8 }}>
+          the quoted claims say ${fmt(field, env.claims_say)}</span>`}
       ${open && html`
         <div style=${{ marginTop: 8, display: "grid", gap: 6 }}>
           ${env.why
             ? html`<p style=${{ margin: 0, fontSize: 12, color: "var(--muted-foreground)" }}>
                 <strong>why this one:</strong> ${env.why}</p>`
+            : env.unquoted_rivals
+            ? html`<p style=${{ margin: 0, fontSize: 12, color: "var(--muted-foreground)" }}>
+                ${env.unquoted_rivals} claim${env.unquoted_rivals === 1 ? "" : "s"} disagree, but
+                none had a usable quote, so only the quoted ones were counted.</p>`
             : html`<p style=${{ margin: 0, fontSize: 12, color: "var(--muted-foreground)" }}>
                 ${env.claims.length} claims, none in conflict — different scopes rather than a
                 disagreement.</p>`}

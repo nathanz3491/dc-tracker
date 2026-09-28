@@ -290,7 +290,11 @@ def standing(project_id: int, events, risks, *, as_of: dt.date | None = None) ->
             when = when.date()
         return when <= as_of
 
-    events = [e for e in events if reached_by(e)]
+    # A forecast is not history even once its date has passed. The date filter
+    # above catches "expected in 2028"; this catches "expected to begin operations
+    # in late 2024", read in 2026 — which filed as `energized` made Switch's The Rock
+    # (#44) show its power track reached.
+    events = [e for e in events if reached_by(e) and getattr(e, "unconfirmed", None) != "forecast"]
     observed = {getattr(e, "event_type", None) for e in events}
 
     # Close over the implications: a project that installed equipment controls its

@@ -1069,6 +1069,26 @@ def raise_phase(phase: str | None, from_blocks: str | None) -> str | None:
     return phase
 
 
+def phase_after_blocks(phase: str | None, blocks: list[Any]) -> str | None:
+    """The campus phase once its *named* buildings have had their say.
+
+    Only a block that names its building may lift the campus. A generic block —
+    "Phase 1", "Building 2" — says nothing about which facility it is, and no block
+    status carries a quote, so an unnamed one lifting the whole campus is the
+    weakest evidence in the row overruling the quoted citations. Observed on Switch's
+    The Rock (#44): a city page listing several operators' data centers put Sabey's
+    finished building on Switch's campus as two unnamed "serving" phases, and the
+    campus read `operational` over four quotes saying `announced`. Its megawatts
+    were already left out as unplaceable; its status was not.
+
+    One function for the write path (`reconcile`) and the read path
+    (`logic.check_collisions`), so the nightly drift check expects exactly what a
+    recompute stores.
+    """
+    named = [b for b in blocks if not getattr(b, "generic", False)]
+    return raise_phase(phase, rollup(named).phase if named else None)
+
+
 def reconcile(project: Any) -> list[str]:
     """Fill the project's scalars from its blocks where they are empty. Disclosures.
 
@@ -1140,7 +1160,7 @@ def reconcile(project: Any) -> list[str]:
                 "double-count or the campus figure is stale"
             )
 
-    project.phase = raise_phase(project.phase, got.phase)
+    project.phase = phase_after_blocks(project.phase, list(project.blocks))
 
     if project.customer is None and got.customer is not None:
         project.customer = got.customer

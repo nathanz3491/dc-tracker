@@ -12,6 +12,38 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **A campus is no longer marked operational on the strength of an unnamed
+  building** (`tracker/blocks.py`, `tracker/logic.py`, `docs/workflows/logic.md`,
+  `tests/test_phase_evidence.py`). After the claims are merged, a campus is lifted
+  to its furthest building, and no building's status carries a quote. An unnamed one
+  ("Phase 1") could lift it too, though the row already left its megawatts out for
+  not saying which facility it was. Switch's The Rock read `operational` over four
+  quotes saying `announced`: a city page listing several operators had put Sabey's
+  finished building on Switch's campus as two unnamed "serving" phases. Only a
+  building that names itself lifts a campus now; 11 campuses move back to what their
+  quoted citations say.
+
+- **A forecast is no longer counted as a finished milestone** (`tracker/ingest/crawl.py`,
+  `tracker/tracks.py`, `tracker/vocab.py`, `tracker/backfill.py`,
+  `tracker/cli/quality.py`, `docs/data-quality.md`). "Switch Round Rock expected to
+  begin operations", filed as `energized` for late 2024, counted as a finished
+  energisation once 2024 had passed; 73 confirmed energisations and groundbreakings
+  on the live database were forecasts like it. The event gate files forward-looking
+  wording as `forecast` — in the quote, as before, and now in the milestone's own
+  description, where the model often says it plainly — and progress tracks leave
+  forecasts out. `tracker backfill events` applies the rule to what is stored (free;
+  a preview until `--apply`).
+
+- **A project's panel no longer shows another claim's sentence as the evidence for
+  a value** (`tracker/gaps.py`, `tracker/export.py`, `tracker/webui/static/app.js`).
+  When no quoted claim held the stored value, the panel credited the strongest
+  source that mentioned the field and printed its sentence under the value marked
+  "quoted" — "operational" over "Switch has unveiled plans". It now says what set
+  the value (a campus's named buildings) or that nothing quoted backs it, flags a
+  stored value that differs from what the quoted claims say, and no longer calls
+  claims that disagree "different scopes" when they were only left out for having
+  no usable quote.
+
 - **The Watch for page works for anyone the morning email has reached**
   (`tracker/webui/server.py`, `tests/test_webui.py`). It read the time of the
   reader's last email after its database session had closed, and a closed read

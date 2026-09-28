@@ -323,6 +323,14 @@ UNCONFIRMED_REASONS: Final[tuple[str, ...]] = (
     #: The quote is genuinely the article's, but does not state this particular
     #: thing — a real sentence filed against the wrong value or category.
     "quote_off_target",
+    #: A milestone the article only expects — "expected to begin operations",
+    #: "Target delivery H2 2026" — filed as though it had happened. Events only, and
+    #: the one reason `tracks.standing` refuses to count: a schedule whose date has
+    #: passed is still a schedule, and counting it made campuses read energised
+    #: that never drew power. Split from `quote_off_target`, which a track still
+    #: counts, because a milestone somebody reported without a clean sentence may
+    #: well have happened, and a forecast has not.
+    "forecast",
     #: Quoted, verified, and still not credible for this project: the `$/MW`
     #: ceiling, which fires on a programme-wide total quoted in an article about
     #: one campus.
