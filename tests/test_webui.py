@@ -5037,3 +5037,26 @@ def test_updates_say_what_was_emailed_and_when(reader, seeded_db):
     _status, after = as_reader(address, cookie, "/api/updates?days=36500")
     assert after["last_email"] is not None
     assert after["last_email"]["kind"] in ("updates", "quiet")
+
+
+def test_watch_for_still_answers_once_the_reader_has_been_emailed(reader, seeded_db):
+    """The page read the last email's time after its read session had closed, and
+    a read session rolls back on the way out, expiring the row: it answered 500 to
+    everyone the morning email had reached, and only to them."""
+    from tracker import notify
+    from tracker.db import open_db, session_scope
+
+    address, _console, cookie, _id = reader
+    as_reader(address, cookie, "/api/watch", "POST", {"action": "add", "entry": "Microsoft"})
+
+    class Recorder:
+        def send(self, *, to, subject, html_body, text_body, idempotency_key=None):
+            return "msg_1"
+
+    with session_scope(open_db(seeded_db, readonly=False)) as session:
+        notify.send_all(session, transport=Recorder(), sleep=lambda _s: None, force=True)
+
+    status, body = as_reader(address, cookie, "/api/watch-for")
+    assert status == 200, body
+    assert body["last_email"] is not None
+    assert body["projects"][0]["company"] == "Microsoft"

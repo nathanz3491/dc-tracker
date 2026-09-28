@@ -2476,7 +2476,10 @@ class Handler(BaseHTTPRequestHandler):
         with self.console.read_session() as session:
             payload = watchfor.report(session, account_id=account_id).as_json()
             last = notify.last_email(session, account_id) if account_id is not None else None
-        payload["last_email"] = last.prepared_at.isoformat() if last is not None else None
+            # Read inside the block. A read session rolls back on the way out, which
+            # expires every row it loaded, so `last.prepared_at` after it raised
+            # DetachedInstanceError — the page failed for anyone who had been emailed.
+            payload["last_email"] = last.prepared_at.isoformat() if last is not None else None
         self._json(payload)
 
     def _set_watch_all(self, account_id: int, value: bool) -> None:

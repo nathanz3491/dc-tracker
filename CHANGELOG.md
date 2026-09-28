@@ -12,6 +12,14 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **The Watch for page works for anyone the morning email has reached**
+  (`tracker/webui/server.py`, `tests/test_webui.py`). It read the time of the
+  reader's last email after its database session had closed, and a closed read
+  session has already emptied the rows it loaded, so the page answered "internal
+  error" — only for people who had been emailed, which is why it went unnoticed
+  until the first daily emails went out. It reads the time while the session is
+  open now.
+
 - **The sign-in page shows its own typefaces** (`tracker/webui/static/public/`).
   They never loaded: they were embedded in a form the console's own security policy
   refuses (`data:` URIs, against `font-src 'self'`), so the page showed Georgia and
