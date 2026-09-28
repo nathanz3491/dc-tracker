@@ -453,7 +453,14 @@ def run(
     return report
 
 
-__all__ = ["BackfillReport", "Candidate", "candidates", "run"]
+__all__ = [
+    "BackfillReport",
+    "Candidate",
+    "ForecastReport",
+    "candidates",
+    "demote_forecast_events",
+    "run",
+]
 
 
 # --- re-gating the claim envelope ------------------------------------------
@@ -888,3 +895,78 @@ def _was_read(source: Source, *, placeholder: str) -> bool:
         and source.source_type != "iso_queue"
         and not extractor.startswith(("derived:", "inferred:"))
     )
+
+
+# --- forecasts filed as milestones ---------------------------------------------
+
+
+@dataclass
+class ForecastReport:
+    """What re-checking stored milestones for forecast wording found."""
+
+    #: Completion milestones examined.
+    events: int = 0
+    #: (event_type, what it was before) -> milestones now filed as forecasts.
+    demoted: dict[tuple[str, str], int] = field(default_factory=dict)
+    #: A few of them, for the report: (project id, type, date, description).
+    examples: list[tuple[int, str, str, str]] = field(default_factory=list)
+    #: Projects whose progress tracks can move.
+    projects: set[int] = field(default_factory=set)
+
+    @property
+    def total(self) -> int:
+        return sum(self.demoted.values())
+
+    def as_rows(self) -> list[tuple[str, int]]:
+        return [
+            ("completion milestones read", self.events),
+            ("filed as forecasts", self.total),
+            ("projects whose tracks can move", len(self.projects)),
+        ]
+
+
+def demote_forecast_events(session: Session, *, apply: bool = False) -> ForecastReport:
+    """File as `forecast` every stored milestone that only says it is expected.
+
+    The same rule a fresh ingest applies (`crawl.description_is_forecast`, and the
+    tense check already recorded as `quote_off_target` on an event, which only that
+    check ever set) — so a row read before the rule existed is judged as one read
+    today would be. `tracks.standing` stops counting them; nothing is deleted, and
+    the description and date stay as the article's forecast. No LLM, no network.
+    """
+    from tracker.ingest.crawl import COMPLETION_EVENTS, description_is_forecast
+    from tracker.models import Event
+
+    report = ForecastReport()
+    rows = session.scalars(
+        select(Event).where(Event.event_type.in_(sorted(COMPLETION_EVENTS))).order_by(Event.id)
+    ).all()
+    for event in rows:
+        report.events += 1
+        if event.unconfirmed == "forecast":
+            continue
+        # `quote_off_target` on an event means the tense check refused its quote:
+        # no other gate sets it on this table.
+        forecast = event.unconfirmed == "quote_off_target" or description_is_forecast(
+            event.event_type, event.description
+        )
+        if not forecast:
+            continue
+        before = event.unconfirmed or "confirmed"
+        key = (event.event_type, before)
+        report.demoted[key] = report.demoted.get(key, 0) + 1
+        report.projects.add(event.project_id)
+        if len(report.examples) < 12:
+            report.examples.append(
+                (
+                    event.project_id,
+                    event.event_type,
+                    str(event.event_date or ""),
+                    (event.description or "")[:80],
+                )
+            )
+        if apply:
+            event.unconfirmed = "forecast"
+    if apply:
+        session.flush()
+    return report

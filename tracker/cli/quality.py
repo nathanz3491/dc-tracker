@@ -1239,6 +1239,44 @@ def _backfill_precision(*, apply: bool, dry_run: bool) -> None:
         console.print("\n[dim]Nothing written. `--apply` writes the precision.[/dim]")
 
 
+def _backfill_events(*, apply: bool, dry_run: bool) -> None:
+    """File forecast-worded milestones as forecasts. Reports before it writes.
+
+    A campus whose "energized" milestone was only ever expected read as energised
+    once the expected date passed. This applies the ingest rule to what is stored;
+    the tracks recompute on read, so nothing else needs to run afterwards.
+    """
+    from tracker.backfill import demote_forecast_events
+
+    writing = apply and not dry_run
+    engine = _writable("backfill events") if writing else _read_engine()
+    with _explain_db_locks(), session_scope(engine, commit=writing) as session:
+        report = demote_forecast_events(session, apply=writing)
+
+    if json_mode():
+        emit(
+            {
+                "events": report.events,
+                "demoted": [
+                    {"event_type": kind, "was": was, "count": n}
+                    for (kind, was), n in sorted(report.demoted.items())
+                ],
+                "projects": sorted(report.projects),
+                "applied": writing,
+            }
+        )
+        return
+
+    title = "backfill events" + ("" if writing else " (preview)")
+    _print_report_rows(report.as_rows(), title=title)
+    for (kind, was), count in sorted(report.demoted.items(), key=lambda kv: -kv[1]):
+        console.print(f"  {kind:<26} was {was:<18} {count:>5}")
+    for pid, kind, when, text in report.examples:
+        console.print(f"  [dim]#{pid} {kind} {when}: {escape(text)}[/dim]")
+    if not writing:
+        console.print("\n[dim]Nothing written. `--apply` files them as forecasts.[/dim]")
+
+
 def _backfill_urls(*, apply: bool, dry_run: bool) -> None:
     """Fold a row's second citation of one article, and unqueue articles already read.
 
@@ -1423,7 +1461,7 @@ def backfill(
     what: Annotated[
         str,
         typer.Argument(
-            help="`blocks`, `dates`, `derive`, `scope`, `basis`, `precision` or `urls`."
+            help="`blocks`, `dates`, `derive`, `scope`, `basis`, `precision`, `urls` or `events`."
         ),
     ] = "blocks",
     limit: Annotated[
@@ -1448,7 +1486,7 @@ def backfill(
     apply: Annotated[
         bool,
         typer.Option(
-            "--apply", help="`dates` only: write. Without it, reports and writes nothing."
+            "--apply", help="Write (every free job). Without it, reports and writes nothing."
         ),
     ] = False,
     all_urls: Annotated[
@@ -1481,6 +1519,9 @@ def backfill(
       "online in 2027" stops rendering as 1 January 2027. Free.
     * `urls` — fold a row's second citation of one article under another spelling
       of its URL, and take articles already read out of the retry pool. Free.
+    * `events` — file as forecasts the stored milestones that only say they are
+      expected ("expected to begin operations"), so no progress track counts them
+      as reached. The rule a fresh ingest applies. Free.
     * `blocks` — re-read stored articles to fill in capacity blocks. The default,
       and the only one that spends anything.
 
@@ -1557,10 +1598,17 @@ def backfill(
                 _fail(f"{name} applies to `backfill blocks` or `dates`, not to `urls`.")
         _backfill_urls(apply=apply, dry_run=dry_run)
         return
+    if what == "events":
+        # Free, like `urls`: a pure function of each stored milestone's own words.
+        for flag, name in ((refetch, "--refetch"), (force, "--force"), (all_urls, "--all")):
+            if flag:
+                _fail(f"{name} applies to `backfill blocks` or `dates`, not to `events`.")
+        _backfill_events(apply=apply, dry_run=dry_run)
+        return
     if what != "blocks":
         _fail(
             f"nothing to backfill called {what!r}. Expected `blocks`, `dates`, "
-            "`derive`, `scope`, `basis`, `precision` or `urls`."
+            "`derive`, `scope`, `basis`, `precision`, `urls` or `events`."
         )
 
     settings = get_settings()

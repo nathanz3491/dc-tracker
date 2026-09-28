@@ -943,10 +943,9 @@ def check_collisions(project: Project) -> list[Collision]:
         # drifted every night and were "repaired" straight back into the same value.
         expected = chosen
         if name == "phase":
-            from tracker.blocks import raise_phase, rollup
+            from tracker.blocks import phase_after_blocks
 
-            blocks = list(getattr(project, "blocks", ()) or ())
-            expected = raise_phase(chosen, rollup(blocks).phase if blocks else None)
+            expected = phase_after_blocks(chosen, list(getattr(project, "blocks", ()) or ()))
 
         out.append(
             Collision(

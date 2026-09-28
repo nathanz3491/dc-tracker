@@ -137,11 +137,15 @@ across 221 projects — energised before operational, 100 MW built against 32 MW
 planned, an expected-online date 944 days in the past on a project still marked
 under construction.
 
-One of them exists because of a quirk worth knowing: `tracks.standing` reads an
-event's *type* and never its date, so an `energized` dated next December counts as
-reached today and drags the whole power track with it. `milestone_in_the_future`
-reports that rather than fixing it, because changing what "reached" means would
-move every track strip in the product.
+A milestone only counts as reached when it has happened. `tracks.standing` leaves
+out one dated in the future — an `energized` next December is a schedule — and one
+filed as a **forecast**, whatever its date: "Switch Round Rock expected to begin
+operations", recorded as `energized` for late 2024, read as a finished energisation
+once 2024 had passed. The event gate files forward-looking wording as `forecast`,
+from the quote and from the milestone's own description, and `tracker backfill
+events` applies the same rule to milestones read before it existed (free; a preview
+until `--apply`). `milestone_in_the_future` still reports future-dated milestones,
+since a row that holds one is worth a look.
 
 Two of them ask a narrower question than the rest: not whether the row's fields
 agree with each other, but whether a stored **number** agrees with the citations

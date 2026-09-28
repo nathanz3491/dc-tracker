@@ -1384,9 +1384,15 @@ def _events(raw: dict[str, Any], article_text: str, url: str) -> list[EventRecor
                     "event quote for %s describes a plan rather than an event; keeping it as 待确认",
                     event_type,
                 )
-                unconfirmed = "quote_off_target"
+                unconfirmed = "forecast"
             else:
                 quote = recovered.text[:500]
+        # The model's own description can say it plainly when the quote does not:
+        # "Switch Round Rock expected to begin operations" over "Estimates … to begin
+        # operations range from late 2024 into 2025". Checked whatever the quote said,
+        # because a forecast with a clean sentence is still a forecast.
+        if unconfirmed != "forecast" and description_is_forecast(event_type, description):
+            unconfirmed, quote = "forecast", None
 
         events.append(
             EventRecord(when, event_type, description, url, quote=quote, unconfirmed=unconfirmed)
@@ -1434,7 +1440,72 @@ _PLANNED_WORDING: Final[tuple[str, ...]] = (
     "upon completion",
     "would be",
     "could be",
+    # Found missing on Switch's The Rock (#44): "Estimates for Switch in Round Rock
+    # … to begin operations range from late 2024 into 2025", filed as `energized`.
+    "estimates for",
+    "estimated to",
+    "expected online",
+    "expected operational",
+    "anticipated to",
+    "projected to",
+    "slated to",
+    "slated for",
+    "could start",
+    "could begin",
 )
+
+#: Milestones that are something done in the world — a building energised, ground
+#: broken, a permit granted — so a forecast of one is not one. `announced`,
+#: `expanded` and `permit_filed` are statements of intent by nature ("unveiled
+#: plans"), and `delayed` is derived, so none of them is checked.
+COMPLETION_EVENTS: Final[frozenset[str]] = frozenset(
+    {
+        "land_acquired",
+        "permit_approved",
+        "interconnection_agreement",
+        "site_work",
+        "groundbreaking",
+        "equipment_install",
+        "energized",
+        "first_customer",
+    }
+)
+
+#: Forward-looking wording in the model's own one-line description of a milestone.
+_FORECAST_DESCRIPTION: Final = re.compile(
+    r"\b(expect(?:s|ed)?|estimat(?:e|es|ed)|anticipat(?:e|es|ed)|projected|scheduled|"
+    r"slated|target(?:s|ed)?|set to|due to|plan(?:s|ned)? (?:to|for)|will|could|would)\b",
+    re.IGNORECASE,
+)
+
+#: Wording that says it happened, which outranks forecast wording beside it:
+#: "Construction began on Phase I, two buildings with 200MW planned for 2026".
+_HAPPENED: Final = re.compile(
+    r"\b(began|begun|broke|broken|opened|completed|finished|energi[sz]ed|went live|"
+    r"came online|started|delivered|commissioned|signed|acquired|closed|approved|"
+    r"granted|installed|topped out|already)\b",
+    re.IGNORECASE,
+)
+
+#: "expected to be approved", "set to begin": an infinitive is the thing expected,
+#: so its verb is not evidence the milestone happened.
+_INFINITIVE: Final = re.compile(r"\bto (?:be |have )?\w+", re.IGNORECASE)
+
+
+def description_is_forecast(event_type: str, description: str | None) -> bool:
+    """Whether a milestone's own description says it has not happened yet.
+
+    Only for `COMPLETION_EVENTS`. Forward-looking wording counts unless the
+    description also says the thing happened, outside an infinitive: "Project
+    expected to be operational" is a forecast; "Construction began on Phase I, with
+    200 MW planned" is not. Pure, so `backfill events` applies exactly the rule a
+    fresh ingest does.
+    """
+    if event_type not in COMPLETION_EVENTS or not description:
+        return False
+    if not _FORECAST_DESCRIPTION.search(description):
+        return False
+    return not _HAPPENED.search(_INFINITIVE.sub(" ", description))
 
 
 def _event_quote_supports(event_type: str, quote: str) -> bool:

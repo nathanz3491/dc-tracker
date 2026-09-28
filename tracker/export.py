@@ -397,6 +397,8 @@ def _provenance_json(project: Project) -> tuple[dict[str, str], dict[str, Any]]:
             "source_url": result.source_url,
             "source_index": result.source_index,
         }
+        if result.via:
+            prov_out[field]["via"] = result.via
         # The claim envelope, only when it says something. Emitted inside `prov`
         # rather than as a sibling map because the axes qualify the value the way
         # the quote does, and every consumer that wants one wants the other —
@@ -513,6 +515,14 @@ def _claims_json(project: Project) -> dict[str, Any]:
             "stored_unsupported": stored is not None and not winner_seen,
         }
 
+        # The row can hold something other than what the claims resolve to — a
+        # campus phase its named buildings lifted after the merge. Said here, so the
+        # panel never marks one claim "kept" beside a different stored value without
+        # saying why the two differ.
+        if stored is not None and chosen is not None and not _same_value(stored, chosen):
+            envelope["stored_differs"] = True
+            envelope["claims_say"] = chosen
+
         confirmed = [c for c in claims if c.confirmed] or claims
         rival = next(
             (c for c in confirmed[1:] if values_conflict(confirmed[0].value, c.value)), None
@@ -523,6 +533,15 @@ def _claims_json(project: Project) -> dict[str, Any]:
             )
             envelope["decided_by"] = code
             envelope["why"] = why
+        elif len(confirmed) < len(claims):
+            # No rival among the quoted claims, but unquoted ones that disagree are
+            # not "different scopes" — they were left out for having no usable
+            # quote. The panel said the first when it meant the second.
+            envelope["unquoted_rivals"] = sum(
+                1
+                for c in claims
+                if not c.confirmed and values_conflict(confirmed[0].value, c.value)
+            )
         out[field] = envelope
     return out
 
