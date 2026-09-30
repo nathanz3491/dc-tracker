@@ -1,8 +1,9 @@
-"""The reserve: OpenCode Go, used only once DeepSeek says the balance is empty.
+"""The reserve: OpenCode Go, used when DeepSeek cannot pay.
 
 An empty balance used to end a night where it happened — every later call failed
 the same way, and a loop that had spent half its budget stopped with half its work
-undone. The properties, in the order a mistake would cost:
+undone. The properties, in the order a mistake would cost (the first group under the
+old `reserve_when=empty` rule, which conftest sets; the balance check at the end):
 
 * nothing goes to the reserve until DeepSeek answers 402 — no other error moves it;
 * with no reserve configured, a 402 fails as before, and says what to do;
@@ -182,3 +183,95 @@ def test_a_stream_moves_before_anything_is_shown(settings):
         respx.post(RESERVE).respond(200, text=body, headers={"Content-Type": "text/event-stream"})
         text = "".join(llm.DeepSeekExtractor(settings).stream(system="s", user="u"))
     assert text == "Hello"
+
+
+# --- starting on the reserve, rather than failing onto it ----------------------------
+
+BALANCE = "https://api.deepseek.com/user/balance"
+
+
+def _balance(amount: str, *, available: bool = True) -> dict:
+    return {
+        "is_available": available,
+        "balance_infos": [{"currency": "CNY", "total_balance": amount}],
+    }
+
+
+@pytest.fixture
+def low_balance_rule(settings, monkeypatch):
+    from tracker.config import get_settings
+
+    monkeypatch.setenv("TRACKER_RESERVE_WHEN", "low_balance")
+    get_settings.cache_clear()
+    yield get_settings()
+    get_settings.cache_clear()
+
+
+def test_a_balance_too_low_to_pay_starts_the_run_on_the_reserve(low_balance_rule):
+    """Every command of a night used to open with a refused request. One free
+    question to the balance endpoint, once a process, and DeepSeek is never asked."""
+    from tracker import llm
+
+    with respx.mock:
+        balance = respx.get(BALANCE).respond(200, json=_balance("0.73"))
+        deepseek = respx.post(DEEPSEEK).respond(200, json=_reply("deepseek-flash"))
+        reserve = respx.post(RESERVE).respond(200, json=_reply("deepseek-v4.1-flash", "ok"))
+        extractor = llm.DeepSeekExtractor(low_balance_rule)
+        extractor.complete(system="s", user="u")
+        extractor.complete(system="s", user="u")
+    assert balance.call_count == 1, "asked once a process, not once a call"
+    assert deepseek.call_count == 0 and reserve.call_count == 2
+    assert extractor.provider == "opencode-go (reserve)"
+
+
+def test_a_balance_that_can_pay_stays_on_deepseek(low_balance_rule):
+    from tracker import llm
+
+    with respx.mock:
+        respx.get(BALANCE).respond(200, json=_balance("25.00"))
+        deepseek = respx.post(DEEPSEEK).respond(200, json=_reply("deepseek-flash"))
+        reserve = respx.post(RESERVE).respond(200, json=_reply("deepseek-v4.1-flash"))
+        llm.DeepSeekExtractor(low_balance_rule).complete(system="s", user="u")
+    assert deepseek.call_count == 1 and reserve.call_count == 0
+
+
+def test_an_unreadable_balance_changes_nothing_and_a_402_still_moves(low_balance_rule):
+    from tracker import llm
+
+    with respx.mock:
+        respx.get(BALANCE).respond(500, text="down")
+        deepseek = respx.post(DEEPSEEK).respond(402, json=EMPTY)
+        reserve = respx.post(RESERVE).respond(200, json=_reply("deepseek-v4.1-flash", "ok"))
+        reply = llm.DeepSeekExtractor(low_balance_rule).complete(system="s", user="u")
+    assert reply.text == "ok" and deepseek.call_count == 1 and reserve.call_count == 1
+
+
+def test_always_sends_every_call_to_the_reserve_without_asking(settings, monkeypatch):
+    from tracker import llm
+    from tracker.config import get_settings
+
+    monkeypatch.setenv("TRACKER_RESERVE_WHEN", "always")
+    get_settings.cache_clear()
+    with respx.mock:
+        reserve = respx.post(RESERVE).respond(200, json=_reply("deepseek-v4.1-flash"))
+        llm.DeepSeekExtractor(get_settings()).complete(system="s", user="u")
+    assert reserve.call_count == 1, "no balance request and no DeepSeek request were mocked"
+
+
+def test_a_run_the_reserve_will_answer_is_not_held_for_deepseeks_peak_hours(
+    low_balance_rule, monkeypatch
+):
+    """The guard exists for DeepSeek's double price; a run on the reserve does not pay it."""
+    import datetime as dt
+
+    from tracker import llm, spend
+
+    llm.arm_peak_guard()
+    try:
+        peak = dt.datetime(2026, 9, 30, 15, 0, tzinfo=spend.BEIJING)
+        with respx.mock:
+            respx.get(BALANCE).respond(200, json=_balance("0.10"))
+            llm.check_peak(low_balance_rule.model_copy(update={"peak_guard": "refuse"}), now=peak)
+        assert llm._ON_RESERVE.is_set()
+    finally:
+        llm._PEAK_GUARD.clear()

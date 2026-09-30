@@ -95,6 +95,12 @@ INSUFFICIENT_BALANCE = 402
 #: asks DeepSeek once, so the first command after a top-up is back on it.
 _ON_RESERVE = threading.Event()
 
+#: Set once this process has asked DeepSeek's balance endpoint whether it can pay
+#: (`Settings.reserve_when = "low_balance"`), so the question is asked once per
+#: `tracker` command, not once per call. See `choose_route`.
+_ROUTE_CHOSEN = threading.Event()
+_ROUTE_LOCK = threading.Lock()
+
 #: What OpenCode Go asks of every client, and refuses a request without (HTTP 400,
 #: `MissingSessionID`): a stable session ID per conversation, which it routes and
 #: caches by, and a user agent naming the client rather than the HTTP library.
@@ -282,6 +288,12 @@ def check_peak(settings: Settings, *, now: Any = None) -> None:
     when = now or dt.datetime.now(dt.UTC)
     if not spend.is_peak(when):
         return
+    # DeepSeek's peak price is the reason for the guard, so a run the reserve will
+    # answer has nothing to wait for. Asked only here, at peak, so an ordinary start
+    # makes no extra request.
+    choose_route(settings)
+    if settings.has_reserve_key() and (settings.reserve_when == "always" or _ON_RESERVE.is_set()):
+        return
     resume = spend.next_off_peak(when).strftime("%H:%M")
     if settings.peak_guard == "warn":
         if not _PEAK_WARNED.is_set():
@@ -294,6 +306,81 @@ def check_peak(settings: Settings, *, now: Any = None) -> None:
         f"{resume}, or prefix it with TRACKER_PEAK_GUARD=off to pay the peak rate "
         "deliberately. `--llm-provider ollama` is never refused."
     )
+
+
+# --- starting on the reserve --------------------------------------------------
+#
+# The reserve used to be reached only by failing: every `tracker` command asked
+# DeepSeek first and moved to OpenCode Go when DeepSeek answered 402. A night is
+# twenty-odd commands, so an empty balance meant twenty-odd refused requests before
+# any work, each logged as an error, and a balance of ¥0.73 is not empty — it
+# answers until it runs out part-way through a command. So by default a process asks
+# DeepSeek's balance endpoint once, which costs nothing, and starts on the reserve
+# when the balance is below `Settings.deepseek_min_balance`. A 402 still moves it,
+# as before, for a balance that runs out mid-run.
+
+
+def deepseek_balance(settings: Settings) -> tuple[bool, float] | None:
+    """`(is_available, balance)` from DeepSeek's balance endpoint, or None if unreadable.
+
+    The endpoint is free. The balance is the CNY entry when there is one, else the
+    first currency listed. Any failure — network, an unexpected shape — is None, and
+    the caller carries on as though it had not asked: the 402 fallback still works.
+    """
+    if not settings.has_api_key():
+        return None
+    try:
+        response = api_client(20.0).get(
+            settings.deepseek_base_url.rstrip("/") + "/user/balance",
+            headers={"Authorization": f"Bearer {settings.deepseek_api_key.get_secret_value()}"},
+        )
+        response.raise_for_status()
+        data = response.json()
+        infos = data.get("balance_infos") or []
+        chosen = next((b for b in infos if b.get("currency") == "CNY"), infos[0] if infos else {})
+        return bool(data.get("is_available")), float(chosen.get("total_balance") or 0)
+    except Exception as exc:  # best effort by design: see the docstring
+        log.debug("could not read the DeepSeek balance: %s", exc)
+        return None
+
+
+def choose_route(settings: Settings) -> None:
+    """Start this process on the reserve when DeepSeek cannot pay for it. Once a process.
+
+    Only when a reserve is configured and `Settings.reserve_when` is `low_balance`.
+    `always` needs no question, and `empty` is the old rule: DeepSeek until a 402.
+    """
+    if _ROUTE_CHOSEN.is_set():
+        return
+    with _ROUTE_LOCK:
+        if _ROUTE_CHOSEN.is_set():
+            return
+        try:
+            _decide_route(settings)
+        finally:
+            # Only once the answer is in: set any earlier and a second worker thread
+            # takes the fast path above and asks DeepSeek while this one is waiting on
+            # the balance endpoint.
+            _ROUTE_CHOSEN.set()
+
+
+def _decide_route(settings: Settings) -> None:
+    if settings.reserve_when != "low_balance" or not settings.has_reserve_key():
+        return
+    balance = deepseek_balance(settings)
+    if balance is None:
+        return
+    available, amount = balance
+    if available and amount >= settings.deepseek_min_balance:
+        return
+    log.warning(
+        "DeepSeek's balance is %.2f (floor %.2f)%s; this run uses OpenCode Go (%s) from the start",
+        amount,
+        settings.deepseek_min_balance,
+        "" if available else ", and DeepSeek says it is not available",
+        settings.opencode_go_model,
+    )
+    _ON_RESERVE.set()
 
 
 @dataclass(frozen=True)
@@ -816,7 +903,9 @@ class DeepSeekExtractor:
 
     @property
     def on_reserve(self) -> bool:
-        return _ON_RESERVE.is_set() and self.settings.has_reserve_key()
+        if not self.settings.has_reserve_key():
+            return False
+        return self.settings.reserve_when == "always" or _ON_RESERVE.is_set()
 
     @property
     def provider(self) -> str:
@@ -824,6 +913,7 @@ class DeepSeekExtractor:
 
     def _route(self, payload: dict[str, Any]) -> tuple[str, dict[str, str], dict[str, Any]]:
         """`(endpoint, headers, body)` for whichever provider answers now."""
+        choose_route(self.settings)
         if self.on_reserve:
             from tracker import __version__
 
@@ -1554,6 +1644,8 @@ __all__ = [
     "arm_peak_guard",
     "build_extractor",
     "check_peak",
+    "choose_route",
+    "deepseek_balance",
     "default_extractor",
     "fast_extractor",
     "judgement_extractor",

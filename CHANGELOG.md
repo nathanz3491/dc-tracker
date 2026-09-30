@@ -12,6 +12,17 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **A run starts on the OpenCode Go reserve when DeepSeek cannot pay, instead of
+  failing onto it** (`tracker/llm.py`, `tracker/config.py`, `scripts/probe_effort.py`,
+  `docs/ingesting.md`, `tests/test_llm_reserve.py`). The reserve was reached only by a
+  refused request: every command asked DeepSeek first and moved on its 402, so on an
+  empty balance each command of a night began with a failure, and a low balance
+  answered until it ran out part-way through. Each command now asks DeepSeek's free
+  balance endpoint once and starts on Go below `TRACKER_DEEPSEEK_MIN_BALANCE` (¥1); a
+  402 mid-command still moves it. `TRACKER_RESERVE_WHEN` picks the rule (`empty` is the
+  old one, `always` sends everything to Go). A run Go will answer is not held for
+  DeepSeek's peak hours. `probe_effort.py --route` measures the effort dial on each.
+
 - **The nightly loop no longer pays to re-read articles that have not changed**
   (`tracker/ingest/enrich.py`, `tracker/ingest/crawl.py`, `tracker/cli/enrich.py`,
   `docs/workflows/enrich.md`, `tests/test_enrich.py`). Enrich put every article it

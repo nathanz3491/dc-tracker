@@ -239,10 +239,16 @@ def _fast_and_keyless_settings(monkeypatch, tmp_path_factory):
     from tracker import llm
 
     llm._ON_RESERVE.clear()
+    llm._ROUTE_CHOSEN.clear()
+    # And the old reserve rule, DeepSeek until a 402: the default asks DeepSeek's
+    # balance endpoint first, a request no test mocking one completion expects. The
+    # tests about that check set it themselves.
+    monkeypatch.setenv("TRACKER_RESERVE_WHEN", "empty")
 
     get_settings.cache_clear()
     yield
     llm._ON_RESERVE.clear()
+    llm._ROUTE_CHOSEN.clear()
     get_settings.cache_clear()
     home.cache_clear()
 

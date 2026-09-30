@@ -278,10 +278,11 @@ class Settings(BaseSettings):
     peak_guard: Literal["refuse", "warn", "off"] = "refuse"
 
     # --- The reserve: OpenCode Go -----------------------------------------
-    #: A second provider, used **only once DeepSeek answers that the balance is
-    #: empty** (HTTP 402), never in place of it. An empty balance used to end the
-    #: night where it happened: every later call failed the same way, and a loop
-    #: that had spent half its budget stopped with half its work undone.
+    #: A second provider, used **when DeepSeek cannot pay**: a balance below
+    #: :data:`deepseek_min_balance` when a command starts, or a 402 part-way through
+    #: (see :data:`reserve_when`). An empty balance used to end the night where it
+    #: happened: every later call failed the same way, and a loop that had spent half
+    #: its budget stopped with half its work undone.
     #:
     #: OpenCode Go serves the same DeepSeek models through the same OpenAI-style
     #: API, so nothing about a request changes but the address, the key and the
@@ -297,6 +298,22 @@ class Settings(BaseSettings):
     #: reasoning effort, not by model, so one name covers them. The 4.1 flash model
     #: rather than 4: same price, and twice the monthly ceiling on Go.
     opencode_go_model: str = "deepseek-v4.1-flash"
+
+    #: When a run goes to the reserve, given one is configured.
+    #:
+    #: `low_balance` (the default): each command asks DeepSeek's balance endpoint
+    #: once — it is free — and starts on the reserve when the balance is below
+    #: :data:`deepseek_min_balance` or DeepSeek says the account cannot be used. A 402
+    #: part-way through still moves it. `empty` is the old rule, DeepSeek until it
+    #: answers 402, which meant every command of a night on an empty balance began
+    #: with a refused request. `always` sends every call to the reserve.
+    reserve_when: Literal["low_balance", "empty", "always"] = "low_balance"
+
+    #: The DeepSeek balance, in the account's currency (CNY), below which a command
+    #: starts on the reserve. ¥1 is a handful of calls; a night of the overnight loop
+    #: is capped at ¥12 (`overnight.sh --cny`), so a balance under that runs out
+    #: mid-night and the rest goes to the reserve by the 402 path.
+    deepseek_min_balance: float = Field(default=1.0, ge=0.0)
 
     #: Model for the drawer's written briefing — the one call a person waits for.
     #:

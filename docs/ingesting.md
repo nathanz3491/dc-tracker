@@ -39,12 +39,20 @@ spend a run's worth of fetches.
 TRACKER_OPENCODE_GO_API_KEY=your-opencode-go-key
 ```
 
-When DeepSeek answers that the balance is empty (HTTP 402), the call is sent
-again to [OpenCode Go](https://opencode.ai/docs/go/), which serves the same
-DeepSeek models through the same kind of API, and the rest of that command stays
-there. Nothing else moves it: a rate limit or a server error is retried on DeepSeek
-as before. Each new command asks DeepSeek first, so topping up takes effect by
-itself, with no setting to flip back.
+[OpenCode Go](https://opencode.ai/docs/go/) serves the same DeepSeek models through
+the same kind of API. **Each command asks DeepSeek's balance endpoint once** — it is
+free — and starts on Go when the balance is below `TRACKER_DEEPSEEK_MIN_BALANCE`
+(default ¥1) or DeepSeek says the account cannot be used. It used to go there only
+after DeepSeek refused a call with HTTP 402, so on an empty balance every command of
+a night opened with a failed request, and a balance of ¥0.73 is not empty: it
+answers until it runs out part-way through. A 402 still moves a command that runs
+out mid-way, for the rest of that command; a rate limit or a server error is retried
+on DeepSeek as before. Each new command asks again, so topping up takes effect by
+itself, with no setting to flip back. `TRACKER_RESERVE_WHEN=empty` restores the old
+rule, and `always` sends every call to Go.
+
+A run the reserve will answer is not held back by the peak-hours guard below: the
+guard is there for DeepSeek's double price, which a call to Go does not pay.
 
 Without a reserve, an empty balance ends a night where it happens: every call
 after it fails the same way, and the loop stops with the rest of its work undone.
