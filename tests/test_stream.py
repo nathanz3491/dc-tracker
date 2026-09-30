@@ -8,6 +8,8 @@ would justify it has finished arriving.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from tracker import overview
@@ -326,15 +328,39 @@ def test_reasoning_off_and_an_effort_cannot_disagree():
     settings = Settings(deepseek_api_key="test-key")
     off = DeepSeekExtractor(settings)
     assert off.thinking is False
-    assert off._payload(system="s", user="u", max_tokens=8, stream=False)["thinking"] == {
-        "type": "disabled"
-    }
+    payload = off._payload(system="s", user="u", max_tokens=8, stream=False)
+    assert payload["thinking"] == {"type": "disabled"}
+    assert "reasoning_effort" not in payload
     on = DeepSeekExtractor(settings, effort="max")
     assert on.thinking is True
-    assert on._payload(system="s", user="u", max_tokens=8, stream=False)["thinking"] == {
-        "type": "enabled",
-        "reasoning_effort": "max",
+    payload = on._payload(system="s", user="u", max_tokens=8, stream=False)
+    assert payload["thinking"] == {"type": "enabled"}
+    assert payload["reasoning_effort"] == "max"
+
+
+def test_the_effort_is_a_top_level_field_on_both_request_paths():
+    """Where DeepSeek's thinking-mode guide puts it: beside `model`, not inside
+    `thinking`. It was sent inside `thinking`, where nothing checked the API read it,
+    so every tier may have been answering at the provider's default effort — and the
+    reply is most of the bill."""
+    import respx
+
+    from tracker.config import Settings
+    from tracker.llm import DeepSeekExtractor
+
+    extractor = DeepSeekExtractor(Settings(deepseek_api_key="test-key"), effort="low")
+    reply = {
+        "choices": [{"message": {"content": "{}"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1},
     }
+    with respx.mock:
+        route = respx.post("https://api.deepseek.com/chat/completions").respond(200, json=reply)
+        extractor.complete(system="s", user="u")
+        extractor.converse(system="s", messages=[{"role": "user", "content": "u"}], tools=[])
+    for call in route.calls:
+        body = json.loads(call.request.content)
+        assert body["reasoning_effort"] == "low"
+        assert body["thinking"] == {"type": "enabled"}
 
 
 def test_a_typo_in_the_effort_setting_fails_at_config_time():

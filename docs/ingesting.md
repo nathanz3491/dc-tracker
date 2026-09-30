@@ -118,6 +118,40 @@ DeepSeek. A local 27B is capable of them, but nobody has measured its
 extraction accuracy here — run a few articles with `--llm-provider ollama
 --dry-run` and read what comes back before pointing a whole `sync --full` at it.
 
+**One tier can go local on its own.** `TRACKER_JUDGEMENT_PROVIDER=ollama` sends only
+the per-item judgements — `risks confirm`, `audit resolve`, `logic conflicts`,
+enrich's settle step — to the local model, and leaves extraction and the agents on
+the API. Each of those is a pick from a short closed menu against evidence already
+in the prompt, the least demanding question the tool asks, so it is where a free
+model is worth trying first. `scripts/overnight.sh --local-judgement` sets it for one
+night. The model has to be pulled first (`ollama pull`, the tag in
+`TRACKER_OLLAMA_MODEL`), and the same caveat applies: read a night's rulings.
+
+## What a call costs, and when it costs double
+
+DeepSeek bills three things at three prices: prompt tokens it served from its
+cache, prompt tokens it did not, and the reply. For the flash model, off-peak, per
+million: ¥0.02, ¥1 and ¥4. The reply — which includes the model's reasoning — is
+about 93% of what a night costs. `tracker/spend.py` holds the table and prices a
+spend ledger line by line; update it there when the pricing page changes.
+
+Between 09:00 and 12:00 and 14:00 and 18:00 Beijing time, Monday to Friday, every
+price doubles. **A command that spends will not start in those hours**: building a
+DeepSeek extractor then is refused the way a missing key is, before anything has
+been fetched or paid for. Measured before the guard: five runs started by hand on
+2026-09-25 cost ¥18 for what would have been ¥9 in the evening. `TRACKER_PEAK_GUARD=off`
+in front of a command pays the peak rate deliberately, and `warn` logs and carries
+on; `--llm-provider ollama` is never refused, and neither is the console. Chinese
+statutory holidays are off-peak all day and are not modelled, so a holiday weekday
+is refused too.
+
+The reasoning dial is the other lever. The effort each tier asks for is sent as
+DeepSeek's top-level `reasoning_effort` field; it used to be sent inside the
+`thinking` object, where the API may never have read it. `python
+scripts/probe_effort.py` asks the same small question at `low` and `high` and prints
+what each reply spent — a few calls, well under ¥0.05 — which is the evidence for or
+against moving a tier to `low`.
+
 ## One command for the whole loop
 
 ```bash

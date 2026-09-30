@@ -51,7 +51,11 @@ silently favour whichever phase ran first.
 * `--enrich` buys **depth** on rows that already exist. Its agent pass — the
   ~77,000-token rung after the harvest — sees only the rows the harvest actually
   reached, as in `tracker enrich`; it was handed every chosen row, so even
-  `--enrich-budget 0`, which reaches none, paid for a model call on each.
+  `--enrich-budget 0`, which reaches none, paid for a model call on each. It shares
+  enrich's savings: a page unchanged since its last read under the same prompt is
+  not sent again (the rule the refresh phase below applies), an article is read for
+  the row being enriched only, and a row with no fillable field left empty is not
+  chosen. See [enrich](enrich.md#what-a-read-costs-and-what-is-not-read-again).
 
 ## What search looks for, and why it is not a model's idea
 

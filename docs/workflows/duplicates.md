@@ -130,6 +130,12 @@ answers "what was already ruled out" instead of only "different sites".
 | `--ask` at a terminal | a person, trusted for a merge without the confidence floor | `operator` |
 | `--no-agent` | the older one-call path, shown two rows and nothing else | `model (0.87)` |
 
+The agent reads at most eight articles and runs four searches a pair
+(`agent.TOOL_LIMITS`), is told with two turns left to answer — `leave_alone` when it
+cannot tell, which the declines ledger remembers — and retries a turn cut off
+mid-reasoning with reasoning off. Running out of steps used to throw the whole run
+away, and a pair left that way was asked again next round.
+
 `--ask` suppresses the agent: paying for a run whose answer is then overridden at
 the keyboard buys nothing. `--no-llm` suppresses it too — the agent *is* a model, so
 "no model" has to mean no model, or `--no-llm --no-ask` would spend calls instead of
@@ -244,6 +250,7 @@ Touching any of these means the poster is in scope. Re-render with
 | Scoring a change to any of it | `scripts/eval_pairs.py`; `docs/duplicate-shapes.md` |
 | The question all three judges are asked | `tracker/triage.py` — `CONTRADICTIONS`, `PAIR_SYSTEM`, `PAIR_SYSTEM_BASE`; `tracker/prompts/duplicates-resolve-v3.txt` |
 | The agent path | `tracker/triage.py` — `resolve_pairs`, `pair_triage`, `pair_verdict_tools`, `_checked`, `pair_subject`, `pair_evidence` |
+| What one agent run may spend | `tracker/agent.py` — `run`, `TOOL_LIMITS`, `WRAP_UP_TURNS`; `tracker/llm.py` — `without_thinking` |
 | Not asking the same pair twice | `tracker/declines.py` — `split`, `record`, `holds`, `citations`, `COOLDOWN_DAYS`; migration `0025_model_decline` |
 | The merge itself | `tracker/merge.py` — `merge_projects`, `_move_events`, `_move_risks`; `tracker/upsert.py` — `fold_source` |
 | Prevention at write time | `tracker/gatekeeper.py` — `same_site_arbiter`, `_warm_verdict`, `_cold_verdict`, `_rejection`, `RULES`; `tracker/ingest/crawl.py` — `ExtractionContext` |

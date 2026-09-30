@@ -44,7 +44,7 @@ from sqlalchemy.orm import Session
 from tracker import attempts
 from tracker.config import Settings, get_settings
 from tracker.gaps import FILLED, NOT_APPLICABLE, FieldState, for_project
-from tracker.llm import LLMUnavailable
+from tracker.llm import LLMUnavailable, spend_stage
 from tracker.llm import judgement_extractor as _judgement_extractor
 from tracker.models import IngestUrl, Project, Source
 from tracker.vocab import TRACKED_FIELDS
@@ -102,7 +102,11 @@ class Round:
 
     number: int
     harvests: list[Harvest] = dc_field(default_factory=list)
+    #: Pages actually put to the model.
     articles_read: int = 0
+    #: Pages harvested but not sent: they hash the same as their last read under
+    #: this prompt. See `run(reread=)`.
+    unchanged: int = 0
     fields_filled: tuple[str, ...] = ()
 
     @property
@@ -153,10 +157,17 @@ class EnrichReport:
     #: nothing to say about a value it deliberately declined to move.
     refused: list[str] = dc_field(default_factory=list)
     settle_calls: int = 0
+    #: Disputes not asked because the same question, on the same claims, was
+    #: refused before. See `_settle`.
+    settle_held: int = 0
 
     @property
     def articles_read(self) -> int:
         return sum(r.articles_read for r in self.rounds)
+
+    @property
+    def articles_unchanged(self) -> int:
+        return sum(r.unchanged for r in self.rounds)
 
     @property
     def gained(self) -> tuple[str, ...]:
@@ -415,13 +426,17 @@ def harvest_search(
         QuotaExhausted,
         SearchError,
         build_provider,
+        cached,
         is_useful_host,
         provider_name,
     )
 
     if provider is None:
         try:
-            provider = build_provider(settings)
+            # `memo` remembers a query for one run; the on-disk cache for a week,
+            # because each overnight round is a new process and asked every query
+            # again — 487 of them on one night. An injected provider is left bare.
+            provider = cached(build_provider(settings), settings)
         except SearchError as exc:
             # Not configured is not a failure: every other harvester still runs.
             # The full message is kept rather than a one-line summary, because it
@@ -527,9 +542,15 @@ def _settle(
     **It does not re-ask a settled field, and needs no bookkeeping to avoid it.**
     Applying an answer marks the losing claims `superseded`, which demotes them out
     of `confirmed` — and a dispute requires two *quote-backed* claims. So a settled
-    field stops being contested, and the next run does not see it. The one case
-    that recurs is a refusal, which writes nothing by design; asking again is the
-    right behaviour there, because the sources have usually changed by then.
+    field stops being contested, and the next run does not see it.
+
+    **A refusal is remembered, keyed on the claims it was shown** (`tracker.declines`,
+    kind `settle`). It writes nothing to the row, so without a record the same
+    question came back every round — the overnight loop re-selected the same fifteen
+    rows each time and re-asked every dispute they carried. A new claim, a superseded
+    one or a re-read that changes a quote is a different question and is asked; so is
+    anything after the cooldown. An unusable reply is remembered the same way; a
+    provider failure is not, because it says nothing about the question.
 
     **It writes**, unlike `tracker logic conflicts`, which proposes. That is the
     command's nature rather than an inconsistency: `enrich` exists to change the
@@ -547,10 +568,16 @@ def _settle(
     it open was also a lock: the next field's question is a model call, and it ran
     with the last answer's writes still holding SQLite's single write lock.
     """
-    from tracker import conflicts
+    from tracker import conflicts, declines
 
+    known = declines.load(session, "settle")
     for dispute in conflicts.disputes(project):
-        outcome = conflicts.solve(dispute, extractor=extractor)
+        subject, print_ = settle_key(dispute)
+        if declines.holds(known, subject, print_):
+            report.settle_held += 1
+            continue
+        with spend_stage("settle"):
+            outcome = conflicts.solve(dispute, extractor=extractor)
         report.settle_calls += outcome.calls
         if outcome.verdict == "resolved" and outcome.chosen is not None:
             report.settled.append(
@@ -558,11 +585,35 @@ def _settle(
             )
             if not dry_run:
                 conflicts.apply_outcome(session, project, outcome)
+                declines.forget(session, "settle", subject)
                 session.commit()
-        elif outcome.verdict == "refused":
+            continue
+        if outcome.verdict == "refused":
             report.refused.append(f"{dispute.field}: {outcome.reason}")
         else:
             log.warning("settle failed on #%d %s: %s", project.id, dispute.field, outcome.reason)
+        if not dry_run and (outcome.verdict == "refused" or outcome.calls):
+            # `calls` is zero only when the request itself failed, which is about the
+            # provider rather than the question and must not hold it back.
+            declines.record(
+                session,
+                "settle",
+                subject,
+                print_,
+                outcome="refused" if outcome.verdict == "refused" else "unusable",
+                reason=outcome.reason,
+                by="model",
+            )
+            session.commit()
+
+
+def settle_key(dispute: object) -> tuple[str, str]:
+    """`(subject, fingerprint)` for one dispute: the row and field, and what was shown."""
+    from tracker import declines
+
+    subject = f"{dispute.project_id}:{dispute.field}"
+    shown = [option.render() for option in dispute.options]
+    return subject, declines.fingerprint(dispute.field, dispute.stored, shown)
 
 
 def run(
@@ -588,8 +639,15 @@ def run(
     want_fields: tuple[str, ...] | None = None,
     max_attempts: int = 0,
     budget: int | None = None,
+    reread: bool = False,
+    focus: bool = True,
 ) -> EnrichReport:
     """Recruit every method against one project until rounds stop paying.
+
+    `reread` sends every harvested page to the model, including one whose text has
+    not changed since it was last read under the same prompt; by default those are
+    skipped for free. `focus` asks the model about this project only, rather than
+    for every campus an article names (`crawl.focus_note`).
 
     `target_fields` stops once this many of the 12 tracked fields are filled,
     leaving the rest of a shared budget for the next project. The PRD's bar is 9;
@@ -729,20 +787,34 @@ def run(
             report.stopped_because = "dry run — harvested only, nothing fetched or extracted"
             break
 
-        crawl.run(
-            session,
-            batch,
-            fetcher=fetcher,
-            escalate=escalate,
-            extractor=extractor,
-            settings=settings,
-            cache_dir=cache_dir,
-            dry_run=False,
-            # Re-reading is the point: a URL already extracted may support a field
-            # the gate dropped at the time, and refresh URLs are cited already.
-            force=True,
-        )
-        current.articles_read = len(batch)
+        with spend_stage("extract"):
+            ingest = crawl.run(
+                session,
+                batch,
+                fetcher=fetcher,
+                escalate=escalate,
+                extractor=extractor,
+                settings=settings,
+                cache_dir=cache_dir,
+                dry_run=False,
+                # A URL already extracted may support a field the gate dropped at
+                # the time, and refresh URLs are cited already, so neither is
+                # filtered out as done...
+                force=True,
+                # ...but one whose page hashes the same as its last good read under
+                # this same prompt is not put to the model again. That read already
+                # answered it: on the night of 2026-09-29, 359 of the 420 articles
+                # enrich extracted came from the local cache unchanged, most of the
+                # ¥12 the phase spent on reading. `reread` (`--reread`) asks anyway,
+                # for when the gate in code has changed and the prompt has not.
+                skip_unchanged=not reread,
+                focus=_label(project) if focus else None,
+            )
+        # A page skipped as unchanged cost nothing and is not counted against the
+        # article budget, so the share it would have taken goes to a page that is new.
+        current.unchanged = ingest.skipped_unchanged
+        current.articles_read = len(batch) - ingest.skipped_unchanged
+        spent -= ingest.skipped_unchanged
 
         session.flush()
         project = session.get(Project, project_id)
@@ -817,8 +889,16 @@ def select_projects(
     *,
     target: int = DEFAULT_TARGET_FIELDS,
     max_attempts: int | None = None,
+    toward_t2: bool = False,
 ) -> list[int]:
     """The projects worth spending a bounded budget on, best first.
+
+    `toward_t2` changes what "best" means to the one the overnight loop measures:
+    rows `tracker clean` holds below T2 for missing fields (`fields_present`), fewest
+    missing first, and only for the fields that condition counts — so a row whose
+    only empty field is `blocker` or `customer`, which the tier deliberately does not
+    demand, is never chosen. Without it, `--target 0` sorted the *fullest* rows
+    first, and the loop spent its nights on rows already past the bar.
 
     ``limit=None`` means every project below the target — the `--all` case. The
     ordering still matters there: the run shares one `--budget`, so whichever
@@ -845,11 +925,18 @@ def select_projects(
     whose every empty fillable field is exhausted — asked `max_attempts` times with
     no citation gained since — is skipped, and the limit goes to the next row. It
     comes back the moment it gains a citation, which is also what reopens its fields.
+
+    **And so are rows with no fillable field empty at all.** The check above used to
+    fire only when at least one fillable field was empty, so a row short of the
+    twelve only by `blocker` or `city` — fields the agent is never asked about and
+    `tracker.attempts` never records — passed it every time. On the night of
+    2026-09-29 twelve of the fifteen rows enrich chose were that shape, at 11 of 12,
+    chosen again every round, each re-reading four articles to gain nothing.
+    `max_attempts=0` ("ask every time") still takes them.
     """
     from sqlalchemy import case, desc
 
     from tracker import attempts
-    from tracker.gapfill import FILLABLE_FIELDS
 
     filled = sum(
         (case((getattr(Project, f).is_not(None), 1), else_=0) for f in TRACKED_FIELDS),
@@ -863,17 +950,61 @@ def select_projects(
     ranked = [row[0] for row in session.execute(stmt).all()]
     cap = attempts.DEFAULT_MAX_ATTEMPTS if max_attempts is None else max_attempts
 
+    if toward_t2:
+        # Every candidate is scored before any is chosen, because the order is by a
+        # count the query cannot compute. `sorted` is stable, so rows missing the
+        # same number keep the query's order: the larger campus first.
+        missing = {}
+        for project_id in ranked:
+            project = session.get(Project, project_id)
+            short = t2_gaps(project)
+            if short and pursuable(project, max_attempts=cap, fields=short):
+                missing[project_id] = len(short)
+        ordered = sorted(missing, key=lambda pid: missing[pid])
+        return ordered if limit is None else ordered[:limit]
+
     chosen: list[int] = []
     for project_id in ranked:
         if limit is not None and len(chosen) >= limit:
             break
-        if cap > 0:
-            project = session.get(Project, project_id)
-            empty = {f for f in FILLABLE_FIELDS if getattr(project, f, None) is None}
-            if empty and empty <= attempts.exhausted(project, max_attempts=cap):
-                continue
+        if cap > 0 and not pursuable(session.get(Project, project_id), max_attempts=cap):
+            continue
         chosen.append(project_id)
     return chosen
+
+
+def t2_gaps(project: Project) -> set[str]:
+    """The fields `tracker clean`'s `fields_present` condition fails this row for.
+
+    The same computation as `clean._conditions`: a field that is a gap and that the
+    tier measures. `blocker` and `customer` are left out there because their absence
+    is usually the truth (`gaps.UNMEASURABLE`), and a null that is correct —
+    `mw_built` on a site not yet built — is not a gap at all.
+    """
+    from tracker.gaps import UNMEASURABLE
+
+    return {s.field for s in for_project(project) if s.is_gap and s.field not in UNMEASURABLE}
+
+
+def pursuable(
+    project: Project | None, *, max_attempts: int, fields: set[str] | None = None
+) -> set[str]:
+    """Empty fields a run could still go after on this row: fillable, and not given up on.
+
+    `fields` narrows the question (the T2 gaps, say); by default it is every gap.
+    Empty means there is nothing left worth a harvest or an agent call until the row
+    gains a citation, which is what reopens a field `tracker.attempts` retired.
+    """
+    from tracker import attempts
+    from tracker.gapfill import FILLABLE_FIELDS
+
+    if project is None:
+        return set()
+    gaps = {s.field for s in for_project(project) if s.is_gap} if fields is None else fields
+    open_ = gaps & FILLABLE_FIELDS
+    if max_attempts > 0:
+        open_ -= attempts.exhausted(project, max_attempts=max_attempts)
+    return open_
 
 
 def run_many(

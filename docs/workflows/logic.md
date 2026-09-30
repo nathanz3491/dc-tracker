@@ -220,6 +220,15 @@ a planned figure no source states is not one this database can hold.
 `RULEABLE_FIELDS` excludes the identity fields for the same reason `conflicts` does:
 superseding a claim about them changes nothing and would only look like it had.
 
+**What one finding may spend.** Every article read is re-sent on each later turn, so
+reading is what makes a run dear: one finding read seventeen articles and three
+searches for ~360,000 tokens. The loop every agent shares (`agent.run`) now gives
+each tool a ration per question — eight `read_article`s, four `search_web`s — past
+which the tool answers that it is used up; tells the model, with two turns left, to
+answer with `leave_alone` if it cannot decide; and retries a turn cut off mid-reasoning
+with reasoning off rather than at a bigger budget. Its searches are answered from a
+week-long cache (`search.CachedProvider`) when the same query was asked before.
+
 ### What a ruling cannot reach, and why that was expensive
 
 "Available on every code" was this page's claim for the agent, and it was wrong in a
@@ -332,6 +341,7 @@ Touching any of these means the poster is in scope. Re-render with
 | Drift repair | `tracker/logic.py` — `resolve_drift`, `check_collisions`; `tracker/upsert.py` — `recompute_from_sources`; `tracker/blocks.py` — `phase_after_blocks`, `raise_phase` |
 | Contested fields, the two calls, the write | `tracker/conflicts.py` — `disputes`, `solve`, `_challenge`, `supersede`, `apply_outcome`, `MAX_CALLS_PER_FIELD`, `MIN_CONFIDENCE`, `SUPERSEDED`, `MISREAD` |
 | The agent path | `tracker/triage.py` — `triage`, `apply_rule_out`, `_claims_value`, `rule_out_tool`, `leave_alone_tool`, `RULEABLE_FIELDS`, `SYSTEM` |
+| What one agent run may spend | `tracker/agent.py` — `run`, `TOOL_LIMITS`, `WRAP_UP_TURNS`, `MAX_STEPS`; `tracker/llm.py` — `without_thinking`; `tracker/ingest/search.py` — `CachedProvider` |
 | What a ruling cannot reach | `tracker/triage.py` — `can_rule_on`, `UNANSWERABLE_BY_RULING`, `has_live_claim`; `tracker/agent.py` — `_list_sources`, `_claims_line` |
 | The fixed menu and the keyboard walk | `tracker/logic.py` — `decide`, `TRIAGE_MIN_CONFIDENCE`; `tracker/cli/logic.py` — `_triage_by_agent`, `_triage_by_model`, `_triage` |
 | Settled-finding bookkeeping | `tracker/audit.py` — `settled_codes`, `_no_change`, `free_answer`, `fmt_value` |

@@ -1611,3 +1611,129 @@ def test_search_skips_a_field_already_looked_for(session):
     assert len(narrowed) < len(everything)
     assert not any("energized operational" in q for q in narrowed), "mw_built still queried"
     assert not any("anchor customer" in q for q in narrowed), "customer still queried"
+
+
+# --- what a night no longer pays for ------------------------------------------------
+
+
+class PromptLLM(FakeLLM):
+    """The canned extraction, recording every prompt it was sent."""
+
+    def __init__(self, payload: dict | None = None) -> None:
+        super().__init__(payload)
+        self.users: list[str] = []
+
+    def complete(self, *, system: str, user: str, max_tokens: int | None = None) -> LLMReply:
+        self.users.append(user)
+        return super().complete(system=system, user=user, max_tokens=max_tokens)
+
+
+def test_a_page_unchanged_since_its_last_read_is_not_sent_to_the_model_again(session):
+    """On 2026-09-29, 359 of the 420 articles enrich extracted came out of the local
+    cache unchanged, re-read under the same prompt for the same answer. The refresh
+    harvester still offers a row's own citations; one whose text hashes the same as
+    its last good read is skipped for free, and does not use up the article budget."""
+    project = add_project(session)
+    add_queued(session, "https://x.com/stack-hillsboro-u", "STACK Hillsboro campus")
+    run(session, project.id)
+    session.commit()
+
+    again = PromptLLM()
+    report = run(session, project.id, extractor=again, target_fields=None)
+    assert again.calls == 0, "the only page on offer is the one already read, unchanged"
+    assert report.articles_unchanged == 1
+    assert report.articles_read == 0
+
+    forced = PromptLLM()
+    run(session, project.id, extractor=forced, target_fields=None, reread=True)
+    assert forced.calls == 1, "--reread asks anyway"
+
+
+def test_an_article_is_read_for_the_row_being_enriched_only(session):
+    """A roundup page names many campuses and the model wrote all of them, most to
+    be thrown away. The reply is the bill, so enrich asks for its own row alone."""
+    project = add_project(session)
+    add_queued(session, "https://x.com/stack-hillsboro-f", "STACK Hillsboro campus")
+    llm = PromptLLM()
+    run(session, project.id, extractor=llm)
+    assert "ONE project already in the database" in llm.users[0]
+    assert "STACK Infrastructure Hillsboro Campus" in llm.users[0]
+
+    other = add_project(session, city="Reno", company="Other Co")
+    add_queued(session, "https://x.com/other-co-reno", "Other Co Reno campus")
+    whole = PromptLLM({"projects": []})
+    run(session, other.id, extractor=whole, focus=False)
+    assert whole.users and "ONE project" not in whole.users[0]
+
+
+def _full_but_blocker(session, **kwargs) -> Project:
+    """11 of the 12 tracked fields: everything but `blocker`, which nothing can fill."""
+    defaults = {
+        "city": "Reno",
+        "company": "Full Co",
+        "county": "Washoe",
+        "customer": "T",
+        "mw_planned": 100.0,
+        "mw_built": 50.0,
+        "investment_usd": 1,
+        "phase": "construction",
+        "first_announced": dt.date(2024, 1, 1),
+        "expected_online": dt.date(2027, 1, 1),
+        "lat": 39.5,
+        "lon": -119.8,
+    }
+    return add_project(session, **{**defaults, **kwargs})
+
+
+def test_select_passes_over_a_row_whose_only_empty_field_the_agent_is_never_asked(session):
+    """The check for "nothing left to ask" fired only when a fillable field was empty,
+    so a row short of the twelve by `blocker` alone passed it every round. Twelve of
+    the fifteen rows the loop chose on 2026-09-29 were that shape, each re-reading
+    four articles a round for nothing."""
+    full = _full_but_blocker(session)
+    thin = add_project(session, city="Mesa", company="Thin Co")
+
+    chosen = enrich.select_projects(session, 5, target=12)
+    assert full.id not in chosen
+    assert thin.id in chosen
+    assert full.id in enrich.select_projects(session, 5, target=12, max_attempts=0), (
+        "0 asks every time, and still takes it"
+    )
+
+
+def test_t2_selection_takes_rows_the_tier_fails_fewest_missing_first(session):
+    """`--target 0` ranked the fullest rows first. The overnight loop measures rows
+    below T2, whose `fields_present` does not demand `blocker` or `customer`."""
+    only_customer = _full_but_blocker(session, company="Self Co", customer=None)
+    one_short = _full_but_blocker(session, company="One Co", city="Ames", investment_usd=None)
+    many_short = add_project(session, city="Mesa", company="Many Co")
+
+    chosen = enrich.select_projects(session, None, target=12, toward_t2=True)
+    assert only_customer.id not in chosen, "T2 does not ask for customer, so neither does this"
+    assert chosen.index(one_short.id) < chosen.index(many_short.id)
+    assert enrich.t2_gaps(one_short) == {"investment_usd"}
+
+
+def test_a_refused_dispute_is_not_asked_again_on_the_same_claims(session):
+    """A refusal writes nothing to the row, so nothing stopped the same question
+    coming back every round. It is remembered against the claims it was shown."""
+    from tracker import declines
+
+    project = _contested(session)
+    refuse = json.dumps({"pick": "r", "confidence": 0.9, "reason": "different scopes"})
+    first = SettleLLM(refuse)
+    run(session, project.id, settle_extractor=first, target_fields=0)
+    assert first.calls == 1
+
+    second = SettleLLM(refuse)
+    report = run(session, project.id, settle_extractor=second, target_fields=0)
+    assert second.calls == 0
+    assert report.settle_held == 1
+
+    # New evidence is a new question.
+    row = declines.load(session, "settle")[f"{project.id}:mw_planned"]
+    row.fingerprint = "something-else"
+    session.commit()
+    third = SettleLLM(refuse)
+    run(session, project.id, settle_extractor=third, target_fields=0)
+    assert third.calls == 1

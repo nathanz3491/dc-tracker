@@ -1238,6 +1238,48 @@ def test_a_small_ceiling_still_gets_room_to_answer_on_the_retry(prompt):
     assert llm.budgets[1] == 8192
 
 
+class ThinkingLLM(BudgetLLM):
+    """A provider with a reasoning dial: records the effort each call was made at."""
+
+    def __init__(self, replies, **kwargs):
+        super().__init__(replies, **kwargs)
+        self.effort = "high"
+        self.efforts: list[str | None] = []
+
+    def complete(self, *, system, user, max_tokens=None):
+        self.efforts.append(self.effort)
+        reply = super().complete(system=system, user=user, max_tokens=max_tokens)
+        # Truncated only while it reasons, as a real starved reply is.
+        if self.effort is None:
+            return LLMReply(reply.text, "stop", 1200, 400, "fake-model")
+        return reply
+
+
+def test_a_starved_reply_is_retried_with_reasoning_off_not_a_bigger_budget(prompt):
+    """With reasoning on, a model told "do not deliberate" deliberates anyway: 31
+    calls hit the 32,768-token ceiling in four nights, most of them twice. The retry
+    is the same model with reasoning switched off, at the ordinary ceiling."""
+    llm = ThinkingLLM(['{"projects": [', canned("llm_response_microsoft_wi.json")])
+    llm.finish_reason = "length"
+    outcome = crawl.extract_one(fetched(), prompt=prompt, extractor=llm)
+
+    assert outcome.status == "ok"
+    assert llm.efforts == ["high", None]
+    assert llm.budgets == [None, None], "no bigger budget: the reasoning was the problem"
+    assert llm.effort == "high", "the caller's extractor is untouched"
+
+
+def test_an_article_read_for_one_project_asks_about_that_project_only(prompt):
+    """Appended to the message, never written into the prompt file: the file's hash is
+    the version stamp on every citation, and editing it would mark the corpus stale."""
+    llm = FakeLLM([canned("llm_response_microsoft_wi.json")])
+    crawl.extract_one(fetched(), prompt=prompt, extractor=llm, focus="Microsoft Fairwater")
+    _, user = llm.seen[0]
+    assert user.endswith(crawl.focus_note("Microsoft Fairwater"))
+    assert "at most one project object" in user
+    assert prompt.stamp == load_prompt("extract-v1").stamp
+
+
 def test_provider_error_is_reported_not_raised(prompt):
     outcome = crawl.extract_one(fetched(), prompt=prompt, extractor=BoomLLM())
     assert outcome.status == "llm_error"

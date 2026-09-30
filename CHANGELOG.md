@@ -12,6 +12,54 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **The nightly loop no longer pays to re-read articles that have not changed**
+  (`tracker/ingest/enrich.py`, `tracker/ingest/crawl.py`, `tracker/cli/enrich.py`,
+  `docs/workflows/enrich.md`, `tests/test_enrich.py`). Enrich put every article it
+  harvested to the model, including a row's own citations served unchanged from the
+  local cache: on 2026-09-29, 359 of the 420 articles it read were those, and enrich
+  was 86% of a night's bill. A page whose text hashes the same as its last read under
+  the same prompt is now skipped for free, the check the sync refresh phase already
+  made, and does not use up the article budget. `--reread` asks anyway.
+
+- **Enrich no longer spends its nights on rows it cannot improve**
+  (`tracker/ingest/enrich.py`, `docs/workflows/enrich.md`, `tests/test_enrich.py`).
+  A row short of the twelve fields only by `blocker` or `city` — fields the agent is
+  never asked about — was chosen again every round: twelve of the fifteen rows the
+  loop picked on 2026-09-29 were that shape, already at 11 of 12, each re-reading four
+  articles to gain nothing. Such a row is passed over now, as a row whose fields have
+  all been looked for already was; `--max-attempts 0` still takes it.
+
+- **The reasoning-effort setting is sent where DeepSeek documents it**
+  (`tracker/llm.py`, `scripts/probe_effort.py`, `tests/test_stream.py`). It went
+  inside the `thinking` object, where DeepSeek's guide does not put it and nothing
+  ever checked the API read it — so every tier may have been answering at the
+  provider's default effort whatever `.env` said, and the reply is about 93% of the
+  bill. It is now the top-level `reasoning_effort` field. `scripts/probe_effort.py`
+  measures whether `low` is really cheaper than `high` (a few calls, under ¥0.05).
+
+- **A reply that runs out of room while reasoning is retried without reasoning, not
+  with a bigger budget** (`tracker/llm.py`, `tracker/ingest/crawl.py`,
+  `tracker/agent.py`, `tests/test_ingest_crawl.py`, `tests/test_agent.py`). A model
+  told "do not deliberate" with reasoning still on deliberated anyway: 31 calls hit
+  the 32,768-token ceiling in four nights, most of them twice, and an agent turn cut
+  off at 20,000 was retried at 50,000 and reached that too. The retry is now the same
+  model with reasoning switched off, at the ordinary ceiling.
+
+- **An agent run is told to answer before it runs out of steps, and has a ration of
+  reads** (`tracker/agent.py`, `docs/workflows/enrich.md`, `docs/workflows/logic.md`,
+  `docs/workflows/duplicates.md`, `tests/test_agent.py`). Running out of steps threw
+  away everything the run had spent — the enrich agent did it twelve times on
+  2026-09-29 and found one fact — and one logic finding read seventeen articles for
+  ~360,000 tokens. With two turns left the model is now told to answer, "could not
+  decide" included, and each question may read eight articles and run four searches.
+
+- **A disagreement enrich's settle step refused is not asked again on the same
+  claims** (`tracker/ingest/enrich.py`, `tracker/declines.py`, `tracker/models.py`,
+  migration `0031_settle_declines`, `tests/test_enrich.py`). A refusal writes nothing
+  to the row, so the same question came back every round the row was chosen. It is
+  remembered against a hash of the claims the model was shown, like the other paid
+  phases' declines, and asked again when those change or after thirty days.
+
 - **A campus is no longer marked operational on the strength of an unnamed
   building** (`tracker/blocks.py`, `tracker/logic.py`, `docs/workflows/logic.md`,
   `tests/test_phase_evidence.py`). After the claims are merged, a campus is lifted
@@ -732,6 +780,41 @@ initial build of the v1 PRD.
 
 ### Changed
 
+- **The overnight loop is bounded in yuan, enriches once a night, and stops when
+  nothing new is gained** (`scripts/overnight.sh`, `tracker/spend.py`,
+  `tests/test_overnight.py`, `README.md`). The six nights to 2026-09-29 cost ¥9–34,
+  ¥23 on average, and the 25M-token ceiling never fired: nine tokens in ten are
+  cached prompt at a fiftieth of the price, so a token count said almost nothing
+  about the bill. Now:
+  - `--cny` (default ¥12) is checked before every paid phase, pricing the spend
+    ledger at the rate for the hour each call was made; `--tokens` still applies.
+    No single phase has cost more than ¥2.76, so a night ends under ¥15.
+  - enrich runs in the first round only (`--enrich-rounds`) and chooses rows below
+    T2, fewest missing fields first (`enrich --t2`), where `--target 0` had ranked
+    the fullest rows first;
+  - a round is progress only when a count falls below the lowest it has been that
+    night — counts that wobbled back down had kept 2026-09-29 going for seven rounds
+    that moved nothing;
+  - the per-item judgements run at `low` effort (`--judgement-effort`);
+  - the morning report shows yuan per command and stage, and the peak-rate share.
+
+- **Enrich asks the model about the row it is enriching only**
+  (`tracker/ingest/crawl.py`, `tracker/ingest/enrich.py`, `tracker/cli/enrich.py`).
+  A roundup page names eight or twenty-eight campuses; the model wrote all of them
+  and all but five were thrown away, and those replies were the dearest calls a night
+  made. A note appended to the message — not to the prompt file, whose hash stamps
+  every citation — asks for this project alone. `--no-focus` reads the whole article.
+
+- **Enrich and the agents reuse a search result for a week**
+  (`tracker/ingest/search.py`, `tracker/ingest/enrich.py`, `tracker/agent.py`,
+  `tracker/config.py`). Each overnight round is a new process, so the per-run memo
+  forgot every query and one night sent 487, mostly repeats. `TRACKER_SEARCH_CACHE_DAYS`
+  (default 7, 0 is off); discovery never reads the cache.
+
+- **The spend ledger names the stage inside a command** (`tracker/llm.py`,
+  `tracker/ingest/enrich.py`, `tracker/cli/enrich.py`). A ninth column — `extract`,
+  `settle`, `agent` — so the report can say which part of enrich spent the money.
+
 - **The console's address now opens on a short front page, and signing in, asking
   for an account and resetting a password are pages of their own** (`/signin`,
   `/register`, `/forgot`). The old single page grew when you switched to creating an
@@ -948,6 +1031,25 @@ initial build of the v1 PRD.
   migrating still build from nothing.
 
 ### Added
+
+- **A command that spends will not start in DeepSeek's peak hours**
+  (`tracker/llm.py`, `tracker/spend.py`, `tracker/cli/_shared.py`,
+  `tracker/config.py`, `docs/ingesting.md`, `tests/test_cost_controls.py`). Every call
+  between 09:00 and 12:00 and 14:00 and 18:00 Beijing time, Monday to Friday, costs
+  double, and five runs started by hand on 2026-09-25 paid ¥18 for ¥9 of work. The
+  hour is refused the way a missing key is, before anything is fetched or paid for.
+  `TRACKER_PEAK_GUARD=off` pays the peak rate on purpose, `warn` only logs; a local
+  model and the console are never refused.
+
+- **`tracker/spend.py` prices a spend ledger** in yuan, from DeepSeek's published
+  table and the hour of each call. `python -m tracker.spend report <ledger>` prints a
+  night's spend by phase; `total` prints the sum the overnight ceiling reads.
+
+- **The judgement tier alone can run on the local model** (`tracker/llm.py`,
+  `tracker/config.py`, `scripts/overnight.sh`). `TRACKER_JUDGEMENT_PROVIDER=ollama`,
+  or `overnight.sh --local-judgement` for a night, sends `risks confirm`,
+  `audit resolve`, `logic conflicts` and enrich's settle step to Ollama while
+  extraction and the agents stay on the API. Unmeasured here: read the rulings.
 
 - **Anyone can ask for an account on `/register`, and an admin decides who gets
   one** (`tracker/accounts.py`, `tracker/account_mail.py`,

@@ -331,7 +331,7 @@ def enrich() -> Canvas:
 
     order = c.box(
         278, 196, 178, 206, "Rows, ordered",
-        ["closest to the target first,", "capacity breaks the tie,", "finished rows excluded,", "and rows with nothing", "left to ask", "", "with --basics: fewest", "defining fields missing first", "", "--budget is the real ceiling"],
+        ["closest to the target first,", "capacity breaks the tie;", "finished rows, and rows with", "nothing fillable left to ask,", "are passed over", "", "--basics: fewest defining", "fields missing first", "--t2: fewest T2 gaps first", "", "--budget is the real ceiling"],
         role="cool2",
     )
     for b in (ids, sel, allr, basc):
@@ -367,8 +367,8 @@ def enrich() -> Canvas:
         role="panel",
     )
     read = c.box(
-        844, 362, 186, 78, "Read and extract",
-        ["crawl.run, force=True — a cited", "page may support a field the", "gate dropped last time"],
+        844, 362, 186, 92, "Read and extract",
+        ["about this row only. A page", "unchanged since its last read", "under this prompt is skipped", "for free; --reread asks anyway"],
         role="cool",
     )
     c.arrow([frame.right(-24), (825, frame.cy - 24), (825, 275), (844, 275)])
@@ -422,7 +422,7 @@ def enrich() -> Canvas:
     c.arrow([settle.right(), (554, 758)], colour=TEAL, label="resolved", label_dy=-6)
     c.box(
         286, 838, 208, 62, "refused",
-        ["the disagreement stays in the notes,", "and is asked again next run"],
+        ["remembered against the claims it saw;", "asked again only when they change"],
         role="red", title_size=11.5,
     )
     c.arrow([settle.bottom(), (settle.cx, 838)], colour=RED)
@@ -437,8 +437,8 @@ def enrich() -> Canvas:
     # The three rails that decide what it is NOT asked. Every one of them saves by
     # not making a call, which is the only saving worth the name at this price.
     c.box(
-        802, 826, 208, 88, "and what it is not asked",
-        ["rows the budget never harvested", "fields already looked for twice", "without success, until a new", "citation reopens them", "--token-budget stops BETWEEN rows"],
+        802, 826, 208, 116, "and what it is not asked",
+        ["rows the budget never harvested", "fields already looked for twice", "without success, until a new", "citation reopens them", "--token-budget stops BETWEEN rows", "eight reads, four searches a row;", "told to answer two turns early"],
         role="red", title_size=11.5, sub_size=9,
     )
     c.arrow([agent.bottom(), (agent.cx, 826)], colour=RED)
@@ -661,7 +661,7 @@ def duplicates() -> Canvas:
 
     who = c.box(
         48, 640, 226, 200, "Who decides",
-        ["--agent   default. Reads both rows'", "          articles, searches, then rules", "", "--ask     a person at the keyboard,", "          trusted for a merge outright", "", "--no-agent  the older one-call path,", "          shown two rows and nothing else", "", "all three are asked one question:", "what would rule this match OUT?"],
+        ["--agent   default. Reads both rows'", "          articles, searches, then rules;", "          8 reads, 4 searches a pair", "--ask     a person at the keyboard,", "          trusted for a merge outright", "", "--no-agent  the older one-call path,", "          shown two rows and nothing else", "", "all three are asked one question:", "what would rule this match OUT?"],
         role="cool", title_size=13, align="left", sub_size=10.2,
     )
 
@@ -714,7 +714,7 @@ def duplicates() -> Canvas:
 
 
 def logic() -> Canvas:
-    c = Canvas(1500, 1090)
+    c = Canvas(1500, 1160)
     c.title(
         "tracker logic — do the supported values agree?",
         "Every other check asks whether a value is cited. These ask whether the cited values contradict "
@@ -792,8 +792,8 @@ def logic() -> Canvas:
         role="orange", title_size=13, align="left", sub_size=10.2,
     )
     c.box(
-        1140, 792, 312, 204, "Why an agent, and its two limits",
-        ["The fixed menu could only answer with a key from", "ACTIONS[code], and 16 of the 22 codes have none — a", "property of the menu, not of the finding. It declined", "432 of 526 findings before calling a model at all.", "", "An agent rules claims out of the merge instead, and a", "ruling survives the next backfill derive. But it moves", "a project scalar and nothing else, so the ~250 tranche", "findings are withheld rather than read at 45k-260k", "tokens each to reach the only answer available — as is", "one whose every claim is already ruled out, and it is", "shown which claims those are.", "", "It may never mark a row verified: that means an", "operator says so, and it feeds confidence. And its", "edits are recorded as 'agent', never as 'operator'."],
+        1140, 792, 312, 276, "Why an agent, and its limits",
+        ["The fixed menu could only answer with a key from", "ACTIONS[code], and 16 of the 22 codes have none — a", "property of the menu, not of the finding. It declined", "432 of 526 findings before calling a model at all.", "", "An agent rules claims out of the merge instead, and a", "ruling survives the next backfill derive. But it moves", "a project scalar and nothing else, so the ~250 tranche", "findings are withheld rather than read at 45k-260k", "tokens each to reach the only answer available — as is", "one whose every claim is already ruled out, and it is", "shown which claims those are. It reads at most eight", "articles and runs four searches a finding, and is told", "to answer two turns before its twelve run out.", "", "It may never mark a row verified: that means an", "operator says so, and it feeds confidence. And its", "edits are recorded as 'agent', never as 'operator'."],
         role="red", title_size=13, align="left", sub_size=10.2,
     )
 

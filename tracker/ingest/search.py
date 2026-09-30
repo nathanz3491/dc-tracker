@@ -41,9 +41,12 @@ which is what makes the comparison above measurable at all.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
-from dataclasses import dataclass, field
+import time
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Any, Protocol
 from urllib.parse import urlsplit
 
@@ -644,6 +647,67 @@ def build_provider(settings: Settings | None = None, name: str | None = None):
         known = ", ".join(sorted(PROVIDERS))
         raise SearchError(f"unknown search provider {chosen!r}. Available: {known}")
     return PROVIDERS[chosen](settings)
+
+
+class CachedProvider:
+    """A search backend that answers a query it was asked recently from disk.
+
+    For the callers that ask the same questions night after night — `enrich`'s
+    search harvester and the agents' `search_web` — never for discovery, whose
+    point is what was published since the last look. See
+    `Settings.search_cache_days` for the measurement behind it.
+
+    Keyed on the backend, the result count and the exact query, so a different
+    backend or a wider ask is a different question. A cache that cannot be read or
+    written is ignored: the query goes to the backend as it always did. Failures are
+    never cached — a quota refusal today says nothing about next week.
+    """
+
+    def __init__(self, inner: object, *, root: Path, days: int) -> None:
+        self.inner = inner
+        self.root = root
+        self.days = days
+        self.NAME = provider_name(inner)
+
+    def _path(self, query: str, limit: int) -> Path:
+        key = hashlib.sha1(f"{self.NAME}\n{limit}\n{query}".encode()).hexdigest()
+        return self.root / f"{key}.json"
+
+    def search(self, query: str, *, limit: int = 10) -> list[SearchHit]:
+        path = self._path(query, limit)
+        try:
+            if time.time() - path.stat().st_mtime < self.days * 86_400:
+                stored = json.loads(path.read_text(encoding="utf-8"))
+                return [SearchHit(**hit) for hit in stored["hits"]]
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+        hits = self.inner.search(query, limit=limit)
+        try:
+            path.write_text(
+                json.dumps(
+                    {
+                        "provider": self.NAME,
+                        "query": query,
+                        "limit": limit,
+                        "hits": [asdict(hit) for hit in hits],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+        except (OSError, TypeError):
+            log.debug("could not cache search results for %r", query, exc_info=True)
+        return hits
+
+
+def cached(provider: object, settings: Settings | None = None) -> object:
+    """`provider` behind the on-disk result cache, or unchanged when it is turned off."""
+    from tracker.config import cache_dir
+
+    settings = settings or get_settings()
+    if settings.search_cache_days <= 0 or isinstance(provider, CachedProvider):
+        return provider
+    return CachedProvider(provider, root=cache_dir("search"), days=settings.search_cache_days)
 
 
 class QuotaExhausted(SearchError):

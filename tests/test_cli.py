@@ -1015,6 +1015,18 @@ def test_enrich_basics_composes_with_a_selector(initialized: Path):
     assert "only one of" not in result.output
 
 
+def test_enrich_t2_is_a_way_of_choosing_rows(initialized: Path):
+    """It picks rows by what T2 measures, so it needs `--select` or `--all` to pick
+    from; with one, an empty database simply has nothing below T2."""
+    refused = invoke(initialized, "enrich", "1", "--t2")
+    assert refused.exit_code == 2
+    assert "--select" in refused.output
+
+    result = invoke(initialized, "enrich", "--select", "5", "--t2")
+    assert result.exit_code == 0, result.output
+    assert "nothing to do" in result.output and "T2" in result.output
+
+
 def test_enrich_refuses_fields_and_basics_together(initialized: Path):
     result = invoke(initialized, "enrich", "--basics", "--fields", "mw_planned", "--select", "1")
     assert result.exit_code == 2

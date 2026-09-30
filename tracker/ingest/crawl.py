@@ -45,7 +45,14 @@ from tracker.ingest.records import (
     RiskRecord,
     SourceRecord,
 )
-from tracker.llm import Extractor, LLMError, LLMJsonError, LLMReply, parse_json_object
+from tracker.llm import (
+    Extractor,
+    LLMError,
+    LLMJsonError,
+    LLMReply,
+    parse_json_object,
+    without_thinking,
+)
 from tracker.models import IngestUrl, utcnow
 from tracker.normalize import (
     NormalizationError,
@@ -2500,6 +2507,30 @@ def _excerpt(quotes: dict[str, str]) -> str | None:
 # --- Extraction -------------------------------------------------------------
 
 
+def focus_note(project: str) -> str:
+    """What is appended to the prompt when an article is read for one known project.
+
+    `enrich` reads articles on behalf of one row, and a listing page it finds — a
+    month's roundup, an operator's locations page — describes eight or twenty-eight
+    campuses. The prompt asks for all of them up to `MAX_PROJECTS_PER_ARTICLE`, the
+    model writes every one, the first five are kept and the rest are thrown away;
+    the reply is what the bill is made of, so those were the dearest calls a night
+    made. This asks for the one project the read is for.
+
+    Appended to the user message rather than written into `extract-v1.txt`, the way
+    the corrective retries below are: the prompt file's hash is the version stamp on
+    every citation, and editing it would mark the whole corpus stale for a note that
+    only one caller sends. The gate is unchanged — a value still needs a quote the
+    article contains — so the note cannot put words in the article's mouth.
+    """
+    return (
+        "\n\nThis article is being read for ONE project already in the database: "
+        f"{project}. Emit at most one project object, for that project only, and ignore "
+        "every other campus the article names. If the article does not describe that "
+        'project, return {"projects": []}.'
+    )
+
+
 def extract_one(
     result: FetchResult,
     *,
@@ -2507,8 +2538,14 @@ def extract_one(
     extractor: Extractor,
     settings: Settings | None = None,
     published_date: str = "unknown",
+    focus: str | None = None,
 ) -> ExtractionOutcome:
-    """Run one article through the LLM, with a single corrective retry."""
+    """Run one article through the LLM, with a single corrective retry.
+
+    `focus` names the one project the article is being read for (see
+    :func:`focus_note`). The model is then asked for that project's object alone,
+    rather than for every campus the page names.
+    """
     settings = settings or get_settings()
     outcome = ExtractionOutcome(
         url=result.url,
@@ -2556,6 +2593,8 @@ def extract_one(
         markdown=body,
         max_projects=MAX_PROJECTS_PER_ARTICLE,
     )
+    if focus:
+        user += focus_note(focus)
 
     last_error: str | None = None
     #: Set when a reply ran out of budget inside its own reasoning, so the retry
@@ -2563,24 +2602,33 @@ def extract_one(
     #: — measured on one Chinese-language article: two identical attempts, two
     #: identical failures, two calls paid for and nothing extracted.
     starved = False
+    #: The same model with reasoning off, for the retry after a starved reply. A
+    #: bigger budget with reasoning still on was measured to starve again as often
+    #: as not — see `llm.without_thinking`. None for an extractor with no reasoning
+    #: to switch off, which keeps the old bigger-budget retry.
+    quiet = without_thinking(extractor)
     for attempt in range(1, max(1, settings.llm_max_attempts) + 1):
         message = user
         budget: int | None = None
+        ask = extractor
         if starved:
             message = (
                 user + "\n\nYour previous reply spent its whole budget reasoning and never "
                 "produced an answer. Do not deliberate. Emit the JSON object immediately, "
                 "with no prose and no code fences."
             )
-            ceiling = settings.max_completion_tokens
-            budget = max(ceiling, min(ceiling * 2, MAX_STARVED_RETRY_TOKENS))
+            if quiet is not None:
+                ask = quiet
+            else:
+                ceiling = settings.max_completion_tokens
+                budget = max(ceiling, min(ceiling * 2, MAX_STARVED_RETRY_TOKENS))
         elif attempt > 1:
             message = (
                 user + "\n\nYour previous reply was not a single valid JSON object. "
                 "Return ONLY the JSON object, with no prose and no code fences."
             )
         try:
-            reply = extractor.complete(system=prompt.system, user=message, max_tokens=budget)
+            reply = ask.complete(system=prompt.system, user=message, max_tokens=budget)
         except LLMError as exc:
             outcome.status = "llm_error"
             outcome.error = str(exc)
@@ -2951,8 +2999,12 @@ def run(
     route: Callable[[IngestRecord], int | None] | None = None,
     arbiter: Any = None,
     skip_unchanged: bool = False,
+    focus: str | None = None,
 ) -> IngestReport:
     """Fetch, extract and upsert a list of article URLs.
+
+    `focus` asks the model about one named project only — see :func:`focus_note`.
+    For a caller reading on behalf of one row; a crawl reads for every row there is.
 
     `skip_unchanged` does not put a page to the model when it hashes the same as
     the last good read and that read was this prompt's — see `unchanged_reads`. The
@@ -3108,6 +3160,7 @@ def run(
             extractor=extractor,
             settings=settings,
             published_date=published.get(result.url, "unknown"),
+            focus=focus,
         )
 
     # The model is most of this loop's elapsed time and one article's extraction

@@ -60,6 +60,26 @@ MAX_TOKENS: int = 20_000
 #: raise the price of every step behind it.
 MAX_TOKENS_ESCALATED: int = 50_000
 
+#: Turns left when the model is told to stop gathering and answer.
+#:
+#: Without it a run that has not converged simply stops at `MAX_STEPS`, and every
+#: token it spent is thrown away: on the night of 2026-09-29 the enrich agent ended
+#: "reached 12 steps without deciding" twelve times — about ¥0.2 each — and found one
+#: fact all night. Every caller offers a terminal tool that means "I could not
+#: settle this" (`nothing_found`, `leave_alone`, `unsure`), which is a paid-for answer
+#: the declines and attempts ledgers can remember; running out of steps is not.
+WRAP_UP_TURNS: int = 2
+
+#: How many times one run may call a tool, by tool name. A run that asks past this
+#: is told it has had its share and to decide with what it has read.
+#:
+#: Every article read is re-sent on every later turn, so reading is what makes a
+#: long run dear: one `logic resolve` finding read seventeen articles and three
+#: searches for ~360,000 tokens. The thorough answer this loop was sized for is
+#: three reads and a search (see `MAX_STEPS`); eight reads is still more than twice
+#: that.
+TOOL_LIMITS: dict[str, int] = {"read_article": 8, "search_web": 4}
+
 #: Characters of any single tool result handed back to the model. An uncapped
 #: article is ~9,300 characters median and 24,000 at the top of the range, and a
 #: run that reads six of them would spend its whole context on one row.
@@ -163,6 +183,16 @@ class AgentResult:
         return [s.name for s in self.steps]
 
 
+def _wrap_up(terminal: list[str]) -> str:
+    """The turn that tells a run it is nearly out of steps."""
+    return (
+        f"You have {WRAP_UP_TURNS} turns left. Stop gathering evidence and answer now "
+        f"by calling {' or '.join(terminal)}. If what you have read does not settle "
+        "the question, say so in that answer: an honest 'could not decide' is recorded "
+        "and not asked again, but running out of turns is lost."
+    )
+
+
 def _clip(text: str, limit: int = MAX_RESULT_CHARS) -> str:
     text = text or ""
     if len(text) <= limit:
@@ -180,6 +210,7 @@ def run(
     max_tokens: int = MAX_TOKENS,
     escalated: int = MAX_TOKENS_ESCALATED,
     on_step: Callable[[Step], None] | None = None,
+    limits: dict[str, int] | None = None,
 ) -> AgentResult:
     """Let a model work `task` with `tools` until it calls a terminal one.
 
@@ -190,8 +221,13 @@ def run(
     Every failure a tool can produce becomes a tool *result* the model reads — bad
     arguments, an unknown name, an exception. A model that asks for a page that
     404s should try another, not have the run torn down around it.
+
+    Three things bound what a run costs without cutting one short: `limits` (default
+    :data:`TOOL_LIMITS`) caps how often each tool may be called; with
+    :data:`WRAP_UP_TURNS` turns left the model is told to answer; and a turn cut off
+    mid-reasoning is retried with reasoning off rather than at a bigger budget.
     """
-    from tracker.llm import LLMError
+    from tracker.llm import LLMError, without_thinking
 
     if not hasattr(extractor, "converse"):
         return AgentResult(
@@ -206,8 +242,17 @@ def run(
     schemas = [t.schema() for t in tools]
     messages: list[dict[str, Any]] = [{"role": "user", "content": task}]
     result = AgentResult(outcome="exhausted")
+    limits = TOOL_LIMITS if limits is None else limits
+    used: dict[str, int] = {}
+    terminal = sorted(t.name for t in tools if t.terminal)
+    quiet = without_thinking(extractor)
 
-    for _ in range(max_steps):
+    for turn in range(max_steps):
+        if terminal and max_steps > WRAP_UP_TURNS + 1 and turn == max_steps - WRAP_UP_TURNS:
+            # Appended, never edited in: the history is append-only for the prefix
+            # cache (see the note above `Tool`). Only reached after a tool turn, so
+            # the message before it is a tool result, which a user turn may follow.
+            messages.append({"role": "user", "content": _wrap_up(terminal)})
         try:
             reply = extractor.converse(
                 system=system, messages=messages, tools=schemas, max_tokens=max_tokens
@@ -217,15 +262,27 @@ def run(
             result.cache_hit_tokens += reply.cache_hit_tokens or 0
             result.cache_miss_tokens += reply.cache_miss_tokens or 0
             if reply.finish_reason == "length" and not reply.tool_calls:
-                # It had the answer and ran out of room saying it. Retrying at the
-                # same budget stops in the same place, so buy the bigger one once.
-                # Only when there are no tool calls: a truncated reply that still
+                # It ran out of room before it said anything usable. Retried once,
+                # and only when there are no tool calls: a truncated reply that still
                 # produced a complete call is usable as it stands.
-                log.debug("turn truncated at %s tokens; retrying at %s", max_tokens, escalated)
+                #
+                # With reasoning off where the provider allows it, at the same
+                # budget: a turn that spent 20,000 tokens deliberating was not short
+                # of room, and the old retry — the same request at 50,000 — was
+                # measured running to that ceiling too. Without reasoning the reply
+                # is the tool call itself. The bigger budget stays for an extractor
+                # with no reasoning to switch off.
                 result.escalations += 1
-                reply = extractor.converse(
-                    system=system, messages=messages, tools=schemas, max_tokens=escalated
-                )
+                if quiet is not None:
+                    log.debug("turn truncated at %s tokens; retrying without reasoning", max_tokens)
+                    reply = quiet.converse(
+                        system=system, messages=messages, tools=schemas, max_tokens=max_tokens
+                    )
+                else:
+                    log.debug("turn truncated at %s tokens; retrying at %s", max_tokens, escalated)
+                    reply = extractor.converse(
+                        system=system, messages=messages, tools=schemas, max_tokens=escalated
+                    )
                 result.prompt_tokens += reply.prompt_tokens or 0
                 result.completion_tokens += reply.completion_tokens or 0
                 # Counted like any other turn: the retry re-sends the same prefix and
@@ -273,9 +330,19 @@ def run(
                 result.tool_name = call.name
                 return result
 
+            cap = limits.get(call.name)
+            if tool is not None and cap is not None:
+                used[call.name] = used.get(call.name, 0) + 1
             if tool is None:
                 payload, failed = (
                     f"no such tool: {call.name}. Available: {', '.join(sorted(by_name))}",
+                    True,
+                )
+            elif cap is not None and used[call.name] > cap:
+                payload, failed = (
+                    f"{call.name} is used up: this question allows {cap} calls to it. "
+                    "Decide with what you have already read"
+                    + (f", using {' or '.join(terminal)}." if terminal else "."),
                     True,
                 )
             elif call.parse_failed:
@@ -624,10 +691,12 @@ def _find_projects(session: Any, query: str, limit: int = 10) -> str:
 
 
 def _search_web(query: str, limit: int = 5) -> str:
-    from tracker.ingest.search import SearchError, build_provider
+    from tracker.ingest.search import SearchError, build_provider, cached
 
     try:
-        provider = build_provider()
+        # Behind the result cache: the same row's questions come back night after
+        # night, and so do the searches they prompt. See `search.CachedProvider`.
+        provider = cached(build_provider())
     except Exception as exc:
         return f"web search unavailable: {exc}"
     if provider is None:
@@ -653,6 +722,8 @@ __all__ = [
     "MAX_STEPS",
     "MAX_TOKENS",
     "MAX_TOKENS_ESCALATED",
+    "TOOL_LIMITS",
+    "WRAP_UP_TURNS",
     "AgentResult",
     "Step",
     "Tool",

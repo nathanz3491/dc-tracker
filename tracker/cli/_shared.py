@@ -256,7 +256,14 @@ def _use_llm(provider: str | None) -> None:
     lazily, and nothing has to be told twice. Called as the first statement of
     every command that spends LLM calls, so no `get_settings()` in the body can
     run ahead of it.
+
+    Which also makes it the place that arms the peak-hours guard
+    (`tracker.llm.check_peak`): it runs in exactly the commands that can spend, and
+    in no request the console serves.
     """
+    from tracker.llm import arm_peak_guard
+
+    arm_peak_guard()
     if provider is None:
         return
     from tracker.llm import LLM_PROVIDERS

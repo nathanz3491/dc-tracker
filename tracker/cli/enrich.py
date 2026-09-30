@@ -139,6 +139,39 @@ def enrich(
             ),
         ),
     ] = attempts_mod.DEFAULT_MAX_ATTEMPTS,
+    t2: Annotated[
+        bool,
+        typer.Option(
+            "--t2",
+            help=(
+                "With --select/--all: choose the rows `tracker clean` holds below T2 "
+                "for missing fields, fewest missing first, and only for the fields that "
+                "tier counts. What the overnight loop uses."
+            ),
+        ),
+    ] = False,
+    reread: Annotated[
+        bool,
+        typer.Option(
+            "--reread",
+            help=(
+                "Send every harvested page to the model, even one whose text is "
+                "unchanged since it was last read under the same prompt. Off by "
+                "default: those pages are skipped for free."
+            ),
+        ),
+    ] = False,
+    focus: Annotated[
+        bool,
+        typer.Option(
+            "--focus/--no-focus",
+            help=(
+                "Default. Ask the model about the row being enriched only, not every "
+                "campus an article names — a roundup page is the dearest read there "
+                "is. `--no-focus` reads the whole article, updating other rows too."
+            ),
+        ),
+    ] = True,
     browser: Annotated[
         bool,
         typer.Option(
@@ -211,6 +244,9 @@ def enrich(
     if len(chosen_ways) > 1:
         _fail(f"pass only one of project ids, --select or --all (got {' and '.join(chosen_ways)})")
         return
+    if t2 and not (select or enrich_all):
+        _fail("--t2 is a way of choosing rows; pass it with --select N or --all")
+        return
     # `--basics` is a modifier, not a fourth selector: it changes which FIELDS are
     # chased, not how rows are picked, so it composes with all three. On its own it
     # also implies the rows — every row whose defining fields are short — because
@@ -238,6 +274,11 @@ def enrich(
     # it on the list, so the field target steps aside and `--budget` does the
     # bounding — as it does when ids are named, and for the same reason.
     if basics:
+        target_fields = None
+    # `--t2` is the same kind of question: the rows it picks are defined by the
+    # fields that tier measures, and a 9-field target would both leave out a row at
+    # ten fields that still fails it and stop a chosen row before its gap is filled.
+    if t2:
         target_fields = None
 
     # What the agent pass may go after. Narrowing it is the cheapest saving
@@ -312,15 +353,23 @@ def enrich(
                     # The same cap the agent pass honours, so a row it would ask
                     # nothing of is not handed to the harvest either.
                     max_attempts=max_attempts,
+                    toward_t2=t2,
                 )
                 wanted += [p for p in chosen if p not in wanted]
                 if not wanted:
                     console.print(
-                        f"[green]nothing to do[/green] — every project already holds "
+                        "[green]nothing to do[/green] — no row below T2 has a missing "
+                        "field left worth asking about"
+                        if t2
+                        else f"[green]nothing to do[/green] — every project already holds "
                         f"{target_fields or len(TRACKED_FIELDS)} of the 12 tracked fields"
                     )
                     return
-                console.print(f"selected {len(chosen)} project(s), closest to target first")
+                console.print(
+                    f"selected {len(chosen)} project(s) below T2, fewest missing fields first"
+                    if t2
+                    else f"selected {len(chosen)} project(s), closest to target first"
+                )
 
             batch = enrich_mod.run_many(
                 session,
@@ -350,6 +399,8 @@ def enrich(
                 # until it stops being asked about.
                 want_fields=tuple(clean_mod.BASIC_FIELDS) if basics else None,
                 max_attempts=max_attempts,
+                reread=reread,
+                focus=focus,
             )
     except LookupError as exc:
         _fail(str(exc))
@@ -418,7 +469,7 @@ def _gapfill_batch(
       is here to prevent rather than a way to prevent it.
     """
     from tracker import gapfill
-    from tracker.llm import LLMUnavailable, agent_extractor
+    from tracker.llm import LLMUnavailable, agent_extractor, spend_stage
 
     try:
         extractor = agent_extractor(get_settings())
@@ -456,7 +507,8 @@ def _gapfill_batch(
             break
 
         try:
-            out = gapfill.fill(session, project, extractor=extractor, gaps=askable)
+            with spend_stage("agent"):
+                out = gapfill.fill(session, project, extractor=extractor, gaps=askable)
         except Exception as exc:
             session.rollback()
             errored += 1
@@ -556,6 +608,25 @@ def _render_batch(batch, *, target: int, dry_run: bool) -> None:
         f"projects at >={target} of 12: [bold]{hit_before} -> {hit_after}[/bold] "
         f"of {len(batch.reports)}   ({batch.articles_read} article(s) read)"
     )
+    unchanged = sum(report.articles_unchanged for report in batch.reports)
+    held = sum(report.settle_held for report in batch.reports)
+    if unchanged or held:
+        console.print(
+            "[dim]"
+            + "; ".join(
+                part
+                for part in (
+                    f"{unchanged} page(s) unchanged since their last read, not sent again"
+                    if unchanged
+                    else "",
+                    f"{held} dispute(s) refused before on the same claims, not asked again"
+                    if held
+                    else "",
+                )
+                if part
+            )
+            + "[/dim]"
+        )
     if batch.budget_exhausted:
         console.print(
             "[yellow]article budget spent[/yellow] before every project was reached; "

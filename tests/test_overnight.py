@@ -15,16 +15,19 @@ computes, but whether calling it can kill its caller.
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import httpx
 import pytest
 import respx
 
-SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "overnight.sh"
+ROOT = Path(__file__).resolve().parents[1]
+SCRIPT = ROOT / "scripts" / "overnight.sh"
 
 
 def _bash() -> str | None:
@@ -48,6 +51,34 @@ def _bash() -> str | None:
 BASH = _bash()
 needs_bash = pytest.mark.skipif(BASH is None, reason="no working bash on this machine")
 
+#: The interpreter the script's `$PY` stands for, spelled so the bash found above can
+#: run it, and the checkout it must import `tracker` from — not whichever copy happens
+#: to be installed.
+PY = Path(sys.executable).as_posix()
+ENV = {**os.environ, "PYTHONPATH": ROOT.as_posix()}
+
+
+def _python_from_bash() -> bool:
+    if BASH is None:
+        return False
+    try:
+        done = subprocess.run(
+            [BASH, "-c", f'"{PY}" -c "import tracker.spend; print(1)"'],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+            env=ENV,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return done.stdout.strip() == "1"
+
+
+needs_python = pytest.mark.skipif(
+    not _python_from_bash(), reason="the bash here cannot run this Python (WSL?)"
+)
+
 
 def _function(name: str) -> str:
     """One shell function's source, exactly as the script defines it."""
@@ -63,7 +94,15 @@ def _run(tmp_path: Path, body: str) -> subprocess.CompletedProcess:
     Relative paths and a working directory, because the bash found on a Windows
     machine may not read a Windows path.
     """
-    script = "set -euo pipefail\n" + _function("spent_so_far") + _function("over_ceiling") + body
+    script = (
+        "set -euo pipefail\n"
+        f'PY="{PY}"\n'
+        "CNY_CAP=1000000\n"
+        + _function("spent_so_far")
+        + _function("spent_cny")
+        + _function("over_ceiling")
+        + body
+    )
     return subprocess.run(
         [BASH, "-c", script],
         cwd=tmp_path,
@@ -71,6 +110,7 @@ def _run(tmp_path: Path, body: str) -> subprocess.CompletedProcess:
         text=True,
         timeout=60,
         check=False,
+        env=ENV,
     )
 
 
@@ -115,12 +155,90 @@ def test_the_ceiling_is_a_test_the_caller_can_branch_on(tmp_path):
     assert done.stdout.split("\n")[:2] == ["under 600", "over 600"]
 
 
+@needs_bash
+@needs_python
+def test_the_money_ceiling_fires_on_the_bill_not_the_token_count(tmp_path):
+    """The token ceiling mostly counted cached prompt, a fiftieth of the price. Two
+    nights with the same token count can differ tenfold in money, and money is what
+    the ceiling is for."""
+    # A Saturday, so off-peak: a million cached prompt tokens is ¥0.02; a hundred
+    # thousand reply tokens is ¥0.40.
+    (tmp_path / "cached.spend").write_text(
+        "2026-09-26T12:00:00Z\t1\tlogic resolve\tdeepseek-flash\t1000000\t0\t1000000\t0\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "reply.spend").write_text(
+        "2026-09-26T12:00:00Z\t1\tenrich\tdeepseek-flash\t0\t100000\t0\t0\textract\n",
+        encoding="utf-8",
+    )
+    body = (
+        "TOKEN_CAP=999999999\n"
+        "CNY_CAP=0.30\n"
+        "export TRACKER_SPEND_LEDGER=cached.spend\n"
+        'if over_ceiling; then echo "over $CNY"; else echo "under $CNY"; fi\n'
+        "export TRACKER_SPEND_LEDGER=reply.spend\n"
+        'if over_ceiling; then echo "over $CNY"; else echo "under $CNY"; fi\n'
+    )
+    done = _run(tmp_path, body)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.split("\n")[:2] == ["under 0.02", "over 0.40"]
+
+
+@needs_bash
+@needs_python
+def test_an_unreadable_ledger_prices_at_nothing_and_does_not_end_the_night(tmp_path):
+    done = _run(tmp_path, 'export TRACKER_SPEND_LEDGER=no-such.spend\necho "alive $(spent_cny)"\n')
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.strip() == "alive 0.00"
+
+
 def test_every_paid_phase_is_preceded_by_a_ceiling_check():
     """The header promised a check "between phases" and the loop made one per round,
     so a single round could overshoot the ceiling by a round's worth of agent runs."""
     text = SCRIPT.read_text(encoding="utf-8")
     for phase in ("audit", "risks", "logic", "duplicates", "enrich"):
         assert f"if capped {phase}; then break; fi" in text, phase
+
+
+def test_enrich_runs_once_a_night_on_rows_below_t2():
+    """It was 86% of the bill and ran every round. What it reads changes when articles
+    are ingested, not between rounds, and `--target 0` alone chose the fullest rows."""
+    text = SCRIPT.read_text(encoding="utf-8")
+    assert 'if [ "$DO_ENRICH" -eq 1 ] && [ "$round" -le "$ENRICH_ROUNDS" ]; then' in text
+    assert "ENRICH_ROUNDS=1\n" in text
+    assert re.search(r"tracker enrich --select \"\$ENRICH\" --t2 ", text)
+
+
+@needs_bash
+def test_a_count_that_wobbles_back_down_is_not_progress(tmp_path):
+    """The counts from 2026-09-29, round by round. Compared with the round before,
+    every dip read as progress and the night ran seven rounds for nothing; against the
+    night's lowest it stops after the third."""
+    rounds = [(335, 12, 524), (334, 14, 527), (334, 12, 524), (335, 11, 528)]
+    body = "MIN_F=334; MIN_D=12; MIN_B=525; STALE=0\n"
+    for f, d, b in rounds:
+        body += (
+            f"if progressed {f} {d} {b}; then STALE=0; else STALE=$((STALE + 1)); fi\n"
+            'echo "$STALE $MIN_F $MIN_D $MIN_B"\n'
+        )
+    script = "set -euo pipefail\n" + _function("progressed") + body
+    done = subprocess.run(
+        [BASH, "-c", script], cwd=tmp_path, capture_output=True, text=True, timeout=60, check=False
+    )
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.split("\n")[:4] == [
+        "0 334 12 524",  # below-T2 fell to a new low: progress
+        "1 334 12 524",  # groups up, findings back to the low: nothing new
+        "2 334 12 524",  # both back to where they were: still nothing — stop here
+        "0 334 11 524",  # (a fourth round would have found one group)
+    ]
+
+
+def test_the_judgement_tier_runs_at_low_effort_overnight_unless_told_otherwise():
+    text = SCRIPT.read_text(encoding="utf-8")
+    assert "JUDGEMENT_EFFORT=low\n" in text
+    assert 'export TRACKER_DEEPSEEK_JUDGEMENT_EFFORT="$JUDGEMENT_EFFORT"' in text
+    assert "export TRACKER_JUDGEMENT_PROVIDER=ollama" in text
 
 
 # --- the ledger itself -------------------------------------------------------
@@ -160,9 +278,26 @@ def test_a_paid_call_appends_one_ledger_line(keyed, monkeypatch):
 
     lines = keyed.spend_ledger.read_text(encoding="utf-8").splitlines()
     assert len(lines) == 1
-    _when, _pid, command, model, prompt, completion, hit, miss = lines[0].split("\t")
+    _when, _pid, command, model, prompt, completion, hit, miss, stage = lines[0].split("\t")
     assert (command, model) == ("risks confirm", "deepseek-flash")
     assert (prompt, completion, hit, miss) == ("1200", "80", "1000", "200")
+    assert stage == "-"
+
+
+@respx.mock
+def test_a_stage_names_which_part_of_a_command_spent(keyed, monkeypatch):
+    """`enrich` reads articles, settles disputes and runs an agent, and a ledger that
+    only said "enrich" could not say which of the three cost ¥14."""
+    from tracker.llm import DeepSeekExtractor, spend_stage
+
+    monkeypatch.setattr("sys.argv", ["tracker", "enrich", "--select", "15"])
+    respx.post("https://api.deepseek.com/chat/completions").respond(200, json=_completion())
+    with spend_stage("settle"):
+        DeepSeekExtractor(keyed).complete(system="s", user="u")
+    DeepSeekExtractor(keyed).complete(system="s", user="u")
+
+    stages = [line.split("\t")[8] for line in keyed.spend_ledger.read_text("utf-8").splitlines()]
+    assert stages == ["settle", "-"]
 
 
 @respx.mock
@@ -222,22 +357,31 @@ def test_the_ledger_counts_agent_turns_too(keyed, monkeypatch):
 
 
 @needs_bash
-def test_the_morning_report_breaks_spend_down_by_command(tmp_path):
+@needs_python
+def test_the_morning_report_breaks_spend_down_by_phase_and_in_money(tmp_path):
     (tmp_path / "night.spend").write_text(
         "t\t1\tlogic resolve\tm\t9000\t1000\t8000\t1000\n"
         "t\t1\tlogic resolve\tm\t9000\t1000\t8000\t1000\n"
-        "t\t2\trisks confirm\tm\t500\t100\t0\t0\n",
+        "t\t2\trisks confirm\tm\t500\t100\t0\t0\n"
+        "2026-09-26T12:00:00Z\t3\tenrich\tdeepseek-flash\t0\t1000000\t0\t0\textract\n",
         encoding="utf-8",
     )
     script = (
         "set -euo pipefail\n"
+        f'PY="{PY}"\n'
         + _function("spend_by_command")
         + "export TRACKER_SPEND_LEDGER=night.spend\nspend_by_command\n"
     )
     done = subprocess.run(
-        [BASH, "-c", script], cwd=tmp_path, capture_output=True, text=True, timeout=60, check=False
+        [BASH, "-c", script],
+        cwd=tmp_path,
+        capture_output=True,
+        timeout=60,
+        check=False,
+        env=ENV,
     )
     assert done.returncode == 0, done.stderr
-    lines = [line.split() for line in done.stdout.strip().splitlines()]
-    assert lines[0][:2] == ["logic", "resolve"] and "~20000" in lines[0] and "88%" in lines[0]
-    assert lines[1][:2] == ["risks", "confirm"] and "n/a" in lines[1]
+    lines = [line.split() for line in done.stdout.decode("utf-8").strip().splitlines()]
+    assert lines[0][0] == "enrich/extract" and "¥4.00" in lines[0]
+    assert lines[1][:2] == ["logic", "resolve"] and "~20,000" in lines[1] and "89%" in lines[1]
+    assert lines[2][:2] == ["risks", "confirm"] and "n/a" in lines[2]

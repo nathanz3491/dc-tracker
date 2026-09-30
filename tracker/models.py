@@ -659,9 +659,10 @@ class ModelDecline(Base):
     __tablename__ = "model_decline"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    #: Which phase asked: pair, logic, audit or risk.
+    #: Which phase asked: pair, logic, audit, risk or settle.
     kind: Mapped[str] = mapped_column(Text, nullable=False)
-    #: What was asked about, in the kind's own spelling — `12-34`, `56:code`, `78`.
+    #: What was asked about, in the kind's own spelling — `12-34`, `56:code`, `78`,
+    #: `90:mw_planned`.
     subject: Mapped[str] = mapped_column(Text, nullable=False)
     #: Hash of the evidence the question was put with. A different hash is a
     #: different question.
@@ -674,7 +675,9 @@ class ModelDecline(Base):
 
     __table_args__ = (
         UniqueConstraint("kind", "subject", name="uq_model_decline_subject"),
-        CheckConstraint("kind IN ('pair', 'logic', 'audit', 'risk')", name="ck_model_decline_kind"),
+        CheckConstraint(
+            "kind IN ('pair', 'logic', 'audit', 'risk', 'settle')", name="ck_model_decline_kind"
+        ),
     )
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid

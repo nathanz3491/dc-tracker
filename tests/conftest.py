@@ -208,6 +208,10 @@ def _fast_and_keyless_settings(monkeypatch, tmp_path_factory):
     # make a queue of positional replies order-deterministic; only serialising can.
     monkeypatch.setenv("TRACKER_LLM_CONCURRENCY", "1")
     monkeypatch.setenv("TRACKER_LLM_RETRY_JITTER", "0")
+    # The peak-hours guard reads the wall clock, so left on it would fail every
+    # command test run on a weekday afternoon in Beijing and pass it in the evening.
+    # The tests about the guard pass their own clock.
+    monkeypatch.setenv("TRACKER_PEAK_GUARD", "off")
 
     # Deleting the environment variables is not enough: `.env` is also read, and
     # once a real one exists on the developer's machine the suite silently starts

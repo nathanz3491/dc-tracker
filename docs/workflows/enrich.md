@@ -42,6 +42,22 @@ the same nothing. A row whose every empty fillable field is exhausted — asked
 limit goes to the next one; a new citation brings it back, exactly as it reopens its
 fields.
 
+**So is a row with no fillable field empty at all.** The rule above only fired when
+at least one of the agent's fields was empty, so a row short of the twelve by
+`blocker` or `city` alone — fields the agent is never asked and nothing records an
+attempt at — passed it every time. On the night of 2026-09-29, twelve of the fifteen
+rows the overnight loop chose were that shape, at 11 of 12, chosen again every round
+and each re-reading four articles to gain nothing. `--max-attempts 0` still takes
+them. A null that is *correct* (`mw_built` on a site not yet built) no longer counts
+as empty here either.
+
+**`--t2` changes what "best" means**, with `--select` or `--all`: rows that `tracker
+clean` holds below T2 because `fields_present` fails, fewest missing first, counting
+only the fields that condition measures — so `blocker` and `customer`, whose absence
+is usually the truth, never put a row on the list. This is what the overnight loop
+uses. Without it `--target 0` ranks the *fullest* rows first, which is how the loop
+spent its nights on rows already past the bar while 514 below T2 went untouched.
+
 ## `--basics`: the fields that say what a project is
 
 A modifier rather than a fourth way of choosing rows — it changes which *fields* are
@@ -92,6 +108,34 @@ The archive is why this works without a search API: it reaches back years, needs
 key, and `matches_known_project` reduces thousands of URLs to the handful about one
 project.
 
+A search result is also kept on disk for `TRACKER_SEARCH_CACHE_DAYS` (default 7):
+each overnight round is a new process, so the per-run memo forgot every query, and
+one night sent 487 of them, most the same queries round after round.
+
+## What a read costs, and what is not read again
+
+The reply is what the bill is made of, so two things now shorten or skip it.
+
+* **A page unchanged since its last read is not sent to the model.** `crawl.run`
+  compares the page's hash with its last good read, and when that read was under the
+  same prompt the answer is already stored (`crawl.unchanged_reads`, the check the
+  sync refresh phase has used all along). On 2026-09-29, 359 of the 420 articles
+  enrich extracted came out of the local cache unchanged. A skipped page is counted
+  as `unchanged`, not as read, so its share of the article budget goes to a page that
+  is new. `--reread` sends it anyway — for when the gate in code has changed and the
+  prompt has not.
+* **The model is asked about this row only.** A roundup page names eight or
+  twenty-eight campuses; the prompt asked for all of them, the model wrote every one,
+  and all but five were thrown away. `crawl.focus_note` is appended to the message —
+  never written into `extract-v1.txt`, whose hash is the version stamp on every
+  citation — asking for this project's object alone. The evidence gate is unchanged.
+  `--no-focus` reads the whole article, which also updates the other rows it names.
+
+A reply that runs out of room inside its own reasoning is retried with reasoning off
+(`llm.without_thinking`), not at a bigger budget: with reasoning on, a model told
+not to deliberate deliberates anyway, and 31 calls hit the 32,768-token ceiling in
+four nights, most of them twice.
+
 ## Why a round stops
 
 Eight reasons, each reported verbatim as `stopped_because` — the eighth, **"read its
@@ -132,10 +176,17 @@ agent pass, which rolls back on its first error, so an answer left flushed was p
 for and then lost: on a copy of production one row went from 36 superseded marks to
 39 and back to 36.
 
-It needs no bookkeeping to avoid re-asking. Applying an answer marks the losing
-claims `superseded`, which demotes them out of `confirmed`, and a dispute needs two
-quote-backed claims — so a settled field stops being contested. A refusal writes
-nothing and *is* re-asked, which is right: the sources have usually changed by then.
+A settled field needs no bookkeeping to avoid re-asking. Applying an answer marks the
+losing claims `superseded`, which demotes them out of `confirmed`, and a dispute needs
+two quote-backed claims — so a settled field stops being contested.
+
+**A refusal is remembered** (`tracker.declines`, kind `settle`, migration 0031). It
+writes nothing to the row, so it used to be re-asked on every run — and the overnight
+loop re-selected the same rows each round and paid again for every refusal they
+carried. It is keyed on a hash of the claims the model was shown, so a new claim, a
+superseded one, or a re-read that changes a quote is a different question and is
+asked; so is anything after the thirty-day cooldown. An unusable reply is remembered
+the same way; a provider failure is not.
 
 `LLMUnavailable` here is caught and reported as a skip rather than raised. The
 harvest is already written, and losing it because the judgement tier has no key
@@ -175,6 +226,14 @@ the only evidence for. It is folded the way a second project from one article is
   tokens and store nothing, which is the waste it exists to prevent rather than a
   way to prevent it. A budget too small for one row attempts nothing and says so.
 
+**And two rails inside a row's run**, from the agent loop every agent shares
+(`agent.run`). Each tool has a ration per question — eight `read_article`s and four
+`search_web`s (`agent.TOOL_LIMITS`) — past which it answers that it is used up. And
+with two turns left the model is told to answer (`agent.WRAP_UP_TURNS`): running out
+of steps threw away everything the run had spent, and on 2026-09-29 this pass ended
+"reached 12 steps without deciding" twelve times and found one fact all night. A
+"nothing found" answer is an attempt `tracker.attempts` records; running out is not.
+
 ## Two failures the comments record
 
 Both invisible from the outside, and both shaped the current call:
@@ -199,11 +258,13 @@ Touching any of these means the poster is in scope. Re-render with
 | Options, defaults, target defaulting, lock | `tracker/cli/enrich.py` — `enrich` |
 | Round loop and stop reasons | `tracker/ingest/enrich.py` — `run` |
 | Batch budget, one-time sweep | `tracker/ingest/enrich.py` — `run_many`, `sweep_archives`, `will_harvest` |
-| Row selection order | `tracker/ingest/enrich.py` — `select_projects`, `DEFAULT_TARGET_FIELDS` |
-| Harvesters | `tracker/ingest/enrich.py` — `harvest_queue`, `harvest_retry`, `harvest_archive`, `harvest_search`, `harvest_refresh`, `_derive` |
+| Row selection order | `tracker/ingest/enrich.py` — `select_projects`, `pursuable`, `t2_gaps`, `DEFAULT_TARGET_FIELDS` |
+| Harvesters | `tracker/ingest/enrich.py` — `harvest_queue`, `harvest_retry`, `harvest_archive`, `harvest_search`, `harvest_refresh`, `_derive`; `tracker/ingest/search.py` — `CachedProvider`, `cached` |
 | Ignore-list filtering | `tracker/ingest/enrich.py` — `Round.urls`; `tracker/policy.py` |
-| Settle stage | `tracker/ingest/enrich.py` — `_settle`; `tracker/conflicts.py` — `disputes`, `solve`, `apply_outcome` |
-| Agent pass | `tracker/cli/enrich.py` — `_gapfill_batch`; `tracker/gapfill.py` — `apply_facts`, `_basis_axes`, `Filled.missed` |
+| Reading, and not re-reading | `tracker/ingest/enrich.py` — `run(reread=, focus=)`; `tracker/ingest/crawl.py` — `unchanged_reads`, `focus_note`, `extract_one`; `tracker/llm.py` — `without_thinking` |
+| Settle stage | `tracker/ingest/enrich.py` — `_settle`, `settle_key`; `tracker/conflicts.py` — `disputes`, `solve`, `apply_outcome`; `tracker/declines.py` |
+| Agent pass | `tracker/cli/enrich.py` — `_gapfill_batch`; `tracker/gapfill.py` — `apply_facts`, `_basis_axes`, `Filled.missed`; `tracker/agent.py` — `run`, `TOOL_LIMITS`, `WRAP_UP_TURNS` |
+| Spend by stage | `tracker/llm.py` — `spend_stage`; `tracker/spend.py` |
 | The basic field set, and the free scan for it | `tracker/clean.py` — `BASIC_FIELDS`, `BASIC_SOURCED_FIELDS`, `basics_missing`, `basics_worklist`, `basic_fillable` |
 | Not asking twice | `tracker/attempts.py` — `exhausted`, `record`, `evidence_count` |
 | Parties and the megawatt basis | inherited: the harvesters run the crawl reader, so a citation from this command carries both. The agent pass builds its own citation and derives the basis itself (`gapfill._basis_axes`); its parties come from `parties._inferred_parties`, which reads any citation's own claims |

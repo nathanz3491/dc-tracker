@@ -29,17 +29,18 @@
 <text x="141.0" y="387.9" font-size="9" fill="#5C6B73" text-anchor="middle">every row short of a</text>
 <text x="141.0" y="401.5" font-size="9" fill="#5C6B73" text-anchor="middle">field that defines it</text>
 <rect x="278.0" y="196.0" width="178.0" height="206.0" rx="7" fill="#E7EDEE" stroke="#B9C6CC" stroke-width="1.3"/>
-<text x="367.0" y="235.5" font-size="12.5" fill="#16242E" text-anchor="middle" font-weight="700">Rows, ordered</text>
-<text x="367.0" y="252.5" font-size="10" fill="#5C6B73" text-anchor="middle">closest to the target first,</text>
-<text x="367.0" y="266.1" font-size="10" fill="#5C6B73" text-anchor="middle">capacity breaks the tie,</text>
-<text x="367.0" y="279.7" font-size="10" fill="#5C6B73" text-anchor="middle">finished rows excluded,</text>
-<text x="367.0" y="293.3" font-size="10" fill="#5C6B73" text-anchor="middle">and rows with nothing</text>
-<text x="367.0" y="306.9" font-size="10" fill="#5C6B73" text-anchor="middle">left to ask</text>
-<text x="367.0" y="320.5" font-size="10" fill="#5C6B73" text-anchor="middle"></text>
-<text x="367.0" y="334.1" font-size="10" fill="#5C6B73" text-anchor="middle">with --basics: fewest</text>
-<text x="367.0" y="347.7" font-size="10" fill="#5C6B73" text-anchor="middle">defining fields missing first</text>
-<text x="367.0" y="361.3" font-size="10" fill="#5C6B73" text-anchor="middle"></text>
-<text x="367.0" y="374.9" font-size="10" fill="#5C6B73" text-anchor="middle">--budget is the real ceiling</text>
+<text x="367.0" y="228.7" font-size="12.5" fill="#16242E" text-anchor="middle" font-weight="700">Rows, ordered</text>
+<text x="367.0" y="245.7" font-size="10" fill="#5C6B73" text-anchor="middle">closest to the target first,</text>
+<text x="367.0" y="259.3" font-size="10" fill="#5C6B73" text-anchor="middle">capacity breaks the tie;</text>
+<text x="367.0" y="272.9" font-size="10" fill="#5C6B73" text-anchor="middle">finished rows, and rows with</text>
+<text x="367.0" y="286.5" font-size="10" fill="#5C6B73" text-anchor="middle">nothing fillable left to ask,</text>
+<text x="367.0" y="300.1" font-size="10" fill="#5C6B73" text-anchor="middle">are passed over</text>
+<text x="367.0" y="313.7" font-size="10" fill="#5C6B73" text-anchor="middle"></text>
+<text x="367.0" y="327.3" font-size="10" fill="#5C6B73" text-anchor="middle">--basics: fewest defining</text>
+<text x="367.0" y="340.9" font-size="10" fill="#5C6B73" text-anchor="middle">fields missing first</text>
+<text x="367.0" y="354.5" font-size="10" fill="#5C6B73" text-anchor="middle">--t2: fewest T2 gaps first</text>
+<text x="367.0" y="368.1" font-size="10" fill="#5C6B73" text-anchor="middle"></text>
+<text x="367.0" y="381.7" font-size="10" fill="#5C6B73" text-anchor="middle">--budget is the real ceiling</text>
 <polyline points="234.0,218.0 278.0,218.0" fill="none" stroke="#5C6B73" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#a5C6B73)"/>
 <polyline points="234.0,272.0 278.0,272.0" fill="none" stroke="#5C6B73" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#a5C6B73)"/>
 <polyline points="234.0,326.0 278.0,326.0" fill="none" stroke="#5C6B73" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#a5C6B73)"/>
@@ -76,11 +77,12 @@
 <text x="937.0" y="276.1" font-size="10" fill="#5C6B73" text-anchor="middle">de-duplicated across harvesters;</text>
 <text x="937.0" y="289.7" font-size="10" fill="#5C6B73" text-anchor="middle">publishers seed/sources.toml</text>
 <text x="937.0" y="303.3" font-size="10" fill="#5C6B73" text-anchor="middle">ignores are dropped first</text>
-<rect x="844.0" y="362.0" width="186.0" height="78.0" rx="7" fill="#EDF1F2" stroke="#B9C6CC" stroke-width="1.3"/>
-<text x="937.0" y="385.1" font-size="12.5" fill="#16242E" text-anchor="middle" font-weight="700">Read and extract</text>
-<text x="937.0" y="402.1" font-size="10" fill="#5C6B73" text-anchor="middle">crawl.run, force=True — a cited</text>
-<text x="937.0" y="415.7" font-size="10" fill="#5C6B73" text-anchor="middle">page may support a field the</text>
-<text x="937.0" y="429.3" font-size="10" fill="#5C6B73" text-anchor="middle">gate dropped last time</text>
+<rect x="844.0" y="362.0" width="186.0" height="92.0" rx="7" fill="#EDF1F2" stroke="#B9C6CC" stroke-width="1.3"/>
+<text x="937.0" y="385.3" font-size="12.5" fill="#16242E" text-anchor="middle" font-weight="700">Read and extract</text>
+<text x="937.0" y="402.3" font-size="10" fill="#5C6B73" text-anchor="middle">about this row only. A page</text>
+<text x="937.0" y="415.9" font-size="10" fill="#5C6B73" text-anchor="middle">unchanged since its last read</text>
+<text x="937.0" y="429.5" font-size="10" fill="#5C6B73" text-anchor="middle">under this prompt is skipped</text>
+<text x="937.0" y="443.1" font-size="10" fill="#5C6B73" text-anchor="middle">for free; --reread asks anyway</text>
 <polyline points="806.0,352.0 825.0,352.0 825.0,275.0 844.0,275.0" fill="none" stroke="#5C6B73" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#a5C6B73)"/>
 <polyline points="937.0,318.0 937.0,362.0" fill="none" stroke="#5C6B73" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#a5C6B73)"/>
 <rect x="900.9" y="323.0" width="72.1" height="15" fill="#FFFFFF" opacity="0.94"/>
@@ -88,7 +90,7 @@
 <rect x="1076.0" y="344.0" width="190.0" height="92.0" rx="7" fill="#FDF6E9" stroke="#D9891F" stroke-width="1.3"/>
 <text x="1171.0" y="387.7" font-size="13" fill="#16242E" text-anchor="middle" font-weight="700">Did the round fill</text>
 <text x="1171.0" y="404.7" font-size="10" fill="#5C6B73" text-anchor="middle">a field that was empty?</text>
-<polyline points="1030.0,401.0 1053.0,401.0 1053.0,390.0 1076.0,390.0" fill="none" stroke="#5C6B73" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#a5C6B73)"/>
+<polyline points="1030.0,408.0 1053.0,408.0 1053.0,390.0 1076.0,390.0" fill="none" stroke="#5C6B73" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#a5C6B73)"/>
 <rect x="1310.0" y="344.0" width="142.0" height="92.0" rx="7" fill="#F7EBE9" stroke="#A83E33" stroke-width="1.3"/>
 <text x="1381.0" y="380.9" font-size="12.5" fill="#A83E33" text-anchor="middle" font-weight="700">no — stop</text>
 <text x="1381.0" y="397.9" font-size="10" fill="#5C6B73" text-anchor="middle">the real stop</text>
@@ -123,8 +125,8 @@
 <text x="524.0" y="752.0" font-size="10" fill="#0F6E75" text-anchor="middle" font-weight="700">resolved</text>
 <rect x="286.0" y="838.0" width="208.0" height="62.0" rx="7" fill="#F7EBE9" stroke="#A83E33" stroke-width="1.3"/>
 <text x="390.0" y="859.9" font-size="11.5" fill="#A83E33" text-anchor="middle" font-weight="700">refused</text>
-<text x="390.0" y="876.9" font-size="10" fill="#5C6B73" text-anchor="middle">the disagreement stays in the notes,</text>
-<text x="390.0" y="890.5" font-size="10" fill="#5C6B73" text-anchor="middle">and is asked again next run</text>
+<text x="390.0" y="876.9" font-size="10" fill="#5C6B73" text-anchor="middle">remembered against the claims it saw;</text>
+<text x="390.0" y="890.5" font-size="10" fill="#5C6B73" text-anchor="middle">asked again only when they change</text>
 <polyline points="390.0,810.0 390.0,838.0" fill="none" stroke="#A83E33" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#aA83E33)"/>
 <rect x="802.0" y="706.0" width="208.0" height="104.0" rx="7" fill="#FBF2E4" stroke="#D9891F" stroke-width="1.3"/>
 <text x="906.0" y="735.3" font-size="12.5" fill="#16242E" text-anchor="middle" font-weight="700">8 · agent pass</text>
@@ -133,13 +135,15 @@
 <text x="906.0" y="779.5" font-size="10" fill="#5C6B73" text-anchor="middle">could not reach, and cites it.</text>
 <text x="906.0" y="793.1" font-size="10" fill="#5C6B73" text-anchor="middle">~77,000 tokens a row, so it is last</text>
 <polyline points="754.0,758.0 802.0,758.0" fill="none" stroke="#5C6B73" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#a5C6B73)"/>
-<rect x="802.0" y="826.0" width="208.0" height="88.0" rx="7" fill="#F7EBE9" stroke="#A83E33" stroke-width="1.3"/>
-<text x="906.0" y="840.5" font-size="11.5" fill="#A83E33" text-anchor="middle" font-weight="700">and what it is not asked</text>
-<text x="906.0" y="857.5" font-size="9" fill="#5C6B73" text-anchor="middle">rows the budget never harvested</text>
-<text x="906.0" y="871.1" font-size="9" fill="#5C6B73" text-anchor="middle">fields already looked for twice</text>
-<text x="906.0" y="884.7" font-size="9" fill="#5C6B73" text-anchor="middle">without success, until a new</text>
-<text x="906.0" y="898.3" font-size="9" fill="#5C6B73" text-anchor="middle">citation reopens them</text>
-<text x="906.0" y="911.9" font-size="9" fill="#5C6B73" text-anchor="middle">--token-budget stops BETWEEN rows</text>
+<rect x="802.0" y="826.0" width="208.0" height="116.0" rx="7" fill="#F7EBE9" stroke="#A83E33" stroke-width="1.3"/>
+<text x="906.0" y="840.9" font-size="11.5" fill="#A83E33" text-anchor="middle" font-weight="700">and what it is not asked</text>
+<text x="906.0" y="857.9" font-size="9" fill="#5C6B73" text-anchor="middle">rows the budget never harvested</text>
+<text x="906.0" y="871.5" font-size="9" fill="#5C6B73" text-anchor="middle">fields already looked for twice</text>
+<text x="906.0" y="885.1" font-size="9" fill="#5C6B73" text-anchor="middle">without success, until a new</text>
+<text x="906.0" y="898.7" font-size="9" fill="#5C6B73" text-anchor="middle">citation reopens them</text>
+<text x="906.0" y="912.3" font-size="9" fill="#5C6B73" text-anchor="middle">--token-budget stops BETWEEN rows</text>
+<text x="906.0" y="925.9" font-size="9" fill="#5C6B73" text-anchor="middle">eight reads, four searches a row;</text>
+<text x="906.0" y="939.5" font-size="9" fill="#5C6B73" text-anchor="middle">told to answer two turns early</text>
 <polyline points="906.0,810.0 906.0,826.0" fill="none" stroke="#A83E33" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#aA83E33)"/>
 <rect x="1058.0" y="700.0" width="224.0" height="116.0" rx="7" fill="#E7EDEE" stroke="#B9C6CC" stroke-width="1.3"/>
 <text x="1170.0" y="735.3" font-size="12.5" fill="#16242E" text-anchor="middle" font-weight="700">The row</text>

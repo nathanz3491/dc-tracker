@@ -165,11 +165,19 @@ duplicates only, with a confirmation before anything is folded.
 until two consecutive rounds fail to reduce either count, because neither is a
 queue that drains — ruling a claim out re-derives a row and can raise a finding
 the old value hid, and merging changes the survivor's claim set and can match a
-third row. Ceilings on hours, rounds and tokens, a `VACUUM INTO` snapshot before
-the first merge, and one run at a time. The token ceiling is checked before every
-paid phase and counts every paid call: each one appends a line to the night's spend
-ledger (`TRACKER_SPEND_LEDGER`, which the script sets), and the morning report
-breaks the total down by command.
+third row. Ceilings on hours, rounds, **yuan** and tokens, a `VACUUM INTO` snapshot
+before the first merge, and one run at a time. The money ceiling (`--cny`, default
+¥12) is checked before every paid phase and counts every paid call: each one appends
+a line to the night's spend ledger (`TRACKER_SPEND_LEDGER`, which the script sets),
+`tracker/spend.py` prices it at DeepSeek's published rate for the hour it was made,
+and the morning report breaks the total down by command and stage. A token ceiling
+could not do this job: nine tokens in ten are cached prompt at a fiftieth of the
+price, and 93% of the money is the reply, so 25M tokens was anything from ¥20 to ¥31.
+
+A command that spends refuses to start in DeepSeek's peak hours (09–12 and 14–18
+Beijing time, Monday to Friday), when every call costs double —
+`TRACKER_PEAK_GUARD=off` in front of it pays the peak rate on purpose, and
+`--llm-provider ollama` is never refused. The console is not affected.
 
 ```bash
 tmux new -s tracker
@@ -179,8 +187,18 @@ caffeinate -i scripts/overnight.sh --hours 10
 
 `scripts/overnight.sh --status` prints where a running one has got to, from any
 other shell. Each round runs the free phases, then `audit` (a T1 gate, and cheap),
-`risks`, the logic and duplicate agents, and `enrich` last — the most expensive rung
-and the only one that can move a row held at T1 by `fields_present`.
+`risks`, the logic and duplicate agents, and — in the first round only
+(`--enrich-rounds`) — `enrich`, the most expensive rung and the only one that can move
+a row held at T1 by `fields_present`, pointed at the rows below T2 (`enrich --t2`).
+A round counts as progress only when a count falls below the lowest it has been that
+night, so counts that wobble up and back down end the night instead of prolonging
+it. The per-item judgements run at `low` effort (`--judgement-effort`), or on the
+local model with `--local-judgement`.
+
+What a night costs, measured on the six nights to 2026-09-29, before these changes:
+¥9–34, ¥23 on average, 86% of it enrich re-reading unchanged articles for rows it
+could not improve. `python -m tracker.spend report <ledger>` prices any night's
+ledger the same way the morning report does.
 
 Sized from measurement, and re-measured after the first run: ~77k tokens a
 finding, with **70% of the prompt served from the provider's prefix cache**. That

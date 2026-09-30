@@ -45,7 +45,9 @@ from tracker.models import ModelDecline, Project, utcnow
 #: enough that a figure first published after the look is still found.
 COOLDOWN_DAYS: Final = 30
 
-KINDS: Final = ("pair", "logic", "audit", "risk")
+#: `settle` is enrich's settle step (`enrich._settle`): a contested field the
+#: judgement tier refused to pick between, on the claims it was shown.
+KINDS: Final = ("pair", "logic", "audit", "risk", "settle")
 
 
 def fingerprint(*parts: Any) -> str:

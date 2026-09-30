@@ -270,6 +270,13 @@ class Settings(BaseSettings):
     #: genuinely stuck still ends.
     deepseek_timeout_s: float = Field(default=600.0, gt=0)
 
+    #: What a command that spends does when it starts in DeepSeek's peak hours
+    #: (09:00-12:00 and 14:00-18:00 Beijing, Monday to Friday), when every call costs
+    #: double. `refuse` treats the hour like a missing key, before anything is fetched
+    #: or paid for; `warn` logs once and carries on; `off` says nothing. Only commands
+    #: arm it — the console's briefing panels never do. See `tracker.llm.check_peak`.
+    peak_guard: Literal["refuse", "warn", "off"] = "refuse"
+
     # --- The reserve: OpenCode Go -----------------------------------------
     #: A second provider, used **only once DeepSeek answers that the balance is
     #: empty** (HTTP 402), never in place of it. An empty balance used to end the
@@ -356,6 +363,17 @@ class Settings(BaseSettings):
     #: accident.
     llm_provider: Literal["deepseek", "ollama"] = "deepseek"
 
+    #: A provider for the judgement tier alone — `risks confirm`, `audit resolve`,
+    #: `logic conflicts` and enrich's settle step — when it should differ from
+    #: :data:`llm_provider`. None follows `llm_provider`.
+    #:
+    #: Each of those is a pick from a short closed menu against evidence already in
+    #: the prompt, the least demanding question the tool asks, so it is the first
+    #: place a local model is worth trying while extraction and the agent stay on the
+    #: API. `overnight.sh --local-judgement` sets it for a night. Nobody has measured
+    #: a local model's answers here yet; read a night's rulings before leaving it on.
+    judgement_provider: Literal["deepseek", "ollama"] | None = None
+
     #: Where the Ollama server answers. Loopback by default: the tracker runs on
     #: the same machine as the model, and nothing here should assume otherwise.
     ollama_base_url: str = "http://127.0.0.1:11434"
@@ -426,6 +444,15 @@ class Settings(BaseSettings):
     search_results_per_query: int = Field(default=10, ge=1, le=10)
     #: Queries per run, so a bad query set cannot exhaust the daily quota.
     search_max_queries: int = Field(default=10, ge=1, le=100)
+    #: Days a search result is reused by `enrich` and the agents' `search_web`
+    #: before the query is sent again. 0 turns the cache off.
+    #:
+    #: Their queries are built from a row's name and gaps, which change slowly, and
+    #: each command is a fresh process, so the in-run memo forgot them between runs:
+    #: one night's loop sent 487 queries, most of them the same queries round after
+    #: round. Discovery (`tracker search`) never reads this cache — finding what was
+    #: published this week is its whole job.
+    search_cache_days: int = Field(default=7, ge=0)
 
     # --- Database ---------------------------------------------------------
     #: Relative paths resolve against the project root, not the CWD.

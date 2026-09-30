@@ -693,3 +693,85 @@ def test_the_citation_list_says_what_each_claims_and_what_is_already_ruled_out(s
     assert "claims: mw_planned 300.0 (ruled out: misread) · investment_usd 2500000000" in listed
     assert "claims: mw_planned 1400.0" in listed
     assert listed.count("ruled out") == 1
+
+
+# --- what a run costs --------------------------------------------------------------
+
+
+class _ThinkingModel(_BudgetModel):
+    """A provider with a reasoning dial, recording the effort of every turn."""
+
+    def __init__(self, *turns):
+        super().__init__(*turns)
+        self.effort = "high"
+        self.efforts: list[str | None] = []
+
+    def converse(self, *, system, messages, tools=None, max_tokens=None):
+        self.efforts.append(self.effort)
+        return super().converse(
+            system=system, messages=messages, tools=tools, max_tokens=max_tokens
+        )
+
+
+def test_a_turn_cut_off_mid_reasoning_is_retried_without_reasoning_at_the_same_budget():
+    """A turn that spent its budget deliberating was not short of room. The retry at
+    50,000 was measured running to that ceiling too; with reasoning off the reply is
+    the tool call itself."""
+    model = _ThinkingModel(
+        LLMReply(text="", finish_reason="length"),
+        LLMReply(text="", tool_calls=(_call("decide", verdict="same"),)),
+    )
+    result = agent.run("go", tools=[_answer_tool()], extractor=model, system="s")
+
+    assert result.answered
+    assert model.budgets == [agent.MAX_TOKENS, agent.MAX_TOKENS]
+    assert model.efforts == ["high", None]
+    assert model.effort == "high", "the caller's extractor is not changed"
+
+
+def _look_tool(name: str = "read_article") -> agent.Tool:
+    return agent.Tool(
+        name=name,
+        description="read",
+        parameters={"type": "object", "properties": {"url": {"type": "string"}}},
+        run=lambda url="": f"text of {url}",
+    )
+
+
+def test_a_run_is_told_to_answer_before_it_runs_out_of_steps():
+    """Running out of steps throws away everything the run spent; an honest
+    'could not decide' is an answer the ledgers remember."""
+    turns = [LLMReply(text="", tool_calls=(_call("read_article", url=f"u{i}"),)) for i in range(4)]
+    model = _ToolModel(*turns, LLMReply(text="", tool_calls=(_call("decide", verdict="unsure"),)))
+
+    result = agent.run(
+        "go", tools=[_look_tool(), _answer_tool()], extractor=model, system="s", max_steps=6
+    )
+
+    assert result.answered
+    warned = [m for m in model.seen[4] if m["role"] == "user" and "turns left" in m["content"]]
+    assert len(warned) == 1 and "decide" in warned[0]["content"]
+    assert not any("turns left" in m.get("content", "") for m in model.seen[3]), "not early"
+    first = model.seen[0]
+    assert model.seen[4][: len(first)] == first, "appended, never edited in: the prefix cache"
+
+
+def test_each_tool_has_a_ration_per_question():
+    """One finding read seventeen articles for ~360,000 tokens. Past the ration the
+    tool answers that it is used up, and the run decides with what it has."""
+    reads = tuple(_call("read_article", url=f"u{i}") for i in range(3))
+    model = _ToolModel(
+        LLMReply(text="", tool_calls=reads),
+        LLMReply(text="", tool_calls=(_call("decide", verdict="same"),)),
+    )
+    result = agent.run(
+        "go",
+        tools=[_look_tool(), _answer_tool()],
+        extractor=model,
+        system="s",
+        limits={"read_article": 2},
+    )
+
+    assert [s.failed for s in result.steps[:3]] == [False, False, True]
+    assert "used up" in result.steps[2].result and "decide" in result.steps[2].result
+    assert agent.TOOL_LIMITS["read_article"] >= 6, "generous: a thorough answer reads three"

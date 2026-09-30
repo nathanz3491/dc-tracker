@@ -48,6 +48,7 @@ import threading
 import time
 import uuid
 from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -241,6 +242,60 @@ class ResponseTruncated(LLMError):
     """The model hit its token ceiling mid-object."""
 
 
+# --- peak hours ----------------------------------------------------------------
+#
+# DeepSeek bills a call made between 09:00 and 12:00 or 14:00 and 18:00, Beijing
+# time, Monday to Friday, at twice the rate of the same call at any other hour
+# (`tracker.spend`). The overnight loop starts at 18:00 for that reason. The runs
+# that paid double were the ones started by hand in the day: on 2026-09-25 three
+# `logic conflicts` passes and two `sync`s cost ¥18 for what would have been ¥9.
+#
+# So a command that spends refuses to start a DeepSeek extractor in those hours,
+# exactly the way it refuses without a key — `PeakHours` is an `LLMUnavailable`, and
+# every paid path already handles that before it spends anything. Commands arm the
+# guard (`cli._shared._use_llm`, the first line of every command that spends); the
+# console never does, because a reader opening a row's briefing is not a batch job
+# that could have waited. `TRACKER_PEAK_GUARD=warn` lets it through with a warning,
+# `off` silently; per run, prefix the command with it.
+
+_PEAK_GUARD = threading.Event()
+_PEAK_WARNED = threading.Event()
+
+
+def arm_peak_guard() -> None:
+    """Refuse DeepSeek extractors built in peak hours for the rest of this process."""
+    _PEAK_GUARD.set()
+
+
+class PeakHours(LLMUnavailable):
+    """Started in DeepSeek's peak hours, when every call costs double."""
+
+
+def check_peak(settings: Settings, *, now: Any = None) -> None:
+    """Raise :class:`PeakHours` when an armed process builds a paid extractor at peak."""
+    import datetime as dt
+
+    from tracker import spend
+
+    if not _PEAK_GUARD.is_set() or settings.peak_guard == "off":
+        return
+    when = now or dt.datetime.now(dt.UTC)
+    if not spend.is_peak(when):
+        return
+    resume = spend.next_off_peak(when).strftime("%H:%M")
+    if settings.peak_guard == "warn":
+        if not _PEAK_WARNED.is_set():
+            _PEAK_WARNED.set()
+            log.warning("DeepSeek's peak hours: every call costs double until %s Beijing", resume)
+        return
+    raise PeakHours(
+        f"DeepSeek bills double until {resume} Beijing time (peak is 09-12 and 14-18, "
+        "Monday to Friday), so this command will not start paying now. Run it after "
+        f"{resume}, or prefix it with TRACKER_PEAK_GUARD=off to pay the peak rate "
+        "deliberately. `--llm-provider ollama` is never refused."
+    )
+
+
 @dataclass(frozen=True)
 class ToolCall:
     """One request from the model to run one tool.
@@ -322,6 +377,26 @@ def cache_counts(usage: dict[str, Any]) -> tuple[int | None, int | None]:
 
 _LEDGER_LOCK = threading.Lock()
 
+#: Which part of a command is spending, for the ledger's ninth column. One command
+#: can run several paid stages — `enrich` reads articles, settles disputes and runs
+#: an agent — and with only the command name the morning report could say that
+#: enrich cost ¥14 but not which of the three it was. A process-wide value rather
+#: than a context variable, because extraction runs on worker threads
+#: (`parallel.map_ordered`) that a context variable set on the main thread would not
+#: reach, and one process runs its stages one after another.
+_STAGE: list[str] = [""]
+
+
+@contextmanager
+def spend_stage(name: str) -> Iterator[None]:
+    """Label every paid call inside this block `name` in the spend ledger."""
+    previous = _STAGE[0]
+    _STAGE[0] = name
+    try:
+        yield
+    finally:
+        _STAGE[0] = previous
+
 
 def _command() -> str:
     """The `tracker` subcommand this process is running, for the ledger's third column.
@@ -342,9 +417,10 @@ def record_spend(settings: Settings, data: dict[str, Any], model: str) -> None:
     """Append one paid call's token counts to :data:`Settings.spend_ledger`.
 
     Tab-separated: UTC time, pid, command, model, prompt tokens, completion tokens,
-    cached prompt tokens, uncached prompt tokens. Unknown counts are written as 0 —
-    the ledger is read by `awk` in a shell script, and an empty field is one more
-    thing for it to get wrong.
+    cached prompt tokens, uncached prompt tokens, stage (see :func:`spend_stage`;
+    `-` when none was set). Unknown counts are written as 0 — the ledger is read by
+    `awk` in a shell script, and an empty field is one more thing for it to get
+    wrong. `tracker.spend` turns the same lines into money.
 
     **A failure to write is logged, never raised.** The call has already been paid
     for and its answer is in hand; losing the answer because a log file could not be
@@ -364,6 +440,7 @@ def record_spend(settings: Settings, data: dict[str, Any], model: str) -> None:
         usage.get("completion_tokens") or 0,
         hit or 0,
         miss or 0,
+        _STAGE[0] or "-",
     )
     line = "\t".join(str(value) for value in fields) + "\n"
     try:
@@ -655,6 +732,9 @@ class DeepSeekExtractor:
         self.settings = settings or get_settings()
         if not self.settings.has_api_key():
             raise MissingApiKey(KEY_HELP)
+        # Here, where a missing key is refused, so every path that already copes with
+        # "no key" copes with "not now" — before it has fetched or spent anything.
+        check_peak(self.settings)
         self.base_url = self.settings.deepseek_base_url.rstrip("/")
         # `model` overrides the configured extraction model. On DeepSeek the
         # tiers differ by reasoning rather than by model name, but the override
@@ -679,6 +759,23 @@ class DeepSeekExtractor:
         asked = max_tokens or self.settings.max_completion_tokens
         return min(asked, MODEL_TOKEN_CAP.get(self.model, asked))
 
+    def _reasoning(self) -> dict[str, Any]:
+        """The request fields that turn reasoning on or off and set how hard it works.
+
+        **`reasoning_effort` is a top-level field**, a sibling of `model` and
+        `messages`; only the on/off switch lives inside `thinking`. That is how
+        DeepSeek's thinking-mode guide writes the request. This file used to send the
+        effort *inside* the `thinking` object, where the guide does not put it, and
+        no test or measurement ever checked that the API honoured it there — so every
+        tier may have been answering at the provider's default, `high`, whatever
+        `TRACKER_DEEPSEEK_*_EFFORT` said. The reply is about 93% of what a night
+        costs, so the effort dial is the largest lever there is, and it has to reach
+        the provider to be one. `scripts/probe_effort.py` measures whether it does.
+        """
+        if self.effort is None:
+            return {"thinking": {"type": "disabled"}}
+        return {"thinking": {"type": "enabled"}, "reasoning_effort": self.effort}
+
     def _payload(self, *, system: str, user: str, max_tokens: int | None, stream: bool) -> dict:
         """The request body both `complete` and `stream` send.
 
@@ -699,11 +796,7 @@ class DeepSeekExtractor:
             # max_tokens — MiniMax wanted max_completion_tokens.
             "max_tokens": self._budget(max_tokens),
             "stream": stream,
-            "thinking": (
-                {"type": "enabled", "reasoning_effort": self.effort}
-                if self.effort is not None
-                else {"type": "disabled"}
-            ),
+            **self._reasoning(),
         }
         # Off by default; see `Settings.deepseek_json_mode` for why. Never on the
         # streaming path, which returns prose a person reads, not an object.
@@ -854,11 +947,7 @@ class DeepSeekExtractor:
             "top_p": 0.9,
             "max_tokens": self._budget(max_tokens),
             "stream": False,
-            "thinking": (
-                {"type": "enabled", "reasoning_effort": self.effort}
-                if self.effort is not None
-                else {"type": "disabled"}
-            ),
+            **self._reasoning(),
         }
         if tools:
             payload["tools"] = tools
@@ -1304,6 +1393,30 @@ def build_extractor(
     return DeepSeekExtractor(settings, model=model, effort=effort)
 
 
+def without_thinking(extractor: Any) -> Any | None:
+    """The same extractor with reasoning switched off, or None if it has none to switch.
+
+    For the retry after a reply ran out of room inside its own reasoning. The retry
+    used to be the same request with a bigger budget and a line asking the model
+    not to deliberate — and a model with reasoning on reasons anyway, so on the
+    nights measured the retry hit the ceiling as often as the first try did: 31
+    calls at the 32,768-token limit in four nights, each an answer paid for and
+    thrown away, most of them twice. With reasoning off the reply *is* the answer,
+    a few hundred tokens of JSON.
+
+    A shallow copy: same settings, same client, same model; only `effort` differs.
+    Anything without an `effort` attribute — every fake in the test suite — has no
+    reasoning to switch off and gets None, so callers keep their old retry.
+    """
+    import copy
+
+    if getattr(extractor, "effort", None) is None:
+        return None
+    quiet = copy.copy(extractor)
+    quiet.effort = None
+    return quiet
+
+
 def default_extractor(settings: Settings | None = None) -> Extractor:
     """Extraction, **with reasoning on**.
 
@@ -1364,9 +1477,14 @@ def judgement_extractor(settings: Settings | None = None) -> Extractor:
     `audit resolve`, `logic conflicts` and enrich's settle step make one call per
     obstacle, finding, field or disagreement — up to a hundred a round overnight.
     See `Settings.deepseek_judgement_effort`.
+
+    `Settings.judgement_provider` can send this tier alone to a local model while
+    everything else stays on the API: a pick from a short menu against evidence
+    already in the prompt is the least demanding question the tool asks, so it is
+    the first place a free model is worth trying.
     """
     settings = settings or get_settings()
-    if settings.llm_provider == "ollama":
+    if (settings.judgement_provider or settings.llm_provider) == "ollama":
         return OllamaExtractor(settings, effort=settings.deepseek_judgement_effort)
     return DeepSeekExtractor(
         settings,
@@ -1431,12 +1549,17 @@ __all__ = [
     "MissingApiKey",
     "OllamaExtractor",
     "OllamaUnavailable",
+    "PeakHours",
     "ResponseTruncated",
+    "arm_peak_guard",
     "build_extractor",
+    "check_peak",
     "default_extractor",
     "fast_extractor",
     "judgement_extractor",
     "parse_json_object",
     "reasoning_extractor",
+    "spend_stage",
     "split_thinking",
+    "without_thinking",
 ]

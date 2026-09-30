@@ -12,6 +12,13 @@
 # took the group count from 47 to 48. So the target is a fixed point, and the stop
 # condition is consecutive rounds with no reduction.
 #
+# "Reduction" means a count falling BELOW THE LOWEST IT HAS BEEN THIS NIGHT, not below
+# last round's. The counts wobble on their own — a merge splits one group into two,
+# a re-derived row drops below T2 and climbs back — and measured against the previous
+# round every wobble back down read as progress: 2026-09-29 ran seven rounds with
+# duplicate groups going 12, 14, 12, 11 and rows below T2 525, 527, 524, 528, and
+# stopped with nothing moved. Against the running minimum it stops after three.
+#
 # THE PHASE ORDER IS THE ARGUMENT, cheapest and most-blocking first:
 #
 #   free      dates, geo, scope, derive, logic --auto. No model, no cost. `scope`
@@ -28,16 +35,32 @@
 #             expensive rung (~77,000 tokens a row) AND the largest tier lever
 #             there is: every one of the 283 rows sitting at T1 is held there by
 #             `fields_present` alone. Those rows are not wrong, they are empty, and
-#             nothing above this line can move one.
+#             nothing above this line can move one. It runs in the FIRST round only
+#             (`--enrich-rounds`): what it reads changes when articles are ingested,
+#             not when a merge or a ruling lands, and on the nights of 2026-09-24 to
+#             09-29 it was 86% of the bill, round after round, for one new fact.
+#             It picks rows with `--t2` — the ones below T2 for missing fields,
+#             fewest missing first — where `--target 0` alone had sorted the
+#             FULLEST rows first and spent every round on rows already past the bar.
 #
-# WHAT IT COSTS. Measured: ~45,000-260,000 tokens per agent finding depending on how
-# many articles it reads, and one HTTP request per article on a cache miss. The free
-# phases and `audit` cost almost nothing. `--tokens` is a hard ceiling, checked
-# before every paid phase, and defaults to one. Later rounds are cheaper than the
-# first: every paid phase records what it answered or could not decide, keyed on the
-# evidence it was shown, and does not re-offer it until that evidence changes or a
-# month passes (`tracker/declines.py`). Before that, only logic findings were
-# remembered, and every round re-paid for the same pairs, rulings and obstacles.
+# WHAT IT COSTS, AND THE CEILING. The ceiling is money: `--cny` (default ¥12), priced
+# from the spend ledger by `tracker.spend` at DeepSeek's published rates for the hour
+# each call was made. A ceiling in tokens (`--tokens`, still honoured) mostly counted
+# cached prompt, which is billed at a fiftieth of the rate; about 93% of the money is
+# the reply, most of it reasoning. 25,000,000 tokens was anything from ¥20 to ¥31, and
+# on the six nights to 2026-09-29 the loop cost ¥9-34 without the token ceiling ever
+# firing. The check runs before every paid phase, and on the nights measured no single
+# phase invocation cost more than ¥2.76 (an enrich pass), so a night ends below
+# `--cny` plus about ¥3 — under ¥15 at the default.
+#
+# Later rounds are cheaper than the first: every paid phase records what it answered
+# or could not decide, keyed on the evidence it was shown, and does not re-offer it
+# until that evidence changes or a month passes (`tracker/declines.py`).
+#
+# The per-item judgements — risks, audit, enrich's settle step — run at `low`
+# reasoning effort overnight (`--judgement-effort`): each is a pick from a short menu
+# against evidence already in the prompt. `--local-judgement` sends them to the local
+# model instead (TRACKER_JUDGEMENT_PROVIDER=ollama), at no cost per call.
 #
 # THE CEILING READS A LEDGER, NOT THE LOG. Every paid call appends a line to the file
 # `TRACKER_SPEND_LEDGER` names (`tracker.llm.record_spend`), so a phase is counted
@@ -90,10 +113,15 @@ AUDIT=60
 RISKS=40
 ENRICH=15
 ENRICH_BUDGET=60
+ENRICH_ROUNDS=1
 MIN_CONF=0.85
 DO_MERGE=1
 DO_ENRICH=1
 TOKEN_CAP=25000000
+CNY_CAP=12
+JUDGEMENT_EFFORT=low
+EXTRACTION_EFFORT=
+LOCAL_JUDGEMENT=0
 BACKUP_EVERY=5
 STATUS_ONLY=0
 
@@ -114,11 +142,16 @@ started in tmux and left.
   --pairs N          duplicate pairs per round (default 25)
   --audit N          audit findings per round (default 60)
   --risks N          obstacles per round (default 40)
-  --enrich N         projects to enrich per round (default 15); 0 to skip
-  --enrich-budget N  articles the enrich phase may read per round (default 60)
+  --enrich N         projects to enrich (default 15); 0 to skip
+  --enrich-budget N  articles the enrich phase may read (default 60)
+  --enrich-rounds N  enrich in the first N rounds only (default 1)
   --min-confidence F floor a duplicate fold needs (default 0.85)
   --no-merge         never fold duplicates; park and rule only. Deletes nothing.
-  --tokens N         stop when estimated spend passes N (default 25,000,000)
+  --cny N            stop when the night's spend, priced, reaches N yuan (default 12)
+  --tokens N         also stop when prompt+reply tokens pass N (default 25,000,000)
+  --judgement-effort E  reasoning for risks, audit and settle: low|high|max (default low)
+  --extraction-effort E reasoning for reading articles (default: whatever .env says)
+  --local-judgement  send risks, audit and settle to the local model (Ollama)
   --backup-every N   snapshot every N rounds (default 5). Always before round 1.
   --status           print the tail of the log and exit
   --help
@@ -145,8 +178,13 @@ while [ $# -gt 0 ]; do
     --risks)          shift; RISKS="${1:?}" ;;
     --enrich)         shift; ENRICH="${1:?}" ;;
     --enrich-budget)  shift; ENRICH_BUDGET="${1:?}" ;;
+    --enrich-rounds)  shift; ENRICH_ROUNDS="${1:?}" ;;
     --min-confidence) shift; MIN_CONF="${1:?}" ;;
+    --cny)            shift; CNY_CAP="${1:?}" ;;
     --tokens)         shift; TOKEN_CAP="${1:?}" ;;
+    --judgement-effort)  shift; JUDGEMENT_EFFORT="${1:?}" ;;
+    --extraction-effort) shift; EXTRACTION_EFFORT="${1:?}" ;;
+    --local-judgement) LOCAL_JUDGEMENT=1 ;;
     --backup-every)   shift; BACKUP_EVERY="${1:?}" ;;
     --no-merge)       DO_MERGE=0 ;;
     --status)         STATUS_ONLY=1 ;;
@@ -157,6 +195,16 @@ while [ $# -gt 0 ]; do
 done
 
 [ "$ENRICH" -gt 0 ] 2>/dev/null || DO_ENRICH=0
+
+effort_ok() { case "$1" in low|high|max) return 0 ;; *) return 1 ;; esac; }
+effort_ok "$JUDGEMENT_EFFORT" || { echo "--judgement-effort must be low, high or max" >&2; exit 2; }
+[ -z "$EXTRACTION_EFFORT" ] || effort_ok "$EXTRACTION_EFFORT" \
+  || { echo "--extraction-effort must be low, high or max" >&2; exit 2; }
+# Exported, so every `tracker` child reads them. The environment wins over `.env`,
+# which is the point: these are the night's settings, not the machine's.
+export TRACKER_DEEPSEEK_JUDGEMENT_EFFORT="$JUDGEMENT_EFFORT"
+[ -z "$EXTRACTION_EFFORT" ] || export TRACKER_DEEPSEEK_EXTRACTION_EFFORT="$EXTRACTION_EFFORT"
+[ "$LOCAL_JUDGEMENT" -eq 0 ] || export TRACKER_JUDGEMENT_PROVIDER=ollama
 
 LOCK="$REPO/data/runs/overnight.lock"
 
@@ -255,24 +303,41 @@ spent_so_far() {
   awk -F'\t' '{t += $5 + $6} END {printf "%d\n", t}' "$TRACKER_SPEND_LEDGER"
 }
 
-# The night's spend by command, largest first — which phase the money went to, and
-# how much of its prompt the provider served from cache. A phase whose hit rate
-# falls is one whose prompt prefix is being disturbed, which costs the difference.
-spend_by_command() {
-  [ -s "$TRACKER_SPEND_LEDGER" ] || { echo "    no paid calls"; return 0; }
-  awk -F'\t' '{t[$3] += $5 + $6; n[$3]++; h[$3] += $7; m[$3] += $8}
-    END {for (c in t) printf "%d\t%d\t%s\t%d\n", t[c], n[c], c,
-      (h[c] + m[c]) ? 100 * h[c] / (h[c] + m[c]) : -1}' "$TRACKER_SPEND_LEDGER" \
-    | sort -rn | awk -F'\t' '{cache = ($4 < 0) ? "cache n/a" : sprintf("cache %d%%", $4);
-      printf "    %-22s %6d call(s)  ~%d tokens  %s\n", $3, $2, $1, cache}'
+# What this run's paid calls cost, in yuan with two decimals, priced by
+# `tracker.spend` at the rate for the hour each was made. `|| echo 0.00` rather than
+# letting a failure through: this is read under `set -e`, and a pricing problem must
+# cost the night its ceiling check, never the night itself.
+spent_cny() {
+  "$PY" -m tracker.spend total "$TRACKER_SPEND_LEDGER" 2>/dev/null || echo 0.00
 }
 
-# True when the ceiling is reached. Called before every paid phase rather than once a
-# round: a round is nine phases and the agent ones cost millions, so a check at the
-# top of the round let one round overshoot the ceiling by a round.
+# The night's spend by phase — command, and the stage within it where one was
+# recorded — dearest first, with how much of the prompt the provider served from
+# cache. A phase whose hit rate falls is one whose prompt prefix is being disturbed.
+spend_by_command() {
+  "$PY" -m tracker.spend report "$TRACKER_SPEND_LEDGER" 2>/dev/null || echo "    (no report)"
+}
+
+# True when any of the three counts — findings, groups, rows below T2 — fell below the
+# lowest it has been tonight, and lowers that minimum. Against the minimum rather than
+# last round's value, so a count that wobbles up and back down is not progress; see
+# WHY ROUNDS in the header. `return $moved` is an answer for an `if`, never an exit.
+progressed() {
+  local moved=1
+  if [ "$1" -lt "$MIN_F" ]; then MIN_F=$1; moved=0; fi
+  if [ "$2" -lt "$MIN_D" ]; then MIN_D=$2; moved=0; fi
+  if [ "$3" -lt "$MIN_B" ]; then MIN_B=$3; moved=0; fi
+  return $moved
+}
+
+# True when either ceiling is reached: yuan, or tokens. Called before every paid
+# phase rather than once a round: a round is several phases, so a check at the top of
+# the round let one round overshoot the ceiling by a round.
 over_ceiling() {
   SPENT=$(spent_so_far)
-  [ "$SPENT" -ge "$TOKEN_CAP" ]
+  CNY=$(spent_cny)
+  if [ "$SPENT" -ge "$TOKEN_CAP" ]; then return 0; fi
+  awk -v spent="$CNY" -v cap="$CNY_CAP" 'BEGIN { exit !(spent + 0 >= cap + 0) }'
 }
 
 # --- start ------------------------------------------------------------------
@@ -280,19 +345,27 @@ over_ceiling() {
 STARTED=$(date +%s)
 DEADLINE=$((STARTED + HOURS * 3600))
 SPENT=0
+CNY=0.00
 STALE=0
 CAPPED=0
 
 say "overnight starting  (pid $$)"
 printf '    repo      %s\n' "$REPO"
-printf '    ceilings  %sh, %s rounds, %s tokens\n' "$HOURS" "$ROUNDS" "$TOKEN_CAP"
-printf '    per round %s findings, %s audit, %s risks, %s pairs, %s enrich\n' \
-  "$FINDINGS" "$AUDIT" "$RISKS" "$PAIRS" "$ENRICH"
+printf '    ceilings  %sh, %s rounds, ¥%s, %s tokens\n' "$HOURS" "$ROUNDS" "$CNY_CAP" "$TOKEN_CAP"
+printf '    per round %s findings, %s audit, %s risks, %s pairs\n' \
+  "$FINDINGS" "$AUDIT" "$RISKS" "$PAIRS"
+printf '    enrich    %s row(s) below T2, %s article budget, first %s round(s)\n' \
+  "$ENRICH" "$ENRICH_BUDGET" "$ENRICH_ROUNDS"
 printf '    merge=%s  enrich=%s  min-confidence %s\n' "$DO_MERGE" "$DO_ENRICH" "$MIN_CONF"
+if [ "$LOCAL_JUDGEMENT" -eq 1 ]; then WHERE=', on the local model'; else WHERE=''; fi
+printf '    judgement %s effort%s\n' "$JUDGEMENT_EFFORT" "$WHERE"
 printf '    spend     %s\n' "$TRACKER_SPEND_LEDGER"
 
 read -r F0 D0 B0 <<<"$(counts)"
 printf '    at start  %s finding(s), %s duplicate group(s), %s row(s) below T2\n' "$F0" "$D0" "$B0"
+# The lowest each count has been tonight. Progress is a count falling below its
+# minimum, not below last round's value — see WHY ROUNDS in the header.
+MIN_F=$F0; MIN_D=$D0; MIN_B=$B0
 
 say 'snapshot before anything is deleted'
 backup
@@ -301,7 +374,7 @@ backup
 # settle below still runs once for whatever the night managed.
 capped() {
   if over_ceiling; then
-    say "token ceiling reached (~$SPENT of $TOKEN_CAP) before $1 — stopping"
+    say "spend ceiling reached (¥$CNY of ¥$CNY_CAP, ~$SPENT of $TOKEN_CAP tokens) before $1 — stopping"
     CAPPED=1
     return 0
   fi
@@ -314,8 +387,9 @@ for round in $(seq 1 "$ROUNDS"); do
     say "wall-clock ceiling of ${HOURS}h reached — stopping between rounds"; break
   fi
   SPENT=$(spent_so_far)
+  CNY=$(spent_cny)
 
-  say "round $round of $ROUNDS  (~$SPENT tokens, $(( (DEADLINE - now) / 60 ))m left)"
+  say "round $round of $ROUNDS  (¥$CNY, ~$SPENT tokens, $(( (DEADLINE - now) / 60 ))m left)"
   if [ "$round" -gt 1 ] && [ $((round % BACKUP_EVERY)) -eq 1 ]; then backup; fi
 
   # --- free: no model, no cost --------------------------------------------
@@ -353,11 +427,14 @@ for round in $(seq 1 "$ROUNDS"); do
 
   # --- enrich: last, and the largest lever --------------------------------
   # Every row sitting at T1 is held there by `fields_present` alone. Nothing above
-  # this line can move one, because they are not wrong — they are empty.
-  if [ "$DO_ENRICH" -eq 1 ]; then
+  # this line can move one, because they are not wrong — they are empty. First
+  # round(s) only: a second pass the same night finds the same pages, and a page it
+  # has read is not read again, so it was paying to be told so. `--t2` picks the rows
+  # that tier fails, fewest missing first.
+  if [ "$DO_ENRICH" -eq 1 ] && [ "$round" -le "$ENRICH_ROUNDS" ]; then
     if capped enrich; then break; fi
-    phase "enrich — $ENRICH thinnest row(s), $ENRICH_BUDGET article budget"
-    tracker enrich --select "$ENRICH" --target 0 --budget "$ENRICH_BUDGET" \
+    phase "enrich — $ENRICH row(s) below T2, $ENRICH_BUDGET article budget"
+    tracker enrich --select "$ENRICH" --t2 --target 0 --budget "$ENRICH_BUDGET" \
       < /dev/null || true
   fi
 
@@ -371,11 +448,12 @@ for round in $(seq 1 "$ROUNDS"); do
   printf '\n  round %s: findings %s -> %s (%+d)  groups %s -> %s (%+d)  below-T2 %s -> %s (%+d)\n' \
     "$round" "$F0" "$F1" "$((F1 - F0))" "$D0" "$D1" "$((D1 - D0))" "$B0" "$B1" "$((B1 - B0))"
 
-  if [ "$F1" -lt "$F0" ] || [ "$D1" -lt "$D0" ] || [ "$B1" -lt "$B0" ]; then
+  if progressed "$F1" "$D1" "$B1"; then
     STALE=0
   else
     STALE=$((STALE + 1))
-    printf '  no reduction (%s of %s stale rounds)\n' "$STALE" "$DRY_ROUNDS"
+    printf '  nothing below the night'"'"'s lowest (%s findings, %s groups, %s below T2): %s of %s stale rounds\n' \
+      "$MIN_F" "$MIN_D" "$MIN_B" "$STALE" "$DRY_ROUNDS"
   fi
   F0=$F1; D0=$D1; B0=$B1
 
@@ -405,7 +483,7 @@ echo
 tracker duplicates < /dev/null 2>&1 | sed -n '1,2p' || true
 
 ELAPSED=$(( ($(date +%s) - STARTED) / 60 ))
-say "overnight complete — ${ELAPSED}m, ~$(spent_so_far) tokens"
+say "overnight complete — ${ELAPSED}m, ¥$(spent_cny), ~$(spent_so_far) tokens"
 spend_by_command
 printf '    Anything still listed needs either a person or a command that does not\n'
 printf '    exist yet. The block findings are the second kind — see this header.\n'
