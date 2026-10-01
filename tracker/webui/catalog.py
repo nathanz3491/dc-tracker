@@ -227,6 +227,9 @@ GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
             # rows we have, the other the operators missing from the database.
             "coverage",
             "clean",
+            # Beside `clean`: that counts how sound the values are, this lists the
+            # ones a run changed with the sentence behind each, which a count cannot.
+            "changes",
             "queue",
             "queue stats",
             "blocks",
@@ -257,6 +260,9 @@ GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "duplicates parked",
             "merge",
             "logic resolve",
+            # The same ruling `logic resolve` offers from its menu, by hand, for one
+            # claim a person has already read and found wrong.
+            "logic rule-out",
             "audit resolve",
             "logic conflicts",
             "risks confirm",

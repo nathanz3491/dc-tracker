@@ -89,30 +89,31 @@
 <text x="590.0" y="627.1" font-size="10.2" fill="#5C6B73" text-anchor="left">that call was paid for and returned nothing, which is not the</text>
 <text x="590.0" y="640.7" font-size="10.2" fill="#5C6B73" text-anchor="left">same as finding no contradictions.</text>
 <rect x="1032.0" y="196.0" width="420.0" height="478.0" rx="7" fill="#F7F9F9" stroke="#B9C6CC" stroke-width="1.3"/>
-<text x="1046.0" y="283.1" font-size="13" fill="#16242E" text-anchor="left" font-weight="700">Nothing in check is written</text>
-<text x="1046.0" y="300.1" font-size="10.2" fill="#5C6B73" text-anchor="left">A contradiction is a question for a person. The</text>
-<text x="1046.0" y="313.7" font-size="10.2" fill="#5C6B73" text-anchor="left">report says so in its last line, and names where</text>
-<text x="1046.0" y="327.3" font-size="10.2" fill="#5C6B73" text-anchor="left">an answer goes.</text>
-<text x="1046.0" y="340.9" font-size="10.2" fill="#5C6B73" text-anchor="left"></text>
-<text x="1046.0" y="354.5" font-size="10.2" fill="#5C6B73" text-anchor="left">That is not timidity. Whether 100 MW built against</text>
-<text x="1046.0" y="368.1" font-size="10.2" fill="#5C6B73" text-anchor="left">32 MW planned means the plan was revised, or that</text>
-<text x="1046.0" y="381.7" font-size="10.2" fill="#5C6B73" text-anchor="left">the two figures describe different phases of one</text>
-<text x="1046.0" y="395.3" font-size="10.2" fill="#5C6B73" text-anchor="left">campus, is not in the row — and a tool that picked</text>
-<text x="1046.0" y="408.9" font-size="10.2" fill="#5C6B73" text-anchor="left">one would be inventing a fact.</text>
-<text x="1046.0" y="422.5" font-size="10.2" fill="#5C6B73" text-anchor="left"></text>
-<text x="1046.0" y="436.1" font-size="10.2" fill="#5C6B73" text-anchor="left">Measured on the live database: 0 of 149 findings</text>
-<text x="1046.0" y="449.7" font-size="10.2" fill="#5C6B73" text-anchor="left">were mechanically resolvable.</text>
-<text x="1046.0" y="463.3" font-size="10.2" fill="#5C6B73" text-anchor="left"></text>
-<text x="1046.0" y="476.9" font-size="10.2" fill="#5C6B73" text-anchor="left">Where answers go:</text>
-<text x="1046.0" y="490.5" font-size="10.2" fill="#5C6B73" text-anchor="left"></text>
-<text x="1046.0" y="504.1" font-size="10.2" fill="#5C6B73" text-anchor="left">tracker review · confirm or demote a value</text>
-<text x="1046.0" y="517.7" font-size="10.2" fill="#5C6B73" text-anchor="left">tracker merge · fold rows that are one campus</text>
-<text x="1046.0" y="531.3" font-size="10.2" fill="#5C6B73" text-anchor="left">logic conflicts · settle a contested field</text>
-<text x="1046.0" y="544.9" font-size="10.2" fill="#5C6B73" text-anchor="left">logic resolve · work through the findings</text>
-<text x="1046.0" y="558.5" font-size="10.2" fill="#5C6B73" text-anchor="left"></text>
-<text x="1046.0" y="572.1" font-size="10.2" fill="#5C6B73" text-anchor="left">An unconfirmed investment figure already stays out</text>
-<text x="1046.0" y="585.7" font-size="10.2" fill="#5C6B73" text-anchor="left">of the capex sums, so the repair path exists before</text>
-<text x="1046.0" y="599.3" font-size="10.2" fill="#5C6B73" text-anchor="left">the audit ever runs.</text>
+<text x="1046.0" y="276.3" font-size="13" fill="#16242E" text-anchor="left" font-weight="700">Nothing in check is written</text>
+<text x="1046.0" y="293.3" font-size="10.2" fill="#5C6B73" text-anchor="left">A contradiction is a question for a person. The</text>
+<text x="1046.0" y="306.9" font-size="10.2" fill="#5C6B73" text-anchor="left">report says so in its last line, and names where</text>
+<text x="1046.0" y="320.5" font-size="10.2" fill="#5C6B73" text-anchor="left">an answer goes.</text>
+<text x="1046.0" y="334.1" font-size="10.2" fill="#5C6B73" text-anchor="left"></text>
+<text x="1046.0" y="347.7" font-size="10.2" fill="#5C6B73" text-anchor="left">That is not timidity. Whether 100 MW built against</text>
+<text x="1046.0" y="361.3" font-size="10.2" fill="#5C6B73" text-anchor="left">32 MW planned means the plan was revised, or that</text>
+<text x="1046.0" y="374.9" font-size="10.2" fill="#5C6B73" text-anchor="left">the two figures describe different phases of one</text>
+<text x="1046.0" y="388.5" font-size="10.2" fill="#5C6B73" text-anchor="left">campus, is not in the row — and a tool that picked</text>
+<text x="1046.0" y="402.1" font-size="10.2" fill="#5C6B73" text-anchor="left">one would be inventing a fact.</text>
+<text x="1046.0" y="415.7" font-size="10.2" fill="#5C6B73" text-anchor="left"></text>
+<text x="1046.0" y="429.3" font-size="10.2" fill="#5C6B73" text-anchor="left">Measured on the live database: 0 of 149 findings</text>
+<text x="1046.0" y="442.9" font-size="10.2" fill="#5C6B73" text-anchor="left">were mechanically resolvable.</text>
+<text x="1046.0" y="456.5" font-size="10.2" fill="#5C6B73" text-anchor="left"></text>
+<text x="1046.0" y="470.1" font-size="10.2" fill="#5C6B73" text-anchor="left">Where answers go:</text>
+<text x="1046.0" y="483.7" font-size="10.2" fill="#5C6B73" text-anchor="left"></text>
+<text x="1046.0" y="497.3" font-size="10.2" fill="#5C6B73" text-anchor="left">tracker review · confirm or demote a value</text>
+<text x="1046.0" y="510.9" font-size="10.2" fill="#5C6B73" text-anchor="left">tracker merge · fold rows that are one campus</text>
+<text x="1046.0" y="524.5" font-size="10.2" fill="#5C6B73" text-anchor="left">logic conflicts · settle a contested field</text>
+<text x="1046.0" y="538.1" font-size="10.2" fill="#5C6B73" text-anchor="left">logic resolve · work through the findings</text>
+<text x="1046.0" y="551.7" font-size="10.2" fill="#5C6B73" text-anchor="left">logic rule-out · take back one claim</text>
+<text x="1046.0" y="565.3" font-size="10.2" fill="#5C6B73" text-anchor="left"></text>
+<text x="1046.0" y="578.9" font-size="10.2" fill="#5C6B73" text-anchor="left">An unconfirmed investment figure already stays out</text>
+<text x="1046.0" y="592.5" font-size="10.2" fill="#5C6B73" text-anchor="left">of the capex sums, so the repair path exists before</text>
+<text x="1046.0" y="606.1" font-size="10.2" fill="#5C6B73" text-anchor="left">the audit ever runs.</text>
 <line x1="48" y1="716" x2="1452" y2="716" stroke="#B9C6CC" stroke-width="1"/>
 <text x="48.0" y="752.0" font-size="10.5" fill="#5C6B73" text-anchor="start" font-weight="700" letter-spacing="2.4">THE TWO THAT CAN SETTLE SOMETHING</text>
 <text x="392.7" y="752.0" font-size="11" fill="#5C6B73" text-anchor="start">and the sharp difference between what each of them writes</text>

@@ -130,6 +130,12 @@ The reply is what the bill is made of, so two things now shorten or skip it.
   never written into `extract-v1.txt`, whose hash is the version stamp on every
   citation — asking for this project's object alone. The evidence gate is unchanged.
   `--no-focus` reads the whole article, which also updates the other rows it names.
+* **A read for one row never founds another.** Asked about one project, the model
+  writes it under the article's own name — "Nebius AI / Highridge Business Park",
+  "Skybox Datacenters Austin" — which matched no row, so on 2026-09-30 each became a
+  second row beside #1299 and #552, counted twice in the totals until merged. A
+  focused read now runs `existing_only`: its reading lands on whatever existing row it
+  routes to, and a campus that matches none is logged by name and not created.
 
 A reply that runs out of room inside its own reasoning is retried with reasoning off
 (`llm.without_thinking`), not at a bigger budget: with reasoning on, a model told
@@ -234,6 +240,17 @@ of steps threw away everything the run had spent, and on 2026-09-29 this pass en
 "reached 12 steps without deciding" twelve times and found one fact all night. A
 "nothing found" answer is an attempt `tracker.attempts` records; running out is not.
 
+**Under `--t2` a row is asked only about the gaps that hold it below T2.** It was
+chosen for those, and asking about every empty field as well is how a self-built Meta
+campus got Meta written in as its own customer — a field T2 deliberately does not
+demand, because its absence is usually the truth.
+
+**A fact counts only if it reaches the row.** A fact attached to a citation whose
+claim about that field an earlier ruling struck stays struck: COL4 re-found the same
+ruled-out $150M on two nights and was reported as a gain both times. Now the pass
+checks the field afterwards; a fact that did not land is reported as such and recorded
+as an attempt, so the next night does not pay to find it again.
+
 ## Two failures the comments record
 
 Both invisible from the outside, and both shaped the current call:
@@ -261,9 +278,9 @@ Touching any of these means the poster is in scope. Re-render with
 | Row selection order | `tracker/ingest/enrich.py` — `select_projects`, `pursuable`, `t2_gaps`, `DEFAULT_TARGET_FIELDS` |
 | Harvesters | `tracker/ingest/enrich.py` — `harvest_queue`, `harvest_retry`, `harvest_archive`, `harvest_search`, `harvest_refresh`, `_derive`; `tracker/ingest/search.py` — `CachedProvider`, `cached` |
 | Ignore-list filtering | `tracker/ingest/enrich.py` — `Round.urls`; `tracker/policy.py` |
-| Reading, and not re-reading | `tracker/ingest/enrich.py` — `run(reread=, focus=)`; `tracker/ingest/crawl.py` — `unchanged_reads`, `focus_note`, `extract_one`; `tracker/llm.py` — `without_thinking` |
+| Reading, and not re-reading | `tracker/ingest/enrich.py` — `run(reread=, focus=)`, `Round.refused_new`; `tracker/ingest/crawl.py` — `run(existing_only=)`, `unchanged_reads`, `focus_note`, `extract_one`; `tracker/llm.py` — `without_thinking` |
 | Settle stage | `tracker/ingest/enrich.py` — `_settle`, `settle_key`; `tracker/conflicts.py` — `disputes`, `solve`, `apply_outcome`; `tracker/declines.py` |
-| Agent pass | `tracker/cli/enrich.py` — `_gapfill_batch`; `tracker/gapfill.py` — `apply_facts`, `_basis_axes`, `Filled.missed`; `tracker/agent.py` — `run`, `TOOL_LIMITS`, `WRAP_UP_TURNS` |
+| Agent pass | `tracker/cli/enrich.py` — `_gapfill_batch(t2_only=)`, and its landed/unlanded check; `tracker/gapfill.py` — `apply_facts`, `_basis_axes`, `Filled.missed`; `tracker/agent.py` — `run`, `TOOL_LIMITS`, `WRAP_UP_TURNS` |
 | Spend by stage | `tracker/llm.py` — `spend_stage`; `tracker/spend.py` |
 | The basic field set, and the free scan for it | `tracker/clean.py` — `BASIC_FIELDS`, `BASIC_SOURCED_FIELDS`, `basics_missing`, `basics_worklist`, `basic_fillable` |
 | Not asking twice | `tracker/attempts.py` — `exhausted`, `record`, `evidence_count` |

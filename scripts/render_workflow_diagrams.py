@@ -310,7 +310,7 @@ class Canvas:
 
 
 def enrich() -> Canvas:
-    c = Canvas(1500, 1010)
+    c = Canvas(1500, 1056)
     c.title(
         "tracker enrich — every method at one row, cheapest first",
         "Six harvesters in cost order. A round that fills nothing ends the run, and the two "
@@ -368,7 +368,7 @@ def enrich() -> Canvas:
     )
     read = c.box(
         844, 362, 186, 92, "Read and extract",
-        ["about this row only. A page", "unchanged since its last read", "under this prompt is skipped", "for free; --reread asks anyway"],
+        ["about this row only, and never", "founds a new row. A page", "unchanged since its last read", "is skipped for free", "(--reread asks anyway)"],
         role="cool",
     )
     c.arrow([frame.right(-24), (825, frame.cy - 24), (825, 275), (844, 275)])
@@ -437,8 +437,8 @@ def enrich() -> Canvas:
     # The three rails that decide what it is NOT asked. Every one of them saves by
     # not making a call, which is the only saving worth the name at this price.
     c.box(
-        802, 826, 208, 116, "and what it is not asked",
-        ["rows the budget never harvested", "fields already looked for twice", "without success, until a new", "citation reopens them", "--token-budget stops BETWEEN rows", "eight reads, four searches a row;", "told to answer two turns early"],
+        802, 826, 208, 152, "and what it is not asked",
+        ["rows the budget never harvested", "fields already looked for twice", "without success, until a new", "citation reopens them", "--token-budget stops BETWEEN rows", "eight reads, four searches a row;", "told to answer two turns early;", "--t2: only the gaps T2 counts;", "a struck fact counts as tried"],
         role="red", title_size=11.5, sub_size=9,
     )
     c.arrow([agent.bottom(), (agent.cx, 826)], colour=RED)
@@ -768,7 +768,7 @@ def logic() -> Canvas:
 
     c.box(
         1032, 196, 420, 478, "Nothing in check is written",
-        ["A contradiction is a question for a person. The", "report says so in its last line, and names where", "an answer goes.", "", "That is not timidity. Whether 100 MW built against", "32 MW planned means the plan was revised, or that", "the two figures describe different phases of one", "campus, is not in the row — and a tool that picked", "one would be inventing a fact.", "", "Measured on the live database: 0 of 149 findings", "were mechanically resolvable.", "", "Where answers go:", "", "tracker review · confirm or demote a value", "tracker merge · fold rows that are one campus", "logic conflicts · settle a contested field", "logic resolve · work through the findings", "", "An unconfirmed investment figure already stays out", "of the capex sums, so the repair path exists before", "the audit ever runs."],
+        ["A contradiction is a question for a person. The", "report says so in its last line, and names where", "an answer goes.", "", "That is not timidity. Whether 100 MW built against", "32 MW planned means the plan was revised, or that", "the two figures describe different phases of one", "campus, is not in the row — and a tool that picked", "one would be inventing a fact.", "", "Measured on the live database: 0 of 149 findings", "were mechanically resolvable.", "", "Where answers go:", "", "tracker review · confirm or demote a value", "tracker merge · fold rows that are one campus", "logic conflicts · settle a contested field", "logic resolve · work through the findings", "logic rule-out · take back one claim", "", "An unconfirmed investment figure already stays out", "of the capex sums, so the repair path exists before", "the audit ever runs."],
         role="panel", title_size=13, align="left", sub_size=10.2,
     )
 

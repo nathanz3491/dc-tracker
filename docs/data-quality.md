@@ -321,6 +321,45 @@ measured on this corpus: if judgement gets visibly worse, pin
 `TRACKER_DEEPSEEK_REASONING_MODEL` back to a pro model for one overnight round
 and compare.
 
+## Reading what a night changed
+
+```bash
+tracker changes --against <snapshot.db>     # every value changed, with its sentence
+tracker logic rule-out 263 investment_usd \
+    --citation https://example.test/article --why "a statewide total, not this campus"
+```
+
+**The quality counts cannot see a wrong value that has a real quote**, and those are
+the errors a model makes. On the night of 2026-09-30 the share of values backed by a
+sentence held at 74.4% and rows at T2 rose, while the night's models:
+
+- replaced a campus's $600M with "invested $20 billion+ **in Ohio** since 2019" — a
+  statewide figure, quoted verbatim;
+- kept $475M as a campus's build investment while saying in their own reason that it
+  was **the price of the land**;
+- stored one new building's estimated cost as the whole campus's investment;
+- wrote a self-built Meta campus's operator in as its **customer**.
+
+Every one passed the evidence gate, because every sentence was really in its article.
+What was wrong was what the sentence was *about*, which only a reader catches. So the
+overnight loop's morning report ends with `tracker changes`: each value that moved,
+old and new, the sentence now standing behind it (or a loud *NOTHING* when no claim
+does), the rows created and removed, and every decision noted on a row. It compares
+against the `VACUUM INTO` snapshot the loop takes before round 1, and an id reused
+after a merge is reported as a new row, not as an edit of the old one.
+
+`tracker logic rule-out` is the repair for what a reader finds. It does what the
+audit's own repair does — marks the citation's claim decided-against (`misread` by
+default: the sentence was about something else; `superseded` for a figure right once
+and since restated), empties the field, re-derives it from what still stands — and
+records the decision in the row's notes as the operator's, with `--why`. It never
+types a value in. `--dry-run` shows the result first.
+
+Two of the four errors above came from the audit step running at `low` reasoning
+effort for that one night; it runs at `high` again (`overnight.sh --judgement-effort`).
+The other two came from enrich's agent being asked about every empty field of a row
+chosen for one T2 gap; under `--t2` it is now asked about that gap alone.
+
 ## What the stored data actually rests on
 
 ```bash

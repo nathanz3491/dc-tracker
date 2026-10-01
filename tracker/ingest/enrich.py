@@ -107,6 +107,9 @@ class Round:
     #: Pages harvested but not sent: they hash the same as their last read under
     #: this prompt. See `run(reread=)`.
     unchanged: int = 0
+    #: Projects a focused reading named that matched no existing row, and so were not
+    #: created. See `run(focus=)`.
+    refused_new: int = 0
     fields_filled: tuple[str, ...] = ()
 
     @property
@@ -168,6 +171,10 @@ class EnrichReport:
     @property
     def articles_unchanged(self) -> int:
         return sum(r.unchanged for r in self.rounds)
+
+    @property
+    def rows_refused(self) -> int:
+        return sum(r.refused_new for r in self.rounds)
 
     @property
     def gained(self) -> tuple[str, ...]:
@@ -809,10 +816,18 @@ def run(
                 # for when the gate in code has changed and the prompt has not.
                 skip_unchanged=not reread,
                 focus=_label(project) if focus else None,
+                # A read focused on one row must not found another. Asked about this
+                # project alone, the model writes this project — under the article's
+                # own name for it, which is how "Nebius AI / Highridge Business Park"
+                # and "Skybox Datacenters Austin" became second rows beside #1299 and
+                # #552 on 2026-09-30, both counted twice in the totals until merged.
+                # The reading still lands wherever it routes to an existing row.
+                existing_only=focus,
             )
         # A page skipped as unchanged cost nothing and is not counted against the
         # article budget, so the share it would have taken goes to a page that is new.
         current.unchanged = ingest.skipped_unchanged
+        current.refused_new = ingest.refused_new
         current.articles_read = len(batch) - ingest.skipped_unchanged
         spent -= ingest.skipped_unchanged
 

@@ -234,9 +234,11 @@ def test_a_count_that_wobbles_back_down_is_not_progress(tmp_path):
     ]
 
 
-def test_the_judgement_tier_runs_at_low_effort_overnight_unless_told_otherwise():
+def test_the_judgement_tier_runs_at_high_effort_overnight_unless_told_otherwise():
+    """It ran at `low` for one night and two of three audit decisions were wrong in
+    ways that moved published totals. The step costs tenths of a yuan."""
     text = SCRIPT.read_text(encoding="utf-8")
-    assert "JUDGEMENT_EFFORT=low\n" in text
+    assert "JUDGEMENT_EFFORT=high\n" in text
     assert 'export TRACKER_DEEPSEEK_JUDGEMENT_EFFORT="$JUDGEMENT_EFFORT"' in text
     assert "export TRACKER_JUDGEMENT_PROVIDER=ollama" in text
 

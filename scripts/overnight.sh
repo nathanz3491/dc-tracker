@@ -57,10 +57,18 @@
 # or could not decide, keyed on the evidence it was shown, and does not re-offer it
 # until that evidence changes or a month passes (`tracker/declines.py`).
 #
-# The per-item judgements — risks, audit, enrich's settle step — run at `low`
-# reasoning effort overnight (`--judgement-effort`): each is a pick from a short menu
-# against evidence already in the prompt. `--local-judgement` sends them to the local
-# model instead (TRACKER_JUDGEMENT_PROVIDER=ollama), at no cost per call.
+# The per-item judgements — risks, audit, enrich's settle step — run at `high`
+# reasoning effort (`--judgement-effort`). They ran at `low` for one night,
+# 2026-09-30, and two of the audit's three model decisions that night were wrong in
+# ways that move published totals: it replaced a campus's $600M with a statewide
+# "$20 billion+ in Ohio", and kept a land price as a campus's build investment while
+# saying in its own reason that it was the land price. The step cost ¥0.18 that
+# night; `high` costs a few tenths of a yuan more, which is not the place to save.
+# `--local-judgement` sends them to the local model (TRACKER_JUDGEMENT_PROVIDER=ollama).
+#
+# The morning report ends with every value the night changed (`tracker changes`
+# against the snapshot taken before round 1), each with the sentence now behind it,
+# so a person can read what the models did in a couple of minutes.
 #
 # THE CEILING READS A LEDGER, NOT THE LOG. Every paid call appends a line to the file
 # `TRACKER_SPEND_LEDGER` names (`tracker.llm.record_spend`), so a phase is counted
@@ -119,7 +127,7 @@ DO_MERGE=1
 DO_ENRICH=1
 TOKEN_CAP=25000000
 CNY_CAP=12
-JUDGEMENT_EFFORT=low
+JUDGEMENT_EFFORT=high
 EXTRACTION_EFFORT=
 LOCAL_JUDGEMENT=0
 BACKUP_EVERY=5
@@ -149,7 +157,7 @@ started in tmux and left.
   --no-merge         never fold duplicates; park and rule only. Deletes nothing.
   --cny N            stop when the night's spend, priced, reaches N yuan (default 12)
   --tokens N         also stop when prompt+reply tokens pass N (default 25,000,000)
-  --judgement-effort E  reasoning for risks, audit and settle: low|high|max (default low)
+  --judgement-effort E  reasoning for risks, audit and settle: low|high|max (default high)
   --extraction-effort E reasoning for reading articles (default: whatever .env says)
   --local-judgement  send risks, audit and settle to the local model (Ollama)
   --backup-every N   snapshot every N rounds (default 5). Always before round 1.
@@ -259,6 +267,8 @@ finally:
     con.close()
 PYEOF
   echo "    snapshot: $dest"
+  # Not `local`: the morning report compares the database with the first one.
+  SNAPSHOT="$dest"
 }
 
 # Three numbers from one process: logic findings not yet answered, duplicate
@@ -368,7 +378,9 @@ printf '    at start  %s finding(s), %s duplicate group(s), %s row(s) below T2\n
 MIN_F=$F0; MIN_D=$D0; MIN_B=$B0
 
 say 'snapshot before anything is deleted'
+SNAPSHOT=""
 backup
+FIRST_SNAPSHOT="$SNAPSHOT"
 
 # Before each paid phase. `break` leaves the round loop from inside its body, so the
 # settle below still runs once for whatever the night managed.
@@ -485,5 +497,16 @@ tracker duplicates < /dev/null 2>&1 | sed -n '1,2p' || true
 ELAPSED=$(( ($(date +%s) - STARTED) / 60 ))
 say "overnight complete — ${ELAPSED}m, ¥$(spent_cny), ~$(spent_so_far) tokens"
 spend_by_command
+
+# Every value the night changed, each with the sentence now behind it. The quality
+# counts above cannot see a wrong value that has a real quote; a reader can, in the
+# minutes this list takes to read. `tracker logic rule-out` takes back a bad one.
+say 'what the night changed'
+if [ -n "$FIRST_SNAPSHOT" ] && [ -f "$FIRST_SNAPSHOT" ]; then
+  tracker changes --against "$FIRST_SNAPSHOT" < /dev/null || true
+else
+  echo "    no snapshot from before round 1 to compare against"
+fi
+echo
 printf '    Anything still listed needs either a person or a command that does not\n'
 printf '    exist yet. The block findings are the second kind — see this header.\n'

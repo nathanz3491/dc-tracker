@@ -12,6 +12,33 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **The nightly loop's audit and settle decisions run at `high` effort again**
+  (`scripts/overnight.sh`, `tests/test_overnight.py`, `docs/data-quality.md`). They ran
+  at `low` for one night, 2026-09-30, and two of the audit's three model decisions
+  were wrong in ways that move published totals: a campus's $600M was replaced by a
+  statewide "$20 billion+ in Ohio", and a land price was kept as a campus's build
+  investment by a model whose own reason said it was the land price. The step cost
+  ¥0.18 that night; `high` costs tenths of a yuan more.
+
+- **Under `enrich --t2` the agent is asked only about the gaps that hold a row below
+  T2** (`tracker/cli/enrich.py`, `tests/test_enrich.py`). It was asked about every
+  empty field of a row chosen for one gap, and wrote a self-built Meta campus's
+  operator in as its customer — a field T2 deliberately does not demand.
+
+- **A fact enrich's agent "found" but that never reached the row is no longer
+  reported as a gain** (`tracker/cli/enrich.py`, `tests/test_enrich.py`). Attached to
+  a citation whose claim an earlier ruling had struck, COL4's $150M stayed struck, was
+  counted as found on two nights, and was asked about again each time. The pass now
+  checks the field afterwards, says when a fact did not land, and records it as an
+  attempt.
+
+- **A read enrich makes for one row no longer creates another**
+  (`tracker/ingest/enrich.py`, `tests/test_enrich.py`, `docs/workflows/enrich.md`).
+  Asked about one project, the model wrote it under the article's own name, which
+  matched no row: "Highridge Business Park" beside #1299 and "Skybox Datacenters
+  Austin" beside #552, each counted twice in the totals. A focused read now lands on
+  an existing row or, logged by name, nowhere.
+
 - **A run starts on the OpenCode Go reserve when DeepSeek cannot pay, instead of
   failing onto it** (`tracker/llm.py`, `tracker/config.py`, `scripts/probe_effort.py`,
   `docs/ingesting.md`, `tests/test_llm_reserve.py`). The reserve was reached only by a
@@ -1042,6 +1069,22 @@ initial build of the v1 PRD.
   migrating still build from nothing.
 
 ### Added
+
+- **`tracker changes --against <snapshot>` lists every value a run changed, beside
+  the sentence now behind it** (`tracker/changes.py`, `tracker/cli/quality.py`,
+  `scripts/overnight.sh`, `tests/test_changes.py`, `docs/data-quality.md`). The quality
+  counts cannot see a wrong value that has a real quote — on 2026-09-30 they held
+  steady while four went wrong — so the overnight loop's morning report now ends with
+  the night's changes, rows created and removed, and decisions noted, against the
+  snapshot it takes before round 1. An id SQLite reused after a merge reads as a new
+  row, not an edit.
+
+- **`tracker logic rule-out` takes back one claim a person finds wrong**
+  (`tracker/cli/logic.py`, `tests/test_changes.py`, `docs/workflows/logic.md`). The
+  audit's own repair, by hand: the citation's claim is marked decided-against
+  (`misread` by default), the field re-derived from what still stands, and the
+  decision recorded as the operator's with `--why`. It never types a value in.
+  `logic resolve` needs a keyboard; this takes the citation by URL or id.
 
 - **A command that spends will not start in DeepSeek's peak hours**
   (`tracker/llm.py`, `tracker/spend.py`, `tracker/cli/_shared.py`,

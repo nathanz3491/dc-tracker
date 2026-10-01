@@ -192,8 +192,11 @@ other shell. Each round runs the free phases, then `audit` (a T1 gate, and cheap
 a row held at T1 by `fields_present`, pointed at the rows below T2 (`enrich --t2`).
 A round counts as progress only when a count falls below the lowest it has been that
 night, so counts that wobble up and back down end the night instead of prolonging
-it. The per-item judgements run at `low` effort (`--judgement-effort`), or on the
-local model with `--local-judgement`.
+it. The per-item judgements run at `high` effort (`--judgement-effort`), or on the
+local model with `--local-judgement`; one night at `low` made two of its three audit
+decisions wrong. The morning report ends with every value the night changed, each
+with the sentence behind it (`tracker changes`), and `tracker logic rule-out` takes
+back a claim a person finds wrong.
 
 What a night costs, measured on the six nights to 2026-09-29, before these changes:
 ¥9–34, ¥23 on average, 86% of it enrich re-reading unchanged articles for rows it

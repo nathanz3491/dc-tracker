@@ -1923,6 +1923,46 @@ def _render_clean_diff(diff: dict) -> None:
 
 
 @app.command()
+def changes(
+    against: Annotated[
+        Path,
+        typer.Option(
+            "--against",
+            help="A copy of the database from before the run — the snapshot overnight.sh "
+            "takes before round 1.",
+        ),
+    ],
+) -> None:
+    """Every tracked value changed since a snapshot, with the sentence now behind it.
+
+    For reading what a night's models did. The quality numbers `clean` reports cannot
+    see a wrong value that has a real quote — a statewide total filed as one campus's,
+    a land price as a build cost — so this lists each change beside its sentence, plus
+    the rows created and removed and every decision noted on a row. Reads only.
+    """
+    from tracker import changes as changes_mod
+
+    if not against.is_file():
+        _fail(f"no snapshot at {against}")
+        return
+    engine = _read_engine()
+    with session_scope(engine, commit=False) as session:
+        found = changes_mod.diff(against, session)
+        if json_mode():
+            emit(
+                {
+                    "values": [vars(c) for c in found.values],
+                    "added": found.added,
+                    "removed": found.removed,
+                    "decisions": found.decisions,
+                }
+            )
+            return
+        for line in changes_mod.render(found, since=against.name):
+            console.print(escape(line), soft_wrap=True)
+
+
+@app.command()
 def clean(
     project_id: Annotated[
         int | None,

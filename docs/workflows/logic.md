@@ -326,6 +326,23 @@ that picked one would be inventing a fact. Measured on the live database: **0 of
 findings were mechanically resolvable.** An unconfirmed investment figure already
 stays out of the capex sums, so the repair path exists before the audit runs.
 
+## `logic rule-out` — a person takes one claim back
+
+```bash
+tracker logic rule-out 263 investment_usd --citation <url-or-source-id> \
+    --why "a statewide total, not this campus's"      # --dry-run to see it first
+```
+
+When a person reading `tracker changes` or a row's card finds a value wrong, this is
+the repair, without the keyboard menu `resolve` needs. It is the ruling the agent
+makes, made by hand: the citation's claim about the field is marked decided-against
+(`misread` by default — the sentence was about a building, a programme, the land;
+`superseded` for a figure right once and since restated), the field is re-derived from
+what still stands, and the decision is recorded as the operator's, with `--why`. It
+never types a value in: a surviving claim decides the field, or it stays empty. Named
+citations that make no claim about the field are refused, and an unknown one is
+answered with the list of citations that do.
+
 ## Source map
 
 Touching any of these means the poster is in scope. Re-render with
@@ -345,7 +362,7 @@ Touching any of these means the poster is in scope. Re-render with
 | What a ruling cannot reach | `tracker/triage.py` — `can_rule_on`, `UNANSWERABLE_BY_RULING`, `has_live_claim`; `tracker/agent.py` — `_list_sources`, `_claims_line` |
 | The fixed menu and the keyboard walk | `tracker/logic.py` — `decide`, `TRIAGE_MIN_CONFIDENCE`; `tracker/cli/logic.py` — `_triage_by_agent`, `_triage_by_model`, `_triage` |
 | Settled-finding bookkeeping | `tracker/audit.py` — `settled_codes`, `_no_change`, `free_answer`, `fmt_value` |
-| CLI | `tracker/cli/logic.py` — `logic_check`, `logic_conflicts`, `logic_resolve` |
+| CLI | `tracker/cli/logic.py` — `logic_check`, `logic_conflicts`, `logic_resolve`, `logic_rule_out` |
 
 See also: [enrich](enrich.md), whose settle stage is `logic conflicts` with
 `--apply` already implied and run automatically after every harvest.
