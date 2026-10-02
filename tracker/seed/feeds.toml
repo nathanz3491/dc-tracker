@@ -14,6 +14,54 @@
 #
 # Every URL below is verified to fetch and parse; a feed that stops resolving is
 # reported by `tracker discover` rather than failing the run.
+#
+# `closed = "why"` keeps an entry here but stops it being requested — a feed is
+# not polled and an archive is not walked. It is for a publisher that has since
+# refused every client this project is willing to be, so a request can only fail;
+# the reason says what was measured and when. `tracker discover` counts these as
+# "feeds closed", apart from "feeds failed", so that line still means something
+# broke since this file was last edited.
+#
+# Closed rather than deleted, for two reasons. `tracker feeds` proposes any
+# publisher whose citations decide stored values and that this file does not list,
+# so a deleted datacenterfrontier would head its list of feeds to add for good. And
+# a block can lift: the URL, the filter setting and the reasoning are still here
+# when it does, and re-opening is deleting one line.
+#
+# --- Closed to clients that cannot run JavaScript, measured 2026-10-02 -------
+#
+# Thirteen feeds and one archive answer 403 as of 2026-10-02: datacenterdynamics,
+# datacenterfrontier (feed and archive) and all eleven States Newsroom sites. The
+# newest rows they queued are dated 2026-09-22 and 2026-09-25, so the blocks are
+# recent. Each answers with Cloudflare's "Just a moment..." page and a
+# `cf-mitigated: challenge` header, which `tracker discover` names in its failure
+# line. That page is a challenge: it lets through only a client that runs the
+# site's own detection script.
+#
+#   * Every page, not only the feed: homepage, articles and, on the States
+#     Newsroom sites, the WordPress API. datacenterdynamics and datacenterfrontier
+#     challenge even robots.txt.
+#   * Identical for our User-Agent, for httpx's default, for a Chrome User-Agent
+#     and for a feed reader's, so it is not a User-Agent filter.
+#   * Identical through curl, and through curl_cffi presenting Chrome's and
+#     Safari's TLS fingerprints, so it is not the fingerprint rule the article
+#     fetcher's curl_cffi rung exists for.
+#   * A 403 from a second, unrelated network as well, so it is not our address.
+#     Other Cloudflare sites in this file — datacenterknowledge, utilitydive,
+#     constructiondive, news.microsoft.com — serve the same client normally, so
+#     the setting is each publisher's own.
+#
+# Getting past it means passing the publisher's bot detection, which is the access
+# control itself rather than a rule misfiring, and this project does not do that —
+# docs/ingesting.md, "Why DataCenterDynamics is not read". Rows these feeds queued
+# before the block are still in the queue, and their pages answer the same
+# challenge: only the ones whose syndicated body was cached when they were queued
+# can be read.
+#
+# To see whether one has re-opened — 200 means delete its `closed` line, then run
+# `tracker discover --dry-run` to see what it would queue:
+#
+#   curl -s -o /dev/null -w '%{http_code}\n' https://georgiarecorder.com/feed/
 
 [[feed]]
 name = "datacenterdynamics"
@@ -21,19 +69,19 @@ name = "datacenterdynamics"
 # and the project signal alone decides. See FeedSpec.topic_implied.
 topic_implied = true
 #
-# DISCOVERY ONLY. The feed is served freely, but the article pages sit behind
-# Cloudflare bot management and return 403 to any non-browser client -- verified
-# identical for our UA, no UA, and curl, so it is not a User-Agent filter.
+# CLOSED, see the top of this file. Until 2026-09-25 this was DISCOVERY ONLY: the
+# feed was served freely while the article pages sat behind Cloudflare bot
+# management, returning 403 to any non-browser client -- verified identical for our
+# UA, no UA, and curl, so not a User-Agent filter. It stayed enabled because the
+# headlines were still valuable: they say WHICH projects exist, and the facts can
+# be taken from the operator's own release or another outlet. Now the feed answers
+# the same challenge as the articles, so there is nothing left here to read.
 #
-# Left enabled anyway because the headlines are still valuable: they tell you
-# WHICH projects exist, and the facts can then be taken from the operator's own
-# release or another outlet. Every DCD URL queued here will fail to fetch, which
-# `tracker queue --failed` lists so it is visible rather than silent.
-#
-# Their robots.txt sets `Content-Signal: search=yes,ai-train=no,use=reference`.
+# Their robots.txt set `Content-Signal: search=yes,ai-train=no,use=reference`.
 # We do not train on the content and we store only short attributed excerpts, but
 # the Cloudflare block is a deliberate access control and this project does not
-# try to defeat it. See docs/ingesting.md "Why DataCenterDynamics is discovery-only".
+# try to defeat it. See docs/ingesting.md "Why DataCenterDynamics is not read".
+closed = "2026-10-02: Cloudflare challenge on the feed, every article and robots.txt"
 url = "https://www.datacenterdynamics.com/en/rss/"
 source_type = "trade_press"
 
@@ -47,6 +95,11 @@ topic_implied = true
 # /sitemap.xml is a sitemap *index*, so point straight at the article sitemap —
 # it is ordered newest-first and carries real lastmod dates, which is all the
 # age filter needs. Titles come from the URL slug.
+#
+# CLOSED, see the top of this file. The most-cited publisher in the database, so
+# its rows are where this block costs most: 522 of its articles were still queued
+# on 2026-10-02, and their pages answer the same challenge.
+closed = "2026-10-02: Cloudflare challenge on the sitemap, every article and robots.txt"
 url = "https://www.datacenterfrontier.com/sitemap/Article.xml"
 source_type = "trade_press"
 
@@ -96,15 +149,29 @@ source_type = "company_filing"
 # one poll, not an estimate.
 
 [[feed]]
-name = "bisnow-datacenter"
-# 11 of 30 entries matched — the highest hit rate of anything tested, and it is
-# the only feed that reliably carries the LOCAL government story: county
-# moratoria, rezoning votes, approvals. Those are the `permitting` and
-# `community_opposition` risk categories, which stood at 2 rows each because
-# nothing in the corpus reported them.
-url = "https://www.bisnow.com/rss/data-center"
+name = "bisnow-latest"
+# Replaces `bisnow-datacenter`, the data-center vertical's own feed, which is gone.
+# That one matched 11 of 30 entries, the highest hit rate of anything tested, and
+# was the only feed that reliably carried the LOCAL government story: county
+# moratoria, rezoning votes, approvals — the `permitting` and
+# `community_opposition` risk categories, at 2 rows each when it was added.
+#
+# Bisnow has since moved to a new site. The last row the old feed queued is dated
+# 2026-08-01, and on 2026-10-02 `/rss/data-center` redirects to a 404. The one
+# feed it still serves is this: its nine newest stories across every market and
+# property type, with no paging and no way to ask for one vertical. Its sitemap
+# lists section pages and monthly HTML indexes, nothing a feed parser can read.
+# So a daily poll sees only the stories published last, and on the poll that
+# added it none of the nine was a data center.
+#
+# Kept anyway, on the rule the state newsrooms below were added on: one request a
+# night, nothing spent until an article matches, and what it can catch is what
+# trade press skips. Not topic_implied, since it covers offices and retail too.
+# The vertical is in the URL (`/news/<market>/data-center-development/<slug>`)
+# and the filter reads the URL path, so a data-center story passes the topic tier
+# even when its headline never says so. Its articles are served normally.
+url = "https://www.bisnow.com/rss/all"
 source_type = "trade_press"
-topic_implied = true
 
 [[feed]]
 name = "constructiondive"
@@ -158,16 +225,26 @@ source_type = "company_filing"
 # moratorium", "Henderson City Council rejects data center moratorium".
 #
 # None is topic_implied: they cover all of state politics.
+#
+# Every States Newsroom site below is CLOSED, see the top of this file: the
+# challenge covers the whole network, its newsfromthestates.com aggregator
+# included, so there is no other door to the same stories. Until then the feeds
+# were the only door anyway: they syndicated each article whole
+# (`cache_feed_text`), while the article pages already refused non-browsers. The
+# three independents — texas-tribune, mississippi-today, cardinal-news — still
+# answer and are polled.
 
 [[feed]]
 name = "virginia-mercury"        # 6 matches on the first poll, the best of these
 url = "https://virginiamercury.com/feed/"
 source_type = "general_media"
+closed = "2026-10-02: Cloudflare challenge on every States Newsroom page, feed included"
 
 [[feed]]
 name = "nevada-current"          # 3 matches
 url = "https://nevadacurrent.com/feed/"
 source_type = "general_media"
+closed = "2026-10-02: Cloudflare challenge on every States Newsroom page, feed included"
 
 [[feed]]
 name = "texas-tribune"           # 1 match
@@ -178,46 +255,55 @@ source_type = "general_media"
 name = "ohio-capital-journal"
 url = "https://www.ohiocapitaljournal.com/feed/"
 source_type = "general_media"
+closed = "2026-10-02: Cloudflare challenge on every States Newsroom page, feed included"
 
 [[feed]]
 name = "georgia-recorder"
 url = "https://georgiarecorder.com/feed/"
 source_type = "general_media"
+closed = "2026-10-02: Cloudflare challenge on every States Newsroom page, feed included"
 
 [[feed]]
 name = "iowa-capital-dispatch"
 url = "https://iowacapitaldispatch.com/feed/"
 source_type = "general_media"
+closed = "2026-10-02: Cloudflare challenge on every States Newsroom page, feed included"
 
 [[feed]]
 name = "nebraska-examiner"
 url = "https://nebraskaexaminer.com/feed/"
 source_type = "general_media"
+closed = "2026-10-02: Cloudflare challenge on every States Newsroom page, feed included"
 
 [[feed]]
 name = "wisconsin-examiner"
 url = "https://wisconsinexaminer.com/feed/"
 source_type = "general_media"
+closed = "2026-10-02: Cloudflare challenge on every States Newsroom page, feed included"
 
 [[feed]]
 name = "louisiana-illuminator"
 url = "https://lailluminator.com/feed/"
 source_type = "general_media"
+closed = "2026-10-02: Cloudflare challenge on every States Newsroom page, feed included"
 
 [[feed]]
 name = "arizona-mirror"
 url = "https://azmirror.com/feed/"
 source_type = "general_media"
+closed = "2026-10-02: Cloudflare challenge on every States Newsroom page, feed included"
 
 [[feed]]
 name = "indiana-capital-chronicle"
 url = "https://indianacapitalchronicle.com/feed/"
 source_type = "general_media"
+closed = "2026-10-02: Cloudflare challenge on every States Newsroom page, feed included"
 
 [[feed]]
 name = "oregon-capital-chronicle"
 url = "https://oregoncapitalchronicle.com/feed/"
 source_type = "general_media"
+closed = "2026-10-02: Cloudflare challenge on every States Newsroom page, feed included"
 
 [[feed]]
 name = "mississippi-today"
@@ -458,6 +544,8 @@ url = "https://www.datacenterfrontier.com/sitemap.xml"
 source_type = "trade_press"
 topic_implied = true
 max_children = 3
+# CLOSED with the feed of the same site, see the top of this file.
+closed = "2026-10-02: Cloudflare challenge on the sitemap index, every article and robots.txt"
 
 # Adding archives is the key-free way to widen coverage, and it is usually a
 # better buy than a search key: no account, no card, no CAPTCHA, no quota. With

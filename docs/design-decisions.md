@@ -447,7 +447,7 @@ this project will not run. `PlaywrightFetcher` drives Chrome's headless shell wi
 nothing patched, sends the same user agent every other rung sends, and asks
 `robots.txt` before it opens a page: rendering a page a site permits is the job;
 getting past a site that refuses crawlers is not (see "Why DataCenterDynamics is
-discovery-only" in `ingesting.md`). A `robots.txt` that cannot be read counts as a
+not read" in `ingesting.md`). A `robots.txt` that cannot be read counts as a
 refusal, because a firewall that refuses even that file is the case the line is
 about. It is on the ladder whenever it is installed — the flag is the install.
 

@@ -100,6 +100,45 @@ deliberately: it is the one path that can name an operator in a place holding no
 rows, and running both is what lets `tracker queue stats` say which is worth the
 quota rather than leaving it asserted.
 
+## A feed that refuses every client is closed, not deleted
+
+On 2026-10-02 thirteen of the 28 feeds — datacenterdynamics, datacenterfrontier and
+all eleven States Newsroom sites — and the datacenterfrontier archive answered every
+request with a Cloudflare challenge: a page that lets through only a client that runs
+the site's own detection script. A browser's User-Agent changes nothing, nor does a
+browser's TLS fingerprint, and the article pages answer the same way. Getting past it
+would mean passing the publisher's bot detection, which this project does not do, so
+a request to any of them can only fail.
+
+Those entries now carry `closed = "<date>: <what was measured>"` in
+`tracker/seed/feeds.toml`, beside the measurements:
+
+* **A closed feed is not requested, and a closed archive is not walked** — by
+  discover, by `--deep`, or by enrich's archive harvest. The report counts them as
+  `feeds closed`, apart from `feeds failed`: thirteen failures a night that everyone
+  expects would teach a reader to stop reading that line, and the fourteenth, which
+  nobody expected, would go unseen.
+* **They stay in the file.** `tracker feeds` proposes publishers whose citations
+  decide stored values and that the file does not list. datacenterfrontier decides
+  more than any other, so deleting it would put it at the head of that list for
+  good; a closed entry still counts as listed.
+* **A challenge is named when one is met.** Cloudflare marks the page
+  `cf-mitigated: challenge`, and the failure line says `HTTP 403 (Cloudflare
+  challenge: …)` rather than a bare 403, which reads as a header problem and is not.
+* **What they queued before the block is still queued** — about 640 rows on
+  2026-10-02, 522 of them datacenterfrontier's — and those pages answer the same
+  challenge. Only the ones whose syndicated body was cached when they were queued
+  can be read; each of the rest costs a fetch that fails, never a model call, and
+  stops being retried after three identical failures.
+
+To re-open one: when `curl -s -o /dev/null -w '%{http_code}\n' <its url>` prints
+200, delete its `closed` line and run `tracker discover --dry-run`.
+
+Bisnow is the other kind of failure. Its data-center feed went away when the site
+was rebuilt — `/rss/data-center` now redirects to a 404 — so that entry was
+replaced rather than closed, by `bisnow-latest`: the one feed it still serves, the
+nine newest stories across every market.
+
 ## Where the queued rows come from
 
 Three phases end in the same queue and answer different questions. Discover and
@@ -318,7 +357,8 @@ Touching any of these means the poster is in scope. Re-render with
 | Concern | Where |
 | --- | --- |
 | Phase order, plan numbering, `--full`, the lock | `tracker/cli/sync.py` — `sync`, its `plan` list and `step` |
-| Discover, archives, search | `tracker/ingest/discover.py` — `run`, `load_sitemaps`, `sweep_sitemaps`, `queue_candidates`; `tracker/ingest/search.py`; `tracker/normalize.py` — `canonical_url`, `url_identity`, `url_variants`; `tracker/backfill.py` — `repair_urls` |
+| Discover, archives, search | `tracker/ingest/discover.py` — `run`, `load_config`, `load_sitemaps`, `sweep_sitemaps`, `queue_candidates`; `tracker/ingest/search.py`; `tracker/normalize.py` — `canonical_url`, `url_identity`, `url_variants`; `tracker/backfill.py` — `repair_urls` |
+| Closed feeds, and naming a challenge | `tracker/seed/feeds.toml` — `closed`; `tracker/ingest/discover.py` — `FeedSpec.closed`, `SitemapSpec.closed`, `_closed_reason`, `DiscoverReport.closed`, `_RawFetcher`, `CHALLENGE_NOTE`; `tracker/ingest/probe.py` — `configured_hosts` |
 | What search looks for | `tracker/ingest/search.py` — `_PLACE_TEMPLATES`, `rank_places`, `plan_queries`, `PlannedQuery.label`, `templates`; `tracker/normalize.py` — `state_name` |
 | Judging a template | `tracker/funnel.py` — `feed_group`, `survey`, `verdicts`; `tracker/ingest/search.py` — `LabelStat` |
 | Queue ordering and counts | `tracker/ingest/discover.py` — `pending` (`known_first`, `new_first`), `pending_split`, `pending_risk_count`, `failed`, `retryable`, `given_up`, `MAX_SAME_FAILURES`, `failure_summary` |

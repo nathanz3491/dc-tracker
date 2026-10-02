@@ -434,8 +434,10 @@ class CurlCffiFetcher:
     `/wp-admin/`. An over-broad WAF rule is not a policy, which is the same
     reasoning that already sanctions `--browser` for the operator sitemaps that
     serve curl and refuse httpx. Where a site genuinely *does* refuse crawlers —
-    DataCenterDynamics' bot management — it stays discovery-only, and this
-    changes nothing about that.
+    DataCenterDynamics' bot management — it is left alone, and this changes
+    nothing about that. Nor does it get past a Cloudflare challenge page, which
+    lets through only a client that runs the site's script: since 2026-10-02
+    lailluminator.com answers every request with one, this rung included.
 
     It sits *below* the browser on the ladder because it is far cheaper: one
     request, no Chromium. It cannot render JavaScript, which is why the rung

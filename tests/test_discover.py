@@ -6,6 +6,7 @@ Entirely offline — feeds come from fixture XML through an injected fetcher.
 from __future__ import annotations
 
 import datetime as dt
+import re
 import tomllib
 from pathlib import Path
 
@@ -81,15 +82,15 @@ def test_only_specialist_feeds_imply_the_topic():
     feeds, _ = load_config()
     implied = {f.name for f in feeds if f.topic_implied}
     assert implied == {
-        # Publications that cover nothing but data centers.
+        # Publications that cover nothing but data centers. The first two are
+        # closed, and listed anyway: re-opening one restores exactly this setting.
         "datacenterdynamics",
         "datacenterfrontier",
         "datacenterknowledge",
-        # Bisnow's data-center vertical, not its national feed. Every article in
-        # this one is about a data center; `bisnow-national` is not here.
-        "bisnow-datacenter",
         # A pure-play operator's own newsroom, like the [[sitemap]] entries.
         "qts-newsroom",
+        # Not `bisnow-latest`: Bisnow's data-center vertical had a feed of its own,
+        # and the feed that replaced it carries every property type.
     }
 
 
@@ -128,6 +129,123 @@ def test_config_without_both_filter_tiers_is_refused(tmp_path: Path):
     )
     with pytest.raises(DiscoverError, match="both `topic` and `signal`"):
         load_config(partial)
+
+
+# --- Closed feeds -----------------------------------------------------------
+#
+# Measured 2026-10-02: thirteen feeds answered every client with a Cloudflare
+# challenge, whatever its User-Agent or TLS fingerprint. `closed` keeps them in the
+# file — so `tracker feeds` does not propose them back, and re-opening is one line —
+# without a request that can only fail, or a failure line that would always be lit.
+
+_CLOSED_CONFIG = """
+[[feed]]
+name = "open"
+url = "https://a.test/rss"
+
+[[feed]]
+name = "refused"
+url = "https://refused.test/feed/"
+closed = "2026-10-02: Cloudflare challenge on every page"
+
+[[feed]]
+name = "reopened"
+url = "https://b.test/feed/"
+closed = false
+
+[[feed]]
+name = "unexplained"
+url = "https://c.test/feed/"
+closed = true
+
+[filter]
+topic = ["data cent"]
+signal = ["campus"]
+
+[[sitemap]]
+name = "refused-archive"
+url = "https://refused.test/sitemap.xml"
+closed = "2026-10-02: Cloudflare challenge on every page"
+
+[[sitemap]]
+name = "open-archive"
+url = "https://a.test/sitemap.xml"
+"""
+
+
+def _closed_config(tmp_path: Path) -> Path:
+    path = tmp_path / "feeds.toml"
+    path.write_text(_CLOSED_CONFIG, encoding="utf-8")
+    return path
+
+
+def test_closed_carries_its_reason_and_false_means_open(tmp_path: Path):
+    feeds = {f.name: f for f in load_config(_closed_config(tmp_path))[0]}
+    assert feeds["open"].closed is None
+    assert feeds["refused"].closed == "2026-10-02: Cloudflare challenge on every page"
+    assert feeds["reopened"].closed is None, "`closed = false` re-opens, like deleting it"
+    assert feeds["unexplained"].closed == discover.UNEXPLAINED_CLOSURE
+
+    sitemaps = {s.name: s for s in discover.load_sitemaps(_closed_config(tmp_path))}
+    assert sitemaps["refused-archive"].closed
+    assert sitemaps["open-archive"].closed is None
+
+
+def test_a_closed_feed_is_not_requested_and_not_counted_as_failed(session, tmp_path: Path):
+    """Thirteen failures a night that everybody expects teach a reader to stop
+    reading the line — and then the fourteenth, which nobody expected, is missed."""
+    fetcher = FakeFeedFetcher(
+        {
+            "https://a.test/rss": fixture("feed_rss.xml"),
+            "https://b.test/feed/": fixture("feed_atom.xml"),
+        }
+    )
+    report, _ = discover.run(
+        session, feeds_path=_closed_config(tmp_path), fetcher=fetcher, since_days=None
+    )
+
+    assert "https://refused.test/feed/" not in fetcher.calls
+    assert "https://c.test/feed/" not in fetcher.calls
+    assert set(fetcher.calls) == {"https://a.test/rss", "https://b.test/feed/"}
+    assert report.feeds_polled == 2
+    assert report.feeds_failed == 0
+    assert report.closed == [
+        ("refused", "2026-10-02: Cloudflare challenge on every page"),
+        ("unexplained", discover.UNEXPLAINED_CLOSURE),
+    ]
+    assert ("feeds closed", 2) in report.as_rows()
+
+
+async def test_a_closed_archive_is_not_walked(tmp_path: Path):
+    fetcher = FakeFeedFetcher({"https://a.test/sitemap.xml": fixture("feed_sitemap.xml")})
+    specs = discover.load_sitemaps(_closed_config(tmp_path))
+    _, problems = await discover.sweep_sitemaps(specs, fetcher, load_config()[1])
+
+    assert fetcher.calls == ["https://a.test/sitemap.xml"]
+    assert problems == [], "a closed archive is a known state, not a problem to report"
+
+
+def test_every_shipped_closure_says_when_it_was_measured():
+    """A closure is a measurement that goes stale, so the date is the point of it:
+    it is what tells the next reader whether checking again is overdue."""
+    feeds, _ = load_config()
+    closed = {f.name: f.closed for f in feeds if f.closed}
+    closed |= {s.name: s.closed for s in discover.load_sitemaps() if s.closed}
+    assert closed, "the shipped file has closed entries; this test guards their reasons"
+    for name, reason in closed.items():
+        assert reason != discover.UNEXPLAINED_CLOSURE, f"{name} is closed without saying why"
+        assert re.match(r"\d{4}-\d{2}-\d{2}: \S", reason), f"{name}: {reason!r} has no date"
+
+
+def test_the_shipped_closed_feeds_are_never_requested(session):
+    fetcher = FakeFeedFetcher({})
+    report, _ = discover.run(session, fetcher=fetcher, since_days=None, dry_run=True)
+
+    feeds, _ = load_config()
+    closed_urls = {f.url for f in feeds if f.closed}
+    assert closed_urls.isdisjoint(fetcher.calls)
+    assert len(fetcher.calls) == len(feeds) - len(closed_urls)
+    assert report.feeds_failed == len(fetcher.calls), "every open feed 404s in this fake"
 
 
 # --- Parsing ----------------------------------------------------------------
@@ -764,6 +882,56 @@ def test_the_feed_fetcher_reports_an_unparseable_url_rather_than_raising():
     result = asyncio.run(_RawFetcher(get_settings()).fetch("http://[::1/feed"))
     assert not result.ok
     assert "invalid" in (result.error or "").lower()
+
+
+async def test_the_feed_request_says_who_it_is():
+    """Measured on the thirteen feeds that answered 403 on 2026-10-02: a Chrome
+    User-Agent changed nothing, so the poller keeps sending the project's own."""
+    import httpx
+
+    from tracker.config import get_settings
+    from tracker.ingest.discover import _RawFetcher
+
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, text=fixture("feed_rss.xml"))
+
+    settings = get_settings()
+    fetcher = _RawFetcher(settings, transport=httpx.MockTransport(handler))
+    result = await fetcher.fetch("https://a.test/rss")
+
+    assert result.ok
+    (request,) = seen
+    assert request.headers["user-agent"] == settings.user_agent
+    assert request.headers["accept"].startswith("application/rss+xml")
+
+
+async def test_a_cloudflare_challenge_is_named_in_the_failure():
+    """A bare "HTTP 403" sends the next person off to try User-Agents for an
+    afternoon. Cloudflare marks its challenge page, so the failure can say what it is."""
+    import httpx
+
+    from tracker.config import get_settings
+    from tracker.ingest.discover import _RawFetcher
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "challenged.test":
+            return httpx.Response(
+                403,
+                headers={"cf-mitigated": "challenge"},
+                text="<title>Just a moment...</title>",
+            )
+        return httpx.Response(403, text="forbidden")
+
+    fetcher = _RawFetcher(get_settings(), transport=httpx.MockTransport(handler))
+    challenged = await fetcher.fetch("https://challenged.test/feed/")
+    plain = await fetcher.fetch("https://plain.test/feed/")
+
+    assert (challenged.ok, challenged.status) == (False, 403)
+    assert challenged.error == f"HTTP 403 ({discover.CHALLENGE_NOTE})"
+    assert plain.error == "HTTP 403", "a 403 that Cloudflare did not mark is not called one"
 
 
 def test_run_queues_matches_and_survives_a_dead_feed(session, tmp_path: Path):

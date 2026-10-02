@@ -397,8 +397,11 @@ Nothing here defeats an access control, and the distinction is the whole
 justification: those sites' `robots.txt` files permit crawling —
 `investor.atmeta.com` says `Allow: /` with `Crawl-delay: 10` — so an over-broad
 WAF rule is not a policy. Where a site genuinely refuses crawlers, as
-DataCenterDynamics does with Cloudflare bot management, it stays discovery-only —
-see [Ingesting](docs/ingesting.md).
+DataCenterDynamics does with Cloudflare bot management, it is left alone — see
+[Ingesting](docs/ingesting.md). Since 2026-10-02 `lailluminator.com` is one of
+those: it and the rest of the States Newsroom network put a Cloudflare challenge on
+every page, which no rung of this ladder gets past, so their feeds are marked
+`closed` in `tracker/seed/feeds.toml`.
 
 ### Running `tracker` from anywhere
 

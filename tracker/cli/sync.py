@@ -560,9 +560,10 @@ def sync(
             _fail(str(exc))
             return
         totals["queued"] = report.queued
+        closed = f" ({len(report.closed)} closed, not polled)" if report.closed else ""
         console.print(
-            f"polled {report.feeds_polled} feed(s), saw {report.entries_seen} entr(ies), "
-            f"queued [bold]{report.queued}[/bold] new candidate(s)"
+            f"polled {report.feeds_polled} feed(s){closed}, saw {report.entries_seen} "
+            f"entr(ies), queued [bold]{report.queued}[/bold] new candidate(s)"
         )
         for name, reason in report.failures:
             err.print(f"[yellow]feed {name}[/yellow]: {reason}")
@@ -586,8 +587,10 @@ def sync(
                 # happened; session_scope then rolls it back.
                 disc2.queue_candidates(session, found, run_id="deep", report=shim)
             totals["queued"] += shim.queued
+            walked = sum(1 for s in specs if not s.closed)
+            closed = f" ({len(specs) - walked} closed, not walked)" if walked < len(specs) else ""
             console.print(
-                f"archives: {len(found)} matching URL(s) across {len(specs)} sitemap(s), "
+                f"archives: {len(found)} matching URL(s) across {walked} sitemap(s){closed}, "
                 f"queued [bold]{shim.queued}[/bold] new ({shim.already_known} already known)"
             )
             for problem in problems[:5]:
@@ -1514,6 +1517,11 @@ def discover(
 
     for name, reason in report.failures:
         err.print(f"[yellow]feed {name}[/yellow]: {reason}")
+    if report.closed:
+        console.print(
+            f"[dim]not polled, marked closed in seed/feeds.toml: "
+            f"{', '.join(name for name, _ in report.closed)}[/dim]"
+        )
 
     if show and candidates:
         table = Table(title="candidates", header_style="bold", title_justify="left", box=TABLE_BOX)

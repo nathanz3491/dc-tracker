@@ -176,7 +176,9 @@ utilitydive-archive            73     0     0      0     0   never read it
 
 Only the first is a candidate. The second is behind Cloudflare and is kept on
 purpose — `tracker/seed/feeds.toml` carries ten lines saying so, because the headlines
-still tell you which projects exist. The third has never been read, so retiring
+still told you which projects exist. Since 2026-10-02 the feed itself answers a
+Cloudflare challenge, so the entry is marked `closed`: not polled, and still listed,
+which is what keeps this command from proposing the publisher back as a feed to add. The third has never been read, so retiring
 it would be deciding on a sample of nothing. A queued-versus-cited ratio ranks
 all three the same and puts the deliberately-kept one at the top of the kill
 list, so the split is on **what happened after the fetch**, not on volume.

@@ -555,19 +555,31 @@ The official Custom Search JSON API is used rather than scraping result pages.
 Scraping would break Google's terms, and it would contradict this project's
 decision not to defeat other sites' access controls either — see below.
 
-## Why DataCenterDynamics is discovery-only
+## Why DataCenterDynamics is not read
 
-Its RSS feed is served freely and its headlines are valuable, so it stays enabled.
-But the article pages sit behind Cloudflare bot management and return 403 to any
-non-browser client — verified identical for our User-Agent, no User-Agent, and
-curl, so it is not a UA filter. Their `robots.txt` also sets
+Until late September 2026 its RSS feed was served freely while the article pages
+sat behind Cloudflare bot management, returning 403 to any non-browser client —
+verified identical for our User-Agent, no User-Agent, and curl, so not a UA
+filter. The headlines were worth having on their own, so the feed stayed enabled:
+DCD said *which* projects exist, and the facts came from the operator's own
+release or another outlet. Their `robots.txt` also sets
 `Content-Signal: search=yes,ai-train=no,use=reference`.
 
 We do not train on the content and we store only short attributed excerpts, but
 the Cloudflare block is a deliberate access control and this project does not try
-to defeat it. So DCD tells you *which* projects exist and the facts come from the
-operator's own release or another outlet. Data Center Knowledge covers the same
-beat and does permit fetching, which is why it was added.
+to defeat it. Data Center Knowledge covers the same beat and does permit fetching,
+which is why it was added.
+
+**Since 2026-10-02 the feed answers the same challenge**, and so do
+datacenterfrontier and every States Newsroom site: Cloudflare's "Just a moment..."
+page on every page, the feed included, for every client this project runs. A
+browser's User-Agent or TLS fingerprint does not change the answer, because the
+page lets through only a client that runs the site's own detection script. Those
+entries are marked `closed` in `tracker/seed/feeds.toml` — not polled, not walked,
+still listed — beside the measurements and a one-line check for when one re-opens.
+`tracker discover` names the challenge when it meets one (`HTTP 403 (Cloudflare
+challenge: ...)`), so the next closure can be recognised from the nightly log
+alone.
 
 Every blocked URL stays visible rather than disappearing:
 

@@ -30,7 +30,7 @@ import tomllib
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
 from sqlalchemy import and_, or_, select
@@ -48,6 +48,9 @@ from tracker.ingest.fetch import (
 from tracker.models import IngestUrl, utcnow
 from tracker.normalize import canonical_url, norm_text, url_identity, url_variants
 from tracker.vocab import PENDING_URL_STATUS
+
+if TYPE_CHECKING:
+    import httpx
 
 log = logging.getLogger(__name__)
 
@@ -107,6 +110,35 @@ class FeedSpec:
     #: real headline like "Crusoe expands Abilene campus to 1.2GW" that never says
     #: "data center" because the whole publication is about them.
     topic_implied: bool = False
+    #: Why this feed is not polled, when it is not. Set by `closed = "..."` in
+    #: `seed/feeds.toml`, for a publisher that refuses every client this project is
+    #: willing to be, so that a poll can only fail.
+    #:
+    #: Kept in the file rather than deleted, for two reasons. `tracker feeds`
+    #: proposes any publisher whose citations decide stored values and that the
+    #: file does not list (`probe.configured_hosts`), so a deleted
+    #: datacenterfrontier would head its list of feeds to add for good. And a
+    #: block can lift: the URL, the filter setting and the reasoning are still
+    #: there when it does, and re-opening is deleting one line.
+    closed: str | None = None
+
+
+#: The reason recorded for `closed = true`, which says that an entry is closed and
+#: not why. The shipped file always says why; a test holds it to that.
+UNEXPLAINED_CLOSURE = "closed in seed/feeds.toml, no reason given"
+
+
+def _closed_reason(entry: dict[str, Any]) -> str | None:
+    """Why a `[[feed]]` or `[[sitemap]]` entry is not polled, or None if it is.
+
+    A string is the reason. `false` means open, like an absent key, so an entry can
+    be re-opened by flipping it as well as by deleting the line.
+    """
+    value = entry.get("closed")
+    if value is None or value is False:
+        return None
+    reason = "" if value is True else str(value).strip()
+    return reason or UNEXPLAINED_CLOSURE
 
 
 @dataclass(frozen=True)
@@ -192,10 +224,16 @@ class DiscoverReport:
     #: request the article page. See :func:`cache_feed_text`.
     bodies_cached: int = 0
     failures: list[tuple[str, str]] = field(default_factory=list)
+    #: `(name, reason)` for each feed not polled because it is marked closed.
+    #: Counted apart from `feeds_failed`, so that line keeps meaning "something
+    #: broke since the file was last edited" — thirteen expected failures a night
+    #: would teach a reader to stop looking at it.
+    closed: list[tuple[str, str]] = field(default_factory=list)
 
     def as_rows(self) -> list[tuple[str, int]]:
         return [
             ("feeds polled", self.feeds_polled),
+            ("feeds closed", len(self.closed)),
             ("feeds failed", self.feeds_failed),
             ("entries seen", self.entries_seen),
             ("filtered out", self.filtered),
@@ -234,6 +272,7 @@ def load_config(path: Path | None = None) -> tuple[list[FeedSpec], FilterSpec]:
             url=str(entry["url"]),
             source_type=str(entry.get("source_type") or "general_media"),
             topic_implied=bool(entry.get("topic_implied", False)),
+            closed=_closed_reason(entry),
         )
         for entry in raw_feeds
         if entry.get("url")
@@ -393,9 +432,13 @@ class SitemapSpec:
     #: requirement took the yield from 15 articles over 8 projects to 28 over 13 —
     #: "new-hillsboro-campus-announced" matches once the operator is implied.
     company: str | None = None
+    #: Why this archive is not walked, when it is not. See `FeedSpec.closed`.
+    closed: str | None = None
 
     def as_feed(self) -> FeedSpec:
-        return FeedSpec(self.name, self.url, self.source_type, self.topic_implied)
+        return FeedSpec(
+            self.name, self.url, self.source_type, self.topic_implied, closed=self.closed
+        )
 
 
 def is_sitemap_index(xml: str) -> bool:
@@ -489,6 +532,7 @@ def load_sitemaps(path: Path | None = None) -> list[SitemapSpec]:
             max_children=int(entry.get("max_children", 4)),
             max_urls=int(entry.get("max_urls", 5000)),
             company=(str(entry["company"]) if entry.get("company") else None),
+            closed=_closed_reason(entry),
         )
         for entry in (data.get("sitemap") or [])
         if entry.get("url")
@@ -498,10 +542,17 @@ def load_sitemaps(path: Path | None = None) -> list[SitemapSpec]:
 async def sweep_sitemaps(
     specs: list[SitemapSpec], fetcher: Fetcher, filter_spec: FilterSpec
 ) -> tuple[list[Candidate], list[str]]:
-    """Walk every configured sitemap. One failing site never stops the others."""
+    """Walk every configured sitemap. One failing site never stops the others.
+
+    A sitemap marked closed is skipped without a request, and is not a problem:
+    the file already says why it cannot be read.
+    """
     found: list[Candidate] = []
     problems: list[str] = []
     for spec in specs:
+        if spec.closed:
+            log.info("not walking %s, marked closed: %s", spec.name, spec.closed)
+            continue
         try:
             kept, issues = await crawl_sitemap(spec, fetcher, filter_spec)
         except Exception as exc:
@@ -1257,7 +1308,8 @@ def run(
     """Poll every configured feed and queue the matching articles.
 
     A feed that fails is recorded and the run continues: one outlet changing its
-    URL must not stop discovery from the other six.
+    URL must not stop discovery from the other six. A feed marked closed is not
+    requested at all, and is reported as closed rather than as failed.
     """
     import asyncio
 
@@ -1266,6 +1318,9 @@ def run(
     report = DiscoverReport()
     run_id = run_id or utcnow().strftime("discover-%Y%m%dT%H%M%S")
     since = utcnow() - dt.timedelta(days=since_days) if since_days else None
+
+    report.closed = [(f.name, f.closed) for f in feeds if f.closed]
+    feeds = [f for f in feeds if not f.closed]
 
     from tracker.ingest.fetch import fetch_all
 
@@ -1312,15 +1367,35 @@ def run(
     return report, queued
 
 
+#: Appended to a failure Cloudflare marks `cf-mitigated: challenge`.
+#:
+#: A bare "HTTP 403" reads as a header problem worth an afternoon of trying
+#: User-Agents. This one is not: the "Just a moment..." page lets through only a
+#: client that runs the publisher's script, so no header and no TLS fingerprint
+#: changes the answer — measured on thirteen feeds on 2026-10-02, see the
+#: `closed` notes in `seed/feeds.toml`. Saying so in the failure line is what
+#: makes the next one recognisable from the nightly log alone.
+CHALLENGE_NOTE = "Cloudflare challenge: only a client that runs the site's script gets past it"
+
+
 class _RawFetcher:
     """Fetches a feed as raw XML.
 
     Distinct from `HttpxFetcher`, which runs `html_to_text` on the body — that
     would strip the very tags a feed parser needs.
+
+    It sends `settings.user_agent`, the project's own name and contact. Measured on
+    the feeds that answer 403, a browser's User-Agent changed nothing, so borrowing
+    one would buy nothing either.
+
+    `transport` stands in for the network, for tests.
     """
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(
+        self, settings: Settings, *, transport: httpx.AsyncBaseTransport | None = None
+    ) -> None:
         self.settings = settings
+        self._transport = transport
 
     async def fetch(self, url: str) -> FetchResult:
         import httpx
@@ -1334,6 +1409,7 @@ class _RawFetcher:
                 timeout=httpx.Timeout(self.settings.fetch_timeout_s, connect=10.0),
                 follow_redirects=True,
                 headers=headers,
+                transport=self._transport,
             ) as client:
                 response = await client.get(url)
         # `InvalidURL` is not a `RequestError`. A mistyped feed URL raised it before
@@ -1342,11 +1418,14 @@ class _RawFetcher:
             return FetchResult(url, False, error=str(exc), fetched_at=utcnow(), via="feed")
 
         if response.status_code >= 400:
+            error = f"HTTP {response.status_code}"
+            if response.headers.get("cf-mitigated", "").lower() == "challenge":
+                error = f"{error} ({CHALLENGE_NOTE})"
             return FetchResult(
                 url,
                 False,
                 status=response.status_code,
-                error=f"HTTP {response.status_code}",
+                error=error,
                 fetched_at=utcnow(),
                 via="feed",
             )
@@ -1361,10 +1440,12 @@ class _RawFetcher:
 
 
 __all__ = [
+    "CHALLENGE_NOTE",
     "DEAD_STATUS",
     "MAX_PER_FEED",
     "MAX_SAME_FAILURES",
     "RETRYABLE_STATUSES",
+    "UNEXPLAINED_CLOSURE",
     "Candidate",
     "DiscoverError",
     "DiscoverReport",

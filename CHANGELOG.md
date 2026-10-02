@@ -64,6 +64,31 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **Half the feeds `tracker discover` polls were failing every night; they are now
+  closed, replaced or fixed, and the report says which is which**
+  (`tracker/seed/feeds.toml`, `tracker/ingest/discover.py`, `tracker/cli/sync.py`,
+  `tests/test_discover.py`, `tests/test_probe.py`, `docs/workflows/sync.md`,
+  `docs/workflows/sync.svg`, `scripts/render_workflow_diagrams.py`,
+  `docs/ingesting.md`, `docs/sources-and-feeds.md`, `docs/design-decisions.md`,
+  `README.md`, `tracker/ingest/fetch.py`). On 2026-10-02, the nightly loop's first
+  discover phase, 14 of 28 feeds failed. Thirteen — datacenterdynamics,
+  datacenterfrontier and all eleven States Newsroom sites — now answer every page
+  with a Cloudflare challenge that only a client running the site's script gets
+  past: the same for our User-Agent, a browser's, a feed reader's and httpx's own,
+  the same through curl and through a browser's TLS fingerprint, and the same from a
+  second network. That is the publisher's bot detection rather than a misfiring rule, so the
+  project does not try to pass it. Those entries, and the datacenterfrontier archive,
+  are marked `closed = "<date>: <what was measured>"`: not requested, counted as
+  `feeds closed` apart from `feeds failed`, and still listed — deleted, the most-cited
+  publisher in the database would head `tracker feeds`' list of feeds to add. A
+  challenge met in future is named in the failure line (`HTTP 403 (Cloudflare
+  challenge: …)`) instead of a bare 403 that reads as a header problem. The
+  fourteenth, Bisnow's data-center feed, went away when Bisnow rebuilt its site, and
+  is replaced by the one feed it still serves (`bisnow-latest`, its nine newest
+  stories across all markets). About 640 rows these publishers queued before the
+  block are still queued and mostly cannot be read; each costs a fetch, never a model
+  call.
+
 - **The nightly loop's audit and settle decisions run at `high` effort again**
   (`scripts/overnight.sh`, `tests/test_overnight.py`, `docs/data-quality.md`). They ran
   at `low` for one night, 2026-09-30, and two of the audit's three model decisions

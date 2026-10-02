@@ -197,6 +197,23 @@ def test_configured_hosts_covers_feeds_and_sitemaps():
     assert "datacenterfrontier.com" in known
 
 
+def test_a_closed_feed_still_counts_as_configured():
+    """Closing a feed must not make `tracker feeds` propose its publisher back.
+
+    Candidates are publishers whose citations decide values and that feeds.toml
+    does not list, and datacenterfrontier decides more than any other: deleted
+    rather than closed, it would head that list for good.
+    """
+    from tracker.ingest.discover import load_config, load_sitemaps
+    from tracker.sources import host_of
+
+    feeds, _ = load_config()
+    closed = {host_of(f.url) for f in feeds if f.closed}
+    closed |= {host_of(s.url) for s in load_sitemaps() if s.closed}
+    assert {"datacenterfrontier.com", "datacenterdynamics.com"} <= closed
+    assert closed <= probe.configured_hosts()
+
+
 def test_the_toml_omits_the_record_line_for_an_explicitly_named_host():
     """`0 value(s) decided` would be a fact about the command line, not the site."""
     hit = probe.FeedHit(url="https://x.test/f.xml", entries=10, would_queue=4, found_via="robots")
