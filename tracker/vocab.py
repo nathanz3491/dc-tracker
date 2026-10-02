@@ -11,6 +11,7 @@ this module, so it must not depend on any of them.
 
 from __future__ import annotations
 
+import re
 from typing import Any, Final, Literal
 
 # --- project.phase ---------------------------------------------------------
@@ -554,7 +555,19 @@ CLAIM_SCOPES: Final[tuple[str, ...]] = (
     #: The article states the figure and does not say what it is a figure of.
     #: The honest answer, and the default when nothing licenses another.
     "unnamed",
+    #: One building, hall or phase of this campus — a part, not the whole. Never
+    #: asked of the model: read out of the sentence by :func:`part_from_quote`,
+    #: the way `basis` is, because a label the model volunteers drifts to whatever
+    #: is cheapest to say. A capacity or investment figure so labelled fills the
+    #: campus column only when nothing describes the whole site (`upsert.contenders`).
+    "building",
 )
+
+#: Campus totals a figure for one building would misstate. `mw_built` is not here:
+#: it takes the largest cited figure, and a building's energised megawatts are a
+#: true floor on the campus's — whereas `mw_planned` and `investment_usd` take one
+#: claim, so a building's figure could displace the campus total outright.
+PART_FIELDS: Final[tuple[str, ...]] = ("mw_planned", "investment_usd")
 
 # --- claim_meta.basis ------------------------------------------------------
 #: What KIND of megawatt a capacity figure is. `scope` says which *thing* a figure
@@ -836,3 +849,233 @@ def _value_spellings(value: object) -> set[str]:
             trimmed = f"{scaled:.10f}".rstrip("0").rstrip(".")
             out.add(trimmed)
     return {t for t in out if t}
+
+
+# --- claim_meta.scope = "building" -------------------------------------------
+#: How far, in characters, a building's name or a phase word may sit from a figure
+#: and still be the thing it describes. A little under `BASIS_WINDOW`: "the 36MW
+#: Hillsboro 3 data center", "VA-2, a $225 million", "the first 12MW phase" all sit
+#: within a dozen characters, and a looser window starts catching the campus total
+#: two clauses later.
+PART_WINDOW: Final = 40
+
+#: "Initial" is tighter still. Next to a figure it names a first phase — "an
+#: initial 200 MW data center", "85MW of initial power capacity" — and a few words
+#: away it names something else: "in the initial stages of developing a 100MW
+#: complex", "$19 billion over its initial term", "with initial availability".
+INITIAL_WINDOW: Final = 16
+
+#: Wording that makes a figure the whole campus's, whatever part the sentence also
+#: names: "POR03F, which will bring the campus up to a total capacity of 200MW". The
+#: nearer of this and a part's name decides, and a tie goes to the whole site.
+#: Unlike a part's name it may sit across another number — "its $1.5 billion, 176
+#: MW AZ1 campus" is still the campus's money — because a miss here is the costly
+#: error. Plurals count: "the first of five buildings and 142 megawatts" is five.
+_WHOLE_SITE_WORDS: Final[tuple[str, ...]] = (
+    "campus",
+    "buildings",
+    "data centers",
+    "data centres",
+    "facilities",
+    "halls",
+    "phases",
+    "total",
+    "combined",
+    "full",
+    "when complete",
+    "upon completion",
+    "build-out",
+    "buildout",
+    "across",
+    "site-wide",
+    "sitewide",
+    "overall",
+    "over time",
+    "eventually",
+    "potentially",
+    "path to",
+    "future",
+    "expand to",
+    "expanding to",
+    "grow to",
+    "growing to",
+    "rise to",
+    "rising to",
+    "increase to",
+    "increasing to",
+    "scale to",
+    "scales to",
+    "scaling to",
+    "scale beyond",
+    "bring the",
+    "brings the",
+    "entire",
+    "whole",
+)
+
+#: A number that is a distance, an area or a quantity rather than a building's
+#: number: "data center 30 miles east", "Phase 2 acres".
+_NOT_A_UNIT = (
+    r"(?!\s*(?:miles?|mi\b|km|acres?|years?|months?|percent|%|mw|gw|kw|megawatts?|"
+    r"feet|ft|sq|million|billion|stor(?:y|ies)|minutes?|hours?))"
+)
+_UNIT_NOUN = (
+    r"(?:building|bldg\.?|data hall|hall|data cent(?:er|re)|facility|phase|tranche|pod|module)"
+)
+#: "Building 2", "Data Center 3", "Phase 1", "Hall 4b", "data hall number 2".
+_NUMBERED_UNIT = re.compile(
+    rf"\b{_UNIT_NOUN}\s*(?:no\.\s*|number\s+|#\s*)?"
+    rf"(?:\d{{1,2}}[a-z]?|one|two|three|four|five|six|seven|eight|nine|ten)\b{_NOT_A_UNIT}",
+    re.IGNORECASE,
+)
+#: "Building K", "Hall B", "Phase II" — the letter has to be a capital in the
+#: article, or "facility a decade ago" would be a building called A.
+_LETTERED_UNIT = re.compile(
+    r"\b(?i:building|bldg\.?|data hall|hall|pod|phase|tranche)\s+(?:[A-Z]|I{1,3}|IV|VI{0,3}|IX)\b"
+)
+#: "Hillsboro 3 data center", "Altoona 3 facility": a place, a number, one building.
+#: The label is the place and number, which is what a row named after it says.
+_PLACE_NUMBER_UNIT = re.compile(
+    r"\b(?P<label>[A-Z][a-z]+ \d{1,2}) (?i:data cent(?:er|re)|facility|building)\b(?!s)"
+)
+#: An operator's building code, in capitals as operators write them: VA-2, ATL3,
+#: PH1, CHI-2, POR03E, NVA05. Lower-case "load1" is a footnote, not a building.
+_FACILITY_CODE = re.compile(r"\b[A-Z]{2,4}-?\d{1,2}[A-Z]?\b")
+#: Capitals and a digit that are not buildings: units with a footnote mark, chips,
+#: fiscal years, roads, gases, protocols.
+_NOT_A_CODE = re.compile(
+    r"^(?:MWH?|GWH?|KWH?|KV|IT|PUE|CO|FY|Q|NVL|DDR|IPV|GEN|PCIE|USB|LTE|AI|US|SR|HWY|RTE|GA)"
+    r"-?\d+[A-Z]?$"
+)
+#: The first of several: "the first phase", "phase one", "first building", "the
+#: first 12MW phase". "Initial" is the same idea on a shorter leash; see
+#: :data:`INITIAL_WINDOW`.
+_FIRST_PART = re.compile(
+    r"\b(?:first phase|phase one|first building|first data hall|first hall|"
+    r"first stage|first tranche|first block)\b|\bfirst\b[^.;]{0,14}\bphase\b",
+    re.IGNORECASE,
+)
+_INITIAL = re.compile(r"\binitial(?:ly)?\b", re.IGNORECASE)
+#: "its 300MW Cinco data center campus": a figure that modifies the campus noun is
+#: the campus's, however near a phase word sits ("the first phase of its ...").
+_DESCRIBES_A_CAMPUS = re.compile(
+    r"\s*(?:mw|gw|kw|megawatts?|gigawatts?|billion|million|bn)?"
+    r"(?:\s+(?!(?:of|for|in|at|to|and|with|will|is|was|has|have|by|on)\b)[a-z0-9'-]+){0,4}?"
+    r"\s+campus\b"
+)
+_NUMBER = re.compile(r"\d[\d,.]*")
+_SENTENCE_BREAK = re.compile(r"[.;!?]\s")
+
+
+def part_from_quote(
+    quote: str | None, value: object, site_names: frozenset[str] = frozenset()
+) -> str:
+    """The building or phase one figure in a sentence belongs to, or "" for the whole site.
+
+    "" is the common and correct answer — most sentences give a campus a figure and
+    say nothing smaller — and it is also the answer whenever this cannot tell, so a
+    miss leaves the figure where it always was. Only a positive reading moves it.
+
+    **Positional, for the reason `basis_from_quote` is.** "The 36MW Hillsboro 3 data
+    center" and "the first of seven planned data centers on the 240MW campus" both
+    name a building; only the first figure is the building's. So a name counts only
+    within :data:`PART_WINDOW` characters of *this* figure, in the same sentence,
+    with no other number between them — "initially announced at $1 billion, now
+    expected to cost $3 billion" makes the first figure the initial one and leaves
+    the second alone. Wording about the whole site near the figure wins outright.
+
+    `site_names` are this row's own names (`ingest.crawl.site_names`). A building
+    the row is named after is the site, not a part of it: "COL4" on a row called
+    "Cologix COL4" is the whole of what that row describes.
+    """
+    text = quote or ""
+    if not text:
+        return ""
+    low = text.lower()
+    figures = [
+        (index, index + len(token))
+        for token in _value_spellings(value)
+        for index in _find_all(low, token)
+        if _stands_alone(low, index, index + len(token))
+    ]
+    if not figures:
+        return ""
+    numbers = [(m.start(), m.end()) for m in _NUMBER.finditer(low)]
+
+    def near(span: tuple[int, int], figure: tuple[int, int], window: int) -> tuple[int, int] | None:
+        """The text between a phrase and the figure, when they are close and in one sentence."""
+        if _span_gap(span, figure) > window:
+            return None
+        lo, hi = (span[1], figure[0]) if span[1] <= figure[0] else (figure[1], span[0])
+        return None if _SENTENCE_BREAK.search(low[lo:hi]) else (lo, hi)
+
+    def governs(span: tuple[int, int], figure: tuple[int, int], window: int) -> bool:
+        between = near(span, figure, window)
+        return between is not None and not any(
+            between[0] <= start and end <= between[1] and not _overlaps((start, end), span)
+            for start, end in numbers
+        )
+
+    names = _part_names(text)
+    # Every mention of the figure has to read as the part's. A sentence giving the
+    # same number twice — "potentially 75 MW, and ... initially at 75 MW" — is
+    # describing two things, and the safe reading is the one that changes nothing.
+    labels: list[str] = []
+    for figure in figures:
+        if _DESCRIBES_A_CAMPUS.match(low, figure[1]):
+            return ""
+        whole = [
+            _span_gap((start, start + len(word)), figure)
+            for word in _WHOLE_SITE_WORDS
+            for start in _find_all(low, word)
+            if near((start, start + len(word)), figure, PART_WINDOW) is not None
+        ]
+        parts = sorted(
+            (_span_gap(span, figure), label)
+            for label, span, window in names
+            if governs(span, figure, window) and not _is_own_name(label, site_names)
+        )
+        # The nearer phrase is the one describing this figure, and a tie goes to the
+        # whole site: "200MW initially then full 1GW" gives each figure its own word.
+        if not parts or (whole and parts[0][0] >= min(whole)):
+            return ""
+        labels.append(parts[0][1])
+    return labels[0]
+
+
+def _part_names(text: str) -> list[tuple[str, tuple[int, int], int]]:
+    """Every phrase naming one building or phase: label, span, how near it must be."""
+    found: list[tuple[str, tuple[int, int], int]] = []
+    for pattern in (_NUMBERED_UNIT, _LETTERED_UNIT, _PLACE_NUMBER_UNIT, _FIRST_PART):
+        for m in pattern.finditer(text):
+            label = m.group("label") if "label" in pattern.groupindex else m.group(0)
+            found.append((label.strip().lower(), (m.start(), m.end()), PART_WINDOW))
+    for m in _FACILITY_CODE.finditer(text):
+        if not _NOT_A_CODE.match(m.group(0)):
+            found.append((m.group(0).lower(), (m.start(), m.end()), PART_WINDOW))
+    found += [
+        (m.group(0).lower(), (m.start(), m.end()), INITIAL_WINDOW) for m in _INITIAL.finditer(text)
+    ]
+    return found
+
+
+def _is_own_name(label: str, site_names: frozenset[str]) -> bool:
+    """True when the row is named after this building — then it is the site."""
+    squashed = re.sub(r"[^a-z0-9]", "", label.lower())
+    return bool(squashed) and any(
+        squashed in re.sub(r"[^a-z0-9]", "", name.lower()) for name in site_names
+    )
+
+
+def _stands_alone(text: str, start: int, end: int) -> bool:
+    """A figure's spelling found as a number of its own, not inside 2026 or 12.5."""
+    before = text[start - 1] if start > 0 else " "
+    after = text[end] if end < len(text) else " "
+    if before.isdigit() or before in ".,":
+        return False
+    following = text[end + 1] if end + 1 < len(text) else " "
+    return not (after.isdigit() or (after in ".," and following.isdigit()))
+
+
+def _overlaps(a: tuple[int, int], b: tuple[int, int]) -> bool:
+    return a[0] < b[1] and b[0] < a[1]

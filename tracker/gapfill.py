@@ -254,29 +254,44 @@ def _coerce(field_name: str, raw: Any) -> Any:
     return text or None
 
 
-def _basis_axes(facts: dict[str, tuple[Any, str]]) -> dict[str, dict[str, Any]]:
-    """The `basis` axis for whichever capacity figures this citation carries.
+def _fact_axes(
+    facts: dict[str, tuple[Any, str]], site_names: frozenset[str] = frozenset()
+) -> dict[str, dict[str, Any]]:
+    """The claim envelope for the facts one citation carries: `basis` and `scope`.
 
     A thin adapter onto the same gate the crawl path uses, rather than a second
     reading of the same wording: `axis_gate` owns which phrases license which
-    basis, and two copies of that table would be free to disagree.
+    basis, and which make a figure one building's rather than the campus's, and two
+    copies of those tables would be free to disagree.
 
-    Only a non-default answer is stored, matching `crawl._claim_axes`. Writing
-    `unspecified` would attach an envelope to nearly every capacity claim and
+    Only non-default answers are stored, matching `crawl._claim_axes`. Writing
+    `unspecified` or `unnamed` would attach an envelope to nearly every claim and
     inflate the coverage measurement that decides whether these axes are worth
     keeping.
     """
     from tracker.ingest.crawl import axis_gate
-    from tracker.vocab import BASIS_FIELDS, CLAIM_AXIS_DEFAULTS
+    from tracker.vocab import BASIS_FIELDS, CLAIM_AXIS_DEFAULTS, PART_FIELDS
 
     out: dict[str, dict[str, Any]] = {}
     for name, (value, quote) in facts.items():
-        if name not in BASIS_FIELDS:
+        if name not in BASIS_FIELDS and name not in PART_FIELDS:
             continue
-        basis = axis_gate({}, quote, field=name, value=value)["basis"]
-        if basis != CLAIM_AXIS_DEFAULTS["basis"]:
-            out[name] = {"basis": basis}
+        axes = axis_gate({}, quote, site_names=site_names, field=name, value=value)
+        kept = {
+            axis: axes[axis]
+            for axis in ("basis", "scope")
+            if axis in axes and axes[axis] != CLAIM_AXIS_DEFAULTS[axis]
+        }
+        if kept:
+            out[name] = kept
     return out
+
+
+def _names_of(project: Any) -> frozenset[str]:
+    """What a quote can call this row, for telling one of its buildings from it."""
+    from tracker.ingest.crawl import site_names
+
+    return site_names({"name": project.name, "city": project.city, "county": project.county})
 
 
 def apply_facts(
@@ -359,7 +374,8 @@ def apply_facts(
                     excerpt=next(iter(facts.values()))[1][:500],
                     claims={name: value for name, (value, _q) in facts.items()},
                     quotes={name: quote for name, (_v, quote) in facts.items()},
-                    # Which kind of megawatt, on the same terms as the crawl path.
+                    # Which kind of megawatt, and whether the figure is one
+                    # building's, on the same terms as the crawl path.
                     #
                     # This path builds its own citation rather than going through
                     # the article reader, so without this the agent could fill a
@@ -368,7 +384,7 @@ def apply_facts(
                     # depending on which command wrote it. It costs nothing: the
                     # quote is already verified verbatim above and the figure is
                     # in hand, which is everything the axis reads.
-                    claim_meta=_basis_axes(facts),
+                    claim_meta=_fact_axes(facts, _names_of(project)),
                     extractor="gapfill-agent-v1",
                 )
             ],

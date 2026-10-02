@@ -227,11 +227,13 @@ def disputes(project: Project) -> list[Dispute]:
 
     * **Quote-backed only.** A 待确认 claim already loses to a confirmed one by
       rule, in every policy. There is nothing to settle.
-    * **First-hand over a directory.** A directory, wiki or digest beside a
-      first-hand report loses by rule too (`upsert.contenders`), so a model asked to
-      choose between them would be paid to repeat the rule — or, worse, overrule it
-      with a supersession the merge then has to carry. Two directories that
-      disagree with nothing first-hand present are still a dispute.
+    * **First-hand over a directory, the whole site over one building.** A
+      directory, wiki or digest beside a first-hand report loses by rule too, and so
+      does a figure its own sentence gives to one building beside one for the whole
+      site (`upsert.contenders`). A model asked to choose would be paid to repeat the
+      rule — or, worse, overrule it with a supersession the merge then has to carry.
+      Two directories that disagree with nothing first-hand present are still a
+      dispute.
     * **Genuinely different**, by `confidence.values_conflict` — the same
       tolerance the conflict disclosures use, so this cannot report a dispute the
       row's own notes do not.

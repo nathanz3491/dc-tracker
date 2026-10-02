@@ -12,6 +12,24 @@ initial build of the v1 PRD.
 
 ### Changed
 
+- **One building's or one phase's figure no longer stands as the campus's while the
+  campus's own is known** (`tracker/vocab.py`, `tracker/ingest/crawl.py`,
+  `tracker/backfill.py`, `tracker/gapfill.py`, `tracker/upsert.py`,
+  `tracker/logic.py`, `tracker/export.py`, `tests/test_building_figures.py`,
+  `docs/data-quality.md`, `docs/workflows/sync.md`, `docs/workflows/enrich.md`).
+  "The 36MW Hillsboro 3 data center", "initially offering 75MW" and "VA-2, a $225
+  million two-story data center" were stored as campus totals, and because
+  `mw_planned` and `investment_usd` take one claim, such a figure could displace the
+  total outright; the 2026-10-01 audit found a building's $150M as a campus's
+  investment. The stored sentence is now read for a building's name, number or code,
+  or a phase word, next to that figure — never asked of the model — and wording
+  about the whole site nearer to it wins, as does a building the row is named
+  after. Such a claim is labelled scope `building` and fills the campus column only
+  when nothing describes the whole site. It runs at extraction, on the agent's
+  facts, and over stored claims in `tracker backfill scope`. On a copy of production
+  it labelled 16 stored claims and moved two values; its use is mostly ahead. Exports
+  mark the claim (`part`, schema `tracker/9`) and the console says "one building".
+
 - **A directory, wiki or digest now only fills a field nothing first-hand states**
   (`tracker/confidence.py`, `tracker/upsert.py`, `tracker/blocks.py`,
   `tracker/conflicts.py`, `tracker/logic.py`, `tracker/export.py`,

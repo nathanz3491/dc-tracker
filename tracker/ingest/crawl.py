@@ -84,9 +84,11 @@ from tracker.vocab import (
     CLAIM_SCOPES,
     DEFAULT_RISK_SEVERITY,
     EVENT_TYPES,
+    PART_FIELDS,
     PARTY_ROLES,
     TRACKED_FIELDS,
     basis_from_quote,
+    part_from_quote,
     risk_precedence,
 )
 
@@ -1070,6 +1072,18 @@ def axis_gate(
             scope = CLAIM_AXIS_DEFAULTS["scope"]
     elif scope not in CLAIM_SCOPES:
         scope = CLAIM_AXIS_DEFAULTS["scope"]
+    if scope in ("this_site", "unnamed", "building"):
+        # `building` is read out of the sentence, never taken from the model — the
+        # lesson `basis` and `this_site` both taught. A campus capacity or
+        # investment whose sentence gives it to one building or phase ("the 36MW
+        # Hillsboro 3 data center", "initially offering 75MW") is that part's, and
+        # the merge then lets it fill the campus column only when nothing describes
+        # the whole site. Anything the reading does not license falls back to the
+        # neutral default, including a `building` the model volunteered.
+        if field in PART_FIELDS and part_from_quote(quote, value, site_names):
+            scope = "building"
+        elif scope == "building":
+            scope = CLAIM_AXIS_DEFAULTS["scope"]
     out["scope"] = scope
 
     bound = str(entry.get("bound") or "").strip()

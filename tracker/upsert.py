@@ -284,6 +284,28 @@ def _decided_against(row: Source) -> frozenset[str]:
     return frozenset(k for k, v in reasons.items() if v in DECIDED_REASONS)
 
 
+def _part_fields(row: Source) -> frozenset[str]:
+    """Fields this citation's sentence gives to one building or phase, not the site.
+
+    Read from `claim_meta`, where the extraction gate and `backfill scope` record
+    scope `building`; only :data:`vocab.PART_FIELDS` can carry it, because those are
+    the campus totals one building's figure would misstate.
+    """
+    from tracker.vocab import PART_FIELDS
+
+    try:
+        meta = json.loads(row.claim_meta or "{}")
+    except (TypeError, ValueError):
+        return frozenset()
+    if not isinstance(meta, dict):
+        return frozenset()
+    return frozenset(
+        name
+        for name in PART_FIELDS
+        if isinstance(meta.get(name), dict) and meta[name].get("scope") == "building"
+    )
+
+
 def _carried_reasons(row: Source, claims: dict[str, Any]) -> dict[str, str]:
     """Decisions already recorded on this source row, for fields it still claims."""
     try:
@@ -341,6 +363,10 @@ class _Claim:
     #: report of its own. Such a claim fills a field nothing first-hand states and
     #: never displaces one that does; see :func:`contenders`.
     tertiary: bool = False
+    #: True for a campus capacity or investment figure its own sentence gives to
+    #: one building or phase (`claim_meta` scope `building`, `vocab.PART_FIELDS`).
+    #: It fills the campus column only when nothing describes the whole site.
+    part: bool = False
 
     def recency(self, *, by_publication: bool) -> Any:
         """The timestamp this claim is ranked by.
@@ -406,6 +432,7 @@ def claims_by_field(sources: list[Source], *, settings: Any = None) -> dict[str,
         # have let an unquoted "construction" outrank a cited "operational".
         placeholder = is_placeholder(s)
         tertiary = conf.is_tertiary(s)
+        parts = _part_fields(s)
         try:
             claims = json.loads(s.claims)
         except (TypeError, ValueError):
@@ -429,6 +456,7 @@ def claims_by_field(sources: list[Source], *, settings: Any = None) -> dict[str,
                     published_at=getattr(s, "published_at", None),
                     decided_against=name in decided,
                     tertiary=tertiary,
+                    part=name in parts,
                 )
             )
     # Confirmed first, then first-hand, then strongest source, then most recent.
@@ -440,9 +468,10 @@ def claims_by_field(sources: list[Source], *, settings: Any = None) -> dict[str,
     # 待确认 one, however authoritative or recent that source is. A claim a decision
     # ruled against leads even that, sorting last of all: `resolve` drops it from the
     # merge entirely, and the readers that *display* every claim — `export`, the web
-    # UI — should show it where the engine ranks it. First-hand sits ahead of weight
-    # for the same reason: `contenders` drops a directory's claim whenever a
-    # first-hand one survives, so the order shown is the order that decides.
+    # UI — should show it where the engine ranks it. Whole-site and first-hand sit
+    # ahead of weight for the same reason: `contenders` drops one building's figure
+    # whenever a figure for the whole site survives, and a directory's claim
+    # whenever a first-hand one does, so the order shown is the order that decides.
     #
     # What "most recent" means is the one part of this that is configurable, and
     # the default is the wrong answer kept deliberately: `fetched_at` is crawl
@@ -453,6 +482,7 @@ def claims_by_field(sources: list[Source], *, settings: Any = None) -> dict[str,
             key=lambda c: (
                 not c.decided_against,
                 c.confirmed,
+                not c.part,
                 not c.tertiary,
                 c.weight,
                 c.recency(by_publication=by_publication),
@@ -466,7 +496,7 @@ def claims_by_field(sources: list[Source], *, settings: Any = None) -> dict[str,
 def contenders(claims: list[_Claim]) -> list[_Claim]:
     """The claims a merge actually chooses among, in the order given.
 
-    Three filters, each a rule rather than a judgement, applied once here so that
+    Four filters, each a rule rather than a judgement, applied once here so that
     `resolve`, the conflict notes and the dispute finder cannot disagree about who
     was in the contest:
 
@@ -474,19 +504,26 @@ def contenders(claims: list[_Claim]) -> list[_Claim]:
        :data:`DECIDED_REASONS`.
     2. **Quote-backed beats unquoted.** A 待确认 claim is a last resort, used only
        when nothing confirmed states the field.
-    3. **First-hand beats tertiary.** A directory, wiki or digest fills a field no
+    3. **The whole site beats one building.** A campus capacity or investment whose
+       own sentence gives it to one building or phase fills the campus column only
+       when nothing describes the whole site. It answers a different question —
+       "the 36MW Hillsboro 3 data center" is not the campus's 200 MW — so it comes
+       before who said it.
+    4. **First-hand beats tertiary.** A directory, wiki or digest fills a field no
        first-hand citation states, and never displaces one that does. Applied after
        the quote rule, deliberately: a directory's quoted figure still beats a news
        figure nobody could find a sentence for, because the second is not evidence
        of anything yet.
 
-    Every policy needs all three, not just PREFER_WEIGHT: MAX, MIN and the phase
-    ladder scan every claim, so without the third a directory's larger `mw_built`
-    or further-along phase would win however many reports said otherwise.
+    Every policy needs them, not just PREFER_WEIGHT: MAX, MIN and the phase ladder
+    scan every claim, so without the fourth a directory's larger `mw_built` or
+    further-along phase would win however many reports said otherwise.
     """
     live = [c for c in claims if not c.decided_against]
     if any(c.confirmed for c in live):
         live = [c for c in live if c.confirmed]
+    if any(not c.part for c in live):
+        live = [c for c in live if not c.part]
     if any(not c.tertiary for c in live):
         live = [c for c in live if not c.tertiary]
     return live
@@ -614,9 +651,10 @@ def resolve(
     stuck: the claim was demoted, no confirmed rival remained, and the last-resort
     rule handed the bad figure back.
 
-    A directory's claim is dropped too whenever a first-hand one is left, which is
-    the third filter in :func:`contenders` — where all three now live, so the readers
-    that report a contest apply exactly the rules that decided it.
+    One building's figure is dropped too whenever one for the whole site is left,
+    and a directory's whenever a first-hand one is — the later filters in
+    :func:`contenders`, where all four now live, so the readers that report a contest
+    apply exactly the rules that decided it.
 
     `ratchet` folds the value already on the row into the comparison, and governs all
     three policies that scan the whole claim set — MAX, MIN and PHASE. It was

@@ -99,8 +99,9 @@ weight, and crawl order decided it.
 help with:
 
 * quote-backed claims only; an unconfirmed claim already loses by rule;
-* a directory, wiki or digest beside a first-hand report loses by rule too, so
-  only directories disagreeing with nothing first-hand present reach a model;
+* a directory, wiki or digest beside a first-hand report loses by rule too, and so
+  does one building's figure beside the whole site's, so neither contest reaches a
+  model;
 * genuinely different values, by `confidence.values_conflict` — the same tolerance
   the row's own conflict disclosures use;
 * tracked fields only; `notes` is assembled and `blocker` is derived from risk rows;

@@ -454,7 +454,8 @@ Five qualifiers now travel with each claim, in `source.claim_meta`:
 - **`scope`** — this site, a named tranche (`block:Phase 1`), the programme, the
   region, the operator's portfolio, or `unnamed`. `unnamed` is a correct and
   common answer; guessing `this_site` to be helpful is the error the axis exists
-  to prevent.
+  to prevent. One more value, `building`, is never asked of the model: see
+  "One building's figure" below.
 - **`basis`** — which *kind* of megawatt: `it_load`, `facility`, `nameplate`, or
   `unspecified`. A different question from `scope`, which is why it is a fifth
   axis rather than a value inside the fourth: a figure can be unambiguously about
@@ -607,6 +608,34 @@ This is the same rule `bound` already follows for hedges, and the two now share
 the machinery. Getting the figure to the gate is what unblocks the last place that
 still does a presence test — see [known limitations](known-limitations.md) #11 and
 #14.
+
+### One building's figure is not the campus's
+
+A capacity or investment sentence often gives its figure to one building or one
+phase — *"the 36MW Hillsboro 3 data center"*, *"initially offering 75MW"*,
+*"VA-2, a $225 million two-story data center"*, *"the first 12MW phase of CHI-2"*.
+Stored as the campus's `mw_planned` or `investment_usd`, that figure displaced the
+campus total outright, because both columns take one claim; the 2026-10-01 audit
+found a building's $150M standing as a campus's investment.
+
+`vocab.part_from_quote` reads the stored sentence for it, the way `basis` is read
+and for the same reason — a label a model volunteers drifts to whatever is cheapest
+to say. Scope `building` is recorded only when a building's name, number or code, or
+a phase word ("first phase", "initially"), sits next to *this* figure in the same
+sentence with no other number between; wording about the whole site nearer to the
+figure ("on the 240MW campus", "a total capacity of", "rising to", "future
+phases") wins, and so does a building the row is named after, which is the site.
+The merge then lets such a claim fill the campus column only when nothing describes
+the whole site (`upsert.contenders`). `mw_built` is left out on purpose: it takes the
+largest figure, and a building's energised megawatts are a true floor on the
+campus's.
+
+It runs at extraction, on the agent's facts, and over stored claims in `tracker
+backfill scope`, which the nightly loop runs before it re-derives. On a copy of
+production on 2026-10-02 it labelled 16 stored claims and moved two values:
+Galaxy's McGregor campus from an initial 75 MW to the 74 MW listed for the whole
+site, and Aligned's SLC02 from an initial $600M credit facility to the $650M
+investment another source states. Its use is mostly ahead: every read from now on.
 
 ## Crawl order is not publication order
 

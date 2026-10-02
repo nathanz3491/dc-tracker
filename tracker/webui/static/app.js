@@ -2575,7 +2575,7 @@ function ClaimTable({ claims, field }) {
               <a href=${c.source_url} target="_blank" rel="noopener noreferrer"
                  style=${{ fontSize: 11, color: "var(--muted-foreground)", whiteSpace: "nowrap" }}
                  title=${c.source_url}>
-                ${c.source_type}${c.tertiary ? " · directory" : ""} · w${c.weight}
+                ${c.source_type}${c.tertiary ? " · directory" : ""}${c.part ? " · one building" : ""} · w${c.weight}
               </a>
             </div>`)}
         </div>`}

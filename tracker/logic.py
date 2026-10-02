@@ -158,8 +158,9 @@ class Collision:
     loser_weight: int
     winner_fetched: dt.datetime | None
     loser_fetched: dt.datetime | None
-    #: Which rule decided it: "confirmed", "first-hand", "credibility", "recency",
-    #: "tiebreak", "largest", "earliest", "furthest along", "terminal" or "first seen".
+    #: Which rule decided it: "confirmed", "whole site", "first-hand", "credibility",
+    #: "recency", "tiebreak", "largest", "earliest", "furthest along", "terminal" or
+    #: "first seen".
     decided_by: str
     #: The field's declared merge policy, named so the reason is checkable.
     policy: str = "prefer_weight"
@@ -1002,6 +1003,11 @@ def why_decided(
     """
     if decided_by == "confirmed":
         return "the other value has no quote behind it"
+    if decided_by == "whole site":
+        return (
+            "the other figure is one building's or one phase's, by its own sentence, "
+            "and fills the campus column only when nothing describes the whole site"
+        )
     if decided_by == "first-hand":
         return (
             "a first-hand report outranks a directory, wiki or digest, which only "
@@ -1068,9 +1074,12 @@ def _decided_by(policy, winner, rival, claims) -> str:
     # win by default, which is what made those two branches unconditional.
     if winner.confirmed != rival.confirmed:
         return "confirmed"
-    # Next in `upsert.contenders`, and for the same reason it is named before any
-    # policy: the directory was dropped, not out-measured. `getattr` because a
-    # caller may hand in claim-shaped objects built before the flag existed.
+    # Next in `upsert.contenders`, and for the same reason they are named before
+    # any policy: the building's figure and the directory were dropped, not
+    # out-measured. `getattr` because a caller may hand in claim-shaped objects
+    # built before the flags existed.
+    if getattr(winner, "part", False) != getattr(rival, "part", False):
+        return "whole site"
     if getattr(winner, "tertiary", False) != getattr(rival, "tertiary", False):
         return "first-hand"
     if policy is Policy.FILL_ONLY:

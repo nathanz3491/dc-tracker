@@ -492,10 +492,15 @@ def regate_scope(session: Session, *, apply: bool = False) -> ScopeReport:
     `backfill derive` recomputes derived values, without re-reading a single
     article. An agent re-scoping the same claims would cost ~77,000 tokens a row.
 
-    Only `this_site` is re-gated. Every other value was licensed by wording or by
-    resolving against a block when it was written, and the gate has not changed for
-    those; `this_site` is the one that used to be unrefusable, so it is the only one
-    whose stored value carries no information about whether it was checked.
+    Only `this_site`, and the one-building reading, are re-gated. Every other value
+    was licensed by wording or by resolving against a block when it was written, and
+    the gate has not changed for those; `this_site` is the one that used to be
+    unrefusable, so it is the only one whose stored value carries no information
+    about whether it was checked. `building` is read out of the sentence rather
+    than asked for, so it is re-read here on every capacity and investment claim —
+    including ones written before it existed, which carry `unnamed` or no envelope
+    at all — and a claim it no longer licenses goes back to what the sentence does
+    say.
 
     Site identity comes from the *project* rather than from the arriving record,
     which is the one way this differs from the ingest path — and it is the right
@@ -505,7 +510,9 @@ def regate_scope(session: Session, *, apply: bool = False) -> ScopeReport:
     import json
 
     from tracker.ingest.crawl import axis_gate, site_names
+    from tracker.vocab import CLAIM_AXIS_DEFAULTS, PART_FIELDS
 
+    default = CLAIM_AXIS_DEFAULTS["scope"]
     report = ScopeReport()
     for project in session.scalars(select(Project)).all():
         labels = frozenset(
@@ -515,35 +522,54 @@ def regate_scope(session: Session, *, apply: bool = False) -> ScopeReport:
         )
         names = site_names({"name": project.name, "city": project.city, "county": project.county})
         for source in project.sources:
-            if not source.claim_meta:
-                continue
             try:
-                meta = json.loads(source.claim_meta)
+                meta = json.loads(source.claim_meta or "{}")
                 quotes = json.loads(source.quotes or "{}")
+                claims = json.loads(source.claims or "{}")
             except (TypeError, ValueError):
                 continue
-            if not isinstance(meta, dict) or not isinstance(quotes, dict):
+            if not all(isinstance(x, dict) for x in (meta, quotes, claims)):
+                continue
+            # The capacity and investment claims with a sentence behind them can be
+            # one building's whether or not they carry an envelope yet.
+            parts = {f for f in PART_FIELDS if claims.get(f) is not None and quotes.get(f)}
+            if not meta and not parts:
                 continue
             report.sources += 1
             touched = False
-            for name, entry in meta.items():
-                if not isinstance(entry, dict) or entry.get("scope") != "this_site":
+            for name in sorted(set(meta) | parts):
+                entry = meta.get(name, {})
+                if not isinstance(entry, dict):
+                    continue
+                was = entry.get("scope") or default
+                if was in ("this_site", "building"):
+                    asked = "this_site"
+                elif was == default and name in parts:
+                    asked = default
+                else:
                     continue
                 report.claims += 1
                 got = axis_gate(
-                    {"scope": "this_site"},
+                    {"scope": asked},
                     quotes.get(name) or "",
                     block_labels=labels,
                     site_names=names,
+                    field=name,
+                    value=claims.get(name),
                 )["scope"]
-                if got == "this_site":
+                if got == was:
                     continue
                 report.changed += 1
-                report.note("this_site", got)
+                report.note(was, got)
                 entry["scope"] = got
+                # Only ever created holding `building`: a claim the gate leaves at
+                # the default is skipped above, so no neutral envelope is invented.
+                meta[name] = entry
                 touched = True
             if touched and apply:
-                source.claim_meta = json.dumps(meta, sort_keys=True, ensure_ascii=False)
+                source.claim_meta = (
+                    json.dumps(meta, sort_keys=True, ensure_ascii=False) if meta else None
+                )
     if apply:
         session.flush()
     return report

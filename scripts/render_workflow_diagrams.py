@@ -756,7 +756,7 @@ def logic() -> Canvas:
 
     c.box(
         576, 196, 432, 232, "Five fields do not use credibility",
-        ["Assuming the better source always won is the mistake this", "module was built on: re-deriving that way reported 73 of 221", "live rows as drifted, and none had.", "", "· mw_built takes the largest figure — energised megawatts", "   only go up, and a better source describing an earlier", "   state must not walk it back", "· first_announced takes the earliest — that is what 'first' means", "· phase takes the furthest along, unless a source says it stopped", "· name, company and location are never overwritten once set:", "   churn in an identity field is worse than staleness", "", "· and under every policy, a directory, wiki or digest only", "   fills a field no first-hand source states"],
+        ["Assuming the better source always won is the mistake this", "module was built on: re-deriving that way reported 73 of 221", "live rows as drifted, and none had.", "", "· mw_built takes the largest figure — energised megawatts", "   only go up, and a better source describing an earlier", "   state must not walk it back", "· first_announced takes the earliest — that is what 'first' means", "· phase takes the furthest along, unless a source says it stopped", "· name, company and location are never overwritten once set:", "   churn in an identity field is worse than staleness", "", "· under every policy, one building's figure and a directory's", "   only fill what nothing better states"],
         role="teal", title_size=13, align="left", sub_size=10.2,
     )
 
