@@ -42,6 +42,12 @@
 #             It picks rows with `--t2` — the ones below T2 for missing fields,
 #             fewest missing first — where `--target 0` alone had sorted the
 #             FULLEST rows first and spent every round on rows already past the bar.
+#   discover  new campuses, first round only: polls the feeds (free — no fetch, no
+#             model) and reads `--discover` queued articles that name no tracked
+#             campus, newest first, through the ordinary crawl, whose identity check
+#             asks before it inserts. Enrich reads for one row and creates none, so
+#             from 2026-09-30 nothing in this loop added a campus; on 10-01 the five
+#             it turned away were all rows already held under other names.
 #
 # WHAT IT COSTS, AND THE CEILING. The ceiling is money: `--cny` (default ¥12), priced
 # from the spend ledger by `tracker.spend` at DeepSeek's published rates for the hour
@@ -122,9 +128,11 @@ RISKS=40
 ENRICH=15
 ENRICH_BUDGET=60
 ENRICH_ROUNDS=1
+DISCOVER=10
 MIN_CONF=0.85
 DO_MERGE=1
 DO_ENRICH=1
+DO_DISCOVER=1
 TOKEN_CAP=25000000
 CNY_CAP=12
 JUDGEMENT_EFFORT=high
@@ -153,6 +161,7 @@ started in tmux and left.
   --enrich N         projects to enrich (default 15); 0 to skip
   --enrich-budget N  articles the enrich phase may read (default 60)
   --enrich-rounds N  enrich in the first N rounds only (default 1)
+  --discover N       queued articles about untracked campuses to read (default 10); 0 to skip
   --min-confidence F floor a duplicate fold needs (default 0.85)
   --no-merge         never fold duplicates; park and rule only. Deletes nothing.
   --cny N            stop when the night's spend, priced, reaches N yuan (default 12)
@@ -187,6 +196,7 @@ while [ $# -gt 0 ]; do
     --enrich)         shift; ENRICH="${1:?}" ;;
     --enrich-budget)  shift; ENRICH_BUDGET="${1:?}" ;;
     --enrich-rounds)  shift; ENRICH_ROUNDS="${1:?}" ;;
+    --discover)       shift; DISCOVER="${1:?}" ;;
     --min-confidence) shift; MIN_CONF="${1:?}" ;;
     --cny)            shift; CNY_CAP="${1:?}" ;;
     --tokens)         shift; TOKEN_CAP="${1:?}" ;;
@@ -203,6 +213,7 @@ while [ $# -gt 0 ]; do
 done
 
 [ "$ENRICH" -gt 0 ] 2>/dev/null || DO_ENRICH=0
+[ "$DISCOVER" -gt 0 ] 2>/dev/null || DO_DISCOVER=0
 
 effort_ok() { case "$1" in low|high|max) return 0 ;; *) return 1 ;; esac; }
 effort_ok "$JUDGEMENT_EFFORT" || { echo "--judgement-effort must be low, high or max" >&2; exit 2; }
@@ -448,6 +459,20 @@ for round in $(seq 1 "$ROUNDS"); do
     phase "enrich — $ENRICH row(s) below T2, $ENRICH_BUDGET article budget"
     tracker enrich --select "$ENRICH" --t2 --target 0 --budget "$ENRICH_BUDGET" \
       < /dev/null || true
+  fi
+
+  # --- discover: new campuses, through the identity check -----------------
+  # The one phase that adds rows. First round only, for the reason enrich is: the
+  # queue does not change between rounds. Polling the feeds costs nothing; each
+  # article read is one extraction (about ¥0.03), and the crawl's identity check —
+  # one call, only when a record nearly matches a row — is what keeps a campus
+  # already held under another name from becoming its twin. Rounds after this one
+  # run `duplicates` over whatever it added.
+  if [ "$DO_DISCOVER" -eq 1 ] && [ "$round" -eq 1 ]; then
+    if capped discover; then break; fi
+    phase "discover — poll the feeds, read $DISCOVER queued article(s) about untracked campuses"
+    tracker discover < /dev/null || true
+    tracker ingest crawl --from-queue --new-first --limit "$DISCOVER" < /dev/null || true
   fi
 
   # --- reconcile and measure ----------------------------------------------

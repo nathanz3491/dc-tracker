@@ -10,6 +10,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 First working version. Nothing has been released yet, so everything below is the
 initial build of the v1 PRD.
 
+### Added
+
+- **The nightly loop adds campuses again, through the identity check**
+  (`scripts/overnight.sh`, `tracker/ingest/discover.py`, `tracker/cli/ingest.py`,
+  `tests/test_discover.py`, `tests/test_overnight.py`, `README.md`,
+  `docs/workflows/sync.md`). Since enrich began reading for one row only
+  (2026-09-30), nothing in the loop created a row; the old loop's ~13 a night had
+  come from unfocused reads. The campuses a one-row read turns away were not the
+  answer: on 10-01 all five were rows already held under other names. The first round
+  now polls the feeds, which costs nothing, and reads `--discover` (default 10) queued
+  articles naming no tracked campus, newest first (`ingest crawl --from-queue
+  --new-first`), through the ordinary crawl and its identity arbiter. About ¥0.3 a
+  night; the queue held 2,133 such articles.
+
 ### Changed
 
 - **One building's or one phase's figure no longer stands as the campus's while the

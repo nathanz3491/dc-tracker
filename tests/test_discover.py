@@ -1004,6 +1004,53 @@ def test_known_first_still_honours_the_limit(session):
     assert len(pending(session, limit=2, known_first=True)) == 2
 
 
+def test_new_first_reads_untracked_campuses_newest_first(session):
+    """The nightly discovery step: a campus nobody tracks, and the newest news first.
+
+    Enrich reads for one row and creates none, so this is the only place a new
+    campus can come from at night — and an article about a tracked row would spend
+    the read on depth the enrich phase already buys.
+    """
+    from tracker.ingest.discover import pending
+
+    tracked(session, "Sabey Data Centers", "Sabey Ashburn Campus", "Ashburn")
+    queue_candidates(
+        session,
+        [
+            Candidate(
+                "https://x.test/sabey-data-centers-ashburn-expansion-70mw/",
+                "Sabey expands its Ashburn data center campus by 70MW",
+                "f",
+                published_at=dt.datetime(2026, 9, 30),
+            ),
+            Candidate(
+                "https://x.test/old-new-data-center-campus-100mw/",
+                "A 100MW campus",
+                "f",
+                published_at=dt.datetime(2024, 1, 5),
+            ),
+            Candidate("https://x.test/undated-data-center-campus-200mw/", "A 200MW campus", "f"),
+            Candidate(
+                "https://x.test/recent-new-data-center-campus-300mw/",
+                "A 300MW campus",
+                "f",
+                published_at=dt.datetime(2026, 9, 20),
+            ),
+        ],
+        run_id="r",
+        report=DiscoverReport(),
+    )
+
+    ordered = [row.url for row in pending(session, new_first=True)]
+    assert ["recent-new" in ordered[0], "old-new" in ordered[1], "undated" in ordered[2]] == [
+        True,
+        True,
+        True,
+    ]
+    assert "sabey" in ordered[3], "the article about a tracked row goes after the new ones"
+    assert len(pending(session, limit=2, new_first=True)) == 2
+
+
 # --- Operator newsrooms -----------------------------------------------------
 
 

@@ -828,6 +828,7 @@ def pending(
     limit: int | None = None,
     *,
     known_first: bool = False,
+    new_first: bool = False,
     spec: FilterSpec | None = None,
 ) -> list[IngestUrl]:
     """Queued candidates.
@@ -835,6 +836,13 @@ def pending(
     Ordered oldest-published-first so a backlog drains predictably. With
     ``known_first`` the ones covering an already-tracked project come first, which
     spends each LLM call on depth rather than on another single-source row.
+
+    ``new_first`` is the opposite question, for the nightly loop's discovery step:
+    the articles that name **no** tracked campus, newest published first, then the
+    rest in the usual order. Those are where a campus the database has never heard
+    of can turn up, and the newest are the ones still true. Each is read by the
+    normal crawl, whose identity check decides whether a record is a new campus or
+    an existing one under another name before anything is inserted.
 
     Passing ``spec`` splits that first group again, putting the articles that also
     carry an obstacle term ahead of the rest. Those are the highest-value calls in
@@ -846,6 +854,22 @@ def pending(
         .where(IngestUrl.status == PENDING_URL_STATUS)
         .order_by(IngestUrl.published_at.asc().nullslast(), IngestUrl.id.asc())
     )
+    if new_first:
+        rows = list(session.scalars(stmt))
+        identities = project_identities(session)
+        implied = newsroom_companies()
+        fresh = [
+            row
+            for row in rows
+            if not matches_known_project(row.url, row.title, identities, implied_companies=implied)
+        ]
+        # Newest first; an undated article last, since nothing says it is recent.
+        dated = [row for row in fresh if row.published_at is not None]
+        undated = [row for row in fresh if row.published_at is None]
+        dated.sort(key=lambda row: (row.published_at, row.id), reverse=True)
+        chosen = {row.id for row in fresh}
+        ordered = dated + undated + [row for row in rows if row.id not in chosen]
+        return ordered[:limit] if limit else ordered
     if not known_first:
         if limit:
             stmt = stmt.limit(limit)

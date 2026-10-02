@@ -196,8 +196,20 @@ def test_every_paid_phase_is_preceded_by_a_ceiling_check():
     """The header promised a check "between phases" and the loop made one per round,
     so a single round could overshoot the ceiling by a round's worth of agent runs."""
     text = SCRIPT.read_text(encoding="utf-8")
-    for phase in ("audit", "risks", "logic", "duplicates", "enrich"):
+    for phase in ("audit", "risks", "logic", "duplicates", "enrich", "discover"):
         assert f"if capped {phase}; then break; fi" in text, phase
+
+
+def test_the_loop_adds_campuses_through_the_identity_check():
+    """Nothing else in the loop creates a row since enrich reads for one row only.
+    First round only, capped, and through the ordinary crawl — whose identity check
+    is what keeps a campus held under another name from gaining a twin."""
+    text = SCRIPT.read_text(encoding="utf-8")
+    assert "DISCOVER=10\n" in text
+    assert 'if [ "$DO_DISCOVER" -eq 1 ] && [ "$round" -eq 1 ]; then' in text
+    assert "tracker discover < /dev/null || true" in text
+    assert 'tracker ingest crawl --from-queue --new-first --limit "$DISCOVER"' in text
+    assert "--no-verify-identity" not in text
 
 
 def test_enrich_runs_once_a_night_on_rows_below_t2():

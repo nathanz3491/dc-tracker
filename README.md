@@ -190,6 +190,11 @@ other shell. Each round runs the free phases, then `audit` (a T1 gate, and cheap
 `risks`, the logic and duplicate agents, and — in the first round only
 (`--enrich-rounds`) — `enrich`, the most expensive rung and the only one that can move
 a row held at T1 by `fields_present`, pointed at the rows below T2 (`enrich --t2`).
+The first round also adds campuses (`--discover`, default 10): it polls the feeds,
+which costs nothing, and reads that many queued articles naming no tracked campus,
+newest first (`ingest crawl --from-queue --new-first`), through the crawl's identity
+check. Enrich reads for one row and creates none, so without this step nothing in the
+loop added a campus.
 A round counts as progress only when a count falls below the lowest it has been that
 night, so counts that wobble up and back down end the night instead of prolonging
 it. The per-item judgements run at `high` effort (`--judgement-effort`), or on the
@@ -420,7 +425,7 @@ directory, which is what lets `tracker init` work from anywhere.
 .venv/Scripts/python -m pytest
 ```
 
-3,529 tests, about three minutes. **A fresh clone with no API key and no network access
+3,531 tests, about three minutes. **A fresh clone with no API key and no network access
 must produce a green run.** Tests that would hit the network or spend DeepSeek
 tokens are marked `network` / `llm` and deselected by default; run them
 explicitly with `-m network` or `-m llm`. An unmarked test that reaches for the

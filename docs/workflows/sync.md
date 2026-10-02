@@ -122,6 +122,12 @@ prioritising after would reorder a batch that was already chosen:
    never satisfy — so left to the ordinary ordering it sits behind a permanent
    supply of better candidates and is never read.
 
+`ingest crawl --from-queue --new-first` asks the opposite question, and is what the
+nightly loop's discovery step runs: the articles naming **no** tracked campus first,
+newest published first, then the rest. Enrich reads for one row and creates none, so
+that step is the loop's only source of new campuses; each article still goes through
+the identity arbiter below before it can insert a row.
+
 Publishers that `tracker/seed/sources.toml` ignores are partitioned out and **named**, not
 merely subtracted: the queue still holds those rows and `tracker queue` still lists
 them, so the number has to be attributable.
@@ -315,7 +321,7 @@ Touching any of these means the poster is in scope. Re-render with
 | Discover, archives, search | `tracker/ingest/discover.py` — `run`, `load_sitemaps`, `sweep_sitemaps`, `queue_candidates`; `tracker/ingest/search.py`; `tracker/normalize.py` — `canonical_url`, `url_identity`, `url_variants`; `tracker/backfill.py` — `repair_urls` |
 | What search looks for | `tracker/ingest/search.py` — `_PLACE_TEMPLATES`, `rank_places`, `plan_queries`, `PlannedQuery.label`, `templates`; `tracker/normalize.py` — `state_name` |
 | Judging a template | `tracker/funnel.py` — `feed_group`, `survey`, `verdicts`; `tracker/ingest/search.py` — `LabelStat` |
-| Queue ordering and counts | `tracker/ingest/discover.py` — `pending`, `pending_split`, `pending_risk_count`, `failed`, `retryable`, `given_up`, `MAX_SAME_FAILURES`, `failure_summary` |
+| Queue ordering and counts | `tracker/ingest/discover.py` — `pending` (`known_first`, `new_first`), `pending_split`, `pending_risk_count`, `failed`, `retryable`, `given_up`, `MAX_SAME_FAILURES`, `failure_summary` |
 | Prospect | `tracker/prospect.py`; `tracker/roster.py` — `hunt_order`, `measure` |
 | Extract and refresh | `tracker/ingest/crawl.py` — `run`, `stale_sources`, `unchanged_reads`, `record_url`, `failure_reason`, `MAX_REFRESH_BACKOFF` |
 | The party gate | `tracker/ingest/crawl.py` — `_parties`, `_ROLE_MARKERS`, `_role_is_licensed` |

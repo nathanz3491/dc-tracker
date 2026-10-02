@@ -116,6 +116,13 @@ def ingest_crawl(
             "--limit", help="With --from-queue or --stale-prompt, take at most this many."
         ),
     ] = None,
+    new_first: Annotated[
+        bool,
+        typer.Option(
+            "--new-first",
+            help="With --from-queue, read articles naming no tracked campus first, newest first.",
+        ),
+    ] = False,
     prompt_name: Annotated[
         str, typer.Option("--prompt", help="Prompt name or path, e.g. extract-v1.")
     ] = "extract-v1",
@@ -258,7 +265,7 @@ def ingest_crawl(
         from tracker.ingest import discover as disc
 
         with session_scope(engine, commit=False) as session:
-            url_list = [row.url for row in disc.pending(session, limit=limit)]
+            url_list = [row.url for row in disc.pending(session, limit=limit, new_first=new_first)]
         if not url_list:
             console.print(
                 "[green]queue is empty[/green] — run `tracker discover` to look for articles"
