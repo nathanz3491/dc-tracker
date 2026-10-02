@@ -507,7 +507,10 @@ survivors of a keyword pass alongside the article itself, with Wayback wrappers
 unwrapped to the URL they archived. The article is also extracted like any page,
 under one guard: a wikipedia.org citation never counts as an independent domain
 in `confidence`, because Wikipedia summarizes the same coverage the row already
-cites — it can supply quotes and leads, never corroboration.
+cites — it can supply quotes and leads, never corroboration. Facility directories
+and digests are under the same guard and one more: their claim fills a field no
+first-hand citation states, and never displaces one that does
+(`confidence.TERTIARY_DOMAINS`).
 
 **Serper is the least friction and the best default here.** It returns Google's
 index, which has the deepest coverage of US data center trade press, and its

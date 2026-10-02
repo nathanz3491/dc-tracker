@@ -573,13 +573,32 @@ one source, because aggregators recycle each other's reporting and counting rows
 would inflate confidence exactly where it should not be. Any citation at all
 floors the score at 1, per the PRD's definition of done.
 
-The same reasoning extends to **tertiary domains** (`TERTIARY_DOMAINS`, today
-just wikipedia.org): a Wikipedia citation is kept, quotable and worth its floor
+The same reasoning extends to **tertiary domains** (`TERTIARY_DOMAINS`):
+Wikipedia and other wikis, facility directories and project trackers
+(servercountry.org, dchub.cloud, epoch.ai and some forty more), and lists,
+digests and reposts. A citation from one is kept, quotable and worth its floor
 of 1, but it never counts toward domain independence, agreement, or conflict.
 Its paragraph on a campus is the trade-press coverage one step removed, so
 letting it corroborate would launder aggregation into independence — and letting
-it *conflict* would dock a row for Wikipedia's staleness rather than for a real
+it *conflict* would dock a row for a directory's staleness rather than for a real
 disagreement between reporters.
+
+**And it never decides a field a first-hand source states.** The merge drops a
+tertiary claim whenever a first-hand one survives the earlier filters
+(`upsert.contenders`): a directory fills what nothing else states and loses
+everything else. Before that rule a directory was `general_media` like any local
+paper, tied with one on weight, and won on recency — and a listing is always
+"recent", because it is re-crawled whenever anyone looks. The hand audit of
+2026-10-01 traced a wrong campus capacity to a directory page that gave one
+building's figures for the whole site. The quote rule still comes first: a
+directory's quoted figure beats a report's unquoted one, which is not evidence of
+anything yet.
+
+The cost is on fields that only move forward. A 2021 article saying
+"construction" now outranks a 2026 directory saying "operational" — on a copy of
+production that moved six phases back, some of them plausibly wrong — and the
+honest fix is a first-hand source saying the site opened, which is what `enrich`
+looks for. A directory that is the only voice on a field still fills it.
 
 `updated_at` means "a field changed". `last_verified_at` means "an operator says
 this row is right" (PRD open question Q4), and it is the only path from a single

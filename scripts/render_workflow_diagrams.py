@@ -756,7 +756,7 @@ def logic() -> Canvas:
 
     c.box(
         576, 196, 432, 232, "Five fields do not use credibility",
-        ["Assuming the better source always won is the mistake this", "module was built on: re-deriving that way reported 73 of 221", "live rows as drifted, and none had.", "", "· mw_built takes the largest figure — energised megawatts", "   only go up, and a better source describing an earlier", "   state must not walk it back", "· first_announced takes the earliest — that is what 'first' means", "· phase takes the furthest along, unless a source says it stopped", "· name, company and location are never overwritten once set:", "   churn in an identity field is worse than staleness"],
+        ["Assuming the better source always won is the mistake this", "module was built on: re-deriving that way reported 73 of 221", "live rows as drifted, and none had.", "", "· mw_built takes the largest figure — energised megawatts", "   only go up, and a better source describing an earlier", "   state must not walk it back", "· first_announced takes the earliest — that is what 'first' means", "· phase takes the furthest along, unless a source says it stopped", "· name, company and location are never overwritten once set:", "   churn in an identity field is worse than staleness", "", "· and under every policy, a directory, wiki or digest only", "   fills a field no first-hand source states"],
         role="teal", title_size=13, align="left", sub_size=10.2,
     )
 
@@ -777,7 +777,7 @@ def logic() -> Canvas:
 
     c.box(
         48, 792, 340, 204, "logic conflicts · proposes",
-        ["A field with two quote-backed claims that genuinely", "disagree. Narrow on purpose: identity fields are excluded,", "and 174 of 666 contested fields were name or company.", "", "One reasoning call sees every claim at once — value, stored", "quote, publisher, date — and picks a key from a closed list.", "It cannot type a value: every option is a figure a publisher", "actually printed, shown with the quote already stored.", "", "Then one adversarial call tries to knock the answer down.", "Two calls a field, hard: an unbounded argument is", "unbounded spend, and a refusal carrying the objection is a", "better outcome than a third call arguing with itself."],
+        ["A field with two quote-backed claims that genuinely", "disagree. Narrow on purpose: identity fields are out", "(174 of 666 were name or company), and so is a directory", "beside a report, which the merge rule already settles.", "One reasoning call sees every claim at once — value, stored", "quote, publisher, date — and picks a key from a closed list.", "It cannot type a value: every option is a figure a publisher", "actually printed, shown with the quote already stored.", "", "Then one adversarial call tries to knock the answer down.", "Two calls a field, hard: an unbounded argument is", "unbounded spend, and a refusal carrying the objection is a", "better outcome than a third call arguing with itself."],
         role="orange", title_size=13, align="left", sub_size=10.2,
     )
 

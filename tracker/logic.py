@@ -158,8 +158,8 @@ class Collision:
     loser_weight: int
     winner_fetched: dt.datetime | None
     loser_fetched: dt.datetime | None
-    #: Which rule decided it: "confirmed", "credibility", "recency", "tiebreak",
-    #: "largest", "earliest", "furthest along", "terminal" or "first seen".
+    #: Which rule decided it: "confirmed", "first-hand", "credibility", "recency",
+    #: "tiebreak", "largest", "earliest", "furthest along", "terminal" or "first seen".
     decided_by: str
     #: The field's declared merge policy, named so the reason is checkable.
     policy: str = "prefer_weight"
@@ -1002,6 +1002,11 @@ def why_decided(
     """
     if decided_by == "confirmed":
         return "the other value has no quote behind it"
+    if decided_by == "first-hand":
+        return (
+            "a first-hand report outranks a directory, wiki or digest, which only "
+            "fills a field nothing first-hand states"
+        )
     if decided_by == "credibility":
         return f"{winner_type} (weight {winner_weight}) beats {loser_type} (weight {loser_weight})"
     if decided_by == "recency":
@@ -1063,6 +1068,11 @@ def _decided_by(policy, winner, rival, claims) -> str:
     # win by default, which is what made those two branches unconditional.
     if winner.confirmed != rival.confirmed:
         return "confirmed"
+    # Next in `upsert.contenders`, and for the same reason it is named before any
+    # policy: the directory was dropped, not out-measured. `getattr` because a
+    # caller may hand in claim-shaped objects built before the flag existed.
+    if getattr(winner, "tertiary", False) != getattr(rival, "tertiary", False):
+        return "first-hand"
     if policy is Policy.FILL_ONLY:
         return "first seen"
     if policy is Policy.MAX:

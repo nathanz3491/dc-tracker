@@ -100,7 +100,87 @@ DERIVED_PREFIX = "derived:"
 #: would launder aggregation into independence. The same reasoning already
 #: counts five articles on one outlet as one source; this extends it to an
 #: outlet whose every article is a digest of the others.
-TERTIARY_DOMAINS = frozenset({"wikipedia.org"})
+#:
+#: **The merge reads this too** (`upsert.contenders`): a tertiary claim fills a
+#: field no first-hand citation states, and never displaces one that does. Before
+#: that, a directory was `general_media` like any local paper, so it tied on weight
+#: and won on recency — and a listing is always "recent", because it is re-crawled
+#: whenever anyone looks. The hand audit of 2026-10-01 traced a wrong `mw_planned`
+#: and `mw_built` on #43 to a dchub.cloud page that gave one building's figures for
+#: the campus; on a copy of production the next day the rule moved 20 figures, phases
+#: and dates on 19 rows — Project Rainier back to the 2.2 GW four reports give, from a
+#: tracker's 2.3 — and 37 confidence scores, both ways: a directory no longer
+#: corroborates the report it copied, and no longer disputes one either.
+#:
+#: Three kinds, all matched by registrable domain so the list stays short:
+#:
+#: * **Encyclopedias and wikis** — a paragraph written from the coverage it cites.
+#: * **Facility directories and project trackers** — a page per site, compiled from
+#:   press releases, filings and other directories, usually undated, often mixing
+#:   one building's figures with the campus's. Some are good; none is a witness.
+#: * **Lists, digests and reposts** — one article summarizing many ("10 biggest data
+#:   centers", a weekly round-up, a catalog that republishes press releases).
+#:
+#: What is *not* here, on purpose: trade press (it reports), wire reposts of a
+#: filing (`stocktitan.net` — the operator's own words), and research houses that
+#: phone the project owner (`industrialinfo.com`). `datacentermap.com` and
+#: `baxtel.com` are listed although search already skips them
+#: (`ingest.search._SKIP_DOMAINS`), because a page can still arrive by another door.
+TERTIARY_DOMAINS = frozenset(
+    {
+        # encyclopedias and wikis
+        "wikipedia.org",
+        "gem.wiki",
+        # facility directories, project trackers and state listings
+        "baxtel.com",
+        "bluecollege.co",
+        "centexdatacenters.org",
+        "cleanview.co",
+        "cloudandcolocation.com",
+        "cloudscene.com",
+        "colocationscout.com",
+        "compute-atlas.com",
+        "datacenter.fyi",
+        "datacenterhawk.com",
+        "datacentermap.com",
+        "datacenters.com",
+        "datacenterslist.com",
+        "dchub.cloud",
+        "dcmap.us",
+        "doyenco.com",
+        "epoch.ai",
+        "gridglasses.com",
+        "inflect.com",
+        "interconnection.fyi",
+        "irecruit.co",
+        "louisianaaihub.com",
+        "michaelbommarito.com",
+        "louisianai.com",
+        "mlq.ai",
+        "morethanjustparks.com",
+        "pitchbook.com",
+        "poweredbywho.com",
+        "servercountry.org",
+        "suedatacenters.org",
+        "tech.vegas",
+        "theloadreport.com",
+        "trackpolicy.org",
+        "unlimitedconstructionshuttles.com",
+        "usdatamap.com",
+        # lists, digests and reposts
+        "blackridgeresearch.com",
+        "brightlio.com",
+        "datacentercatalog.com",
+        "datacenterscatalogs.com",
+        "emergingtrajectories.com",
+        "itkservices3.com",
+        "networkenvironments.com",
+        "realclear.ai",
+        "researchandmarkets.com",
+        "thejobwalk.com",
+        "thewayofward.com",
+    }
+)
 
 #: Multi-part public suffixes we must not truncate to two labels, or
 #: "bbc.co.uk" and "guardian.co.uk" would collapse into one "source".

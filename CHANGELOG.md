@@ -10,6 +10,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 First working version. Nothing has been released yet, so everything below is the
 initial build of the v1 PRD.
 
+### Changed
+
+- **A directory, wiki or digest now only fills a field nothing first-hand states**
+  (`tracker/confidence.py`, `tracker/upsert.py`, `tracker/blocks.py`,
+  `tracker/conflicts.py`, `tracker/logic.py`, `tracker/export.py`,
+  `tests/test_directory_sources.py`, `docs/design-decisions.md`,
+  `docs/workflows/logic.md`). Facility directories such as servercountry.org,
+  dchub.cloud and epoch.ai were weighted like any local paper, tied with one, and
+  won on recency because a listing is re-crawled whenever anyone looks; the
+  2026-10-01 audit traced a wrong campus capacity to a directory page giving one
+  building's figures for the whole site. Some forty sites join Wikipedia on the
+  tertiary list: their claims never displace a first-hand one, never corroborate it
+  and never count as a dispute with it, so the conflict solver no longer spends a
+  call on that contest. On a copy of production it moved 20 values on 19 rows
+  (Project Rainier back to the 2.2 GW four reports give) and 37 confidence scores
+  in both directions. The cost: six phases now follow an older "announced" or
+  "construction" report over a directory's "operational", some plausibly wrongly.
+  Exports carry the flag per claim (schema `tracker/8`) and the console marks such
+  a claim "directory".
+
 ### Fixed
 
 - **The nightly loop's audit and settle decisions run at `high` effort again**

@@ -223,10 +223,15 @@ def disputes(project: Project) -> list[Dispute]:
     already answers with its free rule pass — the deterministic rules settle 285
     findings at no cost, and only what survives them is worth a model.
 
-    Four filters, each removing a case a model cannot help with:
+    Five filters, each removing a case a model cannot help with:
 
     * **Quote-backed only.** A 待确认 claim already loses to a confirmed one by
       rule, in every policy. There is nothing to settle.
+    * **First-hand over a directory.** A directory, wiki or digest beside a
+      first-hand report loses by rule too (`upsert.contenders`), so a model asked to
+      choose between them would be paid to repeat the rule — or, worse, overrule it
+      with a supersession the merge then has to carry. Two directories that
+      disagree with nothing first-hand present are still a dispute.
     * **Genuinely different**, by `confidence.values_conflict` — the same
       tolerance the conflict disclosures use, so this cannot report a dispute the
       row's own notes do not.
@@ -240,7 +245,7 @@ def disputes(project: Project) -> list[Dispute]:
       database: 174 of 666 contested fields are `name` or `company`.
     """
     from tracker.confidence import values_conflict
-    from tracker.upsert import DERIVED_FIELDS, FIELD_POLICY, Policy, claims_by_field
+    from tracker.upsert import DERIVED_FIELDS, FIELD_POLICY, Policy, claims_by_field, contenders
 
     out: list[Dispute] = []
     by_field = claims_by_field(list(project.sources))
@@ -249,7 +254,7 @@ def disputes(project: Project) -> list[Dispute]:
             continue
         if FIELD_POLICY.get(name) is Policy.FILL_ONLY:
             continue
-        backed = [c for c in claims if c.confirmed]
+        backed = [c for c in contenders(claims) if c.confirmed]
         if len(backed) < 2:
             continue
 

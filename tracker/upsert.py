@@ -336,6 +336,11 @@ class _Claim:
     #: against must not come back the moment no confirmed rival remains. `resolve`
     #: drops these outright rather than demoting them.
     decided_against: bool = False
+    #: True for a citation from a directory, a wiki or a digest
+    #: (`confidence.TERTIARY_DOMAINS`) — a page compiled from other coverage, not a
+    #: report of its own. Such a claim fills a field nothing first-hand states and
+    #: never displaces one that does; see :func:`contenders`.
+    tertiary: bool = False
 
     def recency(self, *, by_publication: bool) -> Any:
         """The timestamp this claim is ranked by.
@@ -400,6 +405,7 @@ def claims_by_field(sources: list[Source], *, settings: Any = None) -> dict[str,
         # including on `phase`, which ranks by progression and would otherwise
         # have let an unquoted "construction" outrank a cited "operational".
         placeholder = is_placeholder(s)
+        tertiary = conf.is_tertiary(s)
         try:
             claims = json.loads(s.claims)
         except (TypeError, ValueError):
@@ -422,18 +428,21 @@ def claims_by_field(sources: list[Source], *, settings: Any = None) -> dict[str,
                     confirmed=not placeholder and name not in unconfirmed,
                     published_at=getattr(s, "published_at", None),
                     decided_against=name in decided,
+                    tertiary=tertiary,
                 )
             )
-    # Confirmed first, then strongest source, then most recent. `url` is the final
-    # tiebreaker so the ordering is total and therefore reproducible — without it,
-    # two equally-weighted same-timestamp sources could resolve differently between
-    # runs and break idempotence.
+    # Confirmed first, then first-hand, then strongest source, then most recent.
+    # `url` is the final tiebreaker so the ordering is total and therefore
+    # reproducible — without it, two equally-weighted same-timestamp sources could
+    # resolve differently between runs and break idempotence.
     #
     # `confirmed` leads because a quote-backed value must never be displaced by a
     # 待确认 one, however authoritative or recent that source is. A claim a decision
     # ruled against leads even that, sorting last of all: `resolve` drops it from the
     # merge entirely, and the readers that *display* every claim — `export`, the web
-    # UI — should show it where the engine ranks it.
+    # UI — should show it where the engine ranks it. First-hand sits ahead of weight
+    # for the same reason: `contenders` drops a directory's claim whenever a
+    # first-hand one survives, so the order shown is the order that decides.
     #
     # What "most recent" means is the one part of this that is configurable, and
     # the default is the wrong answer kept deliberately: `fetched_at` is crawl
@@ -444,6 +453,7 @@ def claims_by_field(sources: list[Source], *, settings: Any = None) -> dict[str,
             key=lambda c: (
                 not c.decided_against,
                 c.confirmed,
+                not c.tertiary,
                 c.weight,
                 c.recency(by_publication=by_publication),
                 c.url,
@@ -451,6 +461,35 @@ def claims_by_field(sources: list[Source], *, settings: Any = None) -> dict[str,
             reverse=True,
         )
     return out
+
+
+def contenders(claims: list[_Claim]) -> list[_Claim]:
+    """The claims a merge actually chooses among, in the order given.
+
+    Three filters, each a rule rather than a judgement, applied once here so that
+    `resolve`, the conflict notes and the dispute finder cannot disagree about who
+    was in the contest:
+
+    1. **A claim a decision ruled against is out**, whatever is left — see
+       :data:`DECIDED_REASONS`.
+    2. **Quote-backed beats unquoted.** A 待确认 claim is a last resort, used only
+       when nothing confirmed states the field.
+    3. **First-hand beats tertiary.** A directory, wiki or digest fills a field no
+       first-hand citation states, and never displaces one that does. Applied after
+       the quote rule, deliberately: a directory's quoted figure still beats a news
+       figure nobody could find a sentence for, because the second is not evidence
+       of anything yet.
+
+    Every policy needs all three, not just PREFER_WEIGHT: MAX, MIN and the phase
+    ladder scan every claim, so without the third a directory's larger `mw_built`
+    or further-along phase would win however many reports said otherwise.
+    """
+    live = [c for c in claims if not c.decided_against]
+    if any(c.confirmed for c in live):
+        live = [c for c in live if c.confirmed]
+    if any(not c.tertiary for c in live):
+        live = [c for c in live if not c.tertiary]
+    return live
 
 
 def _coerce_like(value: Any, template: Any) -> Any:
@@ -575,6 +614,10 @@ def resolve(
     stuck: the claim was demoted, no confirmed rival remained, and the last-resort
     rule handed the bad figure back.
 
+    A directory's claim is dropped too whenever a first-hand one is left, which is
+    the third filter in :func:`contenders` — where all three now live, so the readers
+    that report a contest apply exactly the rules that decided it.
+
     `ratchet` folds the value already on the row into the comparison, and governs all
     three policies that scan the whole claim set — MAX, MIN and PHASE. It was
     threaded into PHASE alone, which made it a lie for the other two: a stored figure
@@ -593,11 +636,9 @@ def resolve(
     """
     if not claims:
         return existing
-    claims = [c for c in claims if not c.decided_against]
+    claims = contenders(claims)
     if not claims:
         return existing
-    if any(c.confirmed for c in claims):
-        claims = [c for c in claims if c.confirmed]
 
     if policy is Policy.FILL_ONLY:
         return existing if existing is not None else claims[0].value
@@ -690,17 +731,16 @@ def _conflict_notes(by_field: dict[str, list[_Claim]]) -> tuple[list[str], list[
     fields: list[str] = []
     for field_name in conf.KEY_FIELDS:
         claims = by_field.get(field_name, [])
-        # The same two filters `resolve` applies, and for the same reason: a claim
-        # the engine discarded outright is not a rival, and reporting it as one
+        # The same filters `resolve` applies, and for the same reason: a claim the
+        # engine discarded outright is not a rival, and reporting it as one
         # describes a contest that never happened. Observed live on Fairwater (#1),
         # whose notes credited a placeholder URL as the "higher-weighted" side of a
         # phase conflict — a source that does not exist, disputing nothing. A
         # superseded figure is the same story with a decision behind it: once it is
         # ruled out, the disagreement is settled and the note should stop announcing
-        # it every recompute.
-        claims = [c for c in claims if not c.decided_against]
-        if any(c.confirmed for c in claims):
-            claims = [c for c in claims if c.confirmed]
+        # it every recompute. A directory beside a first-hand report is a third:
+        # the rule settled it, so there is nothing for a reader to weigh.
+        claims = contenders(claims)
         if len(claims) < 2:
             continue
         best = claims[0]
@@ -2302,6 +2342,7 @@ __all__ = [
     "choose_blocker",
     "claim_value",
     "claims_by_field",
+    "contenders",
     "derive_fields",
     "fold_reading",
     "fold_source",

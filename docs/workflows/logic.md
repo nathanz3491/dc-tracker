@@ -95,10 +95,12 @@ cannot tell a superseded figure from a rival one. Hyperion (#10) held Meta's 202
 $10B over its 2026 $50B because both come from the same publisher at the same
 weight, and crawl order decided it.
 
-**What counts as a dispute** — four filters, each removing a case a model cannot
+**What counts as a dispute** — five filters, each removing a case a model cannot
 help with:
 
 * quote-backed claims only; an unconfirmed claim already loses by rule;
+* a directory, wiki or digest beside a first-hand report loses by rule too, so
+  only directories disagreeing with nothing first-hand present reach a model;
 * genuinely different values, by `confidence.values_conflict` — the same tolerance
   the row's own conflict disclosures use;
 * tracked fields only; `notes` is assembled and `blocker` is derived from risk rows;
