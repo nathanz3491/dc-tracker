@@ -1147,6 +1147,10 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **The public front page carries a `websitelaunches-verification` meta tag**
+  (`tracker/webui/static/public/home.html`), so that directory can confirm the
+  console's domain is ours. It is a fixed string in a page that was already public.
+
 - **`tracker changes --against <snapshot>` lists every value a run changed, beside
   the sentence now behind it** (`tracker/changes.py`, `tracker/cli/quality.py`,
   `scripts/overnight.sh`, `tests/test_changes.py`, `docs/data-quality.md`). The quality
