@@ -22,6 +22,10 @@
 # "feeds closed", apart from "feeds failed", so that line still means something
 # broke since this file was last edited.
 #
+# It covers the publisher's articles too, since they refuse the same clients its
+# feed does. Every crawl puts a page on a closed publisher's domain behind every
+# page it can read, unless that page's body is cached, before it cuts to its limit.
+#
 # Closed rather than deleted, for two reasons. `tracker feeds` proposes any
 # publisher whose citations decide stored values and that this file does not list,
 # so a deleted datacenterfrontier would head its list of feeds to add for good. And
@@ -56,7 +60,7 @@
 # docs/ingesting.md, "Why DataCenterDynamics is not read". Rows these feeds queued
 # before the block are still in the queue, and their pages answer the same
 # challenge: only the ones whose syndicated body was cached when they were queued
-# can be read.
+# can be read, so every crawl now reads the rest last.
 #
 # To see whether one has re-opened — 200 means delete its `closed` line, then run
 # `tracker discover --dry-run` to see what it would queue:

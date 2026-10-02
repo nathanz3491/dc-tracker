@@ -363,7 +363,7 @@ def enrich() -> Canvas:
 
     pool = c.box(
         844, 232, 186, 86, "Pooled, then filtered",
-        ["de-duplicated across harvesters;", "publishers seed/sources.toml", "ignores are dropped first"],
+        ["de-duplicated across harvesters;", "publishers seed/sources.toml", "ignores are dropped; a closed", "publisher's pages go last"],
         role="panel",
     )
     read = c.box(
@@ -520,7 +520,7 @@ def sync() -> Canvas:
 
     queue = c.box(
         280, 500, 190, 284, "The queue",
-        ["ingest_url rows,", "status = discovered", "", "Ordered before the limit", "bites, never after:", "", "· rows covering a project", "  we already track go first", "· among those, the ones", "  reporting an obstacle", "· prospect finds jump the", "  whole queue"],
+        ["ingest_url rows,", "status = discovered", "", "Ordered before the limit", "bites, never after:", "", "· rows covering a project", "  we already track go first", "· among those, the ones", "  reporting an obstacle", "· prospect finds jump the", "  whole queue", "· a page nothing can read", "  goes last, whatever its rank"],
         role="panel",
     )
     for b in (feeds, search, roster, archives):

@@ -73,10 +73,11 @@
 <text x="649.0" y="499.5" font-size="10" fill="#5C6B73" text-anchor="middle">round 1 only</text>
 <polyline points="456.0,469.0 474.0,469.0 474.0,232.0 514.0,232.0" fill="none" stroke="#5C6B73" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#a5C6B73)"/>
 <rect x="844.0" y="232.0" width="186.0" height="86.0" rx="7" fill="#F7F9F9" stroke="#B9C6CC" stroke-width="1.3"/>
-<text x="937.0" y="259.1" font-size="12.5" fill="#16242E" text-anchor="middle" font-weight="700">Pooled, then filtered</text>
-<text x="937.0" y="276.1" font-size="10" fill="#5C6B73" text-anchor="middle">de-duplicated across harvesters;</text>
-<text x="937.0" y="289.7" font-size="10" fill="#5C6B73" text-anchor="middle">publishers seed/sources.toml</text>
-<text x="937.0" y="303.3" font-size="10" fill="#5C6B73" text-anchor="middle">ignores are dropped first</text>
+<text x="937.0" y="252.3" font-size="12.5" fill="#16242E" text-anchor="middle" font-weight="700">Pooled, then filtered</text>
+<text x="937.0" y="269.3" font-size="10" fill="#5C6B73" text-anchor="middle">de-duplicated across harvesters;</text>
+<text x="937.0" y="282.9" font-size="10" fill="#5C6B73" text-anchor="middle">publishers seed/sources.toml</text>
+<text x="937.0" y="296.5" font-size="10" fill="#5C6B73" text-anchor="middle">ignores are dropped; a closed</text>
+<text x="937.0" y="310.1" font-size="10" fill="#5C6B73" text-anchor="middle">publisher's pages go last</text>
 <rect x="844.0" y="362.0" width="186.0" height="92.0" rx="7" fill="#EDF1F2" stroke="#B9C6CC" stroke-width="1.3"/>
 <text x="937.0" y="378.5" font-size="12.5" fill="#16242E" text-anchor="middle" font-weight="700">Read and extract</text>
 <text x="937.0" y="395.5" font-size="10" fill="#5C6B73" text-anchor="middle">about this row only, and never</text>

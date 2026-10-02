@@ -28,9 +28,10 @@ import logging
 import re
 import tomllib
 import xml.etree.ElementTree as ET
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeVar
 from urllib.parse import urlsplit
 
 from sqlalchemy import and_, or_, select
@@ -874,6 +875,83 @@ def matches_known_project(
     return None
 
 
+# --- Pages nothing can read -------------------------------------------------
+#
+# A publisher marked `closed` in `seed/feeds.toml` refuses every client this
+# project runs, and its articles answer the same way its feed does. So a queued or
+# cited page on one of those domains can be read only from a body cached before
+# the block began — on 2026-10-02 that was 22 of the 650 queued there.
+#
+# Every crawl that cuts a list to a limit puts the rest last: the queue crawls,
+# `sync`'s extract, retry and refresh, and each round of enrich. Nothing is
+# dropped. The queue still holds them, `tracker queue` still lists them, and they
+# are tried when nothing readable is left, which is also how a block that lifts
+# gets noticed. What stops is a page that will answer a challenge taking a slot
+# from one that would not: measured that day, six of the nightly crawl's next ten
+# slots, and all fifteen of a `tracker sync` extract, which reads `priority`
+# publishers first — and datacenterfrontier and datacenterdynamics are two.
+
+T = TypeVar("T")
+
+
+def closed_domains(path: Path | None = None) -> frozenset[str]:
+    """Every publisher with a feed or archive marked closed, by registrable domain.
+
+    Empty when the config cannot be read, so a broken file leaves the crawl in its
+    old order rather than stopping it; `tracker discover` is where that is reported.
+    """
+    from tracker.confidence import registrable_domain
+
+    try:
+        feeds, _ = load_config(path)
+        sitemaps = load_sitemaps(path)
+    except (DiscoverError, tomllib.TOMLDecodeError):
+        return frozenset()
+    urls = [f.url for f in feeds if f.closed] + [s.url for s in sitemaps if s.closed]
+    return frozenset(domain for domain in map(registrable_domain, urls) if domain)
+
+
+def unreadable_test(cache_dir: Path | None, *, path: Path | None = None) -> Callable[[str], bool]:
+    """A test for pages no fetch will read: on a closed publisher, nothing cached.
+
+    `cache_dir` is the cache the crawl will serve from. None means it will not
+    serve from one — `--no-cache`, and the refresh phase, which re-reads on purpose
+    — and then every page on a closed publisher is unreadable.
+    """
+    from tracker.confidence import registrable_domain
+
+    closed = closed_domains(path)
+
+    def unreadable(url: str) -> bool:
+        if not closed or registrable_domain(url) not in closed:
+            return False
+        return cache_dir is None or not cache_path(url, cache_dir).is_file()
+
+    return unreadable
+
+
+def readable_first(
+    items: list[T],
+    unreadable: Callable[[str], bool] | None,
+    *,
+    url: Callable[[T], str] | None = None,
+) -> list[T]:
+    """`items` in their order, except the ones `unreadable` flags, which go last.
+
+    Stable on both sides, so the ordering the caller chose — depth first, newest
+    first, priority publishers first — survives among the readable pages and among
+    the rest. `url` reads an item's URL; without it the items are URLs.
+    """
+    if unreadable is None:
+        return items
+    get: Callable[[Any], str] = url or (lambda item: item)
+    readable: list[T] = []
+    last: list[T] = []
+    for item in items:
+        (last if unreadable(get(item)) else readable).append(item)
+    return readable + last
+
+
 def pending(
     session: Session,
     limit: int | None = None,
@@ -881,6 +959,7 @@ def pending(
     known_first: bool = False,
     new_first: bool = False,
     spec: FilterSpec | None = None,
+    unreadable: Callable[[str], bool] | None = None,
 ) -> list[IngestUrl]:
     """Queued candidates.
 
@@ -899,6 +978,10 @@ def pending(
     carry an obstacle term ahead of the rest. Those are the highest-value calls in
     the queue: a project's own press release never names its blocker, so an
     adversarial second source is the only way that fact is ever recorded.
+
+    ``unreadable`` (:func:`unreadable_test`) flags the pages no fetch will read,
+    which then go after every other row, whichever order was asked for, before the
+    limit is cut.
     """
     stmt = (
         select(IngestUrl)
@@ -920,33 +1003,33 @@ def pending(
         dated.sort(key=lambda row: (row.published_at, row.id), reverse=True)
         chosen = {row.id for row in fresh}
         ordered = dated + undated + [row for row in rows if row.id not in chosen]
-        return ordered[:limit] if limit else ordered
-    if not known_first:
-        if limit:
-            stmt = stmt.limit(limit)
-        return list(session.scalars(stmt))
-
-    # Scored in Python: the match needs slug normalization that SQL cannot do, and
-    # the queue is hundreds of rows, not millions.
-    rows = list(session.scalars(stmt))
-    identities = project_identities(session)
-    implied = newsroom_companies()
-    risky, enriching, fresh = [], [], []
-    for row in rows:
-        if not matches_known_project(row.url, row.title, identities, implied_companies=implied):
-            fresh.append(row)
-        elif spec is not None and spec.risk_term(f"{row.title or ''} {urlsplit(row.url).path}"):
-            risky.append(row)
-        else:
-            enriching.append(row)
-    if risky or enriching:
-        log.info(
-            "%d queued candidate(s) cover a tracked project (%d of them report an "
-            "obstacle); crawling those first",
-            len(risky) + len(enriching),
-            len(risky),
-        )
-    ordered = risky + enriching + fresh
+    elif known_first:
+        # Scored in Python: the match needs slug normalization that SQL cannot do,
+        # and the queue is thousands of rows, not millions.
+        rows = list(session.scalars(stmt))
+        identities = project_identities(session)
+        implied = newsroom_companies()
+        risky, enriching, fresh = [], [], []
+        for row in rows:
+            if not matches_known_project(row.url, row.title, identities, implied_companies=implied):
+                fresh.append(row)
+            elif spec is not None and spec.risk_term(f"{row.title or ''} {urlsplit(row.url).path}"):
+                risky.append(row)
+            else:
+                enriching.append(row)
+        if risky or enriching:
+            log.info(
+                "%d queued candidate(s) cover a tracked project (%d of them report an "
+                "obstacle); crawling those first",
+                len(risky) + len(enriching),
+                len(risky),
+            )
+        ordered = risky + enriching + fresh
+    elif limit and unreadable is None:
+        return list(session.scalars(stmt.limit(limit)))
+    else:
+        ordered = list(session.scalars(stmt))
+    ordered = readable_first(ordered, unreadable, url=lambda row: row.url)
     return ordered[:limit] if limit else ordered
 
 
@@ -1032,20 +1115,27 @@ def failed(session: Session, limit: int | None = None) -> list[IngestUrl]:
     return list(session.scalars(stmt))
 
 
-def retryable(session: Session, limit: int | None = None) -> list[IngestUrl]:
+def retryable(
+    session: Session,
+    limit: int | None = None,
+    *,
+    unreadable: Callable[[str], bool] | None = None,
+) -> list[IngestUrl]:
     """The failed URLs an automatic retry should still spend a try on.
 
     `failed` less the ones that have failed the same way :data:`MAX_SAME_FAILURES`
-    times running. Longest-untried first, like `failed`.
+    times running. Longest-untried first, like `failed`, except that the pages
+    `unreadable` flags go last — see :func:`pending`.
     """
     stmt = (
         select(IngestUrl)
         .where(_worth_retrying())
         .order_by(IngestUrl.last_tried_at.asc(), IngestUrl.id.asc())
     )
-    if limit:
+    if limit and unreadable is None:
         stmt = stmt.limit(limit)
-    return list(session.scalars(stmt))
+    rows = readable_first(list(session.scalars(stmt)), unreadable, url=lambda row: row.url)
+    return rows[:limit] if limit else rows
 
 
 def given_up(session: Session) -> list[IngestUrl]:
@@ -1456,6 +1546,7 @@ __all__ = [
     "SitemapSpec",
     "UrlVerdict",
     "classify_status",
+    "closed_domains",
     "crawl_sitemap",
     "default_feeds_path",
     "drop_ids",
@@ -1472,10 +1563,12 @@ __all__ = [
     "pending_split",
     "project_identities",
     "queue_candidates",
+    "readable_first",
     "refilter_pending",
     "retryable",
     "run",
     "select_candidates",
     "sweep_sitemaps",
+    "unreadable_test",
     "verify_urls",
 ]

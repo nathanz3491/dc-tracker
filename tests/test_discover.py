@@ -248,6 +248,164 @@ def test_the_shipped_closed_feeds_are_never_requested(session):
     assert report.feeds_failed == len(fetcher.calls), "every open feed 404s in this fake"
 
 
+# --- Pages nothing can read -------------------------------------------------
+#
+# A closed publisher's articles answer the same challenge as its feed. On
+# 2026-10-02 six of the nightly crawl's next ten slots, and all fifteen of a sync
+# extract, were such pages, each one taken from a page that could have been read.
+
+
+def test_closed_domains_are_every_closed_feed_and_archive(tmp_path: Path):
+    """`refused` and its archive share a domain; `unexplained` is closed without a
+    reason and counts all the same; `reopened` says `closed = false`."""
+    assert discover.closed_domains(_closed_config(tmp_path)) == {"refused.test", "c.test"}
+
+
+def test_a_broken_config_closes_nothing(tmp_path: Path):
+    """The ordering is an optimisation. A file discover cannot read must leave the
+    crawl in its old order, not stop it."""
+    bad = tmp_path / "feeds.toml"
+    bad.write_text("[[feed]\nurl = ", encoding="utf-8")
+    assert discover.closed_domains(bad) == frozenset()
+
+
+def test_a_closed_publishers_page_is_unreadable_unless_its_body_is_cached(tmp_path: Path):
+    from tracker.ingest.fetch import cache_path
+
+    config = _closed_config(tmp_path)
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    cached = "https://www.refused.test/2026/09/cached/"
+    cache_path(cached, cache).write_text("syndicated before the block", encoding="utf-8")
+
+    unreadable = discover.unreadable_test(cache, path=config)
+    assert unreadable("https://www.refused.test/2026/09/story/"), "any host on the domain"
+    assert not unreadable(cached), "a cached body is served without a fetch"
+    assert not unreadable("https://a.test/2026/09/story/"), "an open publisher is untouched"
+
+    without_cache = discover.unreadable_test(None, path=config)
+    assert without_cache(cached), "with no cache to serve from, nothing on it can be read"
+
+
+def _queue_dated(session, *pairs: tuple[str, dt.datetime]) -> None:
+    queue_candidates(
+        session,
+        [
+            Candidate(url, f"A {100 * (i + 1)}MW data center campus", "f", published_at=when)
+            for i, (url, when) in enumerate(pairs)
+        ],
+        run_id="r",
+        report=DiscoverReport(),
+    )
+
+
+def test_the_nightly_order_puts_an_unreadable_page_after_every_readable_one(
+    session, tmp_path: Path
+):
+    """Newest first would read the closed publisher's article first, and fail."""
+    _queue_dated(
+        session,
+        ("https://refused.test/newest-campus/", dt.datetime(2026, 9, 30)),
+        ("https://a.test/older-campus/", dt.datetime(2026, 9, 1)),
+        ("https://b.test/oldest-campus/", dt.datetime(2026, 8, 1)),
+    )
+    unreadable = discover.unreadable_test(None, path=_closed_config(tmp_path))
+
+    ordered = [r.url for r in pending(session, new_first=True, unreadable=unreadable)]
+    assert ordered == [
+        "https://a.test/older-campus/",
+        "https://b.test/oldest-campus/",
+        "https://refused.test/newest-campus/",
+    ], "newest first among the readable pages, and the rest after them"
+    two = [r.url for r in pending(session, limit=2, new_first=True, unreadable=unreadable)]
+    assert "https://refused.test/newest-campus/" not in two
+    assert pending(session, new_first=True)[0].url == "https://refused.test/newest-campus/"
+
+
+def test_depth_first_does_not_lift_an_unreadable_page(session, tmp_path: Path):
+    """A second source for a tracked row is worth more than a new row — if it can be
+    read. One that cannot be is worth nothing, however well it ranks."""
+    tracked(session, "Sabey Data Centers", "Sabey Ashburn Campus", "Ashburn")
+    _queue_dated(
+        session,
+        ("https://refused.test/sabey-data-centers-ashburn-70mw/", dt.datetime(2026, 9, 1)),
+        ("https://a.test/brand-new-campus-500mw/", dt.datetime(2026, 9, 2)),
+    )
+    unreadable = discover.unreadable_test(None, path=_closed_config(tmp_path))
+
+    assert "sabey" in pending(session, known_first=True)[0].url
+    ordered = pending(session, known_first=True, unreadable=unreadable)
+    assert ordered[0].url == "https://a.test/brand-new-campus-500mw/"
+
+
+def test_the_limit_is_cut_after_the_unreadable_pages_move(session, tmp_path: Path):
+    """The plain oldest-first order cuts its limit in SQL. With pages to move, the
+    cut has to come after the move, or it only reorders the ones already chosen."""
+    _queue_dated(
+        session,
+        ("https://refused.test/oldest/", dt.datetime(2026, 7, 1)),
+        ("https://a.test/middle/", dt.datetime(2026, 8, 1)),
+        ("https://b.test/newest/", dt.datetime(2026, 9, 1)),
+    )
+    unreadable = discover.unreadable_test(None, path=_closed_config(tmp_path))
+    assert [r.url for r in pending(session, limit=2, unreadable=unreadable)] == [
+        "https://a.test/middle/",
+        "https://b.test/newest/",
+    ]
+
+
+def test_an_unreadable_page_is_still_queued_and_still_reached(session, tmp_path: Path):
+    """Nothing is dropped. With no readable page left the rest are tried — which is
+    also how a block that has lifted gets noticed."""
+    _queue_dated(session, ("https://refused.test/only/", dt.datetime(2026, 9, 1)))
+    unreadable = discover.unreadable_test(None, path=_closed_config(tmp_path))
+    assert [r.url for r in pending(session, limit=5, unreadable=unreadable)] == [
+        "https://refused.test/only/"
+    ]
+
+
+def test_a_retry_takes_the_readable_failures_first(session, tmp_path: Path):
+    _failing(session, "https://refused.test/failed-first", failures=1)
+    _failing(session, "https://a.test/failed-second", failures=1)
+    unreadable = discover.unreadable_test(None, path=_closed_config(tmp_path))
+
+    assert [r.url for r in discover.retryable(session, limit=1)] == [
+        "https://refused.test/failed-first"
+    ]
+    assert [r.url for r in discover.retryable(session, limit=1, unreadable=unreadable)] == [
+        "https://a.test/failed-second"
+    ]
+
+
+def test_priority_publishers_still_lead_among_the_readable_pages(tmp_path: Path):
+    """`tracker sync` reads `priority` publishers first, and on 2026-10-02 two of
+    them were closed: all fifteen of its slots went to pages that answer a
+    challenge. Moving those last must keep the ranking among everything else."""
+    from tracker import policy as policy_mod
+
+    ranks = policy_mod.parse(
+        '[[source]]\ndomain = "refused.test"\nrank = "priority"\n'
+        '[[source]]\ndomain = "p.test"\nrank = "priority"\n'
+    )
+    kept, _ = ranks.partition(
+        ["https://o.test/1", "https://refused.test/2", "https://p.test/3", "https://o.test/4"]
+    )
+    assert kept[:2] == ["https://refused.test/2", "https://p.test/3"]
+
+    unreadable = discover.unreadable_test(None, path=_closed_config(tmp_path))
+    assert discover.readable_first(kept, unreadable) == [
+        "https://p.test/3",
+        "https://o.test/1",
+        "https://o.test/4",
+        "https://refused.test/2",
+    ]
+
+
+def test_readable_first_without_a_test_changes_nothing():
+    urls = ["https://refused.test/1", "https://a.test/2"]
+    assert discover.readable_first(urls, None) == urls
+
+
 # --- Parsing ----------------------------------------------------------------
 
 

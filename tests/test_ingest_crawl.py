@@ -1820,6 +1820,31 @@ def test_a_url_that_keeps_failing_waits_longer_each_time(session):
     assert crawl.stale_sources(session, older_than_days=30) == ["https://a.test/failing"]
 
 
+def test_refresh_reads_what_it_can_before_a_closed_publishers_page(session, tmp_path):
+    """The backoff above would retire such a page after a few runs, but each of
+    those runs spends a slot on it — and the publishers closed on 2026-10-02
+    include the most-cited one in the database."""
+    from tracker.ingest import discover
+
+    config = tmp_path / "feeds.toml"
+    config.write_text(
+        '[[feed]]\nname = "refused"\nurl = "https://refused.test/feed/"\n'
+        'closed = "2026-10-02: Cloudflare challenge on every page"\n'
+        '[filter]\ntopic = ["data cent"]\nsignal = ["campus"]\n',
+        encoding="utf-8",
+    )
+    _cited(session, "https://refused.test/longest-untried", fetched_days_ago=400)
+    _cited(session, "https://a.test/readable", fetched_days_ago=90)
+    unreadable = discover.unreadable_test(None, path=config)
+
+    assert crawl.stale_sources(session, older_than_days=30, limit=1) == [
+        "https://refused.test/longest-untried"
+    ]
+    assert crawl.stale_sources(session, older_than_days=30, limit=1, unreadable=unreadable) == [
+        "https://a.test/readable"
+    ]
+
+
 def test_refresh_leaves_an_iso_queue_row_alone(session):
     """A queue row's URL is the ISO's listing page. Reading it through the article
     extractor buys a model call on a table of generator requests."""

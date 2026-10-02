@@ -1813,3 +1813,35 @@ def test_a_read_for_one_row_does_not_found_another(session):
     add_queued(session, "https://x.com/other-co-reno-e", "Other Co Reno campus")
     run(session, other.id, extractor=ElsewhereLLM(), focus=False)
     assert session.query(Project).count() == before + 2, "--no-focus reads every campus, as before"
+
+
+def test_a_round_reads_the_pages_it_can_before_a_closed_publishers(session, monkeypatch, tmp_path):
+    """A fetch that fails still spends the budget, and the budget is this row's share
+    of the night's. The publishers closed on 2026-10-02 held 650 queued articles, 22
+    of them with a body cached."""
+    from tracker.ingest import crawl, discover
+    from tracker.ingest.records import IngestReport
+
+    config = tmp_path / "feeds.toml"
+    config.write_text(
+        '[[feed]]\nname = "refused"\nurl = "https://refused.test/feed/"\n'
+        'closed = "2026-10-02: Cloudflare challenge on every page"\n'
+        '[filter]\ntopic = ["data cent"]\nsignal = ["campus"]\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(discover, "default_feeds_path", lambda: config)
+
+    harvested = ["https://refused.test/1", "https://refused.test/2", "https://open.test/3"]
+    monkeypatch.setattr(enrich, "harvest_queue", lambda s, pid: enrich.Harvest("queue", harvested))
+    monkeypatch.setattr(enrich, "harvest_retry", lambda s, pid: enrich.Harvest("retry", []))
+    monkeypatch.setattr(enrich, "harvest_refresh", lambda s, pid: enrich.Harvest("refresh", []))
+    batches: list[list[str]] = []
+
+    def fake_crawl(session, urls, **_kw):
+        batches.append(list(urls))
+        return IngestReport()
+
+    monkeypatch.setattr(crawl, "run", fake_crawl)
+    run(session, add_project(session).id, max_articles=2, max_rounds=1, skip_settle=True)
+
+    assert batches == [["https://open.test/3", "https://refused.test/1"]]

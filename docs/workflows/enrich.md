@@ -114,7 +114,8 @@ one night sent 487 of them, most the same queries round after round.
 
 ## What a read costs, and what is not read again
 
-The reply is what the bill is made of, so two things now shorten or skip it.
+The reply is what the bill is made of, so the first three of these shorten or skip
+it; the last keeps the article budget for pages that can be read at all.
 
 * **A page unchanged since its last read is not sent to the model.** `crawl.run`
   compares the page's hash with its last good read, and when that read was under the
@@ -136,6 +137,13 @@ The reply is what the bill is made of, so two things now shorten or skip it.
   second row beside #1299 and #552, counted twice in the totals until merged. A
   focused read now runs `existing_only`: its reading lands on whatever existing row it
   routes to, and a campus that matches none is logged by name and not created.
+* **A page nothing can read is read last.** A publisher marked `closed` in
+  `tracker/seed/feeds.toml` answers every client with a challenge, its articles
+  included, so unless a body was cached before the block a fetch of one can only
+  fail — and a failed fetch still spends the article budget, which is this row's
+  share of the night's. Each round moves those pages behind every other harvested
+  page before it cuts the batch, so they are tried only when nothing readable is
+  left. See [sync](sync.md#where-the-queued-rows-come-from), rule 4.
 
 A reply that runs out of room inside its own reasoning is retried with reasoning off
 (`llm.without_thinking`), not at a bigger budget: with reasoning on, a model told
@@ -279,6 +287,7 @@ Touching any of these means the poster is in scope. Re-render with
 | Harvesters | `tracker/ingest/enrich.py` — `harvest_queue`, `harvest_retry`, `harvest_archive`, `harvest_search`, `harvest_refresh`, `_derive`; `tracker/ingest/search.py` — `CachedProvider`, `cached` |
 | Ignore-list filtering | `tracker/ingest/enrich.py` — `Round.urls`; `tracker/policy.py` |
 | Reading, and not re-reading | `tracker/ingest/enrich.py` — `run(reread=, focus=)`, `Round.refused_new`; `tracker/ingest/crawl.py` — `run(existing_only=)`, `unchanged_reads`, `focus_note`, `extract_one`; `tracker/llm.py` — `without_thinking` |
+| Pages nothing can read go last | `tracker/ingest/enrich.py` — `run`; `tracker/ingest/discover.py` — `unreadable_test`, `readable_first`, `closed_domains` |
 | Settle stage | `tracker/ingest/enrich.py` — `_settle`, `settle_key`; `tracker/conflicts.py` — `disputes`, `solve`, `apply_outcome`; `tracker/declines.py` |
 | Agent pass | `tracker/cli/enrich.py` — `_gapfill_batch(t2_only=)`, and its landed/unlanded check; `tracker/gapfill.py` — `apply_facts`, `_fact_axes`, `Filled.missed`; `tracker/agent.py` — `run`, `TOOL_LIMITS`, `WRAP_UP_TURNS` |
 | Spend by stage | `tracker/llm.py` — `spend_stage`; `tracker/spend.py` |

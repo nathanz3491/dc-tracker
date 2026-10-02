@@ -64,6 +64,23 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **The crawls no longer spend their slots on pages nothing can read**
+  (`tracker/ingest/discover.py`, `tracker/ingest/crawl.py`, `tracker/ingest/enrich.py`,
+  `tracker/cli/ingest.py`, `tracker/cli/sync.py`, `tracker/seed/feeds.toml`,
+  `tests/test_discover.py`, `tests/test_ingest_crawl.py`, `tests/test_enrich.py`,
+  `docs/workflows/sync.md`, `docs/workflows/sync.svg`, `docs/workflows/enrich.md`,
+  `docs/workflows/enrich.svg`, `scripts/render_workflow_diagrams.py`). The publishers
+  closed on 2026-10-02 left 650 articles in the queue, and only 22 had a body cached;
+  the other 628 answer a challenge whatever fetches them. Measured on production
+  that day, they held six of the nightly crawl's next ten slots, and all fifteen of a
+  `tracker sync` extract, because `seed/sources.toml` ranks datacenterfrontier and
+  datacenterdynamics `priority`. Every crawl that cuts a list to a limit — the queue
+  crawl, sync's extract, retry fill and refresh, and each round of enrich — now moves
+  a page on a closed publisher with nothing cached behind every page it can read, and
+  only then cuts. Nothing is deleted: the rows stay queued, a cached one keeps its
+  place, and the rest are tried when nothing readable is left, which is how a block
+  that lifts would be noticed. `seed/sources.toml` is unchanged.
+
 - **Half the feeds `tracker discover` polls were failing every night; they are now
   closed, replaced or fixed, and the report says which is which**
   (`tracker/seed/feeds.toml`, `tracker/ingest/discover.py`, `tracker/cli/sync.py`,
@@ -86,8 +103,8 @@ initial build of the v1 PRD.
   fourteenth, Bisnow's data-center feed, went away when Bisnow rebuilt its site, and
   is replaced by the one feed it still serves (`bisnow-latest`, its nine newest
   stories across all markets). About 640 rows these publishers queued before the
-  block are still queued and mostly cannot be read; each costs a fetch, never a model
-  call.
+  block are still queued and mostly cannot be read; the entry above is what keeps
+  them from taking the crawls' slots.
 
 - **The nightly loop's audit and settle decisions run at `high` effort again**
   (`scripts/overnight.sh`, `tests/test_overnight.py`, `docs/data-quality.md`). They ran

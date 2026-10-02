@@ -125,11 +125,10 @@ Those entries now carry `closed = "<date>: <what was measured>"` in
 * **A challenge is named when one is met.** Cloudflare marks the page
   `cf-mitigated: challenge`, and the failure line says `HTTP 403 (Cloudflare
   challenge: …)` rather than a bare 403, which reads as a header problem and is not.
-* **What they queued before the block is still queued** — about 640 rows on
-  2026-10-02, 522 of them datacenterfrontier's — and those pages answer the same
-  challenge. Only the ones whose syndicated body was cached when they were queued
-  can be read; each of the rest costs a fetch that fails, never a model call, and
-  stops being retried after three identical failures.
+* **What they queued before the block is still queued** — 650 rows on 2026-10-02,
+  522 of them datacenterfrontier's — and those pages answer the same challenge. Only
+  the 22 whose syndicated body was cached when they were queued can be read, so
+  every crawl puts the rest after every page it can read; see rule 4 below.
 
 To re-open one: when `curl -s -o /dev/null -w '%{http_code}\n' <its url>` prints
 200, delete its `closed` line and run `tracker discover --dry-run`.
@@ -160,12 +159,24 @@ prioritising after would reorder a batch that was already chosen:
    we already track", which an article about an operator we have **no** rows for can
    never satisfy — so left to the ordinary ordering it sits behind a permanent
    supply of better candidates and is never read.
+4. **A page nothing can read goes last, whatever its rank.** A publisher marked
+   `closed` answers every client with a challenge, its articles included, so a page
+   on one can only fail unless its body was cached before the block. After every
+   rule above — and after the `priority` ranks in `tracker/seed/sources.toml` — such
+   a page is moved behind every readable one, and only then is the limit cut.
+   Nothing is dropped: it stays queued and is tried when nothing readable is left,
+   which is also how a block that has lifted gets noticed. On 2026-10-02, 628 of the
+   2,287 queued articles were such pages. They held six of the nightly crawl's next
+   ten slots and all fifteen of a sync extract, because datacenterfrontier and
+   datacenterdynamics both rank `priority`.
 
 `ingest crawl --from-queue --new-first` asks the opposite question, and is what the
 nightly loop's discovery step runs: the articles naming **no** tracked campus first,
-newest published first, then the rest. Enrich reads for one row and creates none, so
-that step is the loop's only source of new campuses; each article still goes through
-the identity arbiter below before it can insert a row.
+newest published first, then the rest — rule 4 applying there too. Enrich reads for
+one row and creates none, so that step is the loop's only source of new campuses;
+each article still goes through the identity arbiter below before it can insert a
+row. The same rule orders `--retry-failed`'s fill, the refresh phase below, and
+each round of [enrich](enrich.md#what-a-read-costs-and-what-is-not-read-again).
 
 Publishers that `tracker/seed/sources.toml` ignores are partitioned out and **named**, not
 merely subtracted: the queue still holds those rows and `tracker queue` still lists
@@ -269,6 +280,10 @@ were never reached. Any try now moves the URL to the back.
   doubles its interval (`ingest_url.failures`), up to sixteen intervals, so a page
   behind a WAF the ladder cannot clear stops costing a try every run without being
   given up on.
+* **A page on a closed publisher goes last.** The backoff would retire one after a
+  few failed runs, but each of those runs spends a slot on it, and the publishers
+  closed on 2026-10-02 include the most-cited one in the database. The refresh reads
+  past the cache on purpose (below), so here every such page counts as unreadable.
 * **A failed re-read does not unread the URL.** It keeps the `ok` its good read
   earned — the citations still stand — and records the failure beside it. Demoting
   it had put 35 cited URLs into the pool `--retry-failed` works.
@@ -359,6 +374,7 @@ Touching any of these means the poster is in scope. Re-render with
 | Phase order, plan numbering, `--full`, the lock | `tracker/cli/sync.py` — `sync`, its `plan` list and `step` |
 | Discover, archives, search | `tracker/ingest/discover.py` — `run`, `load_config`, `load_sitemaps`, `sweep_sitemaps`, `queue_candidates`; `tracker/ingest/search.py`; `tracker/normalize.py` — `canonical_url`, `url_identity`, `url_variants`; `tracker/backfill.py` — `repair_urls` |
 | Closed feeds, and naming a challenge | `tracker/seed/feeds.toml` — `closed`; `tracker/ingest/discover.py` — `FeedSpec.closed`, `SitemapSpec.closed`, `_closed_reason`, `DiscoverReport.closed`, `_RawFetcher`, `CHALLENGE_NOTE`; `tracker/ingest/probe.py` — `configured_hosts` |
+| Pages nothing can read go last | `tracker/ingest/discover.py` — `closed_domains`, `unreadable_test`, `readable_first`, `pending(unreadable=)`, `retryable(unreadable=)`; `tracker/ingest/crawl.py` — `stale_sources(unreadable=)`; `tracker/cli/sync.py` — `sync` (extract, retry fill, refresh); `tracker/cli/ingest.py` — `crawl --from-queue`; `tracker/ingest/enrich.py` — `run` |
 | What search looks for | `tracker/ingest/search.py` — `_PLACE_TEMPLATES`, `rank_places`, `plan_queries`, `PlannedQuery.label`, `templates`; `tracker/normalize.py` — `state_name` |
 | Judging a template | `tracker/funnel.py` — `feed_group`, `survey`, `verdicts`; `tracker/ingest/search.py` — `LabelStat` |
 | Queue ordering and counts | `tracker/ingest/discover.py` — `pending` (`known_first`, `new_first`), `pending_split`, `pending_risk_count`, `failed`, `retryable`, `given_up`, `MAX_SAME_FAILURES`, `failure_summary` |
