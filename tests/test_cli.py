@@ -720,10 +720,19 @@ def test_discover_missing_feed_config_is_actionable(initialized: Path, tmp_path:
 
 @pytest.mark.network
 def test_discover_against_the_real_feeds(initialized: Path):
-    """Deselected by default. Run with `-m network` to check the feeds still work."""
-    result = invoke(initialized, "discover", "--since-days", "45")
+    """Deselected by default. Run with `-m network` to check the feeds still work.
+
+    Matched on the row rather than on its padding: the label column is as wide as
+    the longest label, so this had stopped matching any output at all as rows were
+    added, and would have failed with every feed working.
+    """
+    import re
+
+    result = invoke(initialized, "discover", "--since-days", "45", "--dry-run", "--no-show")
     assert result.exit_code == 0
-    assert "| feeds failed  |     0 |" in result.output, "a feed URL has gone stale"
+    assert re.search(r"\| feeds failed +\| +0 \|", result.output), (
+        f"a feed URL has gone stale, or a publisher now refuses us:\n{result.output}"
+    )
 
 
 # --- sync: the one-command pipeline -----------------------------------------
