@@ -55,9 +55,17 @@
 # cached prompt, which is billed at a fiftieth of the rate; about 93% of the money is
 # the reply, most of it reasoning. 25,000,000 tokens was anything from ¥20 to ¥31, and
 # on the six nights to 2026-09-29 the loop cost ¥9-34 without the token ceiling ever
-# firing. The check runs before every paid phase, and on the nights measured no single
-# phase invocation cost more than ¥2.76 (an enrich pass), so a night ends below
-# `--cny` plus about ¥3 — under ¥15 at the default.
+# firing. The check runs before every paid phase, so a night ends below `--cny` plus
+# one phase.
+#
+# THE VOLUME, raised on 2026-10-05. The cost fixes of 09-30 left nights at ¥1.76-2.75
+# against a ¥12 ceiling, so the loop was doing a fifth of what it was allowed to:
+# 15 rows enriched on a 60-article budget, 10 queued articles read for new campuses,
+# while 419 rows sat below T2 with something still worth searching for and 1,659
+# readable articles waited in the queue. Now 40 rows on 160 articles (the enrich pass
+# at ~¥0.12 a row, about ¥5), 40 queued articles (~¥0.01 each), 18 feeds, and 60 findings and
+# 40 pairs a round. About ¥7 a night, so the ceiling still has room; the enrich pass
+# is the largest single phase, which bounds the overshoot at about `--cny` + ¥5.
 #
 # Later rounds are cheaper than the first: every paid phase records what it answered
 # or could not decide, keyed on the evidence it was shown, and does not re-offer it
@@ -121,14 +129,14 @@ tracker() { "$PY" -m tracker "$@"; }
 HOURS=10
 ROUNDS=20
 DRY_ROUNDS=2
-FINDINGS=40
-PAIRS=25
+FINDINGS=60
+PAIRS=40
 AUDIT=60
 RISKS=40
-ENRICH=15
-ENRICH_BUDGET=60
+ENRICH=40
+ENRICH_BUDGET=160
 ENRICH_ROUNDS=1
-DISCOVER=10
+DISCOVER=40
 MIN_CONF=0.85
 DO_MERGE=1
 DO_ENRICH=1
@@ -154,14 +162,14 @@ started in tmux and left.
   --hours N          wall-clock ceiling (default 10). Checked between rounds.
   --rounds N         max rounds (default 20)
   --dry-rounds N     stop after N rounds with no reduction (default 2)
-  --findings N       logic findings per round (default 40)
-  --pairs N          duplicate pairs per round (default 25)
+  --findings N       logic findings per round (default 60)
+  --pairs N          duplicate pairs per round (default 40)
   --audit N          audit findings per round (default 60)
   --risks N          obstacles per round (default 40)
-  --enrich N         projects to enrich (default 15); 0 to skip
-  --enrich-budget N  articles the enrich phase may read (default 60)
+  --enrich N         projects to enrich (default 40); 0 to skip
+  --enrich-budget N  articles the enrich phase may read (default 160)
   --enrich-rounds N  enrich in the first N rounds only (default 1)
-  --discover N       queued articles about untracked campuses to read (default 10); 0 to skip
+  --discover N       queued articles about untracked campuses to read (default 40); 0 to skip
   --min-confidence F floor a duplicate fold needs (default 0.85)
   --no-merge         never fold duplicates; park and rule only. Deletes nothing.
   --cny N            stop when the night's spend, priced, reaches N yuan (default 12)

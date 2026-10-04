@@ -319,6 +319,34 @@ name = "cardinal-news"           # southwest Virginia, where the new sites are g
 url = "https://cardinalnews.org/feed/"
 source_type = "general_media"
 
+# --- Nominated by the record, added 2026-10-05 ------------------------------
+#
+# From `tracker feeds`: publishers whose citations already decide stored values and
+# that this file did not list. Each was then polled the way discover polls — the
+# first 60 entries, the 60-day window, this file's filter — and the count is what
+# that one poll would have queued. A poll is one request and costs nothing until an
+# article matches; the nominees that would have queued nothing (thejobwalk), only a
+# non-English release (prnewswire) or only undated pages (doyenco) were left out.
+# So was mlq.ai's news sitemap (4 of 60), which answered 200 and a plain 403 by
+# turns to the same client within minutes: a feed that fails some nights and not
+# others would make "feeds failed" mean nothing.
+# None is topic_implied: each also covers other things.
+
+[[feed]]
+name = "colocationscout"         # 7 of 60: quarterly permit filings per market
+url = "https://colocationscout.com/sitemap.xml"
+source_type = "general_media"
+
+[[feed]]
+name = "morethanjustparks"       # 2 of 60: one page per campus, two we did not hold
+url = "https://morethanjustparks.com/data-center-tracker/sitemap.xml"
+source_type = "general_media"
+
+[[feed]]
+name = "globenewswire-data-center"  # 2 of 20: press releases tagged "data center"
+url = "https://www.globenewswire.com/RssFeed/keyword/data%20center/feedTitle/GlobeNewswire%20-%20data%20center"
+source_type = "company_filing"
+
 
 # Keyword filtering is two-tier, and both tiers must match.
 #

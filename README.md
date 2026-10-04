@@ -190,7 +190,7 @@ other shell. Each round runs the free phases, then `audit` (a T1 gate, and cheap
 `risks`, the logic and duplicate agents, and — in the first round only
 (`--enrich-rounds`) — `enrich`, the most expensive rung and the only one that can move
 a row held at T1 by `fields_present`, pointed at the rows below T2 (`enrich --t2`).
-The first round also adds campuses (`--discover`, default 10): it polls the feeds,
+The first round also adds campuses (`--discover`, default 40): it polls the feeds,
 which costs nothing, and reads that many queued articles naming no tracked campus,
 newest first (`ingest crawl --from-queue --new-first`), through the crawl's identity
 check. Enrich reads for one row and creates none, so without this step nothing in the

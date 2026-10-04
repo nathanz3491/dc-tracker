@@ -26,6 +26,18 @@ initial build of the v1 PRD.
 
 ### Changed
 
+- **The nightly loop does about three times as much** (`scripts/overnight.sh`,
+  `tracker/seed/feeds.toml`, `tests/test_overnight.py`, `README.md`). After the cost
+  fixes nights cost ¥1.76-2.75 against a ¥12 ceiling, so it was using a fifth of
+  what it was allowed while 419 rows below T2 still had something worth searching
+  for and 1,659 readable articles waited in the queue. Now it enriches 40 rows on a
+  160-article budget (was 15 on 60), reads 40 queued articles for new campuses (was
+  10), and takes 60 logic findings and 40 duplicate pairs a round (was 40 and 25).
+  Three feeds the database nominated were added — colocationscout's permit reports,
+  morethanjustparks' campus pages and GlobeNewswire's "data center" releases — each
+  measured on one poll before it went in. Expected about ¥7 a night; the ¥12 ceiling
+  is unchanged.
+
 - **T2 no longer waits for facts nobody publishes** (`tracker/gaps.py`,
   `tracker/clean.py`, `tracker/ingest/enrich.py`, `tracker/cli/quality.py`,
   `tests/test_clean.py`, `tests/test_gaps.py`, `tests/test_enrich.py`,
