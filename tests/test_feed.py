@@ -484,18 +484,33 @@ def test_the_blocker_moving_notifies(session):
 
 
 def test_a_decisive_milestone_notifies_and_a_cheap_one_does_not(session):
-    """The five things worth a notification, and the ones that are page-only."""
+    """The five things worth a notification, and the ones that are page-only.
+
+    Dated days before today, not on fixed dates: a milestone older than
+    `NOTIFY_MAX_AGE_DAYS` is stale and never notifies, so fixed August dates made
+    this fail from 2026-10-03 on for a reason that had nothing to do with kind.
+    """
     project = _project(session)
-    for kind, date in (
-        ("energized", dt.date(2026, 8, 21)),
-        ("first_customer", dt.date(2026, 8, 20)),
-        ("delayed", dt.date(2026, 8, 19)),
-        ("announced", dt.date(2026, 8, 18)),
-        ("permit_filed", dt.date(2026, 8, 17)),
-        ("land_acquired", dt.date(2026, 8, 16)),
-        ("site_work", dt.date(2026, 8, 15)),
+    today = dt.date.today()
+    for days_ago, kind in enumerate(
+        (
+            "energized",
+            "first_customer",
+            "delayed",
+            "announced",
+            "permit_filed",
+            "land_acquired",
+            "site_work",
+        ),
+        start=1,
     ):
-        _event(session, project, event_type=kind, event_date=date, description=f"{kind}.")
+        _event(
+            session,
+            project,
+            event_type=kind,
+            event_date=today - dt.timedelta(days=days_ago),
+            description=f"{kind}.",
+        )
 
     by_label = {s.label: s for s in feed.digest(session, since=SINCE).signals}
     assert [k for k in by_label if by_label[k].notify] != []
