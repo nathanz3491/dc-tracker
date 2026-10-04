@@ -996,14 +996,12 @@ def select_projects(
 def t2_gaps(project: Project) -> set[str]:
     """The fields `tracker clean`'s `fields_present` condition fails this row for.
 
-    The same computation as `clean._conditions`: a field that is a gap and that the
-    tier measures. `blocker` and `customer` are left out there because their absence
-    is usually the truth (`gaps.UNMEASURABLE`), and a null that is correct —
-    `mw_built` on a site not yet built — is not a gap at all.
+    Delegates to `gaps.t2_gaps`, which that condition calls too, so a row `--t2`
+    chooses is always one the tier counts as short.
     """
-    from tracker.gaps import UNMEASURABLE
+    from tracker import gaps
 
-    return {s.field for s in for_project(project) if s.is_gap and s.field not in UNMEASURABLE}
+    return gaps.t2_gaps(project)
 
 
 def pursuable(

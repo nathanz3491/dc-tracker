@@ -26,6 +26,26 @@ initial build of the v1 PRD.
 
 ### Changed
 
+- **T2 no longer waits for facts nobody publishes** (`tracker/gaps.py`,
+  `tracker/clean.py`, `tracker/ingest/enrich.py`, `tracker/cli/quality.py`,
+  `tests/test_clean.py`, `tests/test_gaps.py`, `tests/test_enrich.py`,
+  `docs/design-decisions.md`, `docs/workflows/enrich.md`). On 2026-10-05, 439 rows
+  sat one tier short of T2 for nothing but an empty field, and the nightly enrich
+  lifted about one a night: on 10-04 it read 60 articles for 15 rows and 0 gained a
+  field T2 counts, because what they lacked — a campus's investment, its built
+  megawatts — had not been published. Two changes, chosen by the operator:
+  - **Built capacity is not asked of a site still under construction.** It is what
+    is energized today, and a row merges to operational as soon as any source says
+    any part is live, so a `construction` row has no figure anyone could print.
+  - **A field searched twice with nothing published counts as answered** for T2. It
+    reopens as soon as the row gains a citation, and every card still names it under
+    the new reported condition `fields_published`. T2 now means complete as far as
+    anything has been published.
+  On a copy of production, rows at T2 or above went from 44 to 102. The tier, `enrich
+  --t2`'s choice of rows and the coverage report share one definition
+  (`gaps.t2_gaps`), so the loop stops paying to search for those facts again. No
+  stored value changes.
+
 - **One building's or one phase's figure no longer stands as the campus's while the
   campus's own is known** (`tracker/vocab.py`, `tracker/ingest/crawl.py`,
   `tracker/backfill.py`, `tracker/gapfill.py`, `tracker/upsert.py`,

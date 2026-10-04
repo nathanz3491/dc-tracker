@@ -354,7 +354,7 @@ the data rather than stored: there is no ledger table and no `clean_tier` column
 ```
 T0 SOURCED    something real cites it, and it does not contradict itself
 T1 SOUND      nothing in a total is a lie          <- the bar worth chasing
-T2 COMPLETE   the fields a reader acts on are there, and each is backed
+T2 COMPLETE   the fields a reader acts on are there and backed, or searched out
 T3 SETTLED    every open question has been answered
 ```
 
@@ -368,6 +368,22 @@ Two definitional choices are load-bearing. `NOT_APPLICABLE` counts as complete �
 of rows, which is a target nobody can use. And 待确认 counts as *backed*: the gate
 declaring it could not confirm a value is the gate **working**, so only
 `confirmed_without_quote` fails the condition.
+
+Two more were added on 2026-10-05, when 439 rows sat at T1 short of a field and the
+nightly enrich lifted about one a night — 0 of 15 rows gained a T2 field on 10-04,
+because the facts missing were ones nobody publishes:
+
+* **`mw_built` does not apply at `construction`.** It is what is energized today,
+  and the merge marks a row operational as soon as any source says any part is live,
+  so a `construction` row has nothing energized and no figure anyone could print.
+  Requiring one held 24 rows below T2.
+* **A field searched twice with nothing published counts as answered**
+  (`gaps.unpublished`, from the `tracker.attempts` ledger). It reopens the moment the
+  row gains a citation, so it records the evidence so far rather than granting a
+  permanent pass, and the reported condition `fields_published` keeps naming it on
+  every card. With both, 58 rows moved to T2 on a copy of production. T2 therefore
+  means *complete as far as anything has been published*, and the unknowns are listed
+  rather than hidden.
 
 The definition is calibrated rather than asserted: a test says that if a
 fully-answered row cannot score T3, the definition is wrong and `clean.py` changes —

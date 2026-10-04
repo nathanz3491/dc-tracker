@@ -1889,7 +1889,7 @@ def _render_clean_sweep(sweep, *, total: int, census: dict | None = None) -> Non
 _TIER_MEANING = {
     0: "cited, and not self-contradictory",
     1: "nothing in a total is a lie",
-    2: "the fields a reader acts on are present and backed",
+    2: "the fields a reader acts on are present and backed, or searched out",
     3: "every open question answered",
 }
 
@@ -1997,7 +1997,7 @@ def clean(
 
         T0 SOURCED    something real cites it, and it does not contradict itself
         T1 SOUND      nothing in a total is a lie          <- the bar worth chasing
-        T2 COMPLETE   the fields a reader acts on are there, and each is backed
+        T2 COMPLETE   the fields a reader acts on are there and backed, or searched out
         T3 SETTLED    every open question has been answered
 
     T1 first, because the numbers this tool publishes are sums: an incomplete row

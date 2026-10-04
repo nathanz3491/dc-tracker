@@ -48,8 +48,8 @@ at least one of the agent's fields was empty, so a row short of the twelve by
 attempt at — passed it every time. On the night of 2026-09-29, twelve of the fifteen
 rows the overnight loop chose were that shape, at 11 of 12, chosen again every round
 and each re-reading four articles to gain nothing. `--max-attempts 0` still takes
-them. A null that is *correct* (`mw_built` on a site not yet built) no longer counts
-as empty here either.
+them. A null that is *correct* (`mw_built` on a site not yet built — announced,
+permitting or still under construction) no longer counts as empty here either.
 
 **`--t2` changes what "best" means**, with `--select` or `--all`: rows that `tracker
 clean` holds below T2 because `fields_present` fails, fewest missing first, counting
@@ -57,6 +57,13 @@ only the fields that condition measures — so `blocker` and `customer`, whose a
 is usually the truth, never put a row on the list. This is what the overnight loop
 uses. Without it `--target 0` ranks the *fullest* rows first, which is how the loop
 spent its nights on rows already past the bar while 514 below T2 went untouched.
+
+**A field searched twice with nothing published no longer holds a row below T2**
+(`gaps.t2_gaps`, `gaps.unpublished`), and `--t2` and the tier share that one
+definition. Before 2026-10-05 the loop chose the same near-T2 rows night after night
+and found nothing — 0 of 15 on 10-04 — because what they lacked was an investment
+figure or a built capacity nobody had printed. Such a field reopens as soon as the row
+gains a citation, and `tracker clean` still names it (`fields_published`).
 
 ## `--basics`: the fields that say what a project is
 
@@ -283,7 +290,7 @@ Touching any of these means the poster is in scope. Re-render with
 | Options, defaults, target defaulting, lock | `tracker/cli/enrich.py` — `enrich` |
 | Round loop and stop reasons | `tracker/ingest/enrich.py` — `run` |
 | Batch budget, one-time sweep | `tracker/ingest/enrich.py` — `run_many`, `sweep_archives`, `will_harvest` |
-| Row selection order | `tracker/ingest/enrich.py` — `select_projects`, `pursuable`, `t2_gaps`, `DEFAULT_TARGET_FIELDS` |
+| Row selection order | `tracker/ingest/enrich.py` — `select_projects`, `pursuable`, `t2_gaps`, `DEFAULT_TARGET_FIELDS`; `tracker/gaps.py` — `t2_gaps`, `unpublished`, `_NOT_BUILT_PHASES` |
 | Harvesters | `tracker/ingest/enrich.py` — `harvest_queue`, `harvest_retry`, `harvest_archive`, `harvest_search`, `harvest_refresh`, `_derive`; `tracker/ingest/search.py` — `CachedProvider`, `cached` |
 | Ignore-list filtering | `tracker/ingest/enrich.py` — `Round.urls`; `tracker/policy.py` |
 | Reading, and not re-reading | `tracker/ingest/enrich.py` — `run(reread=, focus=)`, `Round.refused_new`; `tracker/ingest/crawl.py` — `run(existing_only=)`, `unchanged_reads`, `focus_note`, `extract_one`; `tracker/llm.py` — `without_thinking` |

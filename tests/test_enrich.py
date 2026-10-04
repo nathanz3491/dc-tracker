@@ -477,15 +477,21 @@ def test_a_field_a_null_is_correct_for_is_not_counted_as_failure(session):
 
     states = {s.field: s for s in report.after}
     assert states["mw_built"].status == NOT_APPLICABLE
-    assert states["mw_built"].reason and "nothing is built" in states["mw_built"].reason
+    assert states["mw_built"].reason and "nothing is energized" in states["mw_built"].reason
 
     _, attemptable = report.tracked_score()
     assert attemptable == 11, "mw_built is excluded from the 12 while nothing is built"
 
 
-def test_mw_built_counts_once_construction_starts(session):
-    project = add_project(session, phase="construction")
-    report = run(session, project.id)
+def test_mw_built_counts_once_the_site_is_operational(session):
+    """Not at `construction`: a row any source calls live merges to operational, so
+    one still building has nothing energized, and no figure anyone could print."""
+    building = add_project(session, phase="construction")
+    states = {s.field: s for s in run(session, building.id).after}
+    assert states["mw_built"].status == NOT_APPLICABLE
+
+    live = add_project(session, phase="operational", city="Mesa", dedup_key="op|city:mesa|AZ")
+    report = run(session, live.id)
     states = {s.field: s for s in report.after}
     assert states["mw_built"].status == MISSING
     _, attemptable = report.tracked_score()
