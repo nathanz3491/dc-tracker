@@ -160,6 +160,8 @@ class Project(Base):
         Index("ix_project_state", "state"),
         Index("ix_project_phase", "phase"),
         Index("ix_project_confidence", "confidence"),
+        # A merged-away row's number is never issued again (migration 0032).
+        {"sqlite_autoincrement": True},
     )
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid

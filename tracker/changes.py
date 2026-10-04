@@ -131,8 +131,9 @@ def diff(snapshot: Path, session: Session) -> Changes:
     now = {p.id: p for p in session.scalars(select(Project))}
     for pid, project in sorted(now.items()):
         old = before.get(pid)
-        # A merge deletes a row and SQLite can hand its id to the next insert, so an id
-        # alone does not say "same row": the identity key has to match too.
+        # A merge deletes a row, and before migration 0032 SQLite handed its id to the
+        # next insert; backups from then hold such ids. So an id alone does not say
+        # "same row": the identity key has to match too.
         if old is None or old.dedup_key != project.dedup_key:
             out.added.append((pid, _label(project)))
             if old is not None:

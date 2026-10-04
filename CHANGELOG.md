@@ -64,6 +64,20 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **A project's number is never handed to another campus**
+  (`tracker/migrations/0032_project_autoincrement.sql`, `tracker/db.py`,
+  `tracker/models.py`, `tests/test_db.py`, `docs/design-decisions.md`). SQLite gave
+  each new row one more than the largest id left, so when the newest rows were
+  merged away their numbers went to the next campus created: #1557 named three
+  different campuses in a week and #1556 two, and the merge notes on #404, #552,
+  #1299 and #1311 pointed at whichever unrelated row held the number. `project.id`
+  is now AUTOINCREMENT, and the count starts above #1560, the highest number any
+  note had used. The table is rebuilt with foreign keys switched off by the
+  migration runner, which a migration now asks for with `-- tracker: foreign_keys
+  off` and which commits only if `PRAGMA foreign_key_check` is clean. Rehearsed on a
+  copy of production: every row of every table identical afterwards. The first
+  version, with foreign keys on, emptied all eight child tables on that copy.
+
 - **The crawls no longer spend their slots on pages nothing can read**
   (`tracker/ingest/discover.py`, `tracker/ingest/crawl.py`, `tracker/ingest/enrich.py`,
   `tracker/cli/ingest.py`, `tracker/cli/sync.py`, `tracker/seed/feeds.toml`,

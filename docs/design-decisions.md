@@ -770,7 +770,18 @@ tracker ingest pjm --csv data/raw/pjm_2025q3.csv --iso pjm
   unless the SQL is what changed.
 - **`PRAGMA foreign_keys=ON` on every connection.** SQLite silently ignores every
   foreign key by default, and this whole design rests on `source.project_id` and
-  `event.source_id` being enforced.
+  `event.source_id` being enforced. The one exception is a migration that rebuilds
+  a table others reference: it carries `-- tracker: foreign_keys off`, the runner
+  switches them off outside its transaction and back on after, and it commits only
+  if `PRAGMA foreign_key_check` is clean. With them on, dropping or even renaming
+  the old table cascades through every child — rehearsed on a copy of production,
+  0032 emptied all eight tables under `project` that way before it was rewritten.
+- **A project's number is never reused** (`AUTOINCREMENT`, migration 0032). A plain
+  `INTEGER PRIMARY KEY` gives a new row one more than the largest id left, so
+  merging the newest rows away freed their numbers: #1557 named three campuses in a
+  week, and merge notes elsewhere ("merged #1557 into this row") pointed at
+  whichever one held it. The count starts above #1560, the highest number a note
+  had used.
 - **Read commands open the database read-only** (`mode=ro`), so the PRD's "never
   modify the DB except for ingest and review" is enforced by SQLite rather than by
   convention. A bug in `export.py` raises instead of corrupting data.

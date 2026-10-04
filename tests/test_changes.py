@@ -194,11 +194,10 @@ def test_changes_lists_each_new_value_beside_its_sentence(db, tmp_path):
 
 
 def test_a_reused_id_is_a_new_row_not_a_changed_one(db, tmp_path):
-    """SQLite can hand a merged-away row's id to the next insert, as #1557 was on
-    2026-09-30. Read by id alone, Skybox would have looked like Nebius edited."""
-    from tracker.ingest.records import IngestRecord
-    from tracker.upsert import upsert_record
-
+    """Before migration 0032 SQLite handed a merged-away row's id to the next insert,
+    as #1557 was on 2026-09-30, and the backups from then hold such ids. Read by id
+    alone, Skybox would have looked like Nebius edited. Since 0032 an id is never
+    reissued, so the reuse is made explicitly here."""
     snapshot = _snapshot(db, tmp_path / "before.db")
     engine, _ = init_db(db)
     with session_scope(engine) as s:
@@ -206,14 +205,16 @@ def test_a_reused_id_is_a_new_row_not_a_changed_one(db, tmp_path):
         reused = old.id
         s.delete(old)
         s.flush()
-        upsert_record(
-            s,
-            IngestRecord(
-                project={"company": "Skybox", "name": "Austin", "city": "Austin", "state": "TX"},
-                sources=[_cite("https://c.test/x", 1.0, "a quoted sentence about Skybox Austin")],
-            ),
+        s.add(
+            Project(
+                id=reused,
+                company="Skybox",
+                name="Austin",
+                city="Austin",
+                state="TX",
+                dedup_key="skybox|city:austin|TX",
+            )
         )
-        assert s.query(Project).one().id == reused
     with session_scope(engine, commit=False) as s:
         from tracker import changes
 
