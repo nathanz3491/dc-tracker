@@ -96,6 +96,24 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **The email reports news days old, not weeks, and says when it was reported**
+  (`tracker/ingest/discover.py`, `tracker/feed.py`, `tracker/notify.py`,
+  `tracker/webui/static/app.js`, `scripts/overnight.sh`, `tests/test_discover.py`,
+  `tests/test_feed.py`, `README.md`, `docs/workflows/sync.md`). The 10-04 email
+  carried a lawsuit against Project Camellia as "undated · learned 2026-10-03"; the
+  article was published 09-21 and queued the next day. It waited 11 days because the
+  nightly crawl read articles about *untracked* campuses first and this one was about
+  a tracked campus, behind a backlog of 1,600. Three changes:
+  - **The nightly crawl reads the news first:** everything published within the
+    email's 45-day window, newest first, whatever campus it names; then untracked
+    campuses as before. Tonight's 40 reads are all news, the three about tracked
+    campuses at positions 1, 2 and 11.
+  - **A card with no date of its own shows its article's** — "reported 2026-09-21"
+    instead of "undated" — in the email, its plain-text part and the console.
+  - **An undated fact is as old as the article that reported it**, for deciding
+    whether it may interrupt anybody: reading archive articles must not mail
+    months-old obstacles as news, now that the loop reads 40 a night.
+
 - **A project's number is never handed to another campus**
   (`tracker/migrations/0032_project_autoincrement.sql`, `tracker/db.py`,
   `tracker/models.py`, `tests/test_db.py`, `docs/design-decisions.md`). SQLite gave

@@ -967,12 +967,18 @@ def pending(
     ``known_first`` the ones covering an already-tracked project come first, which
     spends each LLM call on depth rather than on another single-source row.
 
-    ``new_first`` is the opposite question, for the nightly loop's discovery step:
-    the articles that name **no** tracked campus, newest published first, then the
-    rest in the usual order. Those are where a campus the database has never heard
-    of can turn up, and the newest are the ones still true. Each is read by the
-    normal crawl, whose identity check decides whether a record is a new campus or
-    an existing one under another name before anything is inserted.
+    ``new_first`` is the nightly loop's order, and it starts with the **news**:
+    every article published within the email's window (`feed.NOTIFY_MAX_AGE_DAYS`),
+    newest first, whatever campus it names. Then the articles that name **no**
+    tracked campus, newest published first, then the rest in the usual order —
+    those are where a campus the database has never heard of can turn up. Each is
+    read by the normal crawl, whose identity check decides whether a record is a new
+    campus or an existing one under another name before anything is inserted.
+
+    The news goes first because what the crawl learns tonight is mailed tomorrow.
+    An update about a *tracked* campus used to sort behind every untracked article
+    in a backlog of 1,600: a 2026-09-21 report of a lawsuit against Project
+    Camellia was queued the next day, read on 10-03, and mailed on 10-04 as news.
 
     Passing ``spec`` splits that first group again, putting the articles that also
     carry an obstacle term ahead of the rest. Those are the highest-value calls in
@@ -989,20 +995,27 @@ def pending(
         .order_by(IngestUrl.published_at.asc().nullslast(), IngestUrl.id.asc())
     )
     if new_first:
+        from tracker.feed import NOTIFY_MAX_AGE_DAYS
+
         rows = list(session.scalars(stmt))
+        cutoff = utcnow() - dt.timedelta(days=NOTIFY_MAX_AGE_DAYS)
+        news = [row for row in rows if row.published_at is not None and row.published_at >= cutoff]
+        news.sort(key=lambda row: (row.published_at, row.id), reverse=True)
+        taken = {row.id for row in news}
+        backlog = [row for row in rows if row.id not in taken]
         identities = project_identities(session)
         implied = newsroom_companies()
         fresh = [
             row
-            for row in rows
+            for row in backlog
             if not matches_known_project(row.url, row.title, identities, implied_companies=implied)
         ]
         # Newest first; an undated article last, since nothing says it is recent.
         dated = [row for row in fresh if row.published_at is not None]
         undated = [row for row in fresh if row.published_at is None]
         dated.sort(key=lambda row: (row.published_at, row.id), reverse=True)
-        chosen = {row.id for row in fresh}
-        ordered = dated + undated + [row for row in rows if row.id not in chosen]
+        taken |= {row.id for row in fresh}
+        ordered = news + dated + undated + [row for row in rows if row.id not in taken]
     elif known_first:
         # Scored in Python: the match needs slug normalization that SQL cannot do,
         # and the queue is thousands of rows, not millions.

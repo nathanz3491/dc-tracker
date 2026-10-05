@@ -1330,24 +1330,27 @@ def test_known_first_still_honours_the_limit(session):
     assert len(pending(session, limit=2, known_first=True)) == 2
 
 
-def test_new_first_reads_untracked_campuses_newest_first(session):
-    """The nightly discovery step: a campus nobody tracks, and the newest news first.
+def test_the_nightly_order_reads_the_news_first_then_untracked_campuses(session):
+    """What the crawl learns tonight is mailed tomorrow, so anything published
+    within the email's window goes first, newest first, whatever it is about. A
+    2026-09-21 lawsuit against a *tracked* campus sorted behind 1,600 backlog
+    articles, was read on 10-03 and mailed as news on 10-04.
 
-    Enrich reads for one row and creates none, so this is the only place a new
-    campus can come from at night — and an article about a tracked row would spend
-    the read on depth the enrich phase already buys.
+    After the news: campuses nobody tracks, newest first — enrich reads for one row
+    and creates none, so this is the only place a new campus comes from at night.
     """
     from tracker.ingest.discover import pending
 
+    now = dt.datetime.now()
     tracked(session, "Sabey Data Centers", "Sabey Ashburn Campus", "Ashburn")
     queue_candidates(
         session,
         [
             Candidate(
-                "https://x.test/sabey-data-centers-ashburn-expansion-70mw/",
-                "Sabey expands its Ashburn data center campus by 70MW",
+                "https://x.test/sabey-data-centers-ashburn-lawsuit/",
+                "Neighbours sue over Sabey's Ashburn data center campus",
                 "f",
-                published_at=dt.datetime(2026, 9, 30),
+                published_at=now - dt.timedelta(days=2),
             ),
             Candidate(
                 "https://x.test/old-new-data-center-campus-100mw/",
@@ -1360,20 +1363,27 @@ def test_new_first_reads_untracked_campuses_newest_first(session):
                 "https://x.test/recent-new-data-center-campus-300mw/",
                 "A 300MW campus",
                 "f",
-                published_at=dt.datetime(2026, 9, 20),
+                published_at=now - dt.timedelta(days=10),
+            ),
+            Candidate(
+                "https://x.test/sabey-data-centers-ashburn-expansion-2023/",
+                "Sabey expands its Ashburn data center campus",
+                "f",
+                published_at=dt.datetime(2023, 3, 1),
             ),
         ],
         run_id="r",
         report=DiscoverReport(),
     )
 
-    ordered = [row.url for row in pending(session, new_first=True)]
-    assert ["recent-new" in ordered[0], "old-new" in ordered[1], "undated" in ordered[2]] == [
-        True,
-        True,
-        True,
+    ordered = [row.url.rsplit("/", 2)[-2] for row in pending(session, new_first=True)]
+    assert ordered == [
+        "sabey-data-centers-ashburn-lawsuit",  # news, about a tracked row
+        "recent-new-data-center-campus-300mw",  # news
+        "old-new-data-center-campus-100mw",  # backlog, untracked
+        "undated-data-center-campus-200mw",
+        "sabey-data-centers-ashburn-expansion-2023",  # backlog, tracked
     ]
-    assert "sabey" in ordered[3], "the article about a tracked row goes after the new ones"
     assert len(pending(session, limit=2, new_first=True)) == 2
 
 

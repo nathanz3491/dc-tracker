@@ -4816,7 +4816,7 @@ function SignalCard({ signal, onOpen }) {
 
       <div class="dc-num" style=${{ display: "flex", gap: 10, flexWrap: "wrap", fontSize: 12,
                                     color: "var(--muted-foreground)" }}>
-        <span>${happened || "undated"}</span>
+        <span>${happened || signal.when || "undated"}</span>
         ${learned && html`<span>· learned ${learned}</span>`}
         ${signal.publisher && html`<span>· ${signal.publisher}</span>`}
         ${signal.entry && html`<span>· watching ${signal.entry}${

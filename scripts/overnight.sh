@@ -42,12 +42,15 @@
 #             It picks rows with `--t2` — the ones below T2 for missing fields,
 #             fewest missing first — where `--target 0` alone had sorted the
 #             FULLEST rows first and spent every round on rows already past the bar.
-#   discover  new campuses, first round only: polls the feeds (free — no fetch, no
-#             model) and reads `--discover` queued articles that name no tracked
-#             campus, newest first, through the ordinary crawl, whose identity check
-#             asks before it inserts. Enrich reads for one row and creates none, so
-#             from 2026-09-30 nothing in this loop added a campus; on 10-01 the five
-#             it turned away were all rows already held under other names.
+#   discover  the news and new campuses, first round only: polls the feeds (free —
+#             no fetch, no model) and reads `--discover` queued articles through
+#             the ordinary crawl, whose identity check asks before it inserts.
+#             Everything published within the email's 45-day window goes first,
+#             newest first, whatever campus it names, because what is read tonight
+#             is mailed tomorrow: a 09-21 lawsuit against a tracked campus once
+#             waited behind the backlog until 10-03 and was mailed as news. Then
+#             articles naming no tracked campus — enrich reads for one row and
+#             creates none, so this is where new campuses come from.
 #
 # WHAT IT COSTS, AND THE CEILING. The ceiling is money: `--cny` (default ¥12), priced
 # from the spend ledger by `tracker.spend` at DeepSeek's published rates for the hour
@@ -169,7 +172,7 @@ started in tmux and left.
   --enrich N         projects to enrich (default 40); 0 to skip
   --enrich-budget N  articles the enrich phase may read (default 160)
   --enrich-rounds N  enrich in the first N rounds only (default 1)
-  --discover N       queued articles about untracked campuses to read (default 40); 0 to skip
+  --discover N       queued articles to read, the news first (default 40); 0 to skip
   --min-confidence F floor a duplicate fold needs (default 0.85)
   --no-merge         never fold duplicates; park and rule only. Deletes nothing.
   --cny N            stop when the night's spend, priced, reaches N yuan (default 12)
@@ -478,7 +481,7 @@ for round in $(seq 1 "$ROUNDS"); do
   # run `duplicates` over whatever it added.
   if [ "$DO_DISCOVER" -eq 1 ] && [ "$round" -eq 1 ]; then
     if capped discover; then break; fi
-    phase "discover — poll the feeds, read $DISCOVER queued article(s) about untracked campuses"
+    phase "discover — poll the feeds, read $DISCOVER queued article(s), the news first"
     tracker discover < /dev/null || true
     tracker ingest crawl --from-queue --new-first --limit "$DISCOVER" < /dev/null || true
   fi

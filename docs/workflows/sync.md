@@ -170,9 +170,14 @@ prioritising after would reorder a batch that was already chosen:
    ten slots and all fifteen of a sync extract, because datacenterfrontier and
    datacenterdynamics both rank `priority`.
 
-`ingest crawl --from-queue --new-first` asks the opposite question, and is what the
-nightly loop's discovery step runs: the articles naming **no** tracked campus first,
-newest published first, then the rest — rule 4 applying there too. Enrich reads for
+`ingest crawl --from-queue --new-first` asks a different question, and is what the
+nightly loop's discovery step runs. **The news goes first:** every article published
+within the email's window (`feed.NOTIFY_MAX_AGE_DAYS`, 45 days), newest first,
+whatever campus it names, because what the crawl reads tonight is mailed tomorrow. A
+2026-09-21 report of a lawsuit against a *tracked* campus used to sort behind 1,600
+backlog articles; it was read on 10-03 and mailed on 10-04 as news. Then the articles
+naming **no** tracked campus, newest published first, then the rest — rule 4 applying
+throughout. Enrich reads for
 one row and creates none, so that step is the loop's only source of new campuses;
 each article still goes through the identity arbiter below before it can insert a
 row. The same rule orders `--retry-failed`'s fill, the refresh phase below, and
@@ -377,7 +382,7 @@ Touching any of these means the poster is in scope. Re-render with
 | Pages nothing can read go last | `tracker/ingest/discover.py` — `closed_domains`, `unreadable_test`, `readable_first`, `pending(unreadable=)`, `retryable(unreadable=)`; `tracker/ingest/crawl.py` — `stale_sources(unreadable=)`; `tracker/cli/sync.py` — `sync` (extract, retry fill, refresh); `tracker/cli/ingest.py` — `crawl --from-queue`; `tracker/ingest/enrich.py` — `run` |
 | What search looks for | `tracker/ingest/search.py` — `_PLACE_TEMPLATES`, `rank_places`, `plan_queries`, `PlannedQuery.label`, `templates`; `tracker/normalize.py` — `state_name` |
 | Judging a template | `tracker/funnel.py` — `feed_group`, `survey`, `verdicts`; `tracker/ingest/search.py` — `LabelStat` |
-| Queue ordering and counts | `tracker/ingest/discover.py` — `pending` (`known_first`, `new_first`), `pending_split`, `pending_risk_count`, `failed`, `retryable`, `given_up`, `MAX_SAME_FAILURES`, `failure_summary` |
+| Queue ordering and counts | `tracker/ingest/discover.py` — `pending` (`known_first`, `new_first`; news first by `feed.NOTIFY_MAX_AGE_DAYS`), `pending_split`, `pending_risk_count`, `failed`, `retryable`, `given_up`, `MAX_SAME_FAILURES`, `failure_summary` |
 | Prospect | `tracker/prospect.py`; `tracker/roster.py` — `hunt_order`, `measure` |
 | Extract and refresh | `tracker/ingest/crawl.py` — `run`, `stale_sources`, `unchanged_reads`, `record_url`, `failure_reason`, `MAX_REFRESH_BACKOFF` |
 | The party gate | `tracker/ingest/crawl.py` — `_parties`, `_ROLE_MARKERS`, `_role_is_licensed` |

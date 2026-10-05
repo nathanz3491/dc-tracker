@@ -725,6 +725,35 @@ def test_an_undated_signal_is_kept():
     assert feed.notable(undated)
 
 
+def test_an_undated_fact_is_as_old_as_the_article_that_reported_it():
+    """The day we read it is only the latest it can have been reported. On 10-04 an
+    obstacle from a 09-21 article went out as news because it was read on 10-03; one
+    from an archive article read tonight would have gone out the same way."""
+    today = dt.datetime.now()
+    archived = _notifiable(
+        kind="obstacle_opened",
+        sign="bad",
+        happened=None,
+        at=today,
+        published_at=today - dt.timedelta(days=feed.NOTIFY_MAX_AGE_DAYS + 30),
+    )
+    assert feed.occurred(archived) == archived.published_at.date()
+    assert feed.stale(archived), "learned tonight, but reported two and a half months ago"
+
+    recent = _notifiable(happened=None, at=today, published_at=today - dt.timedelta(days=12))
+    assert not feed.stale(recent)
+
+
+def test_a_card_says_when_its_article_was_published_when_the_fact_has_no_date():
+    """It printed "undated · learned 10-03" over a lawsuit an article reported on
+    09-21, and the reader had to open the link to find the delay."""
+    reported = _notifiable(happened=None, published_at=dt.datetime(2026, 9, 21, 22, 8))
+    assert reported.when == "reported 2026-09-21"
+    assert reported.as_json()["when"] == "reported 2026-09-21"
+    assert _notifiable(happened=dt.date(2026, 9, 1)).when == "2026-09-01"
+    assert _notifiable(happened=None).when == "undated"
+
+
 def test_the_horizon_is_overridable_without_touching_the_others():
     """So a caller can tighten or widen it without reimplementing the gate."""
     old = _notifiable(happened=dt.date.today() - dt.timedelta(days=200))
