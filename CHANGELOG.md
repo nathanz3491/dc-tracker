@@ -96,6 +96,22 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **Every campus the nightly loop adds gets one attempt to fold into a twin**
+  (`tracker/capex.py`, `tracker/triage.py`, `tracker/cli/duplicates.py`,
+  `scripts/overnight.sh`, `tests/test_duplicate_detection.py`,
+  `tests/test_overnight.py`, `docs/workflows/duplicates.md`,
+  `docs/workflows/duplicates.svg`, `scripts/render_workflow_diagrams.py`). The
+  10-05 run added eight campuses and one was a duplicate the detector could not
+  see: "SoftBank / SB Energy — PORTS Technology Campus" in Piketon beside "SB Energy —
+  PORTS-Pike Technology Campus" in Pike County, the same 10 GW site, compared by no
+  pass because one row named the town and the other the county, under two company
+  names. `duplicates resolve --created-since T` now puts each row created since `T`
+  to its likeliest twin wherever it is filed — a shared town or county at either
+  granularity, or within 25 km, plus the usual evidence — and the loop runs it after
+  the discover crawl, with the moment the night began: one attempt per new row with
+  a candidate, under the usual rails. On that night it would have asked about the
+  PORTS pair and nothing else.
+
 - **The email reports news days old, not weeks, and says when it was reported**
   (`tracker/ingest/discover.py`, `tracker/feed.py`, `tracker/notify.py`,
   `tracker/webui/static/app.js`, `scripts/overnight.sh`, `tests/test_discover.py`,

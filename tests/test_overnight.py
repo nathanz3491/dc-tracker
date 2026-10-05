@@ -399,3 +399,13 @@ def test_the_morning_report_breaks_spend_down_by_phase_and_in_money(tmp_path):
     assert lines[0][0] == "enrich/extract" and "¥4.00" in lines[0]
     assert lines[1][:2] == ["logic", "resolve"] and "~20,000" in lines[1] and "89%" in lines[1]
     assert lines[2][:2] == ["risks", "confirm"] and "n/a" in lines[2]
+
+
+def test_every_row_the_night_adds_gets_one_attempt_to_fold():
+    """The regular pass only sees pairs within one town or one company, which is how
+    a new 10 GW PORTS row sat beside its duplicate unpaired on 2026-10-05."""
+    text = SCRIPT.read_text(encoding="utf-8")
+    assert "STARTED_UTC=$(date -u '+%Y-%m-%d %H:%M:%S')" in text
+    assert '--created-since "$STARTED_UTC"' in text
+    discover = text.index('tracker ingest crawl --from-queue --new-first --limit "$DISCOVER"')
+    assert text.index('--created-since "$STARTED_UTC"') > discover, "after the rows exist"

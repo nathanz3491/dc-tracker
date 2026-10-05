@@ -1127,8 +1127,6 @@ def suspected_duplicates(session: Session, *, include_parked: bool = False) -> l
     is what `tracker duplicates --parked` uses to let somebody review their own
     past decisions.
     """
-    from tracker import parties as parties_mod
-    from tracker.dedup import exact_identity, shared_parties_across_companies
     from tracker.pairs import canonical, parked_keys
 
     projects = session.scalars(select(Project)).all()
@@ -1139,33 +1137,7 @@ def suspected_duplicates(session: Session, *, include_parked: bool = False) -> l
     parked = set() if include_parked else parked_keys(session)
 
     def evidence(a: Project, b: Project) -> dict[str, Any]:
-        """Every signal that holds for one pair.
-
-        One function for all three passes. The second pass used to record `shared_keys`
-        and nothing else, so a cross-granularity duplicate carried exactly one
-        evidence class however much evidence existed — measured on the live
-        database, 12 of those pairs shared a distinctive name token, 8 shared a real
-        tranche key, and 6 were byte-identical in name and company. None of it
-        reached the report, and `dupresolve.merge_blocked` refused all of them for
-        having only granularity to go on.
-        """
-        return {
-            "exact": exact_identity(a.name, a.company, b.name, b.company),
-            "shared_blocks": shared_identity_keys(a, b, keys, where),
-            # Two sources for one signal, unioned. The string form reads the two
-            # `company` values, which is the only place a party lives on a row
-            # nothing has re-crawled since migration 0023; the party rows reach
-            # the shape it structurally cannot — four articles each naming one
-            # party, which `docs/duplicate-shapes.md` measures as 48 of 90 folds.
-            # Both keep the same-company guard; see `parties.shared_across_companies`.
-            "shared_parties": tuple(
-                sorted(
-                    shared_parties_across_companies(a.company, b.company)
-                    | parties_mod.shared_across_companies(a, b)
-                )
-            ),
-            "shared_tokens": _shared_name_tokens(a, b),
-        }
+        return _pair_evidence(a, b, keys, where)
 
     pairs: list[DuplicatePair] = []
     for (locality, state), group in by_locality.items():
@@ -1366,6 +1338,138 @@ def suspected_duplicates(session: Session, *, include_parked: bool = False) -> l
     # screen. `looks_like_the_same_site` decided the same things in the same order
     # and threw the reason away; nothing is detected differently here.
     return sorted(pairs, key=lambda p: (p.rank, p.a_id, p.b_id))
+
+
+def _pair_evidence(a: Project, b: Project, keys, where) -> dict[str, Any]:
+    """Every signal that holds for one pair.
+
+    One function for every pass, and for `twin_pairs`. The second pass used to
+    record `shared_keys` and nothing else, so a cross-granularity duplicate carried
+    exactly one evidence class however much evidence existed — measured on the live
+    database, 12 of those pairs shared a distinctive name token, 8 shared a real
+    tranche key, and 6 were byte-identical in name and company. None of it reached
+    the report, and `dupresolve.merge_blocked` refused all of them for having only
+    granularity to go on.
+    """
+    from tracker import parties as parties_mod
+    from tracker.dedup import exact_identity, shared_parties_across_companies
+
+    return {
+        "exact": exact_identity(a.name, a.company, b.name, b.company),
+        "shared_blocks": shared_identity_keys(a, b, keys, where),
+        # Two sources for one signal, unioned. The string form reads the two
+        # `company` values, which is the only place a party lives on a row nothing
+        # has re-crawled since migration 0023; the party rows reach the shape it
+        # structurally cannot — four articles each naming one party, which
+        # `docs/duplicate-shapes.md` measures as 48 of 90 folds. Both keep the
+        # same-company guard; see `parties.shared_across_companies`.
+        "shared_parties": tuple(
+            sorted(
+                shared_parties_across_companies(a.company, b.company)
+                | parties_mod.shared_across_companies(a, b)
+            )
+        ),
+        "shared_tokens": _shared_name_tokens(a, b),
+    }
+
+
+def _place_words(project: Project) -> set[str]:
+    """Both of a row's localities, folded as pass one folds one."""
+    from tracker.dedup import _slug
+
+    out: set[str] = set()
+    for place in (project.city, project.county):
+        words = _slug(place or "").split()
+        while words and words[-1] in _PLACE_KIND_WORDS:
+            words.pop()
+        if words:
+            out.add(" ".join(words))
+    return out
+
+
+def twin_pairs(session: Session, project_ids: list[int]) -> list[DuplicatePair]:
+    """For each of these rows, the existing row most likely to be the same campus.
+
+    **One question per new row, wherever its twin is filed.** `suspected_duplicates`
+    compares rows within one city-or-county bucket, or within one company, so a
+    campus filed once under its town and once under its county by two names for one
+    operator meets neither test. On 2026-10-05 the night's new row "SoftBank / SB
+    Energy — PORTS Technology Campus" in Piketon sat beside "SB Energy — PORTS-Pike
+    Technology Campus" in Pike County, the same 10 GW site, and was never paired.
+
+    So for each row this looks wider: any other row in the state that shares a
+    locality at either granularity — the town of one, the county of the other — or
+    sits within the merge rail's 25 km. A candidate still needs real evidence from
+    the same test every pass uses (`_pair_evidence`); a place alone pairs nothing.
+    The strongest candidate is returned, by the detector's own ranking, then by how
+    much evidence it carries, then by distance. A row with none is simply checked.
+
+    Pairs already ruled out are skipped, as everywhere else.
+    """
+    from tracker.dupresolve import FAR_APART_KM, km_apart
+    from tracker.pairs import canonical, parked_keys
+
+    projects = session.scalars(select(Project)).all()
+    by_id = {p.id: p for p in projects}
+    keys = identifying_block_keys(projects)
+    where = block_key_localities(projects)
+    parked = parked_keys(session)
+    raised = {canonical(p.a_id, p.b_id): p for p in suspected_duplicates(session)}
+
+    out: list[DuplicatePair] = []
+    for pid in sorted(set(project_ids)):
+        row = by_id.get(pid)
+        if row is None:
+            continue
+        places = _place_words(row)
+        best: tuple[tuple[Any, ...], DuplicatePair] | None = None
+        for other in projects:
+            if other.id == pid or other.state != row.state:
+                continue
+            pair_key = canonical(pid, other.id)
+            if pair_key in parked:
+                continue
+            distance = km_apart(row, other)
+            if distance is not None and distance > FAR_APART_KM:
+                continue
+            pair = raised.get(pair_key)
+            if pair is None:
+                shared_place = places & _place_words(other)
+                if not shared_place and distance is None:
+                    continue
+                found = _pair_evidence(row, other, keys, where)
+                if not any(found.values()):
+                    continue
+                a, b = (row, other) if row.id < other.id else (other, row)
+                granularity = (
+                    ("city and county granularity differ",)
+                    if shared_place and (a.city is None) != (b.city is None)
+                    else ()
+                )
+                pair = DuplicatePair(
+                    a_id=a.id,
+                    a_company=a.company,
+                    a_name=a.name,
+                    b_id=b.id,
+                    b_company=b.company,
+                    b_name=b.name,
+                    locality=a.city or a.county or "",
+                    state=a.state,
+                    b_mw=float(b.mw_planned or 0.0),
+                    shared_keys=granularity,
+                    **found,
+                )
+            weight = (
+                pair.rank,
+                -len(pair.kinds),
+                distance if distance is not None else FAR_APART_KM,
+                other.id,
+            )
+            if best is None or weight < best[0]:
+                best = (weight, pair)
+        if best is not None:
+            out.append(best[1])
+    return out
 
 
 #: Trailing words that say what kind of place a locality is, not which one.

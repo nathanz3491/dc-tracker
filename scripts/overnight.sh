@@ -375,6 +375,8 @@ over_ceiling() {
 # --- start ------------------------------------------------------------------
 
 STARTED=$(date +%s)
+# The moment rows count as new tonight, in the database's own clock (naive UTC).
+STARTED_UTC=$(date -u '+%Y-%m-%d %H:%M:%S')
 DEADLINE=$((STARTED + HOURS * 3600))
 SPENT=0
 CNY=0.00
@@ -484,6 +486,20 @@ for round in $(seq 1 "$ROUNDS"); do
     phase "discover — poll the feeds, read $DISCOVER queued article(s), the news first"
     tracker discover < /dev/null || true
     tracker ingest crawl --from-queue --new-first --limit "$DISCOVER" < /dev/null || true
+
+    # One attempt to fold per row tonight added, each against its likeliest twin
+    # wherever that twin is filed (`duplicates resolve --created-since`). The
+    # regular pass only sees pairs within one town or one company, and on
+    # 2026-10-05 a new 10 GW PORTS campus row sat unpaired beside its duplicate
+    # because one row named the town and a different company, the other the county.
+    if capped duplicates; then break; fi
+    phase "duplicates — one attempt per row created tonight"
+    if [ "$DO_MERGE" -eq 1 ]; then
+      tracker duplicates resolve --merge --min-confidence "$MIN_CONF" \
+        --created-since "$STARTED_UTC" < /dev/null || true
+    else
+      tracker duplicates resolve --created-since "$STARTED_UTC" < /dev/null || true
+    fi
   fi
 
   # --- reconcile and measure ----------------------------------------------

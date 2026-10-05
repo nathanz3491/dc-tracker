@@ -14,8 +14,9 @@ they run on the production host.
 
 ## How a pair is raised
 
-Four passes over the same rows, **unioned rather than substituted**. Each reaches
-duplicates the others structurally cannot, and the measurements are the argument:
+Four passes over the same rows, **unioned rather than substituted**, and a fifth for
+the rows a night adds. Each reaches duplicates the others structurally cannot, and
+the measurements are the argument:
 
 | | Starts from | Reaches |
 | --- | --- | --- |
@@ -23,6 +24,15 @@ duplicates the others structurally cannot, and the measurements are the argument
 | 2 | dedup keys, bucketed on **company** — locality is the axis that disagrees | cross-granularity duplicates: Hyperion stored four times as `richland parish`, `holly ridge`, `richland`, `richmond parish`. Finds 259 pairs, but alone would **lose 225 of pass 1's 230** |
 | 3 | a shared tranche key, not a place | a campus filed under two locality names that do not match — Stargate as Crusoe's `abilene` row and Oracle's `shackelford county` row. Nine pairs, seven of them real |
 | 4 | one distinctive **name** in one state | a campus whose rows disagree about the place and share no tranche — xAI's Colossus as `Memphis` and as `孟菲斯`, TeraWulf's Lake Mariner under its county and under a town in it, Project Jupiter filed by two of its builders, CyrusOne Thad Hill as a town and as its county. The name must carry a word that is neither a place, nor industry vocabulary, nor the state: two operators' "Santa Clara Data Center" in Santa Clara name nothing |
+
+| 5 | **one new row**, against every row in its state | the night's new campuses, each put to its likeliest twin once (`capex.twin_pairs`, `duplicates resolve --created-since`). A candidate shares a locality at either granularity — one row's town, the other's county — or sits within the 25 km rail, and must still carry evidence from the same test the other passes use. On 2026-10-05 the new row "SoftBank / SB Energy — PORTS Technology Campus" in Piketon sat unpaired beside "SB Energy — PORTS-Pike Technology Campus" in Pike County: town against county, under two company names, so neither pass 1 nor pass 2 compared them |
+
+**The nightly loop asks about every new row once.** After the discover crawl adds
+campuses, `scripts/overnight.sh` runs `duplicates resolve --merge --created-since`
+with the moment the night began: one agent attempt per new row that has a
+candidate, under the same rails as every other pair. A row with no candidate costs
+nothing — on 10-05 seven of the eight new rows had none, and the eighth was the
+PORTS duplicate.
 
 Pass 1's bucket is folded before anything is compared: accents, case and the words
 that say what kind of place it is (`county`, `counties`, `parish`, `township`) are
@@ -239,7 +249,8 @@ Touching any of these means the poster is in scope. Re-render with
 
 | Concern | Where |
 | --- | --- |
-| The four detection passes | `tracker/capex.py` — `suspected_duplicates`, `_locality_buckets`, `_locality_word`, `_one_edit_apart` |
+| The four detection passes | `tracker/capex.py` — `suspected_duplicates`, `_pair_evidence`, `_locality_buckets`, `_locality_word`, `_one_edit_apart` |
+| A new row against its likeliest twin | `tracker/capex.py` — `twin_pairs`, `_place_words`; `tracker/triage.py` — `resolve_pairs(pairs=)`; `tracker/cli/duplicates.py` — `duplicates_resolve(--created-since)`; `scripts/overnight.sh` — `STARTED_UTC` |
 | The party signal, and the guard on it | `tracker/parties.py` — `shared_across_companies`, `keys_for` |
 | Evidence classes, labels, ranking | `tracker/capex.py` — `EVIDENCE_ORDER`, `EVIDENCE_LABELS`, `strongest_evidence`, `DuplicatePair.rank` |
 | Grouping and the MW figure | `tracker/capex.py` — `duplicate_groups`, `double_counted_mw` |
