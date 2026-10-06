@@ -213,6 +213,10 @@ def _app_path(route: str) -> str | None:
     page = route.strip("/")
     if page in READ_VIEWS or page in ACCOUNT_VIEWS:
         return "/" + page
+    if page == "watch-for":
+        # Monitor's old name, in every email sent before the rename. Signed out,
+        # this is what turns it into a sign-in that lands on Monitor, not a 404.
+        return "/monitor"
     if match := _PROJECT_PATH.fullmatch(route):
         return f"/projects/{int(match.group(1))}"
     return None

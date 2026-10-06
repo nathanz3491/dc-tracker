@@ -5131,3 +5131,12 @@ def test_nobody_signed_in_has_no_stars(server):
     status, body = request(address, "/api/watch")
     assert status == 200
     assert body["allow_watch"] is False and body["watched"] == []
+
+
+def test_an_old_watch_for_link_signed_out_lands_on_monitor_after_sign_in(reader):
+    """Every email sent before the rename links to /watch-for, and whoever clicks
+    one is usually signed out. It used to 404 on the published console."""
+    address, _console, _cookie, _id = reader
+    status, headers, _body = raw(address, "/watch-for")
+    assert status in (302, 303, 307)
+    assert headers["Location"] == "/signin?next=/monitor"
