@@ -395,8 +395,29 @@ def duplicates_resolve(
             show_default=False,
         ),
     ] = None,
+    created_since: Annotated[
+        str | None,
+        typer.Option(
+            "--created-since",
+            help=(
+                "Instead of the suspected pairs: one attempt per row created since this "
+                "UTC time ('2026-10-05 04:00'), each against its likeliest twin."
+            ),
+            show_default=False,
+        ),
+    ] = None,
 ) -> None:
     """Settle the suspected duplicates: a model decides, and the rails decide what it may do.
+
+    **`--created-since` asks about the night's new rows instead**, one attempt each:
+    every row created since that moment is put against its likeliest existing twin
+    (`capex.twin_pairs`), wherever that twin is filed. The suspected pairs only
+    compare rows in one locality or one company, so a campus filed under its town by
+    one name and under its county by another is never among them — on 2026-10-05 a
+    new 10 GW PORTS campus row sat unpaired beside the row it duplicated. `--limit`
+    does not apply: the number of attempts is the number of new rows with a
+    candidate. The agent and every merge rail are the same as for the suspected
+    pairs.
 
     `tracker duplicates` proposes and never disposes, which is right — a wrong
     merge destroys two rows and no re-crawl recovers them. The cost of that caution
@@ -479,8 +500,34 @@ def duplicates_resolve(
     # long enough to describe them — SQLAlchemy flushes the park and SQLite
     # refuses. The write lock is taken either way, because this command can delete
     # rows and belongs under the same discipline as the merge it performs.
+    since = None
+    if created_since is not None:
+        import datetime as _dt
+
+        try:
+            since = _dt.datetime.fromisoformat(created_since)
+        except ValueError:
+            _fail(f"--created-since wants a time such as '2026-10-05 04:00', not {created_since!r}")
+        if not use_agent:
+            _fail("--created-since asks the agent; drop --ask, --no-llm or --no-agent.")
+
     engine = _writable("duplicates resolve")
     with _explain_db_locks(), session_scope(engine, commit=not dry_run) as session:
+        twins = None
+        if since is not None:
+            from sqlalchemy import select as _select
+
+            from tracker import capex as capex_mod
+            from tracker.models import Project
+
+            new_ids = list(session.scalars(_select(Project.id).where(Project.created_at >= since)))
+            twins = capex_mod.twin_pairs(session, new_ids)
+            limit = len(twins)
+            if not json_mode():
+                console.print(
+                    f"[dim]{len(new_ids)} row(s) created since {since}; "
+                    f"{len(twins)} with a candidate twin to ask about[/dim]"
+                )
         if use_agent:
             from tracker import triage as triage_mod
 
@@ -503,6 +550,7 @@ def duplicates_resolve(
                 # calls. A dry run is one transaction that is never committed.
                 commit_each=not dry_run,
                 on_held=held_back,
+                pairs=twins,
             )
         else:
             decisions = dupresolve.resolve(

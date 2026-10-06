@@ -427,6 +427,7 @@ def enrich(
                 only_fields=agent_fields,
                 token_budget=token_budget,
                 max_attempts=max_attempts,
+                t2_only=t2,
             )
 
     if len(batch.reports) == 1:
@@ -450,8 +451,14 @@ def _gapfill_batch(
     only_fields: tuple[str, ...] | None = None,
     token_budget: int = 0,
     max_attempts: int = attempts_mod.DEFAULT_MAX_ATTEMPTS,
+    t2_only: bool = False,
 ) -> None:
     """Let a model find and cite what the harvest rounds left empty.
+
+    `t2_only` (`enrich --t2`) asks each row only about the gaps that hold it below
+    T2. The rows were chosen for those gaps, and asking about every empty field too
+    is how a self-built Meta campus got Meta written in as its own customer — a field
+    the tier deliberately does not demand, because its absence is usually the truth.
 
     Committed per project, so a provider failure on row 20 keeps the first 19.
     Rows with nothing left to fill cost nothing at all — `gapfill.fill` returns
@@ -494,6 +501,10 @@ def _gapfill_batch(
         empty = {f for f in gapfill.FILLABLE_FIELDS if getattr(project, f, None) is None}
         if only_fields is not None:
             empty &= set(only_fields)
+        if t2_only:
+            from tracker.ingest.enrich import t2_gaps
+
+            empty &= t2_gaps(project)
         askable = sorted(empty - attempts_mod.exhausted(project, max_attempts=max_attempts))
         if not askable:
             settled_already += 1
@@ -520,18 +531,39 @@ def _gapfill_batch(
         cache_miss += out.cache_miss_tokens
         called += 1
 
+        # A fact can be "stored" and still not reach the row: attached to a citation
+        # whose claim about that field an earlier ruling struck, it stays struck.
+        # COL4 re-found the same ruled-out $150M on two nights running and reported
+        # it as gained both times. What counts is whether the field is filled now.
+        landed = {f for f in askable if getattr(project, f, None) is not None}
+        unlanded = [f for f in askable if f not in landed and f not in out.missed]
+
         # Only a run that reached an answer is evidence about the field. An error
         # or an unusable shape says something about the call, not about whether
         # anybody published the figure, and retiring a field on that would be a
-        # silent loss.
-        if out.verdict in {"filled", "nothing"} and out.missed:
-            attempts_mod.record(project, out.missed)
+        # silent loss. A fact that did not land is an answer that changed nothing,
+        # and is recorded the same way, so the next night does not pay to re-find it.
+        if out.verdict in {"filled", "nothing"} and (out.missed or unlanded):
+            attempts_mod.record(project, [*out.missed, *unlanded])
 
-        if out.verdict == "filled":
+        if out.verdict == "filled" and landed:
             session.commit()
             filled += 1
             for line in out.stored:
-                console.print(f"  {head}  [green]{escape(line)}[/green]")
+                if line.split(" = ", 1)[0].strip() in landed:
+                    console.print(f"  {head}  [green]{escape(line)}[/green]")
+            for field in unlanded:
+                console.print(
+                    f"  {head}  [dim]{field}: found, but an earlier ruling struck that claim — "
+                    "not stored[/dim]"
+                )
+        elif out.verdict == "filled":
+            session.commit()
+            nothing += 1
+            console.print(
+                f"  {head}  [dim]found {', '.join(unlanded) or 'a fact'} again, but an earlier "
+                "ruling struck that claim — not stored[/dim]"
+            )
         elif out.verdict == "nothing":
             # Commits the attempt note even though no fact landed: that note is the
             # entire saving, and rolling it back would re-ask this row forever.
@@ -610,7 +642,8 @@ def _render_batch(batch, *, target: int, dry_run: bool) -> None:
     )
     unchanged = sum(report.articles_unchanged for report in batch.reports)
     held = sum(report.settle_held for report in batch.reports)
-    if unchanged or held:
+    refused = sum(report.rows_refused for report in batch.reports)
+    if unchanged or held or refused:
         console.print(
             "[dim]"
             + "; ".join(
@@ -621,6 +654,10 @@ def _render_batch(batch, *, target: int, dry_run: bool) -> None:
                     else "",
                     f"{held} dispute(s) refused before on the same claims, not asked again"
                     if held
+                    else "",
+                    f"{refused} campus(es) a read for one row named but no row matched — "
+                    "not created (the log names them)"
+                    if refused
                     else "",
                 )
                 if part

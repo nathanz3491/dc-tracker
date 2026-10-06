@@ -477,15 +477,21 @@ def test_a_field_a_null_is_correct_for_is_not_counted_as_failure(session):
 
     states = {s.field: s for s in report.after}
     assert states["mw_built"].status == NOT_APPLICABLE
-    assert states["mw_built"].reason and "nothing is built" in states["mw_built"].reason
+    assert states["mw_built"].reason and "nothing is energized" in states["mw_built"].reason
 
     _, attemptable = report.tracked_score()
     assert attemptable == 11, "mw_built is excluded from the 12 while nothing is built"
 
 
-def test_mw_built_counts_once_construction_starts(session):
-    project = add_project(session, phase="construction")
-    report = run(session, project.id)
+def test_mw_built_counts_once_the_site_is_operational(session):
+    """Not at `construction`: a row any source calls live merges to operational, so
+    one still building has nothing energized, and no figure anyone could print."""
+    building = add_project(session, phase="construction")
+    states = {s.field: s for s in run(session, building.id).after}
+    assert states["mw_built"].status == NOT_APPLICABLE
+
+    live = add_project(session, phase="operational", city="Mesa", dedup_key="op|city:mesa|AZ")
+    report = run(session, live.id)
     states = {s.field: s for s in report.after}
     assert states["mw_built"].status == MISSING
     _, attemptable = report.tracked_score()
@@ -1737,3 +1743,111 @@ def test_a_refused_dispute_is_not_asked_again_on_the_same_claims(session):
     third = SettleLLM(refuse)
     run(session, project.id, settle_extractor=third, target_fields=0)
     assert third.calls == 1
+
+
+# --- what the 2026-09-30 audit of the night's writes found -----------------------
+
+
+def test_the_t2_agent_asks_only_about_the_gaps_that_hold_a_row_below_t2(session, monkeypatch):
+    """A self-built Meta campus got Meta written in as its own customer: the row was
+    chosen for one T2 gap and the agent was asked about every empty field besides."""
+    row = _full_but_blocker(session, company="Self Co", customer=None, investment_usd=None)
+    fake = CountingGapfill()
+    cli_enrich = _agent_ready(monkeypatch, fake)
+
+    cli_enrich._gapfill_batch(session, [row.id], max_attempts=0, t2_only=True)
+    assert fake.calls == [(row.id, ["investment_usd"])], "customer is not a T2 gap"
+
+    fake.calls.clear()
+    cli_enrich._gapfill_batch(session, [row.id], max_attempts=0)
+    assert fake.calls == [(row.id, ["customer", "investment_usd"])], "without --t2, every gap"
+
+
+class StruckFact(CountingGapfill):
+    """Reports a fact as stored that never reaches the row, as COL4's $150M did."""
+
+    def __call__(self, session, project, *, extractor, gaps=None, **kwargs):
+        from tracker.gapfill import Filled
+
+        self.calls.append((project.id, list(gaps or ())))
+        return Filled(
+            verdict="filled",
+            stored=["investment_usd = 150000000 (https://example.test/struck)"],
+            prompt_tokens=self.tokens,
+        )
+
+
+def test_a_fact_an_earlier_ruling_struck_is_not_reported_as_gained(session, monkeypatch, capsys):
+    """COL4 re-found a ruled-out $150M on two nights and was counted as a gain both
+    times; the field stayed empty and was asked about again the next night."""
+    from tracker import attempts
+
+    row = _full_but_blocker(session, company="Col Co", investment_usd=None)
+    fake = StruckFact()
+    cli_enrich = _agent_ready(monkeypatch, fake)
+
+    cli_enrich._gapfill_batch(session, [row.id], max_attempts=0)
+    out = capsys.readouterr().out
+    assert "0 row(s) gained a cited fact" in out
+    assert "earlier ruling struck that claim" in out
+    assert "investment_usd" in attempts.attempts(row), "recorded, so it is not re-asked forever"
+
+
+class ElsewhereLLM(FakeLLM):
+    """An extraction of a campus the database does not hold."""
+
+    def __init__(self) -> None:
+        payload = _extraction()
+        payload["projects"][0].update(
+            company="Stranger Co", name="Stranger Campus", city="Ames", state="IA"
+        )
+        super().__init__(payload)
+
+
+def test_a_read_for_one_row_does_not_found_another(session):
+    """Asked about one project, the model wrote it under the article's own name, and
+    two second rows appeared on 2026-09-30, each counted twice in the totals."""
+    project = add_project(session)
+    add_queued(session, "https://x.com/stack-hillsboro-e", "STACK Hillsboro campus")
+    before = session.query(Project).count()
+
+    report = run(session, project.id, extractor=ElsewhereLLM())
+    assert session.query(Project).count() == before
+    assert report.rows_refused == 1
+
+    other = add_project(session, city="Reno", company="Other Co")
+    add_queued(session, "https://x.com/other-co-reno-e", "Other Co Reno campus")
+    run(session, other.id, extractor=ElsewhereLLM(), focus=False)
+    assert session.query(Project).count() == before + 2, "--no-focus reads every campus, as before"
+
+
+def test_a_round_reads_the_pages_it_can_before_a_closed_publishers(session, monkeypatch, tmp_path):
+    """A fetch that fails still spends the budget, and the budget is this row's share
+    of the night's. The publishers closed on 2026-10-02 held 650 queued articles, 22
+    of them with a body cached."""
+    from tracker.ingest import crawl, discover
+    from tracker.ingest.records import IngestReport
+
+    config = tmp_path / "feeds.toml"
+    config.write_text(
+        '[[feed]]\nname = "refused"\nurl = "https://refused.test/feed/"\n'
+        'closed = "2026-10-02: Cloudflare challenge on every page"\n'
+        '[filter]\ntopic = ["data cent"]\nsignal = ["campus"]\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(discover, "default_feeds_path", lambda: config)
+
+    harvested = ["https://refused.test/1", "https://refused.test/2", "https://open.test/3"]
+    monkeypatch.setattr(enrich, "harvest_queue", lambda s, pid: enrich.Harvest("queue", harvested))
+    monkeypatch.setattr(enrich, "harvest_retry", lambda s, pid: enrich.Harvest("retry", []))
+    monkeypatch.setattr(enrich, "harvest_refresh", lambda s, pid: enrich.Harvest("refresh", []))
+    batches: list[list[str]] = []
+
+    def fake_crawl(session, urls, **_kw):
+        batches.append(list(urls))
+        return IngestReport()
+
+    monkeypatch.setattr(crawl, "run", fake_crawl)
+    run(session, add_project(session).id, max_articles=2, max_rounds=1, skip_settle=True)
+
+    assert batches == [["https://open.test/3", "https://refused.test/1"]]

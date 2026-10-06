@@ -9,8 +9,9 @@ and either
 * it **happened within the last** :data:`CATCH_UP_DAYS` (14) days — the catch-up
   for a company they only just started watching, or an email that failed.
 
-An undated update is judged by the day we recorded it. Nothing older than 45 days
-is ever sent. With no earlier email to count from, "since your last email" means
+An undated update is judged by the day its article was published, or failing that
+the day we recorded it (`feed.occurred`), and its card says "reported <date>" rather
+than "undated". Nothing older than 45 days is ever sent. With no earlier email to count from, "since your last email" means
 the last day.
 
 **A day with no news still gets an email** — the list of what to watch for on
@@ -420,7 +421,7 @@ def _signal_row(signal: Signal) -> str:
     now, but the label is what makes that visible rather than assumed.
     """
     dot, chip_bg, chip_fg = _SIGN_COLOURS.get(signal.sign, _SIGN_COLOURS["neutral"])
-    when = signal.happened.isoformat() if signal.happened else "undated"
+    when = signal.when
     learned = f" · learned {signal.at.date().isoformat()}" if signal.at else ""
     source = ""
     if signal.source_url:
@@ -732,7 +733,7 @@ def render_text(
     more often, and it is what a screen reader actually reads."""
     lines = [f"{len(signals)} new update(s) {_since_words(last_email)}", ""]
     for signal in signals:
-        when = signal.happened.isoformat() if signal.happened else "undated"
+        when = signal.when
         learned = f", learned {signal.at.date().isoformat()}" if signal.at else ""
         lines.append(f"* {signal.company} — {signal.project}: {signal.headline}")
         lines.append(f"  {signal.detail}")

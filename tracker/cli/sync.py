@@ -560,9 +560,10 @@ def sync(
             _fail(str(exc))
             return
         totals["queued"] = report.queued
+        closed = f" ({len(report.closed)} closed, not polled)" if report.closed else ""
         console.print(
-            f"polled {report.feeds_polled} feed(s), saw {report.entries_seen} entr(ies), "
-            f"queued [bold]{report.queued}[/bold] new candidate(s)"
+            f"polled {report.feeds_polled} feed(s){closed}, saw {report.entries_seen} "
+            f"entr(ies), queued [bold]{report.queued}[/bold] new candidate(s)"
         )
         for name, reason in report.failures:
             err.print(f"[yellow]feed {name}[/yellow]: {reason}")
@@ -586,8 +587,10 @@ def sync(
                 # happened; session_scope then rolls it back.
                 disc2.queue_candidates(session, found, run_id="deep", report=shim)
             totals["queued"] += shim.queued
+            walked = sum(1 for s in specs if not s.closed)
+            closed = f" ({len(specs) - walked} closed, not walked)" if walked < len(specs) else ""
             console.print(
-                f"archives: {len(found)} matching URL(s) across {len(specs)} sitemap(s), "
+                f"archives: {len(found)} matching URL(s) across {walked} sitemap(s){closed}, "
                 f"queued [bold]{shim.queued}[/bold] new ({shim.already_known} already known)"
             )
             for problem in problems[:5]:
@@ -763,6 +766,13 @@ def sync(
         # Nebius row.
         if prospect_urls:
             kept = prospect_urls + [url for url in kept if url not in set(prospect_urls)]
+        # Last of all, after the priority ranks and prospect's jump: a page on a
+        # publisher closed to us, with no body cached, goes after every page that
+        # can be read. `priority` alone put such pages in all fifteen slots on
+        # 2026-10-02, because datacenterfrontier and datacenterdynamics rank there.
+        unreadable = disc.unreadable_test(cache_dir)
+        kept = disc.readable_first(kept, unreadable)
+        held_back = sum(1 for url in kept if unreadable(url))
         pending_urls = kept[:limit]
         deepening, _fresh = disc.pending_split(session)
         risky = disc.pending_risk_count(session, queue_spec) if queue_spec else 0
@@ -776,7 +786,9 @@ def sync(
         given_up = disc.given_up(session)
         room = max(0, limit - len(pending_urls))
         if retry_failed and room:
-            pending_urls += [row.url for row in disc.retryable(session, limit=room)]
+            pending_urls += [
+                row.url for row in disc.retryable(session, limit=room, unreadable=unreadable)
+            ]
 
     if pending_urls and not breadth_first and deepening:
         detail = f", {risky} of them reporting an obstacle" if risky else ""
@@ -790,6 +802,11 @@ def sync(
         console.print(
             f"[dim]{len(ignored_urls)} candidate(s) skipped — seed/sources.toml ignores "
             f"their publisher[/dim]"
+        )
+    if held_back:
+        console.print(
+            f"[dim]{held_back} candidate(s) are on publishers marked closed in "
+            "seed/feeds.toml with nothing cached; they go after every readable one[/dim]"
         )
 
     if not pending_urls:
@@ -837,7 +854,14 @@ def sync(
     else:
         step("refresh existing")
         with session_scope(engine, commit=False) as session:
-            stale = crawl.stale_sources(session, older_than_days=refresh_days, limit=refresh_limit)
+            # No cache here (see below), so every page on a closed publisher counts
+            # as unreadable and goes after the pages that can be re-read.
+            stale = crawl.stale_sources(
+                session,
+                older_than_days=refresh_days,
+                limit=refresh_limit,
+                unreadable=disc.unreadable_test(None),
+            )
         if not stale:
             console.print(f"no source read more than {refresh_days} day(s) ago — all current")
         else:
@@ -1514,6 +1538,11 @@ def discover(
 
     for name, reason in report.failures:
         err.print(f"[yellow]feed {name}[/yellow]: {reason}")
+    if report.closed:
+        console.print(
+            f"[dim]not polled, marked closed in seed/feeds.toml: "
+            f"{', '.join(name for name, _ in report.closed)}[/dim]"
+        )
 
     if show and candidates:
         table = Table(title="candidates", header_style="bold", title_justify="left", box=TABLE_BOX)

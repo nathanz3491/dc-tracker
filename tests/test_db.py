@@ -290,6 +290,91 @@ def test_0003_upgrades_an_existing_database_without_losing_rows(tmp_path: Path):
         )
 
 
+def test_0032_rebuilds_project_without_touching_its_children(tmp_path: Path):
+    """Eight tables cascade from `project`. Rehearsed on a copy of production, a
+    rebuild with foreign keys on emptied every one of them; this one must not."""
+    migrations = discover_migrations()
+    engine = make_engine(tmp_path / "upgrade.db")
+    run_migrations(engine, [m for m in migrations if m.version <= 31])
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO project (id, name, company, city, state, dedup_key) "
+                "VALUES (1557, 'LAX12', 'Digital Realty', 'El Segundo', 'CA', 'k')"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO source (project_id, url, source_type) "
+                "VALUES (1557, 'https://a.test/1', 'trade_press')"
+            )
+        )
+
+    assert run_migrations(engine, migrations) == [m.version for m in migrations if m.version > 31]
+
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT project_id, url FROM source")).all() == [
+            (1557, "https://a.test/1")
+        ]
+        assert conn.execute(text("SELECT id, name FROM project")).all() == [(1557, "LAX12")]
+        assert conn.execute(text("PRAGMA foreign_key_check")).all() == []
+        assert conn.execute(text("PRAGMA foreign_keys")).scalar() == 1, "switched back on"
+        refs = {r[2] for r in conn.execute(text("PRAGMA foreign_key_list(source)"))}
+        assert "project" in refs, "children still point at the rebuilt table by name"
+        assert (
+            conn.execute(text("SELECT seq FROM sqlite_sequence WHERE name = 'project'")).scalar()
+            == 1560
+        ), "no number a production note names is issued again"
+
+
+def test_a_merged_away_projects_number_is_never_issued_again(engine: Engine):
+    """#1557 named three different campuses in a week: SQLite gave the next new row
+    one more than the largest id left, so merging the newest row away freed its
+    number, and the merge notes elsewhere then pointed at an unrelated campus."""
+    insert = text(
+        "INSERT INTO project (name, company, city, state, dedup_key) "
+        "VALUES ('n', 'c', 'ci', 'WI', :k)"
+    )
+    with engine.begin() as conn:
+        conn.execute(insert, {"k": "a"})
+        newest = conn.execute(text("SELECT max(id) FROM project")).scalar()
+        conn.execute(text("DELETE FROM project WHERE id = :i"), {"i": newest})
+        conn.execute(insert, {"k": "b"})
+        assert conn.execute(text("SELECT max(id) FROM project")).scalar() == newest + 1
+
+
+def test_a_rebuild_that_would_orphan_rows_is_rolled_back(tmp_path: Path):
+    """With foreign keys off nothing stops a rebuild losing a parent, so the runner
+    checks before it commits — and switches them back on either way."""
+    mig_dir = tmp_path / "migrations"
+    mig_dir.mkdir()
+    (mig_dir / "0001_init.sql").write_text(
+        "CREATE TABLE parent (id INTEGER PRIMARY KEY);\n"
+        "CREATE TABLE child (id INTEGER PRIMARY KEY, "
+        "parent_id INTEGER NOT NULL REFERENCES parent (id) ON DELETE CASCADE);\n"
+        "INSERT INTO parent (id) VALUES (1);\n"
+        "INSERT INTO child (id, parent_id) VALUES (1, 1);",
+        encoding="utf-8",
+    )
+    (mig_dir / "0002_lossy_rebuild.sql").write_text(
+        "-- tracker: foreign_keys off\n"
+        "CREATE TABLE parent_new (id INTEGER PRIMARY KEY AUTOINCREMENT);\n"
+        "DROP TABLE parent;\n"
+        "ALTER TABLE parent_new RENAME TO parent;",
+        encoding="utf-8",
+    )
+    engine = make_engine(tmp_path / "t.db")
+
+    with pytest.raises(MigrationError, match="pointing at nothing"):
+        run_migrations(engine, discover_migrations(mig_dir))
+
+    assert schema_version(engine) == 1
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT id FROM parent")).all() == [(1,)]
+        assert conn.execute(text("SELECT id FROM child")).all() == [(1,)]
+        assert conn.execute(text("PRAGMA foreign_keys")).scalar() == 1
+
+
 def test_discovered_status_was_rejected_before_0003(tmp_path: Path):
     """Confirms the migration is what enables it, not something else."""
     migrations = discover_migrations()

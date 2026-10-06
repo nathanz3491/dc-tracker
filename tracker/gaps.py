@@ -40,7 +40,7 @@ UNMEASURABLE: Final[dict[str, str]] = {
 #: Fields whose denominator is narrower than "every project", with the predicate
 #: that defines it and the reason.
 _RESTRICTED: Final[dict[str, tuple[str, str]]] = {
-    "mw_built": ("built", "only projects with something built"),
+    "mw_built": ("built", "only projects with something operational"),
     "county": ("has_locality", "derivable from a known locality"),
     "lat": ("has_locality", "derivable from a known locality"),
     "lon": ("has_locality", "derivable from a known locality"),
@@ -69,7 +69,8 @@ REPORT_FIELDS: Final[tuple[str, ...]] = (
 
 def _predicate(kind: str) -> ColumnElement[bool]:
     if kind == "built":
-        return Project.phase.in_(("construction", "operational"))
+        # Not "construction": see `_NOT_BUILT_PHASES`.
+        return Project.phase == "operational"
     if kind == "has_locality":
         # City *or* county: a project known only by county already has its county,
         # and scoping to `city IS NOT NULL` would drop those rows from the
@@ -133,8 +134,15 @@ def measure(session: Session, fields: tuple[str, ...] = REPORT_FIELDS) -> list[F
 #: Only `mw_built` is decidable this way. `blocker` and `customer` genuinely may
 #: not exist, but nothing on the row proves it, so they stay MISSING and the
 #: caller is told that a null may well be correct.
+#:
+#: **`construction` is one of them.** `mw_built` is what is energized today, and
+#: the merge takes a row's phase as the furthest along any source reports, so a row
+#: still at `construction` is one no source calls live: nothing on it is energized,
+#: and no operator publishes "0 MW built". Requiring the figure anyway cost 24 rows
+#: their T2 on 2026-10-05 for a fact that cannot exist, and was 31 of the gaps
+#: enrich had already searched for twice and given up on.
 _NOT_BUILT_PHASES: Final[frozenset[str]] = frozenset(
-    {"announced", "permitting", "paused", "cancelled"}
+    {"announced", "permitting", "construction", "paused", "cancelled"}
 )
 
 #: A null here is frequently the truth, so an enrichment run must not report
@@ -538,12 +546,43 @@ def for_project(project: Project, fields: tuple[str, ...] = REPORT_FIELDS) -> li
                     name,
                     None,
                     NOT_APPLICABLE,
-                    f"phase is {project.phase} — nothing is built yet, so null is correct",
+                    f"phase is {project.phase} — nothing is energized yet, so null is correct",
                 )
             )
             continue
         out.append(FieldState(name, None, MISSING, OFTEN_ABSENT.get(name)))
     return out
+
+
+def _measured_gaps(project: Project) -> set[str]:
+    return {s.field for s in for_project(project) if s.is_gap and s.field not in UNMEASURABLE}
+
+
+def unpublished(project: Project) -> set[str]:
+    """Gaps already looked for twice with nothing found, and no new citation since.
+
+    `tracker.attempts` records each search; two empty ones on an unchanged row mean
+    nobody has published the fact. The field reopens by itself the moment the row
+    gains a citation, so this is a statement about the evidence so far, not a
+    permanent pass.
+    """
+    from tracker import attempts
+
+    return _measured_gaps(project) & attempts.exhausted(project)
+
+
+def t2_gaps(project: Project) -> set[str]:
+    """The fields that keep this row below T2: missing, and not yet searched out.
+
+    One definition for `tracker clean`'s `fields_present` condition and for
+    `enrich --t2`'s choice of rows, so the two cannot disagree about which rows
+    are short. `blocker` and `customer` are left out because their absence is
+    usually the truth (`UNMEASURABLE`), a correct null is not a gap at all, and a
+    field searched twice with nothing published (:func:`unpublished`) counts as
+    answered: T2 asks for what a reader acts on *as far as anything says*, since
+    asking for a fact nobody has published kept rows below it for good.
+    """
+    return _measured_gaps(project) - unpublished(project)
 
 
 def worst(gaps: list[FieldGap], limit: int = 3) -> list[FieldGap]:
@@ -573,5 +612,7 @@ __all__ = [
     "for_project",
     "measure",
     "provenance",
+    "t2_gaps",
+    "unpublished",
     "worst",
 ]

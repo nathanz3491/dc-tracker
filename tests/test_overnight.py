@@ -196,8 +196,20 @@ def test_every_paid_phase_is_preceded_by_a_ceiling_check():
     """The header promised a check "between phases" and the loop made one per round,
     so a single round could overshoot the ceiling by a round's worth of agent runs."""
     text = SCRIPT.read_text(encoding="utf-8")
-    for phase in ("audit", "risks", "logic", "duplicates", "enrich"):
+    for phase in ("audit", "risks", "logic", "duplicates", "enrich", "discover"):
         assert f"if capped {phase}; then break; fi" in text, phase
+
+
+def test_the_loop_adds_campuses_through_the_identity_check():
+    """Nothing else in the loop creates a row since enrich reads for one row only.
+    First round only, capped, and through the ordinary crawl — whose identity check
+    is what keeps a campus held under another name from gaining a twin."""
+    text = SCRIPT.read_text(encoding="utf-8")
+    assert "DISCOVER=40\n" in text
+    assert 'if [ "$DO_DISCOVER" -eq 1 ] && [ "$round" -eq 1 ]; then' in text
+    assert "tracker discover < /dev/null || true" in text
+    assert 'tracker ingest crawl --from-queue --new-first --limit "$DISCOVER"' in text
+    assert "--no-verify-identity" not in text
 
 
 def test_enrich_runs_once_a_night_on_rows_below_t2():
@@ -234,9 +246,11 @@ def test_a_count_that_wobbles_back_down_is_not_progress(tmp_path):
     ]
 
 
-def test_the_judgement_tier_runs_at_low_effort_overnight_unless_told_otherwise():
+def test_the_judgement_tier_runs_at_high_effort_overnight_unless_told_otherwise():
+    """It ran at `low` for one night and two of three audit decisions were wrong in
+    ways that moved published totals. The step costs tenths of a yuan."""
     text = SCRIPT.read_text(encoding="utf-8")
-    assert "JUDGEMENT_EFFORT=low\n" in text
+    assert "JUDGEMENT_EFFORT=high\n" in text
     assert 'export TRACKER_DEEPSEEK_JUDGEMENT_EFFORT="$JUDGEMENT_EFFORT"' in text
     assert "export TRACKER_JUDGEMENT_PROVIDER=ollama" in text
 
@@ -385,3 +399,13 @@ def test_the_morning_report_breaks_spend_down_by_phase_and_in_money(tmp_path):
     assert lines[0][0] == "enrich/extract" and "¥4.00" in lines[0]
     assert lines[1][:2] == ["logic", "resolve"] and "~20,000" in lines[1] and "89%" in lines[1]
     assert lines[2][:2] == ["risks", "confirm"] and "n/a" in lines[2]
+
+
+def test_every_row_the_night_adds_gets_one_attempt_to_fold():
+    """The regular pass only sees pairs within one town or one company, which is how
+    a new 10 GW PORTS row sat beside its duplicate unpaired on 2026-10-05."""
+    text = SCRIPT.read_text(encoding="utf-8")
+    assert "STARTED_UTC=$(date -u '+%Y-%m-%d %H:%M:%S')" in text
+    assert '--created-since "$STARTED_UTC"' in text
+    discover = text.index('tracker ingest crawl --from-queue --new-first --limit "$DISCOVER"')
+    assert text.index('--created-since "$STARTED_UTC"') > discover, "after the rows exist"

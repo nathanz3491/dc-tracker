@@ -2575,7 +2575,7 @@ function ClaimTable({ claims, field }) {
               <a href=${c.source_url} target="_blank" rel="noopener noreferrer"
                  style=${{ fontSize: 11, color: "var(--muted-foreground)", whiteSpace: "nowrap" }}
                  title=${c.source_url}>
-                ${c.source_type} · w${c.weight}
+                ${c.source_type}${c.tertiary ? " · directory" : ""}${c.part ? " · one building" : ""} · w${c.weight}
               </a>
             </div>`)}
         </div>`}
@@ -4816,7 +4816,7 @@ function SignalCard({ signal, onOpen }) {
 
       <div class="dc-num" style=${{ display: "flex", gap: 10, flexWrap: "wrap", fontSize: 12,
                                     color: "var(--muted-foreground)" }}>
-        <span>${happened || "undated"}</span>
+        <span>${happened || signal.when || "undated"}</span>
         ${learned && html`<span>· learned ${learned}</span>`}
         ${signal.publisher && html`<span>· ${signal.publisher}</span>`}
         ${signal.entry && html`<span>· watching ${signal.entry}${

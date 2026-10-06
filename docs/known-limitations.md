@@ -111,8 +111,9 @@ trade outlets is three domains, so it reaches the top of the scale on what is
 really one underlying claim.
 
 The tertiary rule already handles the narrow version of this — a Wikipedia
-paragraph written from a press release cannot corroborate it — but syndication
-between publishers is not covered, and trade press dominates the corpus.
+paragraph or a directory listing written from a press release cannot corroborate
+it — but syndication between publishers is not covered, and trade press dominates
+the corpus.
 
 Fixing it needs a way to tell a republished wire story from independent
 reporting. The cheap signals are a near-identical body and a publication date

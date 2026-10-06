@@ -46,12 +46,31 @@ class MigrationError(RuntimeError):
     """A migration file is malformed, missing, or was modified after being applied."""
 
 
+#: A line a migration carries to be run with foreign keys off: SQLite's documented
+#: procedure for rebuilding a table that other tables reference.
+#:
+#: Needed because dropping a parent with foreign keys on runs an implicit DELETE,
+#: and every child here is ON DELETE CASCADE. `PRAGMA foreign_keys` is a no-op
+#: inside a transaction (see 0005), so the migration cannot switch it off itself;
+#: the runner does, before BEGIN, and switches it back on after COMMIT or ROLLBACK.
+#: `legacy_alter_table` is no substitute — rehearsed on a copy of production, the
+#: children still followed a renamed parent while foreign keys were on, and the
+#: drop cascaded through every citation. Such a migration commits only if
+#: `PRAGMA foreign_key_check` finds nothing.
+FOREIGN_KEYS_OFF = "-- tracker: foreign_keys off"
+
+
 @dataclass(frozen=True)
 class Migration:
     version: int
     name: str
     path: Path
     sql: str
+
+    @property
+    def foreign_keys_off(self) -> bool:
+        """Whether the file asks to run with foreign keys off. See `FOREIGN_KEYS_OFF`."""
+        return any(line.strip() == FOREIGN_KEYS_OFF for line in self.sql.splitlines())
 
     @property
     def checksum(self) -> str:
@@ -298,7 +317,7 @@ def _apply(conn: Connection, m: Migration) -> bool:
     statements = split_sql(m.sql)
     if not statements:
         raise MigrationError(f"{m.path.name} contains no executable statements")
-    with _transactional_ddl(conn):
+    with _foreign_keys_off(conn, enabled=m.foreign_keys_off), _transactional_ddl(conn):
         done = conn.execute(
             text("SELECT 1 FROM schema_version WHERE version = :v"), {"v": m.version}
         ).first()
@@ -313,11 +332,38 @@ def _apply(conn: Connection, m: Migration) -> bool:
             # phantom required bind. Migrations are literal SQL by
             # definition and must never be parameterized.
             conn.exec_driver_sql(stmt)
+        if m.foreign_keys_off:
+            broken = conn.exec_driver_sql("PRAGMA foreign_key_check").fetchall()
+            if broken:
+                raise MigrationError(
+                    f"{m.path.name} left {len(broken)} row(s) pointing at nothing, first "
+                    f"{tuple(broken[0])}; rolled back"
+                )
         conn.execute(
             text("INSERT INTO schema_version (version, name, checksum) VALUES (:v, :n, :c)"),
             {"v": m.version, "n": m.name, "c": m.checksum},
         )
     return True
+
+
+@contextmanager
+def _foreign_keys_off(conn: Connection, *, enabled: bool) -> Iterator[None]:
+    """Foreign keys off around one migration's transaction, when it asks.
+
+    Set outside the transaction, where SQLite honours it, and checked rather than
+    trusted: a pragma SQLite ignores reports nothing, and a rebuild that believed
+    it had switched them off would cascade through every child table.
+    """
+    if not enabled:
+        yield
+        return
+    conn.exec_driver_sql("PRAGMA foreign_keys = OFF")
+    try:
+        if conn.exec_driver_sql("PRAGMA foreign_keys").scalar() != 0:
+            raise MigrationError("could not switch foreign keys off; nothing was changed")
+        yield
+    finally:
+        conn.exec_driver_sql("PRAGMA foreign_keys = ON")
 
 
 @contextmanager

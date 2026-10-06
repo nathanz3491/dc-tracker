@@ -166,3 +166,74 @@ def test_a_parked_pair_stays_parked(session):
     session.flush()
     pairs_mod.park(session, [a.id, b.id], reason="two halls, ruled apart", by="operator")
     assert _ids(session) == set()
+
+
+# --- one question per new row, wherever its twin is filed ----------------------
+#
+# On 2026-10-05 the night's new row "SoftBank / SB Energy — PORTS Technology Campus"
+# in Piketon sat beside "SB Energy — PORTS-Pike Technology Campus" in Pike County,
+# the same 10 GW site. Neither pass compares a town with another company's county.
+
+
+def _ports(session) -> tuple[Project, Project]:
+    old = _row(
+        session,
+        name="PORTS-Pike Technology Campus",
+        company="SB Energy",
+        county="Pike County",
+        state="OH",
+        dedup_key="sb energy|county:pike|OH",
+    )
+    new = _row(
+        session,
+        name="PORTS Technology Campus (Piketon)",
+        company="SoftBank / SB Energy",
+        city="Piketon",
+        county="Pike County",
+        state="OH",
+        dedup_key="softbank sb energy|city:piketon|OH",
+    )
+    return old, new
+
+
+def test_a_new_row_is_paired_with_its_twin_under_another_town_and_company(session):
+    from tracker.capex import twin_pairs
+
+    old, new = _ports(session)
+    assert (old.id, new.id) not in _ids(session), "the regular passes cannot see it"
+
+    (pair,) = twin_pairs(session, [new.id])
+    assert (pair.a_id, pair.b_id) == (old.id, new.id)
+    assert "party" in pair.kinds, "a shared operator is evidence a merge may rest on"
+
+
+def test_a_shared_place_alone_pairs_nothing(session):
+    """Two developers in one borough are two sites until something else says so."""
+    from tracker.capex import twin_pairs
+
+    _row(
+        session,
+        name="Red Hook Hub",
+        company="Charter",
+        city="Brooklyn",
+        state="NY",
+        dedup_key="charter|city:brooklyn|NY",
+    )
+    new = _row(
+        session,
+        name="Industry City Expansion",
+        company="DataVerge",
+        city="Brooklyn",
+        state="NY",
+        dedup_key="dataverge|city:brooklyn|NY",
+    )
+    assert twin_pairs(session, [new.id]) == []
+
+
+def test_a_pair_already_ruled_out_is_not_asked_again(session):
+    from tracker import pairs
+    from tracker.capex import twin_pairs
+
+    old, new = _ports(session)
+    pairs.park(session, [old.id, new.id], reason="different sites", by="operator")
+    assert twin_pairs(session, [new.id]) == []

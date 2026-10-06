@@ -28,9 +28,10 @@ import logging
 import re
 import tomllib
 import xml.etree.ElementTree as ET
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, TypeVar
 from urllib.parse import urlsplit
 
 from sqlalchemy import and_, or_, select
@@ -48,6 +49,9 @@ from tracker.ingest.fetch import (
 from tracker.models import IngestUrl, utcnow
 from tracker.normalize import canonical_url, norm_text, url_identity, url_variants
 from tracker.vocab import PENDING_URL_STATUS
+
+if TYPE_CHECKING:
+    import httpx
 
 log = logging.getLogger(__name__)
 
@@ -107,6 +111,35 @@ class FeedSpec:
     #: real headline like "Crusoe expands Abilene campus to 1.2GW" that never says
     #: "data center" because the whole publication is about them.
     topic_implied: bool = False
+    #: Why this feed is not polled, when it is not. Set by `closed = "..."` in
+    #: `seed/feeds.toml`, for a publisher that refuses every client this project is
+    #: willing to be, so that a poll can only fail.
+    #:
+    #: Kept in the file rather than deleted, for two reasons. `tracker feeds`
+    #: proposes any publisher whose citations decide stored values and that the
+    #: file does not list (`probe.configured_hosts`), so a deleted
+    #: datacenterfrontier would head its list of feeds to add for good. And a
+    #: block can lift: the URL, the filter setting and the reasoning are still
+    #: there when it does, and re-opening is deleting one line.
+    closed: str | None = None
+
+
+#: The reason recorded for `closed = true`, which says that an entry is closed and
+#: not why. The shipped file always says why; a test holds it to that.
+UNEXPLAINED_CLOSURE = "closed in seed/feeds.toml, no reason given"
+
+
+def _closed_reason(entry: dict[str, Any]) -> str | None:
+    """Why a `[[feed]]` or `[[sitemap]]` entry is not polled, or None if it is.
+
+    A string is the reason. `false` means open, like an absent key, so an entry can
+    be re-opened by flipping it as well as by deleting the line.
+    """
+    value = entry.get("closed")
+    if value is None or value is False:
+        return None
+    reason = "" if value is True else str(value).strip()
+    return reason or UNEXPLAINED_CLOSURE
 
 
 @dataclass(frozen=True)
@@ -192,10 +225,16 @@ class DiscoverReport:
     #: request the article page. See :func:`cache_feed_text`.
     bodies_cached: int = 0
     failures: list[tuple[str, str]] = field(default_factory=list)
+    #: `(name, reason)` for each feed not polled because it is marked closed.
+    #: Counted apart from `feeds_failed`, so that line keeps meaning "something
+    #: broke since the file was last edited" — thirteen expected failures a night
+    #: would teach a reader to stop looking at it.
+    closed: list[tuple[str, str]] = field(default_factory=list)
 
     def as_rows(self) -> list[tuple[str, int]]:
         return [
             ("feeds polled", self.feeds_polled),
+            ("feeds closed", len(self.closed)),
             ("feeds failed", self.feeds_failed),
             ("entries seen", self.entries_seen),
             ("filtered out", self.filtered),
@@ -234,6 +273,7 @@ def load_config(path: Path | None = None) -> tuple[list[FeedSpec], FilterSpec]:
             url=str(entry["url"]),
             source_type=str(entry.get("source_type") or "general_media"),
             topic_implied=bool(entry.get("topic_implied", False)),
+            closed=_closed_reason(entry),
         )
         for entry in raw_feeds
         if entry.get("url")
@@ -393,9 +433,13 @@ class SitemapSpec:
     #: requirement took the yield from 15 articles over 8 projects to 28 over 13 —
     #: "new-hillsboro-campus-announced" matches once the operator is implied.
     company: str | None = None
+    #: Why this archive is not walked, when it is not. See `FeedSpec.closed`.
+    closed: str | None = None
 
     def as_feed(self) -> FeedSpec:
-        return FeedSpec(self.name, self.url, self.source_type, self.topic_implied)
+        return FeedSpec(
+            self.name, self.url, self.source_type, self.topic_implied, closed=self.closed
+        )
 
 
 def is_sitemap_index(xml: str) -> bool:
@@ -489,6 +533,7 @@ def load_sitemaps(path: Path | None = None) -> list[SitemapSpec]:
             max_children=int(entry.get("max_children", 4)),
             max_urls=int(entry.get("max_urls", 5000)),
             company=(str(entry["company"]) if entry.get("company") else None),
+            closed=_closed_reason(entry),
         )
         for entry in (data.get("sitemap") or [])
         if entry.get("url")
@@ -498,10 +543,17 @@ def load_sitemaps(path: Path | None = None) -> list[SitemapSpec]:
 async def sweep_sitemaps(
     specs: list[SitemapSpec], fetcher: Fetcher, filter_spec: FilterSpec
 ) -> tuple[list[Candidate], list[str]]:
-    """Walk every configured sitemap. One failing site never stops the others."""
+    """Walk every configured sitemap. One failing site never stops the others.
+
+    A sitemap marked closed is skipped without a request, and is not a problem:
+    the file already says why it cannot be read.
+    """
     found: list[Candidate] = []
     problems: list[str] = []
     for spec in specs:
+        if spec.closed:
+            log.info("not walking %s, marked closed: %s", spec.name, spec.closed)
+            continue
         try:
             kept, issues = await crawl_sitemap(spec, fetcher, filter_spec)
         except Exception as exc:
@@ -823,12 +875,91 @@ def matches_known_project(
     return None
 
 
+# --- Pages nothing can read -------------------------------------------------
+#
+# A publisher marked `closed` in `seed/feeds.toml` refuses every client this
+# project runs, and its articles answer the same way its feed does. So a queued or
+# cited page on one of those domains can be read only from a body cached before
+# the block began — on 2026-10-02 that was 22 of the 650 queued there.
+#
+# Every crawl that cuts a list to a limit puts the rest last: the queue crawls,
+# `sync`'s extract, retry and refresh, and each round of enrich. Nothing is
+# dropped. The queue still holds them, `tracker queue` still lists them, and they
+# are tried when nothing readable is left, which is also how a block that lifts
+# gets noticed. What stops is a page that will answer a challenge taking a slot
+# from one that would not: measured that day, six of the nightly crawl's next ten
+# slots, and all fifteen of a `tracker sync` extract, which reads `priority`
+# publishers first — and datacenterfrontier and datacenterdynamics are two.
+
+T = TypeVar("T")
+
+
+def closed_domains(path: Path | None = None) -> frozenset[str]:
+    """Every publisher with a feed or archive marked closed, by registrable domain.
+
+    Empty when the config cannot be read, so a broken file leaves the crawl in its
+    old order rather than stopping it; `tracker discover` is where that is reported.
+    """
+    from tracker.confidence import registrable_domain
+
+    try:
+        feeds, _ = load_config(path)
+        sitemaps = load_sitemaps(path)
+    except (DiscoverError, tomllib.TOMLDecodeError):
+        return frozenset()
+    urls = [f.url for f in feeds if f.closed] + [s.url for s in sitemaps if s.closed]
+    return frozenset(domain for domain in map(registrable_domain, urls) if domain)
+
+
+def unreadable_test(cache_dir: Path | None, *, path: Path | None = None) -> Callable[[str], bool]:
+    """A test for pages no fetch will read: on a closed publisher, nothing cached.
+
+    `cache_dir` is the cache the crawl will serve from. None means it will not
+    serve from one — `--no-cache`, and the refresh phase, which re-reads on purpose
+    — and then every page on a closed publisher is unreadable.
+    """
+    from tracker.confidence import registrable_domain
+
+    closed = closed_domains(path)
+
+    def unreadable(url: str) -> bool:
+        if not closed or registrable_domain(url) not in closed:
+            return False
+        return cache_dir is None or not cache_path(url, cache_dir).is_file()
+
+    return unreadable
+
+
+def readable_first(
+    items: list[T],
+    unreadable: Callable[[str], bool] | None,
+    *,
+    url: Callable[[T], str] | None = None,
+) -> list[T]:
+    """`items` in their order, except the ones `unreadable` flags, which go last.
+
+    Stable on both sides, so the ordering the caller chose — depth first, newest
+    first, priority publishers first — survives among the readable pages and among
+    the rest. `url` reads an item's URL; without it the items are URLs.
+    """
+    if unreadable is None:
+        return items
+    get: Callable[[Any], str] = url or (lambda item: item)
+    readable: list[T] = []
+    last: list[T] = []
+    for item in items:
+        (last if unreadable(get(item)) else readable).append(item)
+    return readable + last
+
+
 def pending(
     session: Session,
     limit: int | None = None,
     *,
     known_first: bool = False,
+    new_first: bool = False,
     spec: FilterSpec | None = None,
+    unreadable: Callable[[str], bool] | None = None,
 ) -> list[IngestUrl]:
     """Queued candidates.
 
@@ -836,42 +967,82 @@ def pending(
     ``known_first`` the ones covering an already-tracked project come first, which
     spends each LLM call on depth rather than on another single-source row.
 
+    ``new_first`` is the nightly loop's order, and it starts with the **news**:
+    every article published within the email's window (`feed.NOTIFY_MAX_AGE_DAYS`),
+    newest first, whatever campus it names. Then the articles that name **no**
+    tracked campus, newest published first, then the rest in the usual order —
+    those are where a campus the database has never heard of can turn up. Each is
+    read by the normal crawl, whose identity check decides whether a record is a new
+    campus or an existing one under another name before anything is inserted.
+
+    The news goes first because what the crawl learns tonight is mailed tomorrow.
+    An update about a *tracked* campus used to sort behind every untracked article
+    in a backlog of 1,600: a 2026-09-21 report of a lawsuit against Project
+    Camellia was queued the next day, read on 10-03, and mailed on 10-04 as news.
+
     Passing ``spec`` splits that first group again, putting the articles that also
     carry an obstacle term ahead of the rest. Those are the highest-value calls in
     the queue: a project's own press release never names its blocker, so an
     adversarial second source is the only way that fact is ever recorded.
+
+    ``unreadable`` (:func:`unreadable_test`) flags the pages no fetch will read,
+    which then go after every other row, whichever order was asked for, before the
+    limit is cut.
     """
     stmt = (
         select(IngestUrl)
         .where(IngestUrl.status == PENDING_URL_STATUS)
         .order_by(IngestUrl.published_at.asc().nullslast(), IngestUrl.id.asc())
     )
-    if not known_first:
-        if limit:
-            stmt = stmt.limit(limit)
-        return list(session.scalars(stmt))
+    if new_first:
+        from tracker.feed import NOTIFY_MAX_AGE_DAYS
 
-    # Scored in Python: the match needs slug normalization that SQL cannot do, and
-    # the queue is hundreds of rows, not millions.
-    rows = list(session.scalars(stmt))
-    identities = project_identities(session)
-    implied = newsroom_companies()
-    risky, enriching, fresh = [], [], []
-    for row in rows:
-        if not matches_known_project(row.url, row.title, identities, implied_companies=implied):
-            fresh.append(row)
-        elif spec is not None and spec.risk_term(f"{row.title or ''} {urlsplit(row.url).path}"):
-            risky.append(row)
-        else:
-            enriching.append(row)
-    if risky or enriching:
-        log.info(
-            "%d queued candidate(s) cover a tracked project (%d of them report an "
-            "obstacle); crawling those first",
-            len(risky) + len(enriching),
-            len(risky),
-        )
-    ordered = risky + enriching + fresh
+        rows = list(session.scalars(stmt))
+        cutoff = utcnow() - dt.timedelta(days=NOTIFY_MAX_AGE_DAYS)
+        news = [row for row in rows if row.published_at is not None and row.published_at >= cutoff]
+        news.sort(key=lambda row: (row.published_at, row.id), reverse=True)
+        taken = {row.id for row in news}
+        backlog = [row for row in rows if row.id not in taken]
+        identities = project_identities(session)
+        implied = newsroom_companies()
+        fresh = [
+            row
+            for row in backlog
+            if not matches_known_project(row.url, row.title, identities, implied_companies=implied)
+        ]
+        # Newest first; an undated article last, since nothing says it is recent.
+        dated = [row for row in fresh if row.published_at is not None]
+        undated = [row for row in fresh if row.published_at is None]
+        dated.sort(key=lambda row: (row.published_at, row.id), reverse=True)
+        taken |= {row.id for row in fresh}
+        ordered = news + dated + undated + [row for row in rows if row.id not in taken]
+    elif known_first:
+        # Scored in Python: the match needs slug normalization that SQL cannot do,
+        # and the queue is thousands of rows, not millions.
+        rows = list(session.scalars(stmt))
+        identities = project_identities(session)
+        implied = newsroom_companies()
+        risky, enriching, fresh = [], [], []
+        for row in rows:
+            if not matches_known_project(row.url, row.title, identities, implied_companies=implied):
+                fresh.append(row)
+            elif spec is not None and spec.risk_term(f"{row.title or ''} {urlsplit(row.url).path}"):
+                risky.append(row)
+            else:
+                enriching.append(row)
+        if risky or enriching:
+            log.info(
+                "%d queued candidate(s) cover a tracked project (%d of them report an "
+                "obstacle); crawling those first",
+                len(risky) + len(enriching),
+                len(risky),
+            )
+        ordered = risky + enriching + fresh
+    elif limit and unreadable is None:
+        return list(session.scalars(stmt.limit(limit)))
+    else:
+        ordered = list(session.scalars(stmt))
+    ordered = readable_first(ordered, unreadable, url=lambda row: row.url)
     return ordered[:limit] if limit else ordered
 
 
@@ -957,20 +1128,27 @@ def failed(session: Session, limit: int | None = None) -> list[IngestUrl]:
     return list(session.scalars(stmt))
 
 
-def retryable(session: Session, limit: int | None = None) -> list[IngestUrl]:
+def retryable(
+    session: Session,
+    limit: int | None = None,
+    *,
+    unreadable: Callable[[str], bool] | None = None,
+) -> list[IngestUrl]:
     """The failed URLs an automatic retry should still spend a try on.
 
     `failed` less the ones that have failed the same way :data:`MAX_SAME_FAILURES`
-    times running. Longest-untried first, like `failed`.
+    times running. Longest-untried first, like `failed`, except that the pages
+    `unreadable` flags go last — see :func:`pending`.
     """
     stmt = (
         select(IngestUrl)
         .where(_worth_retrying())
         .order_by(IngestUrl.last_tried_at.asc(), IngestUrl.id.asc())
     )
-    if limit:
+    if limit and unreadable is None:
         stmt = stmt.limit(limit)
-    return list(session.scalars(stmt))
+    rows = readable_first(list(session.scalars(stmt)), unreadable, url=lambda row: row.url)
+    return rows[:limit] if limit else rows
 
 
 def given_up(session: Session) -> list[IngestUrl]:
@@ -1233,7 +1411,8 @@ def run(
     """Poll every configured feed and queue the matching articles.
 
     A feed that fails is recorded and the run continues: one outlet changing its
-    URL must not stop discovery from the other six.
+    URL must not stop discovery from the other six. A feed marked closed is not
+    requested at all, and is reported as closed rather than as failed.
     """
     import asyncio
 
@@ -1242,6 +1421,9 @@ def run(
     report = DiscoverReport()
     run_id = run_id or utcnow().strftime("discover-%Y%m%dT%H%M%S")
     since = utcnow() - dt.timedelta(days=since_days) if since_days else None
+
+    report.closed = [(f.name, f.closed) for f in feeds if f.closed]
+    feeds = [f for f in feeds if not f.closed]
 
     from tracker.ingest.fetch import fetch_all
 
@@ -1288,15 +1470,35 @@ def run(
     return report, queued
 
 
+#: Appended to a failure Cloudflare marks `cf-mitigated: challenge`.
+#:
+#: A bare "HTTP 403" reads as a header problem worth an afternoon of trying
+#: User-Agents. This one is not: the "Just a moment..." page lets through only a
+#: client that runs the publisher's script, so no header and no TLS fingerprint
+#: changes the answer — measured on thirteen feeds on 2026-10-02, see the
+#: `closed` notes in `seed/feeds.toml`. Saying so in the failure line is what
+#: makes the next one recognisable from the nightly log alone.
+CHALLENGE_NOTE = "Cloudflare challenge: only a client that runs the site's script gets past it"
+
+
 class _RawFetcher:
     """Fetches a feed as raw XML.
 
     Distinct from `HttpxFetcher`, which runs `html_to_text` on the body — that
     would strip the very tags a feed parser needs.
+
+    It sends `settings.user_agent`, the project's own name and contact. Measured on
+    the feeds that answer 403, a browser's User-Agent changed nothing, so borrowing
+    one would buy nothing either.
+
+    `transport` stands in for the network, for tests.
     """
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(
+        self, settings: Settings, *, transport: httpx.AsyncBaseTransport | None = None
+    ) -> None:
         self.settings = settings
+        self._transport = transport
 
     async def fetch(self, url: str) -> FetchResult:
         import httpx
@@ -1310,6 +1512,7 @@ class _RawFetcher:
                 timeout=httpx.Timeout(self.settings.fetch_timeout_s, connect=10.0),
                 follow_redirects=True,
                 headers=headers,
+                transport=self._transport,
             ) as client:
                 response = await client.get(url)
         # `InvalidURL` is not a `RequestError`. A mistyped feed URL raised it before
@@ -1318,11 +1521,14 @@ class _RawFetcher:
             return FetchResult(url, False, error=str(exc), fetched_at=utcnow(), via="feed")
 
         if response.status_code >= 400:
+            error = f"HTTP {response.status_code}"
+            if response.headers.get("cf-mitigated", "").lower() == "challenge":
+                error = f"{error} ({CHALLENGE_NOTE})"
             return FetchResult(
                 url,
                 False,
                 status=response.status_code,
-                error=f"HTTP {response.status_code}",
+                error=error,
                 fetched_at=utcnow(),
                 via="feed",
             )
@@ -1337,10 +1543,12 @@ class _RawFetcher:
 
 
 __all__ = [
+    "CHALLENGE_NOTE",
     "DEAD_STATUS",
     "MAX_PER_FEED",
     "MAX_SAME_FAILURES",
     "RETRYABLE_STATUSES",
+    "UNEXPLAINED_CLOSURE",
     "Candidate",
     "DiscoverError",
     "DiscoverReport",
@@ -1351,6 +1559,7 @@ __all__ = [
     "SitemapSpec",
     "UrlVerdict",
     "classify_status",
+    "closed_domains",
     "crawl_sitemap",
     "default_feeds_path",
     "drop_ids",
@@ -1367,10 +1576,12 @@ __all__ = [
     "pending_split",
     "project_identities",
     "queue_candidates",
+    "readable_first",
     "refilter_pending",
     "retryable",
     "run",
     "select_candidates",
     "sweep_sitemaps",
+    "unreadable_test",
     "verify_urls",
 ]

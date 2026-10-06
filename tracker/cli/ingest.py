@@ -116,6 +116,13 @@ def ingest_crawl(
             "--limit", help="With --from-queue or --stale-prompt, take at most this many."
         ),
     ] = None,
+    new_first: Annotated[
+        bool,
+        typer.Option(
+            "--new-first",
+            help="With --from-queue, read articles naming no tracked campus first, newest first.",
+        ),
+    ] = False,
     prompt_name: Annotated[
         str, typer.Option("--prompt", help="Prompt name or path, e.g. extract-v1.")
     ] = "extract-v1",
@@ -257,8 +264,23 @@ def ingest_crawl(
     elif from_queue:
         from tracker.ingest import discover as disc
 
+        # A page on a publisher closed to us, with no body cached, goes after every
+        # page that can be read, so it cannot take one of `--limit`'s slots. On
+        # 2026-10-02 six of the nightly crawl's next ten were such pages.
+        unreadable = disc.unreadable_test(None if no_cache else article_cache("articles"))
         with session_scope(engine, commit=False) as session:
-            url_list = [row.url for row in disc.pending(session, limit=limit)]
+            url_list = [
+                row.url
+                for row in disc.pending(
+                    session, limit=limit, new_first=new_first, unreadable=unreadable
+                )
+            ]
+            held_back = sum(1 for row in disc.pending(session) if unreadable(row.url))
+        if held_back:
+            console.print(
+                f"[dim]{held_back} queued article(s) are on publishers marked closed in "
+                "seed/feeds.toml with nothing cached; they go after every readable one[/dim]"
+            )
         if not url_list:
             console.print(
                 "[green]queue is empty[/green] — run `tracker discover` to look for articles"

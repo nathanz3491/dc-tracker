@@ -100,6 +100,44 @@ deliberately: it is the one path that can name an operator in a place holding no
 rows, and running both is what lets `tracker queue stats` say which is worth the
 quota rather than leaving it asserted.
 
+## A feed that refuses every client is closed, not deleted
+
+On 2026-10-02 thirteen of the 28 feeds — datacenterdynamics, datacenterfrontier and
+all eleven States Newsroom sites — and the datacenterfrontier archive answered every
+request with a Cloudflare challenge: a page that lets through only a client that runs
+the site's own detection script. A browser's User-Agent changes nothing, nor does a
+browser's TLS fingerprint, and the article pages answer the same way. Getting past it
+would mean passing the publisher's bot detection, which this project does not do, so
+a request to any of them can only fail.
+
+Those entries now carry `closed = "<date>: <what was measured>"` in
+`tracker/seed/feeds.toml`, beside the measurements:
+
+* **A closed feed is not requested, and a closed archive is not walked** — by
+  discover, by `--deep`, or by enrich's archive harvest. The report counts them as
+  `feeds closed`, apart from `feeds failed`: thirteen failures a night that everyone
+  expects would teach a reader to stop reading that line, and the fourteenth, which
+  nobody expected, would go unseen.
+* **They stay in the file.** `tracker feeds` proposes publishers whose citations
+  decide stored values and that the file does not list. datacenterfrontier decides
+  more than any other, so deleting it would put it at the head of that list for
+  good; a closed entry still counts as listed.
+* **A challenge is named when one is met.** Cloudflare marks the page
+  `cf-mitigated: challenge`, and the failure line says `HTTP 403 (Cloudflare
+  challenge: …)` rather than a bare 403, which reads as a header problem and is not.
+* **What they queued before the block is still queued** — 650 rows on 2026-10-02,
+  522 of them datacenterfrontier's — and those pages answer the same challenge. Only
+  the 22 whose syndicated body was cached when they were queued can be read, so
+  every crawl puts the rest after every page it can read; see rule 4 below.
+
+To re-open one: when `curl -s -o /dev/null -w '%{http_code}\n' <its url>` prints
+200, delete its `closed` line and run `tracker discover --dry-run`.
+
+Bisnow is the other kind of failure. Its data-center feed went away when the site
+was rebuilt — `/rss/data-center` now redirects to a 404 — so that entry was
+replaced rather than closed, by `bisnow-latest`: the one feed it still serves, the
+nine newest stories across every market.
+
 ## Where the queued rows come from
 
 Three phases end in the same queue and answer different questions. Discover and
@@ -121,6 +159,29 @@ prioritising after would reorder a batch that was already chosen:
    we already track", which an article about an operator we have **no** rows for can
    never satisfy — so left to the ordinary ordering it sits behind a permanent
    supply of better candidates and is never read.
+4. **A page nothing can read goes last, whatever its rank.** A publisher marked
+   `closed` answers every client with a challenge, its articles included, so a page
+   on one can only fail unless its body was cached before the block. After every
+   rule above — and after the `priority` ranks in `tracker/seed/sources.toml` — such
+   a page is moved behind every readable one, and only then is the limit cut.
+   Nothing is dropped: it stays queued and is tried when nothing readable is left,
+   which is also how a block that has lifted gets noticed. On 2026-10-02, 628 of the
+   2,287 queued articles were such pages. They held six of the nightly crawl's next
+   ten slots and all fifteen of a sync extract, because datacenterfrontier and
+   datacenterdynamics both rank `priority`.
+
+`ingest crawl --from-queue --new-first` asks a different question, and is what the
+nightly loop's discovery step runs. **The news goes first:** every article published
+within the email's window (`feed.NOTIFY_MAX_AGE_DAYS`, 45 days), newest first,
+whatever campus it names, because what the crawl reads tonight is mailed tomorrow. A
+2026-09-21 report of a lawsuit against a *tracked* campus used to sort behind 1,600
+backlog articles; it was read on 10-03 and mailed on 10-04 as news. Then the articles
+naming **no** tracked campus, newest published first, then the rest — rule 4 applying
+throughout. Enrich reads for
+one row and creates none, so that step is the loop's only source of new campuses;
+each article still goes through the identity arbiter below before it can insert a
+row. The same rule orders `--retry-failed`'s fill, the refresh phase below, and
+each round of [enrich](enrich.md#what-a-read-costs-and-what-is-not-read-again).
 
 Publishers that `tracker/seed/sources.toml` ignores are partitioned out and **named**, not
 merely subtracted: the queue still holds those rows and `tracker queue` still lists
@@ -224,6 +285,10 @@ were never reached. Any try now moves the URL to the back.
   doubles its interval (`ingest_url.failures`), up to sixteen intervals, so a page
   behind a WAF the ladder cannot clear stops costing a try every run without being
   given up on.
+* **A page on a closed publisher goes last.** The backoff would retire one after a
+  few failed runs, but each of those runs spends a slot on it, and the publishers
+  closed on 2026-10-02 include the most-cited one in the database. The refresh reads
+  past the cache on purpose (below), so here every such page counts as unreadable.
 * **A failed re-read does not unread the URL.** It keeps the `ok` its good read
   earned — the citations still stand — and records the failure beside it. Demoting
   it had put 35 cited URLs into the pool `--retry-failed` works.
@@ -312,10 +377,12 @@ Touching any of these means the poster is in scope. Re-render with
 | Concern | Where |
 | --- | --- |
 | Phase order, plan numbering, `--full`, the lock | `tracker/cli/sync.py` — `sync`, its `plan` list and `step` |
-| Discover, archives, search | `tracker/ingest/discover.py` — `run`, `load_sitemaps`, `sweep_sitemaps`, `queue_candidates`; `tracker/ingest/search.py`; `tracker/normalize.py` — `canonical_url`, `url_identity`, `url_variants`; `tracker/backfill.py` — `repair_urls` |
+| Discover, archives, search | `tracker/ingest/discover.py` — `run`, `load_config`, `load_sitemaps`, `sweep_sitemaps`, `queue_candidates`; `tracker/ingest/search.py`; `tracker/normalize.py` — `canonical_url`, `url_identity`, `url_variants`; `tracker/backfill.py` — `repair_urls` |
+| Closed feeds, and naming a challenge | `tracker/seed/feeds.toml` — `closed`; `tracker/ingest/discover.py` — `FeedSpec.closed`, `SitemapSpec.closed`, `_closed_reason`, `DiscoverReport.closed`, `_RawFetcher`, `CHALLENGE_NOTE`; `tracker/ingest/probe.py` — `configured_hosts` |
+| Pages nothing can read go last | `tracker/ingest/discover.py` — `closed_domains`, `unreadable_test`, `readable_first`, `pending(unreadable=)`, `retryable(unreadable=)`; `tracker/ingest/crawl.py` — `stale_sources(unreadable=)`; `tracker/cli/sync.py` — `sync` (extract, retry fill, refresh); `tracker/cli/ingest.py` — `crawl --from-queue`; `tracker/ingest/enrich.py` — `run` |
 | What search looks for | `tracker/ingest/search.py` — `_PLACE_TEMPLATES`, `rank_places`, `plan_queries`, `PlannedQuery.label`, `templates`; `tracker/normalize.py` — `state_name` |
 | Judging a template | `tracker/funnel.py` — `feed_group`, `survey`, `verdicts`; `tracker/ingest/search.py` — `LabelStat` |
-| Queue ordering and counts | `tracker/ingest/discover.py` — `pending`, `pending_split`, `pending_risk_count`, `failed`, `retryable`, `given_up`, `MAX_SAME_FAILURES`, `failure_summary` |
+| Queue ordering and counts | `tracker/ingest/discover.py` — `pending` (`known_first`, `new_first`; news first by `feed.NOTIFY_MAX_AGE_DAYS`), `pending_split`, `pending_risk_count`, `failed`, `retryable`, `given_up`, `MAX_SAME_FAILURES`, `failure_summary` |
 | Prospect | `tracker/prospect.py`; `tracker/roster.py` — `hunt_order`, `measure` |
 | Extract and refresh | `tracker/ingest/crawl.py` — `run`, `stale_sources`, `unchanged_reads`, `record_url`, `failure_reason`, `MAX_REFRESH_BACKOFF` |
 | The party gate | `tracker/ingest/crawl.py` — `_parties`, `_ROLE_MARKERS`, `_role_is_licensed` |
@@ -323,6 +390,7 @@ Touching any of these means the poster is in scope. Re-render with
 | Enrich phase | `tracker/ingest/enrich.py` — `select_projects`, `run_many`; `tracker/cli/enrich.py` — `_gapfill_batch`; and [enrich](enrich.md) |
 | Settle | `tracker/derive.py` — `run`; `tracker/upsert.py` — `recompute_confidence`, `recompute_parties`, `apply_mw_basis` |
 | Parties, and what fills them without a crawl | `tracker/parties.py` — `rebuild`, `reconcile`, `parties_by_key`, `_inferred_parties` |
-| Which kind of megawatt a figure is | `tracker/ingest/crawl.py` — `axis_gate`, `_BASIS_MARKERS`; `tracker/vocab.py` — `basis_from_quote`, `BASIS_WINDOW`; `tracker/backfill.py` — `derive_basis`; `tracker/gapfill.py` — `_basis_axes` |
+| Which kind of megawatt a figure is | `tracker/ingest/crawl.py` — `axis_gate`, `_BASIS_MARKERS`; `tracker/vocab.py` — `basis_from_quote`, `BASIS_WINDOW`; `tracker/backfill.py` — `derive_basis`; `tracker/gapfill.py` — `_fact_axes` |
+| Whether a figure is one building's | `tracker/ingest/crawl.py` — `axis_gate`; `tracker/vocab.py` — `part_from_quote`, `PART_FIELDS`, `PART_WINDOW`, `INITIAL_WINDOW`; `tracker/backfill.py` — `regate_scope`; `tracker/upsert.py` — `contenders`; `tracker/gapfill.py` — `_fact_axes` |
 | Source ignore list | `tracker/policy.py` — `load`, `partition` |
 | The database mover | `scripts/sync_db.py` — `pull`, `push`, `snapshot`, `verify`, `_COUNTED` |

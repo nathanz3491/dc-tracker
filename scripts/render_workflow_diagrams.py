@@ -310,7 +310,7 @@ class Canvas:
 
 
 def enrich() -> Canvas:
-    c = Canvas(1500, 1010)
+    c = Canvas(1500, 1056)
     c.title(
         "tracker enrich — every method at one row, cheapest first",
         "Six harvesters in cost order. A round that fills nothing ends the run, and the two "
@@ -363,12 +363,12 @@ def enrich() -> Canvas:
 
     pool = c.box(
         844, 232, 186, 86, "Pooled, then filtered",
-        ["de-duplicated across harvesters;", "publishers seed/sources.toml", "ignores are dropped first"],
+        ["de-duplicated across harvesters;", "publishers seed/sources.toml", "ignores are dropped; a closed", "publisher's pages go last"],
         role="panel",
     )
     read = c.box(
         844, 362, 186, 92, "Read and extract",
-        ["about this row only. A page", "unchanged since its last read", "under this prompt is skipped", "for free; --reread asks anyway"],
+        ["about this row only, and never", "founds a new row. A page", "unchanged since its last read", "is skipped for free", "(--reread asks anyway)"],
         role="cool",
     )
     c.arrow([frame.right(-24), (825, frame.cy - 24), (825, 275), (844, 275)])
@@ -437,8 +437,8 @@ def enrich() -> Canvas:
     # The three rails that decide what it is NOT asked. Every one of them saves by
     # not making a call, which is the only saving worth the name at this price.
     c.box(
-        802, 826, 208, 116, "and what it is not asked",
-        ["rows the budget never harvested", "fields already looked for twice", "without success, until a new", "citation reopens them", "--token-budget stops BETWEEN rows", "eight reads, four searches a row;", "told to answer two turns early"],
+        802, 826, 208, 152, "and what it is not asked",
+        ["rows the budget never harvested", "fields already looked for twice", "without success, until a new", "citation reopens them", "--token-budget stops BETWEEN rows", "eight reads, four searches a row;", "told to answer two turns early;", "--t2: only the gaps T2 counts;", "a struck fact counts as tried"],
         role="red", title_size=11.5, sub_size=9,
     )
     c.arrow([agent.bottom(), (agent.cx, 826)], colour=RED)
@@ -513,14 +513,14 @@ def sync() -> Canvas:
     c.rule(414)
     c.section(48, 454, "where the rows come from", "three phases end in one queue, and one gate stands between the queue and a new row")
 
-    feeds = c.box(48, 500, 176, 62, "Feeds", ["what was published lately"], role="cool", title_size=11.5)
+    feeds = c.box(48, 500, 176, 62, "Feeds", ["what was published lately;", "a closed one is not polled"], role="cool", title_size=11.5)
     search = c.box(48, 574, 176, 62, "Search", ["a place and an event,", "no model, no project name"], role="orange", title_size=11.5)
     roster = c.box(48, 648, 176, 62, "Roster", ["who we hold no rows for"], role="cool", title_size=11.5)
-    archives = c.box(48, 722, 176, 62, "Archives (--deep)", ["sitemaps, no key needed"], role="cool", title_size=11.5)
+    archives = c.box(48, 722, 176, 62, "Archives (--deep)", ["sitemaps, no key needed;", "a closed one is not walked"], role="cool", title_size=11.5)
 
     queue = c.box(
         280, 500, 190, 284, "The queue",
-        ["ingest_url rows,", "status = discovered", "", "Ordered before the limit", "bites, never after:", "", "· rows covering a project", "  we already track go first", "· among those, the ones", "  reporting an obstacle", "· prospect finds jump the", "  whole queue"],
+        ["ingest_url rows,", "status = discovered", "", "Ordered before the limit", "bites, never after:", "", "· rows covering a project", "  we already track go first", "· among those, the ones", "  reporting an obstacle", "· prospect finds jump the", "  whole queue", "· a page nothing can read", "  goes last, whatever its rank"],
         role="panel",
     )
     for b in (feeds, search, roster, archives):
@@ -578,26 +578,31 @@ def duplicates() -> Canvas:
     c.legend(48, 108)
     c.rule(128)
 
-    c.section(48, 162, "how a pair is raised", "four passes, unioned — each reaches duplicates the others structurally cannot")
+    c.section(48, 162, "how a pair is raised", "five passes, unioned — each reaches duplicates the others structurally cannot")
 
     p1 = c.box(
-        48, 196, 236, 84, "1 · same locality",
+        48, 192, 236, 70, "1 · same locality",
         ["(city or county, state), folded: accents,", "'County', a one-letter typo. Compares", "company strings AND party rows"],
         role="cool", title_size=12,
     )
     p2 = c.box(
-        48, 288, 236, 84, "2 · dedup keys",
+        48, 268, 236, 70, "2 · dedup keys",
         ["bucketed on company, not locality —", "pairs county:richland with city:richland"],
         role="cool", title_size=12,
     )
     p3 = c.box(
-        48, 380, 236, 84, "3 · shared tranche key",
+        48, 344, 236, 70, "3 · shared tranche key",
         ["starts from the key, not a place:", "Crusoe's Abilene, Oracle's Shackelford"],
         role="cool", title_size=12,
     )
     p4 = c.box(
-        48, 472, 236, 84, "4 · one name, one state",
+        48, 420, 236, 70, "4 · one name, one state",
         ["a distinctive name filed twice under", "places that do not match: Colossus,", "Project Jupiter, Polaris Forge 1"],
+        role="cool", title_size=12,
+    )
+    p5 = c.box(
+        48, 496, 236, 70, "5 · tonight's new rows",
+        ["each against its likeliest twin: one", "row's town, the other's county, or", "within 25 km (--created-since)"],
         role="cool", title_size=12,
     )
 
@@ -606,7 +611,7 @@ def duplicates() -> Canvas:
         ["carrying every signal that", "holds for it, not only the", "one that raised it.", "", "Recording only the latter left", "31 live pairs with a single", "evidence class and no route", "to any decision"],
         role="panel", title_size=13,
     )
-    for b in (p1, p2, p3, p4):
+    for b in (p1, p2, p3, p4, p5):
         c.arrow([b.right(), (307, b.cy), (307, pair.cy), (330, pair.cy)])
 
     c.text(576, 258, "RANKED, STRONGEST FIRST", size=10.5, colour=SLATE, bold=True, spacing=SECTION_TRACKING)
@@ -756,7 +761,7 @@ def logic() -> Canvas:
 
     c.box(
         576, 196, 432, 232, "Five fields do not use credibility",
-        ["Assuming the better source always won is the mistake this", "module was built on: re-deriving that way reported 73 of 221", "live rows as drifted, and none had.", "", "· mw_built takes the largest figure — energised megawatts", "   only go up, and a better source describing an earlier", "   state must not walk it back", "· first_announced takes the earliest — that is what 'first' means", "· phase takes the furthest along, unless a source says it stopped", "· name, company and location are never overwritten once set:", "   churn in an identity field is worse than staleness"],
+        ["Assuming the better source always won is the mistake this", "module was built on: re-deriving that way reported 73 of 221", "live rows as drifted, and none had.", "", "· mw_built takes the largest figure — energised megawatts", "   only go up, and a better source describing an earlier", "   state must not walk it back", "· first_announced takes the earliest — that is what 'first' means", "· phase takes the furthest along, unless a source says it stopped", "· name, company and location are never overwritten once set:", "   churn in an identity field is worse than staleness", "", "· under every policy, one building's figure and a directory's", "   only fill what nothing better states"],
         role="teal", title_size=13, align="left", sub_size=10.2,
     )
 
@@ -768,7 +773,7 @@ def logic() -> Canvas:
 
     c.box(
         1032, 196, 420, 478, "Nothing in check is written",
-        ["A contradiction is a question for a person. The", "report says so in its last line, and names where", "an answer goes.", "", "That is not timidity. Whether 100 MW built against", "32 MW planned means the plan was revised, or that", "the two figures describe different phases of one", "campus, is not in the row — and a tool that picked", "one would be inventing a fact.", "", "Measured on the live database: 0 of 149 findings", "were mechanically resolvable.", "", "Where answers go:", "", "tracker review · confirm or demote a value", "tracker merge · fold rows that are one campus", "logic conflicts · settle a contested field", "logic resolve · work through the findings", "", "An unconfirmed investment figure already stays out", "of the capex sums, so the repair path exists before", "the audit ever runs."],
+        ["A contradiction is a question for a person. The", "report says so in its last line, and names where", "an answer goes.", "", "That is not timidity. Whether 100 MW built against", "32 MW planned means the plan was revised, or that", "the two figures describe different phases of one", "campus, is not in the row — and a tool that picked", "one would be inventing a fact.", "", "Measured on the live database: 0 of 149 findings", "were mechanically resolvable.", "", "Where answers go:", "", "tracker review · confirm or demote a value", "tracker merge · fold rows that are one campus", "logic conflicts · settle a contested field", "logic resolve · work through the findings", "logic rule-out · take back one claim", "", "An unconfirmed investment figure already stays out", "of the capex sums, so the repair path exists before", "the audit ever runs."],
         role="panel", title_size=13, align="left", sub_size=10.2,
     )
 
@@ -777,7 +782,7 @@ def logic() -> Canvas:
 
     c.box(
         48, 792, 340, 204, "logic conflicts · proposes",
-        ["A field with two quote-backed claims that genuinely", "disagree. Narrow on purpose: identity fields are excluded,", "and 174 of 666 contested fields were name or company.", "", "One reasoning call sees every claim at once — value, stored", "quote, publisher, date — and picks a key from a closed list.", "It cannot type a value: every option is a figure a publisher", "actually printed, shown with the quote already stored.", "", "Then one adversarial call tries to knock the answer down.", "Two calls a field, hard: an unbounded argument is", "unbounded spend, and a refusal carrying the objection is a", "better outcome than a third call arguing with itself."],
+        ["A field with two quote-backed claims that genuinely", "disagree. Narrow on purpose: identity fields are out", "(174 of 666 were name or company), and so is a directory", "beside a report, which the merge rule already settles.", "One reasoning call sees every claim at once — value, stored", "quote, publisher, date — and picks a key from a closed list.", "It cannot type a value: every option is a figure a publisher", "actually printed, shown with the quote already stored.", "", "Then one adversarial call tries to knock the answer down.", "Two calls a field, hard: an unbounded argument is", "unbounded spend, and a refusal carrying the objection is a", "better outcome than a third call arguing with itself."],
         role="orange", title_size=13, align="left", sub_size=10.2,
     )
 

@@ -83,7 +83,11 @@ CSV_COLUMNS: tuple[str, ...] = (
 #: megawatt a capacity figure is. Both additive, and the second is the one to read
 #: before comparing two campuses' capacities: they are only comparable when the
 #: bases agree.
-JSON_SCHEMA_TAG = "tracker/7"
+#: 8 adds `claims_by_field[].claims[].tertiary` — true for a directory, wiki or
+#: digest, whose claim only fills a field nothing first-hand states. Additive.
+#: 9 adds `claims_by_field[].claims[].part` — true for a capacity or investment
+#: figure its own sentence gives to one building or phase. Additive.
+JSON_SCHEMA_TAG = "tracker/9"
 
 FORMATS = ("md", "csv", "json", "html")
 
@@ -435,7 +439,7 @@ def _claims_json(project: Project) -> dict[str, Any]:
     Three rules, each of which a re-implementation would get wrong:
 
     * **The order is the merge engine's own.** `upsert.claims_by_field` sorts by
-      `(confirmed, weight, recency, url)` and resolves `merge_by_publication_date`
+      `(confirmed, whole site, first-hand, weight, recency, url)` and resolves `merge_by_publication_date`
       centrally. Re-sorting here — in Python or in the browser — would let the page
       disagree with the write path about which claim won, which is the failure
       `logic.check_collisions` was built to avoid.
@@ -493,6 +497,12 @@ def _claims_json(project: Project) -> dict[str, Any]:
                     "source_type": claim.source_type,
                     "weight": claim.weight,
                     "confirmed": claim.confirmed,
+                    # A directory, wiki or digest: it fills a field nothing
+                    # first-hand states and never displaces one that does.
+                    "tertiary": claim.tertiary,
+                    # One building's or phase's figure, by its own sentence: it fills
+                    # the campus column only when nothing describes the whole site.
+                    "part": claim.part,
                     "unconfirmed_reason": _reason_for(source, field),
                     # The sentence recorded for THIS field only. Never the source's
                     # excerpt: that fallback belongs to `prov`, where it is labelled

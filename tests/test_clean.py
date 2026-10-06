@@ -196,6 +196,42 @@ def test_a_missing_measurable_field_blocks_completeness_only(session):
     assert got.tier == 1, "still SOUND — nothing it does assert is a lie"
 
 
+def test_a_field_searched_twice_with_nothing_published_counts_as_answered(session):
+    """439 rows sat at T1 short of a field on 2026-10-05, most of them facts nobody
+    publishes: asking for those kept rows below T2 however often they were sought.
+
+    It is reported rather than hidden, and the field reopens on new evidence."""
+    from tracker import attempts
+
+    project = _project(session, name="Unpriced", investment_usd=None)
+    _source(session, project, fields="mw_planned,mw_built,phase,customer")
+    attempts.record(project, ["investment_usd"])
+    assert _card(session, project).tier == 1, "one search is not enough"
+
+    attempts.record(project, ["investment_usd"])
+    got = _card(session, project)
+    assert got.tier >= 2
+    assert got.by_key["fields_published"].ok is False
+    assert "investment_usd" in got.by_key["fields_published"].detail
+
+    _source(session, project, url="https://ref.test/new", fields="mw_planned")
+    got = _card(session, project)
+    assert got.by_key["fields_present"].ok is False, "a new citation reopens the question"
+    assert got.tier == 1
+
+
+def test_built_capacity_is_not_asked_of_a_site_still_under_construction(session):
+    """Nothing is energized at `construction` — a row any source calls live merges to
+    operational — so there is no figure anyone could publish."""
+    project = _project(session, name="Building", phase="construction", mw_built=None)
+    _source(session, project, fields="mw_planned,investment_usd,phase,customer")
+    assert _card(session, project).by_key["fields_present"].ok is True
+
+    live = _project(session, name="Live", phase="operational", mw_built=None)
+    _source(session, live, fields="mw_planned,investment_usd,phase,customer")
+    assert "mw_built" in _card(session, live).by_key["fields_present"].detail
+
+
 # --- one test per remaining condition ----------------------------------------
 
 

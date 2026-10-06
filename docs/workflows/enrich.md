@@ -48,8 +48,8 @@ at least one of the agent's fields was empty, so a row short of the twelve by
 attempt at — passed it every time. On the night of 2026-09-29, twelve of the fifteen
 rows the overnight loop chose were that shape, at 11 of 12, chosen again every round
 and each re-reading four articles to gain nothing. `--max-attempts 0` still takes
-them. A null that is *correct* (`mw_built` on a site not yet built) no longer counts
-as empty here either.
+them. A null that is *correct* (`mw_built` on a site not yet built — announced,
+permitting or still under construction) no longer counts as empty here either.
 
 **`--t2` changes what "best" means**, with `--select` or `--all`: rows that `tracker
 clean` holds below T2 because `fields_present` fails, fewest missing first, counting
@@ -57,6 +57,13 @@ only the fields that condition measures — so `blocker` and `customer`, whose a
 is usually the truth, never put a row on the list. This is what the overnight loop
 uses. Without it `--target 0` ranks the *fullest* rows first, which is how the loop
 spent its nights on rows already past the bar while 514 below T2 went untouched.
+
+**A field searched twice with nothing published no longer holds a row below T2**
+(`gaps.t2_gaps`, `gaps.unpublished`), and `--t2` and the tier share that one
+definition. Before 2026-10-05 the loop chose the same near-T2 rows night after night
+and found nothing — 0 of 15 on 10-04 — because what they lacked was an investment
+figure or a built capacity nobody had printed. Such a field reopens as soon as the row
+gains a citation, and `tracker clean` still names it (`fields_published`).
 
 ## `--basics`: the fields that say what a project is
 
@@ -114,7 +121,8 @@ one night sent 487 of them, most the same queries round after round.
 
 ## What a read costs, and what is not read again
 
-The reply is what the bill is made of, so two things now shorten or skip it.
+The reply is what the bill is made of, so the first three of these shorten or skip
+it; the last keeps the article budget for pages that can be read at all.
 
 * **A page unchanged since its last read is not sent to the model.** `crawl.run`
   compares the page's hash with its last good read, and when that read was under the
@@ -130,6 +138,19 @@ The reply is what the bill is made of, so two things now shorten or skip it.
   never written into `extract-v1.txt`, whose hash is the version stamp on every
   citation — asking for this project's object alone. The evidence gate is unchanged.
   `--no-focus` reads the whole article, which also updates the other rows it names.
+* **A read for one row never founds another.** Asked about one project, the model
+  writes it under the article's own name — "Nebius AI / Highridge Business Park",
+  "Skybox Datacenters Austin" — which matched no row, so on 2026-09-30 each became a
+  second row beside #1299 and #552, counted twice in the totals until merged. A
+  focused read now runs `existing_only`: its reading lands on whatever existing row it
+  routes to, and a campus that matches none is logged by name and not created.
+* **A page nothing can read is read last.** A publisher marked `closed` in
+  `tracker/seed/feeds.toml` answers every client with a challenge, its articles
+  included, so unless a body was cached before the block a fetch of one can only
+  fail — and a failed fetch still spends the article budget, which is this row's
+  share of the night's. Each round moves those pages behind every other harvested
+  page before it cuts the batch, so they are tried only when nothing readable is
+  left. See [sync](sync.md#where-the-queued-rows-come-from), rule 4.
 
 A reply that runs out of room inside its own reasoning is retried with reasoning off
 (`llm.without_thinking`), not at a bigger budget: with reasoning on, a model told
@@ -234,6 +255,17 @@ of steps threw away everything the run had spent, and on 2026-09-29 this pass en
 "reached 12 steps without deciding" twelve times and found one fact all night. A
 "nothing found" answer is an attempt `tracker.attempts` records; running out is not.
 
+**Under `--t2` a row is asked only about the gaps that hold it below T2.** It was
+chosen for those, and asking about every empty field as well is how a self-built Meta
+campus got Meta written in as its own customer — a field T2 deliberately does not
+demand, because its absence is usually the truth.
+
+**A fact counts only if it reaches the row.** A fact attached to a citation whose
+claim about that field an earlier ruling struck stays struck: COL4 re-found the same
+ruled-out $150M on two nights and was reported as a gain both times. Now the pass
+checks the field afterwards; a fact that did not land is reported as such and recorded
+as an attempt, so the next night does not pay to find it again.
+
 ## Two failures the comments record
 
 Both invisible from the outside, and both shaped the current call:
@@ -258,16 +290,17 @@ Touching any of these means the poster is in scope. Re-render with
 | Options, defaults, target defaulting, lock | `tracker/cli/enrich.py` — `enrich` |
 | Round loop and stop reasons | `tracker/ingest/enrich.py` — `run` |
 | Batch budget, one-time sweep | `tracker/ingest/enrich.py` — `run_many`, `sweep_archives`, `will_harvest` |
-| Row selection order | `tracker/ingest/enrich.py` — `select_projects`, `pursuable`, `t2_gaps`, `DEFAULT_TARGET_FIELDS` |
+| Row selection order | `tracker/ingest/enrich.py` — `select_projects`, `pursuable`, `t2_gaps`, `DEFAULT_TARGET_FIELDS`; `tracker/gaps.py` — `t2_gaps`, `unpublished`, `_NOT_BUILT_PHASES` |
 | Harvesters | `tracker/ingest/enrich.py` — `harvest_queue`, `harvest_retry`, `harvest_archive`, `harvest_search`, `harvest_refresh`, `_derive`; `tracker/ingest/search.py` — `CachedProvider`, `cached` |
 | Ignore-list filtering | `tracker/ingest/enrich.py` — `Round.urls`; `tracker/policy.py` |
-| Reading, and not re-reading | `tracker/ingest/enrich.py` — `run(reread=, focus=)`; `tracker/ingest/crawl.py` — `unchanged_reads`, `focus_note`, `extract_one`; `tracker/llm.py` — `without_thinking` |
+| Reading, and not re-reading | `tracker/ingest/enrich.py` — `run(reread=, focus=)`, `Round.refused_new`; `tracker/ingest/crawl.py` — `run(existing_only=)`, `unchanged_reads`, `focus_note`, `extract_one`; `tracker/llm.py` — `without_thinking` |
+| Pages nothing can read go last | `tracker/ingest/enrich.py` — `run`; `tracker/ingest/discover.py` — `unreadable_test`, `readable_first`, `closed_domains` |
 | Settle stage | `tracker/ingest/enrich.py` — `_settle`, `settle_key`; `tracker/conflicts.py` — `disputes`, `solve`, `apply_outcome`; `tracker/declines.py` |
-| Agent pass | `tracker/cli/enrich.py` — `_gapfill_batch`; `tracker/gapfill.py` — `apply_facts`, `_basis_axes`, `Filled.missed`; `tracker/agent.py` — `run`, `TOOL_LIMITS`, `WRAP_UP_TURNS` |
+| Agent pass | `tracker/cli/enrich.py` — `_gapfill_batch(t2_only=)`, and its landed/unlanded check; `tracker/gapfill.py` — `apply_facts`, `_fact_axes`, `Filled.missed`; `tracker/agent.py` — `run`, `TOOL_LIMITS`, `WRAP_UP_TURNS` |
 | Spend by stage | `tracker/llm.py` — `spend_stage`; `tracker/spend.py` |
 | The basic field set, and the free scan for it | `tracker/clean.py` — `BASIC_FIELDS`, `BASIC_SOURCED_FIELDS`, `basics_missing`, `basics_worklist`, `basic_fillable` |
 | Not asking twice | `tracker/attempts.py` — `exhausted`, `record`, `evidence_count` |
-| Parties and the megawatt basis | inherited: the harvesters run the crawl reader, so a citation from this command carries both. The agent pass builds its own citation and derives the basis itself (`gapfill._basis_axes`); its parties come from `parties._inferred_parties`, which reads any citation's own claims |
+| Parties and the megawatt basis | inherited: the harvesters run the crawl reader, so a citation from this command carries both. The agent pass builds its own citation and derives the basis, and whether a figure is one building's, itself (`gapfill._fact_axes`); its parties come from `parties._inferred_parties`, which reads any citation's own claims |
 | Scoring and reporting | `tracker/ingest/enrich.py` — `report_score`, `EnrichReport`, `BatchReport`; `tracker/cli/enrich.py` — `_render_enrich`, `_render_batch` |
 
 See also: [sync](sync.md), whose phase 5 is this command with `--enrich-budget` in

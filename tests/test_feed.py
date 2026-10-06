@@ -484,18 +484,33 @@ def test_the_blocker_moving_notifies(session):
 
 
 def test_a_decisive_milestone_notifies_and_a_cheap_one_does_not(session):
-    """The five things worth a notification, and the ones that are page-only."""
+    """The five things worth a notification, and the ones that are page-only.
+
+    Dated days before today, not on fixed dates: a milestone older than
+    `NOTIFY_MAX_AGE_DAYS` is stale and never notifies, so fixed August dates made
+    this fail from 2026-10-03 on for a reason that had nothing to do with kind.
+    """
     project = _project(session)
-    for kind, date in (
-        ("energized", dt.date(2026, 8, 21)),
-        ("first_customer", dt.date(2026, 8, 20)),
-        ("delayed", dt.date(2026, 8, 19)),
-        ("announced", dt.date(2026, 8, 18)),
-        ("permit_filed", dt.date(2026, 8, 17)),
-        ("land_acquired", dt.date(2026, 8, 16)),
-        ("site_work", dt.date(2026, 8, 15)),
+    today = dt.date.today()
+    for days_ago, kind in enumerate(
+        (
+            "energized",
+            "first_customer",
+            "delayed",
+            "announced",
+            "permit_filed",
+            "land_acquired",
+            "site_work",
+        ),
+        start=1,
     ):
-        _event(session, project, event_type=kind, event_date=date, description=f"{kind}.")
+        _event(
+            session,
+            project,
+            event_type=kind,
+            event_date=today - dt.timedelta(days=days_ago),
+            description=f"{kind}.",
+        )
 
     by_label = {s.label: s for s in feed.digest(session, since=SINCE).signals}
     assert [k for k in by_label if by_label[k].notify] != []
@@ -708,6 +723,35 @@ def test_an_undated_signal_is_kept():
     undated = _notifiable(kind="obstacle_opened", sign="bad", happened=None)
     assert not feed.stale(undated)
     assert feed.notable(undated)
+
+
+def test_an_undated_fact_is_as_old_as_the_article_that_reported_it():
+    """The day we read it is only the latest it can have been reported. On 10-04 an
+    obstacle from a 09-21 article went out as news because it was read on 10-03; one
+    from an archive article read tonight would have gone out the same way."""
+    today = dt.datetime.now()
+    archived = _notifiable(
+        kind="obstacle_opened",
+        sign="bad",
+        happened=None,
+        at=today,
+        published_at=today - dt.timedelta(days=feed.NOTIFY_MAX_AGE_DAYS + 30),
+    )
+    assert feed.occurred(archived) == archived.published_at.date()
+    assert feed.stale(archived), "learned tonight, but reported two and a half months ago"
+
+    recent = _notifiable(happened=None, at=today, published_at=today - dt.timedelta(days=12))
+    assert not feed.stale(recent)
+
+
+def test_a_card_says_when_its_article_was_published_when_the_fact_has_no_date():
+    """It printed "undated · learned 10-03" over a lawsuit an article reported on
+    09-21, and the reader had to open the link to find the delay."""
+    reported = _notifiable(happened=None, published_at=dt.datetime(2026, 9, 21, 22, 8))
+    assert reported.when == "reported 2026-09-21"
+    assert reported.as_json()["when"] == "reported 2026-09-21"
+    assert _notifiable(happened=dt.date(2026, 9, 1)).when == "2026-09-01"
+    assert _notifiable(happened=None).when == "undated"
 
 
 def test_the_horizon_is_overridable_without_touching_the_others():

@@ -1102,6 +1102,122 @@ def _triage(session, findings: list, logic_mod) -> None:
     )
 
 
+@logic_app.command("rule-out")
+def logic_rule_out(
+    project_id: Annotated[int, typer.Argument(help="The row.")],
+    field: Annotated[
+        str, typer.Argument(help="The field the claim is about, e.g. investment_usd.")
+    ],
+    citation: Annotated[
+        list[str],
+        typer.Option(
+            "--citation",
+            help="URL, or source id, of a citation whose claim to take out. Repeat for several.",
+        ),
+    ],
+    why: Annotated[
+        str,
+        typer.Option("--why", help="What the sentence is really about. Kept in the row's notes."),
+    ],
+    reason: Annotated[
+        str,
+        typer.Option(
+            "--reason",
+            help="misread: the sentence was always about something else (a building, a "
+            "programme, the land). superseded: right once, since restated.",
+        ),
+    ] = "misread",
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="Show it; write nothing.")] = False,
+) -> None:
+    """Take one or more citations' claim about one field out of the merge, by hand.
+
+    For a value a model got wrong — found in `tracker changes`, or on a row's card. It
+    does what the audit's own repair does: the claim is marked decided-against on its
+    citation (the article still says what it said; it just stops deciding the field),
+    the field is emptied and re-derived from the claims left standing, and the decision
+    goes into the row's notes as the operator's, with `--why`. Nothing types a value in:
+    if another claim survives, the row takes it; if none does, the field stays empty.
+
+    `logic resolve` does the same from a keyboard menu; this is for a person who has
+    already read the sources and knows which sentence is wrong.
+    """
+    import json
+
+    from tracker import logic as logic_mod
+    from tracker.audit import fmt_value
+    from tracker.conflicts import supersede
+    from tracker.upsert import DECIDED_REASONS, recompute_confidence, recompute_from_sources
+
+    if reason not in DECIDED_REASONS:
+        _fail(f"--reason must be one of {', '.join(sorted(DECIDED_REASONS))} (got {reason!r})")
+        return
+    if field not in Project.__table__.columns:
+        _fail(f"{field!r} is not a project field")
+        return
+
+    def claims(source) -> dict:
+        try:
+            return json.loads(source.claims or "{}")
+        except ValueError:
+            return {}
+
+    engine, _ = init_db(_db_path())
+    if not dry_run:
+        try:
+            release = acquire_write_lock(_db_path(), command="logic rule-out")
+        except AlreadyRunning as exc:
+            _fail(str(exc))
+            raise
+        atexit.register(release)
+
+    with _explain_db_locks(), session_scope(engine, commit=not dry_run) as session:
+        project = session.get(Project, project_id)
+        if project is None:
+            _fail(f"no project with id {project_id}", code=1)
+            return
+        wanted = set(citation)
+        chosen = [s for s in project.sources if s.url in wanted or str(s.id) in wanted]
+        missing = wanted - {s.url for s in chosen} - {str(s.id) for s in chosen}
+        claiming = [s for s in project.sources if field in claims(s)]
+        if missing or not chosen:
+            offered = "\n".join(f"  [{s.id}] {s.url}" for s in claiming) or "  (none)"
+            _fail(
+                f"not a citation on #{project_id}: {', '.join(sorted(missing)) or '(none given)'}\n"
+                f"the citations on this row that claim {field}:\n{offered}"
+            )
+            return
+        silent = [s for s in chosen if field not in claims(s)]
+        if silent:
+            _fail(
+                f"these citations make no claim about {field}: {', '.join(s.url for s in silent)}"
+            )
+            return
+
+        was = getattr(project, field)
+        marked = sum(1 for s in chosen if supersede(s, field, reason=reason))
+        setattr(project, field, None)
+        session.flush()
+        recompute_from_sources(session, project)
+        now = getattr(project, field)
+        what = f"{field} {fmt_value(was)} -> {fmt_value(now)} ({marked} claim(s) ruled out as {reason})"
+        logic_mod.record_decision(project, "operator_ruled_out", what, by="operator", detail=why)
+        session.flush()
+        recompute_confidence(session)
+
+        console.print(f"#{project.id} {escape(project.company)} — {escape(project.name)}")
+        console.print(f"  {escape(what)}")
+        standing = [
+            (s.url, claims(s)[field])
+            for s in claiming
+            if json.loads(s.unconfirmed_reasons or "{}").get(field) not in DECIDED_REASONS
+        ]
+        for url, value in standing:
+            console.print(f"  [dim]still standing: {escape(str(value))} — {escape(url[:90])}[/dim]")
+        if dry_run:
+            session.rollback()
+            console.print("[yellow]dry run[/yellow] — nothing written")
+
+
 def _one_quote(project, field: str) -> str | None:
     """The sentence behind a value, when there is one, for the triage screen."""
     from tracker.gaps import provenance

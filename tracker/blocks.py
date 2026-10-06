@@ -819,7 +819,11 @@ def blocks_by_key(sources: list[Any], aliases: dict[str, str] | None = None) -> 
     def _weight_of(source: Any) -> int:
         return 0 if is_placeholder(source) else conf.SOURCE_WEIGHTS.get(source.source_type, 1)
 
-    ordered = sorted(sources, key=lambda s: (-_weight_of(s), -(s.id or 0)))
+    # First-hand before tertiary, then by weight, for the same reason as the
+    # demotion above: the first source seen supplies the label, the quotes and the
+    # `source_id`, so a directory read first would be credited with a block whose
+    # figures `resolve` took from a report.
+    ordered = sorted(sources, key=lambda s: (conf.is_tertiary(s), -_weight_of(s), -(s.id or 0)))
     for source in ordered:
         if not source.blocks:
             continue
@@ -851,6 +855,7 @@ def blocks_by_key(sources: list[Any], aliases: dict[str, str] | None = None) -> 
                         source.source_type,
                         source.url,
                         confirmed=not placeholder and name not in unconfirmed,
+                        tertiary=conf.is_tertiary(source),
                     )
                 )
             fields.setdefault("_quotes", []).append(entry.get("quotes") or {})

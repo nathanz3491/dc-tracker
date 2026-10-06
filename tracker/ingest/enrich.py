@@ -107,6 +107,9 @@ class Round:
     #: Pages harvested but not sent: they hash the same as their last read under
     #: this prompt. See `run(reread=)`.
     unchanged: int = 0
+    #: Projects a focused reading named that matched no existing row, and so were not
+    #: created. See `run(focus=)`.
+    refused_new: int = 0
     fields_filled: tuple[str, ...] = ()
 
     @property
@@ -168,6 +171,10 @@ class EnrichReport:
     @property
     def articles_unchanged(self) -> int:
         return sum(r.unchanged for r in self.rounds)
+
+    @property
+    def rows_refused(self) -> int:
+        return sum(r.refused_new for r in self.rounds)
 
     @property
     def gained(self) -> tuple[str, ...]:
@@ -669,6 +676,7 @@ def run(
     picks one with a reason or refuses. `skip_settle` turns it off.
     """
     from tracker.ingest import crawl
+    from tracker.ingest.discover import readable_first, unreadable_test
 
     settings = settings or get_settings()
     project = session.get(Project, project_id)
@@ -697,6 +705,7 @@ def run(
     assert project is not None
 
     tried: set[str] = project_urls(session, project_id)
+    unreadable = unreadable_test(cache_dir)
     #: Every query this run has sent, with its hits. See `harvest_search`.
     searched: dict[str, list] = {}
     spent = 0
@@ -771,7 +780,10 @@ def run(
             break
 
         room = max_articles if budget is None else min(max_articles, budget - spent)
-        batch = fresh[:room]
+        # A page on a publisher closed to us, with no body cached, goes after every
+        # page that can be read: a fetch that fails still spends the budget, which
+        # is this row's share of the night's.
+        batch = readable_first(fresh, unreadable)[:room]
         spent += len(batch)
         tried.update(batch)
         before_state = {s.field for s in for_project(project) if s.status == FILLED}
@@ -809,10 +821,18 @@ def run(
                 # for when the gate in code has changed and the prompt has not.
                 skip_unchanged=not reread,
                 focus=_label(project) if focus else None,
+                # A read focused on one row must not found another. Asked about this
+                # project alone, the model writes this project — under the article's
+                # own name for it, which is how "Nebius AI / Highridge Business Park"
+                # and "Skybox Datacenters Austin" became second rows beside #1299 and
+                # #552 on 2026-09-30, both counted twice in the totals until merged.
+                # The reading still lands wherever it routes to an existing row.
+                existing_only=focus,
             )
         # A page skipped as unchanged cost nothing and is not counted against the
         # article budget, so the share it would have taken goes to a page that is new.
         current.unchanged = ingest.skipped_unchanged
+        current.refused_new = ingest.refused_new
         current.articles_read = len(batch) - ingest.skipped_unchanged
         spent -= ingest.skipped_unchanged
 
@@ -976,14 +996,12 @@ def select_projects(
 def t2_gaps(project: Project) -> set[str]:
     """The fields `tracker clean`'s `fields_present` condition fails this row for.
 
-    The same computation as `clean._conditions`: a field that is a gap and that the
-    tier measures. `blocker` and `customer` are left out there because their absence
-    is usually the truth (`gaps.UNMEASURABLE`), and a null that is correct —
-    `mw_built` on a site not yet built — is not a gap at all.
+    Delegates to `gaps.t2_gaps`, which that condition calls too, so a row `--t2`
+    chooses is always one the tier counts as short.
     """
-    from tracker.gaps import UNMEASURABLE
+    from tracker import gaps
 
-    return {s.field for s in for_project(project) if s.is_gap and s.field not in UNMEASURABLE}
+    return gaps.t2_gaps(project)
 
 
 def pursuable(

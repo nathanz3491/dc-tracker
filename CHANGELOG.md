@@ -10,7 +10,208 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 First working version. Nothing has been released yet, so everything below is the
 initial build of the v1 PRD.
 
+### Added
+
+- **The nightly loop adds campuses again, through the identity check**
+  (`scripts/overnight.sh`, `tracker/ingest/discover.py`, `tracker/cli/ingest.py`,
+  `tests/test_discover.py`, `tests/test_overnight.py`, `README.md`,
+  `docs/workflows/sync.md`). Since enrich began reading for one row only
+  (2026-09-30), nothing in the loop created a row; the old loop's ~13 a night had
+  come from unfocused reads. The campuses a one-row read turns away were not the
+  answer: on 10-01 all five were rows already held under other names. The first round
+  now polls the feeds, which costs nothing, and reads `--discover` (default 10) queued
+  articles naming no tracked campus, newest first (`ingest crawl --from-queue
+  --new-first`), through the ordinary crawl and its identity arbiter. About ¥0.3 a
+  night; the queue held 2,133 such articles.
+
+### Changed
+
+- **The nightly loop does about three times as much** (`scripts/overnight.sh`,
+  `tracker/seed/feeds.toml`, `tests/test_overnight.py`, `README.md`). After the cost
+  fixes nights cost ¥1.76-2.75 against a ¥12 ceiling, so it was using a fifth of
+  what it was allowed while 419 rows below T2 still had something worth searching
+  for and 1,659 readable articles waited in the queue. Now it enriches 40 rows on a
+  160-article budget (was 15 on 60), reads 40 queued articles for new campuses (was
+  10), and takes 60 logic findings and 40 duplicate pairs a round (was 40 and 25).
+  Three feeds the database nominated were added — colocationscout's permit reports,
+  morethanjustparks' campus pages and GlobeNewswire's "data center" releases — each
+  measured on one poll before it went in. Expected about ¥7 a night; the ¥12 ceiling
+  is unchanged.
+
+- **T2 no longer waits for facts nobody publishes** (`tracker/gaps.py`,
+  `tracker/clean.py`, `tracker/ingest/enrich.py`, `tracker/cli/quality.py`,
+  `tests/test_clean.py`, `tests/test_gaps.py`, `tests/test_enrich.py`,
+  `docs/design-decisions.md`, `docs/workflows/enrich.md`). On 2026-10-05, 439 rows
+  sat one tier short of T2 for nothing but an empty field, and the nightly enrich
+  lifted about one a night: on 10-04 it read 60 articles for 15 rows and 0 gained a
+  field T2 counts, because what they lacked — a campus's investment, its built
+  megawatts — had not been published. Two changes, chosen by the operator:
+  - **Built capacity is not asked of a site still under construction.** It is what
+    is energized today, and a row merges to operational as soon as any source says
+    any part is live, so a `construction` row has no figure anyone could print.
+  - **A field searched twice with nothing published counts as answered** for T2. It
+    reopens as soon as the row gains a citation, and every card still names it under
+    the new reported condition `fields_published`. T2 now means complete as far as
+    anything has been published.
+  On a copy of production, rows at T2 or above went from 44 to 102. The tier, `enrich
+  --t2`'s choice of rows and the coverage report share one definition
+  (`gaps.t2_gaps`), so the loop stops paying to search for those facts again. No
+  stored value changes.
+
+- **One building's or one phase's figure no longer stands as the campus's while the
+  campus's own is known** (`tracker/vocab.py`, `tracker/ingest/crawl.py`,
+  `tracker/backfill.py`, `tracker/gapfill.py`, `tracker/upsert.py`,
+  `tracker/logic.py`, `tracker/export.py`, `tests/test_building_figures.py`,
+  `docs/data-quality.md`, `docs/workflows/sync.md`, `docs/workflows/enrich.md`).
+  "The 36MW Hillsboro 3 data center", "initially offering 75MW" and "VA-2, a $225
+  million two-story data center" were stored as campus totals, and because
+  `mw_planned` and `investment_usd` take one claim, such a figure could displace the
+  total outright; the 2026-10-01 audit found a building's $150M as a campus's
+  investment. The stored sentence is now read for a building's name, number or code,
+  or a phase word, next to that figure — never asked of the model — and wording
+  about the whole site nearer to it wins, as does a building the row is named
+  after. Such a claim is labelled scope `building` and fills the campus column only
+  when nothing describes the whole site. It runs at extraction, on the agent's
+  facts, and over stored claims in `tracker backfill scope`. On a copy of production
+  it labelled 16 stored claims and moved two values; its use is mostly ahead. Exports
+  mark the claim (`part`, schema `tracker/9`) and the console says "one building".
+
+- **A directory, wiki or digest now only fills a field nothing first-hand states**
+  (`tracker/confidence.py`, `tracker/upsert.py`, `tracker/blocks.py`,
+  `tracker/conflicts.py`, `tracker/logic.py`, `tracker/export.py`,
+  `tests/test_directory_sources.py`, `docs/design-decisions.md`,
+  `docs/workflows/logic.md`). Facility directories such as servercountry.org,
+  dchub.cloud and epoch.ai were weighted like any local paper, tied with one, and
+  won on recency because a listing is re-crawled whenever anyone looks; the
+  2026-10-01 audit traced a wrong campus capacity to a directory page giving one
+  building's figures for the whole site. Some forty sites join Wikipedia on the
+  tertiary list: their claims never displace a first-hand one, never corroborate it
+  and never count as a dispute with it, so the conflict solver no longer spends a
+  call on that contest. On a copy of production it moved 20 values on 19 rows
+  (Project Rainier back to the 2.2 GW four reports give) and 37 confidence scores
+  in both directions. The cost: six phases now follow an older "announced" or
+  "construction" report over a directory's "operational", some plausibly wrongly.
+  Exports carry the flag per claim (schema `tracker/8`) and the console marks such
+  a claim "directory".
+
 ### Fixed
+
+- **Every campus the nightly loop adds gets one attempt to fold into a twin**
+  (`tracker/capex.py`, `tracker/triage.py`, `tracker/cli/duplicates.py`,
+  `scripts/overnight.sh`, `tests/test_duplicate_detection.py`,
+  `tests/test_overnight.py`, `docs/workflows/duplicates.md`,
+  `docs/workflows/duplicates.svg`, `scripts/render_workflow_diagrams.py`). The
+  10-05 run added eight campuses and one was a duplicate the detector could not
+  see: "SoftBank / SB Energy — PORTS Technology Campus" in Piketon beside "SB Energy —
+  PORTS-Pike Technology Campus" in Pike County, the same 10 GW site, compared by no
+  pass because one row named the town and the other the county, under two company
+  names. `duplicates resolve --created-since T` now puts each row created since `T`
+  to its likeliest twin wherever it is filed — a shared town or county at either
+  granularity, or within 25 km, plus the usual evidence — and the loop runs it after
+  the discover crawl, with the moment the night began: one attempt per new row with
+  a candidate, under the usual rails. On that night it would have asked about the
+  PORTS pair and nothing else.
+
+- **The email reports news days old, not weeks, and says when it was reported**
+  (`tracker/ingest/discover.py`, `tracker/feed.py`, `tracker/notify.py`,
+  `tracker/webui/static/app.js`, `scripts/overnight.sh`, `tests/test_discover.py`,
+  `tests/test_feed.py`, `README.md`, `docs/workflows/sync.md`). The 10-04 email
+  carried a lawsuit against Project Camellia as "undated · learned 2026-10-03"; the
+  article was published 09-21 and queued the next day. It waited 11 days because the
+  nightly crawl read articles about *untracked* campuses first and this one was about
+  a tracked campus, behind a backlog of 1,600. Three changes:
+  - **The nightly crawl reads the news first:** everything published within the
+    email's 45-day window, newest first, whatever campus it names; then untracked
+    campuses as before. Tonight's 40 reads are all news, the three about tracked
+    campuses at positions 1, 2 and 11.
+  - **A card with no date of its own shows its article's** — "reported 2026-09-21"
+    instead of "undated" — in the email, its plain-text part and the console.
+  - **An undated fact is as old as the article that reported it**, for deciding
+    whether it may interrupt anybody: reading archive articles must not mail
+    months-old obstacles as news, now that the loop reads 40 a night.
+
+- **A project's number is never handed to another campus**
+  (`tracker/migrations/0032_project_autoincrement.sql`, `tracker/db.py`,
+  `tracker/models.py`, `tests/test_db.py`, `docs/design-decisions.md`). SQLite gave
+  each new row one more than the largest id left, so when the newest rows were
+  merged away their numbers went to the next campus created: #1557 named three
+  different campuses in a week and #1556 two, and the merge notes on #404, #552,
+  #1299 and #1311 pointed at whichever unrelated row held the number. `project.id`
+  is now AUTOINCREMENT, and the count starts above #1560, the highest number any
+  note had used. The table is rebuilt with foreign keys switched off by the
+  migration runner, which a migration now asks for with `-- tracker: foreign_keys
+  off` and which commits only if `PRAGMA foreign_key_check` is clean. Rehearsed on a
+  copy of production: every row of every table identical afterwards. The first
+  version, with foreign keys on, emptied all eight child tables on that copy.
+
+- **The crawls no longer spend their slots on pages nothing can read**
+  (`tracker/ingest/discover.py`, `tracker/ingest/crawl.py`, `tracker/ingest/enrich.py`,
+  `tracker/cli/ingest.py`, `tracker/cli/sync.py`, `tracker/seed/feeds.toml`,
+  `tests/test_discover.py`, `tests/test_ingest_crawl.py`, `tests/test_enrich.py`,
+  `docs/workflows/sync.md`, `docs/workflows/sync.svg`, `docs/workflows/enrich.md`,
+  `docs/workflows/enrich.svg`, `scripts/render_workflow_diagrams.py`). The publishers
+  closed on 2026-10-02 left 650 articles in the queue, and only 22 had a body cached;
+  the other 628 answer a challenge whatever fetches them. Measured on production
+  that day, they held six of the nightly crawl's next ten slots, and all fifteen of a
+  `tracker sync` extract, because `seed/sources.toml` ranks datacenterfrontier and
+  datacenterdynamics `priority`. Every crawl that cuts a list to a limit — the queue
+  crawl, sync's extract, retry fill and refresh, and each round of enrich — now moves
+  a page on a closed publisher with nothing cached behind every page it can read, and
+  only then cuts. Nothing is deleted: the rows stay queued, a cached one keeps its
+  place, and the rest are tried when nothing readable is left, which is how a block
+  that lifts would be noticed. `seed/sources.toml` is unchanged.
+
+- **Half the feeds `tracker discover` polls were failing every night; they are now
+  closed, replaced or fixed, and the report says which is which**
+  (`tracker/seed/feeds.toml`, `tracker/ingest/discover.py`, `tracker/cli/sync.py`,
+  `tests/test_discover.py`, `tests/test_probe.py`, `docs/workflows/sync.md`,
+  `docs/workflows/sync.svg`, `scripts/render_workflow_diagrams.py`,
+  `docs/ingesting.md`, `docs/sources-and-feeds.md`, `docs/design-decisions.md`,
+  `README.md`, `tracker/ingest/fetch.py`). On 2026-10-02, the nightly loop's first
+  discover phase, 14 of 28 feeds failed. Thirteen — datacenterdynamics,
+  datacenterfrontier and all eleven States Newsroom sites — now answer every page
+  with a Cloudflare challenge that only a client running the site's script gets
+  past: the same for our User-Agent, a browser's, a feed reader's and httpx's own,
+  the same through curl and through a browser's TLS fingerprint, and the same from a
+  second network. That is the publisher's bot detection rather than a misfiring rule, so the
+  project does not try to pass it. Those entries, and the datacenterfrontier archive,
+  are marked `closed = "<date>: <what was measured>"`: not requested, counted as
+  `feeds closed` apart from `feeds failed`, and still listed — deleted, the most-cited
+  publisher in the database would head `tracker feeds`' list of feeds to add. A
+  challenge met in future is named in the failure line (`HTTP 403 (Cloudflare
+  challenge: …)`) instead of a bare 403 that reads as a header problem. The
+  fourteenth, Bisnow's data-center feed, went away when Bisnow rebuilt its site, and
+  is replaced by the one feed it still serves (`bisnow-latest`, its nine newest
+  stories across all markets). About 640 rows these publishers queued before the
+  block are still queued and mostly cannot be read; the entry above is what keeps
+  them from taking the crawls' slots.
+
+- **The nightly loop's audit and settle decisions run at `high` effort again**
+  (`scripts/overnight.sh`, `tests/test_overnight.py`, `docs/data-quality.md`). They ran
+  at `low` for one night, 2026-09-30, and two of the audit's three model decisions
+  were wrong in ways that move published totals: a campus's $600M was replaced by a
+  statewide "$20 billion+ in Ohio", and a land price was kept as a campus's build
+  investment by a model whose own reason said it was the land price. The step cost
+  ¥0.18 that night; `high` costs tenths of a yuan more.
+
+- **Under `enrich --t2` the agent is asked only about the gaps that hold a row below
+  T2** (`tracker/cli/enrich.py`, `tests/test_enrich.py`). It was asked about every
+  empty field of a row chosen for one gap, and wrote a self-built Meta campus's
+  operator in as its customer — a field T2 deliberately does not demand.
+
+- **A fact enrich's agent "found" but that never reached the row is no longer
+  reported as a gain** (`tracker/cli/enrich.py`, `tests/test_enrich.py`). Attached to
+  a citation whose claim an earlier ruling had struck, COL4's $150M stayed struck, was
+  counted as found on two nights, and was asked about again each time. The pass now
+  checks the field afterwards, says when a fact did not land, and records it as an
+  attempt.
+
+- **A read enrich makes for one row no longer creates another**
+  (`tracker/ingest/enrich.py`, `tests/test_enrich.py`, `docs/workflows/enrich.md`).
+  Asked about one project, the model wrote it under the article's own name, which
+  matched no row: "Highridge Business Park" beside #1299 and "Skybox Datacenters
+  Austin" beside #552, each counted twice in the totals. A focused read now lands on
+  an existing row or, logged by name, nowhere.
 
 - **A run starts on the OpenCode Go reserve when DeepSeek cannot pay, instead of
   failing onto it** (`tracker/llm.py`, `tracker/config.py`, `scripts/probe_effort.py`,
@@ -1042,6 +1243,26 @@ initial build of the v1 PRD.
   migrating still build from nothing.
 
 ### Added
+
+- **The public front page carries a `websitelaunches-verification` meta tag**
+  (`tracker/webui/static/public/home.html`), so that directory can confirm the
+  console's domain is ours. It is a fixed string in a page that was already public.
+
+- **`tracker changes --against <snapshot>` lists every value a run changed, beside
+  the sentence now behind it** (`tracker/changes.py`, `tracker/cli/quality.py`,
+  `scripts/overnight.sh`, `tests/test_changes.py`, `docs/data-quality.md`). The quality
+  counts cannot see a wrong value that has a real quote — on 2026-09-30 they held
+  steady while four went wrong — so the overnight loop's morning report now ends with
+  the night's changes, rows created and removed, and decisions noted, against the
+  snapshot it takes before round 1. An id SQLite reused after a merge reads as a new
+  row, not an edit.
+
+- **`tracker logic rule-out` takes back one claim a person finds wrong**
+  (`tracker/cli/logic.py`, `tests/test_changes.py`, `docs/workflows/logic.md`). The
+  audit's own repair, by hand: the citation's claim is marked decided-against
+  (`misread` by default), the field re-derived from what still stands, and the
+  decision recorded as the operator's with `--why`. It never types a value in.
+  `logic resolve` needs a keyboard; this takes the citation by URL or id.
 
 - **A command that spends will not start in DeepSeek's peak hours**
   (`tracker/llm.py`, `tracker/spend.py`, `tracker/cli/_shared.py`,

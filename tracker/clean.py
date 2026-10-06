@@ -19,7 +19,7 @@ what a reader can safely *do* with the row:
 
     T0 SOURCED    something real cites it, and nothing on it is self-contradictory
     T1 SOUND      nothing in a total is a lie          <- the campaign bar
-    T2 COMPLETE   the fields a reader acts on are there, and each is backed
+    T2 COMPLETE   the fields a reader acts on are there and backed, or searched out
     T3 SETTLED    every open question has been answered
 
 T1 is the bar because the numbers this tool exists to publish are sums. A row that
@@ -106,6 +106,7 @@ REMEDIES: Final[dict[str, str]] = {
     "fields_present": "tracker enrich {id} --target 0",
     "values_backed": "tracker ingest crawl --stale-prompt --cached-only --limit 50",
     "basics_defined": "tracker enrich {id} --basics",
+    "fields_published": "tracker point '<name>'  # a new citation reopens the field",
     "warnings_settled": "tracker logic resolve --project {id}",
     "blocks_settled": "tracker blocks {id}",
     "risks_confirmed": "tracker risks confirm --project {id}",
@@ -130,6 +131,7 @@ CONDITION_LABELS: Final[dict[str, str]] = {
     "fields_present": "tracked fields still empty",
     "values_backed": "a stored value with no quote",
     "basics_defined": "a field that defines the project is empty or unsourced",
+    "fields_published": "a tracked field searched for twice that nobody has published",
     "warnings_settled": "an open logic warning",
     "blocks_settled": "tranches that may be one thing counted twice",
     "risks_confirmed": "an obstacle with no usable quote",
@@ -429,8 +431,11 @@ def card(session: Session, project: Project, *, shared: _Shared | None = None) -
     # NOT_APPLICABLE counts as satisfied. `mw_built` on an announced project is
     # correctly null, and treating 12-of-12 as the bar reported 1,101 of 1,171 rows
     # as broken — a target nothing could reach, which is a target nobody uses.
-    states = gaps.for_project(project)
-    gapped = [s.field for s in states if s.is_gap and s.field not in gaps.UNMEASURABLE]
+    #
+    # A field searched twice with nothing published counts as answered
+    # (`gaps.unpublished`); it reopens when the row gains a citation, and
+    # `fields_published` below keeps it visible.
+    gapped = sorted(gaps.t2_gaps(project))
     add("fields_present", not gapped, f"missing {', '.join(gapped)}" if gapped else "")
 
     # A 待确认 value is acceptable here and a silent one is not: the tier asks
@@ -490,6 +495,16 @@ def card(session: Session, project: Project, *, shared: _Shared | None = None) -
         if part
     )
     add("basics_defined", not (missing or defaulted), detail)
+
+    # The other side of T2's `fields_present`: the fields it counts as answered
+    # because two searches found nothing. Reported, not a tier condition, for the
+    # reason above — so a row at T2 still says which of its facts are unknown.
+    searched_out = sorted(gaps.unpublished(project))
+    add(
+        "fields_published",
+        not searched_out,
+        f"nothing published: {', '.join(searched_out)}" if searched_out else "",
+    )
 
     return CleanCard(project_id=project.id, name=project.name, conditions=tuple(checks))
 

@@ -267,8 +267,8 @@ def recency_inversions(
 
     `upsert.claims_by_field` breaks a tie on `fetched_at` — when the crawler
     happened to visit the page, not when anybody published it. Where two claims
-    tie on (confirmed, weight), the winner is therefore decided by crawl order,
-    and crawl order is arbitrary with respect to the truth.
+    tie on (confirmed, whole site, first-hand, weight), the winner is therefore decided by
+    crawl order, and crawl order is arbitrary with respect to the truth.
 
     Only ties are reported. An old high-weight source beating a new low-weight one
     is the same disease and is deliberately *not* counted here, because it is the
@@ -298,7 +298,12 @@ def recency_inversions(
             if not won_at:
                 continue
             for other in claims[1:]:
-                if (other.confirmed, other.weight) != (winner.confirmed, winner.weight):
+                if (other.confirmed, other.part, other.tertiary, other.weight) != (
+                    winner.confirmed,
+                    winner.part,
+                    winner.tertiary,
+                    winner.weight,
+                ):
                     break  # sorted, so everything after this is weaker still
                 other_at = published.get(other.url)
                 if other_at and other_at > won_at and other.value != winner.value:

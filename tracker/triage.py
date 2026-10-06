@@ -942,8 +942,14 @@ def resolve_pairs(
     again: bool = False,
     commit_each: bool = False,
     on_held: Any = None,
+    pairs: list[Any] | None = None,
 ) -> list[Any]:
     """Work the suspected pairs with an agent. Returns `dupresolve.Decision` list.
+
+    `pairs` replaces the suspected pairs with a list the caller chose — the new rows'
+    likeliest twins (`capex.twin_pairs`), one per row. Those are asked whatever
+    evidence raised them, since the point is one question per new row; the rails
+    still decide what a verdict may do.
 
     Same selection and same return shape as `dupresolve.resolve`, so every printer
     and the `--json` payload keep working — only the judge changes. `folded` is
@@ -977,11 +983,14 @@ def resolve_pairs(
         ).all()
     }
 
-    found = sorted(suspected_duplicates(session), key=lambda p: (p.rank, p.a_id, p.b_id))
-    if not weak:
-        # A pair raised only by a shared name word cannot be merged and asking
-        # costs a call to be told what the rails already know.
-        found = [p for p in found if set(p.kinds) - {"name"}]
+    if pairs is not None:
+        found = list(pairs)
+    else:
+        found = sorted(suspected_duplicates(session), key=lambda p: (p.rank, p.a_id, p.b_id))
+        if not weak:
+            # A pair raised only by a shared name word cannot be merged and asking
+            # costs a call to be told what the rails already know.
+            found = [p for p in found if set(p.kinds) - {"name"}]
 
     def key(pair: Any) -> tuple[str, str]:
         a, b = rows.get(pair.a_id), rows.get(pair.b_id)

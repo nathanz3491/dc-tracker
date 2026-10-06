@@ -50,14 +50,19 @@ def gap_for(gaps: list[FieldGap], field: str) -> FieldGap:
     return next(g for g in gaps if g.field == field)
 
 
-def test_mw_built_is_measured_only_where_something_is_built(session):
-    """An announced project with no `mw_built` is correct, not incomplete."""
+def test_mw_built_is_measured_only_where_something_is_operational(session):
+    """An announced or still-building project with no `mw_built` is correct.
+
+    `construction` is out too: a row any source calls live merges to operational,
+    so one still at construction has nothing energized to report.
+    """
     add(session, phase="announced", city="Ashburn")
     add(session, phase="construction", city="Reno", mw_built=None)
     add(session, phase="operational", city="Mesa", mw_built=48.0)
+    add(session, phase="operational", city="Waco", mw_built=None)
 
     built = gap_for(measure(session), "mw_built")
-    assert built.applicable == 2, "the announced project must be out of the denominator"
+    assert built.applicable == 2, "announced and construction are out of the denominator"
     assert built.filled == 1
     assert built.pct == 50
     assert built.missing == 1

@@ -1108,13 +1108,16 @@ def _print_resolution_summary(resolutions: list, rescored: int) -> None:
 
 
 def _backfill_scope(*, apply: bool, dry_run: bool) -> None:
-    """Re-gate every stored `this_site` claim, and say what moved.
+    """Re-gate every stored `this_site` claim, read every capacity and investment
+    sentence for one building's figure, and say what moved.
 
     Reports before it writes, like `dates`, because this changes what a label
     *means* on 9,000 claims: `this_site` used to be the value the gate could not
     refuse, so a stored one carries no information about whether it was ever
-    checked. Nothing reads the axis to choose a value yet, so a re-gate cannot move
-    a published figure today — it makes the axis worth reading tomorrow.
+    checked. One value is read by the merge: `building` lets a figure fill the
+    campus column only when nothing describes the whole site, so a re-gate can move
+    a published capacity or investment — at the next `backfill derive`, which the
+    nightly loop runs straight after this.
     """
     from tracker.backfill import regate_scope
 
@@ -1138,7 +1141,7 @@ def _backfill_scope(*, apply: bool, dry_run: bool) -> None:
     table.add_column("outcome")
     table.add_column("count", justify="right")
     table.add_row("sources with an envelope", f"{report.sources:,}")
-    table.add_row("`this_site` claims re-gated", f"{report.claims:,}")
+    table.add_row("claims re-gated", f"{report.claims:,}")
     table.add_row("relabelled", f"{report.changed:,}")
     console.print(table)
 
@@ -1151,7 +1154,8 @@ def _backfill_scope(*, apply: bool, dry_run: bool) -> None:
     else:
         console.print(
             "\n[dim]Written. `this_site` now means the sentence named this campus, "
-            "and `block:*` means it named a tranche instead.[/dim]"
+            "`block:*` that it named a tranche instead, and `building` that it gave "
+            "the figure to one building or phase. `backfill derive` applies it.[/dim]"
         )
 
 
@@ -1885,7 +1889,7 @@ def _render_clean_sweep(sweep, *, total: int, census: dict | None = None) -> Non
 _TIER_MEANING = {
     0: "cited, and not self-contradictory",
     1: "nothing in a total is a lie",
-    2: "the fields a reader acts on are present and backed",
+    2: "the fields a reader acts on are present and backed, or searched out",
     3: "every open question answered",
 }
 
@@ -1923,6 +1927,46 @@ def _render_clean_diff(diff: dict) -> None:
 
 
 @app.command()
+def changes(
+    against: Annotated[
+        Path,
+        typer.Option(
+            "--against",
+            help="A copy of the database from before the run — the snapshot overnight.sh "
+            "takes before round 1.",
+        ),
+    ],
+) -> None:
+    """Every tracked value changed since a snapshot, with the sentence now behind it.
+
+    For reading what a night's models did. The quality numbers `clean` reports cannot
+    see a wrong value that has a real quote — a statewide total filed as one campus's,
+    a land price as a build cost — so this lists each change beside its sentence, plus
+    the rows created and removed and every decision noted on a row. Reads only.
+    """
+    from tracker import changes as changes_mod
+
+    if not against.is_file():
+        _fail(f"no snapshot at {against}")
+        return
+    engine = _read_engine()
+    with session_scope(engine, commit=False) as session:
+        found = changes_mod.diff(against, session)
+        if json_mode():
+            emit(
+                {
+                    "values": [vars(c) for c in found.values],
+                    "added": found.added,
+                    "removed": found.removed,
+                    "decisions": found.decisions,
+                }
+            )
+            return
+        for line in changes_mod.render(found, since=against.name):
+            console.print(escape(line), soft_wrap=True)
+
+
+@app.command()
 def clean(
     project_id: Annotated[
         int | None,
@@ -1953,7 +1997,7 @@ def clean(
 
         T0 SOURCED    something real cites it, and it does not contradict itself
         T1 SOUND      nothing in a total is a lie          <- the bar worth chasing
-        T2 COMPLETE   the fields a reader acts on are there, and each is backed
+        T2 COMPLETE   the fields a reader acts on are there and backed, or searched out
         T3 SETTLED    every open question has been answered
 
     T1 first, because the numbers this tool publishes are sums: an incomplete row

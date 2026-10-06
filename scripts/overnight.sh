@@ -42,6 +42,15 @@
 #             It picks rows with `--t2` — the ones below T2 for missing fields,
 #             fewest missing first — where `--target 0` alone had sorted the
 #             FULLEST rows first and spent every round on rows already past the bar.
+#   discover  the news and new campuses, first round only: polls the feeds (free —
+#             no fetch, no model) and reads `--discover` queued articles through
+#             the ordinary crawl, whose identity check asks before it inserts.
+#             Everything published within the email's 45-day window goes first,
+#             newest first, whatever campus it names, because what is read tonight
+#             is mailed tomorrow: a 09-21 lawsuit against a tracked campus once
+#             waited behind the backlog until 10-03 and was mailed as news. Then
+#             articles naming no tracked campus — enrich reads for one row and
+#             creates none, so this is where new campuses come from.
 #
 # WHAT IT COSTS, AND THE CEILING. The ceiling is money: `--cny` (default ¥12), priced
 # from the spend ledger by `tracker.spend` at DeepSeek's published rates for the hour
@@ -49,18 +58,34 @@
 # cached prompt, which is billed at a fiftieth of the rate; about 93% of the money is
 # the reply, most of it reasoning. 25,000,000 tokens was anything from ¥20 to ¥31, and
 # on the six nights to 2026-09-29 the loop cost ¥9-34 without the token ceiling ever
-# firing. The check runs before every paid phase, and on the nights measured no single
-# phase invocation cost more than ¥2.76 (an enrich pass), so a night ends below
-# `--cny` plus about ¥3 — under ¥15 at the default.
+# firing. The check runs before every paid phase, so a night ends below `--cny` plus
+# one phase.
+#
+# THE VOLUME, raised on 2026-10-05. The cost fixes of 09-30 left nights at ¥1.76-2.75
+# against a ¥12 ceiling, so the loop was doing a fifth of what it was allowed to:
+# 15 rows enriched on a 60-article budget, 10 queued articles read for new campuses,
+# while 419 rows sat below T2 with something still worth searching for and 1,659
+# readable articles waited in the queue. Now 40 rows on 160 articles (the enrich pass
+# at ~¥0.12 a row, about ¥5), 40 queued articles (~¥0.01 each), 18 feeds, and 60 findings and
+# 40 pairs a round. About ¥7 a night, so the ceiling still has room; the enrich pass
+# is the largest single phase, which bounds the overshoot at about `--cny` + ¥5.
 #
 # Later rounds are cheaper than the first: every paid phase records what it answered
 # or could not decide, keyed on the evidence it was shown, and does not re-offer it
 # until that evidence changes or a month passes (`tracker/declines.py`).
 #
-# The per-item judgements — risks, audit, enrich's settle step — run at `low`
-# reasoning effort overnight (`--judgement-effort`): each is a pick from a short menu
-# against evidence already in the prompt. `--local-judgement` sends them to the local
-# model instead (TRACKER_JUDGEMENT_PROVIDER=ollama), at no cost per call.
+# The per-item judgements — risks, audit, enrich's settle step — run at `high`
+# reasoning effort (`--judgement-effort`). They ran at `low` for one night,
+# 2026-09-30, and two of the audit's three model decisions that night were wrong in
+# ways that move published totals: it replaced a campus's $600M with a statewide
+# "$20 billion+ in Ohio", and kept a land price as a campus's build investment while
+# saying in its own reason that it was the land price. The step cost ¥0.18 that
+# night; `high` costs a few tenths of a yuan more, which is not the place to save.
+# `--local-judgement` sends them to the local model (TRACKER_JUDGEMENT_PROVIDER=ollama).
+#
+# The morning report ends with every value the night changed (`tracker changes`
+# against the snapshot taken before round 1), each with the sentence now behind it,
+# so a person can read what the models did in a couple of minutes.
 #
 # THE CEILING READS A LEDGER, NOT THE LOG. Every paid call appends a line to the file
 # `TRACKER_SPEND_LEDGER` names (`tracker.llm.record_spend`), so a phase is counted
@@ -107,19 +132,21 @@ tracker() { "$PY" -m tracker "$@"; }
 HOURS=10
 ROUNDS=20
 DRY_ROUNDS=2
-FINDINGS=40
-PAIRS=25
+FINDINGS=60
+PAIRS=40
 AUDIT=60
 RISKS=40
-ENRICH=15
-ENRICH_BUDGET=60
+ENRICH=40
+ENRICH_BUDGET=160
 ENRICH_ROUNDS=1
+DISCOVER=40
 MIN_CONF=0.85
 DO_MERGE=1
 DO_ENRICH=1
+DO_DISCOVER=1
 TOKEN_CAP=25000000
 CNY_CAP=12
-JUDGEMENT_EFFORT=low
+JUDGEMENT_EFFORT=high
 EXTRACTION_EFFORT=
 LOCAL_JUDGEMENT=0
 BACKUP_EVERY=5
@@ -138,18 +165,19 @@ started in tmux and left.
   --hours N          wall-clock ceiling (default 10). Checked between rounds.
   --rounds N         max rounds (default 20)
   --dry-rounds N     stop after N rounds with no reduction (default 2)
-  --findings N       logic findings per round (default 40)
-  --pairs N          duplicate pairs per round (default 25)
+  --findings N       logic findings per round (default 60)
+  --pairs N          duplicate pairs per round (default 40)
   --audit N          audit findings per round (default 60)
   --risks N          obstacles per round (default 40)
-  --enrich N         projects to enrich (default 15); 0 to skip
-  --enrich-budget N  articles the enrich phase may read (default 60)
+  --enrich N         projects to enrich (default 40); 0 to skip
+  --enrich-budget N  articles the enrich phase may read (default 160)
   --enrich-rounds N  enrich in the first N rounds only (default 1)
+  --discover N       queued articles to read, the news first (default 40); 0 to skip
   --min-confidence F floor a duplicate fold needs (default 0.85)
   --no-merge         never fold duplicates; park and rule only. Deletes nothing.
   --cny N            stop when the night's spend, priced, reaches N yuan (default 12)
   --tokens N         also stop when prompt+reply tokens pass N (default 25,000,000)
-  --judgement-effort E  reasoning for risks, audit and settle: low|high|max (default low)
+  --judgement-effort E  reasoning for risks, audit and settle: low|high|max (default high)
   --extraction-effort E reasoning for reading articles (default: whatever .env says)
   --local-judgement  send risks, audit and settle to the local model (Ollama)
   --backup-every N   snapshot every N rounds (default 5). Always before round 1.
@@ -179,6 +207,7 @@ while [ $# -gt 0 ]; do
     --enrich)         shift; ENRICH="${1:?}" ;;
     --enrich-budget)  shift; ENRICH_BUDGET="${1:?}" ;;
     --enrich-rounds)  shift; ENRICH_ROUNDS="${1:?}" ;;
+    --discover)       shift; DISCOVER="${1:?}" ;;
     --min-confidence) shift; MIN_CONF="${1:?}" ;;
     --cny)            shift; CNY_CAP="${1:?}" ;;
     --tokens)         shift; TOKEN_CAP="${1:?}" ;;
@@ -195,6 +224,7 @@ while [ $# -gt 0 ]; do
 done
 
 [ "$ENRICH" -gt 0 ] 2>/dev/null || DO_ENRICH=0
+[ "$DISCOVER" -gt 0 ] 2>/dev/null || DO_DISCOVER=0
 
 effort_ok() { case "$1" in low|high|max) return 0 ;; *) return 1 ;; esac; }
 effort_ok "$JUDGEMENT_EFFORT" || { echo "--judgement-effort must be low, high or max" >&2; exit 2; }
@@ -259,6 +289,8 @@ finally:
     con.close()
 PYEOF
   echo "    snapshot: $dest"
+  # Not `local`: the morning report compares the database with the first one.
+  SNAPSHOT="$dest"
 }
 
 # Three numbers from one process: logic findings not yet answered, duplicate
@@ -343,6 +375,8 @@ over_ceiling() {
 # --- start ------------------------------------------------------------------
 
 STARTED=$(date +%s)
+# The moment rows count as new tonight, in the database's own clock (naive UTC).
+STARTED_UTC=$(date -u '+%Y-%m-%d %H:%M:%S')
 DEADLINE=$((STARTED + HOURS * 3600))
 SPENT=0
 CNY=0.00
@@ -368,7 +402,9 @@ printf '    at start  %s finding(s), %s duplicate group(s), %s row(s) below T2\n
 MIN_F=$F0; MIN_D=$D0; MIN_B=$B0
 
 say 'snapshot before anything is deleted'
+SNAPSHOT=""
 backup
+FIRST_SNAPSHOT="$SNAPSHOT"
 
 # Before each paid phase. `break` leaves the round loop from inside its body, so the
 # settle below still runs once for whatever the night managed.
@@ -438,6 +474,34 @@ for round in $(seq 1 "$ROUNDS"); do
       < /dev/null || true
   fi
 
+  # --- discover: new campuses, through the identity check -----------------
+  # The one phase that adds rows. First round only, for the reason enrich is: the
+  # queue does not change between rounds. Polling the feeds costs nothing; each
+  # article read is one extraction (about ¥0.03), and the crawl's identity check —
+  # one call, only when a record nearly matches a row — is what keeps a campus
+  # already held under another name from becoming its twin. Rounds after this one
+  # run `duplicates` over whatever it added.
+  if [ "$DO_DISCOVER" -eq 1 ] && [ "$round" -eq 1 ]; then
+    if capped discover; then break; fi
+    phase "discover — poll the feeds, read $DISCOVER queued article(s), the news first"
+    tracker discover < /dev/null || true
+    tracker ingest crawl --from-queue --new-first --limit "$DISCOVER" < /dev/null || true
+
+    # One attempt to fold per row tonight added, each against its likeliest twin
+    # wherever that twin is filed (`duplicates resolve --created-since`). The
+    # regular pass only sees pairs within one town or one company, and on
+    # 2026-10-05 a new 10 GW PORTS campus row sat unpaired beside its duplicate
+    # because one row named the town and a different company, the other the county.
+    if capped duplicates; then break; fi
+    phase "duplicates — one attempt per row created tonight"
+    if [ "$DO_MERGE" -eq 1 ]; then
+      tracker duplicates resolve --merge --min-confidence "$MIN_CONF" \
+        --created-since "$STARTED_UTC" < /dev/null || true
+    else
+      tracker duplicates resolve --created-since "$STARTED_UTC" < /dev/null || true
+    fi
+  fi
+
   # --- reconcile and measure ----------------------------------------------
   phase 'settle — re-derive and score'
   tracker backfill derive < /dev/null || true
@@ -485,5 +549,16 @@ tracker duplicates < /dev/null 2>&1 | sed -n '1,2p' || true
 ELAPSED=$(( ($(date +%s) - STARTED) / 60 ))
 say "overnight complete — ${ELAPSED}m, ¥$(spent_cny), ~$(spent_so_far) tokens"
 spend_by_command
+
+# Every value the night changed, each with the sentence now behind it. The quality
+# counts above cannot see a wrong value that has a real quote; a reader can, in the
+# minutes this list takes to read. `tracker logic rule-out` takes back a bad one.
+say 'what the night changed'
+if [ -n "$FIRST_SNAPSHOT" ] && [ -f "$FIRST_SNAPSHOT" ]; then
+  tracker changes --against "$FIRST_SNAPSHOT" < /dev/null || true
+else
+  echo "    no snapshot from before round 1 to compare against"
+fi
+echo
 printf '    Anything still listed needs either a person or a command that does not\n'
 printf '    exist yet. The block findings are the second kind — see this header.\n'

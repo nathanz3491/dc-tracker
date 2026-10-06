@@ -354,7 +354,7 @@ the data rather than stored: there is no ledger table and no `clean_tier` column
 ```
 T0 SOURCED    something real cites it, and it does not contradict itself
 T1 SOUND      nothing in a total is a lie          <- the bar worth chasing
-T2 COMPLETE   the fields a reader acts on are there, and each is backed
+T2 COMPLETE   the fields a reader acts on are there and backed, or searched out
 T3 SETTLED    every open question has been answered
 ```
 
@@ -368,6 +368,22 @@ Two definitional choices are load-bearing. `NOT_APPLICABLE` counts as complete �
 of rows, which is a target nobody can use. And 待确认 counts as *backed*: the gate
 declaring it could not confirm a value is the gate **working**, so only
 `confirmed_without_quote` fails the condition.
+
+Two more were added on 2026-10-05, when 439 rows sat at T1 short of a field and the
+nightly enrich lifted about one a night — 0 of 15 rows gained a T2 field on 10-04,
+because the facts missing were ones nobody publishes:
+
+* **`mw_built` does not apply at `construction`.** It is what is energized today,
+  and the merge marks a row operational as soon as any source says any part is live,
+  so a `construction` row has nothing energized and no figure anyone could print.
+  Requiring one held 24 rows below T2.
+* **A field searched twice with nothing published counts as answered**
+  (`gaps.unpublished`, from the `tracker.attempts` ledger). It reopens the moment the
+  row gains a citation, so it records the evidence so far rather than granting a
+  permanent pass, and the reported condition `fields_published` keeps naming it on
+  every card. With both, 58 rows moved to T2 on a copy of production. T2 therefore
+  means *complete as far as anything has been published*, and the unknowns are listed
+  rather than hidden.
 
 The definition is calibrated rather than asserted: a test says that if a
 fully-answered row cannot score T3, the definition is wrong and `clean.py` changes —
@@ -447,7 +463,7 @@ this project will not run. `PlaywrightFetcher` drives Chrome's headless shell wi
 nothing patched, sends the same user agent every other rung sends, and asks
 `robots.txt` before it opens a page: rendering a page a site permits is the job;
 getting past a site that refuses crawlers is not (see "Why DataCenterDynamics is
-discovery-only" in `ingesting.md`). A `robots.txt` that cannot be read counts as a
+not read" in `ingesting.md`). A `robots.txt` that cannot be read counts as a
 refusal, because a firewall that refuses even that file is the case the line is
 about. It is on the ladder whenever it is installed — the flag is the install.
 
@@ -573,13 +589,32 @@ one source, because aggregators recycle each other's reporting and counting rows
 would inflate confidence exactly where it should not be. Any citation at all
 floors the score at 1, per the PRD's definition of done.
 
-The same reasoning extends to **tertiary domains** (`TERTIARY_DOMAINS`, today
-just wikipedia.org): a Wikipedia citation is kept, quotable and worth its floor
+The same reasoning extends to **tertiary domains** (`TERTIARY_DOMAINS`):
+Wikipedia and other wikis, facility directories and project trackers
+(servercountry.org, dchub.cloud, epoch.ai and some forty more), and lists,
+digests and reposts. A citation from one is kept, quotable and worth its floor
 of 1, but it never counts toward domain independence, agreement, or conflict.
 Its paragraph on a campus is the trade-press coverage one step removed, so
 letting it corroborate would launder aggregation into independence — and letting
-it *conflict* would dock a row for Wikipedia's staleness rather than for a real
+it *conflict* would dock a row for a directory's staleness rather than for a real
 disagreement between reporters.
+
+**And it never decides a field a first-hand source states.** The merge drops a
+tertiary claim whenever a first-hand one survives the earlier filters
+(`upsert.contenders`): a directory fills what nothing else states and loses
+everything else. Before that rule a directory was `general_media` like any local
+paper, tied with one on weight, and won on recency — and a listing is always
+"recent", because it is re-crawled whenever anyone looks. The hand audit of
+2026-10-01 traced a wrong campus capacity to a directory page that gave one
+building's figures for the whole site. The quote rule still comes first: a
+directory's quoted figure beats a report's unquoted one, which is not evidence of
+anything yet.
+
+The cost is on fields that only move forward. A 2021 article saying
+"construction" now outranks a 2026 directory saying "operational" — on a copy of
+production that moved six phases back, some of them plausibly wrong — and the
+honest fix is a first-hand source saying the site opened, which is what `enrich`
+looks for. A directory that is the only voice on a field still fills it.
 
 `updated_at` means "a field changed". `last_verified_at` means "an operator says
 this row is right" (PRD open question Q4), and it is the only path from a single
@@ -751,7 +786,18 @@ tracker ingest pjm --csv data/raw/pjm_2025q3.csv --iso pjm
   unless the SQL is what changed.
 - **`PRAGMA foreign_keys=ON` on every connection.** SQLite silently ignores every
   foreign key by default, and this whole design rests on `source.project_id` and
-  `event.source_id` being enforced.
+  `event.source_id` being enforced. The one exception is a migration that rebuilds
+  a table others reference: it carries `-- tracker: foreign_keys off`, the runner
+  switches them off outside its transaction and back on after, and it commits only
+  if `PRAGMA foreign_key_check` is clean. With them on, dropping or even renaming
+  the old table cascades through every child — rehearsed on a copy of production,
+  0032 emptied all eight tables under `project` that way before it was rewritten.
+- **A project's number is never reused** (`AUTOINCREMENT`, migration 0032). A plain
+  `INTEGER PRIMARY KEY` gives a new row one more than the largest id left, so
+  merging the newest rows away freed their numbers: #1557 named three campuses in a
+  week, and merge notes elsewhere ("merged #1557 into this row") pointed at
+  whichever one held it. The count starts above #1560, the highest number a note
+  had used.
 - **Read commands open the database read-only** (`mode=ro`), so the PRD's "never
   modify the DB except for ingest and review" is enforced by SQLite rather than by
   convention. A bug in `export.py` raises instead of corrupting data.

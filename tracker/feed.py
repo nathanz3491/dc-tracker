@@ -233,6 +233,20 @@ class Signal:
         return notable(self)
 
     @property
+    def when(self) -> str:
+        """The date a reader sees beside "learned": when it happened, or else when
+        its article was published, or "undated".
+
+        A fact with no date of its own used to print "undated" even when its
+        article carried one, so a reader could not tell that "learned 10-03" was
+        about something reported on 09-21 without opening the link.
+        """
+        if self.happened is not None:
+            return self.happened.isoformat()
+        published = _as_date(self.published_at)
+        return f"reported {published.isoformat()}" if published else "undated"
+
+    @property
     def headline(self) -> str:
         """The label, plus what actually happened to it.
 
@@ -271,6 +285,7 @@ class Signal:
             "source_url": self.source_url,
             "publisher": self.publisher,
             "published_at": self.published_at.isoformat() if self.published_at else None,
+            "when": self.when,
             "weight": self.weight,
             "notify": self.notify,
             "entry": self.entry,
@@ -678,11 +693,14 @@ def stale(signal: Signal, *, max_age_days: int = NOTIFY_MAX_AGE_DAYS) -> bool:
     129, the nightly average falls from 11.8 to 4.3, and the worst night — a large
     sync on 2026-08-11 — falls from **135 to 21**.
 
-    **An undated signal is judged by when we recorded it.** `happened` is None for
-    an obstacle nobody put a date on, and an open obstacle is a statement about
-    now: treating "no date" as "old" would silently drop the live risks this
-    channel exists to carry (25 of the 354 were undated). The day we recorded it is
-    the most recent it can have been reported, so that is its age.
+    **An undated signal is judged by when its article was published**, and only
+    failing that by when we recorded it. `happened` is None for an obstacle nobody
+    put a date on, and an open obstacle is a statement about now: treating "no
+    date" as "old" would silently drop the live risks this channel exists to carry
+    (25 of the 354 were undated). But the day we recorded it is only the latest it
+    can have been reported, and the queue reads articles weeks old: on 2026-10-04 an
+    obstacle from a 09-21 article went out as news because it was read on 10-03.
+    The article's own date is when it was reported, so that is its age.
     """
     when = occurred(signal)
     if when is None:
@@ -691,9 +709,12 @@ def stale(signal: Signal, *, max_age_days: int = NOTIFY_MAX_AGE_DAYS) -> bool:
 
 
 def occurred(signal: Signal) -> dt.date | None:
-    """When it happened, or — undated — the day we recorded it."""
+    """When it happened; undated, when its article was published; failing that,
+    the day we recorded it."""
     if signal.happened is not None:
         return signal.happened
+    if signal.published_at is not None:
+        return _as_date(signal.published_at)
     return signal.at.date() if signal.at else None
 
 

@@ -6,6 +6,7 @@ Entirely offline — feeds come from fixture XML through an injected fetcher.
 from __future__ import annotations
 
 import datetime as dt
+import re
 import tomllib
 from pathlib import Path
 
@@ -81,15 +82,15 @@ def test_only_specialist_feeds_imply_the_topic():
     feeds, _ = load_config()
     implied = {f.name for f in feeds if f.topic_implied}
     assert implied == {
-        # Publications that cover nothing but data centers.
+        # Publications that cover nothing but data centers. The first two are
+        # closed, and listed anyway: re-opening one restores exactly this setting.
         "datacenterdynamics",
         "datacenterfrontier",
         "datacenterknowledge",
-        # Bisnow's data-center vertical, not its national feed. Every article in
-        # this one is about a data center; `bisnow-national` is not here.
-        "bisnow-datacenter",
         # A pure-play operator's own newsroom, like the [[sitemap]] entries.
         "qts-newsroom",
+        # Not `bisnow-latest`: Bisnow's data-center vertical had a feed of its own,
+        # and the feed that replaced it carries every property type.
     }
 
 
@@ -128,6 +129,281 @@ def test_config_without_both_filter_tiers_is_refused(tmp_path: Path):
     )
     with pytest.raises(DiscoverError, match="both `topic` and `signal`"):
         load_config(partial)
+
+
+# --- Closed feeds -----------------------------------------------------------
+#
+# Measured 2026-10-02: thirteen feeds answered every client with a Cloudflare
+# challenge, whatever its User-Agent or TLS fingerprint. `closed` keeps them in the
+# file — so `tracker feeds` does not propose them back, and re-opening is one line —
+# without a request that can only fail, or a failure line that would always be lit.
+
+_CLOSED_CONFIG = """
+[[feed]]
+name = "open"
+url = "https://a.test/rss"
+
+[[feed]]
+name = "refused"
+url = "https://refused.test/feed/"
+closed = "2026-10-02: Cloudflare challenge on every page"
+
+[[feed]]
+name = "reopened"
+url = "https://b.test/feed/"
+closed = false
+
+[[feed]]
+name = "unexplained"
+url = "https://c.test/feed/"
+closed = true
+
+[filter]
+topic = ["data cent"]
+signal = ["campus"]
+
+[[sitemap]]
+name = "refused-archive"
+url = "https://refused.test/sitemap.xml"
+closed = "2026-10-02: Cloudflare challenge on every page"
+
+[[sitemap]]
+name = "open-archive"
+url = "https://a.test/sitemap.xml"
+"""
+
+
+def _closed_config(tmp_path: Path) -> Path:
+    path = tmp_path / "feeds.toml"
+    path.write_text(_CLOSED_CONFIG, encoding="utf-8")
+    return path
+
+
+def test_closed_carries_its_reason_and_false_means_open(tmp_path: Path):
+    feeds = {f.name: f for f in load_config(_closed_config(tmp_path))[0]}
+    assert feeds["open"].closed is None
+    assert feeds["refused"].closed == "2026-10-02: Cloudflare challenge on every page"
+    assert feeds["reopened"].closed is None, "`closed = false` re-opens, like deleting it"
+    assert feeds["unexplained"].closed == discover.UNEXPLAINED_CLOSURE
+
+    sitemaps = {s.name: s for s in discover.load_sitemaps(_closed_config(tmp_path))}
+    assert sitemaps["refused-archive"].closed
+    assert sitemaps["open-archive"].closed is None
+
+
+def test_a_closed_feed_is_not_requested_and_not_counted_as_failed(session, tmp_path: Path):
+    """Thirteen failures a night that everybody expects teach a reader to stop
+    reading the line — and then the fourteenth, which nobody expected, is missed."""
+    fetcher = FakeFeedFetcher(
+        {
+            "https://a.test/rss": fixture("feed_rss.xml"),
+            "https://b.test/feed/": fixture("feed_atom.xml"),
+        }
+    )
+    report, _ = discover.run(
+        session, feeds_path=_closed_config(tmp_path), fetcher=fetcher, since_days=None
+    )
+
+    assert "https://refused.test/feed/" not in fetcher.calls
+    assert "https://c.test/feed/" not in fetcher.calls
+    assert set(fetcher.calls) == {"https://a.test/rss", "https://b.test/feed/"}
+    assert report.feeds_polled == 2
+    assert report.feeds_failed == 0
+    assert report.closed == [
+        ("refused", "2026-10-02: Cloudflare challenge on every page"),
+        ("unexplained", discover.UNEXPLAINED_CLOSURE),
+    ]
+    assert ("feeds closed", 2) in report.as_rows()
+
+
+async def test_a_closed_archive_is_not_walked(tmp_path: Path):
+    fetcher = FakeFeedFetcher({"https://a.test/sitemap.xml": fixture("feed_sitemap.xml")})
+    specs = discover.load_sitemaps(_closed_config(tmp_path))
+    _, problems = await discover.sweep_sitemaps(specs, fetcher, load_config()[1])
+
+    assert fetcher.calls == ["https://a.test/sitemap.xml"]
+    assert problems == [], "a closed archive is a known state, not a problem to report"
+
+
+def test_every_shipped_closure_says_when_it_was_measured():
+    """A closure is a measurement that goes stale, so the date is the point of it:
+    it is what tells the next reader whether checking again is overdue."""
+    feeds, _ = load_config()
+    closed = {f.name: f.closed for f in feeds if f.closed}
+    closed |= {s.name: s.closed for s in discover.load_sitemaps() if s.closed}
+    assert closed, "the shipped file has closed entries; this test guards their reasons"
+    for name, reason in closed.items():
+        assert reason != discover.UNEXPLAINED_CLOSURE, f"{name} is closed without saying why"
+        assert re.match(r"\d{4}-\d{2}-\d{2}: \S", reason), f"{name}: {reason!r} has no date"
+
+
+def test_the_shipped_closed_feeds_are_never_requested(session):
+    fetcher = FakeFeedFetcher({})
+    report, _ = discover.run(session, fetcher=fetcher, since_days=None, dry_run=True)
+
+    feeds, _ = load_config()
+    closed_urls = {f.url for f in feeds if f.closed}
+    assert closed_urls.isdisjoint(fetcher.calls)
+    assert len(fetcher.calls) == len(feeds) - len(closed_urls)
+    assert report.feeds_failed == len(fetcher.calls), "every open feed 404s in this fake"
+
+
+# --- Pages nothing can read -------------------------------------------------
+#
+# A closed publisher's articles answer the same challenge as its feed. On
+# 2026-10-02 six of the nightly crawl's next ten slots, and all fifteen of a sync
+# extract, were such pages, each one taken from a page that could have been read.
+
+
+def test_closed_domains_are_every_closed_feed_and_archive(tmp_path: Path):
+    """`refused` and its archive share a domain; `unexplained` is closed without a
+    reason and counts all the same; `reopened` says `closed = false`."""
+    assert discover.closed_domains(_closed_config(tmp_path)) == {"refused.test", "c.test"}
+
+
+def test_a_broken_config_closes_nothing(tmp_path: Path):
+    """The ordering is an optimisation. A file discover cannot read must leave the
+    crawl in its old order, not stop it."""
+    bad = tmp_path / "feeds.toml"
+    bad.write_text("[[feed]\nurl = ", encoding="utf-8")
+    assert discover.closed_domains(bad) == frozenset()
+
+
+def test_a_closed_publishers_page_is_unreadable_unless_its_body_is_cached(tmp_path: Path):
+    from tracker.ingest.fetch import cache_path
+
+    config = _closed_config(tmp_path)
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    cached = "https://www.refused.test/2026/09/cached/"
+    cache_path(cached, cache).write_text("syndicated before the block", encoding="utf-8")
+
+    unreadable = discover.unreadable_test(cache, path=config)
+    assert unreadable("https://www.refused.test/2026/09/story/"), "any host on the domain"
+    assert not unreadable(cached), "a cached body is served without a fetch"
+    assert not unreadable("https://a.test/2026/09/story/"), "an open publisher is untouched"
+
+    without_cache = discover.unreadable_test(None, path=config)
+    assert without_cache(cached), "with no cache to serve from, nothing on it can be read"
+
+
+def _queue_dated(session, *pairs: tuple[str, dt.datetime]) -> None:
+    queue_candidates(
+        session,
+        [
+            Candidate(url, f"A {100 * (i + 1)}MW data center campus", "f", published_at=when)
+            for i, (url, when) in enumerate(pairs)
+        ],
+        run_id="r",
+        report=DiscoverReport(),
+    )
+
+
+def test_the_nightly_order_puts_an_unreadable_page_after_every_readable_one(
+    session, tmp_path: Path
+):
+    """Newest first would read the closed publisher's article first, and fail."""
+    _queue_dated(
+        session,
+        ("https://refused.test/newest-campus/", dt.datetime(2026, 9, 30)),
+        ("https://a.test/older-campus/", dt.datetime(2026, 9, 1)),
+        ("https://b.test/oldest-campus/", dt.datetime(2026, 8, 1)),
+    )
+    unreadable = discover.unreadable_test(None, path=_closed_config(tmp_path))
+
+    ordered = [r.url for r in pending(session, new_first=True, unreadable=unreadable)]
+    assert ordered == [
+        "https://a.test/older-campus/",
+        "https://b.test/oldest-campus/",
+        "https://refused.test/newest-campus/",
+    ], "newest first among the readable pages, and the rest after them"
+    two = [r.url for r in pending(session, limit=2, new_first=True, unreadable=unreadable)]
+    assert "https://refused.test/newest-campus/" not in two
+    assert pending(session, new_first=True)[0].url == "https://refused.test/newest-campus/"
+
+
+def test_depth_first_does_not_lift_an_unreadable_page(session, tmp_path: Path):
+    """A second source for a tracked row is worth more than a new row — if it can be
+    read. One that cannot be is worth nothing, however well it ranks."""
+    tracked(session, "Sabey Data Centers", "Sabey Ashburn Campus", "Ashburn")
+    _queue_dated(
+        session,
+        ("https://refused.test/sabey-data-centers-ashburn-70mw/", dt.datetime(2026, 9, 1)),
+        ("https://a.test/brand-new-campus-500mw/", dt.datetime(2026, 9, 2)),
+    )
+    unreadable = discover.unreadable_test(None, path=_closed_config(tmp_path))
+
+    assert "sabey" in pending(session, known_first=True)[0].url
+    ordered = pending(session, known_first=True, unreadable=unreadable)
+    assert ordered[0].url == "https://a.test/brand-new-campus-500mw/"
+
+
+def test_the_limit_is_cut_after_the_unreadable_pages_move(session, tmp_path: Path):
+    """The plain oldest-first order cuts its limit in SQL. With pages to move, the
+    cut has to come after the move, or it only reorders the ones already chosen."""
+    _queue_dated(
+        session,
+        ("https://refused.test/oldest/", dt.datetime(2026, 7, 1)),
+        ("https://a.test/middle/", dt.datetime(2026, 8, 1)),
+        ("https://b.test/newest/", dt.datetime(2026, 9, 1)),
+    )
+    unreadable = discover.unreadable_test(None, path=_closed_config(tmp_path))
+    assert [r.url for r in pending(session, limit=2, unreadable=unreadable)] == [
+        "https://a.test/middle/",
+        "https://b.test/newest/",
+    ]
+
+
+def test_an_unreadable_page_is_still_queued_and_still_reached(session, tmp_path: Path):
+    """Nothing is dropped. With no readable page left the rest are tried — which is
+    also how a block that has lifted gets noticed."""
+    _queue_dated(session, ("https://refused.test/only/", dt.datetime(2026, 9, 1)))
+    unreadable = discover.unreadable_test(None, path=_closed_config(tmp_path))
+    assert [r.url for r in pending(session, limit=5, unreadable=unreadable)] == [
+        "https://refused.test/only/"
+    ]
+
+
+def test_a_retry_takes_the_readable_failures_first(session, tmp_path: Path):
+    _failing(session, "https://refused.test/failed-first", failures=1)
+    _failing(session, "https://a.test/failed-second", failures=1)
+    unreadable = discover.unreadable_test(None, path=_closed_config(tmp_path))
+
+    assert [r.url for r in discover.retryable(session, limit=1)] == [
+        "https://refused.test/failed-first"
+    ]
+    assert [r.url for r in discover.retryable(session, limit=1, unreadable=unreadable)] == [
+        "https://a.test/failed-second"
+    ]
+
+
+def test_priority_publishers_still_lead_among_the_readable_pages(tmp_path: Path):
+    """`tracker sync` reads `priority` publishers first, and on 2026-10-02 two of
+    them were closed: all fifteen of its slots went to pages that answer a
+    challenge. Moving those last must keep the ranking among everything else."""
+    from tracker import policy as policy_mod
+
+    ranks = policy_mod.parse(
+        '[[source]]\ndomain = "refused.test"\nrank = "priority"\n'
+        '[[source]]\ndomain = "p.test"\nrank = "priority"\n'
+    )
+    kept, _ = ranks.partition(
+        ["https://o.test/1", "https://refused.test/2", "https://p.test/3", "https://o.test/4"]
+    )
+    assert kept[:2] == ["https://refused.test/2", "https://p.test/3"]
+
+    unreadable = discover.unreadable_test(None, path=_closed_config(tmp_path))
+    assert discover.readable_first(kept, unreadable) == [
+        "https://p.test/3",
+        "https://o.test/1",
+        "https://o.test/4",
+        "https://refused.test/2",
+    ]
+
+
+def test_readable_first_without_a_test_changes_nothing():
+    urls = ["https://refused.test/1", "https://a.test/2"]
+    assert discover.readable_first(urls, None) == urls
 
 
 # --- Parsing ----------------------------------------------------------------
@@ -766,6 +1042,56 @@ def test_the_feed_fetcher_reports_an_unparseable_url_rather_than_raising():
     assert "invalid" in (result.error or "").lower()
 
 
+async def test_the_feed_request_says_who_it_is():
+    """Measured on the thirteen feeds that answered 403 on 2026-10-02: a Chrome
+    User-Agent changed nothing, so the poller keeps sending the project's own."""
+    import httpx
+
+    from tracker.config import get_settings
+    from tracker.ingest.discover import _RawFetcher
+
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, text=fixture("feed_rss.xml"))
+
+    settings = get_settings()
+    fetcher = _RawFetcher(settings, transport=httpx.MockTransport(handler))
+    result = await fetcher.fetch("https://a.test/rss")
+
+    assert result.ok
+    (request,) = seen
+    assert request.headers["user-agent"] == settings.user_agent
+    assert request.headers["accept"].startswith("application/rss+xml")
+
+
+async def test_a_cloudflare_challenge_is_named_in_the_failure():
+    """A bare "HTTP 403" sends the next person off to try User-Agents for an
+    afternoon. Cloudflare marks its challenge page, so the failure can say what it is."""
+    import httpx
+
+    from tracker.config import get_settings
+    from tracker.ingest.discover import _RawFetcher
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "challenged.test":
+            return httpx.Response(
+                403,
+                headers={"cf-mitigated": "challenge"},
+                text="<title>Just a moment...</title>",
+            )
+        return httpx.Response(403, text="forbidden")
+
+    fetcher = _RawFetcher(get_settings(), transport=httpx.MockTransport(handler))
+    challenged = await fetcher.fetch("https://challenged.test/feed/")
+    plain = await fetcher.fetch("https://plain.test/feed/")
+
+    assert (challenged.ok, challenged.status) == (False, 403)
+    assert challenged.error == f"HTTP 403 ({discover.CHALLENGE_NOTE})"
+    assert plain.error == "HTTP 403", "a 403 that Cloudflare did not mark is not called one"
+
+
 def test_run_queues_matches_and_survives_a_dead_feed(session, tmp_path: Path):
     config, mapping = feed_mapping(tmp_path)
     fetcher = FakeFeedFetcher(mapping)
@@ -1002,6 +1328,63 @@ def test_known_first_still_honours_the_limit(session):
         report=DiscoverReport(),
     )
     assert len(pending(session, limit=2, known_first=True)) == 2
+
+
+def test_the_nightly_order_reads_the_news_first_then_untracked_campuses(session):
+    """What the crawl learns tonight is mailed tomorrow, so anything published
+    within the email's window goes first, newest first, whatever it is about. A
+    2026-09-21 lawsuit against a *tracked* campus sorted behind 1,600 backlog
+    articles, was read on 10-03 and mailed as news on 10-04.
+
+    After the news: campuses nobody tracks, newest first — enrich reads for one row
+    and creates none, so this is the only place a new campus comes from at night.
+    """
+    from tracker.ingest.discover import pending
+
+    now = dt.datetime.now()
+    tracked(session, "Sabey Data Centers", "Sabey Ashburn Campus", "Ashburn")
+    queue_candidates(
+        session,
+        [
+            Candidate(
+                "https://x.test/sabey-data-centers-ashburn-lawsuit/",
+                "Neighbours sue over Sabey's Ashburn data center campus",
+                "f",
+                published_at=now - dt.timedelta(days=2),
+            ),
+            Candidate(
+                "https://x.test/old-new-data-center-campus-100mw/",
+                "A 100MW campus",
+                "f",
+                published_at=dt.datetime(2024, 1, 5),
+            ),
+            Candidate("https://x.test/undated-data-center-campus-200mw/", "A 200MW campus", "f"),
+            Candidate(
+                "https://x.test/recent-new-data-center-campus-300mw/",
+                "A 300MW campus",
+                "f",
+                published_at=now - dt.timedelta(days=10),
+            ),
+            Candidate(
+                "https://x.test/sabey-data-centers-ashburn-expansion-2023/",
+                "Sabey expands its Ashburn data center campus",
+                "f",
+                published_at=dt.datetime(2023, 3, 1),
+            ),
+        ],
+        run_id="r",
+        report=DiscoverReport(),
+    )
+
+    ordered = [row.url.rsplit("/", 2)[-2] for row in pending(session, new_first=True)]
+    assert ordered == [
+        "sabey-data-centers-ashburn-lawsuit",  # news, about a tracked row
+        "recent-new-data-center-campus-300mw",  # news
+        "old-new-data-center-campus-100mw",  # backlog, untracked
+        "undated-data-center-campus-200mw",
+        "sabey-data-centers-ashburn-expansion-2023",  # backlog, tracked
+    ]
+    assert len(pending(session, limit=2, new_first=True)) == 2
 
 
 # --- Operator newsrooms -----------------------------------------------------

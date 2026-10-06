@@ -190,10 +190,20 @@ other shell. Each round runs the free phases, then `audit` (a T1 gate, and cheap
 `risks`, the logic and duplicate agents, and — in the first round only
 (`--enrich-rounds`) — `enrich`, the most expensive rung and the only one that can move
 a row held at T1 by `fields_present`, pointed at the rows below T2 (`enrich --t2`).
+The first round also reads the news and adds campuses (`--discover`, default 40): it
+polls the feeds, which costs nothing, and reads that many queued articles through
+the crawl's identity check (`ingest crawl --from-queue --new-first`). Everything
+published within the email's 45-day window goes first, newest first, so what the
+email reports is days old rather than weeks; then articles naming no tracked campus.
+Enrich reads for one row and creates none, so without this step nothing in the loop
+added a campus.
 A round counts as progress only when a count falls below the lowest it has been that
 night, so counts that wobble up and back down end the night instead of prolonging
-it. The per-item judgements run at `low` effort (`--judgement-effort`), or on the
-local model with `--local-judgement`.
+it. The per-item judgements run at `high` effort (`--judgement-effort`), or on the
+local model with `--local-judgement`; one night at `low` made two of its three audit
+decisions wrong. The morning report ends with every value the night changed, each
+with the sentence behind it (`tracker changes`), and `tracker logic rule-out` takes
+back a claim a person finds wrong.
 
 What a night costs, measured on the six nights to 2026-09-29, before these changes:
 ¥9–34, ¥23 on average, 86% of it enrich re-reading unchanged articles for rows it
@@ -389,8 +399,11 @@ Nothing here defeats an access control, and the distinction is the whole
 justification: those sites' `robots.txt` files permit crawling —
 `investor.atmeta.com` says `Allow: /` with `Crawl-delay: 10` — so an over-broad
 WAF rule is not a policy. Where a site genuinely refuses crawlers, as
-DataCenterDynamics does with Cloudflare bot management, it stays discovery-only —
-see [Ingesting](docs/ingesting.md).
+DataCenterDynamics does with Cloudflare bot management, it is left alone — see
+[Ingesting](docs/ingesting.md). Since 2026-10-02 `lailluminator.com` is one of
+those: it and the rest of the States Newsroom network put a Cloudflare challenge on
+every page, which no rung of this ladder gets past, so their feeds are marked
+`closed` in `tracker/seed/feeds.toml`.
 
 ### Running `tracker` from anywhere
 
@@ -417,7 +430,7 @@ directory, which is what lets `tracker init` work from anywhere.
 .venv/Scripts/python -m pytest
 ```
 
-3,483 tests, about three minutes. **A fresh clone with no API key and no network access
+3,562 tests, about four minutes. **A fresh clone with no API key and no network access
 must produce a green run.** Tests that would hit the network or spend DeepSeek
 tokens are marked `network` / `llm` and deselected by default; run them
 explicitly with `-m network` or `-m llm`. An unmarked test that reaches for the

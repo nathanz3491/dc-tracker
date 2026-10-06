@@ -84,9 +84,11 @@ from tracker.vocab import (
     CLAIM_SCOPES,
     DEFAULT_RISK_SEVERITY,
     EVENT_TYPES,
+    PART_FIELDS,
     PARTY_ROLES,
     TRACKED_FIELDS,
     basis_from_quote,
+    part_from_quote,
     risk_precedence,
 )
 
@@ -1070,6 +1072,18 @@ def axis_gate(
             scope = CLAIM_AXIS_DEFAULTS["scope"]
     elif scope not in CLAIM_SCOPES:
         scope = CLAIM_AXIS_DEFAULTS["scope"]
+    if scope in ("this_site", "unnamed", "building"):
+        # `building` is read out of the sentence, never taken from the model — the
+        # lesson `basis` and `this_site` both taught. A campus capacity or
+        # investment whose sentence gives it to one building or phase ("the 36MW
+        # Hillsboro 3 data center", "initially offering 75MW") is that part's, and
+        # the merge then lets it fill the campus column only when nothing describes
+        # the whole site. Anything the reading does not license falls back to the
+        # neutral default, including a `building` the model volunteered.
+        if field in PART_FIELDS and part_from_quote(quote, value, site_names):
+            scope = "building"
+        elif scope == "building":
+            scope = CLAIM_AXIS_DEFAULTS["scope"]
     out["scope"] = scope
 
     bound = str(entry.get("bound") or "").strip()
@@ -2805,7 +2819,13 @@ def already_done(session: Session, urls: list[str]) -> set[str]:
 MAX_REFRESH_BACKOFF: Final = 4
 
 
-def stale_sources(session: Session, *, older_than_days: int, limit: int | None = None) -> list[str]:
+def stale_sources(
+    session: Session,
+    *,
+    older_than_days: int,
+    limit: int | None = None,
+    unreadable: Callable[[str], bool] | None = None,
+) -> list[str]:
     """Source URLs of existing projects that have not been re-read recently.
 
     This is how a project's data gets *updated* rather than merely added: articles
@@ -2834,8 +2854,14 @@ def stale_sources(session: Session, *, older_than_days: int, limit: int | None =
     citations, fetched and sent through extraction on every run; and an ISO queue
     row's URL is the queue's listing page, which the article extractor can only waste
     a call on.
+
+    **A page on a closed publisher goes last** when `unreadable` is given
+    (`discover.unreadable_test`). The backoff above would retire it after a few
+    runs, but each of those runs spends a slot on it, and the publishers closed on
+    2026-10-02 include the most-cited one in the database.
     """
     from tracker.confidence import PLACEHOLDER_MARKER
+    from tracker.ingest.discover import readable_first
     from tracker.models import Source
 
     rows = session.execute(
@@ -2865,7 +2891,7 @@ def stale_sources(session: Session, *, older_than_days: int, limit: int | None =
         if last < now - wait:
             due.append((last, url))
     due.sort()
-    urls = [url for _, url in due]
+    urls = readable_first([url for _, url in due], unreadable)
     return urls[:limit] if limit else urls
 
 
