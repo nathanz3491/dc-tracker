@@ -511,12 +511,13 @@ tracker notify status --user you@example.com                        # what went 
 **One email per person, every morning at 8:00 (China time), and nothing sent
 twice.** The loop is over people, not signals: fourteen updates on your watchlist
 is one message with fourteen cards. An update goes in if you have never been sent
-it, it clears `feed.notable`, and it was **reported in the last two months** — the
-same window as the Updates page. The ledger is what makes "since your last email"
-true, so there is no separate catch-up rule: a company you only just started
-watching, or a morning whose email failed, leaves unsent updates that are still in
-the window. A milestone recorded *before* its own date was a schedule when we read
-it, and is never sent.
+it, it clears `feed.notable`, it was **reported in the last two months** — the same
+window as the Updates page — and either we stored it since your last email or it
+was reported in the last two weeks (the catch-up for a company you only just
+started watching, or a morning whose email failed). The second condition is not
+redundant with the ledger: without it, the first email after the change would have
+carried every unsent update of two months, 64 for one reader. A milestone recorded
+*before* its own date was a schedule when we read it, and is never sent.
 
 **A day with no news still sends**, and it is not an apology: it is every open
 blocker reported in the last two months on every project you follow, and the

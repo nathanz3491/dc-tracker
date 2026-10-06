@@ -2,15 +2,23 @@
 
 **What goes in.** Every morning each person gets one email. An update is in it if
 they have never been sent it, it is worth interrupting them for (`feed.notable`),
-and it was **reported within the last** :data:`feed.REPORT_WINDOW_DAYS` (60) days —
+it was **reported within the last** :data:`feed.REPORT_WINDOW_DAYS` (60) days —
 the same window as the Updates page, on the same date (`feed.reported_on`: the
-article's publish date, else the fact's own date, else the day we stored it). An
-article from 2015 that the crawler found yesterday is never sent, and neither is a
-recent article recalling an old milestone (`feed.background`).
+article's publish date, else the fact's own date, else the day we stored it) — and
+either
 
-The ledger is what makes "since your last email" true, so there is no separate
-catch-up rule: a company somebody only just started watching, or an email that
-failed, simply leaves unsent updates that are still inside the window.
+* we **stored it since their last email**, or
+* it was **reported within the last** :data:`CATCH_UP_DAYS` (14) days — the
+  catch-up for a company they only just started watching, or an email that failed.
+
+An article from 2015 that the crawler found yesterday is never sent, and neither is
+a recent article recalling an old milestone (`feed.background`).
+
+**Why the second condition and not the ledger alone.** Dropping it made every
+unsent update of the last two months owed at once: measured on the day it
+deployed, one reader's next email would have carried 64, most of them obstacles
+closed in one batch on 08-12. The ledger stops a repeat; it does not make an
+update that was never news worth sending late.
 
 **A day with no news still gets an email** — the list of what to watch for on
 each followed project (`watchfor`), so a quiet day reads as a quiet day and not as
@@ -87,6 +95,12 @@ log = logging.getLogger(__name__)
 
 #: Where Resend takes a message. One host, one endpoint.
 RESEND_ENDPOINT = "https://api.resend.com/emails"
+
+#: With no earlier email to count from, "new since your last email" means this.
+FIRST_WINDOW: Final = dt.timedelta(days=1)
+
+#: An unsent update reported this recently goes in whenever we stored it.
+CATCH_UP_DAYS: Final[int] = 14
 
 #: Tries per message, and the waits between them. A rate limit or a provider
 #: hiccup clears in seconds; one still failing after ~40 s is owed tomorrow.
@@ -814,6 +828,7 @@ def is_sent(signal: Signal, sent: set[str]) -> bool:
 def choose(
     signals: Iterable[Signal],
     *,
+    since: dt.datetime,
     sent: set[str],
     today: dt.date | None = None,
 ) -> tuple[Signal, ...]:
@@ -828,6 +843,7 @@ def choose(
     every "expected online September 20" read in June would arrive on September
     21 as an energisation.
     """
+    today = today or dt.date.today()
     out = []
     for signal in signals:
         if not notable(signal, today=today) or is_sent(signal, sent):
@@ -838,7 +854,10 @@ def choose(
             and signal.at.date() < signal.happened
         ):
             continue
-        out.append(signal)
+        new = signal.at is not None and signal.at >= since
+        recent = signal.reported is not None and (today - signal.reported).days <= CATCH_UP_DAYS
+        if new or recent:
+            out.append(signal)
     return tuple(out)
 
 
@@ -920,7 +939,13 @@ def compose(
         entities=entities,
         today=local_time(now).date(),
     )
-    owed = choose(brief.signals, sent=sent_keys(session, account.id), today=local_time(now).date())
+    since = last or (now - FIRST_WINDOW)
+    owed = choose(
+        brief.signals,
+        since=since,
+        sent=sent_keys(session, account.id),
+        today=local_time(now).date(),
+    )
     watch = watchfor.report(session, account_id=account.id, entities=entities, everything=False)
 
     if owed:
@@ -1258,6 +1283,8 @@ def alert_admins(
 
 __all__ = [
     "BACKOFF_SECONDS",
+    "CATCH_UP_DAYS",
+    "FIRST_WINDOW",
     "FONT_DISPLAY",
     "FONT_MONO",
     "FONT_SANS",

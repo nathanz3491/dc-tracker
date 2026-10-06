@@ -312,8 +312,8 @@ def test_nothing_reported_over_two_months_ago_is_sent(session):
 
 def test_an_unsent_update_still_in_the_window_is_caught_up(session):
     """Recorded before the last email, never sent — a company just added to the
-    watchlist, say. The ledger owes it for as long as it is inside the two-month
-    window, and not a day longer."""
+    watchlist, say. Caught up while it was reported in the last two weeks; one
+    reported earlier than that was never news to this reader and stays unsent."""
     account = _reader(session, watch=("xAI",))
     nscale = _project(session)
     post = Recorder()
@@ -321,14 +321,14 @@ def test_an_unsent_update_still_in_the_window_is_caught_up(session):
     _milestone(
         session,
         nscale,
-        happened=TODAY - dt.timedelta(days=20),
+        happened=TODAY - dt.timedelta(days=8),
         recorded=utcnow() - dt.timedelta(days=5),
     )
     _milestone(
         session,
         nscale,
         event_type="first_customer",
-        happened=TODAY - dt.timedelta(days=70),
+        happened=TODAY - dt.timedelta(days=20),
         recorded=utcnow() - dt.timedelta(days=5),
     )
     watchlist.add(session, "Nscale", account_id=account.id)
@@ -360,7 +360,7 @@ def test_the_choice_is_pure_and_judges_by_the_report_date():
     old = signal(label="first_customer", at=now, reported=TODAY - dt.timedelta(days=61))
     fresh = signal(label="energized", at=now, reported=TODAY - dt.timedelta(days=3))
     recap = signal(label="interconnection_agreement", at=now, reported=TODAY, background=True)
-    chosen = notify.choose((old, fresh, recap), sent=set(), today=TODAY)
+    chosen = notify.choose((old, fresh, recap), since=now, sent=set(), today=TODAY)
     assert [s.label for s in chosen] == ["energized"]
 
 
@@ -372,7 +372,30 @@ def test_a_schedule_read_before_its_date_is_never_sent():
         reported=TODAY - dt.timedelta(days=1),
         at=dt.datetime.combine(TODAY - dt.timedelta(days=30), dt.time()),
     )
-    assert notify.choose((read_early,), sent=set(), today=TODAY) == ()
+    assert notify.choose((read_early,), since=read_early.at, sent=set(), today=TODAY) == ()
+
+
+def test_an_unsent_update_from_before_the_last_email_needs_a_recent_report():
+    """The rule the first deploy dropped. With the ledger alone every unsent update
+    of the last two months was owed at once — 64 in one reader's next email, most
+    of them obstacles closed in a single batch weeks earlier."""
+    last = dt.datetime.combine(TODAY, dt.time())
+    stored_before = last - dt.timedelta(days=30)
+    weeks_old = signal(at=stored_before, reported=TODAY - dt.timedelta(days=30), happened=None)
+    days_old = signal(
+        label="first_customer",
+        at=stored_before,
+        reported=TODAY - dt.timedelta(days=5),
+        happened=None,
+    )
+    new_tonight = signal(
+        label="interconnection_agreement",
+        at=last + dt.timedelta(hours=10),
+        reported=TODAY - dt.timedelta(days=40),
+        happened=None,
+    )
+    chosen = notify.choose((weeks_old, days_old, new_tonight), since=last, sent=set(), today=TODAY)
+    assert [s.label for s in chosen] == ["first_customer", "interconnection_agreement"]
 
 
 # --- who gets nothing ------------------------------------------------------------

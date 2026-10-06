@@ -657,11 +657,18 @@ def reported_on(
     A date in the future is not a report date, whichever field it came from: a
     milestone dated next year is a schedule, and a publish date after today is a
     publisher's metadata error. Both are skipped, so the next rung decides.
+
+    **Never later than the day we stored it.** We cannot have learned something
+    before it was reported, so a later date is a later citation, not the first
+    report: a merge or a re-read re-points a fact at whichever article said it
+    most recently. Measured on the first night: Fairwater's energisation, stored
+    08-11, cited an article of 10-02 and would have been mailed as news.
     """
     today = today or dt.date.today()
-    for candidate in (_as_date(published), _as_date(happened), _as_date(recorded)):
+    stored = _as_date(recorded)
+    for candidate in (_as_date(published), _as_date(happened), stored):
         if candidate is not None and candidate <= today:
-            return candidate
+            return min(candidate, stored) if stored is not None else candidate
     return None
 
 

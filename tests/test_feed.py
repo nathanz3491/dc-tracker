@@ -115,8 +115,7 @@ def test_every_milestone_belongs_to_a_track():
 
 
 def test_the_window_filters_on_when_it_was_reported(session):
-    """A 2022 milestone read last night is not news; one reported this week is,
-    whenever we happened to store it."""
+    """A 2022 milestone read last night is not news; one reported this week is."""
     project = _project(session)
     _event(
         session,
@@ -132,7 +131,7 @@ def test_the_window_filters_on_when_it_was_reported(session):
         event_type="groundbreaking",
         event_date=day(-1),
         description="Broke ground.",
-        created_at=BEFORE,
+        created_at=NOW - dt.timedelta(hours=2),
     )
 
     result = feed.digest(session, since=SINCE)
@@ -184,6 +183,14 @@ def test_a_recent_article_recalling_an_old_milestone_is_background(session):
     assert [s for s in feed.digest(session, days=7).signals if s.kind == "milestone"] == []
     assert feed.background(NOW - dt.timedelta(days=2), day(-2 - feed.BACKGROUND_DAYS - 1))
     assert not feed.background(NOW - dt.timedelta(days=2), day(-2 - feed.BACKGROUND_DAYS))
+
+
+def test_a_fact_cannot_have_been_reported_after_we_stored_it():
+    """A later citation is a re-report, not the first: Fairwater's energisation,
+    stored 08-11 and re-pointed at a 10-02 article, read as October news."""
+    stored = NOW - dt.timedelta(days=50)
+    assert feed.reported_on(day(-4), day(-120), stored, today=TODAY) == stored.date()
+    assert feed.reported_on(day(-60), None, stored, today=TODAY) == day(-60)
 
 
 def test_a_future_publish_date_is_not_a_report_date():

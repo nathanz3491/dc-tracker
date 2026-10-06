@@ -126,7 +126,9 @@ initial build of the v1 PRD.
   own date, else the day we stored it. A milestone more than a year older than the
   article reporting it is treated as background and dropped. The email's 45-day
   limit on the event's own date became this same rule, so the page and the email
-  agree. Monitor counts older open obstacles instead of listing them: 231 of 339
+  agree; an email still carries only what reached us since the last one or was
+  reported in the last two weeks. A report date is never later than the day we
+  stored the fact, since a later citation is a re-report. Monitor counts older open obstacles instead of listing them: 231 of 339
   had not been reported in two months. Four tests pinned to August dates had
   started failing as those dates aged out; the suite is now relative to today.
 
