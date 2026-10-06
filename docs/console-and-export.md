@@ -368,12 +368,16 @@ bad and the same obstacle clearing is good — all four are closed enums, so the
 sign is a lookup rather than an opinion. `tracker/feed.py` has the reasoning, and
 three parts of it are worth knowing here:
 
-* **The window is on when *we* recorded a fact.** A crawl reads one article and
-  imports a project's whole back-history, so stored milestones run from 1997 to
-  2040 while the rows themselves arrived last night. Filtering on the milestone's
-  own date would report 2022 every morning. Every line therefore carries both
-  dates — "energized (2024-09-01, learned 2026-08-11)" — because either one alone
-  is a lie in one direction.
+* **The window is on when a fact was *reported*, and it is two months.** A crawl
+  reads one article and imports a project's whole back-history, so stored
+  milestones run from 1997 to 2040 while the rows themselves arrived last night.
+  The report date is the article's publish date, else the fact's own date, else
+  the day we stored it, and nothing reported more than 60 days ago is on the page
+  at all — an article from 2015 the crawler found yesterday is history. A milestone
+  more than a year older than the article reporting it is that article's
+  background, not its news, and is left out too. The week / month / 2 months
+  control narrows by report date in the browser; each line says when it was
+  reported and, where different, when it happened.
 * **A future-dated milestone is a schedule, not an achievement.** "Full Phase 1
   *expected* online 2028" is marked as expected, scores lowest, and never counts
   as the blocker moving. This is the same trap `tracks.standing` filters with
@@ -388,10 +392,11 @@ counted separately, never mixed in — the console's standing rule is that a mod
 answer is not a fact, and a briefing is the last place to abandon it.
 
 **It leads with what needs a decision.** Four tiles — new since your last email,
-needing attention, good news, still open — then what is new since your last email,
-then the rest of the window grouped by day for anybody who skipped one, then a
+needing attention, good news, still open — then what reached us since your last
+email, then the rest of the window grouped by the day it was reported, then a
 per-company table: how each watch's window went, how many blockers it still has,
-and where it stands. "New since your last email" and the ✓ *emailed* mark come
+and where it stands. The watches sit above it as filter chips; the list itself is
+edited on Monitor. "New since your last email" and the ✓ *emailed* mark come
 from the mailer's own ledger (`notify_sent`), never from comparing dates, so the
 split is exactly what reached the inbox. With no email yet it is the last day.
 
@@ -400,15 +405,28 @@ the bar the 8 a.m. email applies: the blocker moving, a decisive milestone, a da
 slip, or an obstacle of material severity opening or clearing. Everything else is
 there to be read. The *worth emailing* filter narrows the page to just those.
 
-**Watch for** is the page the email's "see the full list" button opens: every open
-obstacle on every project you follow, however old, with how long it has been open,
-the track it holds, its source and quote, and the milestone that would clear it —
+**Monitor** (formerly *Watch for*; the old address redirects) is where the
+watchlist is kept and the page the email's button opens. The top is the list: one
+row per entry — a company, a typed project name, or one project followed by id —
+with how many projects it reaches, a ✕ to drop it, the picker to add one, and the
+*watch everything* switch. Below it, every open obstacle **reported in the last two
+months** on the projects the list reaches, with how long it has been open, the
+track it holds, its source and quote, and the milestone that would clear it —
 "power — energized: look for an energization or service-start announcement from the
-utility". Unconfirmed obstacles sit in their own fold on each project, labelled.
-It is `tracker/watchfor.py`, the same report the email is built from, served at
-`/api/watch-for`.
+utility". Older open obstacles are counted, not listed: measured on the live
+database, 231 of 339 had not been reported in two months, so "open" mostly meant
+"nobody wrote that it closed". Unconfirmed obstacles sit in their own fold on each
+project, labelled. It is `tracker/watchfor.py`, the same report the email is built
+from, served at `/api/monitor`.
 
-**The watchlist is editable here, and it is the only thing on the console that
+**☆ on any Projects row, or *Watch* on a project's page, follows that one project.**
+It watches by id (migration 0033), not by name: a typed "xAI | Colossus" matches
+"Colossus 2" as well, which is right for something typed and wrong for a button
+pressed on one row. A row already covered by a company entry shows a dimmed ★ and
+says which entry; that is changed on Monitor. A merge carries the watch to the
+surviving row.
+
+**The watchlist is editable, and it is the only thing on the console that
 writes.** A `watch` row says whose news to show: nothing derives from it, no
 ingest reads it, and losing the table would lose a preference rather than a fact.
 It has its own flag — `serve --no-watch-edits` — because these are different risks
@@ -478,7 +496,9 @@ The three worth knowing:
 | `GET /api/capex` | capacity by the company buying it | ~0.4 s on a copy of production (it was ~1.0 s and 2,031 statements); its own route for that reason |
 | `GET /api/articles` | publishers, and one publisher's citations when asked | counts at rest; `?host=` for the list |
 | `GET /api/updates` | what changed on the watchlist, signed and ranked | one pass over projects, events and risks |
-| `POST /api/watch` | adds or drops a watchlist entry | **the only write there is** |
+| `GET /api/monitor` | the list, and recent obstacles on what it reaches | `watchfor.report` |
+| `GET /api/watch` | which projects this reader follows, and which by id | for the ☆ buttons |
+| `POST /api/watch` | adds or drops a watchlist entry, or one project by `project_id` | **the only write there is** |
 | `POST /api/login` | exchanges an email and password for a session cookie; takes a `next` and answers the checked one, `/` if it was refused | — |
 | `POST /api/register` | spends an invite code and creates the account; takes and answers `next` the same way | — |
 | `POST /api/signup` | asks for an account; with a `code`, is `/api/register` | one email, from the mail budget |

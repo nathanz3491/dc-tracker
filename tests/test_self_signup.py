@@ -358,9 +358,16 @@ def test_an_invite_code_brings_you_back_where_you_started(live, mailed, db):
         address,
         "/api/signup",
         "POST",
-        {"email": "friend@example.com", "password": PASSWORD, "code": code, "next": "/watch-for"},
+        {"email": "friend@example.com", "password": PASSWORD, "code": code, "next": "/monitor"},
     )
-    assert status == 200 and body["next"] == "/watch-for" and cookie
+    assert status == 200 and body["next"] == "/monitor" and cookie
+
+
+def test_a_link_to_monitors_old_name_still_lands_on_monitor():
+    """Sign-in links in emails sent before the rename carry `next=/watch-for`."""
+    from tracker.webui.server import safe_next
+
+    assert safe_next("/watch-for") == "/monitor"
 
 
 def test_forgot_password_answers_the_same_and_the_link_signs_in(live, mailed):

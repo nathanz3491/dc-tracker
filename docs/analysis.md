@@ -426,8 +426,16 @@ milestones and 21 of 50 new obstacles were written more than three days after th
 and mailed. `recorded_at` is the row's own insert time, and a cleared obstacle's is
 `closed_at`, the moment it left `open`.
 
-So the window filters on when we recorded something, and every line prints both
-dates. `tracker/feed.py` carries the rest of the reasoning: the sign comes from the
+That was still the wrong question. A window on our own clock — fetch or insert —
+put an article from 2015 on the page as this morning's news because the crawler
+found it yesterday: of 582 milestones stored in thirty days, 92 came from an article
+published in the previous two months and 343 described something over a year old.
+So the window is now on when a fact was **reported** (`feed.reported_on`: the
+article's publish date, else the fact's own date, else `recorded_at`), it never
+reaches back past two months (`feed.REPORT_WINDOW_DAYS`), and a milestone more than
+a year older than its own article is that article's background and is dropped
+(`feed.background`, 29 of the 582). `recorded_at` still answers one question — what
+reached you since your last email. `tracker/feed.py` carries the rest of the reasoning: the sign comes from the
 vocabulary rather than from a model, a future-dated milestone is a schedule and not
 an achievement, and a signal that reaches the milestone a *blocked* track was
 waiting for is ranked above everything else — that is
@@ -443,17 +451,16 @@ everything; `--notify` prints only what `feed.notable` admits, and prints nothin
 all when nothing does, so a scheduled job sends on the nights that earn it. Four
 gates: the signal has to be quote-backed (an unconfirmed one never notifies,
 whatever it says), it has to have actually happened (a future-dated milestone is a
-schedule), it has to have happened **recently**, and it has to be material — which
+schedule), it has to have been **reported recently**, and it has to be material — which
 means the blocker moving, a decisive milestone, a dated slip, or an obstacle at
 `material` severity or worse opening or clearing. An announcement, a filed permit,
 earthworks and a new row in the tracker are all on the page and none of them is
 worth an interruption.
 
-**The recency gate is "new means new to us" applied to interruption**, and it is
-the one the other three could not cover. The window is on when we *learned* a
-fact, and a crawl reads one article and imports a project's whole back-history, so
-without it a 2021 groundbreaking read last night is this morning's alarm. Measured
-on the live database over thirty days:
+**The recency gate came first, for interruption only**, before the window itself
+moved to the report date. A crawl reads one article and imports a project's whole
+back-history, so without it a 2021 groundbreaking read last night was this
+morning's alarm. Measured on the live database over thirty days:
 
 | | signals that would notify | worst single night |
 | --- | --- | --- |
@@ -461,11 +468,11 @@ on the live database over thirty days:
 | happened within a year | 192 | 52 |
 | **happened within 90 days** | **129** | **21** |
 
-107 of that original 354 described something more than three years old. The gate
-is now **45 days** (`NOTIFY_MAX_AGE_DAYS`), the product's rule for the morning
-email: anything that happened more than a month and a half ago is not news. An
-*undated* signal is judged by the day we recorded it — `happened` is None for an
-obstacle nobody dated, and an open obstacle is a statement about now.
+107 of that original 354 described something more than three years old. It became
+45 days on the event's own date, and is now the same two months on the report date
+that the page uses (`feed.stale`), so the page and the email no longer disagree
+about what is history. A signal with no date at all is placed by the day we stored
+it.
 
 A slip is dated by the date it slipped *to*, so it used to read as a schedule and
 could never be sent — 56 of 146 on the live database. A `delayed` event dated in
@@ -504,19 +511,17 @@ tracker notify status --user you@example.com                        # what went 
 **One email per person, every morning at 8:00 (China time), and nothing sent
 twice.** The loop is over people, not signals: fourteen updates on your watchlist
 is one message with fourteen cards. An update goes in if you have never been sent
-it, it clears `feed.notable`, and either
-
-* we **recorded it since your last email** and it happened within the last 45
-  days, or
-* it **happened within the last two weeks** — the catch-up for a company you only
-  just started watching, or a morning whose email failed. A milestone recorded
-  *before* its own date was a schedule when we read it, and is not caught up.
-
-With no earlier email, "since your last email" means the last day.
+it, it clears `feed.notable`, and it was **reported in the last two months** — the
+same window as the Updates page. The ledger is what makes "since your last email"
+true, so there is no separate catch-up rule: a company you only just started
+watching, or a morning whose email failed, leaves unsent updates that are still in
+the window. A milestone recorded *before* its own date was a schedule when we read
+it, and is never sent.
 
 **A day with no news still sends**, and it is not an apology: it is every open
-blocker on every project you follow, and the milestone that would clear each —
-`tracker/watchfor.py`, the same report the console's *Watch for* page draws. A day
+blocker reported in the last two months on every project you follow, and the
+milestone that would clear each —
+`tracker/watchfor.py`, the same report the console's *Monitor* page draws. A day
 with news carries a short version of it under the news (the five most obstructed
 projects, two blockers each). Both link to the full list and to the week on the
 *Updates* page, for anybody who skipped an email. An account with no watchlist
@@ -576,8 +581,8 @@ tracker digest --notify --markdown --days 1 --user you@example.com \
 `digest --notify` remembers nothing, so a job built on it reports by window; the
 mailer is the one with the ledger.
 
-The same reading is the console's Updates page, where the watchlist can also be
-edited — see `docs/console-and-export.md`.
+The same reading is the console's Updates page; the watchlist is edited on its
+Monitor page, or with ☆ on any project — see `docs/console-and-export.md`.
 
 ## What no article says: `tracker infer`
 

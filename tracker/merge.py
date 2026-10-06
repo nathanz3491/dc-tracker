@@ -35,6 +35,7 @@ from dataclasses import dataclass, field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from tracker import watchlist
 from tracker.models import Event, Project, ProjectAlias, Risk, utcnow
 from tracker.normalize import url_identity
 from tracker.upsert import SOURCE_NOTE_PREFIX, fold_source, recompute_from_sources, record_tag
@@ -60,6 +61,8 @@ class MergeResult:
     risks_moved: int = 0
     risks_discarded: int = 0
     aliases_recorded: int = 0
+    #: Exact watches (a reader's "watch this project") moved to the survivor.
+    watches_moved: int = 0
     conflicts: list[str] = field(default_factory=list)
 
     def as_rows(self) -> list[tuple[str, int]]:
@@ -73,6 +76,7 @@ class MergeResult:
             ("obstacles moved", self.risks_moved),
             ("obstacles already held", self.risks_discarded),
             ("identities remembered", self.aliases_recorded),
+            ("watches moved", self.watches_moved),
         ]
 
 
@@ -185,6 +189,11 @@ def merge_projects(
         # `audit.settled_codes` reads that prose to know what has been answered —
         # so losing it silently re-opens every question the folded row had settled.
         carried.extend(_operator_prose(dupe.notes))
+
+        # Somebody pressed "watch" on this row. The cascade on `watch.project_id`
+        # would delete that preference with the row, so it moves to the survivor
+        # first — the campus is the same one they asked to follow.
+        result.watches_moved += watchlist.repoint(session, dupe.id, keep.id)
 
         session.delete(dupe)
         result.removed.append(dupe_id)

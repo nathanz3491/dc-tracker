@@ -902,6 +902,13 @@ class Watch(Base):
     note: Mapped[str | None] = mapped_column(Text)
     added_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False, server_default=_NOW)
 
+    #: Set when this watches exactly one project — the button on a Projects row —
+    #: rather than whatever the text matches. `project_key` is then "#<id>" so the
+    #: row cannot collide with a typed watch of the same name. Migration 0033.
+    project_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("project.id", ondelete="CASCADE")
+    )
+
     account: Mapped[Account] = relationship(back_populates="watches")
 
     __table_args__ = (
@@ -909,6 +916,13 @@ class Watch(Base):
         CheckConstraint("length(company_key) > 0", name="ck_watch_company_key"),
         Index("ix_watch_company_key", "company_key"),
         Index("ix_watch_account_id", "account_id"),
+        Index(
+            "uq_watch_project",
+            "account_id",
+            "project_id",
+            unique=True,
+            sqlite_where=text("project_id IS NOT NULL"),
+        ),
     )
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid

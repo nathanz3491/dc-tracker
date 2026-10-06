@@ -296,12 +296,13 @@ def test_a_fact_written_weeks_after_its_fetch_is_still_sent(session):
     assert outcome.kind == "updates" and outcome.signals == 1
 
 
-def test_nothing_that_happened_over_45_days_ago_is_sent(session):
+def test_nothing_reported_over_two_months_ago_is_sent(session):
+    """An article dated 61 days ago that we stored this morning is history."""
     _reader(session)
     project = _project(session)
-    _milestone(session, project, happened=TODAY - dt.timedelta(days=44))
+    _milestone(session, project, happened=TODAY - dt.timedelta(days=59))
     _milestone(
-        session, project, event_type="first_customer", happened=TODAY - dt.timedelta(days=46)
+        session, project, event_type="first_customer", happened=TODAY - dt.timedelta(days=61)
     )
     post = Recorder()
     send(session, post)
@@ -309,9 +310,10 @@ def test_nothing_that_happened_over_45_days_ago_is_sent(session):
     assert "first customer" not in post.sent[0]["text"]
 
 
-def test_an_unsent_update_from_the_past_two_weeks_is_caught_up(session):
+def test_an_unsent_update_still_in_the_window_is_caught_up(session):
     """Recorded before the last email, never sent — a company just added to the
-    watchlist, say. Two weeks is the catch-up; older than that stays unsent."""
+    watchlist, say. The ledger owes it for as long as it is inside the two-month
+    window, and not a day longer."""
     account = _reader(session, watch=("xAI",))
     nscale = _project(session)
     post = Recorder()
@@ -319,14 +321,14 @@ def test_an_unsent_update_from_the_past_two_weeks_is_caught_up(session):
     _milestone(
         session,
         nscale,
-        happened=TODAY - dt.timedelta(days=8),
+        happened=TODAY - dt.timedelta(days=20),
         recorded=utcnow() - dt.timedelta(days=5),
     )
     _milestone(
         session,
         nscale,
         event_type="first_customer",
-        happened=TODAY - dt.timedelta(days=20),
+        happened=TODAY - dt.timedelta(days=70),
         recorded=utcnow() - dt.timedelta(days=5),
     )
     watchlist.add(session, "Nscale", account_id=account.id)
@@ -353,24 +355,24 @@ def test_a_schedule_whose_date_passed_is_not_caught_up_as_news(session):
     assert outcome.kind == "quiet"
 
 
-def test_the_choice_is_pure_and_judges_an_undated_update_by_when_we_recorded_it():
-    old = signal(
-        kind="obstacle_opened",
-        sign="bad",
-        label="permitting",
-        happened=None,
-        at=dt.datetime.combine(TODAY - dt.timedelta(days=60), dt.time()),
+def test_the_choice_is_pure_and_judges_by_the_report_date():
+    now = dt.datetime.combine(TODAY, dt.time())
+    old = signal(label="first_customer", at=now, reported=TODAY - dt.timedelta(days=61))
+    fresh = signal(label="energized", at=now, reported=TODAY - dt.timedelta(days=3))
+    recap = signal(label="interconnection_agreement", at=now, reported=TODAY, background=True)
+    chosen = notify.choose((old, fresh, recap), sent=set(), today=TODAY)
+    assert [s.label for s in chosen] == ["energized"]
+
+
+def test_a_schedule_read_before_its_date_is_never_sent():
+    """ "Expected online September 20", read in June: the date passing does not
+    make it an energisation."""
+    read_early = signal(
+        happened=TODAY - dt.timedelta(days=1),
+        reported=TODAY - dt.timedelta(days=1),
+        at=dt.datetime.combine(TODAY - dt.timedelta(days=30), dt.time()),
     )
-    fresh = signal(
-        kind="obstacle_opened",
-        sign="bad",
-        label="water",
-        happened=None,
-        at=dt.datetime.combine(TODAY, dt.time()),
-    )
-    since = dt.datetime.combine(TODAY - dt.timedelta(days=90), dt.time())
-    chosen = notify.choose((old, fresh), since=since, sent=set())
-    assert [s.label for s in chosen] == ["water"]
+    assert notify.choose((read_early,), sent=set(), today=TODAY) == ()
 
 
 # --- who gets nothing ------------------------------------------------------------
@@ -415,7 +417,16 @@ def test_a_quiet_day_sends_what_to_watch_for(session):
     and what would move it. A quiet day must not look like a broken service."""
     _reader(session)
     project = _project(session)
-    _obstacle(session, project, recorded_at=utcnow() - dt.timedelta(days=120))
+    # `watch` severity: on the Monitor list, and below the bar an update has to
+    # clear to be mailed as news, so the day stays quiet.
+    _obstacle(session, project, severity="watch", recorded_at=utcnow() - dt.timedelta(days=10))
+    _obstacle(
+        session,
+        project,
+        category="water",
+        summary="An aquifer study nobody has mentioned since.",
+        recorded_at=utcnow() - dt.timedelta(days=120),
+    )
 
     post = Recorder()
     [outcome] = send(session, post, console_url="https://console.example")
@@ -425,21 +436,22 @@ def test_a_quiet_day_sends_what_to_watch_for(session):
     assert message["subject"].startswith("No new updates today")
     assert "rezoning vote" in message["html"]
     assert "Would clear it" in message["text"], "the milestone that would clear it"
-    assert "https://console.example/watch-for" in message["html"]
+    assert "aquifer" not in message["html"], "not reported in two months: not current"
+    assert "https://console.example/monitor" in message["html"]
 
 
 def test_a_day_with_news_carries_a_short_watch_list_and_the_week(session):
     _reader(session)
     project = _project(session)
     _milestone(session, project, event_type="first_customer")
-    _obstacle(session, project, recorded_at=utcnow() - dt.timedelta(days=120))
+    _obstacle(session, project, recorded_at=utcnow() - dt.timedelta(days=10))
 
     post = Recorder()
     send(session, post, console_url="https://console.example")
 
     html = post.sent[0]["html"]
     assert "What to watch for" in html
-    assert "https://console.example/watch-for" in html
+    assert "https://console.example/monitor" in html
     assert "https://console.example/updates" in html, "the week, for anybody who skipped a day"
 
 
@@ -538,12 +550,12 @@ def test_a_dry_run_records_nothing(session):
 
 
 def test_the_message_carries_both_dates():
-    """Same rule as the page: "new" means new to us, so a milestone we read
-    yesterday must not read as yesterday's news."""
-    sig = signal(happened=dt.date(2026, 6, 1), at=dt.datetime(2026, 8, 28, 9, 0))
+    """When it was reported and when it happened: a late first report of a spring
+    energisation must not read as last week's energisation."""
+    sig = signal(happened=TODAY - dt.timedelta(days=50), reported=TODAY - dt.timedelta(days=3))
     body = notify.render(brief_of(sig), (sig,))
-    assert "2026-06-01" in body
-    assert "2026-08-28" in body
+    assert (TODAY - dt.timedelta(days=50)).isoformat() in body
+    assert f"reported {(TODAY - dt.timedelta(days=3)).isoformat()}" in body
 
 
 def test_everything_from_an_article_is_escaped():

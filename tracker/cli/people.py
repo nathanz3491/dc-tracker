@@ -1098,10 +1098,12 @@ def digest(
     `--user alice@example.com` reproduces exactly the page alice sees, which is the
     form to schedule if the nightly note is going to *her*.
 
-    **The window is on when we learned a fact, not when it happened.** A crawl
-    reads one article and imports a project's whole back-history, so filtering on
-    the milestone's own date would report 2022 every morning. Every line carries
-    both dates for exactly that reason — `tracker/feed.py` has the argument.
+    **The window is on when a fact was reported, never on when we found it.** A
+    crawl reads one article and imports a project's whole back-history, so a window
+    on our own clock reported 2015 every morning. The report date is the article's
+    publish date, else the fact's own date, else the day we stored it, and nothing
+    reported more than two months ago is listed at all, whatever `--days` says —
+    `tracker/feed.py` has the argument and the measurement.
 
     **`--notify` is the form to schedule.** It prints only what `feed.notable`
     admits — the blocker moving, a decisive milestone, a dated slip, an obstacle of
@@ -1113,10 +1115,9 @@ def digest(
     Three things bound what it can send, and all three exist because a mailer is
     read *after* it has interrupted somebody:
 
-    * **It must have happened recently**, not merely been learned recently
-      (`feed.NOTIFY_MAX_AGE_DAYS`). The window is on `created_at`, and a crawl
-      imports a whole back-history at once — measured live, 107 of 354 notifiable
-      signals in a month described something over three years old.
+    * **It must have been reported recently**, not merely learned recently
+      (`feed.REPORT_WINDOW_DAYS`), and not be an old milestone a new article is
+      only recalling (`feed.background`).
     * **An empty watchlist is refused**, because the fallback that makes the *page*
       useful — show everything until somebody configures it — makes the mail a
       firehose. `--whole-database` says you meant it.
@@ -1215,9 +1216,13 @@ _SIGN_MARK = {"good": "+", "bad": "-", "neutral": "."}
 
 
 def _signal_line(signal) -> str:
-    """One signal as a sentence, with both of its dates."""
+    """One signal as a sentence, with when it happened and when it was reported."""
     when = signal.happened.isoformat() if signal.happened else "undated"
-    learned = f", learned {signal.at.date().isoformat()}" if signal.at else ""
+    learned = (
+        f", reported {signal.reported.isoformat()}"
+        if signal.reported and signal.reported != signal.happened
+        else ""
+    )
     tail = f" [{signal.publisher}]" if signal.publisher else ""
     return (
         f"{signal.company} — {signal.project}: {signal.headline} "

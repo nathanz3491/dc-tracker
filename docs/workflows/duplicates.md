@@ -214,7 +214,9 @@ nearly consequence-free: `merge_projects` recomputes every field from the combin
 claims, so this decides a row number rather than a value. A citation both rows hold
 is folded into the survivor's copy rather than dropped with the other, so the choice
 decides a value only where two copies of one article disagree — the survivor's
-stands and the other is named in its notes.
+stands and the other is named in its notes. A reader who pressed ☆ on the folded
+row keeps following the campus: the watch moves to the survivor before the row is
+deleted, rather than going with it.
 
 `folded` carries a run's merges forward, so a later pair naming a row this run just
 deleted is asked about the survivor instead. That is what settles a group of four
@@ -263,6 +265,6 @@ Touching any of these means the poster is in scope. Re-render with
 | The agent path | `tracker/triage.py` — `resolve_pairs`, `pair_triage`, `pair_verdict_tools`, `_checked`, `pair_subject`, `pair_evidence` |
 | What one agent run may spend | `tracker/agent.py` — `run`, `TOOL_LIMITS`, `WRAP_UP_TURNS`; `tracker/llm.py` — `without_thinking` |
 | Not asking the same pair twice | `tracker/declines.py` — `split`, `record`, `holds`, `citations`, `COOLDOWN_DAYS`; migration `0025_model_decline` |
-| The merge itself | `tracker/merge.py` — `merge_projects`, `_move_events`, `_move_risks`; `tracker/upsert.py` — `fold_source` |
+| The merge itself | `tracker/merge.py` — `merge_projects`, `_move_events`, `_move_risks`; `tracker/upsert.py` — `fold_source`; `tracker/watchlist.py` — `repoint` |
 | Prevention at write time | `tracker/gatekeeper.py` — `same_site_arbiter`, `_warm_verdict`, `_cold_verdict`, `_rejection`, `RULES`; `tracker/ingest/crawl.py` — `ExtractionContext` |
 | CLI, printers, keyboard prompt | `tracker/cli/duplicates.py` — `merge`, `duplicates`, `duplicates_park`, `duplicates_unpark`, `duplicates_resolve`, `duplicates_parked`, `_print_parked`, `_dupe_prompt` |

@@ -15,7 +15,7 @@
 
 import { HelpView } from "/static/views-help.js";
 import { AccountView, AdminView } from "/static/views-account.js";
-import { WatchForView } from "/static/views-watchfor.js";
+import { MonitorView } from "/static/views-monitor.js";
 
 const html = htm.bind(React.createElement);
 const { useState, useEffect, useMemo, useRef, useCallback } = React;
@@ -787,6 +787,81 @@ function CoverageStrip({ data }) {
     </div>`;
 }
 
+/* Which projects this reader follows, for every watch button in the console.
+ *
+ * Held once in the shell rather than per view, because the same answer drives the
+ * Projects table, a project's page and the Monitor list, and a star that says
+ * "watching" in one place and not in another is worse than no star. `exact` is
+ * what a button can turn off — a watch on that project by id (migration 0033).
+ * A project covered only by a company-wide entry is `watched` but not `exact`,
+ * and that entry is changed on Monitor, where the list is.
+ *
+ * `enabled` is `allow_watch` from the dataset: nobody signed in has no list. */
+function useWatchState(enabled) {
+  const [state, setState] = useState({ watched: new Set(), exact: new Set(), via: {}, watchAll: false });
+  const [busy, setBusy] = useState(() => new Set());
+  const [error, setError] = useState(null);
+  const refresh = useCallback(() => api("/api/watch")
+    .then((b) => setState({
+      watched: new Set(b.watched || []),
+      exact: new Set(b.exact || []),
+      via: b.via || {},
+      watchAll: !!b.watch_all,
+    }))
+    .catch(() => {}), []);
+  useEffect(() => { if (enabled) refresh(); }, [enabled, refresh]);
+  const toggle = useCallback(async (id) => {
+    const on = !state.exact.has(id);
+    setBusy((b) => new Set(b).add(id));
+    setError(null);
+    try {
+      await api("/api/watch", { method: "POST", body: { action: on ? "add" : "remove", project_id: id } });
+      await refresh();
+    } catch (err) {
+      setError(err.message || "that did not work");
+    } finally {
+      setBusy((b) => { const next = new Set(b); next.delete(id); return next; });
+    }
+  }, [state.exact, refresh]);
+  return { ...state, enabled: !!enabled, busy, error, toggle, refresh };
+}
+
+/* The watch button on one project: ☆ to follow it, ★ when you do.
+ *
+ * Three states, not two. A project covered by a company-wide entry ("xAI") is
+ * already followed, and a button that offered to "watch" it would add a second
+ * row that does nothing; one that offered to "unwatch" it could not, because the
+ * entry is the company's. So it shows the star dimmed and says where the watch
+ * lives. `wide` is the labelled form for a project's own page. */
+function WatchButton({ id, watch, wide = false, onGoto }) {
+  if (!watch?.enabled) return null;
+  const exact = watch.exact.has(id);
+  const via = !exact && (watch.watched.has(id) ? watch.via[String(id)] : watch.watchAll ? "everything" : null);
+  const busy = watch.busy.has(id);
+  const stop = (e) => e.stopPropagation();
+  const label = exact ? "Watching" : via ? `Watching via ${via}` : "Watch";
+  const title = exact
+    ? "You watch this project. Click to stop."
+    : via
+      ? `Covered by your “${via}” watch. Change that on Monitor.`
+      : "Watch this project: its updates reach your Updates page and morning email.";
+  if (via) {
+    return html`
+      <button type="button" class=${`dc-star dc-star--via${wide ? " dc-star--wide" : ""}`}
+              title=${title} aria-label=${title}
+              onClick=${(e) => { stop(e); onGoto?.("monitor"); }} onKeyDown=${stop}>
+        <span aria-hidden="true">★</span>${wide ? html`<span>${label}</span>` : null}
+      </button>`;
+  }
+  return html`
+    <button type="button" class=${`dc-star${exact ? " dc-star--on" : ""}${wide ? " dc-star--wide" : ""}`}
+            aria-pressed=${exact} disabled=${busy} title=${title}
+            aria-label=${exact ? "Stop watching this project" : "Watch this project"}
+            onClick=${(e) => { stop(e); watch.toggle(id); }} onKeyDown=${stop}>
+      <span aria-hidden="true">${exact ? "★" : "☆"}</span>${wide ? html`<span>${label}</span>` : null}
+    </button>`;
+}
+
 /* One project as a card. The phone form of a table row: the six facts worth
  * having at a glance, and the same drawer behind a tap. */
 function ProjectCard({ p, data, onOpen, onQuote }) {
@@ -982,7 +1057,12 @@ function SkeletonRows({ columns, count }) {
 
 const BLANK_FILTERS = { q: "", state: "", phase: "", conf: "", risk: "", severity: "", quoted: false };
 
-function ProjectsView({ data, onOpen }) {
+/* The id column's width, which the second sticky column is offset by. Wider than
+   the id alone because the watch star sits in it, where it stays on screen however
+   far the table is scrolled sideways. */
+const ID_COL_W = 84;
+
+function ProjectsView({ data, onOpen, watch, onGoto }) {
   const [f, setF] = useState(BLANK_FILTERS);
   const [wide, setWide] = useState(false);
   const [sort, setSort] = useState({ key: "confidence", dir: "desc" });
@@ -1139,9 +1219,12 @@ function ProjectsView({ data, onOpen }) {
         ? html`
           <div class=${`dc-paged${stale ? " dc-paged--stale" : ""}`} style=${{ display: "grid", gap: 9 }}>
             ${rows.map((p, i) => html`
-              <div key=${p.id} class=${i < 12 ? "dc-enter" : undefined} style=${i < 12 ? { "--i": i } : undefined}>
+              <div key=${p.id} class=${`dc-pcard-wrap${i < 12 ? " dc-enter" : ""}`} style=${i < 12 ? { "--i": i } : undefined}>
                 <${ProjectCard} p=${p} data=${data}
                                 onOpen=${onOpen} onQuote=${showQuote} />
+                ${/* Beside the card rather than in it: the card is a button, and a
+                     button inside a button is not a thing HTML allows. */ ""}
+                <${WatchButton} id=${p.id} watch=${watch} onGoto=${onGoto} />
               </div>`)}
             ${first && [0, 1, 2, 3, 4].map((i) => html`
               <${Skeleton} key=${`skel-${i}`} className="mrd-shimmer" style=${{ height: 104 }} />`)}
@@ -1171,8 +1254,9 @@ function ProjectsView({ data, onOpen }) {
                   sortable=${key !== "id"}
                   sortDirection=${sort.key === key ? sort.dir : null}
                   onSort=${() => setSort((s) => ({ key, dir: s.key === key && s.dir === "desc" ? "asc" : "desc" }))}
-                  style=${i < 2 ? { position: "sticky", left: i === 0 ? 0 : 58, zIndex: 4,
-                                    background: "var(--surface)" } : undefined}>
+                  style=${i < 2 ? { position: "sticky", left: i === 0 ? 0 : ID_COL_W, zIndex: 4,
+                                    background: "var(--surface)",
+                                    ...(i === 0 ? { width: ID_COL_W, minWidth: ID_COL_W } : {}) } : undefined}>
                   <span title=${(COLUMN[key] || {}).why || key}>${columnLabel(key)}</span>
                   ${(COLUMN[key] || {}).unit && html`<span style=${{ display: "block", fontWeight: 400,
                       fontSize: 9.5, letterSpacing: ".06em", textTransform: "none",
@@ -1188,14 +1272,15 @@ function ProjectsView({ data, onOpen }) {
                     aria-label=${`${p.company} ${p.name}, ${place(p)}, confidence ${p.confidence}`}
                     onClick=${() => onOpen(p.id)}
                     onKeyDown=${(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpen(p.id); } }}>
-                  <td class="dc-sticky" style=${{ left: 0, whiteSpace: "nowrap" }}>
+                  <td class="dc-sticky" style=${{ left: 0, whiteSpace: "nowrap", width: ID_COL_W, minWidth: ID_COL_W }}>
+                    <${WatchButton} id=${p.id} watch=${watch} onGoto=${onGoto} />
                     <span class="dc-v dc-num" style=${{ fontSize: 12, color: "var(--muted-foreground)" }}
                           title=${p.dedup_key}>#${p.id}</span>
                   </td>
                   ${columns.slice(1).map((key, i) => html`
                     <td key=${key}
                         class=${`dc-cell${["name", "company", "blocker"].includes(key) ? " dc-cell--wide" : ""}${i === 0 ? " dc-sticky" : ""}`}
-                        style=${i === 0 ? { left: 58 } : undefined}>
+                        style=${i === 0 ? { left: ID_COL_W } : undefined}>
                       <${Value} project=${p} field=${key} onQuote=${showQuote}
                         extra=${{
                           ...(RIGHT.has(key) ? { fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums" } : {}),
@@ -1299,7 +1384,7 @@ function Section({ id, title, count, blurb, children }) {
     </section>`;
 }
 
-function ProjectPage({ id, data, onBack }) {
+function ProjectPage({ id, data, onBack, watch, onGoto }) {
   /* Fetched per visit, not read out of the list payload the console already has.
    *
    * Two reasons, and the second is the one that matters. The list deliberately
@@ -1376,7 +1461,11 @@ function ProjectPage({ id, data, onBack }) {
                 title=${p.dedup_key}>#${p.id}</span>
           <h1 style=${{ margin: 0, fontFamily: "var(--font-display)", fontSize: 32, fontWeight: 500,
                         letterSpacing: "-0.02em", lineHeight: 1.1 }}>${p.name}</h1>
+          <span style=${{ alignSelf: "center" }}>
+            <${WatchButton} id=${p.id} watch=${watch} wide=${true} onGoto=${onGoto} />
+          </span>
         </div>
+        ${watch?.error && html`<div style=${{ fontSize: 12, color: "var(--danger)" }}>${watch.error}</div>`}
         <div style=${{ display: "flex", alignItems: "center", gap: 9, flexWrap: "wrap" }}>
           <span style=${{ fontSize: 14, fontWeight: 500 }}>${p.company}</span>
           <span style=${{ color: "var(--border)" }}>·</span>
@@ -4348,10 +4437,17 @@ function CapexBody({ data, capex, allowAi, onOpen }) {
     </div>`;
 }
 
+/* How far back the Updates page reaches, by report date: `feed.REPORT_WINDOW_DAYS`.
+   The server enforces it; this only asks for all of it. */
+const REPORT_WINDOW_DAYS = 60;
+
+/* Narrowing inside that, by report date. There is no "today": articles are dated
+   by their publishers, and a day's window over publish dates is mostly empty for
+   reasons that have nothing to do with what happened. */
 const WINDOWS = [
-  [1, "today"],
   [7, "week"],
   [30, "month"],
+  [60, "2 months"],
 ];
 
 /* Green for good, red for bad, quiet for neither — the semantic tones, not a hue
@@ -4521,9 +4617,11 @@ function WatchPicker({ projects, watchlist, disabled, onAdd, error }) {
     if (row) row.scrollIntoView({ block: "nearest" });
   }, [active, open]);
 
+  /* The whole candidate, not its text: a project picked from the list is watched
+     by id, so it means that campus and not every name containing it. */
   const take = (candidate) => {
     if (!candidate || candidate.covered) return;
-    onAdd(candidate.entry);
+    onAdd(candidate);
     setQuery("");
     setOpen(false);
   };
@@ -4535,7 +4633,7 @@ function WatchPicker({ projects, watchlist, disabled, onAdd, error }) {
   const submitTyped = () => {
     const typed = query.trim();
     if (!typed) return;
-    onAdd(typed);
+    onAdd({ kind: "typed", entry: typed });
     setQuery("");
     setOpen(false);
   };
@@ -4631,23 +4729,23 @@ function WatchPicker({ projects, watchlist, disabled, onAdd, error }) {
     </div>`;
 }
 
-/* One watched entity as a chip: what it is, how it went, and two things you can
- * do to it.
+/* One watched entity as a chip: what it is and how its window went.
  *
  * The counts are the point of the strip — "xAI, 3 updates, 1 bad" is the whole
  * page in one line, and it is what makes the list below skippable on a quiet day.
  * The arrows carry a title and an accessible label because a bare ▼ beside a
  * number is a glyph, not a fact.
  *
- * Clicking the body filters the list to that entity, which is the question a chip
- * invites and the first thing tried on it. */
-function WatchChip({ entity, digest, onRemove, onFilter, filtered, disabled }) {
-  const bad = digest?.bad || 0;
-  const good = digest?.good || 0;
+ * Clicking it filters the list to that entity, which is the question a chip
+ * invites and the first thing tried on it. Read-only: the list is edited on
+ * Monitor. */
+function WatchChip({ entity, tally, onFilter, filtered }) {
+  const bad = tally?.bad || 0;
+  const good = tally?.good || 0;
   const projects = entity.project_ids.length;
   const parts = [
     `${projects} project${projects === 1 ? "" : "s"}`,
-    digest ? `${digest.total} update${digest.total === 1 ? "" : "s"} in this window` : null,
+    tally ? `${tally.total} update${tally.total === 1 ? "" : "s"} in this window` : null,
     bad ? `${bad} bad` : null,
     good ? `${good} good` : null,
     entity.note || null,
@@ -4673,46 +4771,78 @@ function WatchChip({ entity, digest, onRemove, onFilter, filtered, disabled }) {
                        title="nothing in the database matches this yet">no match</span>`
           : null}
       </button>
-      ${!disabled &&
-      html`<button type="button" class="dc-watch-x" aria-label=${`Stop watching ${entity.entry}`}
-                   title=${`Stop watching ${entity.entry}`}
-                   onClick=${() => onRemove(entity.entry)}>✕</button>`}
     </span>`;
 }
 
-/* The watchlist, and the box that edits it.
+/* Per watch entry, how its window went. From the signals on the page rather than
+   the server's tally, because the window is now chosen here (see UpdatesView). */
+function tallies(signals, held) {
+  const out = {};
+  const row = (entry) => out[entry] || (out[entry] = { good: 0, bad: 0, neutral: 0, held: 0, total: 0 });
+  for (const s of signals) {
+    if (!s.entry) continue;
+    const t = row(s.entry);
+    t[s.sign] = (t[s.sign] || 0) + 1;
+    t.total += 1;
+  }
+  for (const s of held) {
+    if (s.entry) row(s.entry).held += 1;
+  }
+  return out;
+}
+
+/* The watches as filters, on Updates. Editing moved to Monitor: this page is about
+   what changed, and a list editor at its top pushed the changes below the fold. */
+function WatchFilter({ watchlist, tally, filter, onFilter, onGoto, signedIn, watchAll, projectsWatched }) {
+  const entities = watchlist || [];
+  return html`
+    <div style=${{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+      ${entities.map((e) => html`
+        <${WatchChip} key=${`${e.project_id ?? ""}:${e.entry}`} entity=${e} tally=${tally[e.entry]}
+                      filtered=${filter === e.entry} onFilter=${onFilter} />`)}
+      ${!entities.length && html`<span style=${{ fontSize: 13, color: "var(--muted-foreground)" }}>
+        ${!signedIn
+          ? html`Everything — ${projectsWatched ?? 0} projects. A watchlist belongs to an account;
+                 sign in to keep one.`
+          : watchAll
+            ? html`Watching everything — ${projectsWatched ?? 0} projects.`
+            : "Watching nothing yet."}
+      </span>`}
+      ${filter && html`<button type="button" class="dc-linkish" style=${{ fontSize: 12 }}
+                               onClick=${() => onFilter(null)}>show all watches</button>`}
+      ${signedIn && html`<button type="button" class="dc-linkish" style=${{ fontSize: 12 }}
+                                 onClick=${() => onGoto("monitor")}>
+        ${entities.length ? "Edit the list on Monitor →" : "Choose what to watch on Monitor →"}</button>`}
+    </div>`;
+}
+
+/* The watchlist, and the box that edits it — on Monitor.
  *
  * Editable from the page deliberately, and it is the console's *only* write: a
  * `watch` row says whose news to show, nothing derives from it, and the person
  * whose list it is is sitting in front of the published page rather than at a
  * terminal.
  *
- * **It is one account's list, and needs an account to exist.** The server sends
- * `allow_watch: false` to a visitor of a console with no accounts — there is
- * nobody to own a list — so this reads that one field and does not have to know
- * the difference between "--no-watch-edits" and "nobody is signed in". What it
- * does have to get right is that an empty list and an absent list look the same
- * here and mean different things, which is what the two messages below are. */
-function Watchlist({ payload, projects, allowWatch, filter, onFilter, onChanged }) {
+ * **One row per entry, not a chip.** The list is what this part of the page is
+ * for, so each entry says what it is — a company, a typed project name matched
+ * loosely, or one project followed by id from its star — how many projects it
+ * reaches, and when it was added. A typed entry matching nothing says so rather
+ * than reading as a quiet one.
+ *
+ * Passed into Monitor from here (`MonitorView`'s `ListEditor`), because the picker
+ * it is built on lives in this file and views-monitor.js cannot import app.js. */
+function WatchlistEditor({ payload, projects, onChanged }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const entities = payload?.watchlist || [];
-  const digests = useMemo(
-    () => Object.fromEntries((payload?.entities || []).map((e) => [e.entry, e])),
-    [payload],
-  );
-  /* From `/api/dataset`, which the shell already has, rather than from the digest.
-     Reading it off the digest meant the input did not exist until that request
-     landed, and vanished again on every window change — taking whatever was
-     half-typed with it. The server still decides; this only decides whether to
-     offer the control. */
-  const editable = !!allowWatch;
+  const editable = !!payload?.allow_watch;
 
   const send = async (body) => {
     setBusy(true);
     setError(null);
     try {
-      onChanged(await api("/api/watch", { method: "POST", body }));
+      await api("/api/watch", { method: "POST", body });
+      await onChanged();
     } catch (err) {
       // Inline, under the box that caused it. A page-level banner for a rejected
       // entry puts the complaint nowhere near the thing being complained about.
@@ -4721,40 +4851,63 @@ function Watchlist({ payload, projects, allowWatch, filter, onFilter, onChanged 
       setBusy(false);
     }
   };
+  const add = (candidate) =>
+    send(candidate.kind === "project"
+      ? { action: "add", project_id: candidate.ids[0] }
+      : { action: "add", entry: candidate.entry });
+  const remove = (e) =>
+    send(e.project_id != null
+      ? { action: "remove", project_id: e.project_id }
+      : { action: "remove", entry: e.entry });
+  const kind = (e) => (e.project_id != null ? "this project" : e.project_key ? "project name" : "company");
 
   return html`
-    <div style=${{ display: "grid", gap: 10 }}>
-      <div style=${{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
-        ${entities.map((e) => html`
-          <${WatchChip} key=${e.entry} entity=${e} digest=${digests[e.entry]}
-                        filtered=${filter === e.entry} onFilter=${onFilter}
-                        disabled=${!editable || busy}
-                        onRemove=${(entry) => send({ action: "remove", entry })} />`)}
-        ${!entities.length &&
-        html`<span style=${{ fontSize: 13, color: "var(--muted-foreground)" }}>
-          ${!editable
-            ? html`Everything — ${payload?.projects_watched ?? 0} projects. A watchlist belongs to
-                   an account; sign in to keep one.`
-            : payload?.watch_all
-              ? html`Watching everything — ${payload?.projects_watched ?? 0} projects.
-                     Name a company to narrow it.`
-              : html`Watching nothing yet. Name a company below, or take
-                     all ${projects?.length ?? 0} of them.`}
-        </span>`}
-        ${editable &&
-        html`<button type="button" class="dc-linkish" style=${{ fontSize: 12 }}
-                     disabled=${busy}
-                     onClick=${() => send({ action: "watch_all", value: !payload?.watch_all })}>
-          ${payload?.watch_all ? "watch only my list" : "watch everything"}
-        </button>`}
-        ${filter &&
-        html`<button type="button" class="dc-linkish" style=${{ fontSize: 12 }}
-                     onClick=${() => onFilter(null)}>show all watches</button>`}
-      </div>
+    <div style=${{ display: "grid", gap: 12 }}>
+      ${!editable && html`<div style=${{ fontSize: 13, color: "var(--muted-foreground)" }}>
+        A watchlist belongs to an account; sign in to keep one.</div>`}
+      ${editable && !entities.length && html`<div style=${{ fontSize: 13, color: "var(--muted-foreground)" }}>
+        ${payload?.watch_all
+          ? "Watching everything. Name a company to narrow it."
+          : html`Watching nothing yet. Name a company or a project below, press ☆ on any row of
+                 Projects, or take all ${projects?.length ?? 0} of them.`}
+      </div>`}
 
-      ${editable &&
-      html`<${WatchPicker} projects=${projects} watchlist=${entities} disabled=${busy}
-                           error=${error} onAdd=${(entry) => send({ action: "add", entry })} />`}
+      ${!!entities.length && html`
+        <ul class="dc-wl">
+          ${entities.map((e) => html`
+            <li key=${`${e.project_id ?? ""}:${e.entry}`} class="dc-wl-row">
+              <span class="dc-wl-kind">${kind(e)}</span>
+              <span class="dc-wl-entry">
+                <b style=${{ fontWeight: 500 }}>${e.entry}</b>
+                ${e.note && html`<span class="dc-wl-meta"> · ${e.note}</span>`}
+              </span>
+              <span class="dc-wl-meta dc-num"
+                    style=${!e.project_ids.length ? { color: "var(--warning)" } : undefined}
+                    title=${!e.project_ids.length ? "nothing in the database matches this yet" : undefined}>
+                ${e.project_ids.length
+                  ? `${e.project_ids.length} project${e.project_ids.length === 1 ? "" : "s"}`
+                  : "no match yet"}
+              </span>
+              <span class="dc-wl-meta dc-num">${e.added_at ? `added ${e.added_at.slice(0, 10)}` : ""}</span>
+              ${editable && html`
+                <button type="button" class="dc-watch-x" disabled=${busy}
+                        aria-label=${`Stop watching ${e.entry}`} title=${`Stop watching ${e.entry}`}
+                        onClick=${() => remove(e)}>✕</button>`}
+            </li>`)}
+        </ul>`}
+
+      ${editable && html`
+        <div style=${{ display: "flex", gap: 14, alignItems: "flex-start", flexWrap: "wrap" }}>
+          <div style=${{ flex: "1 1 320px", maxWidth: 420 }}>
+            <${WatchPicker} projects=${projects} watchlist=${entities} disabled=${busy}
+                            error=${error} onAdd=${add} />
+          </div>
+          <button type="button" class="dc-linkish" style=${{ fontSize: 12, paddingTop: 7 }}
+                  disabled=${busy}
+                  onClick=${() => send({ action: "watch_all", value: !payload?.watch_all })}>
+            ${payload?.watch_all ? "watch only my list" : "watch everything"}
+          </button>
+        </div>`}
     </div>`;
 }
 
@@ -4764,13 +4917,15 @@ function Watchlist({ payload, projects, allowWatch, filter, onFilter, onChanged 
  * five tracks, the sentence somebody published, then the dates and the publisher.
  * A reader who stops after two lines has still had the finding.
  *
- * **Both dates, always.** "energized (2024-09-01, learned 2026-08-11)" is a
- * milestone from two years ago that reached us last night, and a page that printed
- * only one of those dates would be lying in one direction or the other. */
+ * **When it was reported, and when it happened if that differs.** The report
+ * date is what put it on this page — the article's publish date, else the fact's
+ * own date — and a milestone a fresh article reports from three months back
+ * should read as exactly that. When we happened to find it is not shown: it is
+ * the one date a reader cannot act on. */
 function SignalCard({ signal, onOpen }) {
   const tone = SIGN_TONE[signal.sign] || SIGN_TONE.neutral;
   const happened = shortDate(signal.happened);
-  const learned = shortDate(signal.at);
+  const reported = shortDate(signal.reported);
   return html`
     <article style=${{ display: "grid", gap: 6, padding: "14px 16px",
                        borderLeft: `3px solid ${tone.color}`, background: "var(--card)",
@@ -4816,11 +4971,12 @@ function SignalCard({ signal, onOpen }) {
 
       <div class="dc-num" style=${{ display: "flex", gap: 10, flexWrap: "wrap", fontSize: 12,
                                     color: "var(--muted-foreground)" }}>
-        <span>${happened || signal.when || "undated"}</span>
-        ${learned && html`<span>· learned ${learned}</span>`}
+        <span>${reported ? `reported ${reported}` : "undated"}</span>
+        ${happened && signal.happened !== signal.reported && html`<span>· ${
+          signal.expected ? "due" : "happened"} ${happened}</span>`}
         ${signal.publisher && html`<span>· ${signal.publisher}</span>`}
         ${signal.entry && html`<span>· watching ${signal.entry}${
-          signal.via && signal.via !== "operator" ? ` (as ${signal.via.replace(/_/g, " ")})` : ""
+          signal.via && !["operator", "project"].includes(signal.via) ? ` (as ${signal.via.replace(/_/g, " ")})` : ""
         }</span>`}
         ${signal.restatements
           ? html`<span title="the same moment, reported again elsewhere">· +${signal.restatements} more report${signal.restatements > 1 ? "s" : ""}</span>`
@@ -4888,13 +5044,13 @@ const TONES = [
 
 const SEVERITY_TONE = { blocking: "--danger", material: "--warning", watch: "--muted-foreground" };
 
-/* One row per watch: how its week went, what is still open, and where it stands.
+/* One row per watch: how its window went, what is still open, and where it stands.
  *
  * The table a reader wants after the list, not before it: "which of my companies
  * had the bad week, and which is stuck" — the question the list cannot answer
- * without reading every card. Tallies are the digest's own (`entities`), and what
- * is open comes from `/api/watch-for`, the same report the email is built from. */
-function Scoreboard({ payload, watch, onFilter, onGoto }) {
+ * without reading every card. Tallies are counted from the windowed list, and what
+ * is open comes from `/api/monitor`, the same report the email is built from. */
+function Scoreboard({ watchlist, tally, watch, onFilter, onGoto }) {
   const rows = useMemo(() => {
     const byEntry = new Map();
     for (const project of watch?.projects || []) {
@@ -4906,8 +5062,13 @@ function Scoreboard({ payload, watch, onFilter, onGoto }) {
       if (project.worst && (row.worst == null || rank[project.worst] > rank[row.worst])) row.worst = project.worst;
       byEntry.set(key, row);
     }
-    return (payload?.entities || []).map((e) => ({ ...e, open: byEntry.get(e.entry) || { blockers: 0 } }));
-  }, [payload, watch]);
+    return (watchlist || []).map((e) => ({
+      entry: e.entry,
+      projects: e.project_ids.length,
+      ...(tally[e.entry] || { good: 0, bad: 0 }),
+      open: byEntry.get(e.entry) || { blockers: 0 },
+    }));
+  }, [watchlist, tally, watch]);
   if (!rows.length) return null;
   const standing = (lead) => {
     const sign = lead?.signposts?.[0];
@@ -4919,7 +5080,7 @@ function Scoreboard({ payload, watch, onFilter, onGoto }) {
       <${SectionHead} title="By company" count=${`${rows.length} watch${rows.length === 1 ? "" : "es"}`}>
         How each watch's window went, and what is still holding it.
         <button type="button" class="dc-linkish" style=${{ marginLeft: 6 }}
-                onClick=${() => onGoto("watch-for")}>Everything to watch for →</button>
+                onClick=${() => onGoto("monitor")}>Everything on Monitor →</button>
       <//>
       <div style=${{ overflowX: "auto" }}>
         <${Table}>
@@ -4957,13 +5118,27 @@ function Scoreboard({ payload, watch, onFilter, onGoto }) {
     </div>`;
 }
 
+/* A signal's report date as a local-midnight time, for windowing and grouping.
+   `reported` is a plain date, so it is read as the reader's own calendar day. */
+function reportedTime(s) {
+  if (!s.reported) return 0;
+  const [y, m, d] = s.reported.split("-").map(Number);
+  return new Date(y, m - 1, d).getTime();
+}
+
 /* The landing page, attention first.
  *
  * **It leads with what needs a decision, not with a feed.** Four numbers — new
  * since your last email, needing attention, good news, still open — then the new
- * items, then the rest of the window grouped by day for anybody who skipped an
- * email, then the per-company table. A reader who stops after the tiles has had
- * the week.
+ * items, then the rest of the window grouped by the day it was reported, then the
+ * per-company table. A reader who stops after the tiles has had the week.
+ *
+ * **"New" is decided by when a thing was reported, never by when we found it.**
+ * The server returns everything reported in the last two months
+ * (`feed.REPORT_WINDOW_DAYS`) and nothing older — an article from 2015 that the
+ * crawler read last night is not here at all. The week / month / two months
+ * control narrows that by report date, here, so changing it costs no request and
+ * "new since your email" can still see the whole two months.
  *
  * **"New since your last email" is the mailer's own record.** `last_email` and
  * each signal's `emailed` come from the ledger the morning run writes, so the split
@@ -4980,35 +5155,28 @@ function UpdatesView({ data, onOpen, onGoto }) {
      chip strip because the signal list below is what it filters. */
   const [only, setOnly] = useState(null);
   const [tone, setTone] = useState("all");
-
-  /* `nonce` is how an edit to the watchlist re-reads the digest. Patching the
-     new entry into the payload in place would leave every tally beside it
-     describing the previous scope — an entry with no counts reads as a quiet
-     week rather than as a number nobody has computed yet. */
-  const [nonce, setNonce] = useState(0);
-
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setFailed(null);
-    api(`/api/updates?days=${days}`)
+    api(`/api/updates?days=${REPORT_WINDOW_DAYS}`)
       .then((body) => { if (!cancelled) setPayload(body); })
       .catch((err) => { if (!cancelled) setFailed(err.message || "could not read the updates"); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [days, nonce]);
+  }, []);
 
   /* The per-company "where it stands" column. Its own request, and a failure is
      only a missing column: the updates are the page. */
   useEffect(() => {
     let cancelled = false;
-    api("/api/watch-for")
+    api("/api/monitor")
       .then((body) => { if (!cancelled) setWatch(body); })
       .catch(() => { if (!cancelled) setWatch(null); });
     return () => { cancelled = true; };
-  }, [nonce]);
+  }, []);
 
   const stale = hoursSince(payload?.last_crawl);
   const lastEmail = payload?.last_email;
@@ -5016,6 +5184,18 @@ function UpdatesView({ data, onOpen, onGoto }) {
     const d = localDate(lastEmail?.at);
     return d ? d.getTime() : Date.now() - 864e5;
   }, [lastEmail]);
+  const windowStart = useMemo(() => {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    return d.getTime() - days * 864e5;
+  }, [days]);
+
+  const all = payload?.signals || [];
+  const allHeld = payload?.held || [];
+  const inWindow = (s) => reportedTime(s) >= windowStart;
+  const signals = useMemo(() => all.filter(inWindow), [all, windowStart]);
+  const held = useMemo(() => allHeld.filter(inWindow), [allHeld, windowStart]);
+  const tally = useMemo(() => tallies(signals, held), [signals, held]);
 
   const matches = useCallback(
     (s) =>
@@ -5026,27 +5206,31 @@ function UpdatesView({ data, onOpen, onGoto }) {
         (tone === "email" && s.notify)),
     [only, tone],
   );
-  const signals = payload?.signals || [];
+  /* New since your email: from the whole two months, not the window — something
+     reported three weeks ago that reached us this morning is new to you whichever
+     window is showing. */
+  const freshAll = useMemo(
+    () => all.filter((s) => (localDate(s.at)?.getTime() ?? 0) > cutoff), [all, cutoff]);
+  const fresh = useMemo(() => freshAll.filter(matches), [freshAll, matches]);
+  const freshKeys = useMemo(() => new Set(freshAll.map((s) => s.key)), [freshAll]);
   const shown = useMemo(() => signals.filter(matches), [signals, matches]);
-  const fresh = useMemo(
-    () => shown.filter((s) => (localDate(s.at)?.getTime() ?? 0) > cutoff),
-    [shown, cutoff],
-  );
   const earlier = useMemo(() => {
     const groups = new Map();
     for (const s of shown) {
-      if ((localDate(s.at)?.getTime() ?? 0) > cutoff) continue;
-      const key = dayKey(s.at);
+      if (freshKeys.has(s.key)) continue;
+      const key = s.reported || "undated";
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key).push(s);
     }
     return [...groups.entries()].sort((a, b) => (a[0] < b[0] ? 1 : -1));
-  }, [shown, cutoff]);
+  }, [shown, freshKeys]);
 
-  const freshAll = signals.filter((s) => (localDate(s.at)?.getTime() ?? 0) > cutoff);
-  const counts = payload?.counts;
+  const counts = {
+    bad: signals.filter((s) => s.sign === "bad").length,
+    good: signals.filter((s) => s.sign === "good").length,
+  };
   const open = payload?.watch;
-  const windowWord = days === 1 ? "today" : days === 7 ? "this week" : `the last ${days} days`;
+  const windowWord = days === 7 ? "this week" : days === 30 ? "this month" : `the last ${days / 30} months`;
   const tile = (label, value, hint, onClick, color) => html`
     <button type="button" class="dc-tile" onClick=${onClick} disabled=${!onClick}
             style=${{ textAlign: "left" }}>
@@ -5060,32 +5244,17 @@ function UpdatesView({ data, onOpen, onGoto }) {
                                             maxWidth: 920 }}>
       <${Eyebrow} figure="fig. 00 — updates" title="What changed on what you are watching">
         What moved on the companies and projects on your list, and whether it was good or
-        bad. "New" means new to <em>us</em> — a crawl can import a whole back-history, so every
-        line carries both the date it happened and the date we learned it. A morning email goes
-        out at 8:00 with everything <b>worth emailing</b> you have not already been sent; this
-        page keeps the whole week, so nothing is lost if you skip one.
+        bad. Only what was <em>reported</em> in the last two months counts — an old article
+        the crawler only just found is history, not news, and is left out. Each line carries
+        the date it was reported and, where different, the date it happened. A morning email
+        goes out at 8:00 with everything <b>worth emailing</b> you have not already been sent.
       <//>
 
       <div class="dc-band">
-        <${Watchlist} payload=${payload} projects=${data.projects}
-                      allowWatch=${data.allow_watch}
-                      filter=${only} onFilter=${setOnly}
-                      onChanged=${(body) => {
-                        /* `watch_all` rides along only when the toggle sent it, so
-                           an add/remove must not reset it to undefined. */
-                        setPayload((p) =>
-                          p
-                            ? {
-                                ...p,
-                                watchlist: body.watchlist,
-                                watch_all:
-                                  body.watch_all === undefined ? p.watch_all : body.watch_all,
-                              }
-                            : p,
-                        );
-                        setOnly(null);
-                        setNonce((n) => n + 1);
-                      }} />
+        <${WatchFilter} watchlist=${payload?.watchlist} tally=${tally}
+                        filter=${only} onFilter=${setOnly} onGoto=${onGoto}
+                        signedIn=${!!data.allow_watch} watchAll=${payload?.watch_all}
+                        projectsWatched=${payload?.projects_watched} />
       </div>
 
       ${payload && html`
@@ -5095,22 +5264,22 @@ function UpdatesView({ data, onOpen, onGoto }) {
             freshAll.length,
             lastEmail ? `email went ${whenLabel(lastEmail.sent_at || lastEmail.at)}` : "no email sent to you yet",
           )}
-          ${tile("Needs attention", counts?.bad ?? 0, `obstacles and slips ${windowWord}`,
-                 counts?.bad ? () => setTone(tone === "bad" ? "all" : "bad") : null,
-                 counts?.bad ? "var(--danger)" : undefined)}
-          ${tile("Good news", counts?.good ?? 0, `milestones and cleared obstacles ${windowWord}`,
-                 counts?.good ? () => setTone(tone === "good" ? "all" : "good") : null,
-                 counts?.good ? "var(--success)" : undefined)}
+          ${tile("Needs attention", counts.bad, `obstacles and slips reported ${windowWord}`,
+                 counts.bad ? () => setTone(tone === "bad" ? "all" : "bad") : null,
+                 counts.bad ? "var(--danger)" : undefined)}
+          ${tile("Good news", counts.good, `milestones and cleared obstacles reported ${windowWord}`,
+                 counts.good ? () => setTone(tone === "good" ? "all" : "good") : null,
+                 counts.good ? "var(--success)" : undefined)}
           ${tile("Still open", open?.blockers ?? 0,
-                 open ? `blockers on ${open.blocked} of ${open.projects} projects — see what to watch for`
-                      : "blockers on the projects you follow",
-                 () => onGoto("watch-for"),
+                 open ? `obstacles reported in two months, on ${open.blocked} of ${open.projects} projects`
+                      : "obstacles on the projects you follow",
+                 () => onGoto("monitor"),
                  open?.severity?.blocking ? "var(--danger)" : open?.blockers ? "var(--warning)" : undefined)}
         </div>`}
 
       <div class="dc-band" style=${{ display: "flex", gap: 14, alignItems: "center",
                                      flexWrap: "wrap", paddingBottom: 18 }}>
-        <div class="dc-seg" aria-label="window">
+        <div class="dc-seg" aria-label="reported in">
           ${WINDOWS.map(([n, label]) => html`
             <button key=${n} type="button" class="dc-seg-btn" aria-pressed=${days === n}
                     onClick=${() => setDays(n)}>${label}</button>`)}
@@ -5144,28 +5313,27 @@ function UpdatesView({ data, onOpen, onGoto }) {
         ${[0, 1, 2].map((i) => html`<${Skeleton} key=${i} style=${{ height: 96 }} />`)}
       </div>`}
 
-      ${payload && !signals.length &&
-      html`<${EmptyState} variant="dashed" title=${`Nothing new ${windowWord}`}
+      ${payload && !signals.length && !fresh.length &&
+      html`<${EmptyState} variant="dashed" title=${`Nothing reported ${windowWord}`}
                           description=${payload.last_crawl
-                            ? "The crawl ran and nothing on your list moved. Widen the window, add a company, or see what is still open on the Watch for page."
+                            ? "Nothing on your list was reported in this window. Widen it, add a company on Monitor, or see what is still open there."
                             : "No citation has ever been fetched, so there is nothing to compare against."} />`}
 
-      ${payload && !!signals.length && !shown.length &&
+      ${payload && !!(signals.length || fresh.length) && !shown.length && !fresh.length &&
       html`<${EmptyState} variant="dashed"
                           title=${only ? `Nothing for ${only} ${windowWord}` : "Nothing matches this filter"}
                           description=${only
                             ? "Other watches did move. Click the chip again to see everything."
                             : "Pick “all” to read everything in the window."} />`}
 
-      ${payload && !!shown.length && html`
-        <div style=${{ display: "grid", gap: 12, opacity: loading ? 0.55 : 1,
-                       transition: "opacity var(--duration-fast, .12s)" }}>
+      ${payload && !!(shown.length || fresh.length) && html`
+        <div style=${{ display: "grid", gap: 12 }}>
           <${SectionHead}
             title=${lastEmail ? "New since your last email" : "New in the last day"}
             count=${fresh.length}>
             ${lastEmail
-              ? html`Recorded after your email of ${whenLabel(lastEmail.at)}. What is worth it goes in tomorrow's.`
-              : "Nothing has been emailed to you yet, so this is the last 24 hours."}
+              ? html`Reached us after your email of ${whenLabel(lastEmail.at)}, and reported in the last two months. What is worth it goes in tomorrow's.`
+              : "Nothing has been emailed to you yet, so this is what reached us in the last 24 hours."}
           <//>
           ${fresh.map((s, i) => html`
             <${SignalCard} key=${s.key || `${s.project_id}-${s.kind}-${s.label}-${i}`} signal=${s} onOpen=${onOpen} />`)}
@@ -5176,10 +5344,10 @@ function UpdatesView({ data, onOpen, onGoto }) {
         </div>`}
 
       ${payload && !!earlier.length && html`
-        <div style=${{ display: "grid", gap: 12, opacity: loading ? 0.55 : 1 }}>
-          <${SectionHead} title=${`Earlier ${windowWord}`}
+        <div style=${{ display: "grid", gap: 12 }}>
+          <${SectionHead} title=${`Reported ${windowWord}`}
                           count=${earlier.reduce((n, [, group]) => n + group.length, 0)}>
-            In case you missed an email. A tick means it was in one.
+            Grouped by the day it was reported. A tick means it was in one of your emails.
           <//>
           ${earlier.map(([key, group]) => html`
             <div key=${key} style=${{ display: "grid", gap: 10 }}>
@@ -5197,7 +5365,7 @@ function UpdatesView({ data, onOpen, onGoto }) {
             </div>`)}
         </div>`}
 
-      ${payload && html`<${Scoreboard} payload=${payload} watch=${watch}
+      ${payload && html`<${Scoreboard} watchlist=${payload.watchlist} tally=${tally} watch=${watch}
                                          onFilter=${(entry) => { setOnly(entry); window.scrollTo({ top: 0, behavior: "smooth" }); }}
                                          onGoto=${onGoto} />`}
 
@@ -5206,15 +5374,15 @@ function UpdatesView({ data, onOpen, onGoto }) {
            console's standing rule is that a model's answer is not a fact. Counting
            them beside the confirmed ones would quietly abandon that; leaving them
            out entirely would hide work waiting for `tracker risks confirm`. */ ""}
-      ${payload && !!payload.held.length &&
+      ${payload && !!held.length &&
       html`<div class="dc-band" style=${{ paddingBottom: 0 }}>
         <button type="button" class="dc-linkish" onClick=${() => setShowHeld((v) => !v)}>
-          ${showHeld ? "Hide" : "Show"} ${payload.held.length} unconfirmed —
-          nobody could quote ${payload.held.length === 1 ? "it" : "them"}
+          ${showHeld ? "Hide" : "Show"} ${held.length} unconfirmed —
+          nobody could quote ${held.length === 1 ? "it" : "them"}
         </button>
         ${showHeld &&
         html`<div style=${{ display: "grid", gap: 12, opacity: 0.75 }}>
-          ${payload.held.map((s, i) => html`
+          ${held.map((s, i) => html`
             <${SignalCard} key=${`held-${s.key || i}`} signal=${s} onOpen=${onOpen} />`)}
         </div>`}
       </div>`}
@@ -5235,7 +5403,7 @@ function UpdatesView({ data, onOpen, onGoto }) {
  * Kept in step with `server.READ_VIEWS`, which decides which paths are pages
  * rather than 404s; a test asserts the two agree. */
 const VIEWS = [
-  ["updates", "Updates"], ["watch-for", "Watch for"], ["projects", "Projects"],
+  ["updates", "Updates"], ["monitor", "Monitor"], ["projects", "Projects"],
   ["sources", "Sources"], ["map", "Map"], ["capex", "Capex"], ["help", "Help"],
 ];
 
@@ -5640,6 +5808,7 @@ function App() {
      refreshed and reached with the back button, like every other page here. */
   const [projectId, setProjectId] = useState(() => window.DC_PROJECT || null);
   const [dark, setDark] = useState(false);
+  const watch = useWatchState(data?.allow_watch);
 
   const load = useCallback(() => api("/api/dataset").then((payload) => {
     if (payload.kwPerH200) H200_KW = payload.kwPerH200;
@@ -5822,13 +5991,16 @@ function App() {
         </header>
 
         ${view === "updates" && html`<${UpdatesView} data=${data} onOpen=${openProject} onGoto=${goto} />`}
-        ${view === "watch-for" && html`<${WatchForView} api=${api} onOpen=${openProject} onGoto=${goto} />`}
+        ${view === "monitor" && html`<${MonitorView} api=${api} onOpen=${openProject} onGoto=${goto}
+                                                  ListEditor=${WatchlistEditor} projects=${data.projects}
+                                                  onListChanged=${watch.refresh} />`}
         ${/* One project's page, or the table. The page fetches its own detail, so it
               needs the id rather than a row out of the list payload. */ ""}
         ${view === "projects" && projectId != null
-          ? html`<${ProjectPage} id=${projectId} data=${data}
+          ? html`<${ProjectPage} id=${projectId} data=${data} watch=${watch} onGoto=${goto}
                    onBack=${() => goto("projects")} />`
-          : view === "projects" && html`<${ProjectsView} data=${data} onOpen=${openProject} />`}
+          : view === "projects" && html`<${ProjectsView} data=${data} onOpen=${openProject}
+                                                         watch=${watch} onGoto=${goto} />`}
         ${view === "sources" && html`<${SourcesView} data=${data} />`}
         ${view === "map" && html`<${MapView} data=${data} onOpen=${openProject} />`}
         ${view === "capex" && html`

@@ -261,3 +261,111 @@ def test_one_account_s_view_does_not_carry_an_owner(session, account):
     [entity] = watchlist.watched(session, account_id=account.id)
     assert entity.owner is None
     assert "owner" not in entity.as_json()
+
+
+# --- one exact project (migration 0033) -------------------------------------------
+
+
+def test_an_exact_watch_covers_that_project_and_no_other(session, account):
+    """The reason the button does not reuse the typed form: "Colossus" typed also
+    matches "Colossus 2", and a star that lights both rows is broken."""
+    one = _project(session)
+    two = _project(session, name="Colossus 2", dedup_key="k2")
+
+    watchlist.add_project(session, one.id, account_id=account.id)
+    [exact] = watchlist.watched(session, account_id=account.id)
+    assert exact.matches == {one.id: watchlist.VIA_PROJECT}
+    assert exact.entry == "xAI | Colossus" and exact.project_id == one.id
+
+    watchlist.add(session, "xAI | Colossus", account_id=account.id)
+    loose = [e for e in watchlist.watched(session, account_id=account.id) if e.project_id is None]
+    assert set(loose[0].matches) == {one.id, two.id}, "the typed one stays loose"
+
+
+def test_an_exact_watch_is_idempotent_and_removable(session, account):
+    project = _project(session)
+    _row, created = watchlist.add_project(session, project.id, account_id=account.id)
+    _row, again = watchlist.add_project(session, project.id, account_id=account.id)
+    assert (created, again) == (True, False)
+    assert watchlist.remove_project(session, project.id, account_id=account.id) is True
+    assert watchlist.remove_project(session, project.id, account_id=account.id) is False
+
+
+def test_the_words_on_the_list_also_drop_an_exact_watch(session, account):
+    """`tracker watch remove "xAI | Colossus"` reads the list as it is printed."""
+    project = _project(session)
+    watchlist.add_project(session, project.id, account_id=account.id)
+    assert watchlist.remove(session, "xAI | Colossus", account_id=account.id) is True
+    assert watchlist.entries(session, account_id=account.id) == []
+
+
+def test_a_typed_project_cannot_take_an_exact_watchs_key(session, account):
+    with pytest.raises(watchlist.WatchError):
+        watchlist.add(session, "xAI | #12", account_id=account.id)
+
+
+def test_watching_a_project_that_does_not_exist_is_refused(session, account):
+    with pytest.raises(watchlist.WatchError):
+        watchlist.add_project(session, 424242, account_id=account.id)
+
+
+def test_a_merge_moves_the_exact_watch_to_the_survivor(session, account):
+    """The cascade on `watch.project_id` would delete the watch with the folded row;
+    the campus is the same one they asked to follow, so it moves instead."""
+    from tracker.merge import merge_projects
+
+    keep = _project(session, name="Stargate Abilene", company="Crusoe", dedup_key="keep")
+    dupe = _project(session, name="Stargate", company="Oracle", dedup_key="dupe")
+    watchlist.add_project(session, dupe.id, account_id=account.id)
+
+    result = merge_projects(session, keep.id, [dupe.id])
+
+    assert result.watches_moved == 1
+    [row] = watchlist.entries(session, account_id=account.id)
+    assert row.project_id == keep.id and row.entry == "Crusoe | Stargate Abilene"
+
+
+def test_a_merge_folds_two_exact_watches_into_one(session, account):
+    keep = _project(session, name="Stargate Abilene", company="Crusoe", dedup_key="keep")
+    dupe = _project(session, name="Stargate", company="Oracle", dedup_key="dupe")
+    watchlist.add_project(session, keep.id, account_id=account.id)
+    watchlist.add_project(session, dupe.id, account_id=account.id)
+
+    from tracker.merge import merge_projects
+
+    merge_projects(session, keep.id, [dupe.id])
+    assert [r.project_id for r in watchlist.entries(session, account_id=account.id)] == [keep.id]
+
+
+# --- Monitor: two months, like everything else -----------------------------------
+
+
+def test_monitor_lists_only_obstacles_reported_in_two_months(session, account):
+    """An open obstacle nobody has written about since spring is counted, not listed:
+    "open" mostly meant "nobody has written that it closed"."""
+    from tracker import watchfor
+    from tracker.models import Risk
+
+    project = _project(session)
+    now = dt.datetime.now()
+    for category, age in (("permitting", 10), ("water", 120)):
+        session.add(
+            Risk(
+                project_id=project.id,
+                category=category,
+                severity="material",
+                status="open",
+                summary=f"{category} fight.",
+                created_at=now - dt.timedelta(days=age),
+                recorded_at=now - dt.timedelta(days=age),
+            )
+        )
+    session.flush()
+    session.refresh(project)
+    watchlist.add_project(session, project.id, account_id=account.id)
+
+    report = watchfor.report(session, account_id=account.id, everything=False)
+    [row] = report.projects
+    assert [b.category for b in row.blockers] == ["permitting"]
+    assert row.older == 1
+    assert report.as_json()["counts"]["older"] == 1

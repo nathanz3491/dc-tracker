@@ -802,10 +802,14 @@ def test_every_view_has_its_own_url(server):
     and swapping.
     """
     address, _ = server
-    for path in ("/updates", "/watch-for", "/projects", "/sources", "/map", "/capex", "/help"):
+    for path in ("/updates", "/monitor", "/projects", "/sources", "/map", "/capex", "/help"):
         status, body = request(address, path)
         assert status == 200, path
         assert f'window.DC_VIEW="{path.strip("/")}"' in body
+
+    # Monitor's old name. Every email sent before the rename links to it.
+    status, _ = request(address, "/watch-for")
+    assert status in (301, 302, 303, 307, 308)
 
     # `/dev` was the second face, and it went with the runner. It must 404 rather
     # than fall through to the console, or a stale bookmark reads as a broken link.
@@ -4987,16 +4991,16 @@ def test_a_half_written_briefing_renders_what_arrived():
         assert _parse_markdown(cut), f"{cut!r} rendered nothing"
 
 
-# --- the email ledger on the page, and the watch-for page ---------------------
+# --- the email ledger on the page, and the Monitor page ------------------------
 
 
-def test_watch_for_lists_every_open_blocker_on_the_readers_projects(reader):
+def test_monitor_lists_every_recent_blocker_on_the_readers_projects(reader):
     """The page the morning email links to: each followed project, its open
     obstacles, and the milestone that would clear the blocked track."""
     address, _console, cookie, _id = reader
     as_reader(address, cookie, "/api/watch", "POST", {"action": "add", "entry": "Microsoft"})
 
-    status, body = as_reader(address, cookie, "/api/watch-for")
+    status, body = as_reader(address, cookie, "/api/monitor")
     assert status == 200
     [project] = body["projects"]
     assert project["company"] == "Microsoft"
@@ -5005,11 +5009,18 @@ def test_watch_for_lists_every_open_blocker_on_the_readers_projects(reader):
     assert project["signposts"][0]["blocked"] is True
     assert body["counts"]["blocked"] == 1
     assert body["last_email"] is None, "nothing has been emailed yet"
+    # The list is edited on this page now, so it rides along.
+    assert [w["entry"] for w in body["watchlist"]] == ["Microsoft"]
+    assert body["allow_watch"] is True
+
+    # The old name still answers, for a tab running the bundle from before.
+    status, old = as_reader(address, cookie, "/api/watch-for")
+    assert status == 200 and old["projects"] == body["projects"]
 
 
-def test_watch_for_is_empty_for_a_reader_following_nothing(reader):
+def test_monitor_is_empty_for_a_reader_following_nothing(reader):
     address, _console, cookie, _id = reader
-    status, body = as_reader(address, cookie, "/api/watch-for")
+    status, body = as_reader(address, cookie, "/api/monitor")
     assert status == 200
     assert body["projects"] == [] and body["counts"]["projects"] == 0
 
@@ -5039,7 +5050,7 @@ def test_updates_say_what_was_emailed_and_when(reader, seeded_db):
     assert after["last_email"]["kind"] in ("updates", "quiet")
 
 
-def test_watch_for_still_answers_once_the_reader_has_been_emailed(reader, seeded_db):
+def test_monitor_still_answers_once_the_reader_has_been_emailed(reader, seeded_db):
     """The page read the last email's time after its read session had closed, and
     a read session rolls back on the way out, expiring the row: it answered 500 to
     everyone the morning email had reached, and only to them."""
@@ -5056,7 +5067,67 @@ def test_watch_for_still_answers_once_the_reader_has_been_emailed(reader, seeded
     with session_scope(open_db(seeded_db, readonly=False)) as session:
         notify.send_all(session, transport=Recorder(), sleep=lambda _s: None, force=True)
 
-    status, body = as_reader(address, cookie, "/api/watch-for")
+    status, body = as_reader(address, cookie, "/api/monitor")
     assert status == 200, body
     assert body["last_email"] is not None
     assert body["projects"][0]["company"] == "Microsoft"
+
+
+# --- watching one exact project, by its button ---------------------------------
+
+
+def test_the_star_watches_exactly_that_project(reader):
+    """`project_id` on POST /api/watch is the button on a Projects row or a
+    project's page. It covers that row and no other, and GET /api/watch is what
+    every star reads to draw itself."""
+    address, _console, cookie, _id = reader
+    _status, data = as_reader(address, cookie, "/api/dataset")
+    target = data["projects"][0]["id"]
+
+    status, body = as_reader(
+        address, cookie, "/api/watch", "POST", {"action": "add", "project_id": target}
+    )
+    assert status == 200 and body["created"] is True
+    [entry] = body["watchlist"]
+    assert entry["project_id"] == target and entry["project_ids"] == [target]
+
+    _status, state = as_reader(address, cookie, "/api/watch")
+    assert state["exact"] == [target] and state["watched"] == [target]
+
+    # Pressed again, it stops.
+    status, body = as_reader(
+        address, cookie, "/api/watch", "POST", {"action": "remove", "project_id": target}
+    )
+    assert status == 200 and body["removed"] is True and body["watchlist"] == []
+    _status, state = as_reader(address, cookie, "/api/watch")
+    assert state["exact"] == [] and state["watched"] == []
+
+
+def test_a_company_watch_covers_a_row_without_making_it_exact(reader):
+    """The star shows "watching via Microsoft" and cannot turn it off: the entry is
+    the company's, and it is removed on Monitor."""
+    address, _console, cookie, _id = reader
+    as_reader(address, cookie, "/api/watch", "POST", {"action": "add", "entry": "Microsoft"})
+    _status, state = as_reader(address, cookie, "/api/watch")
+    assert state["watched"] and state["exact"] == []
+    assert set(state["via"].values()) == {"Microsoft"}
+
+
+def test_the_star_refuses_what_is_not_a_project_id(reader):
+    address, _console, cookie, _id = reader
+    for bad in ("12", True, 1.5):
+        status, _body = as_reader(
+            address, cookie, "/api/watch", "POST", {"action": "add", "project_id": bad}
+        )
+        assert status == 400, bad
+    status, body = as_reader(
+        address, cookie, "/api/watch", "POST", {"action": "add", "project_id": 999999}
+    )
+    assert status == 400 and "no project" in body["error"]
+
+
+def test_nobody_signed_in_has_no_stars(server):
+    address, _ = server
+    status, body = request(address, "/api/watch")
+    assert status == 200
+    assert body["allow_watch"] is False and body["watched"] == []

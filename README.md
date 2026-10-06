@@ -126,7 +126,7 @@ tracker coverage      # which operators we hold no rows for at all
 tracker users add you@example.com   # who may read the console (and `users admin`, `edit`, `disable`…)
 tracker watch add xAI --user you@example.com   # what you want to be told about
 tracker digest --user you@example.com          # what changed on it, good and bad
-tracker notify send   # everyone's 8 a.m. email: what is new, or what to watch for
+tracker notify send   # everyone's 8 a.m. email: what is new, or what Monitor shows
 tracker serve         # the same dataset as a live console
 ```
 
@@ -193,7 +193,7 @@ a row held at T1 by `fields_present`, pointed at the rows below T2 (`enrich --t2
 The first round also reads the news and adds campuses (`--discover`, default 40): it
 polls the feeds, which costs nothing, and reads that many queued articles through
 the crawl's identity check (`ingest crawl --from-queue --new-first`). Everything
-published within the email's 45-day window goes first, newest first, so what the
+published within the email's two-month window goes first, newest first, so what the
 email reports is days old rather than weeks; then articles naming no tracked campus.
 Enrich reads for one row and creates none, so without this step nothing in the loop
 added a campus.
@@ -275,11 +275,14 @@ substation is the most valuable signal here.
 **Confidence is recomputed, never stored,** and one source can never reach 3
 however authoritative — independence is counted by domain.
 
-**"New" means new to us.** A crawl reads one article and imports a project's whole
-back-history, so stored milestones run from 1997 to 2040 while the rows themselves
-arrived last night. `tracker digest`, the console's Updates page and the morning
-email filter on when we recorded a fact and print both dates, because either one
-alone reads as a different claim than the evidence supports.
+**"New" means newly reported, not newly found.** A crawl reads one article and
+imports a project's whole back-history, so stored milestones run from 1997 to 2040
+while the rows themselves arrived last night. `tracker digest`, the console's
+Updates and Monitor pages and the morning email all keep only what was *reported* in
+the last two months — the article's publish date, else the fact's own date, else
+the day we stored it — and drop a milestone its own article is only recalling from
+over a year before. An article from 2015 that the crawler found yesterday is not an
+update anywhere. `tracker/feed.py` has the measurement.
 
 **Coverage is a question the sources cannot answer.** Discovery finds what was
 published, so an operator nobody wrote about last month is indistinguishable from
@@ -430,7 +433,7 @@ directory, which is what lets `tracker init` work from anywhere.
 .venv/Scripts/python -m pytest
 ```
 
-3,562 tests, about four minutes. **A fresh clone with no API key and no network access
+3,576 tests, about four minutes. **A fresh clone with no API key and no network access
 must produce a green run.** Tests that would hit the network or spend DeepSeek
 tokens are marked `network` / `llm` and deselected by default; run them
 explicitly with `-m network` or `-m llm`. An unmarked test that reaches for the

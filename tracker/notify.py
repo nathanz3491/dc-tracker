@@ -2,22 +2,20 @@
 
 **What goes in.** Every morning each person gets one email. An update is in it if
 they have never been sent it, it is worth interrupting them for (`feed.notable`),
-and either
+and it was **reported within the last** :data:`feed.REPORT_WINDOW_DAYS` (60) days —
+the same window as the Updates page, on the same date (`feed.reported_on`: the
+article's publish date, else the fact's own date, else the day we stored it). An
+article from 2015 that the crawler found yesterday is never sent, and neither is a
+recent article recalling an old milestone (`feed.background`).
 
-* we **recorded it since their last email** and it happened within the last
-  :data:`MAX_AGE_DAYS` (45) days, or
-* it **happened within the last** :data:`CATCH_UP_DAYS` (14) days — the catch-up
-  for a company they only just started watching, or an email that failed.
-
-An undated update is judged by the day its article was published, or failing that
-the day we recorded it (`feed.occurred`), and its card says "reported <date>" rather
-than "undated". Nothing older than 45 days is ever sent. With no earlier email to count from, "since your last email" means
-the last day.
+The ledger is what makes "since your last email" true, so there is no separate
+catch-up rule: a company somebody only just started watching, or an email that
+failed, simply leaves unsent updates that are still inside the window.
 
 **A day with no news still gets an email** — the list of what to watch for on
 each followed project (`watchfor`), so a quiet day reads as a quiet day and not as
 a broken service. A day with news carries a short version of the same list. Both
-link to the console's *Watch for* page and to the week on the *Updates* page, for
+link to the console's *Monitor* page and to the *Updates* page, for
 anybody who skipped a day.
 
 **The mailer has a memory, and that is what makes it consistent.** It used to
@@ -75,7 +73,7 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from tracker.config import Settings, get_settings
-from tracker.feed import NOTIFY_MAX_AGE_DAYS, Digest, Signal, occurred
+from tracker.feed import REPORT_WINDOW_DAYS, Digest, Signal, notable
 from tracker.models import Account, NotifyDelivery, NotifyRun, NotifySent, Source, utcnow
 from tracker.watchfor import (
     EMAIL_BLOCKERS_PER_PROJECT,
@@ -89,16 +87,6 @@ log = logging.getLogger(__name__)
 
 #: Where Resend takes a message. One host, one endpoint.
 RESEND_ENDPOINT = "https://api.resend.com/emails"
-
-#: With no earlier email to count from, "new since your last email" means this.
-FIRST_WINDOW: Final = dt.timedelta(days=1)
-
-#: An unsent update that happened this recently goes in whenever it was recorded.
-CATCH_UP_DAYS: Final[int] = 14
-
-#: Nothing that happened longer ago than this is ever mailed. The same number
-#: `feed.notable` gates on, named here because it is this module's rule.
-MAX_AGE_DAYS: Final[int] = NOTIFY_MAX_AGE_DAYS
 
 #: Tries per message, and the waits between them. A rate limit or a provider
 #: hiccup clears in seconds; one still failing after ~40 s is owed tomorrow.
@@ -415,14 +403,13 @@ def _button(label: str, href: str, *, primary: bool = True) -> str:
 def _signal_row(signal: Signal) -> str:
     """One signal as a card.
 
-    Both dates ride on every row, which is the same rule the page follows: "new"
-    means new to us, and a milestone from 2022 that we read yesterday has to read
-    as what it is. The recency gate means a notification rarely carries an old one
-    now, but the label is what makes that visible rather than assumed.
+    When it happened and when it was reported, the same pair the page shows. The
+    second is left off when it is the same day, which for an undated article it
+    is by construction (`feed.reported_on`).
     """
     dot, chip_bg, chip_fg = _SIGN_COLOURS.get(signal.sign, _SIGN_COLOURS["neutral"])
-    when = signal.when
-    learned = f" · learned {signal.at.date().isoformat()}" if signal.at else ""
+    when = signal.happened.isoformat() if signal.happened else "undated"
+    learned = _reported_words(signal, sep=" · ")
     source = ""
     if signal.source_url:
         label = esc(signal.publisher or "source")
@@ -481,6 +468,13 @@ def _signal_row(signal: Signal) -> str:
     </td></tr>"""
 
 
+def _reported_words(signal: Signal, *, sep: str) -> str:
+    """ "reported 2026-10-01", or nothing when that is the date already shown."""
+    if signal.reported is None or signal.reported == signal.happened:
+        return ""
+    return f"{sep}reported {signal.reported.isoformat()}"
+
+
 def _heading(text: str) -> str:
     return (
         f'<tr><td style="padding:22px 0 10px 0;font-family:{FONT_MONO};font-size:11px;'
@@ -500,7 +494,7 @@ def _open_for(days: int | None) -> str:
 
 
 def _project_block(project: ProjectWatch, *, blockers: int) -> str:
-    """One followed project in the watch-for section: its blockers, then its signposts."""
+    """One followed project in the Monitor section: its blockers, then its signposts."""
     shown = project.blockers[:blockers]
     more = len(project.blockers) - len(shown)
     lines = []
@@ -604,11 +598,11 @@ def _watch_section(
             f'color:{TOKENS["muted_foreground"]};">{esc(note)}</td></tr>'
         )
         text.append(note)
-    link = page_url(console_url, "watch-for")
+    link = page_url(console_url, "monitor")
     if link:
         rows.append(
             f'<tr><td align="left" style="padding:6px 0 0 0;">'
-            f"{_button('See the full list of what to watch for', link, primary=False)}</td></tr>"
+            f"{_button('See everything on Monitor', link, primary=False)}</td></tr>"
         )
         text.append(f"The full list: {link}")
     return "".join(rows), text
@@ -617,7 +611,7 @@ def _watch_section(
 def _missed_note(console_url: str | None) -> tuple[str, list[str]]:
     """The line for anybody who skipped a day: the whole week is on the page."""
     link = page_url(console_url, "updates")
-    words = "Missed an email? Every update from the past 7 days is on your Updates page"
+    words = "Missed an email? Every update from the past two months is on your Updates page"
     if not link:
         return "", []
     return (
@@ -684,8 +678,8 @@ def _page(*, preheader: str, intro: str, body: str, footer: str) -> str:
 _FOOTER = (
     "You are receiving this because these companies are on your watchlist. Every "
     "figure above is traceable to the article that stated it — the dates are shown "
-    "as <em>when it happened</em> and <em>when we learned it</em>, which are rarely "
-    "the same."
+    "as <em>when it happened</em> and <em>when it was reported</em>. Nothing "
+    "reported more than two months ago is sent."
 )
 
 
@@ -733,8 +727,8 @@ def render_text(
     more often, and it is what a screen reader actually reads."""
     lines = [f"{len(signals)} new update(s) {_since_words(last_email)}", ""]
     for signal in signals:
-        when = signal.when
-        learned = f", learned {signal.at.date().isoformat()}" if signal.at else ""
+        when = signal.happened.isoformat() if signal.happened else "undated"
+        learned = _reported_words(signal, sep=", ")
         lines.append(f"* {signal.company} — {signal.project}: {signal.headline}")
         lines.append(f"  {signal.detail}")
         lines.append(
@@ -820,30 +814,31 @@ def is_sent(signal: Signal, sent: set[str]) -> bool:
 def choose(
     signals: Iterable[Signal],
     *,
-    since: dt.datetime,
     sent: set[str],
     today: dt.date | None = None,
 ) -> tuple[Signal, ...]:
     """The updates owed to one person today, in the order given. See the module rules.
 
-    The catch-up rule admits a milestone only if we recorded it on or after the day
-    it is dated. One recorded *before* its date was a schedule when we read it; the
-    date passing does not make it news, and without this every "expected online
-    September 20" read in June would arrive on September 21 as an energisation.
+    `signals` is a digest, so everything in it was reported inside the window;
+    `feed.notable` checks that again, because the mailer is the one place a
+    stale update must never leak through.
+
+    A milestone **recorded before its own date** is left out: it was a schedule
+    when we read it, and the date passing does not make it news. Without this
+    every "expected online September 20" read in June would arrive on September
+    21 as an energisation.
     """
-    today = today or dt.date.today()
     out = []
     for signal in signals:
-        if not signal.notify or is_sent(signal, sent):
+        if not notable(signal, today=today) or is_sent(signal, sent):
             continue
-        when = occurred(signal)
-        if when is None or (today - when).days > MAX_AGE_DAYS:
+        if (
+            signal.happened is not None
+            and signal.at is not None
+            and signal.at.date() < signal.happened
+        ):
             continue
-        new = signal.at is not None and signal.at >= since
-        reported_after = signal.at is None or signal.at.date() >= when
-        recent = (today - when).days <= CATCH_UP_DAYS and reported_after
-        if new or recent:
-            out.append(signal)
+        out.append(signal)
     return tuple(out)
 
 
@@ -918,11 +913,14 @@ def compose(
     ):
         return "already emailed today"
     last = previous.prepared_at if previous is not None else None
-    since = last or (now - FIRST_WINDOW)
-    # Wide enough for both rules: the catch-up reaches back CATCH_UP_DAYS.
-    earliest = min(since, now - dt.timedelta(days=CATCH_UP_DAYS + 1))
-    brief = digest(session, since=earliest, account_id=account.id, entities=entities)
-    owed = choose(brief.signals, since=since, sent=sent_keys(session, account.id))
+    brief = digest(
+        session,
+        days=REPORT_WINDOW_DAYS,
+        account_id=account.id,
+        entities=entities,
+        today=local_time(now).date(),
+    )
+    owed = choose(brief.signals, sent=sent_keys(session, account.id), today=local_time(now).date())
     watch = watchfor.report(session, account_id=account.id, entities=entities, everything=False)
 
     if owed:
@@ -1260,12 +1258,9 @@ def alert_admins(
 
 __all__ = [
     "BACKOFF_SECONDS",
-    "CATCH_UP_DAYS",
-    "FIRST_WINDOW",
     "FONT_DISPLAY",
     "FONT_MONO",
     "FONT_SANS",
-    "MAX_AGE_DAYS",
     "RESEND_ENDPOINT",
     "SEND_ATTEMPTS",
     "TOKENS",

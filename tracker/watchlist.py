@@ -21,6 +21,13 @@ routinely filed under the developer's name, and a watchlist that missed it would
 be answering a different question from the one that was asked. Every match says
 which way it came, so a reader can tell a builder from a tenant.
 
+**A row can also name one project exactly** (migration 0033): the button on a
+Projects row or a project's own page. Typed text stays loose because the database
+holds whatever the first article called the campus; a button is pressed *on* the
+row, so it means that row and no other — a loose "Colossus" also matches
+"Colossus 2", and a star that lights three rows is broken. Such a row carries the
+project's id, and a merge moves it to the surviving project (`repoint`).
+
 **Every row has an owner, and the two callers want opposite scopes.** A console
 request is always for one account — anything else would show one reader another's
 interests — so `account_id` is required to write and named to read. The CLI is the
@@ -49,6 +56,8 @@ SEPARATOR = "|"
 VIA_OPERATOR = "operator"
 VIA_CUSTOMER = "customer"
 VIA_BLOCK = "block_customer"
+#: Watched by id, from the project's own button. Not a builder or a tenant match.
+VIA_PROJECT = "project"
 
 
 class WatchError(ValueError):
@@ -71,10 +80,12 @@ class Entity:
     #: because the terminal reads the whole database and a list of entries with no
     #: owner column would be several people's interests run together.
     owner: str | None = None
+    #: Set when this row watches exactly one project. See the module docstring.
+    project_id: int | None = None
 
     @property
     def whole_company(self) -> bool:
-        return not self.project_key
+        return not self.project_key and self.project_id is None
 
     @property
     def project_ids(self) -> tuple[int, ...]:
@@ -96,6 +107,7 @@ class Entity:
             "added_at": self.added_at.isoformat() if self.added_at else None,
             "project_ids": list(self.project_ids),
             "matched_via": dict(self.matches),
+            "project_id": self.project_id,
         }
 
 
@@ -109,6 +121,13 @@ def parse(entry: str) -> tuple[str, str]:
     watchlist.
     """
     company, _, project = entry.partition(SEPARATOR)
+    if project.strip().startswith("#"):
+        # The key space of exact watches (`_exact_key`). Typed, it would match
+        # nothing and could block the button on that project from ever working.
+        raise WatchError(
+            f"{entry!r}: a project name cannot start with '#'. Use the watch button "
+            "on the project to follow it by id."
+        )
     key = company_key(company.strip())
     if not key:
         raise WatchError(
@@ -169,6 +188,89 @@ def add(
     return row, True
 
 
+def add_project(
+    session: Session, project_id: int, *, account_id: int, note: str | None = None
+) -> tuple[Watch, bool]:
+    """Watch exactly one project, by id. Returns the row and whether it was new.
+
+    The entry is written as "Company | Name" so the list reads the same as a typed
+    one; what it matches is the id alone.
+    """
+    project = session.get(Project, project_id)
+    if project is None:
+        raise WatchError(f"no project #{project_id}")
+    found = _find_project(session, account_id, project_id)
+    if found is not None:
+        if note is not None:
+            found.note = note
+        session.flush()
+        return found, False
+    company = company_key(project.company) or company_key(project.name)
+    if not company:
+        raise WatchError(f"project #{project_id} has no company to file the watch under")
+    row = Watch(
+        account_id=account_id,
+        entry=f"{project.company} {SEPARATOR} {project.name}",
+        company_key=company,
+        project_key=_exact_key(project_id),
+        project_id=project_id,
+        note=note,
+        added_at=utcnow(),
+    )
+    session.add(row)
+    session.flush()
+    return row, True
+
+
+def remove_project(session: Session, project_id: int, *, account_id: int) -> bool:
+    """Stop watching one project by id. False if it was not watched that way.
+
+    Only the exact row: a company-wide watch that also covers this project is the
+    company's, and is removed from the list, not from a row.
+    """
+    found = _find_project(session, account_id, project_id)
+    if found is None:
+        return False
+    session.delete(found)
+    session.flush()
+    return True
+
+
+def repoint(session: Session, old_id: int, new_id: int) -> int:
+    """Move exact watches from a project being merged away onto the survivor.
+
+    Called by `merge.merge_projects` before it deletes the folded row, which would
+    otherwise take every exact watch on it down with the cascade. An account that
+    already watches the survivor keeps that row and loses the duplicate. Returns
+    how many rows were moved or folded.
+    """
+    survivor = session.get(Project, new_id)
+    if survivor is None:
+        return 0
+    rows = session.scalars(select(Watch).where(Watch.project_id == old_id)).all()
+    for row in rows:
+        if _find_project(session, row.account_id, new_id) is not None:
+            session.delete(row)
+            continue
+        row.project_id = new_id
+        row.project_key = _exact_key(new_id)
+        row.company_key = company_key(survivor.company) or row.company_key
+        row.entry = f"{survivor.company} {SEPARATOR} {survivor.name}"
+    session.flush()
+    return len(rows)
+
+
+def _exact_key(project_id: int) -> str:
+    """`project_key` for an exact watch. "#" never starts a lowercased name."""
+    return f"#{project_id}"
+
+
+def _find_project(session: Session, account_id: int, project_id: int) -> Watch | None:
+    return session.scalar(
+        select(Watch).where(Watch.account_id == account_id, Watch.project_id == project_id)
+    )
+
+
 def remove(session: Session, entry: str, *, account_id: int) -> bool:
     """Drop one entity from one account's list. False if it was not being watched.
 
@@ -177,6 +279,16 @@ def remove(session: Session, entry: str, *, account_id: int) -> bool:
     """
     company, project = parse(entry)
     found = _find(session, account_id, company, project)
+    if found is None:
+        # An exact watch reads "Company | Name" in the list, so the same words
+        # typed at the CLI should drop it too.
+        found = session.scalar(
+            select(Watch).where(
+                Watch.account_id == account_id,
+                Watch.project_id.is_not(None),
+                Watch.entry == entry.strip(),
+            )
+        )
     if found is None:
         return False
     session.delete(found)
@@ -242,7 +354,12 @@ def resolve(
     out: list[Entity] = []
     for watch in watches:
         matches: dict[int, str] = {}
+        exact = getattr(watch, "project_id", None)
         for project, keys in indexed:
+            if exact is not None:
+                if project.id == exact:
+                    matches[project.id] = VIA_PROJECT
+                continue
             if not _name_matches(watch.project_key, project.name):
                 continue
             for key, via in keys:
@@ -260,6 +377,7 @@ def resolve(
                 added_at=watch.added_at,
                 matches=matches,
                 owner=(owners or {}).get(getattr(watch, "account_id", None)),
+                project_id=exact,
             )
         )
     return out
@@ -297,12 +415,16 @@ __all__ = [
     "VIA_BLOCK",
     "VIA_CUSTOMER",
     "VIA_OPERATOR",
+    "VIA_PROJECT",
     "Entity",
     "WatchError",
     "add",
+    "add_project",
     "entries",
     "parse",
     "remove",
+    "remove_project",
+    "repoint",
     "resolve",
     "watched",
 ]

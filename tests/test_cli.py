@@ -1903,29 +1903,41 @@ def test_digest_notify_prints_what_crosses_the_bar(initialized: Path):
 
 
 def test_digest_markdown_carries_both_dates(initialized: Path):
-    """The window is on when we learned it; the line has to say when it happened."""
+    """The window is on when it was reported; the line says when it happened too."""
     import datetime as when
 
     from tracker.db import open_db, session_scope
-    from tracker.models import Event, Project
+    from tracker.models import Event, Project, Source
 
     with session_scope(open_db(initialized, readonly=False)) as session:
         project = Project(name="Colossus", company="xAI", city="Memphis", state="TN", dedup_key="k")
         session.add(project)
         session.flush()
         session.add(
+            Source(
+                project_id=project.id,
+                url="https://trade.example/late",
+                source_type="trade_press",
+                fetched_at=when.datetime.now(),
+                published_at=when.datetime.now() - when.timedelta(days=1),
+            )
+        )
+        session.flush()
+        happened = when.date.today() - when.timedelta(days=40)
+        session.add(
             Event(
                 project_id=project.id,
-                event_date=when.date(2022, 3, 4),
+                source_id=project.sources[0].id,
+                event_date=happened,
                 event_type="land_acquired",
                 description="Bought the land.",
-                quote="The company bought the site in March 2022.",
+                quote="The company bought the site in August.",
                 created_at=when.datetime.now(),
             )
         )
 
     out = invoke(initialized, "digest", "--markdown", "--days", "2").output
-    assert "2022-03-04" in out and "learned" in out
+    assert happened.isoformat() in out and "reported" in out
 
 
 # --- duplicates resolve ----------------------------------------------------

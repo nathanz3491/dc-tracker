@@ -1,15 +1,19 @@
 """What somebody should watch for themselves, on each project they follow.
 
-The daily email and the console's *Watch for* page both read this. The briefing
+The daily email and the console's *Monitor* page both read this. The briefing
 (`feed`) answers "what moved"; this answers the question a reader is left with on a
 day when nothing did: **what is standing between each of my projects and done, and
 what would the next piece of good news look like?**
 
-**It is the project's open obstacles, every one, however old.** A permit fight
-first reported four months ago that is still unresolved is still the thing most
-worth watching, so there is no age gate here — the 45-day rule is about *news*
-(`feed.NOTIFY_MAX_AGE_DAYS`), and a blocker is not news, it is a standing fact.
-Each carries how long it has been open so an old one reads as what it is.
+**It is the project's open obstacles reported in the last two months.** The same
+window as the Updates page (`feed.REPORT_WINDOW_DAYS`, on `feed.reported_on`'s
+date), because the product's rule is that nothing older than that is current. It
+used to list every open obstacle however old, on the argument that an unresolved
+fight is a standing fact rather than news; measured on the live database, 231 of
+339 open obstacles had not been reported in two months and 71 not in a year, so
+"open" mostly meant "nobody has written that it closed". The older ones are
+counted, never listed, so the page still says they exist. Each listed obstacle
+carries how long it has been open.
 
 **What to watch for is the next milestone on the blocked track.** `tracks` already
 knows, per track, the rung after the furthest one reached and what that rung looks
@@ -36,6 +40,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from tracker import watchlist
+from tracker.feed import REPORT_WINDOW_DAYS, reported_on
 from tracker.models import Project, Source
 from tracker.sources import host_of
 from tracker.tracks import NEXT_SIGNAL, RISK_TRACK, TRACK_LABELS, TRACKS, standing
@@ -66,6 +71,8 @@ class Blocker:
     #: The date the source puts on it, or else the day we recorded it.
     since: dt.date | None = None
     recorded: dt.datetime | None = None
+    #: When it was last reported: what the two-month window is on.
+    reported: dt.date | None = None
     source_url: str | None = None
     publisher: str | None = None
     unconfirmed: str | None = None
@@ -91,6 +98,7 @@ class Blocker:
             "since": self.since.isoformat() if self.since else None,
             "days_open": self.days_open,
             "recorded": self.recorded.isoformat() if self.recorded else None,
+            "reported": self.reported.isoformat() if self.reported else None,
             "source_url": self.source_url,
             "publisher": self.publisher,
             "unconfirmed": self.unconfirmed,
@@ -135,6 +143,8 @@ class ProjectWatch:
     signposts: tuple[Signpost, ...] = ()
     #: Per track, for a strip: (track, status, blocked, complete).
     tracks: tuple[tuple[str, str, bool, bool], ...] = ()
+    #: Open obstacles left out because nobody has reported them in two months.
+    older: int = 0
 
     @property
     def worst(self) -> str | None:
@@ -166,6 +176,7 @@ class ProjectWatch:
             "blockers": [b.as_json() for b in self.blockers],
             "unconfirmed": [b.as_json() for b in self.unconfirmed],
             "signposts": [s.as_json() for s in self.signposts],
+            "older": self.older,
             "tracks": [
                 {
                     "track": track,
@@ -208,6 +219,8 @@ class WatchReport:
                 "blocked": len(self.blocked),
                 "blockers": self.blockers,
                 "unconfirmed": sum(len(p.unconfirmed) for p in self.projects),
+                "older": sum(p.older for p in self.projects),
+                "window_days": REPORT_WINDOW_DAYS,
                 "severity": self.by_severity(),
             },
         }
@@ -239,7 +252,7 @@ def _location(project: Project) -> str:
     return ", ".join(part for part in (project.city, project.state) if part)
 
 
-def _blocker(risk, sources: dict[int, Source]) -> Blocker:
+def _blocker(risk, sources: dict[int, Source], *, today: dt.date) -> Blocker:
     recorded = _as_datetime(getattr(risk, "recorded_at", None)) or _as_datetime(risk.created_at)
     source = sources.get(risk.source_id) if risk.source_id else None
     return Blocker(
@@ -251,6 +264,9 @@ def _blocker(risk, sources: dict[int, Source]) -> Blocker:
         quote=risk.quote,
         since=_as_date(risk.first_seen) or (recorded.date() if recorded else None),
         recorded=recorded,
+        reported=reported_on(
+            source.published_at if source else None, risk.first_seen, recorded, today=today
+        ),
         source_url=source.url if source else None,
         publisher=host_of(source.url) if source else None,
         unconfirmed=risk.unconfirmed,
@@ -258,23 +274,33 @@ def _blocker(risk, sources: dict[int, Source]) -> Blocker:
 
 
 def project_watch(
-    project: Project, sources: dict[int, Source], *, entry: str | None = None
+    project: Project,
+    sources: dict[int, Source],
+    *,
+    entry: str | None = None,
+    today: dt.date | None = None,
 ) -> ProjectWatch:
-    """One project's watch entry, from its rows."""
+    """One project's watch entry, from its rows.
+
+    Only obstacles reported inside the window are listed, or block a track here;
+    the rest are counted in `older`. See the module docstring.
+    """
+    today = today or dt.date.today()
     stand = standing(project.id, project.events, project.risks)
-    open_risks = [r for r in project.risks if r.status == OPEN_RISK_STATUS]
     order = {"blocking": 0, "material": 1, "watch": 2}
+    cutoff = today - dt.timedelta(days=REPORT_WINDOW_DAYS)
 
     def most_pressing(b: Blocker) -> tuple:
         return (order.get(b.severity, 3), b.since or dt.date.max, b.risk_id)
 
-    confirmed = sorted(
-        (_blocker(r, sources) for r in open_risks if r.unconfirmed is None), key=most_pressing
-    )
-    held = sorted(
-        (_blocker(r, sources) for r in open_risks if r.unconfirmed is not None),
-        key=most_pressing,
-    )
+    every = [
+        (risk, _blocker(risk, sources, today=today))
+        for risk in project.risks
+        if risk.status == OPEN_RISK_STATUS
+    ]
+    current = [(r, b) for r, b in every if b.reported is not None and b.reported >= cutoff]
+    confirmed = sorted((b for r, b in current if r.unconfirmed is None), key=most_pressing)
+    held = sorted((b for r, b in current if r.unconfirmed is not None), key=most_pressing)
     confirmed_tracks = {b.track for b in confirmed if b.track}
 
     signposts: list[Signpost] = []
@@ -325,6 +351,7 @@ def project_watch(
         tracks=tuple(
             (t.track, t.status, t.track in confirmed_tracks, t.complete) for t in stand.tracks
         ),
+        older=len(every) - len(current),
     )
 
 
@@ -334,6 +361,7 @@ def report(
     account_id: int | None = None,
     entities: list[watchlist.Entity] | None = None,
     everything: bool | None = None,
+    today: dt.date | None = None,
 ) -> WatchReport:
     """Every project the account follows, most obstructed first.
 
@@ -376,7 +404,7 @@ def report(
         if source_ids
         else {}
     )
-    rows = [project_watch(p, sources, entry=wanted.get(p.id)) for p in projects]
+    rows = [project_watch(p, sources, entry=wanted.get(p.id), today=today) for p in projects]
     return WatchReport(projects=tuple(sorted(rows, key=ProjectWatch.sort_key)))
 
 

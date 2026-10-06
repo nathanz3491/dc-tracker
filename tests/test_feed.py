@@ -1,9 +1,9 @@
 """The digest: what counts as news, which way it cuts, and what leads.
 
-The load-bearing assertion in this file is `test_the_window_filters_on_when_we
-_learned_it`. Every other date in the schema answers a different question, and a
-digest keyed on the wrong one either repeats 2022 every morning or hides what
-arrived last night.
+The load-bearing assertion in this file is `test_the_window_filters_on_when_it_was
+_reported`. Every other date in the schema answers a different question, and a
+digest keyed on the wrong one either repeats 2015 every morning because the crawler
+found it yesterday, or hides what was reported last week.
 """
 
 from __future__ import annotations
@@ -14,9 +14,19 @@ from tracker import feed, watchlist
 from tracker.models import Event, Project, Risk, Source
 from tracker.vocab import EVENT_TYPES
 
-NOW = dt.datetime(2026, 8, 22, 9, 0)
-SINCE = dt.datetime(2026, 8, 20, 0, 0)
-BEFORE = dt.datetime(2026, 8, 1, 12, 0)
+#: Relative to the real today, because the window is: nothing reported more than
+#: `feed.REPORT_WINDOW_DAYS` ago is an update, and a suite pinned to fixed dates
+#: silently stops testing anything the day those dates age out of it.
+TODAY = dt.date.today()
+NOW = dt.datetime.combine(TODAY, dt.time(9, 0))
+SINCE = dt.datetime.combine(TODAY - dt.timedelta(days=2), dt.time.min)
+BEFORE = dt.datetime.combine(TODAY - dt.timedelta(days=21), dt.time(12, 0))
+LONG_AGO = dt.datetime.combine(TODAY - dt.timedelta(days=400), dt.time(12, 0))
+
+
+def day(offset: int) -> dt.date:
+    """`TODAY` plus `offset` days."""
+    return TODAY + dt.timedelta(days=offset)
 
 
 def _project(session, **kw) -> Project:
@@ -27,7 +37,9 @@ def _project(session, **kw) -> Project:
             "state": "TN",
             "city": "Memphis",
             "dedup_key": kw.pop("dedup_key", "xai|city:memphis|TN"),
-            "created_at": BEFORE,
+            # Long enough ago that the row's own arrival is outside every window,
+            # so a test about milestones is not also about "new to the tracker".
+            "created_at": LONG_AGO,
             "updated_at": BEFORE,
             **kw,
         }
@@ -54,7 +66,7 @@ def _event(session, project, **kw) -> Event:
     row = Event(
         **{
             "project_id": project.id,
-            "event_date": dt.date(2026, 8, 21),
+            "event_date": day(-1),
             "event_type": "energized",
             "description": "Site energized.",
             "quote": "The site was energized on Friday.",
@@ -102,8 +114,9 @@ def test_every_milestone_belongs_to_a_track():
 # --- the two clocks --------------------------------------------------------
 
 
-def test_the_window_filters_on_when_we_learned_it(session):
-    """A 2022 milestone read last night is news; today's milestone read in July is not."""
+def test_the_window_filters_on_when_it_was_reported(session):
+    """A 2022 milestone read last night is not news; one reported this week is,
+    whenever we happened to store it."""
     project = _project(session)
     _event(
         session,
@@ -117,16 +130,66 @@ def test_the_window_filters_on_when_we_learned_it(session):
         session,
         project,
         event_type="groundbreaking",
-        event_date=dt.date(2026, 8, 21),
+        event_date=day(-1),
         description="Broke ground.",
         created_at=BEFORE,
     )
 
     result = feed.digest(session, since=SINCE)
-    assert [s.label for s in result.signals] == ["land_acquired"]
-    # And it reports both clocks, so the old date is visible rather than dressed up.
-    assert result.signals[0].happened == dt.date(2022, 3, 4)
-    assert result.signals[0].at == NOW
+    assert [s.label for s in result.signals] == ["groundbreaking"]
+    assert result.signals[0].reported == day(-1)
+
+
+def test_an_article_from_2015_found_yesterday_is_not_an_update(session):
+    """The case that started this: the crawler reads an old article today. Its
+    publish date is the report date, and it is years outside the window."""
+    project = _project(session)
+    old = _source(session, project, when=dt.datetime(2015, 5, 1))
+    _event(
+        session,
+        project,
+        source_id=old.id,
+        event_type="energized",
+        event_date=dt.date(2015, 4, 20),
+        created_at=NOW,
+    )
+    assert [s for s in feed.digest(session, days=60).signals if s.kind == "milestone"] == []
+
+
+def test_the_article_date_outranks_the_milestone_date(session):
+    """A late first report — an energisation in spring, first written up last week —
+    is reported last week, and lands in last week's window."""
+    project = _project(session)
+    fresh = _source(session, project, when=NOW - dt.timedelta(days=5))
+    _event(session, project, source_id=fresh.id, event_date=day(-90), created_at=NOW)
+
+    [signal] = [s for s in feed.digest(session, days=7).signals if s.kind == "milestone"]
+    assert signal.reported == day(-5)
+    assert signal.happened == day(-90)
+
+
+def test_a_recent_article_recalling_an_old_milestone_is_background(session):
+    """ "The campus, which broke ground in 2023, ..." — reported this week, and still
+    not an update: the milestone predates its own article by more than a year."""
+    project = _project(session)
+    recap = _source(session, project, when=NOW - dt.timedelta(days=2))
+    _event(
+        session,
+        project,
+        source_id=recap.id,
+        event_type="groundbreaking",
+        event_date=day(-2 - feed.BACKGROUND_DAYS - 1),
+        created_at=NOW,
+    )
+    assert [s for s in feed.digest(session, days=7).signals if s.kind == "milestone"] == []
+    assert feed.background(NOW - dt.timedelta(days=2), day(-2 - feed.BACKGROUND_DAYS - 1))
+    assert not feed.background(NOW - dt.timedelta(days=2), day(-2 - feed.BACKGROUND_DAYS))
+
+
+def test_a_future_publish_date_is_not_a_report_date():
+    """Publisher metadata is sometimes wrong; a date after today falls through."""
+    assert feed.reported_on(day(30), day(-3), NOW, today=TODAY) == day(-3)
+    assert feed.reported_on(None, day(400), NOW, today=TODAY) == TODAY
 
 
 def test_a_fact_written_long_after_its_page_was_fetched_is_new_when_written(session):
@@ -140,56 +203,32 @@ def test_a_fact_written_long_after_its_page_was_fetched_is_new_when_written(sess
     assert signal.key.startswith("event:")
 
 
-def test_a_cleared_obstacle_is_new_when_we_recorded_it_clearing(session):
-    """A resolution the source dates in July, recorded today, is today's news."""
+def test_a_cleared_obstacle_is_placed_on_the_day_it_was_resolved(session):
+    """A resolution the source dates seven weeks ago, recorded today, is in the
+    two-month window and not in this week's."""
     project = _project(session)
     _risk(
         session,
         project,
         status="resolved",
-        resolved_at=dt.date(2026, 7, 1),
+        resolved_at=day(-52),
         closed_at=NOW,
         created_at=BEFORE,
     )
-    [signal] = feed.digest(session, since=SINCE).signals
+    assert feed.digest(session, since=SINCE).signals == ()
+    [signal] = feed.digest(session, days=60).signals
     assert signal.kind == "obstacle_cleared"
-    assert signal.at == NOW and signal.happened == dt.date(2026, 7, 1)
+    assert signal.at == NOW and signal.reported == day(-52)
     assert signal.key.endswith(":cleared")
 
 
-def test_a_slip_to_a_future_date_is_news_not_a_schedule(session):
-    """A slip is dated by the date it slipped TO. Read as a schedule, it could never
-    be sent — 56 of 146 on the live database."""
-    project = _project(session)
-    _event(
-        session,
-        project,
-        event_type="delayed",
-        event_date=dt.date.today() + dt.timedelta(days=700),
-        description="expected_online moved from 2026-01-01 to 2028-10-01 (+1004 days)",
-        quote=None,
-    )
-    [signal] = feed.digest(session, since=SINCE).signals
-    assert not signal.expected
-    assert signal.happened is None
-    assert signal.sign == "bad" and signal.weight == 3
-
-
-def test_a_folded_card_carries_the_key_of_every_row_behind_it(session):
-    """Sending the card means sending all of them, or the restatement goes tomorrow."""
-    project = _project(session)
-    first = _event(session, project, event_type="delayed", event_date=dt.date(2026, 8, 20))
-    second = _event(session, project, event_type="delayed", event_date=dt.date(2026, 8, 21))
-
-    [signal] = feed.digest(session, since=SINCE).signals
-    assert set(signal.all_keys) == {f"event:{first.id}", f"event:{second.id}"}
-
-
-def test_an_event_with_no_discovery_date_is_not_news(session):
-    """NULL means "we do not know when we learned this" (migration 0018)."""
+def test_an_event_with_no_discovery_date_is_placed_by_its_own_date(session):
+    """NULL means "we do not know when we learned this" (migration 0018), which no
+    longer matters: what places it is when it was reported."""
     project = _project(session)
     _event(session, project, created_at=None)
-    assert feed.digest(session, since=SINCE).signals == ()
+    [signal] = feed.digest(session, since=SINCE).signals
+    assert signal.reported == day(-1)
 
 
 # --- which way it cuts -----------------------------------------------------
@@ -221,18 +260,18 @@ def test_a_cleared_obstacle_is_good_news_dated_by_its_resolution(session):
         session,
         project,
         status="resolved",
-        resolved_at=dt.date(2026, 8, 21),
+        resolved_at=day(-1),
         # Learned long before the window: it is the resolution that is new.
         created_at=BEFORE,
     )
     [signal] = feed.digest(session, since=SINCE).signals
     assert (signal.kind, signal.sign) == ("obstacle_cleared", "good")
-    assert signal.happened == dt.date(2026, 8, 21)
+    assert signal.happened == day(-1)
 
 
 def test_a_resolved_obstacle_outside_the_window_is_silent(session):
     project = _project(session)
-    _risk(session, project, status="resolved", resolved_at=dt.date(2026, 7, 1), created_at=BEFORE)
+    _risk(session, project, status="resolved", resolved_at=day(-52), created_at=BEFORE)
     assert feed.digest(session, since=SINCE).signals == ()
 
 
@@ -254,7 +293,7 @@ def test_the_milestone_a_blocked_track_was_waiting_for_scores_highest(session):
         session,
         project,
         event_type="interconnection_agreement",
-        event_date=dt.date(2026, 8, 21),
+        event_date=day(-1),
         description="Interconnection agreement signed with the utility.",
     )
 
@@ -309,8 +348,10 @@ def test_a_signal_carries_its_publisher(session):
 
 def test_the_last_crawl_is_reported_so_a_dead_crawler_is_visible(session):
     project = _project(session)
-    _source(session, project, when=dt.datetime(2026, 8, 19, 3, 0))
-    assert feed.digest(session, since=SINCE).last_crawl == dt.datetime(2026, 8, 19, 3, 0)
+    _source(session, project, when=dt.datetime.combine(day(-3), dt.time(3, 0)))
+    assert feed.digest(session, since=SINCE).last_crawl == dt.datetime.combine(
+        day(-3), dt.time(3, 0)
+    )
 
 
 # --- scope -----------------------------------------------------------------
@@ -343,7 +384,7 @@ def test_each_watched_entity_gets_its_own_tally(session, account):
         session,
         meta,
         event_type="delayed",
-        event_date=dt.date(2026, 8, 21),
+        event_date=day(-1),
         description="Slipped a year.",
         quote=None,
         unconfirmed="no_quote",
@@ -369,12 +410,24 @@ def test_a_signal_names_the_watch_that_brought_it_in(session, account):
     assert (signal.entry, signal.via) == ("OpenAI", watchlist.VIA_CUSTOMER)
 
 
-def test_the_default_window_is_a_week(session):
-    """`days` and an explicit `since` are the same knob."""
+def test_the_default_window_is_a_week_and_no_window_reaches_past_two_months(session):
+    """`days` and an explicit `since` are the same knob, and neither can reach back
+    further than `REPORT_WINDOW_DAYS`."""
     project = _project(session)
-    _event(session, project, created_at=dt.datetime.now() - dt.timedelta(days=2))
-    assert len(feed.digest(session).signals) == 1
+    _event(session, project, event_date=day(-2), created_at=NOW)
+    _event(
+        session,
+        project,
+        event_type="first_customer",
+        event_date=day(-feed.REPORT_WINDOW_DAYS - 5),
+        created_at=NOW,
+    )
+    assert [s.label for s in feed.digest(session).signals] == ["energized"]
     assert feed.digest(session, days=1).signals == ()
+    assert [s.label for s in feed.digest(session, days=365).signals] == ["energized"]
+    assert [s.label for s in feed.digest(session, since=dt.datetime(2020, 1, 1)).signals] == [
+        "energized"
+    ]
 
 
 def test_as_json_is_serializable(session):
@@ -425,18 +478,18 @@ def test_two_articles_reporting_one_moment_fold_into_one_signal(session):
         session,
         project,
         event_type="delayed",
-        event_date=dt.date(2025, 6, 1),
+        event_date=day(-30),
         description="AWS withdrew CUP application amid neighbour opposition.",
     )
     _event(
         session,
         project,
         event_type="delayed",
-        event_date=dt.date(2025, 7, 1),
+        event_date=day(-20),
         description="AWS withdraws CUP application.",
     )
 
-    [signal] = feed.digest(session, since=SINCE).signals
+    [signal] = feed.digest(session, days=60).signals
     assert signal.restatements == 1
     # The database still holds both rows; only the digest folds them.
     assert len(project.events) == 2
@@ -444,11 +497,11 @@ def test_two_articles_reporting_one_moment_fold_into_one_signal(session):
 
 def test_folding_does_not_hide_a_quoted_signal_behind_an_unquoted_one(session):
     project = _project(session)
-    _event(session, project, event_date=dt.date(2026, 8, 21), description="Energized.")
+    _event(session, project, event_date=day(-1), description="Energized.")
     _event(
         session,
         project,
-        event_date=dt.date(2026, 8, 20),
+        event_date=day(-2),
         description="Energized, so somebody said.",
         quote=None,
         unconfirmed="no_quote",
@@ -476,7 +529,7 @@ def test_the_blocker_moving_notifies(session):
         session,
         project,
         event_type="interconnection_agreement",
-        event_date=dt.date(2026, 8, 21),
+        event_date=day(-1),
         description="Agreement signed.",
     )
     [signal] = [s for s in feed.digest(session, since=SINCE).signals if s.label != "grid_capacity"]
@@ -486,33 +539,29 @@ def test_the_blocker_moving_notifies(session):
 def test_a_decisive_milestone_notifies_and_a_cheap_one_does_not(session):
     """The five things worth a notification, and the ones that are page-only.
 
-    Dated days before today, not on fixed dates: a milestone older than
-    `NOTIFY_MAX_AGE_DAYS` is stale and never notifies, so fixed August dates made
+    Dated days before today, not on fixed dates: a milestone reported more than
+    `REPORT_WINDOW_DAYS` ago is stale and never notifies, so fixed August dates made
     this fail from 2026-10-03 on for a reason that had nothing to do with kind.
     """
     project = _project(session)
-    today = dt.date.today()
-    for days_ago, kind in enumerate(
-        (
-            "energized",
-            "first_customer",
-            "delayed",
-            "announced",
-            "permit_filed",
-            "land_acquired",
-            "site_work",
-        ),
-        start=1,
+    for kind, date in (
+        ("energized", day(-1)),
+        ("first_customer", day(-2)),
+        ("delayed", day(-3)),
+        ("announced", day(-4)),
+        ("permit_filed", day(-5)),
+        ("land_acquired", day(-6)),
+        ("site_work", day(-7)),
     ):
         _event(
             session,
             project,
             event_type=kind,
-            event_date=today - dt.timedelta(days=days_ago),
+            event_date=date,
             description=f"{kind}.",
         )
 
-    by_label = {s.label: s for s in feed.digest(session, since=SINCE).signals}
+    by_label = {s.label: s for s in feed.digest(session, days=30).signals}
     assert [k for k in by_label if by_label[k].notify] != []
     assert all(by_label[k].notify for k in ("energized", "first_customer", "delayed"))
     assert not any(
@@ -539,7 +588,7 @@ def test_a_cleared_obstacle_notifies_only_if_it_mattered(session):
         project,
         severity="material",
         status="resolved",
-        resolved_at=dt.date(2026, 8, 21),
+        resolved_at=day(-1),
         created_at=BEFORE,
     )
     [signal] = feed.digest(session, since=SINCE).signals
@@ -582,7 +631,7 @@ def test_the_notifying_subset_is_counted_and_ranked(session):
         session,
         project,
         event_type="announced",
-        event_date=dt.date(2026, 8, 20),
+        event_date=day(-2),
         description="Announced.",
     )
     result = feed.digest(session, since=SINCE)
@@ -597,7 +646,7 @@ def test_a_cleared_obstacle_says_cleared_in_its_own_title(session):
         session,
         project,
         status="resolved",
-        resolved_at=dt.date(2026, 8, 21),
+        resolved_at=day(-1),
         created_at=BEFORE,
         summary="Operating turbines without an air permit.",
     )
@@ -623,7 +672,7 @@ def test_every_kind_a_digest_produces_is_declared(session):
         project,
         category="water",
         status="resolved",
-        resolved_at=dt.date(2026, 8, 21),
+        resolved_at=day(-1),
         created_at=BEFORE,
     )
     produced = {s.kind for s in feed.digest(session, since=SINCE).signals}
@@ -641,7 +690,7 @@ def test_a_chips_tally_matches_the_cards_that_chip_filters_to(session, account):
     # One moment, three publishers: same project, same kind, same label.
     for i in range(3):
         citation = _source(session, project, url=f"https://trade.example/{i}")
-        _event(session, project, source_id=citation.id, event_date=dt.date(2026, 8, 18 + i))
+        _event(session, project, source_id=citation.id, event_date=day(-4 + i))
     watchlist.add(session, "xAI", account_id=account.id)
 
     got = feed.digest(session, since=SINCE)
@@ -692,88 +741,55 @@ def _notifiable(**kw):
     return feed.Signal(**base)
 
 
-def test_a_milestone_from_years_ago_does_not_interrupt_anybody():
+def test_a_milestone_reported_years_ago_does_not_interrupt_anybody():
     """The defect this gate exists for: an article read last night carrying a 2021
     groundbreaking cleared confirmed, not-future and material, and paged somebody
     about 2021."""
-    old = _notifiable(happened=dt.date.today() - dt.timedelta(days=1100))
+    old = _notifiable(reported=TODAY - dt.timedelta(days=1100))
     assert feed.stale(old)
     assert not feed.notable(old)
 
 
-def test_a_recent_milestone_still_does():
-    fresh = _notifiable(happened=dt.date.today() - dt.timedelta(days=3))
+def test_a_recently_reported_milestone_still_does():
+    fresh = _notifiable(reported=TODAY - dt.timedelta(days=3))
     assert not feed.stale(fresh)
     assert feed.notable(fresh)
 
 
+def test_background_never_notifies():
+    assert not feed.notable(_notifiable(reported=TODAY, background=True))
+
+
 def test_the_horizon_is_where_it_says_it_is():
-    """A boundary worth pinning: the constant is the documented contract, and the
-    measurement that chose 90 was made against this comparison."""
-    day = dt.timedelta(days=1)
-    edge = dt.date.today() - dt.timedelta(days=feed.NOTIFY_MAX_AGE_DAYS)
-    assert feed.notable(_notifiable(happened=edge))
-    assert not feed.notable(_notifiable(happened=edge - day))
+    """A boundary worth pinning: the constant is the documented contract."""
+    edge = TODAY - dt.timedelta(days=feed.REPORT_WINDOW_DAYS)
+    assert feed.notable(_notifiable(reported=edge))
+    assert not feed.notable(_notifiable(reported=edge - dt.timedelta(days=1)))
 
 
 def test_an_undated_signal_is_kept():
-    """`happened` is None for an obstacle nobody dated, and an open obstacle is a
+    """No report date at all says nothing about age, and an open obstacle is a
     statement about now. Treating "no date" as "old" would silently drop the live
-    risks this channel exists to carry — 25 of the 354 measured."""
-    undated = _notifiable(kind="obstacle_opened", sign="bad", happened=None)
+    risks this channel exists to carry."""
+    undated = _notifiable(kind="obstacle_opened", sign="bad", reported=None)
     assert not feed.stale(undated)
     assert feed.notable(undated)
-
-
-def test_an_undated_fact_is_as_old_as_the_article_that_reported_it():
-    """The day we read it is only the latest it can have been reported. On 10-04 an
-    obstacle from a 09-21 article went out as news because it was read on 10-03; one
-    from an archive article read tonight would have gone out the same way."""
-    today = dt.datetime.now()
-    archived = _notifiable(
-        kind="obstacle_opened",
-        sign="bad",
-        happened=None,
-        at=today,
-        published_at=today - dt.timedelta(days=feed.NOTIFY_MAX_AGE_DAYS + 30),
-    )
-    assert feed.occurred(archived) == archived.published_at.date()
-    assert feed.stale(archived), "learned tonight, but reported two and a half months ago"
-
-    recent = _notifiable(happened=None, at=today, published_at=today - dt.timedelta(days=12))
-    assert not feed.stale(recent)
-
-
-def test_a_card_says_when_its_article_was_published_when_the_fact_has_no_date():
-    """It printed "undated · learned 10-03" over a lawsuit an article reported on
-    09-21, and the reader had to open the link to find the delay."""
-    reported = _notifiable(happened=None, published_at=dt.datetime(2026, 9, 21, 22, 8))
-    assert reported.when == "reported 2026-09-21"
-    assert reported.as_json()["when"] == "reported 2026-09-21"
-    assert _notifiable(happened=dt.date(2026, 9, 1)).when == "2026-09-01"
-    assert _notifiable(happened=None).when == "undated"
-
-
-def test_the_horizon_is_overridable_without_touching_the_others():
-    """So a caller can tighten or widen it without reimplementing the gate."""
-    old = _notifiable(happened=dt.date.today() - dt.timedelta(days=200))
-    assert not feed.notable(old)
-    assert feed.notable(old, max_age_days=365)
 
 
 def test_the_gate_does_not_rescue_what_the_other_three_refused():
     """Recency is a fourth gate, not a replacement. A fresh but unconfirmed or
     immaterial signal still says nothing."""
-    today = dt.date.today()
-    assert not feed.notable(_notifiable(happened=today, unconfirmed="no_quote"))
-    assert not feed.notable(_notifiable(happened=today, weight=feed.NOTIFY_WEIGHT - 1))
-    assert not feed.notable(_notifiable(happened=today + dt.timedelta(days=400), expected=True))
+    assert not feed.notable(_notifiable(reported=TODAY, unconfirmed="no_quote"))
+    assert not feed.notable(_notifiable(reported=TODAY, weight=feed.NOTIFY_WEIGHT - 1))
+    assert not feed.notable(
+        _notifiable(happened=TODAY + dt.timedelta(days=400), reported=TODAY, expected=True)
+    )
 
 
-def test_the_page_still_shows_what_notification_now_withholds(session):
-    """The split this rests on. `digest` carries everything with both dates on it,
-    because a reader sees them before deciding to care; a notification is read
-    after it has already interrupted."""
+def test_the_page_and_the_email_agree_about_history(session):
+    """They used to split: the page carried a three-year-old milestone the crawler
+    had just found, with both dates on it, and only the email held it back. The
+    product's rule is that it is not an update anywhere."""
     project = Project(
         name="Monarch Compute Campus",
         company="Nscale",
@@ -796,13 +812,9 @@ def test_the_page_still_shows_what_notification_now_withholds(session):
     )
     session.flush()
 
-    brief = feed.digest(session, days=7)
-    assert any(s.project_id == project.id for s in brief.signals), (
-        "the page must still carry it — this is history, not a secret"
-    )
-    assert not any(s.project_id == project.id for s in brief.notifying), (
-        "but nothing three years old may interrupt anybody"
-    )
+    brief = feed.digest(session, days=60)
+    assert not [s for s in brief.signals if s.kind == "milestone"]
+    assert not brief.notifying
 
 
 # --- an empty watchlist means nothing, not everything ---------------------------

@@ -45,7 +45,7 @@
 #   discover  the news and new campuses, first round only: polls the feeds (free —
 #             no fetch, no model) and reads `--discover` queued articles through
 #             the ordinary crawl, whose identity check asks before it inserts.
-#             Everything published within the email's 45-day window goes first,
+#             Everything published within the email's two-month window goes first,
 #             newest first, whatever campus it names, because what is read tonight
 #             is mailed tomorrow: a 09-21 lawsuit against a tracked campus once
 #             waited behind the backlog until 10-03 and was mailed as news. Then

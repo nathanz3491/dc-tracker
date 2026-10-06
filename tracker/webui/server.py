@@ -135,7 +135,7 @@ AUTH_CACHE_S = 5.0
 #: and was only filed under the machinery because that is where the tab happened to
 #: sit.
 READ_VIEWS: frozenset[str] = frozenset(
-    {"updates", "watch-for", "projects", "sources", "map", "capex", "help"}
+    {"updates", "monitor", "projects", "sources", "map", "capex", "help"}
 )
 
 #: Pages about the reader's own account rather than the dataset, so not tabs in the
@@ -195,6 +195,9 @@ def safe_next(raw: object) -> str | None:
         return None
     if raw in APP_PATHS:
         return raw
+    if raw == "/watch-for":
+        # The Monitor page's old name, still in sign-in links already sent.
+        return "/monitor"
     if match := _NEXT_PROJECT.fullmatch(raw):
         return f"/projects/{int(match.group(1))}"
     return None
@@ -943,6 +946,10 @@ class Handler(BaseHTTPRequestHandler):
         # sent on without their query, signed in or not.
         if page in {"login", "signup"}:
             return self._redirect("/signin" if page == "login" else "/register")
+        # The Monitor page's old name. Every email sent before the rename links
+        # here, and an inbox is not something a deploy can update.
+        if page == "watch-for":
+            return self._redirect("/monitor")
         if page in {"signin", "register"}:
             return self._redirect(safe_next((query.get("next") or [""])[0]) or "/")
         if page == "forgot":
@@ -995,8 +1002,12 @@ class Handler(BaseHTTPRequestHandler):
             return self._publishers()
         if route == "/api/updates":
             return self._updates(query)
-        if route == "/api/watch-for":
-            return self._watch_for()
+        if route in {"/api/monitor", "/api/watch-for"}:
+            # The second is the old name, for a tab still running the bundle
+            # from before the rename.
+            return self._monitor()
+        if route == "/api/watch":
+            return self._watch_state()
         if route == "/api/health":
             return self._json({"ok": True, "version": __version__, "commit": deployed_commit()})
         if route == "/api/admin/users":
@@ -1939,24 +1950,33 @@ class Handler(BaseHTTPRequestHandler):
         "GET /api/updates": {
             "answers": "what changed on the watchlist, signed good or bad, most material first",
             "reads": "feed.digest — every project with its events, risks and citations — "
-            "plus this reader's email ledger and the watch-for tally",
-            "note": "?days=<n> or ?since=<iso>, ?limit=<n>. The window is on when we "
-            "recorded a fact, not when it happened: see tracker/feed.py. Each signal "
-            "says whether it was emailed to this reader, and `last_email` says when "
-            "their last one went, so the page can split 'new since your email' from "
-            "the rest of the week.",
+            "plus this reader's email ledger and the Monitor tally",
+            "note": "?days=<n> or ?since=<iso>, ?limit=<n>. The window is on when a "
+            "fact was reported (the article's publish date, else its own date, else "
+            "when we stored it), never more than 60 days: see tracker/feed.py. Each "
+            "signal says whether it was emailed to this reader, and `last_email` says "
+            "when their last one went, so the page can split 'new since your email' "
+            "from the rest.",
         },
-        "GET /api/watch-for": {
-            "answers": "every followed project's open obstacles and the milestone that "
-            "would clear each, most obstructed first",
+        "GET /api/monitor": {
+            "answers": "every followed project's open obstacles reported in the last "
+            "60 days and the milestone that would clear each, most obstructed first, "
+            "plus the watchlist itself",
             "reads": "watchfor.report — the followed projects with their events and risks",
-            "note": "The page the daily email links to. Every open obstacle, however "
-            "old; unconfirmed ones apart and labelled.",
+            "note": "The page the daily email links to. Older open obstacles are "
+            "counted, not listed; unconfirmed ones apart and labelled. "
+            "/api/watch-for is the old name.",
+        },
+        "GET /api/watch": {
+            "answers": "which projects this reader follows, and which by an exact watch",
+            "reads": "watchlist.watched",
+            "note": "For the watch buttons on the Projects table and a project's page.",
         },
         "POST /api/watch": {
             "answers": "adds or drops one watchlist entry; returns the list",
             "writes": True,
-            "note": "Body: {action: add|remove, entry, note?}. The ONLY route here "
+            "note": "Body: {action: add|remove, entry | project_id, note?}. "
+            "project_id watches exactly that project. The ONLY route here "
             "that writes, because a watch is a statement about whose news to show "
             "and nothing derives from it. Acts on the signed-in account's list, so "
             "it needs an account and not merely a session. Refused under "
@@ -2463,23 +2483,64 @@ class Handler(BaseHTTPRequestHandler):
             )
         }
 
-    def _watch_for(self) -> None:
-        """Every followed project's open obstacles, and what would clear each.
+    def _monitor(self) -> None:
+        """Every followed project's recent open obstacles, what would clear each,
+        and the watchlist itself — the Monitor page is where the list is edited.
 
         The page the daily email's "see the full list" button opens. Derived like
         `/api/updates` — `tracker.watchfor` stores nothing — and per reader, so
         never cached across accounts.
         """
-        from tracker import notify, watchfor
+        from tracker import feed, notify, watchfor, watchlist
 
         account_id = self._account_id
         with self.console.read_session() as session:
-            payload = watchfor.report(session, account_id=account_id).as_json()
+            entities = (
+                watchlist.watched(session, account_id=account_id)
+                if account_id is not None
+                else None
+            )
+            payload = watchfor.report(session, account_id=account_id, entities=entities).as_json()
+            payload["watchlist"] = self._watchlist_json(session, account_id, entities=entities)
+            payload["watch_all"] = (
+                bool(feed.watches_all(session, account_id)) if account_id is not None else False
+            )
+            payload["allow_watch"] = self.console.allow_watch and account_id is not None
             last = notify.last_email(session, account_id) if account_id is not None else None
             # Read inside the block. A read session rolls back on the way out, which
             # expires every row it loaded, so `last.prepared_at` after it raised
             # DetachedInstanceError — the page failed for anyone who had been emailed.
             payload["last_email"] = last.prepared_at.isoformat() if last is not None else None
+        self._json(payload)
+
+    def _watch_state(self) -> None:
+        """Which projects this reader follows, and which of those by an exact watch.
+
+        What the Projects table and a project's own page need to draw their watch
+        buttons, without the digest or the obstacle report behind it. `watched` is
+        every project any entry covers; `exact` is the ones a button can turn off —
+        a project covered only by a company-wide entry is turned off on Monitor.
+        """
+        from tracker import feed, watchlist
+
+        account_id = self._account_id
+        if account_id is None:
+            return self._json(
+                {"watched": [], "exact": [], "watch_all": False, "allow_watch": False}
+            )
+        with self.console.read_session() as session:
+            entities = watchlist.watched(session, account_id=account_id)
+            covered: dict[int, str] = {}
+            for entity in entities:
+                for pid in entity.matches:
+                    covered.setdefault(pid, entity.entry)
+            payload = {
+                "watched": sorted(covered),
+                "via": {str(pid): entry for pid, entry in covered.items()},
+                "exact": sorted(e.project_id for e in entities if e.project_id is not None),
+                "watch_all": bool(feed.watches_all(session, account_id)),
+                "allow_watch": self.console.allow_watch,
+            }
         self._json(payload)
 
     def _set_watch_all(self, account_id: int, value: bool) -> None:
@@ -2565,11 +2626,19 @@ class Handler(BaseHTTPRequestHandler):
                 "Create one with `tracker users add` and sign in.",
             )
 
-        from tracker.watchlist import WatchError, add, remove
+        from tracker.watchlist import WatchError, add, add_project, remove, remove_project
 
         action = str(body.get("action") or "").strip()
         entry = str(body.get("entry") or "").strip()
         note = body.get("note")
+        # The button on a Projects row or a project's page names the row by id,
+        # which watches exactly that project (migration 0033). A bool is an int in
+        # Python, so it is refused by name rather than silently read as #1.
+        project_id = body.get("project_id")
+        if project_id is not None and (
+            isinstance(project_id, bool) or not isinstance(project_id, int)
+        ):
+            return self._error(400, "project_id must be a whole number")
         if action not in {"add", "remove", "watch_all"}:
             return self._error(400, "action must be 'add', 'remove' or 'watch_all'")
         if action == "watch_all":
@@ -2581,8 +2650,8 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(wanted, bool):
                 return self._error(400, "value must be true or false")
             return self._set_watch_all(account_id, wanted)
-        if not entry:
-            return self._error(400, "entry is required")
+        if not entry and project_id is None:
+            return self._error(400, "entry or project_id is required")
         if len(entry) > 200:
             return self._error(400, "entry is too long")
         if note is not None and not isinstance(note, str):
@@ -2590,7 +2659,17 @@ class Handler(BaseHTTPRequestHandler):
 
         try:
             with self.console.write_session() as session:
-                if action == "add":
+                if project_id is not None and action == "add":
+                    row, created = add_project(
+                        session, project_id, account_id=account_id, note=(note or None)
+                    )
+                    result = {"entry": row.entry, "project_id": project_id, "created": created}
+                elif project_id is not None:
+                    result = {
+                        "project_id": project_id,
+                        "removed": remove_project(session, project_id, account_id=account_id),
+                    }
+                elif action == "add":
                     row, created = add(session, entry, account_id=account_id, note=(note or None))
                     result = {"entry": row.entry, "created": created}
                 else:

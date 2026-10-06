@@ -1,24 +1,27 @@
-/* What to watch for: every open obstacle on the projects you follow, and what
- * would clear it.
+/* Monitor: what you follow, and what stands in each project's way.
  *
- * The page the morning email's "see the full list" button opens, and the answer to
- * the question a reader is left with on a day when nothing moved: what is standing
- * between each of my projects and done, and what would the next good news look
- * like?
+ * Two halves. The top is **the list itself** — add a company or a project, drop
+ * one, or follow everything — which used to sit on Updates and moved here so that
+ * page could lead with what changed. Pressing ☆ on a Projects row adds to the same
+ * list. The rest is **every open obstacle reported in the last two months** on the
+ * projects that list reaches, and the milestone that would clear it: the page the
+ * morning email's button opens, and the answer to the question a reader is left
+ * with on a day when nothing moved.
  *
  * What the server decides and this page only draws (`tracker/watchfor.py`):
- *   - every open obstacle is listed, however old — a four-month permit fight that
- *     is still unresolved is the thing most worth watching;
+ *   - only obstacles reported in the last two months are listed; older open ones
+ *     are counted, so the page says they exist without presenting them as current;
  *   - "would clear it" is the next milestone on the blocked track, from
  *     `tracks.NEXT_SIGNAL`, so the page never reasons about tracks itself;
  *   - unconfirmed obstacles are kept apart, labelled, and left out of the email.
  *
- * Kept out of app.js for the reason views-help.js is. `api` and `onOpen` are
- * passed in, because this file cannot import from app.js (app.js imports it).
+ * Kept out of app.js for the reason views-help.js is. `api`, `onOpen` and the
+ * list editor are passed in, because this file cannot import from app.js (app.js
+ * imports it).
  */
 
 const html = htm.bind(React.createElement);
-const { useState, useEffect, useMemo } = React;
+const { useState, useEffect, useMemo, useCallback } = React;
 const NS = window.MeridianDesignSystem_6e9015 || {};
 const { Alert, EmptyState, Input, Skeleton } = NS;
 
@@ -168,20 +171,26 @@ function ProjectCard({ project, level, onOpen }) {
     </article>`;
 }
 
-export function WatchForView({ api, onOpen, onGoto }) {
+export function MonitorView({ api, onOpen, onGoto, ListEditor, projects: allProjects, onListChanged }) {
   const [payload, setPayload] = useState(null);
   const [failed, setFailed] = useState(null);
   const [level, setLevel] = useState("all");
   const [query, setQuery] = useState("");
   const [showClear, setShowClear] = useState(false);
 
-  useEffect(() => {
-    let cancelled = false;
-    api("/api/watch-for")
-      .then((body) => { if (!cancelled) setPayload(body); })
-      .catch((err) => { if (!cancelled) setFailed(err.message || "could not read what to watch for"); });
-    return () => { cancelled = true; };
-  }, []);
+  /* Re-read after every edit to the list: which projects are followed is the
+     server's answer (`watchlist.resolve`), not something to patch in place. */
+  const load = useCallback(
+    () => api("/api/monitor")
+      .then((body) => { setPayload(body); setFailed(null); })
+      .catch((err) => setFailed(err.message || "could not read what you monitor")),
+    [],
+  );
+  useEffect(() => { load(); }, [load]);
+  const changed = useCallback(async () => {
+    await load();
+    if (onListChanged) await onListChanged();
+  }, [load, onListChanged]);
 
   const q = query.trim().toLowerCase();
   const projects = payload?.projects || [];
@@ -208,11 +217,24 @@ export function WatchForView({ api, onOpen, onGoto }) {
   return html`
     <div class="dc-view dc-rise" style=${{ display: "grid", gap: 24, padding: "26px 26px 60px",
                                             maxWidth: 920 }}>
-      <${Heading} figure="fig. 01 — watch for" title="What to watch for on your projects">
-        Every open obstacle on the projects you follow, however long it has been open, and the
-        milestone that would clear it. The morning email carries the top of this list; on a day
-        with no news it carries all of it.
+      <${Heading} figure="fig. 01 — monitor" title="What you monitor">
+        The companies and projects you follow, and every open obstacle on them that was
+        reported in the last two months, with the milestone that would clear it. The morning
+        email carries the top of this list; on a day with no news it carries all of it.
       <//>
+
+      <section class="dc-band" style=${{ display: "grid", gap: 12 }} aria-label="Your list">
+        <div style=${{ display: "flex", gap: 10, alignItems: "baseline", flexWrap: "wrap" }}>
+          <h2 class="dc-wf-h2">Your list</h2>
+          ${payload && html`<span class="dc-wf-meta dc-num">
+            ${(payload.watchlist || []).length} entr${(payload.watchlist || []).length === 1 ? "y" : "ies"}
+            · ${projects.length} project${projects.length === 1 ? "" : "s"}</span>`}
+          <button type="button" class="dc-linkish" style=${{ fontSize: 12 }}
+                  onClick=${() => onGoto("projects")}>or press ☆ on any project →</button>
+        </div>
+        ${payload && ListEditor && html`<${ListEditor} payload=${payload} projects=${allProjects}
+                                                       onChanged=${changed} />`}
+      </section>
 
       ${failed && html`<${Alert} variant="warning"><div class="mrd-alert-desc">${failed}</div><//>`}
       ${!payload && !failed && html`
@@ -222,19 +244,26 @@ export function WatchForView({ api, onOpen, onGoto }) {
 
       ${payload && !projects.length && html`
         <${EmptyState} variant="dashed" title="You are not following any project yet"
-                       description="Add a company or a project on the Updates page, and its blockers appear here." />
-        <div><button type="button" class="dc-linkish" onClick=${() => onGoto("updates")}>Go to Updates →</button></div>`}
+                       description="Add a company or a project above, or press ☆ on a row of Projects, and its obstacles appear here." />`}
 
       ${payload && !!projects.length && html`
         <div class="dc-tiles">
           ${tile("Projects followed", counts.projects, "matched by your watchlist")}
-          ${tile("Blocked", counts.blocked, `of ${counts.projects} have an open obstacle`,
+          ${tile("Blocked", counts.blocked, `of ${counts.projects} have an obstacle reported in two months`,
                  counts.blocked ? "var(--warning)" : "var(--success)")}
           ${tile("Blocking or material", (sev.blocking || 0) + (sev.material || 0),
                  `${sev.blocking || 0} blocking · ${sev.material || 0} material · ${sev.watch || 0} to watch`,
                  sev.blocking ? "var(--danger)" : sev.material ? "var(--warning)" : undefined)}
           ${tile("Unconfirmed", counts.unconfirmed, "reported, but nobody could quote them")}
         </div>
+
+        ${counts.older > 0 && html`
+          <div class="dc-wf-meta">
+            ${counts.older} older open obstacle${counts.older === 1 ? " is" : "s are"} not listed: nobody has
+            reported ${counts.older === 1 ? "it" : "them"} in ${Math.round((counts.window_days || 60) / 30)} months,
+            so ${counts.older === 1 ? "it is" : "they are"} history rather than something to watch. The project's
+            own page still has ${counts.older === 1 ? "it" : "them"}.
+          </div>`}
 
         <div class="dc-band" style=${{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap",
                                        paddingBottom: 18 }}>

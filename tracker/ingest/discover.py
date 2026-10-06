@@ -968,7 +968,7 @@ def pending(
     spends each LLM call on depth rather than on another single-source row.
 
     ``new_first`` is the nightly loop's order, and it starts with the **news**:
-    every article published within the email's window (`feed.NOTIFY_MAX_AGE_DAYS`),
+    every article published within the email's window (`feed.REPORT_WINDOW_DAYS`),
     newest first, whatever campus it names. Then the articles that name **no**
     tracked campus, newest published first, then the rest in the usual order —
     those are where a campus the database has never heard of can turn up. Each is
@@ -995,10 +995,10 @@ def pending(
         .order_by(IngestUrl.published_at.asc().nullslast(), IngestUrl.id.asc())
     )
     if new_first:
-        from tracker.feed import NOTIFY_MAX_AGE_DAYS
+        from tracker.feed import REPORT_WINDOW_DAYS
 
         rows = list(session.scalars(stmt))
-        cutoff = utcnow() - dt.timedelta(days=NOTIFY_MAX_AGE_DAYS)
+        cutoff = utcnow() - dt.timedelta(days=REPORT_WINDOW_DAYS)
         news = [row for row in rows if row.published_at is not None and row.published_at >= cutoff]
         news.sort(key=lambda row: (row.published_at, row.id), reverse=True)
         taken = {row.id for row in news}

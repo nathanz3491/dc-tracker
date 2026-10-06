@@ -10,20 +10,28 @@ every signal is a reading of `event`, `risk` and `project` rows that already car
 their own dates and citations, so there is no second copy to drift out of
 agreement with the evidence.
 
-Three ideas do the work.
+Four ideas do the work.
 
-**1. "New" means new to us, not new in the world.** Both clocks are reported, and
-they are wildly different on this dataset: a crawl reads one article and imports a
+**1. "New" means newly reported, not newly learned by us.** Three clocks exist and
+they disagree wildly on this dataset: a crawl reads one article and imports a
 project's whole back-history, so `event_date` spans 1997 to 2040 while the rows
-themselves arrived last night. `recorded_at` (migration 0029) is what the window
-filters on, because "tell me what changed since Friday" is a question about our
-knowledge. `happened` rides along beside it so a 2022 milestone we only learned
-yesterday reads as what it is, rather than as this morning's news.
+themselves arrived last night. The window used to be on `recorded_at` — when *we*
+stored the row — and that put an article published in 2015 on the page as this
+morning's news because the crawler found it yesterday. Measured on the live
+database over thirty days: of 582 milestones stored, 92 came from an article
+published in the last two months and 343 described something over a year old.
 
-It used to be `created_at`, which is when the article was *fetched*. Enrichment
-re-reads cached pages, so a fact written today could carry a fetch from three weeks
-ago and land in a window that had already been read and mailed — never shown as
-new and never sent. The row's own insert time cannot land behind anything.
+So the window is on :func:`reported_on` — the article's publish date, else the
+date the fact itself carries, else the day we stored it — and nothing reported
+more than :data:`REPORT_WINDOW_DAYS` ago is an update at all, on the page or in
+the email. This is the rule news alert services settle on: sort by arrival, but
+refuse anything that arrives long after it was published.
+
+A milestone also has to be **news in its own article** (:func:`background`): a
+2026 piece recalling that the campus "broke ground in 2023" is reported recently
+and is still not an update. `recorded_at` survives for one question only — what
+arrived since your last email — and `happened` rides along so every line carries
+both the date of the thing and the date it was reported.
 
 **2. Good and bad are properties of the vocabulary, not of a model's opinion.**
 An `energized` event is good news, a `delayed` event is bad, an obstacle opening
@@ -42,15 +50,11 @@ fact, and a digest is the last place to abandon it.
 **4. Notifying is a higher bar than showing.** The page carries everything; a
 notification interrupts a person, and a channel that interrupts too often gets
 muted, at which point it protects nobody. :func:`notable` is that bar — checkable,
-already happened, **recent**, and material — and it admits five things: the blocker
-moving, a decisive milestone, a dated slip, and an obstacle of `material` severity
-or worse opening or clearing. An announcement is not one of them.
-
-That third gate is idea 1 applied to interruption, and it was missing. The window
-is on when we recorded a row, so back-history imported by a crawl arrived "today"
-and paged somebody about 2021. The page can afford to carry it because it prints both dates
-and a reader sees them before caring; a notification is read *after* it has already
-interrupted. :func:`stale` carries the measurement.
+already happened, **recently reported**, and material — and it admits five things:
+the blocker moving, a decisive milestone, a dated slip, and an obstacle of
+`material` severity or worse opening or clearing. An announcement is not one of
+them. The recency gate is idea 1 again, checked a second time because a signal can
+be built outside :func:`digest`.
 """
 
 from __future__ import annotations
@@ -126,8 +130,8 @@ KINDS: Final[tuple[str, ...]] = (
     "new_project",
 )
 
-#: Default window when a caller names none. A week, because the crawl runs nightly
-#: and a reader who was away for a weekend should not have to reconstruct it.
+#: Default window when a caller names none: what was reported in the last week.
+#: Never wider than `REPORT_WINDOW_DAYS`, which `digest` enforces.
 DEFAULT_DAYS: Final[int] = 7
 
 #: For ordering only. `upsert` has its own for the same reason: naive datetimes
@@ -153,14 +157,20 @@ OBSTACLE_OFFSET: Final[int] = 2
 #: What is worth interrupting somebody for. See :func:`notable`.
 NOTIFY_WEIGHT: Final[int] = 3
 
-#: How old the thing itself may be and still interrupt somebody, in days.
+#: How long ago something may have been reported and still be an update, in days.
 #:
-#: Separate from the window, which is on `recorded_at` and asks "did we learn this
-#: recently". This asks "did it *happen* recently", and the two diverge every time
-#: a crawl imports a project's back-history. 45 is the product's rule for mail —
-#: anything that happened more than a month and a half ago is not news — and
-#: :func:`stale` has the measurement that showed why the gate exists at all.
-NOTIFY_MAX_AGE_DAYS: Final[int] = 45
+#: The product's rule, for the page and the email alike: two months. Anything
+#: reported earlier is history, however recently the crawler found it. See
+#: :func:`reported_on` for which date "reported" is.
+REPORT_WINDOW_DAYS: Final[int] = 60
+
+#: How far a milestone may predate the article reporting it and still be that
+#: article's news, in days. Past this the article is recalling it — "the campus,
+#: which broke ground in 2023, …" — and a recap is not an update. A year, because
+#: a first public report of an energisation months after the fact is still the
+#: first report and still worth reading; one from the year before is background.
+#: 29 of the 582 milestones stored in thirty days were exactly that.
+BACKGROUND_DAYS: Final[int] = 365
 
 #: Most notifications one run will send before it stops listing and starts
 #: counting. A backstop rather than a filter: ingest arrives in bursts by nature,
@@ -183,10 +193,16 @@ class Signal:
     #: The sentence a reader actually reads. The stored description or summary.
     detail: str
     #: When WE learned it: the row's `recorded_at`, or for a cleared obstacle the
-    #: moment it was closed (`closed_at`). What the window filters on.
+    #: moment it was closed (`closed_at`). Answers "what arrived since my last
+    #: email" and nothing else.
     at: dt.datetime | None = None
     #: When it happened, or the date the source puts on it. Not the same question.
     happened: dt.date | None = None
+    #: When the world was told. What the window filters on; see `reported_on`.
+    reported: dt.date | None = None
+    #: True when the article is recalling this rather than reporting it. Never
+    #: listed; see `background`.
+    background: bool = False
     #: What it did to the project's five tracks, in words, or None when it says
     #: nothing about them (a new project, an unclassified obstacle).
     effect: str | None = None
@@ -233,20 +249,6 @@ class Signal:
         return notable(self)
 
     @property
-    def when(self) -> str:
-        """The date a reader sees beside "learned": when it happened, or else when
-        its article was published, or "undated".
-
-        A fact with no date of its own used to print "undated" even when its
-        article carried one, so a reader could not tell that "learned 10-03" was
-        about something reported on 09-21 without opening the link.
-        """
-        if self.happened is not None:
-            return self.happened.isoformat()
-        published = _as_date(self.published_at)
-        return f"reported {published.isoformat()}" if published else "undated"
-
-    @property
     def headline(self) -> str:
         """The label, plus what actually happened to it.
 
@@ -275,6 +277,7 @@ class Signal:
             "detail": self.detail,
             "at": self.at.isoformat() if self.at else None,
             "happened": self.happened.isoformat() if self.happened else None,
+            "reported": self.reported.isoformat() if self.reported else None,
             "effect": self.effect,
             "track": self.track,
             "unblocks": self.unblocks,
@@ -285,7 +288,6 @@ class Signal:
             "source_url": self.source_url,
             "publisher": self.publisher,
             "published_at": self.published_at.isoformat() if self.published_at else None,
-            "when": self.when,
             "weight": self.weight,
             "notify": self.notify,
             "entry": self.entry,
@@ -465,18 +467,26 @@ def signals_for(
     entry: str | None = None,
     via: str | None = None,
 ) -> list[Signal]:
-    """Every signal one project produced since `since`.
+    """Every signal one project produced that was reported on or after `since`.
 
     `as_of` decides which milestones have actually happened, defaulting to today
-    and matching `tracks.standing`'s parameter of the same name.
+    and matching `tracks.standing`'s parameter of the same name. Background — a
+    milestone its own article was only recalling — is never returned.
     """
     out: list[Signal] = []
     as_of = as_of or dt.date.today()
+    start = since.date()
     awaited = _awaited(project, since)
 
+    def keep(signal: Signal) -> None:
+        if signal.background or signal.reported is None or signal.reported < start:
+            return
+        out.append(signal)
+
     created = _as_datetime(project.created_at)
-    if created is not None and created >= since:
-        out.append(
+    if created is not None:
+        announced = _as_date(project.first_announced)
+        keep(
             Signal(
                 kind="new_project",
                 sign="neutral",
@@ -489,7 +499,11 @@ def signals_for(
                     + (f", {project.mw_planned:,.0f} MW planned" if project.mw_planned else "")
                 ),
                 at=created,
-                happened=_as_date(project.first_announced),
+                happened=announced,
+                # No article of its own, so the campus's first public mention is
+                # when it was reported. One announced in 2015 that our crawl only
+                # found today is not new to anybody but us.
+                reported=reported_on(None, announced, created, today=as_of),
                 weight=2,
                 entry=entry,
                 via=via,
@@ -499,8 +513,6 @@ def signals_for(
 
     for event in project.events:
         at = _recorded(event)
-        if at is None or at < since:
-            continue
         happened = _as_date(event.event_date)
         # An undated milestone is kept: somebody recorded it without saying when,
         # which is a different problem from one scheduled for next year. Same call
@@ -515,7 +527,7 @@ def signals_for(
             expected, happened = False, None
         effect, track, unblocks = _milestone_effect(event.event_type, awaited, expected=expected)
         url, publisher, published = _citation(sources, event.source_id)
-        out.append(
+        keep(
             Signal(
                 kind="milestone",
                 sign="neutral" if expected else EVENT_SIGN.get(event.event_type, "neutral"),
@@ -526,6 +538,8 @@ def signals_for(
                 detail=event.description,
                 at=at,
                 happened=happened,
+                reported=reported_on(published, happened, at, today=as_of),
+                background=background(published, happened, today=as_of),
                 effect=effect,
                 track=track,
                 unblocks=unblocks,
@@ -549,19 +563,12 @@ def signals_for(
     for risk in project.risks:
         url, publisher, published = _citation(sources, risk.source_id)
         resolved = _as_date(risk.resolved_at)
-        # A cleared obstacle is new on the day we recorded it clearing, which is
-        # `closed_at` (0029) — not `resolved_at`, the source's date, which could
-        # put a resolution we only learned today behind a window that already ran.
-        # Rows closed before 0029 carry `resolved_at` there, at midnight.
+        # When we recorded it clearing is `closed_at` (0029); rows closed before
+        # 0029 carry only `resolved_at`, at midnight.
         cleared_at = _as_datetime(getattr(risk, "closed_at", None)) or _as_datetime(resolved)
-        if (
-            risk.status != "open"
-            and resolved is not None
-            and cleared_at is not None
-            and cleared_at >= since
-        ):
+        if risk.status != "open" and resolved is not None and cleared_at is not None:
             effect, track = _obstacle_effect(risk.category, risk.severity, cleared=True)
-            out.append(
+            keep(
                 Signal(
                     kind="obstacle_cleared",
                     sign="good",
@@ -572,6 +579,10 @@ def signals_for(
                     detail=risk.summary,
                     at=cleared_at,
                     happened=resolved,
+                    # The citation is the article that reported the obstacle, not
+                    # its clearing, so its publish date says nothing here. The
+                    # resolution's own date is the report.
+                    reported=reported_on(None, resolved, cleared_at, today=as_of),
                     effect=effect,
                     track=track,
                     quote=risk.quote,
@@ -588,9 +599,10 @@ def signals_for(
             continue
 
         at = _recorded(risk)
-        if risk.status == "open" and at is not None and at >= since:
+        if risk.status == "open":
+            first_seen = _as_date(risk.first_seen)
             effect, track = _obstacle_effect(risk.category, risk.severity, cleared=False)
-            out.append(
+            keep(
                 Signal(
                     kind="obstacle_opened",
                     sign="bad",
@@ -600,7 +612,11 @@ def signals_for(
                     label=risk.category,
                     detail=risk.summary,
                     at=at,
-                    happened=_as_date(risk.first_seen),
+                    happened=first_seen,
+                    # No background test: an article this month saying residents
+                    # have fought the site since 2019 is a recent report that the
+                    # fight is live, which is exactly what an obstacle is.
+                    reported=reported_on(published, first_seen, at, today=as_of),
                     effect=effect,
                     track=track,
                     quote=risk.quote,
@@ -627,12 +643,48 @@ def _recorded(row: Any) -> dt.datetime | None:
     return _as_datetime(getattr(row, "recorded_at", None)) or _as_datetime(row.created_at)
 
 
-def notable(signal: Signal, *, max_age_days: int = NOTIFY_MAX_AGE_DAYS) -> bool:
+def reported_on(
+    published: Any, happened: Any, recorded: Any, *, today: dt.date | None = None
+) -> dt.date | None:
+    """When the world was told about something: the date the window filters on.
+
+    **The article's publish date first**, because that is literally when it was
+    reported. 38% of citations carry none, so it falls back to **the date the
+    fact itself carries** — a milestone cannot have been reported before it
+    happened, so that is the latest it can honestly be placed — and only then to
+    **the day we stored it**, which is the one date guaranteed to exist.
+
+    A date in the future is not a report date, whichever field it came from: a
+    milestone dated next year is a schedule, and a publish date after today is a
+    publisher's metadata error. Both are skipped, so the next rung decides.
+    """
+    today = today or dt.date.today()
+    for candidate in (_as_date(published), _as_date(happened), _as_date(recorded)):
+        if candidate is not None and candidate <= today:
+            return candidate
+    return None
+
+
+def background(published: Any, happened: Any, *, today: dt.date | None = None) -> bool:
+    """Whether an article is recalling a milestone rather than reporting it.
+
+    True when the milestone predates its own article by more than
+    `BACKGROUND_DAYS`. Needs both dates: with no publish date the report date
+    *is* the milestone's own date, and the window alone judges it.
+    """
+    today = today or dt.date.today()
+    published_on, happened_on = _as_date(published), _as_date(happened)
+    if published_on is None or happened_on is None or published_on > today:
+        return False
+    return (published_on - happened_on).days > BACKGROUND_DAYS
+
+
+def notable(signal: Signal, *, today: dt.date | None = None) -> bool:
     """Whether this is worth a notification, as against a line on the page.
 
     The page shows everything; a notification interrupts somebody, and a channel
     that interrupts too often gets muted — at which point it protects nobody. So
-    three gates, and a signal has to clear all of them.
+    four gates, and a signal has to clear all of them.
 
     **It has to be checkable.** An unconfirmed signal never notifies, whatever it
     says. Waking somebody at seven in the morning over a sentence no quote stood up
@@ -643,6 +695,8 @@ def notable(signal: Signal, *, max_age_days: int = NOTIFY_MAX_AGE_DAYS) -> bool:
     *expected* online 2028" — is a schedule. Schedules do not page anybody, and
     treating them as achievements is the fault the live database caught on
     Hyperion.
+
+    **It has to have been reported recently** — see :func:`stale`.
 
     **It has to be material**, at `NOTIFY_WEIGHT` or above, which admits exactly
     five things and no others:
@@ -661,61 +715,32 @@ def notable(signal: Signal, *, max_age_days: int = NOTIFY_MAX_AGE_DAYS) -> bool:
     those are on the page, and none of them is a reason to look up from something
     else. A watch-severity obstacle is a heads-up, not an alarm.
 
-    **This decides what is worth sending, not who has had it.** It used to claim
-    that a nightly window made memory unnecessary; it did not — a missed run, a
-    reboot and a backdated row each broke it. `notify` keeps a ledger instead.
+    **This decides what is worth sending, not who has had it.** `notify` keeps a
+    ledger for that.
     """
     if not signal.confirmed or signal.expected:
         return False
     if signal.weight < NOTIFY_WEIGHT:
         return False
-    return not stale(signal, max_age_days=max_age_days)
+    return not stale(signal, today=today)
 
 
-def stale(signal: Signal, *, max_age_days: int = NOTIFY_MAX_AGE_DAYS) -> bool:
-    """Whether the thing itself happened too long ago to interrupt anybody.
+def stale(signal: Signal, *, today: dt.date | None = None) -> bool:
+    """Whether this is history rather than an update.
 
-    **The gate the other three could not be.** "It has to have happened" only ever
-    excluded the *future* — a milestone dated 2028 is a schedule. Nothing excluded
-    the deep past, and the window is on `created_at`, so a crawl that reads one
-    article and imports a project's whole back-history makes every milestone in it
-    today's news. Measured on the live database over thirty days: of 354 signals
-    that would have notified, **107 described something more than three years old**
-    and 162 more than one year. A nightly mailer would have paged somebody about a
-    2021 groundbreaking because an article mentioning it was read yesterday.
+    True for background, and for anything reported more than
+    `REPORT_WINDOW_DAYS` ago. `digest` never returns either; this is the same
+    rule for a signal assembled anywhere else, and it is what the mailer trusts.
 
-    This is the README's own "**New means new to us**" distinction, which `digest`
-    already honours on the page by printing both dates — and which notification
-    cannot honour by printing anything, because the whole point of an interruption
-    is that nobody reads it before deciding whether to care.
-
-    Measured effect of the 90-day default, same thirty days: 354 signals become
-    129, the nightly average falls from 11.8 to 4.3, and the worst night — a large
-    sync on 2026-08-11 — falls from **135 to 21**.
-
-    **An undated signal is judged by when its article was published**, and only
-    failing that by when we recorded it. `happened` is None for an obstacle nobody
-    put a date on, and an open obstacle is a statement about now: treating "no
-    date" as "old" would silently drop the live risks this channel exists to carry
-    (25 of the 354 were undated). But the day we recorded it is only the latest it
-    can have been reported, and the queue reads articles weeks old: on 2026-10-04 an
-    obstacle from a 09-21 article went out as news because it was read on 10-03.
-    The article's own date is when it was reported, so that is its age.
+    **Why the report date and not the day we learned it.** Measured on the live
+    database: of 354 signals that would have notified over thirty days under a
+    window on our own clock, 107 described something more than three years old.
     """
-    when = occurred(signal)
-    if when is None:
+    if signal.background:
+        return True
+    if signal.reported is None:
         return False
-    return (dt.date.today() - when).days > max_age_days
-
-
-def occurred(signal: Signal) -> dt.date | None:
-    """When it happened; undated, when its article was published; failing that,
-    the day we recorded it."""
-    if signal.happened is not None:
-        return signal.happened
-    if signal.published_at is not None:
-        return _as_date(signal.published_at)
-    return signal.at.date() if signal.at else None
+    return ((today or dt.date.today()) - signal.reported).days > REPORT_WINDOW_DAYS
 
 
 def fold(signals: list[Signal]) -> list[Signal]:
@@ -745,7 +770,7 @@ def fold(signals: list[Signal]) -> list[Signal]:
 
 
 def rank(signals: list[Signal]) -> list[Signal]:
-    """Most material first, then most recently learned.
+    """Most material first, then most recently reported, then most recently learned.
 
     Bad news sorts above good news of the same weight. Not a moral judgement: an
     obstacle is actionable and a milestone is not, and the whole point of the page
@@ -765,6 +790,7 @@ def rank(signals: list[Signal]) -> list[Signal]:
         key=lambda s: (
             -s.weight,
             sign_order.get(s.sign, 3),
+            -(s.reported or dt.date.min).toordinal(),
             newest_first(s.at),
             -(s.happened or dt.date.min).toordinal(),
             s.project_id,
@@ -791,8 +817,14 @@ def digest(
     limit: int | None = None,
     account_id: int | None = None,
     entities: list[watchlist.Entity] | None = None,
+    today: dt.date | None = None,
 ) -> Digest:
     """The whole page, for the watchlist as it stands.
+
+    The window is on the **report date** (`reported_on`) and never reaches back
+    further than `REPORT_WINDOW_DAYS`, whatever `since` or `days` asks for:
+    something reported three months ago is not an update however recently we
+    found it. `today` is the day the window is measured from; tests pin it.
 
     `entities` is `watchlist.watched(session, account_id=account_id)` when the
     caller has already resolved it. The console draws the list beside the digest,
@@ -815,10 +847,11 @@ def digest(
     all has nobody whose preference to read. In neither case has a person said
     "nothing" — there is no person.
     """
+    today = today or dt.date.today()
     if since is None:
-        since = dt.datetime.combine(
-            dt.date.today() - dt.timedelta(days=days or DEFAULT_DAYS), dt.time.min
-        )
+        since = dt.datetime.combine(today - dt.timedelta(days=days or DEFAULT_DAYS), dt.time.min)
+    earliest = dt.datetime.combine(today - dt.timedelta(days=REPORT_WINDOW_DAYS), dt.time.min)
+    since = max(since, earliest)
 
     projects = list(
         session.scalars(
@@ -862,7 +895,7 @@ def digest(
 
     if everything:
         for project in projects:
-            collected.extend(signals_for(project, since=since, sources=sources))
+            collected.extend(signals_for(project, since=since, sources=sources, as_of=today))
         watched_ids = set(by_id)
     else:
         for entity in entities:
@@ -871,7 +904,14 @@ def digest(
                 if project is None:  # pragma: no cover - resolved from the same query
                     continue
                 collected.extend(
-                    signals_for(project, since=since, sources=sources, entry=entity.entry, via=via)
+                    signals_for(
+                        project,
+                        since=since,
+                        sources=sources,
+                        as_of=today,
+                        entry=entity.entry,
+                        via=via,
+                    )
                 )
             watched_ids |= set(entity.matches)
 
@@ -916,23 +956,25 @@ def digest(
 
 
 __all__ = [
+    "BACKGROUND_DAYS",
     "DEFAULT_DAYS",
     "EVENT_SIGN",
     "EVENT_TRACK",
     "KINDS",
-    "NOTIFY_MAX_AGE_DAYS",
     "NOTIFY_MAX_ITEMS",
     "NOTIFY_WEIGHT",
     "OBSTACLE_OFFSET",
+    "REPORT_WINDOW_DAYS",
     "SCALE",
     "Digest",
     "EntityDigest",
     "Signal",
+    "background",
     "digest",
     "fold",
     "notable",
-    "occurred",
     "rank",
+    "reported_on",
     "signals_for",
     "stale",
     "watches_all",

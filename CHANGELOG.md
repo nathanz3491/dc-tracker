@@ -12,6 +12,16 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **Follow one project with a button: ☆ on every Projects row and *Watch* on a
+  project's page** (`tracker/watchlist.py`, `tracker/merge.py`, `tracker/models.py`,
+  migration `0033_watch_project`, `tracker/webui/server.py`,
+  `tracker/webui/static/app.js`, `tests/test_watchlist.py`, `tests/test_webui.py`).
+  Following a campus used to mean typing it into a box on another page, and the
+  typed form matches names loosely, so "xAI | Colossus" also follows "Colossus 2".
+  The button follows exactly that row, by id, and a merge carries it to the
+  surviving row instead of deleting it. A row already covered by a company watch
+  shows a dimmed star that says which one.
+
 - **The nightly loop adds campuses again, through the identity check**
   (`scripts/overnight.sh`, `tracker/ingest/discover.py`, `tracker/cli/ingest.py`,
   `tests/test_discover.py`, `tests/test_overnight.py`, `README.md`,
@@ -25,6 +35,15 @@ initial build of the v1 PRD.
   night; the queue held 2,133 such articles.
 
 ### Changed
+
+- **"Watch for" is now "Monitor", and the watchlist is edited there**
+  (`tracker/webui/static/views-monitor.js`, `tracker/webui/static/app.js`,
+  `tracker/webui/server.py`, `tracker/notify.py`, `docs/console-and-export.md`).
+  The list editor sat at the top of Updates and pushed the changes below the fold.
+  Monitor now opens on the list — one row per entry, with what kind it is and how
+  many projects it reaches — above the obstacles; Updates keeps the entries as
+  filter chips. `/watch-for` and `/api/watch-for` redirect or answer as before, so
+  links in emails already sent still work.
 
 - **The nightly loop does about three times as much** (`scripts/overnight.sh`,
   `tracker/seed/feeds.toml`, `tests/test_overnight.py`, `README.md`). After the cost
@@ -95,6 +114,21 @@ initial build of the v1 PRD.
   a claim "directory".
 
 ### Fixed
+
+- **An old article the crawler only just found no longer shows up as news**
+  (`tracker/feed.py`, `tracker/notify.py`, `tracker/watchfor.py`,
+  `tracker/cli/people.py`, `README.md`, `docs/analysis.md`, `tests/test_feed.py`,
+  `tests/test_notify.py`). Updates decided what was new by when *we* stored a fact,
+  so an article from 2015 read last night was listed as yesterday's news. Of 582
+  milestones stored in thirty days, only 92 came from an article published in the
+  previous two months. Updates, Monitor and the morning email now keep only what
+  was *reported* in the last two months: the article's publish date, else the fact's
+  own date, else the day we stored it. A milestone more than a year older than the
+  article reporting it is treated as background and dropped. The email's 45-day
+  limit on the event's own date became this same rule, so the page and the email
+  agree. Monitor counts older open obstacles instead of listing them: 231 of 339
+  had not been reported in two months. Four tests pinned to August dates had
+  started failing as those dates aged out; the suite is now relative to today.
 
 - **Every campus the nightly loop adds gets one attempt to fold into a twin**
   (`tracker/capex.py`, `tracker/triage.py`, `tracker/cli/duplicates.py`,
