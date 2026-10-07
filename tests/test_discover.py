@@ -29,7 +29,7 @@ from tracker.ingest.discover import (
     select_candidates,
 )
 from tracker.ingest.fetch import FetchResult
-from tracker.models import IngestUrl
+from tracker.models import IngestUrl, utcnow
 from tracker.vocab import PENDING_URL_STATUS
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -87,6 +87,10 @@ def test_only_specialist_feeds_imply_the_topic():
         "datacenterdynamics",
         "datacenterfrontier",
         "datacenterknowledge",
+        # The two closed ones' headlines, through a news search; see the comment
+        # beside them in seed/feeds.toml.
+        "datacenterdynamics-headlines",
+        "datacenterfrontier-headlines",
         # A pure-play operator's own newsroom, like the [[sitemap]] entries.
         "qts-newsroom",
         # Not `bisnow-latest`: Bisnow's data-center vertical had a feed of its own,
@@ -191,9 +195,11 @@ def test_closed_carries_its_reason_and_false_means_open(tmp_path: Path):
     assert sitemaps["open-archive"].closed is None
 
 
-def test_a_closed_feed_is_not_requested_and_not_counted_as_failed(session, tmp_path: Path):
+def test_a_closed_feed_is_not_polled_and_not_counted_as_failed(session, tmp_path: Path):
     """Thirteen failures a night that everybody expects teach a reader to stop
-    reading the line — and then the fourteenth, which nobody expected, is missed."""
+    reading the line — and then the fourteenth, which nobody expected, is missed.
+    (The weekly check does ask a closed feed; it is turned off here and tested on
+    its own below.)"""
     fetcher = FakeFeedFetcher(
         {
             "https://a.test/rss": fixture("feed_rss.xml"),
@@ -201,7 +207,7 @@ def test_a_closed_feed_is_not_requested_and_not_counted_as_failed(session, tmp_p
         }
     )
     report, _ = discover.run(
-        session, feeds_path=_closed_config(tmp_path), fetcher=fetcher, since_days=None
+        session, feeds_path=_closed_config(tmp_path), fetcher=fetcher, since_days=None, probe=False
     )
 
     assert "https://refused.test/feed/" not in fetcher.calls
@@ -237,9 +243,9 @@ def test_every_shipped_closure_says_when_it_was_measured():
         assert re.match(r"\d{4}-\d{2}-\d{2}: \S", reason), f"{name}: {reason!r} has no date"
 
 
-def test_the_shipped_closed_feeds_are_never_requested(session):
+def test_the_shipped_closed_feeds_are_not_polled(session):
     fetcher = FakeFeedFetcher({})
-    report, _ = discover.run(session, fetcher=fetcher, since_days=None, dry_run=True)
+    report, _ = discover.run(session, fetcher=fetcher, since_days=None, dry_run=True, probe=False)
 
     feeds, _ = load_config()
     closed_urls = {f.url for f in feeds if f.closed}
@@ -1477,3 +1483,202 @@ def test_one_operators_domain_does_not_imply_another_operators_projects(tmp_path
     implied = discover.newsroom_companies(newsroom_config(tmp_path))
     url = "https://www.stackinfra.com/news/new-hillsboro-campus/"
     assert discover.matches_known_project(url, None, [theirs, mine], implied_companies=implied) == 7
+
+
+# --- closed publishers, asked again once a week ---------------------------------
+
+
+def test_every_closed_entry_is_asked_once_a_week_and_not_again_sooner(session, tmp_path: Path):
+    config = _closed_config(tmp_path)
+    fetcher = FakeFeedFetcher({})
+    first = discover.probe_closed(session, feeds_path=config, fetcher=fetcher)
+
+    assert {r.name for r in first} == {"refused", "unexplained", "refused-archive"}
+    assert not any(r.open for r in first)
+    assert discover.reopened_names(session) == frozenset()
+
+    again = discover.probe_closed(
+        session, feeds_path=config, fetcher=fetcher, now=utcnow() + dt.timedelta(days=6)
+    )
+    assert again == [], "asked six days ago: not due"
+    week = discover.probe_closed(
+        session, feeds_path=config, fetcher=fetcher, now=utcnow() + dt.timedelta(days=7)
+    )
+    assert len(week) == 3
+
+
+def test_a_closed_feed_that_answers_again_is_polled_and_closed_again_when_it_fails(
+    session, tmp_path: Path
+):
+    """Reopened by its weekly check, polled from that night; the first poll that
+    fails closes it again rather than leaving it to fail for a week."""
+    config = _closed_config(tmp_path)
+    live = FakeFeedFetcher(
+        {
+            "https://refused.test/feed/": fixture("feed_rss.xml"),
+            "https://refused.test/sitemap.xml": fixture("feed_sitemap.xml"),
+        }
+    )
+    report, _ = discover.run(session, feeds_path=config, fetcher=live, since_days=None)
+
+    assert "refused" in report.reopened
+    assert ("feeds reopened", 1) in report.as_rows()
+    assert "refused" not in {name for name, _ in report.closed}
+    assert live.calls.count("https://refused.test/feed/") == 2, "the check, then the poll"
+    assert discover.closed_domains(config, reopened=discover.reopened_names(session)) == {
+        "c.test"
+    }, "a reopened publisher's pages are no longer read last — feed and archive both answered"
+
+    gone = FakeFeedFetcher({})
+    again, _ = discover.run(session, feeds_path=config, fetcher=gone, since_days=None)
+    assert "refused" in again.reopened, "still open going in"
+    assert "refused" not in discover.reopened_names(session), "closed by the failed poll"
+
+
+def test_a_check_counts_only_a_real_feed_as_open(session, tmp_path: Path):
+    """A challenge page served with 200, or an empty document, is not a reopening."""
+    config = _closed_config(tmp_path)
+    fetcher = FakeFeedFetcher(
+        {
+            "https://refused.test/feed/": "<html><title>Just a moment...</title></html>",
+            "https://c.test/feed/": "<rss><channel></channel></rss>",
+        }
+    )
+    results = {
+        r.name: r for r in discover.probe_closed(session, feeds_path=config, fetcher=fetcher)
+    }
+    assert not results["refused"].open
+    assert not results["unexplained"].open
+
+
+# --- headlines only ---------------------------------------------------------------
+
+_GOOGLE_NEWS = """<?xml version="1.0"?><rss version="2.0"><channel>
+<item><title>AWS plans 36-building data center campus in Indiana County, Pennsylvania - Data Center Dynamics</title>
+<link>https://news.google.com/rss/articles/AAA</link><pubDate>Tue, 06 Oct 2026 09:00:00 GMT</pubDate>
+<source url="https://www.datacenterdynamics.com">Data Center Dynamics</source></item>
+<item><title>Somebody else's take on the AWS campus - Other Paper</title>
+<link>https://news.google.com/rss/articles/BBB</link><pubDate>Tue, 06 Oct 2026 10:00:00 GMT</pubDate>
+<source url="https://other.example">Other Paper</source></item>
+</channel></rss>"""
+
+_HEADLINE_CONFIG = """
+[[feed]]
+name = "dcd-headlines"
+url = "https://news.example/rss?q=dcd"
+topic_implied = true
+headlines_of = "datacenterdynamics.com"
+
+[[feed]]
+name = "dcd"
+url = "https://www.datacenterdynamics.com/en/rss/"
+closed = "2026-10-02: Cloudflare challenge on every page"
+
+[filter]
+topic = ["data cent"]
+signal = ["campus"]
+"""
+
+
+class FakeSearch:
+    def __init__(self, hits):
+        self.hits = hits
+        self.queries: list[str] = []
+
+    def search(self, query, *, limit=10):
+        from tracker.ingest.search import SearchHit
+
+        self.queries.append(query)
+        return [SearchHit(url=u, title=t, snippet=sn, query=query) for u, t, sn in self.hits]
+
+
+def test_headlines_are_kept_only_from_the_named_publisher_without_its_suffix():
+    feed = discover.FeedSpec("dcd-headlines", "https://x", headlines_of="datacenterdynamics.com")
+    [item] = discover.parse_headlines(_GOOGLE_NEWS, feed)
+    assert item.title == "AWS plans 36-building data center campus in Indiana County, Pennsylvania"
+    assert item.published_at == dt.datetime(2026, 10, 6, 9, 0)
+
+
+def test_a_headline_is_looked_up_once_and_its_readable_copies_queued(session, tmp_path: Path):
+    """The DCD page is never queued; the same story from somebody we can read is,
+    dated like the headline. A repost carrying DCD's words, the closed publisher
+    itself, and a different story about the same company are all left out."""
+    config = tmp_path / "feeds.toml"
+    config.write_text(_HEADLINE_CONFIG, encoding="utf-8")
+    fetcher = FakeFeedFetcher({"https://news.example/rss?q=dcd": _GOOGLE_NEWS})
+    search = FakeSearch(
+        [
+            (
+                "https://www.pennlive.com/news/2026/10/aws-36-data-centers-homer-city.html",
+                "AWS files plans for 36 data center buildings at Homer City campus in Indiana County",
+                "Amazon Web Services plans a 36-building data center campus in Pennsylvania",
+            ),
+            (
+                "https://repost.example/aws-plans-36-building",
+                "AWS plans 36-building data center campus in Indiana County ... - Repost",
+                "",
+            ),
+            (
+                "https://www.datacenterdynamics.com/en/news/aws-indiana-county/",
+                "AWS plans 36-building data center campus in Indiana County",
+                "",
+            ),
+            (
+                "https://elsewhere.example/aws-quarterly-results",
+                "AWS reports quarterly data center campus spending",
+                "Amazon's cloud unit spent more on data center campus construction",
+            ),
+        ]
+    )
+
+    report, queued = discover.run(
+        session, feeds_path=config, fetcher=fetcher, since_days=None, search_provider=search
+    )
+
+    assert [c.url for c in queued] == [
+        "https://www.pennlive.com/news/2026/10/aws-36-data-centers-homer-city.html"
+    ]
+    assert queued[0].published_at == dt.datetime(2026, 10, 6, 9, 0)
+    assert queued[0].feed == "lead:dcd-headlines"
+    assert "-site:datacenterdynamics.com" in search.queries[0]
+    assert (report.headlines_new, report.headlines_looked_up, report.leads_queued) == (1, 1, 1)
+
+    headline = session.scalar(select(IngestUrl).where(IngestUrl.feed == "dcd-headlines"))
+    assert headline.status == "skipped", "never handed to the crawl, which could not read it"
+
+    again, _ = discover.run(
+        session, feeds_path=config, fetcher=fetcher, since_days=None, search_provider=search
+    )
+    assert len(search.queries) == 1, "a headline is looked up once"
+    assert again.headlines_new == 0
+
+
+def test_a_failed_search_leaves_the_headline_for_tomorrow(session, tmp_path: Path):
+    from tracker.ingest.search import SearchError
+
+    class Down:
+        def search(self, query, *, limit=10):
+            raise SearchError("quota")
+
+    config = tmp_path / "feeds.toml"
+    config.write_text(_HEADLINE_CONFIG, encoding="utf-8")
+    fetcher = FakeFeedFetcher({"https://news.example/rss?q=dcd": _GOOGLE_NEWS})
+    report, _ = discover.run(
+        session, feeds_path=config, fetcher=fetcher, since_days=None, search_provider=Down()
+    )
+    assert report.headlines_looked_up == 0
+    assert session.scalar(select(IngestUrl).where(IngestUrl.feed == "dcd-headlines")) is None
+
+
+def test_same_story_and_copies():
+    headline = "Former IBM research campus in Silicon Valley set to be acquired by data center firm"
+    assert discover.copies_headline(
+        headline, "Former IBM research campus in Silicon Valley set to ... - Voltcal"
+    )
+    assert not discover.copies_headline(
+        headline, "Data center company to acquire former South San Jose IBM site"
+    )
+    assert discover.same_story(
+        headline, "Data center company to acquire former South San Jose IBM research campus"
+    )
+    assert not discover.same_story(headline, "IBM reports quarterly results")

@@ -31,7 +31,7 @@ import xml.etree.ElementTree as ET
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any, Final, TypeVar
 from urllib.parse import urlsplit
 
 from sqlalchemy import and_, or_, select
@@ -46,7 +46,7 @@ from tracker.ingest.fetch import (
     html_to_text,
     parse_timestamp,
 )
-from tracker.models import IngestUrl, utcnow
+from tracker.models import FeedProbe, IngestUrl, utcnow
 from tracker.normalize import canonical_url, norm_text, url_identity, url_variants
 from tracker.vocab import PENDING_URL_STATUS
 
@@ -122,6 +122,12 @@ class FeedSpec:
     #: block can lift: the URL, the filter setting and the reasoning are still
     #: there when it does, and re-opening is deleting one line.
     closed: str | None = None
+    #: The publisher whose headlines this feed lists, when it is a news search
+    #: rather than the publisher's own feed — "datacenterdynamics.com" for Google
+    #: News's results for that site. Its links are the search service's and lead
+    #: back to a page we cannot read, so each headline is looked up elsewhere
+    #: instead of queued. See :func:`follow_headlines`.
+    headlines_of: str | None = None
 
 
 #: The reason recorded for `closed = true`, which says that an entry is closed and
@@ -230,17 +236,31 @@ class DiscoverReport:
     #: broke since the file was last edited" — thirteen expected failures a night
     #: would teach a reader to stop looking at it.
     closed: list[tuple[str, str]] = field(default_factory=list)
+    #: Closed entries polled anyway because their latest weekly check answered.
+    reopened: list[str] = field(default_factory=list)
+    #: The weekly checks made this run. See :func:`probe_closed`.
+    probes: list[ProbeResult] = field(default_factory=list)
+    #: Headlines-only feeds: headlines not seen before, how many were looked up,
+    #: and how many readable copies that put in the queue (counted in `queued`
+    #: too). See :func:`follow_headlines`.
+    headlines_new: int = 0
+    headlines_looked_up: int = 0
+    leads_queued: int = 0
 
     def as_rows(self) -> list[tuple[str, int]]:
         return [
             ("feeds polled", self.feeds_polled),
             ("feeds closed", len(self.closed)),
+            ("feeds reopened", len(self.reopened)),
             ("feeds failed", self.feeds_failed),
             ("entries seen", self.entries_seen),
             ("filtered out", self.filtered),
             ("already known", self.already_known),
             ("queued", self.queued),
             ("bodies from feed", self.bodies_cached),
+            ("headlines, new", self.headlines_new),
+            ("headlines looked up", self.headlines_looked_up),
+            ("readable copies queued", self.leads_queued),
         ]
 
 
@@ -274,6 +294,7 @@ def load_config(path: Path | None = None) -> tuple[list[FeedSpec], FilterSpec]:
             source_type=str(entry.get("source_type") or "general_media"),
             topic_implied=bool(entry.get("topic_implied", False)),
             closed=_closed_reason(entry),
+            headlines_of=str(entry["headlines_of"]) if entry.get("headlines_of") else None,
         )
         for entry in raw_feeds
         if entry.get("url")
@@ -894,8 +915,14 @@ def matches_known_project(
 T = TypeVar("T")
 
 
-def closed_domains(path: Path | None = None) -> frozenset[str]:
+def closed_domains(
+    path: Path | None = None, *, reopened: frozenset[str] = frozenset()
+) -> frozenset[str]:
     """Every publisher with a feed or archive marked closed, by registrable domain.
+
+    `reopened` names entries a weekly check found open (:func:`reopened_names`);
+    those count as open. A headlines-only feed is never a closed publisher: its own
+    host is the search service.
 
     Empty when the config cannot be read, so a broken file leaves the crawl in its
     old order rather than stopping it; `tracker discover` is where that is reported.
@@ -907,11 +934,18 @@ def closed_domains(path: Path | None = None) -> frozenset[str]:
         sitemaps = load_sitemaps(path)
     except (DiscoverError, tomllib.TOMLDecodeError):
         return frozenset()
+    feeds = without_reopened(feeds, reopened)
+    sitemaps = without_reopened(sitemaps, reopened)
     urls = [f.url for f in feeds if f.closed] + [s.url for s in sitemaps if s.closed]
     return frozenset(domain for domain in map(registrable_domain, urls) if domain)
 
 
-def unreadable_test(cache_dir: Path | None, *, path: Path | None = None) -> Callable[[str], bool]:
+def unreadable_test(
+    cache_dir: Path | None,
+    *,
+    path: Path | None = None,
+    reopened: frozenset[str] = frozenset(),
+) -> Callable[[str], bool]:
     """A test for pages no fetch will read: on a closed publisher, nothing cached.
 
     `cache_dir` is the cache the crawl will serve from. None means it will not
@@ -920,7 +954,7 @@ def unreadable_test(cache_dir: Path | None, *, path: Path | None = None) -> Call
     """
     from tracker.confidence import registrable_domain
 
-    closed = closed_domains(path)
+    closed = closed_domains(path, reopened=reopened)
 
     def unreadable(url: str) -> bool:
         if not closed or registrable_domain(url) not in closed:
@@ -1397,6 +1431,357 @@ def drop_ids(session: Session, ids: list[int]) -> int:
 # --- Run --------------------------------------------------------------------
 
 
+# --- Closed publishers: asked again once a week --------------------------------
+
+#: How often a closed feed or archive is asked whether it has reopened.
+PROBE_EVERY: Final = dt.timedelta(days=7)
+
+
+@dataclass(frozen=True)
+class ProbeResult:
+    """One closed entry, asked again."""
+
+    name: str
+    url: str
+    open: bool
+    status: int | None
+    detail: str
+
+
+def _closed_entries(path: Path | None = None) -> list[FeedSpec]:
+    """Every [[feed]] and [[sitemap]] marked closed in the file, as feed specs."""
+    feeds, _ = load_config(path)
+    return [f for f in feeds if f.closed] + [s.as_feed() for s in load_sitemaps(path) if s.closed]
+
+
+def _latest_probes(session: Session) -> dict[str, FeedProbe]:
+    """The newest check per entry name."""
+    latest: dict[str, FeedProbe] = {}
+    for row in session.scalars(select(FeedProbe).order_by(FeedProbe.checked_at.asc())):
+        latest[row.name] = row
+    return latest
+
+
+def reopened_names(session: Session) -> frozenset[str]:
+    """Closed entries whose latest weekly check answered: polled again until one fails.
+
+    Empty when the table does not exist yet, so a command run against a database
+    one migration behind still starts.
+    """
+    from sqlalchemy.exc import OperationalError
+
+    try:
+        return frozenset(name for name, row in _latest_probes(session).items() if row.open)
+    except OperationalError:
+        return frozenset()
+
+
+def _answer(result: FetchResult | None, spec: FeedSpec) -> tuple[bool, str]:
+    """Whether a fetch came back as a real feed or sitemap, and what was seen."""
+    if result is None:
+        return False, "no result"
+    if not result.ok:
+        return False, result.error or f"HTTP {result.status}"
+    text = result.markdown or ""
+    if is_sitemap_index(text):
+        children = index_children(text)
+        return bool(children), f"sitemap index, {len(children)} child sitemap(s)"
+    try:
+        entries = parse_feed(text, spec)
+    except DiscoverError as exc:
+        return False, str(exc)
+    return bool(entries), f"{len(entries)} entr{'y' if len(entries) == 1 else 'ies'}"
+
+
+def record_probe(
+    session: Session, spec: FeedSpec, result: FetchResult | None, *, now: dt.datetime
+) -> ProbeResult:
+    """Write one check of `spec` and return it."""
+    open_, detail = _answer(result, spec)
+    status = result.status if result is not None else None
+    session.add(
+        FeedProbe(
+            name=spec.name,
+            url=spec.url,
+            checked_at=now,
+            open=open_,
+            status=status,
+            detail=detail[:500],
+        )
+    )
+    session.flush()
+    return ProbeResult(spec.name, spec.url, open_, status, detail)
+
+
+def probe_closed(
+    session: Session,
+    *,
+    feeds_path: Path | None = None,
+    fetcher: Any = None,
+    settings: Settings | None = None,
+    now: dt.datetime | None = None,
+    force: bool = False,
+) -> list[ProbeResult]:
+    """Ask every closed feed and archive whether it answers, once per `PROBE_EVERY`.
+
+    One request each, to the entry's own URL, with the client discovery always
+    uses — the project's own name and nothing that pretends to be a browser. A
+    publisher that serves a feed to that client has reopened to us; one that still
+    answers with a challenge has not, and nothing here tries to get past it.
+
+    `force` asks every closed entry now, whatever its last check said.
+    """
+    import asyncio
+
+    from tracker.ingest.fetch import fetch_all
+
+    settings = settings or get_settings()
+    now = now or utcnow()
+    latest = _latest_probes(session)
+    due = [
+        spec
+        for spec in _closed_entries(feeds_path)
+        if force or spec.name not in latest or now - latest[spec.name].checked_at >= PROBE_EVERY
+    ]
+    if not due:
+        return []
+    results = asyncio.run(
+        fetch_all(
+            [spec.url for spec in due],
+            fetcher=fetcher or _RawFetcher(settings),
+            settings=settings,
+        )
+    )
+    by_url = {r.url: r for r in results}
+    return [record_probe(session, spec, by_url.get(spec.url), now=now) for spec in due]
+
+
+def without_reopened(specs: list[T], reopened: frozenset[str]) -> list[T]:
+    """`specs` with `closed` cleared on every entry a weekly check found open."""
+    from dataclasses import replace
+
+    return [
+        replace(spec, closed=None) if spec.closed and spec.name in reopened else spec
+        for spec in specs
+    ]
+
+
+# --- Headlines only: another site's articles, found and read elsewhere ----------
+
+#: Most headlines looked up per run. A search costs about $0.001; this bounds the
+#: first night, when a week of headlines arrives at once, and nothing else.
+MAX_HEADLINE_LOOKUPS = 40
+
+#: Results kept per headline: the same story, from somebody we can read.
+LEADS_PER_HEADLINE = 2
+
+#: Share of a headline's words a search result must share to count as the same
+#: story. Measured on DCD headlines: the operator's own release and the local
+#: paper's piece share well over half; a different story about the same company
+#: shares a third or less.
+SAME_STORY_OVERLAP = 0.5
+
+_WORD = re.compile(r"[a-z0-9]+")
+_STOPWORDS = frozenset(
+    [
+        "the",
+        "a",
+        "an",
+        "and",
+        "or",
+        "of",
+        "for",
+        "to",
+        "in",
+        "on",
+        "at",
+        "by",
+        "with",
+        "from",
+        "as",
+        "is",
+        "are",
+        "be",
+        "its",
+        "it",
+        "this",
+        "that",
+        "new",
+        "data",
+        "center",
+        "centre",
+        "centers",
+        "campus",
+        "says",
+        "will",
+    ]
+)
+
+
+def _story_words(text: str) -> frozenset[str]:
+    """Distinctive words, cut to five letters so "acquire" meets "acquired"."""
+    return frozenset(
+        w[:5] for w in _WORD.findall(text.lower()) if len(w) > 2 and w not in _STOPWORDS
+    )
+
+
+def same_story(headline: str, title: str, snippet: str = "") -> bool:
+    """Whether a search result is plausibly the headline's own story."""
+    wanted = _story_words(headline)
+    if not wanted:
+        return False
+    found = _story_words(f"{title} {snippet}")
+    return len(wanted & found) / len(wanted) >= SAME_STORY_OVERLAP
+
+
+#: Words a result's title must run to before matching the headline word for word
+#: marks it as a copy. Short titles collide by accident ("AWS expands in Ohio").
+COPY_MIN_WORDS = 5
+
+
+def copies_headline(headline: str, title: str) -> bool:
+    """Whether a result is the blocked publisher's own article, republished.
+
+    A title that repeats the headline word for word — cut short by the search
+    engine's "..." or not, with or without a " - Site" suffix — is a reposting
+    site carrying the article we are not reading, and reading it there is reading
+    it anyway. Measured on the first six DCD headlines looked up: two such copies
+    (voltcal.com, goalfore.com) beside five pieces in other outlets' own words.
+    """
+    cut = re.split(r"\s*(?:\.\.\.|…)", title, maxsplit=1)[0]
+    cut = re.sub(r"\s+[-|\u2013]\s+[^-|\u2013]+$", "", cut)
+    theirs = _WORD.findall(cut.lower())
+    ours = _WORD.findall(headline.lower())
+    return len(theirs) >= COPY_MIN_WORDS and ours[: len(theirs)] == theirs
+
+
+def parse_headlines(xml: str, feed: FeedSpec) -> list[Candidate]:
+    """Items of a news-search feed that the configured publisher wrote.
+
+    Google News's RSS lists each article with a `<source url="...">` naming the
+    outlet and a title ending " - <outlet>". Items from anybody else are dropped,
+    and the suffix is removed so the headline can be searched for as written. The
+    link stays the news service's own: it is unreadable to us, and is kept only so
+    the same headline is recognised tomorrow.
+    """
+    from tracker.confidence import registrable_domain
+
+    try:
+        root = ET.fromstring(xml.strip())
+    except ET.ParseError as exc:
+        raise DiscoverError(f"{feed.name}: not parseable XML ({exc})") from exc
+    wanted = registrable_domain(f"https://{feed.headlines_of}")
+    out: list[Candidate] = []
+    for item in root.iter("item"):
+        source = item.find("source")
+        link = _text(item.find("link"))
+        if source is None or not link:
+            continue
+        if registrable_domain(source.get("url") or "") != wanted:
+            continue
+        title = _text(item.find("title"))
+        outlet = _text(source)
+        if outlet and title.endswith(f" - {outlet}"):
+            title = title[: -len(outlet) - 3].rstrip()
+        out.append(
+            Candidate(
+                url=link,
+                title=title,
+                feed=feed.name,
+                published_at=_parse_date(_text(item.find("pubDate"))),
+                source_type=feed.source_type,
+                topic_implied=feed.topic_implied,
+            )
+        )
+    return out[:MAX_PER_FEED]
+
+
+def follow_headlines(
+    session: Session,
+    headlines: list[Candidate],
+    spec: FilterSpec,
+    *,
+    run_id: str,
+    report: DiscoverReport,
+    closed: frozenset[str],
+    provider: Any = None,
+    dry_run: bool = False,
+) -> list[Candidate]:
+    """Look each new headline up once, and queue the copies we are allowed to read.
+
+    A headline is recorded in `ingest_url` under the news service's link with
+    status `skipped`, so it is looked up exactly once and never handed to the
+    crawl, which could not read it. Its search excludes every closed publisher,
+    and a result has to share most of the headline's words to count as the same
+    story — the operator's own release, the local paper, another trade outlet.
+    The leads are queued with the headline's publish date, so the nightly crawl's
+    news-first order treats them as the news they are.
+
+    A search that fails leaves the headline unrecorded, to be tried tomorrow.
+    """
+    from dataclasses import replace
+
+    from tracker.confidence import registrable_domain
+    from tracker.ingest.search import SearchError, SearchReport, build_provider, hits_to_candidates
+
+    known = {
+        url_identity(u)
+        for u in session.scalars(
+            select(IngestUrl.url).where(IngestUrl.url.in_([h.url for h in headlines]))
+        )
+    }
+    fresh = [h for h in headlines if url_identity(h.url) not in known]
+    report.headlines_new += len(fresh)
+    if dry_run or not fresh:
+        return []
+    if provider is None:
+        try:
+            provider = build_provider()
+        except SearchError as exc:
+            report.failures.append(("headlines", f"no search backend: {exc}"))
+            return []
+    exclude = " ".join(f"-site:{d}" for d in sorted(closed))
+    leads: list[Candidate] = []
+    now = utcnow()
+    for headline in fresh[:MAX_HEADLINE_LOOKUPS]:
+        query = f"{headline.title} {exclude}".strip()
+        try:
+            hits = provider.search(query, limit=6)
+        except SearchError as exc:
+            report.failures.append((headline.feed, f"search failed: {exc}"))
+            continue
+        report.headlines_looked_up += 1
+        label = f"lead:{headline.feed}"
+        found = hits_to_candidates(hits, spec, report=SearchReport(), labels={query: label})
+        snippets = {h.url: h.snippet for h in hits}
+        same = [
+            replace(c, published_at=headline.published_at)
+            for c in found
+            if registrable_domain(c.url) not in closed
+            and same_story(headline.title, c.title, snippets.get(c.url, ""))
+            and not copies_headline(headline.title, c.title)
+        ][:LEADS_PER_HEADLINE]
+        leads.extend(same)
+        session.add(
+            IngestUrl(
+                url=canonical_url(headline.url),
+                run_id=run_id,
+                status="skipped",
+                title=norm_text(headline.title, max_len=300),
+                feed=headline.feed,
+                published_at=headline.published_at,
+                error=f"headline only: {len(same)} readable cop(y/ies) queued",
+                attempts=0,
+                first_seen_at=now,
+                last_tried_at=now,
+            )
+        )
+    session.flush()
+    queued = queue_candidates(session, leads, run_id=run_id, report=report)
+    report.leads_queued += len(queued)
+    return queued
+
+
 def run(
     session: Session,
     *,
@@ -1407,12 +1792,20 @@ def run(
     run_id: str | None = None,
     dry_run: bool = False,
     cache_dir: Path | None = None,
+    probe: bool = True,
+    probe_force: bool = False,
+    search_provider: Any = None,
 ) -> tuple[DiscoverReport, list[Candidate]]:
     """Poll every configured feed and queue the matching articles.
 
     A feed that fails is recorded and the run continues: one outlet changing its
     URL must not stop discovery from the other six. A feed marked closed is not
-    requested at all, and is reported as closed rather than as failed.
+    requested at all, and is reported as closed rather than as failed — unless its
+    weekly check (`probe`, :func:`probe_closed`) found it answering again, when it
+    is polled like any other, and closed again the moment a poll fails.
+
+    A headlines-only feed's matches are looked up rather than queued; see
+    :func:`follow_headlines`.
     """
     import asyncio
 
@@ -1422,8 +1815,18 @@ def run(
     run_id = run_id or utcnow().strftime("discover-%Y%m%dT%H%M%S")
     since = utcnow() - dt.timedelta(days=since_days) if since_days else None
 
+    if probe:
+        # On a dry run too: the checks are rolled back with everything else, and
+        # they are what `--probe-closed --dry-run` is asked for.
+        report.probes = probe_closed(
+            session, feeds_path=feeds_path, fetcher=fetcher, settings=settings, force=probe_force
+        )
+    reopened = reopened_names(session)
+    report.reopened = [f.name for f in feeds if f.closed and f.name in reopened]
+    feeds = without_reopened(feeds, reopened)
     report.closed = [(f.name, f.closed) for f in feeds if f.closed]
     feeds = [f for f in feeds if not f.closed]
+    closed = closed_domains(feeds_path, reopened=reopened)
 
     from tracker.ingest.fetch import fetch_all
 
@@ -1435,9 +1838,14 @@ def run(
     by_url = {r.url: r for r in results}
 
     all_kept: list[Candidate] = []
+    headlines: list[Candidate] = []
     for feed in feeds:
         result = by_url.get(feed.url)
         report.feeds_polled += 1
+        if feed.name in report.reopened and not dry_run:
+            # A reopened publisher is held to every poll: one that fails is closed
+            # again tonight, not after another week of failures.
+            record_probe(session, feed, result, now=utcnow())
         if result is None or not result.ok:
             report.feeds_failed += 1
             reason = (result.error if result else "no result") or "unknown error"
@@ -1445,7 +1853,11 @@ def run(
             log.warning("feed %s failed: %s", feed.name, reason)
             continue
         try:
-            entries = parse_feed(result.markdown, feed)
+            entries = (
+                parse_headlines(result.markdown, feed)
+                if feed.headlines_of
+                else parse_feed(result.markdown, feed)
+            )
         except DiscoverError as exc:
             report.feeds_failed += 1
             report.failures.append((feed.name, str(exc)))
@@ -1453,15 +1865,26 @@ def run(
             continue
         if not entries:
             report.failures.append((feed.name, "parsed but contained no entries"))
-        all_kept.extend(select_candidates(entries, spec, since=since, report=report))
+        kept = select_candidates(entries, spec, since=since, report=report)
+        (headlines if feed.headlines_of else all_kept).extend(kept)
 
     queued = queue_candidates(session, all_kept, run_id=run_id, report=report)
+    queued += follow_headlines(
+        session,
+        headlines,
+        spec,
+        run_id=run_id,
+        report=report,
+        closed=closed,
+        provider=search_provider,
+        dry_run=dry_run,
+    )
     if dry_run:
         session.rollback()
         # The report still describes what would have happened. No bodies are
         # written either: a dry run must not leave files behind any more than it
         # leaves rows behind.
-        return report, all_kept
+        return report, all_kept + headlines
     # Only for the newly queued. A candidate already in `ingest_url` has had its
     # turn, and rewriting its body would resurrect an article the operator dropped
     # from the queue on purpose.
@@ -1544,9 +1967,12 @@ class _RawFetcher:
 
 __all__ = [
     "CHALLENGE_NOTE",
+    "COPY_MIN_WORDS",
     "DEAD_STATUS",
+    "MAX_HEADLINE_LOOKUPS",
     "MAX_PER_FEED",
     "MAX_SAME_FAILURES",
+    "PROBE_EVERY",
     "RETRYABLE_STATUSES",
     "UNEXPLAINED_CLOSURE",
     "Candidate",
@@ -1554,34 +1980,43 @@ __all__ = [
     "DiscoverReport",
     "FeedSpec",
     "FilterSpec",
+    "ProbeResult",
     "ProjectIdentity",
     "PruneCandidate",
     "SitemapSpec",
     "UrlVerdict",
     "classify_status",
     "closed_domains",
+    "copies_headline",
     "crawl_sitemap",
     "default_feeds_path",
     "drop_ids",
     "drop_pending",
     "failed",
     "failure_summary",
+    "follow_headlines",
     "given_up",
     "load_config",
     "load_sitemaps",
     "matches_known_project",
     "parse_feed",
+    "parse_headlines",
     "pending",
     "pending_risk_count",
     "pending_split",
+    "probe_closed",
     "project_identities",
     "queue_candidates",
     "readable_first",
+    "record_probe",
     "refilter_pending",
+    "reopened_names",
     "retryable",
     "run",
+    "same_story",
     "select_candidates",
     "sweep_sitemaps",
     "unreadable_test",
     "verify_urls",
+    "without_reopened",
 ]

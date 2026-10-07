@@ -267,7 +267,11 @@ def ingest_crawl(
         # A page on a publisher closed to us, with no body cached, goes after every
         # page that can be read, so it cannot take one of `--limit`'s slots. On
         # 2026-10-02 six of the nightly crawl's next ten were such pages.
-        unreadable = disc.unreadable_test(None if no_cache else article_cache("articles"))
+        with session_scope(engine, commit=False) as session:
+            reopened = disc.reopened_names(session)
+        unreadable = disc.unreadable_test(
+            None if no_cache else article_cache("articles"), reopened=reopened
+        )
         with session_scope(engine, commit=False) as session:
             url_list = [
                 row.url

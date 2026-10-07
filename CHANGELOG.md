@@ -12,6 +12,24 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **DCD and DCF stories reach the queue again, through other outlets**
+  (`tracker/ingest/discover.py`, `tracker/seed/feeds.toml`, `tracker/cli/sync.py`,
+  `tests/test_discover.py`, `docs/workflows/sync.md`, `docs/ingesting.md`). The two
+  most-cited trade publishers have answered every page with a Cloudflare challenge
+  since 2026-10-02 — re-measured from two networks and a browser — so their stories
+  stopped arriving. Their headlines are read from Google News's RSS search; each new
+  one is looked up once (about $0.001, at most 40 a night) with the closed
+  publishers excluded, and the operator's release or another outlet's report of the
+  same story is queued, dated like the headline. Reposts of the blocked article are
+  skipped. On 12 headlines: 10 readable copies for 7 stories.
+
+- **Every closed feed and archive is asked again once a week**
+  (`tracker/ingest/discover.py`, migration `0034_feed_probe`, `tracker/cli/sync.py`).
+  Fourteen were closed by hand on 2026-10-02 and nothing would have noticed one
+  reopening. `tracker discover` now requests each one's own URL weekly; one that
+  answers with a real feed is polled again that night and closed again the first
+  night it fails. `--probe-closed` asks all of them now.
+
 - **Follow one project with a button: ☆ on every Projects row and *Watch* on a
   project's page** (`tracker/watchlist.py`, `tracker/merge.py`, `tracker/models.py`,
   migration `0033_watch_project`, `tracker/webui/server.py`,

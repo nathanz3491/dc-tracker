@@ -929,6 +929,29 @@ class Watch(Base):
         return f"<Watch {self.entry!r} of account {self.account_id}>"
 
 
+class FeedProbe(Base):
+    """One weekly check of a feed or archive marked closed in `seed/feeds.toml`.
+
+    Newest row per `name` wins: open means `tracker discover` polls it again. See
+    migration 0034 and `discover.probe_closed`.
+    """
+
+    __tablename__ = "feed_probe"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    url: Mapped[str] = mapped_column(Text, nullable=False)
+    checked_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False)
+    open: Mapped[bool] = mapped_column(Integer, nullable=False)
+    status: Mapped[int | None] = mapped_column(Integer)
+    detail: Mapped[str | None] = mapped_column(Text)
+
+    __table_args__ = (
+        CheckConstraint("open IN (0, 1)", name="ck_feed_probe_open"),
+        Index("ix_feed_probe_name", "name", "checked_at"),
+    )
+
+
 class NotifyRun(Base):
     """One `tracker notify send`. `finished_at` NULL after the fact means it died."""
 

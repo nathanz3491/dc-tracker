@@ -113,7 +113,7 @@ a request to any of them can only fail.
 Those entries now carry `closed = "<date>: <what was measured>"` in
 `tracker/seed/feeds.toml`, beside the measurements:
 
-* **A closed feed is not requested, and a closed archive is not walked** — by
+* **A closed feed is not polled, and a closed archive is not walked** — by
   discover, by `--deep`, or by enrich's archive harvest. The report counts them as
   `feeds closed`, apart from `feeds failed`: thirteen failures a night that everyone
   expects would teach a reader to stop reading that line, and the fourteenth, which
@@ -130,8 +130,33 @@ Those entries now carry `closed = "<date>: <what was measured>"` in
   the 22 whose syndicated body was cached when they were queued can be read, so
   every crawl puts the rest after every page it can read; see rule 4 below.
 
-To re-open one: when `curl -s -o /dev/null -w '%{http_code}\n' <its url>` prints
-200, delete its `closed` line and run `tracker discover --dry-run`.
+**Each is asked again once a week** (migration 0034, `discover.probe_closed`):
+one request to the entry's own URL, with discovery's usual client, from
+`tracker discover` — so the nightly loop does it without being told. An entry whose
+check comes back as a real feed or sitemap is polled again from that night, and its
+pages stop being read last; the first poll that fails closes it again the same
+night. The checks are rows in `feed_probe`, not edits to the file, because the
+host's checkout is reset to the pushed commit every two minutes. When a reopening
+has held, delete the `closed` line. `tracker discover --probe-closed --dry-run`
+asks every one now. On 2026-10-07 all fourteen still answered with the challenge,
+from two networks and from a browser.
+
+## Headlines from a publisher we cannot read
+
+A `[[feed]]` with `headlines_of = "<site>"` lists another publisher's articles —
+Google News's RSS search for datacenterdynamics.com and datacenterfrontier.com, the
+two most-cited sources before they closed. Its links lead back to the blocked page,
+so nothing from it is queued. Instead `discover.follow_headlines` looks each new
+headline up once (Serper, about $0.001, at most 40 a run), with every closed
+publisher excluded, and queues up to two results that tell the same story — most
+of the headline's distinctive words — dated like the headline so the news-first
+crawl reads them first. A result whose title repeats the headline word for word is
+a reposting site carrying the blocked article, and is skipped: reading it there
+would be reading it anyway. The headline itself is stored as a `skipped` row, so
+it is looked up once and never handed to the crawl. Measured on 12 DCD headlines
+on 2026-10-07: 10 readable copies for 7 stories — PennLive and WJAC on AWS's
+Indiana County campus, San José Spotlight on the IBM site, Applied Digital's own
+release, and two reposts left out.
 
 Bisnow is the other kind of failure. Its data-center feed went away when the site
 was rebuilt — `/rss/data-center` now redirects to a 404 — so that entry was
@@ -379,6 +404,8 @@ Touching any of these means the poster is in scope. Re-render with
 | Phase order, plan numbering, `--full`, the lock | `tracker/cli/sync.py` — `sync`, its `plan` list and `step` |
 | Discover, archives, search | `tracker/ingest/discover.py` — `run`, `load_config`, `load_sitemaps`, `sweep_sitemaps`, `queue_candidates`; `tracker/ingest/search.py`; `tracker/normalize.py` — `canonical_url`, `url_identity`, `url_variants`; `tracker/backfill.py` — `repair_urls` |
 | Closed feeds, and naming a challenge | `tracker/seed/feeds.toml` — `closed`; `tracker/ingest/discover.py` — `FeedSpec.closed`, `SitemapSpec.closed`, `_closed_reason`, `DiscoverReport.closed`, `_RawFetcher`, `CHALLENGE_NOTE`; `tracker/ingest/probe.py` — `configured_hosts` |
+| The weekly check of closed entries | `tracker/ingest/discover.py` — `probe_closed`, `record_probe`, `reopened_names`, `without_reopened`, `PROBE_EVERY`; migration `0034_feed_probe`; `tracker/cli/sync.py` — `discover --probe-closed` |
+| Headlines-only feeds | `tracker/seed/feeds.toml` — `headlines_of`; `tracker/ingest/discover.py` — `parse_headlines`, `follow_headlines`, `same_story`, `copies_headline`, `MAX_HEADLINE_LOOKUPS` |
 | Pages nothing can read go last | `tracker/ingest/discover.py` — `closed_domains`, `unreadable_test`, `readable_first`, `pending(unreadable=)`, `retryable(unreadable=)`; `tracker/ingest/crawl.py` — `stale_sources(unreadable=)`; `tracker/cli/sync.py` — `sync` (extract, retry fill, refresh); `tracker/cli/ingest.py` — `crawl --from-queue`; `tracker/ingest/enrich.py` — `run` |
 | What search looks for | `tracker/ingest/search.py` — `_PLACE_TEMPLATES`, `rank_places`, `plan_queries`, `PlannedQuery.label`, `templates`; `tracker/normalize.py` — `state_name` |
 | Judging a template | `tracker/funnel.py` — `feed_group`, `survey`, `verdicts`; `tracker/ingest/search.py` — `LabelStat` |

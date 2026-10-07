@@ -572,7 +572,9 @@ def sync(
     if deep and not skip_discover:
         from tracker.ingest import discover as disc2
 
-        specs = disc2.load_sitemaps()
+        with session_scope(engine, commit=False) as session:
+            reopened = disc2.reopened_names(session)
+        specs = disc2.without_reopened(disc2.load_sitemaps(), reopened)
         if not specs:
             console.print("[dim]--deep: no [[sitemap]] entries configured[/dim]")
         else:
@@ -770,7 +772,9 @@ def sync(
         # publisher closed to us, with no body cached, goes after every page that
         # can be read. `priority` alone put such pages in all fifteen slots on
         # 2026-10-02, because datacenterfrontier and datacenterdynamics rank there.
-        unreadable = disc.unreadable_test(cache_dir)
+        with session_scope(engine, commit=False) as session:
+            reopened = disc.reopened_names(session)
+        unreadable = disc.unreadable_test(cache_dir, reopened=reopened)
         kept = disc.readable_first(kept, unreadable)
         held_back = sum(1 for url in kept if unreadable(url))
         pending_urls = kept[:limit]
@@ -860,7 +864,7 @@ def sync(
                 session,
                 older_than_days=refresh_days,
                 limit=refresh_limit,
-                unreadable=disc.unreadable_test(None),
+                unreadable=disc.unreadable_test(None, reopened=disc.reopened_names(session)),
             )
         if not stale:
             console.print(f"no source read more than {refresh_days} day(s) ago — all current")
@@ -1508,11 +1512,29 @@ def discover(
     show: Annotated[
         bool, typer.Option("--show/--no-show", help="List the candidates found.")
     ] = True,
+    probe_closed: Annotated[
+        bool,
+        typer.Option(
+            "--probe-closed",
+            help="Ask every closed feed and archive now whether it has reopened, "
+            "instead of only those not asked in the last week.",
+        ),
+    ] = False,
 ) -> None:
     """Poll news feeds for candidate articles and queue them for crawling.
 
-    Nothing is fetched or sent to an LLM here — matches land in the queue with
-    their headline so you can triage them with `tracker queue` first.
+    Nothing is sent to an LLM here — matches land in the queue with their headline
+    so you can triage them with `tracker queue` first.
+
+    **Closed publishers are asked again once a week.** One request each, to the
+    entry's own URL; one that answers with a real feed is polled again from that
+    night, and closed again the first night it fails. `--probe-closed` asks them
+    all now. The `closed` line in seed/feeds.toml stays as the record of why.
+
+    **A headlines-only feed** (`headlines_of = "site"`, a news search for a
+    publisher we cannot read) is not queued: each new headline is searched for once,
+    the closed publishers excluded, and the copies that tell the same story are
+    queued instead. About $0.001 a headline, at most 40 a run.
     """
     from tracker.ingest import discover as disc
 
@@ -1525,6 +1547,7 @@ def discover(
                 since_days=since_days or None,
                 dry_run=dry_run,
                 cache_dir=article_cache("articles"),
+                probe_force=probe_closed,
             )
     except disc.DiscoverError as exc:
         _fail(str(exc))
@@ -1538,6 +1561,15 @@ def discover(
 
     for name, reason in report.failures:
         err.print(f"[yellow]feed {name}[/yellow]: {reason}")
+    for probe in report.probes:
+        style = "green" if probe.open else "dim"
+        verdict = "answers again — polled from tonight" if probe.open else "still closed"
+        console.print(f"[{style}]weekly check {probe.name}: {verdict} ({probe.detail})[/{style}]")
+    if report.reopened:
+        console.print(
+            f"[green]reopened by a weekly check, polled: {', '.join(report.reopened)}[/green] — "
+            "once it holds, delete its `closed` line in seed/feeds.toml"
+        )
     if report.closed:
         console.print(
             f"[dim]not polled, marked closed in seed/feeds.toml: "

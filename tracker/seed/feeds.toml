@@ -62,10 +62,12 @@
 # challenge: only the ones whose syndicated body was cached when they were queued
 # can be read, so every crawl now reads the rest last.
 #
-# To see whether one has re-opened — 200 means delete its `closed` line, then run
-# `tracker discover --dry-run` to see what it would queue:
+# Nobody has to check by hand: `tracker discover` asks every closed entry once a
+# week (migration 0034, `discover.probe_closed`) and polls one that answers with a
+# real feed again from that night, closing it again the first night it fails. When
+# a reopening has held, delete its `closed` line here. To ask now:
 #
-#   curl -s -o /dev/null -w '%{http_code}\n' https://georgiarecorder.com/feed/
+#   tracker discover --probe-closed --dry-run
 
 [[feed]]
 name = "datacenterdynamics"
@@ -105,6 +107,36 @@ topic_implied = true
 # on 2026-10-02, and their pages answer the same challenge.
 closed = "2026-10-02: Cloudflare challenge on the sitemap, every article and robots.txt"
 url = "https://www.datacenterfrontier.com/sitemap/Article.xml"
+source_type = "trade_press"
+
+# --- Headlines from the two closed trade publishers --------------------------
+#
+# DCD and DCF answer every page, robots.txt included, with a Cloudflare challenge
+# since 2026-10-02 — measured from two networks and a browser on 2026-10-07. Their
+# headlines are still published by Google News's RSS search, which lists each
+# article with its outlet and publish date. `headlines_of` makes these
+# headlines-only feeds: the links lead back to the blocked page, so nothing is
+# queued from them. Each new headline is searched for once, the closed publishers
+# excluded, and the copies telling the same story — the operator's release, the
+# local paper, another trade outlet — are queued instead
+# (`discover.follow_headlines`). The article text of DCD and DCF is not read.
+#
+# `when:7d` keeps each poll to a week, which the nightly run covers with room to
+# spare. DCF's site: search returns nothing, so it is searched by name and the
+# items are kept only when Google attributes them to datacenterfrontier.com.
+
+[[feed]]
+name = "datacenterdynamics-headlines"
+topic_implied = true
+headlines_of = "datacenterdynamics.com"
+url = "https://news.google.com/rss/search?q=site:datacenterdynamics.com+when:7d&hl=en-US&gl=US&ceid=US:en"
+source_type = "trade_press"
+
+[[feed]]
+name = "datacenterfrontier-headlines"
+topic_implied = true
+headlines_of = "datacenterfrontier.com"
+url = "https://news.google.com/rss/search?q=%22Data+Center+Frontier%22+when:7d&hl=en-US&gl=US&ceid=US:en"
 source_type = "trade_press"
 
 [[feed]]

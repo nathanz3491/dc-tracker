@@ -579,7 +579,15 @@ entries are marked `closed` in `tracker/seed/feeds.toml` — not polled, not wal
 still listed — beside the measurements and a one-line check for when one re-opens.
 `tracker discover` names the challenge when it meets one (`HTTP 403 (Cloudflare
 challenge: ...)`), so the next closure can be recognised from the nightly log
-alone.
+alone, and asks every closed entry again once a week — one that answers with a
+real feed is polled again that night (`docs/workflows/sync.md`).
+
+**Their headlines come back another way.** Google News's RSS search lists each
+DCD and DCF article with its outlet and publish date. Those two feeds are
+headlines-only: each new headline is searched for once, the closed publishers
+excluded, and the operator's release or another outlet's own report of the same
+story is queued instead. The DCD and DCF article text is still not read — a result
+that copies their headline word for word is a repost of it and is skipped.
 
 Every blocked URL stays visible rather than disappearing:
 
