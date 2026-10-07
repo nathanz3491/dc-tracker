@@ -62,3 +62,65 @@ def test_a_call_that_times_out_says_so(keyed, monkeypatch, caplog):
         with pytest.raises(llm.LLMError, match="ReadTimeout"):
             llm.DeepSeekExtractor(keyed).complete(system="s", user="u")
     assert "ReadTimeout" in caplog.text
+
+
+# --- a broken pool, and a provider that has gone away ---------------------------
+
+_OK = {
+    "model": "deepseek-flash",
+    "choices": [{"message": {"content": "{}"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 10, "completion_tokens": 2},
+}
+
+
+def test_waiting_for_a_connection_is_not_the_read_timeout(keyed):
+    """Ten minutes is how long a reply may take, not how long to wait for a socket.
+    On 2026-10-07 a leaked pool made every call wait the full ten minutes, three
+    times, and enrich wrote nothing for three hours."""
+    from tracker import llm
+
+    client = llm.api_client(900.0)
+    assert client.timeout.read == 900.0
+    assert client.timeout.pool == llm.POOL_WAIT_S < 60
+
+
+def test_a_broken_connection_rebuilds_the_pool_before_the_retry(keyed, monkeypatch):
+    from tracker import llm
+
+    monkeypatch.setattr(llm.time, "sleep", lambda _s: None)
+    first = llm.api_client(keyed.deepseek_timeout_s)
+    with respx.mock:
+        respx.post(ENDPOINT).mock(
+            side_effect=[httpx.PoolTimeout("no free connection"), httpx.Response(200, json=_OK)]
+        )
+        llm.DeepSeekExtractor(keyed).complete(system="s", user="u")
+    assert first.is_closed, "the broken pool was dropped"
+    assert llm.api_client(keyed.deepseek_timeout_s) is not first
+
+
+def test_an_unreachable_provider_fails_fast_then_is_tried_again(keyed, monkeypatch):
+    """After OUTAGE_FAILURES calls each fail every attempt, calls fail at once,
+    without touching the network, until the cool-down ends; one that answers then
+    resumes everything."""
+    from tracker import llm
+
+    monkeypatch.setattr(llm.time, "sleep", lambda _s: None)
+    clock = [1000.0]
+    monkeypatch.setattr(llm.time, "monotonic", lambda: clock[0])
+    extractor = llm.DeepSeekExtractor(keyed)
+    with respx.mock:
+        route = respx.post(ENDPOINT).mock(side_effect=httpx.ConnectError("SSL EOF"))
+        for _ in range(llm.OUTAGE_FAILURES):
+            with pytest.raises(llm.LLMError, match="ConnectError"):
+                extractor.complete(system="s", user="u")
+        tried = route.call_count
+
+        with pytest.raises(llm.LLMError, match="unreachable"):
+            extractor.complete(system="s", user="u")
+        assert route.call_count == tried, "failing fast: no request at all"
+
+        clock[0] += llm.OUTAGE_COOLDOWN_S + 1
+        route.mock(side_effect=None, return_value=httpx.Response(200, json=_OK))
+        extractor.complete(system="s", user="u")
+        extractor.complete(system="s", user="u")
+    assert route.call_count == tried + 2, "answering again, so asked again"

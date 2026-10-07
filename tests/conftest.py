@@ -240,6 +240,9 @@ def _fast_and_keyless_settings(monkeypatch, tmp_path_factory):
 
     llm._ON_RESERVE.clear()
     llm._ROUTE_CHOSEN.clear()
+    # And no outage on record: it is per process too, and six failing-call tests
+    # anywhere in the suite would otherwise make every later call fail fast.
+    llm._OUTAGE.answered()
     # And the old reserve rule, DeepSeek until a 402: the default asks DeepSeek's
     # balance endpoint first, a request no test mocking one completion expects. The
     # tests about that check set it themselves.

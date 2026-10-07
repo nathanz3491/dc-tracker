@@ -133,6 +133,17 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **A dropped proxy no longer hangs a nightly run for hours** (`tracker/llm.py`,
+  `tests/test_llm_timeout.py`, `tests/conftest.py`). On 2026-10-07 the proxy failed
+  at 18:53 mid-enrich; the connection pool was left with its connections leaked,
+  and because waiting for a connection shared the ten-minute read timeout, every
+  later call waited ten minutes three times. Enrich wrote nothing for three hours
+  and was killed by hand at 22:05. Now a request waits at most 30 seconds for a
+  connection; a connection-level failure rebuilds the pool before the retry; and
+  after 6 calls in a row fail on the network, calls fail at once for five minutes,
+  then one tries again — so an outage costs a run minutes of failures, and a
+  network that comes back is used again.
+
 - **An old article the crawler only just found no longer shows up as news**
   (`tracker/feed.py`, `tracker/notify.py`, `tracker/watchfor.py`,
   `tracker/cli/people.py`, `README.md`, `docs/analysis.md`, `tests/test_feed.py`,

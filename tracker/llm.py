@@ -137,6 +137,16 @@ LLM_PROVIDERS = ("deepseek", "ollama")
 
 _LIMITS = httpx.Limits(max_connections=32, max_keepalive_connections=16)
 
+#: How long a request waits for a free connection in the pool, in seconds.
+#:
+#: Separate from the read timeout on purpose. It used to be the same number —
+#: `deepseek_timeout_s`, ten minutes, which a slow model reply needs — so when a
+#: proxy outage on 2026-10-07 left the pool's connections leaked, every later call
+#: waited ten minutes for a slot, three times, and enrich sat at 0% CPU for three
+#: hours writing nothing. A healthy pool hands out a connection in milliseconds;
+#: thirty seconds without one means the pool is broken, and `_post` rebuilds it.
+POOL_WAIT_S: float = 30.0
+
 #: Every client built so far. A plain dict rather than `lru_cache` so shutdown can
 #: enumerate it — `lru_cache` offers no way to reach its values.
 _CLIENTS: dict[tuple[str, float], httpx.Client] = {}
@@ -166,10 +176,112 @@ def _client(kind: str, timeout_s: float, *, trust_env: bool) -> httpx.Client:
     if existing is not None and not existing.is_closed:
         return existing
     built = httpx.Client(
-        timeout=httpx.Timeout(timeout_s, connect=10.0), limits=_LIMITS, trust_env=trust_env
+        timeout=httpx.Timeout(timeout_s, connect=10.0, pool=POOL_WAIT_S),
+        limits=_LIMITS,
+        trust_env=trust_env,
     )
     _CLIENTS[(kind, timeout_s)] = built
     return built
+
+
+_RESET_LOCK = threading.Lock()
+
+
+def reset_client(client: httpx.Client) -> None:
+    """Drop a pooled client whose connections a network failure has left unusable.
+
+    Only if it is still the one in use: thirty workers that all saw the same outage
+    rebuild the pool once, not thirty times. Closing it fails the requests other
+    workers still have on it, which is the point — they were waiting on sockets the
+    proxy had already closed, and their retries get the fresh pool.
+    """
+    with _RESET_LOCK:
+        for key, existing in list(_CLIENTS.items()):
+            if existing is client:
+                del _CLIENTS[key]
+                try:
+                    client.close()
+                except Exception:  # pragma: no cover - best effort on a broken pool
+                    log.debug("could not close a broken HTTP client", exc_info=True)
+                log.warning("rebuilt the %s HTTP connection pool after a network failure", key[0])
+
+
+#: Failures that say the connection, not the request, is broken. A pool that saw
+#: one is rebuilt before the next attempt.
+_BROKEN_CONNECTION = (
+    httpx.PoolTimeout,
+    httpx.ConnectError,
+    httpx.ConnectTimeout,
+    httpx.RemoteProtocolError,
+    httpx.ReadError,
+    httpx.WriteError,
+)
+
+#: Calls in a row that must fail on the network, every attempt, before the
+#: provider is treated as unreachable.
+OUTAGE_FAILURES: int = 6
+
+#: How long an unreachable provider is not asked, in seconds, before one call
+#: tries again. Five minutes: a proxy that restarts is back well inside it, and a
+#: run that waited ten minutes per call for three hours is the thing this replaces.
+OUTAGE_COOLDOWN_S: float = 300.0
+
+
+class _Outage:
+    """Process-wide memory of a provider that has stopped answering.
+
+    After `OUTAGE_FAILURES` calls in a row have each failed every attempt on the
+    network, calls fail at once — an `LLMError`, which every caller already handles
+    per item — for `OUTAGE_COOLDOWN_S`. Then one call is let through; if it
+    answers, everything resumes, and if not, the wait starts again. So a run in an
+    outage finishes its work as failures in minutes rather than hanging for hours,
+    and a run whose network comes back picks up where it was.
+    """
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.failures = 0
+        self.until = 0.0
+        self.since: float | None = None
+
+    def check(self) -> None:
+        with self.lock:
+            now = time.monotonic()
+            if self.until and now < self.until:
+                raise LLMError(
+                    f"provider unreachable for {now - (self.since or now):.0f}s; "
+                    f"not asking again for {self.until - now:.0f}s"
+                )
+            if self.until:
+                # Cool-down over: this call is the probe. Re-arm at once so the other
+                # workers keep failing fast until it reports back.
+                self.until = now + OUTAGE_COOLDOWN_S
+
+    def failed(self) -> None:
+        with self.lock:
+            self.failures += 1
+            if self.failures >= OUTAGE_FAILURES:
+                now = time.monotonic()
+                if not self.until:
+                    log.error(
+                        "LLM provider unreachable: %d calls in a row failed on the network; "
+                        "failing fast for %.0fs before trying again",
+                        self.failures,
+                        OUTAGE_COOLDOWN_S,
+                    )
+                self.since = self.since or now
+                self.until = now + OUTAGE_COOLDOWN_S
+
+    def answered(self) -> None:
+        with self.lock:
+            if self.until:
+                log.warning("LLM provider answering again; resuming")
+            self.failures = 0
+            self.until = 0.0
+            self.since = None
+
+
+_OUTAGE = _Outage()
 
 
 @atexit.register
@@ -1140,19 +1252,23 @@ class DeepSeekExtractor:
         yield from self.stream(system=system, user=user, max_tokens=max_tokens)
 
     def _post(self, payload: dict[str, Any], *, attempts: int = 3) -> dict[str, Any]:
+        _OUTAGE.check()
         last: Exception | None = None
         for attempt in range(1, attempts + 1):
             # Inside the loop: another worker in this process may have moved it
             # onto the reserve while this one was waiting out a backoff.
             url, headers, body = self._route(payload)
+            client = api_client(self.settings.deepseek_timeout_s)
             try:
-                response = api_client(self.settings.deepseek_timeout_s).post(
+                response = client.post(
                     url,
                     json=body,
                     headers=headers,
                 )
             except httpx.RequestError as exc:
                 last = exc
+                if isinstance(exc, _BROKEN_CONNECTION):
+                    reset_client(client)
                 # By type as well: a timeout's message is empty, and "LLM request
                 # error: " with nothing after it hid which failure this was.
                 log.warning(
@@ -1181,11 +1297,13 @@ class DeepSeekExtractor:
                     return self._post(payload, attempts=attempts)
                 if response.status_code >= 400:
                     raise self._refused(response)
+                _OUTAGE.answered()
                 data = response.json()
                 record_spend(self.settings, data, body["model"])
                 return data
             if attempt < attempts:
                 time.sleep(_backoff(attempt, settings=self.settings))
+        _OUTAGE.failed()
         raise LLMError(
             f"LLM request failed after {attempts} attempts: {type(last).__name__} {last}".rstrip()
         )
