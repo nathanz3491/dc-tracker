@@ -1655,12 +1655,27 @@ def copies_headline(headline: str, title: str) -> bool:
     return len(theirs) >= COPY_MIN_WORDS and ours[: len(theirs)] == theirs
 
 
+#: A headline that names a capacity — "1GW", "75 MW".
+_CAPACITY = re.compile(r"\b\d+(?:\.\d+)?\s?[GM]W\b", re.I)
+
+#: The publisher's own surveys, polls, podcasts and sponsored pieces. They pass the
+#: topic test and are never a project: on 2026-10-07 "DCD Survey: Data center
+#: construction" led to a 2023 report and "DCF Poll: ..." to an opinion piece.
+_NOT_NEWS = re.compile(
+    r"^(?:DCD|DCF)\s+(?:Survey|Poll|Podcast|Webinar|Broadcast|Awards?)\b"
+    r"|\b(?:sponsored|webinar|whitepaper|podcast)\b",
+    re.I,
+)
+
+
 def parse_headlines(xml: str, feed: FeedSpec) -> list[Candidate]:
     """Items of a news-search feed that the configured publisher wrote.
 
     Google News's RSS lists each article with a `<source url="...">` naming the
     outlet and a title ending " - <outlet>". Items from anybody else are dropped,
-    and the suffix is removed so the headline can be searched for as written. The
+    and the suffix is removed so the headline can be searched for as written.
+    The publisher's surveys and polls are dropped (`_NOT_NEWS`), and a headline
+    stating a capacity counts as on topic without saying "data center". The
     link stays the news service's own: it is unreadable to us, and is kept only so
     the same headline is recognised tomorrow.
     """
@@ -1683,6 +1698,8 @@ def parse_headlines(xml: str, feed: FeedSpec) -> list[Candidate]:
         outlet = _text(source)
         if outlet and title.endswith(f" - {outlet}"):
             title = title[: -len(outlet) - 3].rstrip()
+        if _NOT_NEWS.search(title):
+            continue
         out.append(
             Candidate(
                 url=link,
@@ -1690,7 +1707,10 @@ def parse_headlines(xml: str, feed: FeedSpec) -> list[Candidate]:
                 feed=feed.name,
                 published_at=_parse_date(_text(item.find("pubDate"))),
                 source_type=feed.source_type,
-                topic_implied=feed.topic_implied,
+                # A stated capacity stands in for the topic word: "TeraWulf's
+                # Kentucky campus to reach 1GW" is the story we want and never says
+                # "data center". Everything else has to say it.
+                topic_implied=feed.topic_implied or bool(_CAPACITY.search(title)),
             )
         )
     return out[:MAX_PER_FEED]

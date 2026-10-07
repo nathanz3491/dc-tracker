@@ -146,8 +146,10 @@ from two networks and from a browser.
 A `[[feed]]` with `headlines_of = "<site>"` lists another publisher's articles —
 Google News's RSS search for datacenterdynamics.com and datacenterfrontier.com, the
 two most-cited sources before they closed. Its links lead back to the blocked page,
-so nothing from it is queued. Instead `discover.follow_headlines` looks each new
-headline up once (Serper, about $0.001, at most 40 a run), with every closed
+so nothing from it is queued. A headline has to name the topic itself or state a
+capacity ("1GW") — DCD also covers telecom, chips and quantum, and on the first
+night 23 of its 39 headlines were those — and the publishers' surveys and polls are
+dropped. Then `discover.follow_headlines` looks each remaining headline up once (Serper, about $0.001, at most 40 a run), with every closed
 publisher excluded, and queues up to two results that tell the same story — most
 of the headline's distinctive words — dated like the headline so the news-first
 crawl reads them first. A result whose title repeats the headline word for word is

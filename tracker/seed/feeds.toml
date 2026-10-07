@@ -121,20 +121,23 @@ source_type = "trade_press"
 # local paper, another trade outlet — are queued instead
 # (`discover.follow_headlines`). The article text of DCD and DCF is not read.
 #
+# Not `topic_implied`, unlike the publishers' own feeds: DCD also covers telecom,
+# chips and quantum, and on the first night 23 of 39 headlines said nothing about a
+# data center. A headline has to name the topic, or state a capacity ("1GW"), and
+# the publishers' surveys and polls are dropped (`discover._NOT_NEWS`).
+#
 # `when:7d` keeps each poll to a week, which the nightly run covers with room to
 # spare. DCF's site: search returns nothing, so it is searched by name and the
 # items are kept only when Google attributes them to datacenterfrontier.com.
 
 [[feed]]
 name = "datacenterdynamics-headlines"
-topic_implied = true
 headlines_of = "datacenterdynamics.com"
 url = "https://news.google.com/rss/search?q=site:datacenterdynamics.com+when:7d&hl=en-US&gl=US&ceid=US:en"
 source_type = "trade_press"
 
 [[feed]]
 name = "datacenterfrontier-headlines"
-topic_implied = true
 headlines_of = "datacenterfrontier.com"
 url = "https://news.google.com/rss/search?q=%22Data+Center+Frontier%22+when:7d&hl=en-US&gl=US&ceid=US:en"
 source_type = "trade_press"

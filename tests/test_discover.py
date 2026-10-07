@@ -87,10 +87,6 @@ def test_only_specialist_feeds_imply_the_topic():
         "datacenterdynamics",
         "datacenterfrontier",
         "datacenterknowledge",
-        # The two closed ones' headlines, through a news search; see the comment
-        # beside them in seed/feeds.toml.
-        "datacenterdynamics-headlines",
-        "datacenterfrontier-headlines",
         # A pure-play operator's own newsroom, like the [[sitemap]] entries.
         "qts-newsroom",
         # Not `bisnow-latest`: Bisnow's data-center vertical had a feed of its own,
@@ -1668,6 +1664,31 @@ def test_a_failed_search_leaves_the_headline_for_tomorrow(session, tmp_path: Pat
     )
     assert report.headlines_looked_up == 0
     assert session.scalar(select(IngestUrl).where(IngestUrl.feed == "dcd-headlines")) is None
+
+
+def test_a_headline_must_name_the_topic_or_a_capacity_and_not_be_a_survey():
+    """Measured on the first night: 23 of 39 DCD/DCF headlines were telecom, chips
+    or quantum, and a survey and a poll each led to a page with no project."""
+    feed = discover.FeedSpec("h", "https://x", headlines_of="datacenterdynamics.com")
+    _, spec = load_config()
+
+    def item(title):
+        return (
+            f"<item><title>{title} - Data Center Dynamics</title><link>https://n/{abs(hash(title))}</link>"
+            "<pubDate>Tue, 06 Oct 2026 09:00:00 GMT</pubDate>"
+            '<source url="https://www.datacenterdynamics.com">Data Center Dynamics</source></item>'
+        )
+
+    titles = [
+        "Crusoe files for $4.8bn data center campus in Jayton, Texas",
+        "TeraWulf's Kentucky campus to reach 1GW in 2029",
+        "Rightfiber finalizes acquisition of Fastwyre's Nebraska business",
+        "DCD Survey: Data center construction",
+        "DCF Poll: What Must Data Centers Prove to Keep Building at AI Scale?",
+    ]
+    xml = "<rss><channel>" + "".join(item(t) for t in titles) + "</channel></rss>"
+    kept = discover.select_candidates(discover.parse_headlines(xml, feed), spec)
+    assert [c.title for c in kept] == titles[:2]
 
 
 def test_same_story_and_copies():

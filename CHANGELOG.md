@@ -21,7 +21,9 @@ initial build of the v1 PRD.
   one is looked up once (about $0.001, at most 40 a night) with the closed
   publishers excluded, and the operator's release or another outlet's report of the
   same story is queued, dated like the headline. Reposts of the blocked article are
-  skipped. On 12 headlines: 10 readable copies for 7 stories.
+  skipped. On 12 headlines: 10 readable copies for 7 stories. A headline must name
+  the topic or state a capacity, and surveys and polls are dropped: on the first
+  night that leaves 17 of 39, the rest being telecom, chips and quantum.
 
 - **Every closed feed and archive is asked again once a week**
   (`tracker/ingest/discover.py`, migration `0034_feed_probe`, `tracker/cli/sync.py`).
