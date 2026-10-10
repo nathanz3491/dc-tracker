@@ -12,6 +12,20 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **The nightly loop dates articles by asking their publishers, and re-reads what
+  older prompts extracted** (`scripts/overnight.sh`, `tracker/dates.py`, migration
+  `0035_date_probe`, `tests/test_dates.py`, `tests/test_overnight.py`, `README.md`,
+  `docs/data-quality.md`). The 10-10 night showed two steps the loop never took.
+  1,836 citations stayed undated night after night because the date step only read
+  dates written in URL paths; the date is what decides whether an article is news.
+  And 2,320 citations, behind 374 rows, were last read by a superseded extraction
+  prompt, so gate improvements never reached them. The first round now asks
+  publishers for up to 150 dates (one plain request each, no model; each page asked
+  once per 90 days, newest first, closed publishers skipped) and re-reads up to 60
+  cached articles under the current prompt, oldest vintage first, existing rows only
+  (about ¥0.8). On a production copy 5 of 40 pages came back dated; 3 re-read articles
+  updated 7 values for ¥0.04.
+
 - **DCD and DCF stories reach the queue again, through other outlets**
   (`tracker/ingest/discover.py`, `tracker/seed/feeds.toml`, `tracker/cli/sync.py`,
   `tests/test_discover.py`, `docs/workflows/sync.md`, `docs/ingesting.md`). The two

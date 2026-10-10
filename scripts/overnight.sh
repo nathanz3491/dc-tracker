@@ -24,6 +24,8 @@
 #   free      dates, geo, scope, derive, logic --auto. No model, no cost. `scope`
 #             re-gates stored labels against their own quotes; `derive` re-applies
 #             every derived value, and both are pure functions of what is stored.
+#             In the first round the dates step also asks publishers (`--dates`,
+#             one plain request a page, each page once per 90 days, newest first).
 #   audit     THE biggest tier lever and the one this script used to miss entirely:
 #             `audit_clear` is a T1 gate failing 68 rows and the SOLE blocker on 54.
 #             One call per finding on the fixed-menu path, so it is also cheap.
@@ -42,6 +44,9 @@
 #             It picks rows with `--t2` — the ones below T2 for missing fields,
 #             fewest missing first — where `--target 0` alone had sorted the
 #             FULLEST rows first and spent every round on rows already past the bar.
+#   reread    first round only: re-reads, from the cache, up to `--reread` articles
+#             that a superseded extraction prompt last read, oldest vintage first, so
+#             a tightened gate reaches rows written before it. Existing rows only.
 #   discover  the news and new campuses, first round only: polls the feeds (free —
 #             no fetch, no model), asks each closed feed again once a week, looks
 #             up DCD/DCF headlines elsewhere (≤40 web searches, ~$0.04, no model)
@@ -142,6 +147,8 @@ ENRICH=40
 ENRICH_BUDGET=160
 ENRICH_ROUNDS=1
 DISCOVER=40
+DATES=150
+REREAD=60
 MIN_CONF=0.85
 DO_MERGE=1
 DO_ENRICH=1
@@ -175,6 +182,9 @@ started in tmux and left.
   --enrich-budget N  articles the enrich phase may read (default 160)
   --enrich-rounds N  enrich in the first N rounds only (default 1)
   --discover N       queued articles to read, the news first (default 40); 0 to skip
+  --dates N          pages to ask for a publish date, first round (default 150); 0 to skip
+  --reread N         articles to re-read under the current prompt, first round
+                     (default 60); 0 to skip
   --min-confidence F floor a duplicate fold needs (default 0.85)
   --no-merge         never fold duplicates; park and rule only. Deletes nothing.
   --cny N            stop when the night's spend, priced, reaches N yuan (default 12)
@@ -210,6 +220,8 @@ while [ $# -gt 0 ]; do
     --enrich-budget)  shift; ENRICH_BUDGET="${1:?}" ;;
     --enrich-rounds)  shift; ENRICH_ROUNDS="${1:?}" ;;
     --discover)       shift; DISCOVER="${1:?}" ;;
+    --dates)          shift; DATES="${1:?}" ;;
+    --reread)         shift; REREAD="${1:?}" ;;
     --min-confidence) shift; MIN_CONF="${1:?}" ;;
     --cny)            shift; CNY_CAP="${1:?}" ;;
     --tokens)         shift; TOKEN_CAP="${1:?}" ;;
@@ -434,7 +446,17 @@ for round in $(seq 1 "$ROUNDS"); do
   # `|| true` throughout: one phase failing must not end the night, and every
   # command below commits as it goes, so whatever succeeded is already durable.
   phase 'free — dates, geo, scope, derive, logic --auto'
-  tracker backfill dates --apply < /dev/null || true
+  # First round only, the date check also asks publishers: one plain request per
+  # page, no model. Without it only dates written in a URL's path are found, and
+  # 1,836 citations sat undated night after night — the date the morning email
+  # decides "is this news" by. Each page is asked once per 90 days (migration
+  # 0035), newest first, so the limit reaches new articles rather than re-asking a
+  # Census table that will never state one.
+  if [ "$round" -eq 1 ] && [ "$DATES" -gt 0 ] 2>/dev/null; then
+    tracker backfill dates --apply --refetch --yes --limit "$DATES" < /dev/null || true
+  else
+    tracker backfill dates --apply < /dev/null || true
+  fi
   tracker ingest geo < /dev/null || true
   tracker backfill scope --apply < /dev/null || true
   tracker backfill derive < /dev/null || true
@@ -474,6 +496,20 @@ for round in $(seq 1 "$ROUNDS"); do
     phase "enrich — $ENRICH row(s) below T2, $ENRICH_BUDGET article budget"
     tracker enrich --select "$ENRICH" --t2 --target 0 --budget "$ENRICH_BUDGET" \
       < /dev/null || true
+  fi
+
+  # Re-read, from the article cache, what an older prompt extracted. The gate has
+  # been tightened release after release and each tightening applied only to rows
+  # written afterwards: on 2026-10-10, 2,320 citations were last read by a
+  # superseded prompt and 374 rows failed `vintage_current` for it. Cached only,
+  # so nothing is fetched and a closed publisher's page we already hold is read
+  # again legitimately; existing projects only, so a re-read never adds a campus.
+  # Oldest vintage first. About ¥0.02 an article.
+  if [ "$round" -eq 1 ] && [ "$REREAD" -gt 0 ] 2>/dev/null; then
+    if capped reread; then break; fi
+    phase "reread — $REREAD article(s) last read by a superseded prompt"
+    tracker ingest crawl --stale-prompt --cached-only --existing-only \
+      --limit "$REREAD" < /dev/null || true
   fi
 
   # --- discover: new campuses, through the identity check -----------------

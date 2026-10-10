@@ -196,7 +196,7 @@ def test_every_paid_phase_is_preceded_by_a_ceiling_check():
     """The header promised a check "between phases" and the loop made one per round,
     so a single round could overshoot the ceiling by a round's worth of agent runs."""
     text = SCRIPT.read_text(encoding="utf-8")
-    for phase in ("audit", "risks", "logic", "duplicates", "enrich", "discover"):
+    for phase in ("audit", "risks", "logic", "duplicates", "enrich", "reread", "discover"):
         assert f"if capped {phase}; then break; fi" in text, phase
 
 
@@ -409,3 +409,15 @@ def test_every_row_the_night_adds_gets_one_attempt_to_fold():
     assert '--created-since "$STARTED_UTC"' in text
     discover = text.index('tracker ingest crawl --from-queue --new-first --limit "$DISCOVER"')
     assert text.index('--created-since "$STARTED_UTC"') > discover, "after the rows exist"
+
+
+def test_the_first_round_asks_publishers_for_dates_and_rereads_old_prompts():
+    """The two gaps the 2026-10-10 night showed: 1,836 citations undated because the
+    loop never asked a publisher, and 2,320 last read by a superseded prompt
+    because nothing re-read them."""
+    text = SCRIPT.read_text(encoding="utf-8")
+    assert "DATES=150\n" in text and "REREAD=60\n" in text
+    assert 'tracker backfill dates --apply --refetch --yes --limit "$DATES"' in text
+    assert "tracker ingest crawl --stale-prompt --cached-only --existing-only" in text
+    reread = text.index('phase "reread')
+    assert text.rfind('if [ "$round" -eq 1 ] && [ "$REREAD" -gt 0 ]', 0, reread) != -1

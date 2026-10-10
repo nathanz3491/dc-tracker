@@ -196,7 +196,11 @@ the crawl's identity check (`ingest crawl --from-queue --new-first`). Everything
 published within the email's two-month window goes first, newest first, so what the
 email reports is days old rather than weeks; then articles naming no tracked campus.
 Enrich reads for one row and creates none, so without this step nothing in the loop
-added a campus.
+added a campus. The first round also asks publishers for the dates of up to 150
+undated articles (`--dates`; one plain request each, newest first, never the same page
+twice in 90 days), and re-reads up to 60 cached articles that an older extraction
+prompt last read (`--reread`, about ¥0.8), so a tightened gate reaches rows written
+before it.
 A round counts as progress only when a count falls below the lowest it has been that
 night, so counts that wobble up and back down end the night instead of prolonging
 it. The per-item judgements run at `high` effort (`--judgement-effort`), or on the
