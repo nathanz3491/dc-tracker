@@ -298,3 +298,70 @@ def test_a_preview_copies_nothing(session):
     report = dates.run(session, apply=False)
     assert report.citations == 1
     assert session.scalar(select(Source)).published_at is None
+
+
+# --- asking a publisher once, not every night (migration 0035) --------------------
+
+
+def test_a_page_that_stated_no_date_is_not_asked_again_for_ninety_days(session):
+    """500 of the undated citations were Census data pages that will never state a
+    date; a nightly loop with --refetch would spend its whole limit on them."""
+    from tracker.models import DateProbe
+
+    cited(session, "https://www.census.gov/table/one")
+    fetcher = FakeFetcher(
+        {
+            "https://www.census.gov/table/one": FetchResult(
+                "https://www.census.gov/table/one", True, markdown="t"
+            )
+        }
+    )
+    first = dates.run(session, refetch=True, apply=True, fetcher=fetcher)
+    assert first.unanswered == 1
+    [probe] = session.scalars(select(DateProbe)).all()
+    assert probe.outcome == "none"
+
+    second = dates.run(session, refetch=True, apply=True, fetcher=fetcher)
+    assert second.skipped_recent == 1
+    assert fetcher.calls == ["https://www.census.gov/table/one"], "asked once"
+
+    probe.asked_at = probe.asked_at - dt.timedelta(days=dates.NO_DATE_RETRY_DAYS + 1)
+    session.flush()
+    dates.run(session, refetch=True, apply=True, fetcher=fetcher)
+    assert len(fetcher.calls) == 2, "asked again once the wait is over"
+
+
+def test_a_failed_request_waits_a_fortnight_not_a_season(session):
+    from tracker.models import DateProbe
+
+    cited(session, "https://y.test/opaque")
+    fetcher = FakeFetcher({})
+    dates.run(session, refetch=True, apply=True, fetcher=fetcher)
+    [probe] = session.scalars(select(DateProbe)).all()
+    assert probe.outcome == "failed"
+    asked = len(fetcher.calls)  # the fetch layer retries a failure; count requests per run
+    assert dates.run(session, refetch=True, apply=True, fetcher=fetcher).skipped_recent == 1
+    assert len(fetcher.calls) == asked
+
+    probe.asked_at = probe.asked_at - dt.timedelta(days=dates.FAILED_RETRY_DAYS + 1)
+    session.flush()
+    dates.run(session, refetch=True, apply=True, fetcher=fetcher)
+    assert len(fetcher.calls) > asked
+
+
+def test_the_newest_pages_are_asked_first(session):
+    """The memory stops a capped run re-asking the same pages, so the order can
+    serve the email: a new article's date decides whether it is news."""
+    queued(session, "https://y.test/old", seen=NOW - dt.timedelta(days=30))
+    queued(session, "https://y.test/new", seen=NOW)
+    fetcher = FakeFetcher({})
+    dates.run(session, refetch=True, limit=1, apply=True, fetcher=fetcher)
+    assert set(fetcher.calls) == {"https://y.test/new"}
+
+
+def test_a_preview_remembers_nothing(session):
+    from tracker.models import DateProbe
+
+    cited(session, "https://y.test/opaque")
+    dates.run(session, refetch=True, apply=False, fetcher=FakeFetcher({}))
+    assert session.scalars(select(DateProbe)).all() == []

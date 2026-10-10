@@ -48,10 +48,19 @@ from sqlalchemy.orm import Session
 
 from tracker.config import Settings, get_settings
 from tracker.ingest.fetch import Fetcher, date_from_url, fetch_all
-from tracker.models import IngestUrl, Source
+from tracker.models import DateProbe, IngestUrl, Source, utcnow
 from tracker.vocab import PENDING_URL_STATUS
 
 log = logging.getLogger(__name__)
+
+#: Days a page that answered with no date is left alone before it is asked again.
+#: Most never will state one — a Census data page, a facility directory — and
+#: asking them nightly spent the whole `--limit` on the same pages. Migration 0035.
+NO_DATE_RETRY_DAYS = 90
+
+#: Days a failed request waits. Shorter: a timeout or a 503 is more often a bad
+#: night at the publisher than a refusal.
+FAILED_RETRY_DAYS = 14
 
 
 @dataclass
@@ -77,6 +86,10 @@ class DateReport:
     #: Still undated and not fetched — either `--refetch` was off, or the run hit
     #: `--limit`. What is left for the next pass.
     remaining: int = 0
+    #: Left out of this run's requests: asked recently (see `NO_DATE_RETRY_DAYS`),
+    #: or on a publisher that challenges every client, where a request can only fail.
+    skipped_recent: int = 0
+    skipped_closed: int = 0
     examples: list[tuple[str, dt.datetime, str]] = dc_field(default_factory=list)
 
     @property
@@ -91,6 +104,8 @@ class DateReport:
             ("dated from the page", self.from_page),
             ("fetched, no date stated", self.unanswered),
             ("fetch failed", self.failed),
+            ("asked recently, skipped", self.skipped_recent),
+            ("closed publisher, skipped", self.skipped_closed),
             ("rows written", self.written),
             ("citations dated", self.citations),
         ]
@@ -123,6 +138,52 @@ def undated_urls(session: Session, *, everything: bool = False) -> list[str]:
         backs_a_citation = select(Source.id).where(Source.url == IngestUrl.url).exists()
         stmt = stmt.where(backs_a_citation | (IngestUrl.status == PENDING_URL_STATUS))
     return list(session.scalars(stmt.order_by(IngestUrl.first_seen_at.asc(), IngestUrl.id.asc())))
+
+
+def _worth_asking(session: Session, urls: list[str], report: DateReport) -> list[str]:
+    """The URLs a request might actually date, newest first.
+
+    Two kinds are left out and counted. A page asked recently — it stated no date
+    (`NO_DATE_RETRY_DAYS`) or the request failed (`FAILED_RETRY_DAYS`) — because
+    asking again tomorrow gets the same answer. And a page on a publisher that
+    challenges every client (`discover.closed_domains`), because the request can
+    only fail.
+
+    **Newest first**, against the oldest-first order the backlog is listed in. The
+    memory above is what stops a capped run reconsidering the same pages, so the
+    order is free to serve the email instead: a recent article's date decides
+    whether it is news (`feed.reported_on`), and a 2019 one's decides only a tie.
+    """
+    from tracker.confidence import registrable_domain
+    from tracker.ingest import discover
+
+    now = utcnow()
+    recent: set[str] = set()
+    for url, outcome in session.execute(
+        select(DateProbe.url, DateProbe.outcome).where(
+            DateProbe.asked_at >= now - dt.timedelta(days=NO_DATE_RETRY_DAYS)
+        )
+    ):
+        if outcome == "none":
+            recent.add(url)
+    recent |= set(
+        session.scalars(
+            select(DateProbe.url).where(
+                DateProbe.outcome == "failed",
+                DateProbe.asked_at >= now - dt.timedelta(days=FAILED_RETRY_DAYS),
+            )
+        )
+    )
+    closed = discover.closed_domains(reopened=discover.reopened_names(session))
+    out: list[str] = []
+    for url in reversed(urls):
+        if url in recent:
+            report.skipped_recent += 1
+        elif registrable_domain(url) in closed:
+            report.skipped_closed += 1
+        else:
+            out.append(url)
+    return out
 
 
 def _store(session: Session, url: str, when: dt.datetime, *, apply: bool) -> bool:
@@ -235,6 +296,7 @@ def run(
         report.citations = _propagate(session, found, apply=apply)
         return report
 
+    still_undated = _worth_asking(session, still_undated, report)
     if limit:
         report.remaining = max(0, len(still_undated) - limit)
         still_undated = still_undated[:limit]
@@ -247,7 +309,11 @@ def run(
         fetch_all(still_undated, fetcher=fetcher, escalate=escalate, settings=settings)
     )
     report.fetched = len(results)
+    asked_at = utcnow()
     for result in results:
+        outcome = "failed" if not result.ok else "none" if result.published_at is None else "dated"
+        if apply:
+            session.add(DateProbe(url=result.url, asked_at=asked_at, outcome=outcome))
         if not result.ok:
             report.failed += 1
             continue
@@ -267,4 +333,4 @@ def run(
     return report
 
 
-__all__ = ["DateReport", "run", "undated_urls"]
+__all__ = ["FAILED_RETRY_DAYS", "NO_DATE_RETRY_DAYS", "DateReport", "run", "undated_urls"]

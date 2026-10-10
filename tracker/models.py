@@ -952,6 +952,22 @@ class FeedProbe(Base):
     )
 
 
+class DateProbe(Base):
+    """One request for an article's publish date. See migration 0035 and `dates.run`."""
+
+    __tablename__ = "date_probe"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    url: Mapped[str] = mapped_column(Text, nullable=False)
+    asked_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False)
+    outcome: Mapped[str] = mapped_column(Text, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("outcome IN ('dated', 'none', 'failed')", name="ck_date_probe_outcome"),
+        Index("ix_date_probe_url", "url", "asked_at"),
+    )
+
+
 class NotifyRun(Base):
     """One `tracker notify send`. `finished_at` NULL after the fact means it died."""
 

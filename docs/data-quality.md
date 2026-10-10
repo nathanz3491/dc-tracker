@@ -715,6 +715,16 @@ tracker backfill dates --apply              # write those
 tracker backfill dates --refetch --apply    # ask the publishers too
 ```
 
+`--refetch` remembers what it asked (migration 0035, `date_probe`): a page that
+answered with no date is not asked again for 90 days, a failed request for 14, and a
+publisher that challenges every client is not asked at all. Without that memory a
+capped run asked the same pages every time — 500 of the undated citations are
+census.gov tables that will never state a date. It asks the newest pages first,
+because a recent article's date is what decides whether it is news. The nightly loop
+runs it in its first round, 150 pages a night (`overnight.sh --dates`); on a copy of
+production 5 of the first 40 came back dated, among them articles from the previous
+three weeks.
+
 It only considers URLs where a date changes something. Two things read the column
 — `upsert._published_at` for a URL backing a citation, and `crawl.published_dates`
 for one still queued — and of 5,552 undated rows only **1,778** are either. The
