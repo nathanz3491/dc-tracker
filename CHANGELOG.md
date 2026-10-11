@@ -57,9 +57,15 @@ initial build of the v1 PRD.
   `news.google.com` disallows `/rss/search`. Those two feeds now ask Serper's news
   API instead (`news_search` in `seed/feeds.toml`, `SerperProvider.news`,
   `discover.news_headlines`). That's a paid API, not a crawled page, at about $0.007 a
-  night for five pages of DCD headlines and two of DCF. Each headline is still
-  looked up once and only readable copies are queued. A name search returned ten
-  dated DCD stories a page; `site:` returns profile pages, so it is not used.
+  night. It runs two searches over the past week: the news endpoint by the
+  publisher's name, and the web endpoint on `site:datacenterdynamics.com/en/news`,
+  which found 11 on-topic stories the news index had skipped. Each headline is
+  still looked up once, and only readable copies are queued. Measured on
+  2026-10-11: 22 on-topic DCD headlines and about 15 real copies from 20 lookups.
+  DCF is thin in Google's index, with nothing on topic that week. Sponsored pieces,
+  studio segments and job lists are dropped. A lead must share two words with the
+  headline in its own title, not just its snippet. Company-profile stubs are
+  skipped.
 
 - **The relief map reads at a glance instead of being three towers.** Columns
   are flat-topped, one width band, and grow with the square root of capacity

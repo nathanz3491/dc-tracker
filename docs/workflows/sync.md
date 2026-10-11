@@ -149,13 +149,32 @@ from Google News's RSS search. When every fetch began asking `robots.txt` first
 crawlers. A feed with `news_search = "<query>"` in place of a URL is asked through
 Serper's news endpoint instead (`SerperProvider.news`, `discover.search_news`). That
 is an API this project pays for, about $0.001 a page of ten, not a page a
-`robots.txt` governs. It asks for the last week, searched by the publisher's
-name, because a `site:` query returns profile and directory pages, undated. DCD
-gets five pages a night and DCF two, about $0.007 a night before lookups. A result
-is kept only when its link is the publisher's own (`discover.news_headlines`). The
-link is recorded as the `skipped` headline row, in place of Google's.
-On 2026-10-11 a name search returned ten DCD stories a page, all dated within the
-week. If DCD or DCF reopens, its `skipped` headline rows need requeuing, because
+`robots.txt` governs. It runs two kinds of query, each limited to the past week (`news_search` and
+`web_search`, unioned by `discover.search_news`):
+
+- **The news endpoint, by the publisher's name.** A `site:` query there returns
+  profile and directory pages, undated.
+- **The web endpoint, with `site:` on the news section** (`SerperProvider.recent`).
+  This finds stories the news index skips.
+
+Measured on 2026-10-11: DCD's name gave 15 on-topic headlines in five pages, and
+`/en/news` gave 11 in three, with little overlap. DCF was thin in both, with nothing
+on topic that week, so it gets one page of each. That comes to about $0.01 a night
+before lookups.
+
+A result is kept only when its link is the publisher's own and not under
+`/sponsored/` (`discover.news_headlines`). The publisher's studio segments, job
+lists and "Global" round-ups are dropped with the surveys and polls. The link is
+recorded as the `skipped` headline row, in place of Google's.
+
+A lead's own title must share at least two of the headline's distinctive words
+(`TITLE_OVERLAP`), whatever its snippet says. On the first measurement, a page
+titled "The WA-AIR Room" matched two unrelated headlines through its snippet alone.
+Company-profile stubs (CB Insights, Dealroom and similar) and Muck Rack are never
+leads.
+
+Measured end to end that night: 22 on-topic DCD headlines; 20 looked up gave 20
+leads, about 15 of them real copies after these rules. If DCD or DCF reopens, its `skipped` headline rows need requeuing, because
 they were recorded as headlines and never handed to the crawl.
 
 A `[[feed]]` with `headlines_of = "<site>"` lists another publisher's articles —

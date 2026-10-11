@@ -130,12 +130,22 @@ class FeedSpec:
     #: back to a page we cannot read, so each headline is looked up elsewhere
     #: instead of queued. See :func:`follow_headlines`.
     headlines_of: str | None = None
-    #: A query for a news-search API, in place of a URL to fetch: a feed of
+    #: Queries for a news-search API, in place of a URL to fetch: a feed of
     #: `headlines_of`'s articles when neither its site nor Google News's RSS will
-    #: let us read them. See :func:`news_headlines`.
-    news_search: str | None = None
-    #: Result pages to ask for, ten headlines each.
+    #: let us read them. See :func:`search_news`.
+    news_search: tuple[str, ...] = ()
+    #: Result pages to ask for per news query, ten headlines each.
     news_pages: int = 1
+    #: Web-search queries over the last week, for the same purpose:
+    #: `site:<publisher>/<news section>` finds stories the news index skipped.
+    web_search: tuple[str, ...] = ()
+    #: Result pages per web query.
+    web_pages: int = 1
+
+    @property
+    def searched(self) -> bool:
+        """Whether this feed is asked through a search API rather than fetched."""
+        return bool(self.news_search or self.web_search)
 
 
 #: The reason recorded for `closed = true`, which says that an entry is closed and
@@ -298,16 +308,22 @@ def load_config(path: Path | None = None) -> tuple[list[FeedSpec], FilterSpec]:
     feeds = [
         FeedSpec(
             name=str(entry.get("name") or entry.get("url", "?")),
-            url=str(entry.get("url") or _news_url(str(entry["news_search"]))),
+            url=str(
+                entry.get("url")
+                or _news_url(_queries(entry, "news_search") + _queries(entry, "web_search"))
+            ),
             source_type=str(entry.get("source_type") or "general_media"),
             topic_implied=bool(entry.get("topic_implied", False)),
             closed=_closed_reason(entry),
             headlines_of=str(entry["headlines_of"]) if entry.get("headlines_of") else None,
-            news_search=str(entry["news_search"]) if entry.get("news_search") else None,
+            news_search=_queries(entry, "news_search"),
             news_pages=max(1, int(entry.get("news_pages", 1))),
+            web_search=_queries(entry, "web_search"),
+            web_pages=max(1, int(entry.get("web_pages", 1))),
         )
         for entry in raw_feeds
-        if entry.get("url") or (entry.get("news_search") and entry.get("headlines_of"))
+        if entry.get("url")
+        or ((entry.get("news_search") or entry.get("web_search")) and entry.get("headlines_of"))
     ]
 
     raw_filter = data.get("filter") or {}
@@ -1591,6 +1607,9 @@ LEADS_PER_HEADLINE = 2
 #: shares a third or less.
 SAME_STORY_OVERLAP = 0.5
 
+#: Headline words a result's own title must share, whatever its snippet says.
+TITLE_OVERLAP = 2
+
 _WORD = re.compile(r"[a-z0-9]+")
 _STOPWORDS = frozenset(
     [
@@ -1636,9 +1655,17 @@ def _story_words(text: str) -> frozenset[str]:
 
 
 def same_story(headline: str, title: str, snippet: str = "") -> bool:
-    """Whether a search result is plausibly the headline's own story."""
+    """Whether a search result is plausibly the headline's own story.
+
+    Most of the headline's words have to appear in the title and snippet together,
+    and at least `TITLE_OVERLAP` of them in the title itself. The second rule is
+    what stops a page whose snippet happens to carry the headline: on 2026-10-11,
+    "The WA-AIR Room" matched two unrelated DCD headlines on its snippet alone.
+    """
     wanted = _story_words(headline)
     if not wanted:
+        return False
+    if len(wanted & _story_words(title)) < min(TITLE_OVERLAP, len(wanted)):
         return False
     found = _story_words(f"{title} {snippet}")
     return len(wanted & found) / len(wanted) >= SAME_STORY_OVERLAP
@@ -1672,7 +1699,8 @@ _CAPACITY = re.compile(r"\b\d+(?:\.\d+)?\s?[GM]W\b", re.I)
 #: topic test and are never a project: on 2026-10-07 "DCD Survey: Data center
 #: construction" led to a 2023 report and "DCF Poll: ..." to an opinion piece.
 _NOT_NEWS = re.compile(
-    r"^(?:DCD|DCF)\s+(?:Survey|Poll|Podcast|Webinar|Broadcast|Awards?)\b"
+    r"^(?:DCD|DCF)\s*(?:>\s*)?(?:Survey|Poll|Podcast|Webinar|Broadcast|Awards?|Studio|Talks?|Global)\b"
+    r"|^Data Center Jobs\b"
     r"|\b(?:sponsored|webinar|whitepaper|podcast)\b",
     re.I,
 )
@@ -1726,7 +1754,13 @@ def parse_headlines(xml: str, feed: FeedSpec) -> list[Candidate]:
     return out[:MAX_PER_FEED]
 
 
-def _news_url(query: str) -> str:
+def _queries(entry: dict[str, Any], key: str) -> tuple[str, ...]:
+    """A feed's search queries: one string or a list of them."""
+    value = entry.get(key) or ()
+    return (str(value),) if isinstance(value, str) else tuple(str(v) for v in value)
+
+
+def _news_url(queries: tuple[str, ...]) -> str:
     """A stable name for a news-search feed, where the others have their URL.
 
     Never requested: a news-search feed is asked through the search API's client,
@@ -1734,7 +1768,7 @@ def _news_url(query: str) -> str:
     """
     from urllib.parse import quote
 
-    return f"https://google.serper.dev/news?q={quote(query)}"
+    return f"https://google.serper.dev/news?q={quote(' | '.join(queries))}"
 
 
 _AGO = re.compile(r"^(\d+)\s+(minute|hour|day|week|month)s?\s+ago$", re.I)
@@ -1775,7 +1809,7 @@ def news_headlines(
     wanted = registrable_domain(f"https://{feed.headlines_of}")
     out: list[Candidate] = []
     for hit in hits:
-        if registrable_domain(hit.url) != wanted:
+        if registrable_domain(hit.url) != wanted or "/sponsored/" in hit.url:
             continue
         title = hit.title.strip()
         for outlet in filter(None, (hit.source.strip(), "Data Center Frontier", "DCD")):
@@ -1798,17 +1832,25 @@ def news_headlines(
 
 
 def search_news(feed: FeedSpec, provider: Any) -> list[Candidate]:
-    """Every page of one news-search feed, as headlines. Raises `SearchError`."""
+    """Every page of every query of one searched feed, as headlines, each once.
+
+    News queries go to the news endpoint, web queries to the web endpoint limited to
+    the last week. A page with nothing on it ends that query. Raises `SearchError`.
+    """
     seen: set[str] = set()
     out: list[Candidate] = []
-    for page in range(1, feed.news_pages + 1):
-        hits = provider.news(feed.news_search, page=page)
-        if not hits:
-            break
-        for candidate in news_headlines(hits, feed):
-            if candidate.url not in seen:
-                seen.add(candidate.url)
-                out.append(candidate)
+    plan = [(provider.news, q, feed.news_pages) for q in feed.news_search] + [
+        (provider.recent, q, feed.web_pages) for q in feed.web_search
+    ]
+    for ask, query, pages in plan:
+        for page in range(1, pages + 1):
+            hits = ask(query, page=page)
+            if not hits:
+                break
+            for candidate in news_headlines(hits, feed):
+                if url_identity(candidate.url) not in seen:
+                    seen.add(url_identity(candidate.url))
+                    out.append(candidate)
     return out
 
 
@@ -1946,8 +1988,8 @@ def run(
 
     from tracker.ingest.fetch import fetch_all
 
-    searched = [f for f in feeds if f.news_search]
-    feeds = [f for f in feeds if not f.news_search]
+    searched = [f for f in feeds if f.searched]
+    feeds = [f for f in feeds if not f.searched]
     results = asyncio.run(
         fetch_all(
             [f.url for f in feeds], fetcher=fetcher or _RawFetcher(settings), settings=settings
@@ -2031,7 +2073,7 @@ def _poll_news(
     """
     from tracker.ingest.search import SearchError, SerperProvider
 
-    if provider is None or not hasattr(provider, "news"):
+    if provider is None or not hasattr(provider, "recent"):
         try:
             provider = SerperProvider()
         except SearchError as exc:

@@ -129,23 +129,30 @@ source_type = "trade_press"
 # Until 2026-10-11 the search was Google News's RSS, until every fetch began asking
 # robots.txt first: news.google.com disallows /rss/search for crawlers. It is now
 # Serper's news API (`news_search`), which this project pays for, about $0.001 a
-# page, rather than a page a robots.txt governs. A week's results, searched by the
-# publisher's name, because `site:` returns its profile and directory pages,
-# undated. DCD publishes a few dozen stories a day, so it gets five pages of ten a
-# night; DCF's week fits on two.
+# page, rather than a page a robots.txt governs. Two kinds of query, a week each:
+# the news endpoint searched by the publisher's name (`site:` there returns profile
+# and directory pages, undated), and the web endpoint searched with `site:` on the
+# news section, which finds stories the news index skips. Measured on 2026-10-11:
+# DCD's name gave 15 on-topic headlines in five pages, `/en/news` 11 in three, with
+# little overlap. DCF is thin in both indexes (nothing on topic that week), so it
+# gets one cheap page of each. About $0.01 a night before lookups.
 
 [[feed]]
 name = "datacenterdynamics-headlines"
 headlines_of = "datacenterdynamics.com"
 news_search = '"Data Center Dynamics"'
 news_pages = 5
+web_search = "site:datacenterdynamics.com/en/news"
+web_pages = 3
 source_type = "trade_press"
 
 [[feed]]
 name = "datacenterfrontier-headlines"
 headlines_of = "datacenterfrontier.com"
 news_search = '"Data Center Frontier"'
-news_pages = 2
+news_pages = 1
+web_search = "site:datacenterfrontier.com"
+web_pages = 1
 source_type = "trade_press"
 
 [[feed]]

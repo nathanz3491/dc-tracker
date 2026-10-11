@@ -1742,6 +1742,10 @@ class FakeNews(FakeSearch):
         rows = self.pages[page - 1] if page <= len(self.pages) else []
         return [SearchHit(url=u, title=t, date=d, source=s, query=query) for u, t, d, s in rows]
 
+    def recent(self, query, *, page=1, window="qdr:w"):
+        self.news_calls.append((query, page))
+        return []
+
 
 _DCD_PAGE = [
     (
@@ -1879,3 +1883,86 @@ def test_serper_news_asks_the_news_endpoint_for_a_week(monkeypatch):
     assert sent["url"] == search.SerperProvider.NEWS_ENDPOINT
     assert sent["body"]["tbs"] == "qdr:w" and sent["body"]["page"] == 2
     assert (hit.date, hit.source) == ("1 day ago", "D")
+
+
+def test_sponsored_pieces_and_studio_segments_are_not_headlines():
+    from tracker.ingest.search import SearchHit
+
+    feed = discover.FeedSpec("n", "https://x", headlines_of="datacenterdynamics.com")
+    hits = [
+        SearchHit(
+            url="https://www.datacenterdynamics.com/en/news/a/",
+            title="Crusoe plans 1GW campus - DCD",
+        ),
+        SearchHit(
+            url="https://www.datacenterdynamics.com/en/sponsored/b/",
+            title="Why 1GW campuses need cooling",
+        ),
+        SearchHit(
+            url="https://www.datacenterdynamics.com/en/c/",
+            title="DCD Studio: Permitting for Edge sites",
+        ),
+        SearchHit(
+            url="https://www.datacenterdynamics.com/en/d/",
+            title="Data Center Jobs: Engineering, Construction",
+        ),
+    ]
+    assert [c.title for c in discover.news_headlines(hits, feed)] == ["Crusoe plans 1GW campus"]
+
+
+def test_a_searched_feed_unions_its_news_and_web_queries_once_each(tmp_path: Path):
+    from tracker.ingest.search import SearchHit
+
+    feed = discover.FeedSpec(
+        "n",
+        "https://x",
+        headlines_of="datacenterdynamics.com",
+        news_search=("q-news",),
+        news_pages=2,
+        web_search=("q-web",),
+        web_pages=1,
+    )
+    same = "https://www.datacenterdynamics.com/en/news/a/"
+
+    class Both:
+        def __init__(self):
+            self.calls: list[tuple[str, str, int]] = []
+
+        def news(self, query, *, page=1):
+            self.calls.append(("news", query, page))
+            return [SearchHit(url=same, title="A 1GW campus")] if page == 1 else []
+
+        def recent(self, query, *, page=1):
+            self.calls.append(("web", query, page))
+            return [
+                SearchHit(url=same, title="A 1GW campus - DCD"),
+                SearchHit(
+                    url="https://www.datacenterdynamics.com/en/news/b/", title="B 2GW campus"
+                ),
+            ]
+
+    provider = Both()
+    found = discover.search_news(feed, provider)
+    assert [c.url for c in found] == [same, "https://www.datacenterdynamics.com/en/news/b/"]
+    assert provider.calls == [("news", "q-news", 1), ("news", "q-news", 2), ("web", "q-web", 1)]
+
+
+def test_company_profile_stubs_are_never_leads():
+    from tracker.ingest.search import is_useful_host
+
+    assert not is_useful_host("https://www.cbinsights.com/company/airtrunk")
+    assert not is_useful_host("https://app.dealroom.co/companies/terawulf")
+
+
+def test_a_result_matching_only_in_its_snippet_is_not_the_same_story():
+    headline = "Council rejects 80MW data center in northern Italy"
+    assert not discover.same_story(
+        headline,
+        "The WA-AIR Room",
+        "Council rejects 80MW data center in northern Italy, citing water",
+    )
+    assert discover.same_story(
+        headline,
+        "Council in northern Italy rejects 80MW data center, citing water",
+        "",
+    )

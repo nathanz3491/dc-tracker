@@ -171,6 +171,19 @@ _SKIP_DOMAINS = (
     "zillow.com",
     "loopnet.com",
     "crunchbase.com",
+    # Company-profile stubs: a name, a funding table and a scraped blurb. On the
+    # first night of DCD headline lookups (2026-10-11) two of seventeen leads were
+    # these, each matching a headline only through the company's name.
+    "cbinsights.com",
+    "dealroom.co",
+    "pitchbook.com",
+    "zoominfo.com",
+    "tracxn.com",
+    "craft.co",
+    "owler.com",
+    # A directory of journalists: its page for a publication is titled with the
+    # publication's name and matches that publication's headlines.
+    "muckrack.com",
     "datacentermap.com",
     "baxtel.com",
     # Chinese portals and UGC platforms. They repost and translate US coverage
@@ -547,6 +560,30 @@ class SerperProvider:
                 source=str(item.get("source") or ""),
             )
             for item in _items(payload.get("news"))
+            if item.get("link")
+        ]
+
+    def recent(self, query: str, *, page: int = 1, window: str = "qdr:w") -> list[SearchHit]:
+        """Web results for `query` from the last week, dated, ten a page.
+
+        The other half of a publisher's headlines. `site:datacenterdynamics.com/en/news`
+        through the web endpoint returned 30 dated DCD stories on 2026-10-11, eleven of
+        them on topic and several the news endpoint had not listed.
+        """
+        response = self._post(
+            self.ENDPOINT,
+            {"q": query, "num": 10, "gl": "us", "hl": "en", "tbs": window, "page": page},
+        )
+        payload = _payload(response, "Serper")
+        return [
+            SearchHit(
+                url=item.get("link", ""),
+                title=item.get("title", ""),
+                snippet=item.get("snippet", ""),
+                query=query,
+                date=str(item.get("date") or ""),
+            )
+            for item in _items(payload.get("organic"))
             if item.get("link")
         ]
 
