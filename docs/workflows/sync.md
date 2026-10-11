@@ -143,6 +143,14 @@ from two networks and from a browser.
 
 ## Headlines from a publisher we cannot read
 
+**Closed since 2026-10-11.** Every fetch now asks the site's `robots.txt` first
+(`tracker/robots.py`), and `news.google.com/robots.txt` disallows `/rss/search` for
+crawlers. Both headline feeds are therefore marked `closed` in `seed/feeds.toml`.
+The weekly check asks them again, and it costs one read of that `robots.txt` and
+no search request. The route below stays in the code for a headline source that
+permits us; Serper's news search, which is an API we pay for rather than a page we
+crawl, is the obvious candidate.
+
 A `[[feed]]` with `headlines_of = "<site>"` lists another publisher's articles —
 Google News's RSS search for datacenterdynamics.com and datacenterfrontier.com, the
 two most-cited sources before they closed. Its links lead back to the blocked page,
@@ -164,6 +172,18 @@ Bisnow is the other kind of failure. Its data-center feed went away when the sit
 was rebuilt — `/rss/data-center` now redirects to a 404 — so that entry was
 replaced rather than closed, by `bisnow-latest`: the one feed it still serves, the
 nine newest stories across every market.
+
+## Every request asks robots.txt first
+
+The feed client, the article clients and the browser all ask the site's
+`robots.txt` before they request a page (`tracker/robots.py`). It is read the RFC 9309
+way: a 4xx means no file and nothing disallowed, and a 5xx or no answer means nothing
+is fetched for half an hour. A file that was read is kept for a day per process. A
+disallowed page comes back as a failed fetch with `via = "robots"`, and no request is
+made. It is not retried and not escalated, because a stronger client would get the
+same answer. `Crawl-delay` stretches the gap between two requests to one host, up to
+60 seconds. On 2026-10-11, 43 of the 45 open feeds and sitemaps were permitted; the
+two refused were the Google News headline feeds above.
 
 ## Where the queued rows come from
 
@@ -407,6 +427,7 @@ Touching any of these means the poster is in scope. Re-render with
 | Discover, archives, search | `tracker/ingest/discover.py` — `run`, `load_config`, `load_sitemaps`, `sweep_sitemaps`, `queue_candidates`; `tracker/ingest/search.py`; `tracker/normalize.py` — `canonical_url`, `url_identity`, `url_variants`; `tracker/backfill.py` — `repair_urls` |
 | Closed feeds, and naming a challenge | `tracker/seed/feeds.toml` — `closed`; `tracker/ingest/discover.py` — `FeedSpec.closed`, `SitemapSpec.closed`, `_closed_reason`, `DiscoverReport.closed`, `_RawFetcher`, `CHALLENGE_NOTE`; `tracker/ingest/probe.py` — `configured_hosts` |
 | The weekly check of closed entries | `tracker/ingest/discover.py` — `probe_closed`, `record_probe`, `reopened_names`, `without_reopened`, `PROBE_EVERY`; migration `0034_feed_probe`; `tracker/cli/sync.py` — `discover --probe-closed` |
+| Asking robots.txt before every request | `tracker/robots.py` — `allowed`, `allowed_async`, `interpret`, `crawl_delay`; `tracker/ingest/fetch.py` — `permitted`, `refused`, `fetch_with_retry`, `should_escalate`, `fetch_all`; `tracker/ingest/discover.py` — `_RawFetcher`; `tracker/config.py` — `respect_robots` |
 | Headlines-only feeds | `tracker/seed/feeds.toml` — `headlines_of`; `tracker/ingest/discover.py` — `parse_headlines`, `follow_headlines`, `same_story`, `copies_headline`, `MAX_HEADLINE_LOOKUPS` |
 | Pages nothing can read go last | `tracker/ingest/discover.py` — `closed_domains`, `unreadable_test`, `readable_first`, `pending(unreadable=)`, `retryable(unreadable=)`; `tracker/ingest/crawl.py` — `stale_sources(unreadable=)`; `tracker/cli/sync.py` — `sync` (extract, retry fill, refresh); `tracker/cli/ingest.py` — `crawl --from-queue`; `tracker/ingest/enrich.py` — `run` |
 | What search looks for | `tracker/ingest/search.py` — `_PLACE_TEMPLATES`, `rank_places`, `plan_queries`, `PlannedQuery.label`, `templates`; `tracker/normalize.py` — `state_name` |

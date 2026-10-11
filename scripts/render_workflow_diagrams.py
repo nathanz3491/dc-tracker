@@ -514,7 +514,7 @@ def sync() -> Canvas:
     c.section(48, 454, "where the rows come from", "three phases end in one queue, and one gate stands between the queue and a new row")
 
     feeds = c.box(48, 500, 176, 62, "Feeds", ["what was published lately;", "a closed one, asked weekly"], role="cool", title_size=11.5)
-    search = c.box(48, 574, 176, 62, "Search", ["a place and an event, or", "a headline we cannot read"], role="orange", title_size=11.5)
+    search = c.box(48, 574, 176, 62, "Search", ["a place and an event, or", "a headline (closed: robots.txt)"], role="orange", title_size=11.5)
     roster = c.box(48, 648, 176, 62, "Roster", ["who we hold no rows for"], role="cool", title_size=11.5)
     archives = c.box(48, 722, 176, 62, "Archives (--deep)", ["sitemaps, no key needed;", "a closed one is not walked"], role="cool", title_size=11.5)
 
@@ -552,6 +552,12 @@ def sync() -> Canvas:
         role="orange2", title_size=12,
     )
 
+    c.text(
+        48, 804,
+        "Every request, whether feed, sitemap or article, asks the site's robots.txt first and honours its Crawl-delay "
+        "(tracker/robots.py). A disallowed page is not fetched, retried or escalated.",
+        size=10.5, colour=SLATE,
+    )
     c.text(
         48, 826,
         "Not this command: scripts/sync_db.py moves the database file between machines. It shares only the word. See docs/workflows/sync.md.",

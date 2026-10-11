@@ -38,6 +38,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from tracker import robots
 from tracker.config import Settings, get_settings
 from tracker.models import utcnow
 
@@ -83,6 +84,20 @@ class FetchResult:
 
 class Fetcher(Protocol):
     async def fetch(self, url: str) -> FetchResult: ...
+
+
+def refused(url: str) -> FetchResult:
+    """The result of a fetch `robots.txt` did not permit: no request was made."""
+    return FetchResult(
+        url, False, error=robots.REFUSED, fetched_at=utcnow(), via=robots.VIA, attempts=0
+    )
+
+
+async def permitted(url: str, settings: Settings, get: robots.AsyncGetter) -> bool:
+    """Whether this project may fetch `url`, asking the site's `robots.txt` through `get`."""
+    if not settings.respect_robots:
+        return True
+    return await robots.allowed_async(url, settings.user_agent, get)
 
 
 # --- Publication date -------------------------------------------------------
@@ -370,7 +385,17 @@ class HttpxFetcher:
             await self._pool.aclose()
             self._pool = None
 
+    async def _get(self, url: str) -> tuple[int | None, str]:
+        try:
+            async with self._client() as client:
+                response = await client.get(url)
+        except (httpx.RequestError, httpx.InvalidURL):
+            return None, ""
+        return response.status_code, response.text
+
     async def fetch(self, url: str) -> FetchResult:
+        if not await permitted(url, self.settings, self._get):
+            return refused(url)
         try:
             async with self._client() as client:
                 response = await client.get(url)
@@ -478,6 +503,8 @@ class CurlCffiFetcher:
         except ImportError as exc:
             raise MissingDependency(_MISSING_CURL_CFFI) from exc
 
+        if not await permitted(url, self.settings, lambda u: _get_text(u, self.settings)):
+            return refused(url)
         headers = {
             "User-Agent": self.settings.user_agent,
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -622,6 +649,8 @@ class Crawl4AIFetcher:
     async def fetch(self, url: str) -> FetchResult:
         if self._crawler is None:
             raise RuntimeError("Crawl4AIFetcher must be used as an async context manager")
+        if not await permitted(url, self.settings, lambda u: _get_text(u, self.settings)):
+            return refused(url)
         from crawl4ai import CacheMode, CrawlerRunConfig
 
         try:
@@ -968,6 +997,9 @@ async def fetch_with_retry(
         made = attempt
         if last.ok:
             return FetchResult(**{**last.__dict__, "attempts": made})
+        if last.via == robots.VIA:
+            # No request was made, and asking again gets the same file's answer.
+            return last
         if last.status in HARD_FAIL_STATUS or last.status in BROWSER_WORTHY_STATUS:
             break  # retrying the same tool will not help; escalate instead
         if last.status is not None and last.status not in RETRYABLE_STATUS:
@@ -995,6 +1027,8 @@ def should_escalate(result: FetchResult) -> bool:
     """
     if result.via in ("playwright", "crawl4ai"):
         return False  # a browser is the top rung; nothing left to escalate to
+    if result.via == robots.VIA:
+        return False  # the site said no; a stronger client is not a different answer
     if result.status in BROWSER_WORTHY_STATUS:
         return True
     return result.ok and result.looks_thin
@@ -1151,8 +1185,12 @@ async def fetch_all(
                 result = FetchResult(
                     url, False, error=f"{type(exc).__name__}: {exc}", fetched_at=utcnow()
                 )
-            if settings.politeness_delay_s:
-                await asyncio.sleep(settings.politeness_delay_s)
+            # The project's own gap, or the site's `Crawl-delay` when that is longer.
+            pause = settings.politeness_delay_s
+            if settings.respect_robots:
+                pause = max(pause, robots.crawl_delay(url, settings.user_agent))
+            if pause and result.via != robots.VIA:
+                await asyncio.sleep(pause)
             return result
 
     # dict.fromkeys dedupes while preserving order, so a repeated URL in the

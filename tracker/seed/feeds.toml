@@ -132,12 +132,14 @@ source_type = "trade_press"
 
 [[feed]]
 name = "datacenterdynamics-headlines"
+closed = "2026-10-11: news.google.com/robots.txt disallows /rss/search for crawlers"
 headlines_of = "datacenterdynamics.com"
 url = "https://news.google.com/rss/search?q=site:datacenterdynamics.com+when:7d&hl=en-US&gl=US&ceid=US:en"
 source_type = "trade_press"
 
 [[feed]]
 name = "datacenterfrontier-headlines"
+closed = "2026-10-11: news.google.com/robots.txt disallows /rss/search for crawlers"
 headlines_of = "datacenterfrontier.com"
 url = "https://news.google.com/rss/search?q=%22Data+Center+Frontier%22+when:7d&hl=en-US&gl=US&ceid=US:en"
 source_type = "trade_press"

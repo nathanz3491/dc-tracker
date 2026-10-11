@@ -45,6 +45,8 @@ from tracker.ingest.fetch import (
     cache_path,
     html_to_text,
     parse_timestamp,
+    permitted,
+    refused,
 )
 from tracker.models import FeedProbe, IngestUrl, utcnow
 from tracker.normalize import canonical_url, norm_text, url_identity, url_variants
@@ -1943,9 +1945,31 @@ class _RawFetcher:
         self.settings = settings
         self._transport = transport
 
+    def _client(self, headers: dict[str, str]):
+        import httpx
+
+        return httpx.AsyncClient(
+            timeout=httpx.Timeout(self.settings.fetch_timeout_s, connect=10.0),
+            follow_redirects=True,
+            headers=headers,
+            transport=self._transport,
+        )
+
+    async def _get(self, url: str) -> tuple[int | None, str]:
+        import httpx
+
+        try:
+            async with self._client({"User-Agent": self.settings.user_agent}) as client:
+                response = await client.get(url)
+        except (httpx.RequestError, httpx.InvalidURL):
+            return None, ""
+        return response.status_code, response.text
+
     async def fetch(self, url: str) -> FetchResult:
         import httpx
 
+        if not await permitted(url, self.settings, self._get):
+            return refused(url)
         headers = {
             "User-Agent": self.settings.user_agent,
             "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml, */*",

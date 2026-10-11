@@ -247,6 +247,13 @@ def _fast_and_keyless_settings(monkeypatch, tmp_path_factory):
     # balance endpoint first, a request no test mocking one completion expects. The
     # tests about that check set it themselves.
     monkeypatch.setenv("TRACKER_RESERVE_WHEN", "empty")
+    # And no robots.txt check: the fake transports answer every path, including
+    # `/robots.txt`, with whatever page the test serves, and count the requests.
+    # `tests/test_robots.py` turns it back on.
+    monkeypatch.setenv("TRACKER_RESPECT_ROBOTS", "0")
+    from tracker import robots
+
+    robots.clear()
 
     get_settings.cache_clear()
     yield

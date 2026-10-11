@@ -128,10 +128,27 @@ def _icon_candidates(html: str, base: str) -> list[str]:
 def _fetch_logo(domain: str, user_agent: str, timeout: float) -> tuple[bytes, str] | None:
     import httpx
 
+    from tracker import robots
+    from tracker.config import get_settings
+
     headers = {"User-Agent": user_agent}
     base = f"https://{domain}/"
+    check = get_settings().respect_robots
     try:
         with httpx.Client(timeout=timeout, follow_redirects=True, headers=headers) as client:
+
+            def get(url: str) -> tuple[int | None, str]:
+                try:
+                    response = client.get(url)
+                except httpx.HTTPError:
+                    return None, ""
+                return response.status_code, response.text
+
+            def ok(url: str) -> bool:
+                return not check or robots.allowed(url, user_agent, get)
+
+            if not ok(base):
+                return None
             try:
                 page = client.get(base)
                 html = page.text if page.status_code < 400 else ""
@@ -139,7 +156,7 @@ def _fetch_logo(domain: str, user_agent: str, timeout: float) -> tuple[bytes, st
             except httpx.HTTPError:
                 html = ""
             for url in _icon_candidates(html, base):
-                if urlsplit(url).scheme not in ("http", "https"):
+                if urlsplit(url).scheme not in ("http", "https") or not ok(url):
                     continue
                 try:
                     got = client.get(url)

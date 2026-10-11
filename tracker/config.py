@@ -523,6 +523,9 @@ class Settings(BaseSettings):
     politeness_delay_s: float = Field(default=1.0, ge=0.0)
     fetch_timeout_s: float = Field(default=30.0, gt=0)
     user_agent: str = "dc-tracker/0.1 (+contact: set-me@example.com)"
+    #: Ask each site's `robots.txt` before fetching from it (`tracker/robots.py`).
+    #: Off only in the test suite, whose fake transports answer every path.
+    respect_robots: bool = True
     #: Exponential-backoff base for a retryable fetch failure. Set to 0 to disable
     #: waiting entirely, which is what the test suite does — otherwise a single
     #: simulated timeout costs several seconds of real sleep.

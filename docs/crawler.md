@@ -45,14 +45,25 @@ night, mostly between 18:00 and 08:00 China Standard Time (UTC+8).
 
 ## How it behaves
 
-- **One request at a time per site**, at least one second apart, and no more
-  than four in flight across all sites. Requests time out after 30 seconds.
+- **It reads `robots.txt` before it requests anything from a site**, and follows
+  it. That covers every request: articles, feeds, sitemaps, the date check, the
+  reader view and a company's site icon. A `User-agent: dc-tracker` group applies
+  to it, and so does `User-agent: *`. The file is read the way RFC 9309 says. A
+  4xx means there is no file, so nothing is disallowed. A 5xx or no answer means
+  the site cannot say, so nothing is fetched for half an hour, then it asks again.
+  A file that was read is kept for a day.
+- **`Crawl-delay` is honoured**, up to 60 seconds between two requests to the same
+  site. A longer delay is treated as 60, and on the few pages a night it reads from
+  any one site that is the same thing.
+- **One request at a time per site**, at least one second apart (or the site's
+  `Crawl-delay`), and no more than four in flight across all sites. Requests time
+  out after 30 seconds.
 - **Retries** happen only on transient errors (408, 425, 429, 5xx), at most three
   attempts with exponential backoff. It never retries 401, 402, 404, 410 or 451.
 - **On a 403, 429 or 503**, it may try the same page once more with a client
   that presents a browser's TLS handshake. It still sends the User-Agent above.
-  If a headless browser is enabled, that is tried last, and it reads
-  `robots.txt` first and stays out of anything disallowed.
+  If a headless browser is enabled, that is tried last. Neither is tried for a
+  page `robots.txt` disallows.
 - **A site that challenges every request is left alone.** If a site puts every
   page, its feed and its `robots.txt` behind a challenge, it is marked closed in
   `feeds.toml`. The crawler does not try to get past a challenge. A closed site
@@ -61,11 +72,6 @@ night, mostly between 18:00 and 08:00 China Standard Time (UTC+8).
   The console's reader view does not request them at all.
 - **Pages are cached.** An article that was read once is served from a local
   copy after that. The nightly jobs re-read that copy rather than the site.
-
-**Two honest gaps.** Only the headless-browser path parses `robots.txt` on every
-request. The plain client relies on the hand-kept list of sites in
-`feeds.toml`, and a site that asks to be excluded is removed from that list.
-`Crawl-delay` is not read; the fixed one-second gap per site applies instead.
 
 ## What it keeps
 

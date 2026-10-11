@@ -212,9 +212,15 @@ def _get(url: str) -> tuple[str, str]:
     fetch a publisher could not attribute to us — and the crawler's public page
     (`docs/crawler.md`) says every request carries the project's name.
     """
+    from tracker import robots
     from tracker.config import get_settings
 
-    headers = {"user-agent": get_settings().user_agent}
+    settings = get_settings()
+    headers = {"user-agent": settings.user_agent}
+    if settings.respect_robots and not robots.allowed(
+        url, settings.user_agent, lambda u: _robots_get(u, headers)
+    ):
+        return "", robots.REFUSED
     try:
         from curl_cffi import requests as creq
 
@@ -237,6 +243,17 @@ def _get(url: str) -> tuple[str, str]:
     except Exception as exc:
         log.warning("reader fetch of %s failed: %s", url, exc)
         return "", f"could not be fetched: {exc}"[:200]
+
+
+def _robots_get(url: str, headers: dict[str, str]) -> tuple[int | None, str]:
+    """`(status, body)` for a site's `robots.txt`, for `_get`'s check."""
+    import httpx
+
+    try:
+        response = httpx.get(url, timeout=10, follow_redirects=True, headers=headers)
+    except Exception:
+        return None, ""
+    return response.status_code, response.text
 
 
 #: `<meta charset>` in either spelling, within the head where it is required to be.

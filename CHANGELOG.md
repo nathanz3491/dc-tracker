@@ -41,6 +41,22 @@ initial build of the v1 PRD.
 
 ### Changed
 
+- **Every request asks the site's robots.txt first, and honours Crawl-delay**
+  (`tracker/robots.py`, `tracker/ingest/fetch.py`, `tracker/ingest/discover.py`,
+  `tracker/webui/article.py`, `tracker/company_logo.py`, `tracker/seed/feeds.toml`,
+  `tests/test_robots.py`, `docs/crawler.md`, `docs/workflows/sync.md`). Only the
+  headless-browser fallback used to ask. The plain clients, which make almost every
+  request, relied on a hand-kept site list, and the crawler's public page had to say
+  so in the same email that asks DCD and DCF for access. Now articles, feeds,
+  sitemaps, the date check, the reader view and the logo fetch all ask first, read
+  the RFC 9309 way: a 4xx means no file, and a 5xx or no answer means wait half an
+  hour. A refused page costs no request and is neither retried nor escalated.
+  `Crawl-delay` stretches the per-site gap, up to 60 seconds. Checked on
+  2026-10-11: 43 of the 45 open feeds and sitemaps are permitted. The two refused
+  are the Google News searches that carried DCD and DCF headlines, because
+  `news.google.com` disallows `/rss/search`. They are now closed, so those headlines
+  stop arriving until another source replaces them.
+
 - **The relief map reads at a glance instead of being three towers.** Columns
   are flat-topped, one width band, and grow with the square root of capacity
   against the 95th percentile, capped a third above it. States are shaded by how
