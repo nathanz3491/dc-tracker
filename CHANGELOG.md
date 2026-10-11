@@ -36,8 +36,8 @@ initial build of the v1 PRD.
 - **A public page for publishers who find the crawler in their logs**
   (`docs/crawler.md`, `.env.example`). It covers what dc-tracker requests, how often,
   how it behaves on a refusal or a challenge, what it keeps, and how to have it slowed
-  or stopped. It also names its gaps: `robots.txt` is parsed only on the browser
-  path, and `Crawl-delay` is not read. The User-Agent is meant to link to it.
+  or stopped. The User-Agent is meant to link to it. (The two gaps it first admitted,
+  `robots.txt` only on the browser path and no `Crawl-delay`, were closed the same day; see below.)
 
 ### Changed
 
