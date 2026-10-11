@@ -3418,7 +3418,7 @@ function ProjectSourcesPage({ id, data, onBack }) {
   }, [id]);
   const p = state.project;
   return html`
-    <div class="dc-view dc-rise" style=${{ display: "grid", gap: 20, padding: "22px 26px 72px", maxWidth: 980 }}>
+    <div class="dc-view dc-rise" style=${{ display: "grid", gap: 20, padding: "22px 26px 72px" }}>
       <button type="button" class="dc-linkish" onClick=${onBack} style=${{ justifySelf: "start" }}>
         ← ${p ? p.name : `project #${id}`}</button>
       ${state.loading && html`<${Skeleton} style=${{ height: 220 }} />`}
@@ -3499,7 +3499,7 @@ function CompanyPage({ slug, data, onOpen, onGoto, onListChanged }) {
 
   if (!c) {
     return html`
-      <div class="dc-view dc-rise" style=${{ display: "grid", gap: 22, padding: "22px 26px 72px", maxWidth: 1120 }}>
+      <div class="dc-view dc-rise" style=${{ display: "grid", gap: 22, padding: "22px 26px 72px" }}>
         <button type="button" class="dc-linkish" onClick=${() => onGoto("projects")}
                 style=${{ justifySelf: "start" }}>← every project</button>
         ${state.loading
@@ -3521,7 +3521,7 @@ function CompanyPage({ slug, data, onOpen, onGoto, onListChanged }) {
   ].filter(Boolean).join(" · ");
 
   return html`
-    <div class="dc-view dc-rise" style=${{ display: "grid", gap: 22, padding: "22px 26px 72px", maxWidth: 1120 }}>
+    <div class="dc-view dc-rise" style=${{ display: "grid", gap: 22, padding: "22px 26px 72px" }}>
       <button type="button" class="dc-linkish" onClick=${() => onGoto("projects")}
               style=${{ justifySelf: "start" }}>← every project</button>
 
