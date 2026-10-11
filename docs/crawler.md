@@ -37,6 +37,11 @@ change when the crawler falls back to a different HTTP client (below).
 - **A publication-date check**: one request each for pages that recorded no
   date, at most 150 a night. A page that still gives no date is not asked again
   for 90 days.
+- **Nothing from a site that has closed itself to crawlers.** For the two trade
+  publishers that challenge every request, DatacenterDynamics and Data Center
+  Frontier, it learns their headlines from a news-search API it pays for, then
+  looks for the same story from an outlet it can read. It does not request their
+  pages.
 - **A re-read of an article** it already cites, every few weeks, to see whether
   the story changed. Each failed re-read doubles the wait.
 

@@ -245,9 +245,11 @@ def test_the_shipped_closed_feeds_are_not_polled(session):
 
     feeds, _ = load_config()
     closed_urls = {f.url for f in feeds if f.closed}
+    searched = [f for f in feeds if f.news_search and not f.closed]
     assert closed_urls.isdisjoint(fetcher.calls)
-    assert len(fetcher.calls) == len(feeds) - len(closed_urls)
-    assert report.feeds_failed == len(fetcher.calls), "every open feed 404s in this fake"
+    assert len(fetcher.calls) == len(feeds) - len(closed_urls) - len(searched)
+    # Every open feed 404s in this fake, and the news searches have no key here.
+    assert report.feeds_failed == len(fetcher.calls) + len(searched)
 
 
 # --- Pages nothing can read -------------------------------------------------
@@ -1703,3 +1705,177 @@ def test_same_story_and_copies():
         headline, "Data center company to acquire former South San Jose IBM research campus"
     )
     assert not discover.same_story(headline, "IBM reports quarterly results")
+
+
+# --- headlines through a news-search API --------------------------------------
+
+_NEWS_CONFIG = """
+[[feed]]
+name = "dcd-news"
+headlines_of = "datacenterdynamics.com"
+news_search = '"Data Center Dynamics"'
+news_pages = 2
+
+[[feed]]
+name = "dcd"
+url = "https://www.datacenterdynamics.com/en/rss/"
+closed = "2026-10-02: Cloudflare challenge on every page"
+
+[filter]
+topic = ["data cent"]
+signal = ["campus"]
+"""
+
+
+class FakeNews(FakeSearch):
+    """Serper's two endpoints: `news` lists headlines, `search` finds copies."""
+
+    def __init__(self, pages, hits):
+        super().__init__(hits)
+        self.pages = pages
+        self.news_calls: list[tuple[str, int]] = []
+
+    def news(self, query, *, page=1, window="qdr:w"):
+        from tracker.ingest.search import SearchHit
+
+        self.news_calls.append((query, page))
+        rows = self.pages[page - 1] if page <= len(self.pages) else []
+        return [SearchHit(url=u, title=t, date=d, source=s, query=query) for u, t, d, s in rows]
+
+
+_DCD_PAGE = [
+    (
+        "https://www.datacenterdynamics.com/en/news/aws-indiana-county/",
+        "AWS plans 36-building data center campus in Indiana County, Pennsylvania",
+        "3 days ago",
+        "Data Center Dynamics",
+    ),
+    (
+        "https://other.example/aws",
+        "Somebody else on the AWS data center campus",
+        "1 day ago",
+        "Other",
+    ),
+]
+
+
+def test_a_news_result_is_kept_only_from_the_named_publisher_and_dated():
+    from tracker.ingest.search import SearchHit
+
+    feed = discover.FeedSpec(
+        "n", "https://x", headlines_of="datacenterfrontier.com", news_search="q"
+    )
+    now = dt.datetime(2026, 10, 11, 12, 0)
+    hits = [
+        SearchHit(
+            url="https://www.datacenterfrontier.com/a/1",
+            title="Crusoe adds 1GW in Wyoming | Data Center Frontier",
+            date="4 days ago",
+            source="Data Center Frontier",
+        ),
+        SearchHit(
+            url="https://www.datacenterfrontier.com/a/2", title="Old one", date="Oct 2, 2026"
+        ),
+        SearchHit(url="https://elsewhere.example/a", title="Not theirs", date="1 day ago"),
+    ]
+    first, second = discover.news_headlines(hits, feed, now=now)
+    assert first.title == "Crusoe adds 1GW in Wyoming"
+    assert first.published_at == dt.datetime(2026, 10, 7, 12, 0)
+    assert first.topic_implied, "a stated capacity stands in for the topic word"
+    assert second.published_at == dt.datetime(2026, 10, 2)
+
+
+def test_news_headlines_are_looked_up_like_any_headline(session, tmp_path: Path):
+    config = tmp_path / "feeds.toml"
+    config.write_text(_NEWS_CONFIG, encoding="utf-8")
+    provider = FakeNews(
+        [_DCD_PAGE],
+        [
+            (
+                "https://www.pennlive.com/news/2026/10/aws-36-data-centers-homer-city.html",
+                "AWS files plans for 36 data center buildings at Homer City campus in Indiana County",
+                "Amazon Web Services plans a 36-building data center campus in Pennsylvania",
+            )
+        ],
+    )
+    fetcher = FakeFeedFetcher({})
+
+    report, queued = discover.run(
+        session,
+        feeds_path=config,
+        fetcher=fetcher,
+        since_days=None,
+        search_provider=provider,
+        probe=False,
+    )
+
+    assert provider.news_calls == [('"Data Center Dynamics"', 1), ('"Data Center Dynamics"', 2)]
+    assert fetcher.calls == [], "a news-search feed is never fetched as a URL"
+    assert [c.url for c in queued] == [
+        "https://www.pennlive.com/news/2026/10/aws-36-data-centers-homer-city.html"
+    ]
+    assert (report.headlines_new, report.headlines_looked_up) == (1, 1)
+    headline = session.scalar(select(IngestUrl).where(IngestUrl.feed == "dcd-news"))
+    assert headline.status == "skipped"
+    assert headline.url == "https://www.datacenterdynamics.com/en/news/aws-indiana-county/"
+
+
+def test_a_news_feed_without_a_key_fails_alone(session, tmp_path: Path, monkeypatch):
+    from tracker.ingest import search
+
+    def no_key(*a, **kw):
+        raise search.SearchError("no key")
+
+    monkeypatch.setattr(search, "SerperProvider", no_key)
+    config = tmp_path / "feeds.toml"
+    config.write_text(_NEWS_CONFIG, encoding="utf-8")
+    report, queued = discover.run(
+        session, feeds_path=config, fetcher=FakeFeedFetcher({}), since_days=None
+    )
+    assert queued == []
+    assert report.feeds_failed == 1
+    assert "Serper key" in dict(report.failures)["dcd-news"]
+
+
+def test_the_shipped_headline_feeds_use_the_news_api_not_google_news():
+    feeds, _ = load_config()
+    heads = {f.name: f for f in feeds if f.headlines_of}
+    assert set(heads) == {"datacenterdynamics-headlines", "datacenterfrontier-headlines"}
+    for feed in heads.values():
+        assert feed.news_search and not feed.closed
+        assert "news.google.com" not in feed.url
+
+
+def test_serper_news_asks_the_news_endpoint_for_a_week(monkeypatch):
+    import httpx
+
+    from tracker.ingest import search
+
+    monkeypatch.setenv("TRACKER_SERPER_API_KEY", "test-key")
+    from tracker.config import get_settings
+
+    get_settings.cache_clear()
+    sent = {}
+
+    def fake_post(url, **kw):
+        sent.update(url=url, body=kw["json"])
+        return httpx.Response(
+            200,
+            json={
+                "news": [
+                    {
+                        "link": "https://d.example/a",
+                        "title": "T",
+                        "date": "1 day ago",
+                        "source": "D",
+                    }
+                ]
+            },
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setattr(search.httpx, "post", fake_post)
+    [hit] = search.SerperProvider().news('"Data Center Dynamics"', page=2)
+    assert sent["url"] == search.SerperProvider.NEWS_ENDPOINT
+    assert sent["body"]["tbs"] == "qdr:w" and sent["body"]["page"] == 2
+    assert (hit.date, hit.source) == ("1 day ago", "D")

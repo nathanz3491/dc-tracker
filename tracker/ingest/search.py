@@ -234,6 +234,11 @@ class SearchHit:
     title: str
     snippet: str = ""
     query: str = ""
+    #: When the result says it was published, as the backend wrote it ("3 days
+    #: ago", "Oct 7, 2026"). Only the news search fills it.
+    date: str = ""
+    #: The outlet the backend names, for a news result.
+    source: str = ""
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "url", canonical_url(self.url))
@@ -495,6 +500,7 @@ class SerperProvider:
     """
 
     ENDPOINT = "https://google.serper.dev/search"
+    NEWS_ENDPOINT = "https://google.serper.dev/news"
     NAME = "serper"
 
     def __init__(self, settings: Settings | None = None) -> None:
@@ -503,14 +509,56 @@ class SerperProvider:
             raise SearchError(SEARCH_KEY_HELP)
 
     def search(self, query: str, *, limit: int = 10) -> list[SearchHit]:
+        response = self._post(
+            self.ENDPOINT, {"q": query, "num": min(limit, 10), "gl": "us", "hl": "en"}
+        )
+        payload = _payload(response, "Serper")
+        return [
+            SearchHit(
+                url=item.get("link", ""),
+                title=item.get("title", ""),
+                snippet=item.get("snippet", ""),
+                query=query,
+            )
+            for item in _items(payload.get("organic"))
+            if item.get("link")
+        ]
+
+    def news(self, query: str, *, page: int = 1, window: str = "qdr:w") -> list[SearchHit]:
+        """Google News results for `query`, ten a page, from the last week by default.
+
+        The route to a publisher's headlines when its own site and Google News's RSS
+        are both closed to us: an API this project pays for, about $0.001 a page,
+        rather than a page anybody's `robots.txt` governs. Search a publisher by
+        name: `site:` returns its profile and directory pages, undated, not its news.
+        """
+        response = self._post(
+            self.NEWS_ENDPOINT,
+            {"q": query, "gl": "us", "hl": "en", "tbs": window, "page": page},
+        )
+        payload = _payload(response, "Serper")
+        return [
+            SearchHit(
+                url=item.get("link", ""),
+                title=item.get("title", ""),
+                snippet=item.get("snippet", ""),
+                query=query,
+                date=str(item.get("date") or ""),
+                source=str(item.get("source") or ""),
+            )
+            for item in _items(payload.get("news"))
+            if item.get("link")
+        ]
+
+    def _post(self, endpoint: str, body: dict[str, Any]) -> httpx.Response:
         try:
             response = httpx.post(
-                self.ENDPOINT,
+                endpoint,
                 headers={
                     "X-API-KEY": self.settings.serper_api_key.get_secret_value(),
                     "Content-Type": "application/json",
                 },
-                json={"q": query, "num": min(limit, 10), "gl": "us", "hl": "en"},
+                json=body,
                 timeout=httpx.Timeout(30.0, connect=10.0),
             )
         except httpx.RequestError as exc:
@@ -525,18 +573,7 @@ class SerperProvider:
             )
         if response.status_code >= 400:
             raise SearchError(f"search returned HTTP {response.status_code}: {response.text[:400]}")
-
-        payload = _payload(response, "Serper")
-        return [
-            SearchHit(
-                url=item.get("link", ""),
-                title=item.get("title", ""),
-                snippet=item.get("snippet", ""),
-                query=query,
-            )
-            for item in _items(payload.get("organic"))
-            if item.get("link")
-        ]
+        return response
 
 
 class BochaProvider:

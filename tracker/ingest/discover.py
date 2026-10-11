@@ -130,6 +130,12 @@ class FeedSpec:
     #: back to a page we cannot read, so each headline is looked up elsewhere
     #: instead of queued. See :func:`follow_headlines`.
     headlines_of: str | None = None
+    #: A query for a news-search API, in place of a URL to fetch: a feed of
+    #: `headlines_of`'s articles when neither its site nor Google News's RSS will
+    #: let us read them. See :func:`news_headlines`.
+    news_search: str | None = None
+    #: Result pages to ask for, ten headlines each.
+    news_pages: int = 1
 
 
 #: The reason recorded for `closed = true`, which says that an entry is closed and
@@ -292,14 +298,16 @@ def load_config(path: Path | None = None) -> tuple[list[FeedSpec], FilterSpec]:
     feeds = [
         FeedSpec(
             name=str(entry.get("name") or entry.get("url", "?")),
-            url=str(entry["url"]),
+            url=str(entry.get("url") or _news_url(str(entry["news_search"]))),
             source_type=str(entry.get("source_type") or "general_media"),
             topic_implied=bool(entry.get("topic_implied", False)),
             closed=_closed_reason(entry),
             headlines_of=str(entry["headlines_of"]) if entry.get("headlines_of") else None,
+            news_search=str(entry["news_search"]) if entry.get("news_search") else None,
+            news_pages=max(1, int(entry.get("news_pages", 1))),
         )
         for entry in raw_feeds
-        if entry.get("url")
+        if entry.get("url") or (entry.get("news_search") and entry.get("headlines_of"))
     ]
 
     raw_filter = data.get("filter") or {}
@@ -1718,6 +1726,92 @@ def parse_headlines(xml: str, feed: FeedSpec) -> list[Candidate]:
     return out[:MAX_PER_FEED]
 
 
+def _news_url(query: str) -> str:
+    """A stable name for a news-search feed, where the others have their URL.
+
+    Never requested: a news-search feed is asked through the search API's client,
+    not fetched. It exists so the code keyed by a feed's URL has one to key by.
+    """
+    from urllib.parse import quote
+
+    return f"https://google.serper.dev/news?q={quote(query)}"
+
+
+_AGO = re.compile(r"^(\d+)\s+(minute|hour|day|week|month)s?\s+ago$", re.I)
+
+
+def _news_date(raw: str, now: dt.datetime) -> dt.datetime | None:
+    """A news result's date: "3 days ago", or a date as written ("Oct 7, 2026")."""
+    text = (raw or "").strip()
+    if not text:
+        return None
+    ago = _AGO.match(text)
+    if ago:
+        n, unit = int(ago.group(1)), ago.group(2).lower()
+        days = {"minute": 1 / 1440, "hour": 1 / 24, "day": 1, "week": 7, "month": 30}[unit]
+        return now - dt.timedelta(days=n * days)
+    for fmt in ("%b %d, %Y", "%d %b %Y", "%B %d, %Y"):
+        try:
+            return dt.datetime.strptime(text, fmt)
+        except ValueError:
+            continue
+    return parse_timestamp(text)
+
+
+def news_headlines(
+    hits: list[Any], feed: FeedSpec, *, now: dt.datetime | None = None
+) -> list[Candidate]:
+    """Results of a news search that `feed.headlines_of` itself published.
+
+    The same rules as :func:`parse_headlines`: anybody else's result is dropped, an
+    outlet suffix (" - DCD", " | Data Center Frontier") is removed, surveys and
+    polls are dropped, and a stated capacity stands in for the topic word. The link
+    is the publisher's own page, which we cannot read; it is kept so the headline
+    is recognised tomorrow, and is never handed to the crawl.
+    """
+    from tracker.confidence import registrable_domain
+
+    now = now or utcnow()
+    wanted = registrable_domain(f"https://{feed.headlines_of}")
+    out: list[Candidate] = []
+    for hit in hits:
+        if registrable_domain(hit.url) != wanted:
+            continue
+        title = hit.title.strip()
+        for outlet in filter(None, (hit.source.strip(), "Data Center Frontier", "DCD")):
+            for sep in (" - ", " | "):
+                if title.endswith(f"{sep}{outlet}"):
+                    title = title[: -len(outlet) - len(sep)].rstrip()
+        if not title or _NOT_NEWS.search(title):
+            continue
+        out.append(
+            Candidate(
+                url=hit.url,
+                title=title,
+                feed=feed.name,
+                published_at=_news_date(hit.date, now),
+                source_type=feed.source_type,
+                topic_implied=feed.topic_implied or bool(_CAPACITY.search(title)),
+            )
+        )
+    return out[:MAX_PER_FEED]
+
+
+def search_news(feed: FeedSpec, provider: Any) -> list[Candidate]:
+    """Every page of one news-search feed, as headlines. Raises `SearchError`."""
+    seen: set[str] = set()
+    out: list[Candidate] = []
+    for page in range(1, feed.news_pages + 1):
+        hits = provider.news(feed.news_search, page=page)
+        if not hits:
+            break
+        for candidate in news_headlines(hits, feed):
+            if candidate.url not in seen:
+                seen.add(candidate.url)
+                out.append(candidate)
+    return out
+
+
 def follow_headlines(
     session: Session,
     headlines: list[Candidate],
@@ -1852,6 +1946,8 @@ def run(
 
     from tracker.ingest.fetch import fetch_all
 
+    searched = [f for f in feeds if f.news_search]
+    feeds = [f for f in feeds if not f.news_search]
     results = asyncio.run(
         fetch_all(
             [f.url for f in feeds], fetcher=fetcher or _RawFetcher(settings), settings=settings
@@ -1861,6 +1957,10 @@ def run(
 
     all_kept: list[Candidate] = []
     headlines: list[Candidate] = []
+    if searched:
+        headlines.extend(
+            _poll_news(searched, spec, since=since, report=report, provider=search_provider)
+        )
     for feed in feeds:
         result = by_url.get(feed.url)
         report.feeds_polled += 1
@@ -1913,6 +2013,46 @@ def run(
     report.bodies_cached = cache_feed_text(queued, cache_dir)
     session.commit()
     return report, queued
+
+
+def _poll_news(
+    feeds: list[FeedSpec],
+    spec: FilterSpec,
+    *,
+    since: dt.datetime | None,
+    report: DiscoverReport,
+    provider: Any = None,
+) -> list[Candidate]:
+    """The kept headlines of every news-search feed, through Serper's news API.
+
+    `provider` is anything with a `news(query, page=)` method; tests pass a fake.
+    Without one this builds Serper's client, and a missing key is a failure on
+    each feed rather than a stopped run.
+    """
+    from tracker.ingest.search import SearchError, SerperProvider
+
+    if provider is None or not hasattr(provider, "news"):
+        try:
+            provider = SerperProvider()
+        except SearchError as exc:
+            for feed in feeds:
+                report.feeds_polled += 1
+                report.feeds_failed += 1
+                report.failures.append((feed.name, f"news search needs a Serper key: {exc}"))
+            return []
+    kept: list[Candidate] = []
+    for feed in feeds:
+        report.feeds_polled += 1
+        try:
+            entries = search_news(feed, provider)
+        except SearchError as exc:
+            report.feeds_failed += 1
+            report.failures.append((feed.name, f"news search failed: {exc}"))
+            continue
+        if not entries:
+            report.failures.append((feed.name, "news search returned none of its headlines"))
+        kept.extend(select_candidates(entries, spec, since=since, report=report))
+    return kept
 
 
 #: Appended to a failure Cloudflare marks `cf-mitigated: challenge`.

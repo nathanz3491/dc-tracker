@@ -54,8 +54,12 @@ initial build of the v1 PRD.
   `Crawl-delay` stretches the per-site gap, up to 60 seconds. Checked on
   2026-10-11: 43 of the 45 open feeds and sitemaps are permitted. The two refused
   are the Google News searches that carried DCD and DCF headlines, because
-  `news.google.com` disallows `/rss/search`. They are now closed, so those headlines
-  stop arriving until another source replaces them.
+  `news.google.com` disallows `/rss/search`. Those two feeds now ask Serper's news
+  API instead (`news_search` in `seed/feeds.toml`, `SerperProvider.news`,
+  `discover.news_headlines`). That's a paid API, not a crawled page, at about $0.007 a
+  night for five pages of DCD headlines and two of DCF. Each headline is still
+  looked up once and only readable copies are queued. A name search returned ten
+  dated DCD stories a page; `site:` returns profile pages, so it is not used.
 
 - **The relief map reads at a glance instead of being three towers.** Columns
   are flat-topped, one width band, and grow with the square root of capacity

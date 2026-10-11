@@ -143,13 +143,20 @@ from two networks and from a browser.
 
 ## Headlines from a publisher we cannot read
 
-**Closed since 2026-10-11.** Every fetch now asks the site's `robots.txt` first
-(`tracker/robots.py`), and `news.google.com/robots.txt` disallows `/rss/search` for
-crawlers. Both headline feeds are therefore marked `closed` in `seed/feeds.toml`.
-The weekly check asks them again, and it costs one read of that `robots.txt` and
-no search request. The route below stays in the code for a headline source that
-permits us; Serper's news search, which is an API we pay for rather than a page we
-crawl, is the obvious candidate.
+**The headlines come from a news-search API since 2026-10-11.** They used to come
+from Google News's RSS search. When every fetch began asking `robots.txt` first
+(`tracker/robots.py`), that stopped: `news.google.com` disallows `/rss/search` for
+crawlers. A feed with `news_search = "<query>"` in place of a URL is asked through
+Serper's news endpoint instead (`SerperProvider.news`, `discover.search_news`). That
+is an API this project pays for, about $0.001 a page of ten, not a page a
+`robots.txt` governs. It asks for the last week, searched by the publisher's
+name, because a `site:` query returns profile and directory pages, undated. DCD
+gets five pages a night and DCF two, about $0.007 a night before lookups. A result
+is kept only when its link is the publisher's own (`discover.news_headlines`). The
+link is recorded as the `skipped` headline row, in place of Google's.
+On 2026-10-11 a name search returned ten DCD stories a page, all dated within the
+week. If DCD or DCF reopens, its `skipped` headline rows need requeuing, because
+they were recorded as headlines and never handed to the crawl.
 
 A `[[feed]]` with `headlines_of = "<site>"` lists another publisher's articles —
 Google News's RSS search for datacenterdynamics.com and datacenterfrontier.com, the
@@ -183,7 +190,8 @@ disallowed page comes back as a failed fetch with `via = "robots"`, and no reque
 made. It is not retried and not escalated, because a stronger client would get the
 same answer. `Crawl-delay` stretches the gap between two requests to one host, up to
 60 seconds. On 2026-10-11, 43 of the 45 open feeds and sitemaps were permitted; the
-two refused were the Google News headline feeds above.
+two refused were the Google News headline feeds above, which now come from a news
+API instead.
 
 ## Where the queued rows come from
 
@@ -428,7 +436,7 @@ Touching any of these means the poster is in scope. Re-render with
 | Closed feeds, and naming a challenge | `tracker/seed/feeds.toml` — `closed`; `tracker/ingest/discover.py` — `FeedSpec.closed`, `SitemapSpec.closed`, `_closed_reason`, `DiscoverReport.closed`, `_RawFetcher`, `CHALLENGE_NOTE`; `tracker/ingest/probe.py` — `configured_hosts` |
 | The weekly check of closed entries | `tracker/ingest/discover.py` — `probe_closed`, `record_probe`, `reopened_names`, `without_reopened`, `PROBE_EVERY`; migration `0034_feed_probe`; `tracker/cli/sync.py` — `discover --probe-closed` |
 | Asking robots.txt before every request | `tracker/robots.py` — `allowed`, `allowed_async`, `interpret`, `crawl_delay`; `tracker/ingest/fetch.py` — `permitted`, `refused`, `fetch_with_retry`, `should_escalate`, `fetch_all`; `tracker/ingest/discover.py` — `_RawFetcher`; `tracker/config.py` — `respect_robots` |
-| Headlines-only feeds | `tracker/seed/feeds.toml` — `headlines_of`; `tracker/ingest/discover.py` — `parse_headlines`, `follow_headlines`, `same_story`, `copies_headline`, `MAX_HEADLINE_LOOKUPS` |
+| Headlines-only feeds | `tracker/seed/feeds.toml` — `headlines_of`, `news_search`, `news_pages`; `tracker/ingest/search.py` — `SerperProvider.news`; `tracker/ingest/discover.py` — `news_headlines`, `search_news`, `_poll_news`, `_news_date`, `parse_headlines`, `follow_headlines`, `same_story`, `copies_headline`, `MAX_HEADLINE_LOOKUPS` |
 | Pages nothing can read go last | `tracker/ingest/discover.py` — `closed_domains`, `unreadable_test`, `readable_first`, `pending(unreadable=)`, `retryable(unreadable=)`; `tracker/ingest/crawl.py` — `stale_sources(unreadable=)`; `tracker/cli/sync.py` — `sync` (extract, retry fill, refresh); `tracker/cli/ingest.py` — `crawl --from-queue`; `tracker/ingest/enrich.py` — `run` |
 | What search looks for | `tracker/ingest/search.py` — `_PLACE_TEMPLATES`, `rank_places`, `plan_queries`, `PlannedQuery.label`, `templates`; `tracker/normalize.py` — `state_name` |
 | Judging a template | `tracker/funnel.py` — `feed_group`, `survey`, `verdicts`; `tracker/ingest/search.py` — `LabelStat` |
