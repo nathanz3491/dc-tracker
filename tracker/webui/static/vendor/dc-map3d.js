@@ -6,10 +6,18 @@
 /* <dc-map3d> — the same dataset as a drafting-table relief.
  *
  * State plates are extruded from the same us-atlas TopoJSON the flat map uses
- * (d3.geoAlbersUsa, real Census geometry), and each project rises as a column
- * whose height is its cited mw_planned. A project with no cited capacity gets a
- * thin dashed pin at zero height rather than an invented column — the same rule
- * the flat map's hollow ring follows.
+ * (d3.geoAlbersUsa, real Census geometry) and shaded by how many projects each
+ * holds, and each project rises as a flat-topped column whose height grows with
+ * the square root of its cited mw_planned. A project with no cited capacity gets a
+ * short faint pin rather than an invented column — the same rule the flat map's
+ * hollow ring follows.
+ *
+ * Scaled to the 95th percentile rather than a fixed number, with a ceiling. The
+ * first version scaled against a fixed 1,200 MW, which was fine when nothing
+ * passed a gigawatt; with 5-10 GW campuses in the database a handful of columns
+ * stood ninety units tall and five wide on a map 120 deep, and the other five
+ * hundred projects disappeared under them. Columns are now one width band, and
+ * anything past the 95th percentile stands at most a third taller than it.
  *
  * Attributes: encoding="phase|confidence" selected="<id>" autorotate
  * Events: dc-pick {detail:{id}}
@@ -130,6 +138,11 @@
       scene.add(plateGroup);
       this._plates = [];
       const withProjects = new Set(window.DCTRACKER.projects.map((p) => p.state));
+      // Projects per state, for the plate shading: a state is darker the more
+      // campuses it holds, on a square-root ramp so Texas does not flatten the rest.
+      const perState = {};
+      window.DCTRACKER.projects.forEach((p) => { perState[p.state] = (perState[p.state] || 0) + 1; });
+      const mostInState = Math.max(1, ...Object.values(perState));
       const ABBR = { "01": "AL", "02": "AK", "04": "AZ", "05": "AR", "06": "CA", "08": "CO", "09": "CT", 10: "DE", 11: "DC", 12: "FL", 13: "GA", 15: "HI", 16: "ID", 17: "IL", 18: "IN", 19: "IA", 20: "KS", 21: "KY", 22: "LA", 23: "ME", 24: "MD", 25: "MA", 26: "MI", 27: "MN", 28: "MS", 29: "MO", 30: "MT", 31: "NE", 32: "NV", 33: "NH", 34: "NJ", 35: "NM", 36: "NY", 37: "NC", 38: "ND", 39: "OH", 40: "OK", 41: "OR", 42: "PA", 44: "RI", 45: "SC", 46: "SD", 47: "TN", 48: "TX", 49: "UT", 50: "VT", 51: "VA", 53: "WA", 54: "WV", 55: "WI", 56: "WY" };
 
       states.features.forEach((f) => {
@@ -156,6 +169,7 @@
         const mesh = new THREE.Mesh(geo, mat);
         mesh.userData.active = active;
         mesh.userData.state = ab;
+        mesh.userData.share = Math.sqrt((perState[ab] || 0) / mostInState);
         plateGroup.add(mesh);
         this._plates.push(mesh);
 
@@ -171,7 +185,15 @@
       this._marks = [];
       const markGroup = new THREE.Group();
       scene.add(markGroup);
-      const maxMW = 1200;
+      // The height reference: the 95th percentile of cited capacity among the
+      // projects that can be placed, so one 10 GW campus does not set the scale
+      // for everything else. Floored so a sparse test dataset still draws.
+      const cited = window.DCTRACKER.projects
+        .filter((p) => p.lat != null && p.mw_planned != null && p.mw_planned > 0)
+        .map((p) => p.mw_planned)
+        .sort((a, b) => a - b);
+      const refMW = Math.max(50, cited.length ? cited[Math.floor(0.95 * (cited.length - 1))] : 1200);
+      const level = (mw) => Math.min(1.35, Math.sqrt(mw / refMW));
       window.DCTRACKER.projects.forEach((p) => {
         if (p.lat == null) return;
         const xy = projection([p.lon, p.lat]);
@@ -179,25 +201,38 @@
         const x = xy[0] - W / 2, z = xy[1] - H / 2;
         const g = new THREE.Group();
         g.position.set(x, 3.2, z);
-        const hasMW = p.mw_planned != null;
-        const hgt = hasMW ? 4 + 30 * Math.sqrt(p.mw_planned / maxMW) : 3.5;
-        const rad = hasMW ? 0.7 + 1.5 * Math.sqrt(p.mw_planned / maxMW) : 0.35;
+        const hasMW = p.mw_planned != null && p.mw_planned > 0;
+        const t = hasMW ? level(p.mw_planned) : 0;
+        const hgt = hasMW ? 1.5 + 17 * t : 1.2;
+        const rad = hasMW ? 0.85 + 0.3 * Math.min(1, t) : 0.3;
 
-        const colMat = new THREE.MeshStandardMaterial({ roughness: 0.35, metalness: 0.15, transparent: true, opacity: hasMW ? 0.92 : 0.55 });
-        const col = new THREE.Mesh(new THREE.CylinderGeometry(rad, rad * 1.12, hgt, hasMW ? 18 : 6, 1, false), colMat);
+        const colMat = new THREE.MeshStandardMaterial({ roughness: 0.55, metalness: 0.05, transparent: !hasMW, opacity: hasMW ? 1 : 0.45 });
+        const col = new THREE.Mesh(new THREE.CylinderGeometry(rad, rad, hgt, hasMW ? 20 : 8, 1, false), colMat);
         col.position.y = hgt / 2;
         g.add(col);
 
-        const capMat = new THREE.MeshStandardMaterial({ roughness: 0.2, metalness: 0.3 });
-        const cap = new THREE.Mesh(new THREE.SphereGeometry(hasMW ? rad * 1.25 : 0.6, 16, 12), capMat);
-        cap.position.y = hgt + (hasMW ? rad * 0.5 : 0.4);
+        // A flat lid, lighter than the column, rather than a ball on top: it reads
+        // as the end of a column at every angle and does not hide its neighbours.
+        const capMat = new THREE.MeshStandardMaterial({ roughness: 0.4, metalness: 0.05 });
+        const cap = new THREE.Mesh(new THREE.CircleGeometry(rad * 1.001, hasMW ? 20 : 8), capMat);
+        cap.rotation.x = -Math.PI / 2;
+        cap.position.y = hgt + 0.02;
         g.add(cap);
+
+        // A soft footprint in the column's colour, so the base sits on the plate.
+        const foot = new THREE.Mesh(
+          new THREE.CircleGeometry(rad * 1.9, 24),
+          new THREE.MeshBasicMaterial({ transparent: true, opacity: hasMW ? 0.22 : 0.1, depthWrite: false })
+        );
+        foot.rotation.x = -Math.PI / 2;
+        foot.position.y = 0.06;
+        g.add(foot);
 
         const blocking = p.risks.some((r) => r.status === "open" && r.severity === "blocking");
         let halo = null;
         if (blocking) {
           halo = new THREE.Mesh(
-            new THREE.TorusGeometry(rad + 2.4, 0.22, 8, 40),
+            new THREE.TorusGeometry(rad * 1.9 + 0.5, 0.14, 8, 40),
             new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.9 })
           );
           halo.rotation.x = -Math.PI / 2;
@@ -205,18 +240,20 @@
           g.add(halo);
         }
 
-        const hit = new THREE.Mesh(new THREE.CylinderGeometry(Math.max(rad, 2.4), Math.max(rad, 2.4), hgt + 4, 8), new THREE.MeshBasicMaterial({ visible: false }));
-        hit.position.y = (hgt + 4) / 2;
+        // The pick target stays wider than the pin, so a thin column is still easy
+        // to hover and click.
+        const hit = new THREE.Mesh(new THREE.CylinderGeometry(Math.max(rad, 1.4), Math.max(rad, 1.4), hgt + 2, 8), new THREE.MeshBasicMaterial({ visible: false }));
+        hit.position.y = (hgt + 2) / 2;
         hit.userData.pid = p.id;
         g.add(hit);
 
         markGroup.add(g);
-        this._marks.push({ p: p, g: g, col: col, colMat: colMat, cap: cap, capMat: capMat, halo: halo, hasMW: hasMW, hgt: hgt, rad: rad });
+        this._marks.push({ p: p, g: g, col: col, colMat: colMat, cap: cap, capMat: capMat, foot: foot, halo: halo, hasMW: hasMW, hgt: hgt, rad: rad });
       });
 
       // --- selection ring
       this._selRing = new THREE.Mesh(
-        new THREE.RingGeometry(3.6, 4.4, 48),
+        new THREE.RingGeometry(2.4, 2.9, 48),
         new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.95, side: THREE.DoubleSide })
       );
       this._selRing.rotation.x = -Math.PI / 2;
@@ -225,14 +262,14 @@
 
       this._raycaster = new THREE.Raycaster();
       this._pointer = new THREE.Vector2();
-      this._orbit = { theta: -0.35, phi: 0.92, dist: 210, target: new THREE.Vector3(0, 6, 0) };
+      this._orbit = { theta: -0.3, phi: 0.82, dist: 148, target: new THREE.Vector3(0, 2, 6) };
       // Settle rather than decorate: the slow reveal stops after six seconds, or
       // the moment the reader takes hold of it.
       this._auto = true;
       this._settle = setTimeout(() => { this._auto = false; }, 6000);
       this._reset = () => {
-        this._orbit.theta = -0.35; this._orbit.phi = 0.92; this._orbit.dist = 210;
-        this._orbit.target.set(0, 6, 0); this._auto = false;
+        this._orbit.theta = -0.3; this._orbit.phi = 0.82; this._orbit.dist = 148;
+        this._orbit.target.set(0, 2, 6); this._auto = false;
       };
       window.addEventListener("dc-reset-view", this._reset);
 
@@ -254,7 +291,6 @@
         if (this._auto && !this._dragging) this._orbit.theta += 0.0016;
         this._marks.forEach((m) => {
           if (m.halo) { const s = 1 + 0.14 * Math.sin(t * 2.2); m.halo.scale.set(s, s, 1); m.halo.material.opacity = 0.55 + 0.35 * (0.5 + 0.5 * Math.sin(t * 2.2)); }
-          m.cap.position.y = m.hgt + (m.hasMW ? m.rad * 0.5 : 0.4) + Math.sin(t * 1.4 + m.p.id) * (m.hasMW ? 0.35 : 0.18);
         });
         if (this._selRing.visible) this._selRing.rotation.z = t * 0.5;
         this.place();
@@ -296,10 +332,16 @@
       const mutedC = new T.Color(this.tok("--muted"));
       const borderC = new T.Color(this.tok("--input"));
       const primary = new T.Color(this.tok("--primary"));
+      // Shaded by projects per state: a light plate for one campus, a deep warm one
+      // for the busiest state. States with none sit back in the muted tone.
+      const deep = surface.clone().lerp(primary, 0.9);
       this._plates.forEach((m) => {
         if (m.isLineSegments) { m.material.color.copy(borderC); return; }
-        m.material.color.copy(m.userData.active ? surface.clone().lerp(primary, 0.14) : mutedC);
-        m.material.emissive.copy(m.userData.active ? primary.clone().multiplyScalar(0.05) : new T.Color(0x000000));
+        const share = m.userData.share || 0;
+        m.material.color.copy(
+          m.userData.active ? surface.clone().lerp(primary, 0.1).lerp(deep, share) : mutedC
+        );
+        m.material.emissive.copy(m.userData.active ? primary.clone().multiplyScalar(0.04 * share) : new T.Color(0x000000));
       });
       const encoding = this.getAttribute("encoding") || "phase";
       const danger = new T.Color(this.tok("--danger"));
@@ -308,8 +350,9 @@
         const c = new T.Color(this.tok(tokName));
         m.colMat.color.copy(c);
         m.colMat.emissive.copy(c.clone().multiplyScalar(0.28));
-        m.capMat.color.copy(c.clone().lerp(new T.Color(0xffffff), 0.3));
-        m.capMat.emissive.copy(c.clone().multiplyScalar(0.55));
+        m.capMat.color.copy(c.clone().lerp(new T.Color(0xffffff), 0.35));
+        m.capMat.emissive.copy(c.clone().multiplyScalar(0.4));
+        if (m.foot) m.foot.material.color.copy(c);
         if (m.halo) m.halo.material.color.copy(danger);
       });
       if (this._selRing) this._selRing.material.color.copy(new T.Color(this.tok("--foreground")));

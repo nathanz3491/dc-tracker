@@ -154,6 +154,15 @@ ACCOUNT_VIEWS: frozenset[str] = frozenset({"account", "admin"})
 #: script-injection bug.
 _PROJECT_PATH = re.compile(r"/projects/(\d{1,18})")
 
+#: `/projects/<id>/sources` — every citation behind one project, on its own page,
+#: so the project page can show a few and link here. Same digits-only rule.
+_PROJECT_SOURCES_PATH = re.compile(r"/projects/(\d{1,18})/sources")
+
+#: `/companies/<slug>` — one company's campuses (`tracker.company`). Lowercase
+#: letters, digits and hyphens only, and that is the defence: the slug reaches the
+#: page shell's `<script>`, so nothing that could close a string may match.
+_COMPANY_PATH = re.compile(r"/companies/([a-z0-9][a-z0-9-]{0,80})")
+
 #: Every page of the console a sign-in may send somebody back to, whole paths.
 APP_PATHS: frozenset[str] = frozenset({"/"} | {f"/{v}" for v in READ_VIEWS | ACCOUNT_VIEWS})
 
@@ -161,6 +170,7 @@ APP_PATHS: frozenset[str] = frozenset({"/"} | {f"/{v}" for v in READ_VIEWS | ACC
 #: Arabic-Indic and every other script's digits, which `int()` then accepts, and a
 #: JSON body can carry any of them.
 _NEXT_PROJECT = re.compile(r"/projects/([0-9]{1,18})")
+_NEXT_PROJECT_SOURCES = re.compile(r"/projects/([0-9]{1,18})/sources")
 
 #: The policy the public pages are served under, stricter than the console's.
 #:
@@ -200,6 +210,10 @@ def safe_next(raw: object) -> str | None:
         return "/monitor"
     if match := _NEXT_PROJECT.fullmatch(raw):
         return f"/projects/{int(match.group(1))}"
+    if match := _NEXT_PROJECT_SOURCES.fullmatch(raw):
+        return f"/projects/{int(match.group(1))}/sources"
+    if match := _COMPANY_PATH.fullmatch(raw):
+        return f"/companies/{match.group(1)}"
     return None
 
 
@@ -219,6 +233,10 @@ def _app_path(route: str) -> str | None:
         return "/monitor"
     if match := _PROJECT_PATH.fullmatch(route):
         return f"/projects/{int(match.group(1))}"
+    if match := _PROJECT_SOURCES_PATH.fullmatch(route):
+        return f"/projects/{int(match.group(1))}/sources"
+    if match := _COMPANY_PATH.fullmatch(route):
+        return f"/companies/{match.group(1)}"
     return None
 
 
@@ -984,6 +1002,10 @@ class Handler(BaseHTTPRequestHandler):
         # can say "no project 41" in the console's own furniture.
         if match := _PROJECT_PATH.fullmatch(route):
             return self._page(view="projects", project=int(match.group(1)))
+        if match := _PROJECT_SOURCES_PATH.fullmatch(route):
+            return self._page(view="projects", project=int(match.group(1)), sub="sources")
+        if match := _COMPANY_PATH.fullmatch(route):
+            return self._page(view="company", company=match.group(1))
         if route == "/api":
             return self._api_index()
         if route.startswith("/static/"):
@@ -1000,6 +1022,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._claims(query)
         if route == "/api/project":
             return self._project(query)
+        if route == "/api/company":
+            return self._company(query)
+        if route == "/api/company-logo":
+            return self._company_logo(query)
         if route == "/api/article":
             return self._article(query)
         if route == "/api/publishers":
@@ -1680,7 +1706,14 @@ class Handler(BaseHTTPRequestHandler):
             changes.append("told them by email")
         self._json({"ok": True, "account": result, "changes": changes})
 
-    def _page(self, *, view: str = "", project: int | None = None) -> None:
+    def _page(
+        self,
+        *,
+        view: str = "",
+        project: int | None = None,
+        sub: str = "",
+        company: str = "",
+    ) -> None:
         """The console shell. One face now.
 
         There used to be two — `/` read the dataset and `/dev` ran commands, chosen
@@ -1691,7 +1724,9 @@ class Handler(BaseHTTPRequestHandler):
         front end opens on it directly. Without it a deep link would paint the
         default view first and then swap, which reads as a flash of the wrong page.
 
-        `project` does the same for `/projects/<id>`, as `window.DC_PROJECT`.
+        `project` does the same for `/projects/<id>`, as `window.DC_PROJECT`;
+        `sub` is `"sources"` for `/projects/<id>/sources` (`window.DC_SUB`), and
+        `company` is the slug of `/companies/<slug>` (`window.DC_COMPANY`).
 
         **Both are interpolated into a `<script>` unescaped, and each is safe for
         its own reason.** `view` is only ever a member of `READ_VIEWS`, a frozen
@@ -1713,7 +1748,17 @@ class Handler(BaseHTTPRequestHandler):
         html = assets.stamp(index.read_text(encoding="utf-8"))
         # `project` is an int or None, so nothing but digits can reach the string;
         # `null` is what JavaScript reads as "no project was asked for".
-        stamp = f'window.DC_VIEW="{view}";window.DC_PROJECT={project or "null"}'
+        # `sub` is one of two literals and `company` has matched `_COMPANY_PATH`
+        # (letters, digits, hyphens); both are re-checked here rather than trusted,
+        # because this line is where a looser caller would become an injection.
+        if sub not in ("", "sources"):
+            raise ValueError(f"unexpected page sub-view {sub!r}")
+        if company and not _COMPANY_PATH.fullmatch(f"/companies/{company}"):
+            raise ValueError("unexpected company slug")
+        stamp = (
+            f'window.DC_VIEW="{view}";window.DC_PROJECT={project or "null"};'
+            f'window.DC_SUB="{sub}";window.DC_COMPANY="{company}"'
+        )
         html = html.replace(
             '<div id="root"></div>',
             f'<script>{stamp}</script>\n<div id="root"></div>',
@@ -1970,6 +2015,17 @@ class Handler(BaseHTTPRequestHandler):
             "note": "The page the daily email links to. Older open obstacles are "
             "counted, not listed; unconfirmed ones apart and labelled. "
             "/api/watch-for is the old name.",
+        },
+        "GET /api/company": {
+            "answers": "one company's campuses, as builder or tenant, and their updates "
+            "reported in the last 60 days",
+            "reads": "company.profile — matched the way a watchlist entry matches",
+            "note": "?slug=compass-datacenters. The page is /companies/<slug>.",
+        },
+        "GET /api/company-logo": {
+            "answers": "the company's own site icon, as an image; 404 when none is found",
+            "reads": "company_logo.logo — the cited domain matching the name, cached 30 days",
+            "note": "?slug=compass-datacenters. Fetched by the server; never a row.",
         },
         "GET /api/watch": {
             "answers": "which projects this reader follows, and which by an exact watch",
@@ -2273,6 +2329,65 @@ class Handler(BaseHTTPRequestHandler):
             # and `parties`, and a detached instance raises on the first of them.
             payload = project_payload(project, claims=True)
         self._json({"project": payload})
+
+    def _company(self, query: dict[str, list[str]]) -> None:
+        """One company's campuses and recent updates, for `/companies/<slug>`.
+
+        `watching` says whether this reader follows the company as a whole — the
+        page's Watch button — and is False with nobody signed in.
+        """
+        from tracker import company, watchlist
+
+        wanted = (query.get("slug") or [""])[0]
+        if not company.SLUG.fullmatch(wanted):
+            return self._error(400, "slug must be lowercase letters, digits and hyphens")
+        account_id = self._account_id
+        with self.console.read_session() as session:
+            payload = company.profile(session, wanted)
+            if payload is None:
+                return self._error(404, f"no project is built or occupied by {wanted!r}")
+            payload["watching"] = account_id is not None and any(
+                row.company_key == payload["key"] and not row.project_key
+                for row in watchlist.entries(session, account_id=account_id)
+            )
+        payload["allow_watch"] = self.console.allow_watch and account_id is not None
+        self._json(payload)
+
+    def _company_logo(self, query: dict[str, list[str]]) -> None:
+        """A company's own icon, fetched from its website once and cached on disk.
+
+        The server fetches it because the console's policy loads images only from
+        itself. The image is sent under its own policy with `sandbox` and nothing
+        allowed, so an SVG opened directly in a tab cannot run a script under this
+        origin; inside the page's `<img>` it could not anyway. 404 when the company
+        has no findable website or icon, and the page draws initials instead.
+        """
+        from tracker import company, company_logo
+        from tracker.config import cache_dir, get_settings
+
+        wanted = (query.get("slug") or [""])[0]
+        if not company.SLUG.fullmatch(wanted):
+            return self._error(400, "slug must be lowercase letters, digits and hyphens")
+        with self.console.read_session() as session:
+            payload = company.profile(session, wanted)
+        domain = payload and payload.get("domain")
+        found = (
+            company_logo.logo(
+                wanted, domain, cache=cache_dir("logos"), user_agent=get_settings().user_agent
+            )
+            if domain
+            else None
+        )
+        if found is None:
+            return self._error(404, f"no logo found for {wanted!r}")
+        data, kind = found
+        self._send(
+            200,
+            data,
+            kind,
+            cache="private, max-age=86400",
+            csp="default-src 'none'; style-src 'unsafe-inline'; sandbox",
+        )
 
     def _article(self, query: dict[str, list[str]]) -> None:
         """Reader view of one cited article, for the sources modal's frame.

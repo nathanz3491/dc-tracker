@@ -44,7 +44,7 @@ from dataclasses import dataclass, field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from tracker.dedup import company_key, customer_key
+from tracker.dedup import company_key, company_slug, customer_key
 from tracker.models import Project, Watch, utcnow
 
 #: What separates the company from the project in an entry, as in
@@ -102,6 +102,7 @@ class Entity:
         return {
             "entry": self.entry,
             "company_key": self.company_key,
+            "company_slug": company_slug(self.company_key),
             "project_key": self.project_key,
             "note": self.note,
             "added_at": self.added_at.isoformat() if self.added_at else None,

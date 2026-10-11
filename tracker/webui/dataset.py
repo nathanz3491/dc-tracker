@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 from tracker import __version__
 from tracker import required as required_list
 from tracker.confidence import SOURCE_WEIGHTS
+from tracker.dedup import company_key, company_slug, customer_key
 from tracker.export import fetch_projects, iso, to_json_object
 from tracker.gaps import measure as measure_gaps
 from tracker.gaps import worst as worst_gaps
@@ -502,6 +503,13 @@ def project_payload(project: Any, *, claims: bool = False) -> dict[str, Any]:
     # that picked it, so the explanation cannot name a different risk than the
     # column holds.
     payload["blocker_rationale"] = blocker_rationale(project)
+    # Where the company names link: `/companies/<slug>` (`tracker.company`). From
+    # the same key a watchlist entry matches on, so the link and a watch on that
+    # name lead to the same campuses.
+    payload["company_slug"] = company_slug(company_key(project.company))
+    payload["customer_slug"] = (
+        company_slug(customer_key(project.customer)) if customer_key(project.customer) else None
+    )
     _split_serving(payload)
     return payload
 

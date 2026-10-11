@@ -40,6 +40,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from tracker import watchlist
+from tracker.dedup import company_key, company_slug
 from tracker.feed import REPORT_WINDOW_DAYS, reported_on
 from tracker.models import Project, Source
 from tracker.sources import host_of
@@ -168,6 +169,7 @@ class ProjectWatch:
         return {
             "project_id": self.project_id,
             "company": self.company,
+            "company_slug": company_slug(company_key(self.company)),
             "project": self.project,
             "location": self.location,
             "entry": self.entry,

@@ -108,7 +108,30 @@ blocked) and never track identity, which the lane labels already carry.
 Long lists are capped at a dozen rows with an exact count and an in-place "show N
 more". Measured on a project with 70 citations: that section alone was 14,660px —
 fifteen screens, two thirds of the page — and a reader scrolling past it had no
-way to know how much was left.
+way to know how much was left. Citations go further: the page shows five, and
+"View all" opens `/projects/<id>/sources`, a page of its own that can be linked
+and reached with the back button.
+
+**A company has a page too**, at `/companies/<slug>` (the normalised name, with
+hyphens: `compass-datacenters`). It lists every campus the company builds or
+rents, with stage, capacity and open obstacles, plus the states and phases they
+fall in and what was reported about them in the last two months. Campuses are
+matched the way a watchlist entry on the same name matches (`tracker/company.py`
+calls the watchlist's own matcher), so the page and a watch cannot cover
+different campuses. Names on the Monitor tab and in a project's header link
+here. The slug is restricted to lowercase letters, digits and hyphens, because
+the server writes it into the page shell, and that restriction is the defence
+against script injection there.
+
+The company's mark is its own site icon, fetched by the console's server, because
+the page's content policy loads images only from itself (`tracker/company_logo.py`,
+`GET /api/company-logo`). The website is the cited domain that carries the
+company's name. A short hand-kept list covers the big tenants, Meta, Amazon and
+Oracle among them, which are cited almost only through their landlords' releases.
+An icon, or the lack of one, is cached for 30 days under the cache directory, and
+the page draws initials when there is none. The image is served under its own
+`sandbox` policy, so an SVG opened directly in a tab cannot run script on the
+console's origin.
 
 There used to be a second face at `/dev` carrying Pipeline, Commands and Runs: a
 palette built by introspecting the CLI, and a real subprocess per button. **It is

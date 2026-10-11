@@ -12,63 +12,41 @@ initial build of the v1 PRD.
 
 ### Added
 
-- **The nightly loop dates articles by asking their publishers, and re-reads what
-  older prompts extracted** (`scripts/overnight.sh`, `tracker/dates.py`, migration
-  `0035_date_probe`, `tests/test_dates.py`, `tests/test_overnight.py`, `README.md`,
-  `docs/data-quality.md`). The 10-10 night showed two steps the loop never took.
-  1,836 citations stayed undated night after night because the date step only read
-  dates written in URL paths; the date is what decides whether an article is news.
-  And 2,320 citations, behind 374 rows, were last read by a superseded extraction
-  prompt, so gate improvements never reached them. The first round now asks
-  publishers for up to 150 dates (one plain request each, no model; each page asked
-  once per 90 days, newest first, closed publishers skipped) and re-reads up to 60
-  cached articles under the current prompt, oldest vintage first, existing rows only
-  (about ¥0.8). On a production copy 5 of 40 pages came back dated; 3 re-read articles
-  updated 7 values for ¥0.04.
+- **Every company has a page, and names across the console lead to it**
+  (`tracker/company.py`, `tracker/company_logo.py`, `tracker/dedup.py`,
+  `tracker/webui/server.py`, `tracker/webui/static/app.js`,
+  `tracker/webui/static/views-monitor.js`, `tests/test_company_logo.py`,
+  `tests/test_webui.py`). A watchlist entry like "Microsoft" (twenty campuses) led
+  nowhere. `/companies/<slug>` now shows the company's mark, its website, what it
+  builds and where it is a tenant, its campuses biggest first with their stage and
+  capacity, which states and phases they are in, and what was reported about them
+  in the last two months, with a Watch button. Campus and company names on the
+  Monitor list, Monitor cards and a project's header link to their pages. Campuses
+  are matched the way a watch on the same name matches, so the page and the watch
+  cannot disagree. The logo is the company's own site icon: the website comes from
+  the cited domain that carries the company's name (a short hand-kept list covers
+  Meta, Amazon and the other big tenants, which are cited only through their
+  landlords). The console's server fetches it once and caches it for 30 days, and
+  the page shows initials when there is none.
 
-- **DCD and DCF stories reach the queue again, through other outlets**
-  (`tracker/ingest/discover.py`, `tracker/seed/feeds.toml`, `tracker/cli/sync.py`,
-  `tests/test_discover.py`, `docs/workflows/sync.md`, `docs/ingesting.md`). The two
-  most-cited trade publishers have answered every page with a Cloudflare challenge
-  since 2026-10-02 — re-measured from two networks and a browser — so their stories
-  stopped arriving. Their headlines are read from Google News's RSS search; each new
-  one is looked up once (about $0.001, at most 40 a night) with the closed
-  publishers excluded, and the operator's release or another outlet's report of the
-  same story is queued, dated like the headline. Reposts of the blocked article are
-  skipped. On 12 headlines: 10 readable copies for 7 stories. A headline must name
-  the topic or state a capacity, and surveys and polls are dropped: on the first
-  night that leaves 17 of 39, the rest being telecom, chips and quantum.
+- **A project's citations have their own page** (`/projects/<id>/sources`). The
+  project page shows the first five and links to the rest. Fairwater cites 54
+  articles, which had buried everything under them.
 
-- **Every closed feed and archive is asked again once a week**
-  (`tracker/ingest/discover.py`, migration `0034_feed_probe`, `tracker/cli/sync.py`).
-  Fourteen were closed by hand on 2026-10-02 and nothing would have noticed one
-  reopening. `tracker discover` now requests each one's own URL weekly; one that
-  answers with a real feed is polled again that night and closed again the first
-  night it fails. `--probe-closed` asks all of them now.
-
-- **Follow one project with a button: ☆ on every Projects row and *Watch* on a
-  project's page** (`tracker/watchlist.py`, `tracker/merge.py`, `tracker/models.py`,
-  migration `0033_watch_project`, `tracker/webui/server.py`,
-  `tracker/webui/static/app.js`, `tests/test_watchlist.py`, `tests/test_webui.py`).
-  Following a campus used to mean typing it into a box on another page, and the
-  typed form matches names loosely, so "xAI | Colossus" also follows "Colossus 2".
-  The button follows exactly that row, by id, and a merge carries it to the
-  surviving row instead of deleting it. A row already covered by a company watch
-  shows a dimmed star that says which one.
-
-- **The nightly loop adds campuses again, through the identity check**
-  (`scripts/overnight.sh`, `tracker/ingest/discover.py`, `tracker/cli/ingest.py`,
-  `tests/test_discover.py`, `tests/test_overnight.py`, `README.md`,
-  `docs/workflows/sync.md`). Since enrich began reading for one row only
-  (2026-09-30), nothing in the loop created a row; the old loop's ~13 a night had
-  come from unfocused reads. The campuses a one-row read turns away were not the
-  answer: on 10-01 all five were rows already held under other names. The first round
-  now polls the feeds, which costs nothing, and reads `--discover` (default 10) queued
-  articles naming no tracked campus, newest first (`ingest crawl --from-queue
-  --new-first`), through the ordinary crawl and its identity arbiter. About ¥0.3 a
-  night; the queue held 2,133 such articles.
+- **A public page for publishers who find the crawler in their logs**
+  (`docs/crawler.md`, `.env.example`). It covers what dc-tracker requests, how often,
+  how it behaves on a refusal or a challenge, what it keeps, and how to have it slowed
+  or stopped. It also names its gaps: `robots.txt` is parsed only on the browser
+  path, and `Crawl-delay` is not read. The User-Agent is meant to link to it.
 
 ### Changed
+
+- **The relief map reads at a glance instead of being three towers.** Columns
+  are flat-topped, one width band, and grow with the square root of capacity
+  against the 95th percentile, capped a third above it. States are shaded by how
+  many projects they hold, and the camera starts closer. The first version scaled
+  against a fixed 1,200 MW, and with 5-10 GW campuses in the database a few columns
+  stood ninety units tall over the other five hundred.
 
 - **"Watch for" is now "Monitor", and the watchlist is edited there**
   (`tracker/webui/static/views-monitor.js`, `tracker/webui/static/app.js`,
@@ -148,6 +126,70 @@ initial build of the v1 PRD.
   a claim "directory".
 
 ### Fixed
+
+- **The console's reader view identifies itself, and leaves closed publishers
+  alone** (`tracker/webui/article.py`). Opening a cited article fetched it with a
+  Chrome User-Agent, the one request a publisher could not attribute to this
+  project. It also ignored the list of publishers that challenge every client, so
+  one click on an old DCD citation knocked on a door the crawl had agreed to leave
+  shut. It now sends the configured User-Agent, and on a closed publisher it shows
+  the stored text without a request.
+
+- **The nightly loop dates articles by asking their publishers, and re-reads what
+  older prompts extracted** (`scripts/overnight.sh`, `tracker/dates.py`, migration
+  `0035_date_probe`, `tests/test_dates.py`, `tests/test_overnight.py`, `README.md`,
+  `docs/data-quality.md`). The 10-10 night showed two steps the loop never took.
+  1,836 citations stayed undated night after night because the date step only read
+  dates written in URL paths; the date is what decides whether an article is news.
+  And 2,320 citations, behind 374 rows, were last read by a superseded extraction
+  prompt, so gate improvements never reached them. The first round now asks
+  publishers for up to 150 dates (one plain request each, no model; each page asked
+  once per 90 days, newest first, closed publishers skipped) and re-reads up to 60
+  cached articles under the current prompt, oldest vintage first, existing rows only
+  (about ¥0.8). On a production copy 5 of 40 pages came back dated; 3 re-read articles
+  updated 7 values for ¥0.04.
+
+- **DCD and DCF stories reach the queue again, through other outlets**
+  (`tracker/ingest/discover.py`, `tracker/seed/feeds.toml`, `tracker/cli/sync.py`,
+  `tests/test_discover.py`, `docs/workflows/sync.md`, `docs/ingesting.md`). The two
+  most-cited trade publishers have answered every page with a Cloudflare challenge
+  since 2026-10-02 — re-measured from two networks and a browser — so their stories
+  stopped arriving. Their headlines are read from Google News's RSS search; each new
+  one is looked up once (about $0.001, at most 40 a night) with the closed
+  publishers excluded, and the operator's release or another outlet's report of the
+  same story is queued, dated like the headline. Reposts of the blocked article are
+  skipped. On 12 headlines: 10 readable copies for 7 stories. A headline must name
+  the topic or state a capacity, and surveys and polls are dropped: on the first
+  night that leaves 17 of 39, the rest being telecom, chips and quantum.
+
+- **Every closed feed and archive is asked again once a week**
+  (`tracker/ingest/discover.py`, migration `0034_feed_probe`, `tracker/cli/sync.py`).
+  Fourteen were closed by hand on 2026-10-02 and nothing would have noticed one
+  reopening. `tracker discover` now requests each one's own URL weekly; one that
+  answers with a real feed is polled again that night and closed again the first
+  night it fails. `--probe-closed` asks all of them now.
+
+- **Follow one project with a button: ☆ on every Projects row and *Watch* on a
+  project's page** (`tracker/watchlist.py`, `tracker/merge.py`, `tracker/models.py`,
+  migration `0033_watch_project`, `tracker/webui/server.py`,
+  `tracker/webui/static/app.js`, `tests/test_watchlist.py`, `tests/test_webui.py`).
+  Following a campus used to mean typing it into a box on another page, and the
+  typed form matches names loosely, so "xAI | Colossus" also follows "Colossus 2".
+  The button follows exactly that row, by id, and a merge carries it to the
+  surviving row instead of deleting it. A row already covered by a company watch
+  shows a dimmed star that says which one.
+
+- **The nightly loop adds campuses again, through the identity check**
+  (`scripts/overnight.sh`, `tracker/ingest/discover.py`, `tracker/cli/ingest.py`,
+  `tests/test_discover.py`, `tests/test_overnight.py`, `README.md`,
+  `docs/workflows/sync.md`). Since enrich began reading for one row only
+  (2026-09-30), nothing in the loop created a row; the old loop's ~13 a night had
+  come from unfocused reads. The campuses a one-row read turns away were not the
+  answer: on 10-01 all five were rows already held under other names. The first round
+  now polls the feeds, which costs nothing, and reads `--discover` (default 10) queued
+  articles naming no tracked campus, newest first (`ingest crawl --from-queue
+  --new-first`), through the ordinary crawl and its identity arbiter. About ¥0.3 a
+  night; the queue held 2,133 such articles.
 
 - **A dropped proxy no longer hangs a nightly run for hours** (`tracker/llm.py`,
   `tests/test_llm_timeout.py`, `tests/conftest.py`). On 2026-10-07 the proxy failed

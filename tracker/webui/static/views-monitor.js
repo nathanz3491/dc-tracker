@@ -114,7 +114,7 @@ function Blocker({ blocker, muted }) {
     </li>`;
 }
 
-function ProjectCard({ project, level, onOpen }) {
+function ProjectCard({ project, level, onOpen, onOpenCompany }) {
   const [showHeld, setShowHeld] = useState(false);
   const blockers = project.blockers.filter((b) => RANK[b.severity] >= RANK[level === "all" ? "watch" : level]);
   const hidden = project.blockers.length - blockers.length;
@@ -124,7 +124,10 @@ function ProjectCard({ project, level, onOpen }) {
                         flexWrap: "wrap" }}>
         <div style=${{ display: "grid", gap: 2 }}>
           <span class="dc-wf-meta" style=${{ fontWeight: 600 }}>
-            ${project.company}${project.location ? ` · ${project.location}` : ""}
+            ${project.company_slug && onOpenCompany
+              ? html`<button type="button" class="dc-linkish" style=${{ font: "inherit", fontWeight: 600 }}
+                             onClick=${() => onOpenCompany(project.company_slug)}>${project.company}</button>`
+              : project.company}${project.location ? ` · ${project.location}` : ""}
           </span>
           <button type="button" class="dc-linkish dc-wf-name" onClick=${() => onOpen(project.project_id)}>
             ${project.project}
@@ -171,7 +174,7 @@ function ProjectCard({ project, level, onOpen }) {
     </article>`;
 }
 
-export function MonitorView({ api, onOpen, onGoto, ListEditor, projects: allProjects, onListChanged }) {
+export function MonitorView({ api, onOpen, onGoto, onOpenCompany, ListEditor, projects: allProjects, onListChanged }) {
   const [payload, setPayload] = useState(null);
   const [failed, setFailed] = useState(null);
   const [level, setLevel] = useState("all");
@@ -233,7 +236,8 @@ export function MonitorView({ api, onOpen, onGoto, ListEditor, projects: allProj
                   onClick=${() => onGoto("projects")}>or press ☆ on any project →</button>
         </div>
         ${payload && ListEditor && html`<${ListEditor} payload=${payload} projects=${allProjects}
-                                                       onChanged=${changed} />`}
+                                                       onChanged=${changed} onOpen=${onOpen}
+                                                       onOpenCompany=${onOpenCompany} />`}
       </section>
 
       ${failed && html`<${Alert} variant="warning"><div class="mrd-alert-desc">${failed}</div><//>`}
@@ -283,7 +287,7 @@ export function MonitorView({ api, onOpen, onGoto, ListEditor, projects: allProj
                          description=${q ? "Nothing matches that filter." : "None of your projects has an obstacle this severe."} />`}
 
         <div style=${{ display: "grid", gap: 14 }}>
-          ${blocked.map((p) => html`<${ProjectCard} key=${p.project_id} project=${p} level=${level} onOpen=${onOpen} />`)}
+          ${blocked.map((p) => html`<${ProjectCard} key=${p.project_id} project=${p} level=${level} onOpen=${onOpen} onOpenCompany=${onOpenCompany} />`)}
         </div>
 
         ${!!clear.length && html`
@@ -294,7 +298,7 @@ export function MonitorView({ api, onOpen, onGoto, ListEditor, projects: allProj
             </button>
             ${showClear && html`
               <div style=${{ display: "grid", gap: 14 }}>
-                ${clear.map((p) => html`<${ProjectCard} key=${p.project_id} project=${p} level=${level} onOpen=${onOpen} />`)}
+                ${clear.map((p) => html`<${ProjectCard} key=${p.project_id} project=${p} level=${level} onOpen=${onOpen} onOpenCompany=${onOpenCompany} />`)}
               </div>`}
           </div>`}
       `}

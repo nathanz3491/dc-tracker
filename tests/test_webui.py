@@ -5140,3 +5140,133 @@ def test_an_old_watch_for_link_signed_out_lands_on_monitor_after_sign_in(reader)
     status, headers, _body = raw(address, "/watch-for")
     assert status in (302, 303, 307)
     assert headers["Location"] == "/signin?next=/monitor"
+
+
+# --- company pages, a project's citations page, the reader's manners ---------
+
+
+def test_a_company_has_its_own_page(server):
+    """A watchlist entry like "Microsoft" led nowhere; now it leads here."""
+    address, _ = server
+    status, body = request(address, "/companies/microsoft")
+    assert status == 200
+    assert 'window.DC_VIEW="company"' in body
+    assert 'window.DC_COMPANY="microsoft"' in body
+
+
+def test_the_company_route_answers_with_its_campuses(server):
+    address, _ = server
+    status, company = request(address, "/api/company?slug=microsoft")
+    assert status == 200
+    assert company["name"] == "Microsoft"
+    assert [p["name"] for p in company["projects"]] == ["Fairwater"]
+    assert company["projects"][0]["via"] == "operator"
+    assert company["totals"]["projects"] == 1
+    assert company["states"] == [["WI", 1]]
+    assert company["domain"] == "microsoft.com"
+    # Nobody is signed in on this console, so there is no watch to offer.
+    assert company["watching"] is False
+
+
+def test_a_company_nobody_builds_for_is_a_404(server):
+    address, _ = server
+    assert request(address, "/api/company?slug=nobody-at-all")[0] == 404
+    assert request(address, "/api/company?slug=Not_A_Slug")[0] == 400
+
+
+def test_a_company_path_cannot_inject_script_into_the_shell(server):
+    """Same rule as the project path: only a slug can reach the interpolation."""
+    address, _ = server
+    for attack in (
+        '/companies/x"></script><script>alert(1)</script>',
+        "/companies/x;alert(1)",
+        "/companies/X",
+        "/companies/-x",
+        "/companies/x/y",
+    ):
+        status, body = request(address, attack)
+        assert status == 404, attack
+        assert "window.DC_COMPANY" not in str(body), attack
+
+
+def test_a_projects_citations_have_their_own_page(server):
+    address, _ = server
+    _status, data = request(address, "/api/dataset")
+    pid = data["projects"][0]["id"]
+    status, body = request(address, f"/projects/{pid}/sources")
+    assert status == 200
+    assert f"window.DC_PROJECT={pid}" in body
+    assert 'window.DC_SUB="sources"' in body
+    assert 'window.DC_SUB=""' in request(address, f"/projects/{pid}")[1]
+    assert request(address, f"/projects/{pid}/claims")[0] == 404
+
+
+def test_a_company_logo_is_served_under_a_policy_that_runs_nothing(server, monkeypatch):
+    """An SVG opened directly in a tab must not run script under the console's origin."""
+    from tracker import company_logo
+
+    address, _ = server
+    seen = {}
+
+    def fake(slug, domain, **kw):
+        seen.update(slug=slug, domain=domain)
+        return b"<svg xmlns='http://www.w3.org/2000/svg'/>", "image/svg+xml"
+
+    monkeypatch.setattr(company_logo, "logo", fake)
+    headers = headers_for(address, "/api/company-logo?slug=microsoft")
+    assert headers["content-type"] == "image/svg+xml"
+    assert "sandbox" in headers["content-security-policy"]
+    assert "default-src 'none'" in headers["content-security-policy"]
+    assert seen == {"slug": "microsoft", "domain": "microsoft.com"}
+
+
+def test_no_logo_is_a_404_the_page_draws_initials_for(server, monkeypatch):
+    from tracker import company_logo
+
+    address, _ = server
+    monkeypatch.setattr(company_logo, "logo", lambda *a, **kw: None)
+    assert request(address, "/api/company-logo?slug=microsoft")[0] == 404
+    assert request(address, "/api/company-logo?slug=nobody-at-all")[0] == 404
+    assert request(address, "/api/company-logo?slug=../etc")[0] == 400
+
+
+def test_the_reader_does_not_knock_on_a_closed_publisher(seeded_db, reader_dirs, monkeypatch):
+    """The crawl leaves a publisher that challenges every client alone; so does a click."""
+    from tracker.webui import article
+
+    def refuse(url):
+        raise AssertionError("fetched a closed publisher")
+
+    monkeypatch.setattr(article, "_closed", lambda session, url: True)
+    monkeypatch.setattr(article, "_get", refuse)
+    found = _load(seeded_db, FAIRWATER, reader_dirs)
+    # Falls back to the stored text rather than an empty pane.
+    assert found.via in ("text", "excerpt")
+    assert "900 MW" in found.body
+
+
+def test_the_reader_sends_the_projects_own_user_agent(monkeypatch):
+    """It used to send a Chrome string — the one request a publisher could not attribute."""
+    import httpx
+
+    from tracker.config import get_settings
+    from tracker.webui import article
+
+    monkeypatch.setenv("TRACKER_USER_AGENT", "dc-tracker/test (+https://example.com/crawler)")
+    get_settings.cache_clear()
+    monkeypatch.setitem(sys.modules, "curl_cffi", None)  # take the httpx path
+    sent = {}
+
+    response = httpx.Response(
+        200,
+        content=b"<html><body>hello</body></html>",
+        headers={"content-type": "text/html; charset=utf-8"},
+    )
+
+    def fake_get(url, **kw):
+        sent.update(kw.get("headers") or {})
+        return response
+
+    monkeypatch.setattr(httpx, "get", fake_get)
+    article._get("https://news.example.com/a")
+    assert sent["user-agent"] == "dc-tracker/test (+https://example.com/crawler)"

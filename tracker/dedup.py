@@ -131,6 +131,16 @@ def _slug(raw: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def company_slug(key: str) -> str:
+    """A company key as a URL segment: `"compass datacenters"` → `"compass-datacenters"`.
+
+    For `/companies/<slug>` (`tracker.company`). Lowercase letters, digits and
+    hyphens only — the server puts it into the page shell, and that restriction
+    is the defence there.
+    """
+    return re.sub(r"[^a-z0-9]+", "-", (key or "").lower()).strip("-")[:81]
+
+
 def company_key(company: str | None) -> str:
     """Normalized company identity.
 
@@ -703,6 +713,7 @@ __all__ = [
     "city_key",
     "company_key",
     "company_parts",
+    "company_slug",
     "county_key",
     "customer_key",
     "dedup_key",

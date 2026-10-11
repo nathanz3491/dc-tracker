@@ -1384,7 +1384,7 @@ function Section({ id, title, count, blurb, children }) {
     </section>`;
 }
 
-function ProjectPage({ id, data, onBack, watch, onGoto }) {
+function ProjectPage({ id, data, onBack, watch, onGoto, onOpenCompany, onAllSources }) {
   /* Fetched per visit, not read out of the list payload the console already has.
    *
    * Two reasons, and the second is the one that matters. The list deliberately
@@ -1467,7 +1467,16 @@ function ProjectPage({ id, data, onBack, watch, onGoto }) {
         </div>
         ${watch?.error && html`<div style=${{ fontSize: 12, color: "var(--danger)" }}>${watch.error}</div>`}
         <div style=${{ display: "flex", alignItems: "center", gap: 9, flexWrap: "wrap" }}>
-          <span style=${{ fontSize: 14, fontWeight: 500 }}>${p.company}</span>
+          ${p.company_slug && onOpenCompany
+            ? html`<button type="button" class="dc-linkish" style=${{ fontSize: 14, fontWeight: 500 }}
+                           title=${`Every campus of ${p.company}`}
+                           onClick=${() => onOpenCompany(p.company_slug)}>${p.company}</button>`
+            : html`<span style=${{ fontSize: 14, fontWeight: 500 }}>${p.company}</span>`}
+          ${p.customer && p.customer_slug && p.customer_slug !== p.company_slug && onOpenCompany && html`
+            <span style=${{ fontSize: 13, color: "var(--muted-foreground)" }}>for</span>
+            <button type="button" class="dc-linkish" style=${{ fontSize: 14 }}
+                    title=${`Every campus of ${p.customer}`}
+                    onClick=${() => onOpenCompany(p.customer_slug)}>${p.customer}</button>`}
           <span style=${{ color: "var(--border)" }}>·</span>
           <span class="dc-num" style=${{ fontSize: 12.5, color: "var(--muted-foreground)" }}>
             ${place(p)}${p.iso ? " · " + p.iso : ""}</span>
@@ -1532,7 +1541,7 @@ function ProjectPage({ id, data, onBack, watch, onGoto }) {
       ${has("citations") && html`
         <${Section} id="citations" title="Citations" count=${(p.sources || []).length}
           blurb="Every article this row rests on, what each one supports, and what its publisher is worth.">
-          <${SourcesTab} data=${data} p=${p} />
+          <${SourcesTab} data=${data} p=${p} limit=${CITATIONS_ON_PAGE} onAll=${onAllSources} />
         <//>`}
 
       <${Section} id="timeline" title="Timeline"
@@ -3387,8 +3396,257 @@ function RisksTab({ data, p }) {
     </div>`;
 }
 
-function SourcesTab({ data, p }) {
-  const [rows, more] = useCapped(p.sources || []);
+/* How many citations the project page shows before "View all". Enough to see
+   what kind of sourcing a row has; the rest is a click away on its own page,
+   where the list can be read without scrolling past the timeline to get there. */
+const CITATIONS_ON_PAGE = 5;
+
+/* Every citation behind one project, at `/projects/<id>/sources`.
+ *
+ * Its own page rather than an ever-longer section: a well-covered campus carries
+ * forty citations, and the project page's job is the figures and the tracks —
+ * the full list buried both under a wall of cards. */
+function ProjectSourcesPage({ id, data, onBack }) {
+  const [state, setState] = useState({ loading: true, project: null, error: null });
+  useEffect(() => {
+    let cancelled = false;
+    setState({ loading: true, project: null, error: null });
+    api(`/api/project?id=${id}`)
+      .then((payload) => { if (!cancelled) setState({ loading: false, project: payload.project, error: null }); })
+      .catch((err) => { if (!cancelled) setState({ loading: false, project: null, error: String((err && err.message) || err) }); });
+    return () => { cancelled = true; };
+  }, [id]);
+  const p = state.project;
+  return html`
+    <div class="dc-view dc-rise" style=${{ display: "grid", gap: 20, padding: "22px 26px 72px", maxWidth: 980 }}>
+      <button type="button" class="dc-linkish" onClick=${onBack} style=${{ justifySelf: "start" }}>
+        ← ${p ? p.name : `project #${id}`}</button>
+      ${state.loading && html`<${Skeleton} style=${{ height: 220 }} />`}
+      ${!state.loading && !p && html`
+        <${EmptyState} variant="dashed" title=${`No project #${id}`}
+          description=${state.error || "Nothing in the database has that id."} />`}
+      ${p && html`
+        <${Eyebrow} figure=${`#${p.id} — citations`} title=${`Every source behind ${p.name}`}>
+          ${(p.sources || []).length} article${(p.sources || []).length === 1 ? "" : "s"}, what each one
+          supports, and what its publisher is worth. One source alone caps confidence at 2.
+        <//>
+        <${SourcesTab} data=${data} p=${p} limit=${null} />`}
+    </div>`;
+}
+
+/* A company's mark: its own site icon when the server found one, else initials.
+ *
+ * The server fetches the icon from the company's cited website and caches it
+ * (`tracker/company_logo.py`); a 404 or a broken image falls back to initials on
+ * a tint, so the header never shows a broken-image glyph. */
+function CompanyMark({ slug, name, size = 64 }) {
+  const [failed, setFailed] = useState(false);
+  useEffect(() => { setFailed(false); }, [slug]);
+  const initials = (name || "?").split(/\s+/).filter(Boolean).slice(0, 2)
+    .map((w) => w[0].toUpperCase()).join("");
+  return html`
+    <span class="dc-co-mark" style=${{ width: size, height: size }} aria-hidden="true">
+      ${failed
+        ? html`<span class="dc-co-initials" style=${{ fontSize: size * 0.36 }}>${initials}</span>`
+        : html`<img src=${`/api/company-logo?slug=${encodeURIComponent(slug)}`} alt=""
+                    onError=${() => setFailed(true)} />`}
+    </span>`;
+}
+
+/* One company: every campus it builds or occupies, at `/companies/<slug>`.
+ *
+ * Reached from a watchlist entry, a company name on a project page or a Monitor
+ * card. Matched the way a watch on the same name matches (`tracker/company.py`),
+ * so following the company from here and the list on this page cover the same
+ * campuses. Each row says whether the company builds it or is the tenant.
+ *
+ * Laid out as a profile rather than a report: who it is (mark, name, website),
+ * four numbers, then the campuses beside where they are and what stage they are
+ * at, then what moved on them recently. */
+function CompanyPage({ slug, data, onOpen, onGoto, onListChanged }) {
+  const [state, setState] = useState({ loading: true, company: null, error: null });
+  const [busy, setBusy] = useState(false);
+  const [nonce, setNonce] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    setState((s) => ({ ...s, loading: true }));
+    api(`/api/company?slug=${encodeURIComponent(slug)}`)
+      .then((payload) => { if (!cancelled) setState({ loading: false, company: payload, error: null }); })
+      .catch((err) => { if (!cancelled) setState({ loading: false, company: null, error: String((err && err.message) || err) }); });
+    return () => { cancelled = true; };
+  }, [slug, nonce]);
+
+  const c = state.company;
+  const toggleWatch = async () => {
+    setBusy(true);
+    try {
+      await api("/api/watch", { method: "POST",
+        body: { action: c.watching ? "remove" : "add", entry: c.name } });
+      if (onListChanged) await onListChanged();
+      setNonce((n) => n + 1);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const role = (via) => (via === "operator" ? "builds" : via === "block_customer" ? "tenant (tranche)" : "tenant");
+  const stat = (value, label, hint) => html`
+    <div class="dc-co-stat">
+      <span class="dc-co-stat-value dc-num">${value}</span>
+      <span class="dc-co-stat-label">${label}</span>
+      ${hint && html`<span class="dc-co-stat-hint">${hint}</span>`}
+    </div>`;
+  const gw = (mw) => (mw >= 1000 ? `${(mw / 1000).toFixed(1).replace(/\.0$/, "")} GW` : `${fmtMw(mw)} MW`);
+
+  if (!c) {
+    return html`
+      <div class="dc-view dc-rise" style=${{ display: "grid", gap: 22, padding: "22px 26px 72px", maxWidth: 1120 }}>
+        <button type="button" class="dc-linkish" onClick=${() => onGoto("projects")}
+                style=${{ justifySelf: "start" }}>← every project</button>
+        ${state.loading
+          ? html`<${Skeleton} style=${{ height: 240 }} />`
+          : html`<${EmptyState} variant="dashed" title="No campus for this company"
+              description=${state.error || "Nothing in the database is built or occupied under this name."} />`}
+      </div>`;
+  }
+
+  const t = c.totals;
+  const maxMw = Math.max(1, ...c.projects.map((r) => r.mw_planned || 0));
+  const states = c.states || [];
+  const phases = c.phases || [];
+  const stateMax = Math.max(1, ...states.map(([, n]) => n));
+  const summary = [
+    t.as_operator && `builds ${t.as_operator}`,
+    t.as_tenant && `tenant on ${t.as_tenant}`,
+    states.length && `in ${states.length} state${states.length === 1 ? "" : "s"}`,
+  ].filter(Boolean).join(" · ");
+
+  return html`
+    <div class="dc-view dc-rise" style=${{ display: "grid", gap: 22, padding: "22px 26px 72px", maxWidth: 1120 }}>
+      <button type="button" class="dc-linkish" onClick=${() => onGoto("projects")}
+              style=${{ justifySelf: "start" }}>← every project</button>
+
+      <section class="dc-co-hero">
+        <div class="dc-co-id">
+          <${CompanyMark} slug=${c.slug} name=${c.name} />
+          <div style=${{ minWidth: 0, display: "grid", gap: 4 }}>
+            <span class="dc-co-eyebrow">company</span>
+            <h1 class="dc-co-name">${c.name}</h1>
+            <div class="dc-co-meta">
+              ${c.domain && html`
+                <a href=${`https://${c.domain}`} target="_blank" rel="noopener noreferrer"
+                   class="dc-co-site">${c.domain} ↗</a>`}
+              <span>${summary}</span>
+            </div>
+          </div>
+          ${c.allow_watch && html`
+            <button type="button" class=${`dc-star dc-star--wide${c.watching ? " dc-star--on" : ""}`}
+                    style=${{ marginLeft: "auto", alignSelf: "flex-start" }}
+                    aria-pressed=${c.watching} disabled=${busy} onClick=${toggleWatch}
+                    title=${c.watching ? "You watch this company. Click to stop." : "Watch every campus of this company"}>
+              <span aria-hidden="true">${c.watching ? "★" : "☆"}</span>
+              <span>${c.watching ? "Watching" : "Watch company"}</span>
+            </button>`}
+        </div>
+        <div class="dc-co-stats">
+          ${stat(t.projects, t.projects === 1 ? "campus" : "campuses",
+                 `${t.as_operator} built · ${t.as_tenant} as tenant`)}
+          ${stat(gw(t.mw_planned), "planned", "summed over the campuses below")}
+          ${stat(gw(t.mw_built), "running", "energised and serving today")}
+          ${stat(t.open_obstacles, "open obstacles", "on these campuses, however old")}
+        </div>
+      </section>
+
+      <div class="dc-co-body">
+        <div class="dc-co-card" style=${{ minWidth: 0 }}>
+          <div style=${{ padding: "16px 18px 6px" }}>
+            <${SectionHead} title="Campuses" count=${c.projects.length}>
+              Biggest first. A campus it rents rather than builds says who the builder is.
+            <//>
+          </div>
+          <div style=${{ overflowX: "auto" }}>
+            <${Table} density="compact">
+              <${TableHeader}><${TableRow}>
+                <${TableHead}>campus<//>
+                <${TableHead}>phase<//>
+                <${TableHead}>planned<//>
+                <${TableHead} align="right">running<//>
+                <${TableHead} align="right">obstacles<//>
+              <//><//>
+              <${TableBody}>
+                ${c.projects.map((r) => html`
+                  <tr key=${r.id} class="dc-row" role="button" tabindex="0"
+                      onClick=${() => onOpen(r.id)}
+                      onKeyDown=${(e) => { if (e.key === "Enter") onOpen(r.id); }}>
+                    <td style=${{ minWidth: 220 }}>
+                      <div style=${{ fontWeight: 600 }}>${r.name}</div>
+                      <div style=${{ fontSize: 12, color: "var(--muted-foreground)" }}>
+                        ${[r.city || r.county, r.state].filter(Boolean).join(", ")}
+                        <span class="dc-co-role">${role(r.via)}${r.via !== "operator" && r.company ? ` · built by ${r.company}` : ""}</span>
+                      </div>
+                    </td>
+                    <td><span style=${chip(PHASE_TOKEN[r.phase] || "--muted-foreground")}>${r.phase}</span></td>
+                    <td style=${{ minWidth: 150 }}>
+                      ${r.mw_planned != null
+                        ? html`<div class="dc-co-mw">
+                            <span class="dc-num">${fmtMw(r.mw_planned)} MW</span>
+                            <span class="dc-co-bar"><span style=${{ width: `${Math.max(3, (100 * r.mw_planned) / maxMw)}%` }}></span></span>
+                          </div>`
+                        : html`<span style=${{ color: "var(--muted-foreground)" }}>not stated</span>`}
+                    </td>
+                    <td class="dc-num" style=${{ textAlign: "right" }}>${r.mw_built != null ? fmtMw(r.mw_built) : "—"}</td>
+                    <td class="dc-num" style=${{ textAlign: "right",
+                        color: r.open_obstacles ? "var(--warning)" : "var(--muted-foreground)" }}>
+                      ${r.open_obstacles || "—"}</td>
+                  </tr>`)}
+              <//>
+            <//>
+          </div>
+        </div>
+
+        <aside class="dc-co-aside">
+          <div class="dc-co-card dc-co-panel">
+            <span class="dc-co-aside-title">Where</span>
+            ${states.map(([st, n]) => html`
+              <div key=${st} class="dc-co-staterow">
+                <span class="dc-num">${st}</span>
+                <span class="dc-co-bar"><span style=${{ width: `${(100 * n) / stateMax}%` }}></span></span>
+                <span class="dc-num" style=${{ textAlign: "right" }}>${n}</span>
+              </div>`)}
+          </div>
+          <div class="dc-co-card dc-co-panel">
+            <span class="dc-co-aside-title">Stage</span>
+            <div class="dc-co-stack" role="img"
+                 aria-label=${phases.map(([ph, n]) => `${n} ${ph}`).join(", ")}>
+              ${phases.map(([ph, n]) => html`
+                <span key=${ph} title=${`${n} ${ph}`}
+                      style=${{ flex: n, background: `var(${PHASE_TOKEN[ph] || "--muted-foreground"})` }}></span>`)}
+            </div>
+            <div style=${{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              ${phases.map(([ph, n]) => html`
+                <span key=${ph} style=${chip(PHASE_TOKEN[ph] || "--muted-foreground")}>${ph} ${n}</span>`)}
+            </div>
+          </div>
+        </aside>
+      </div>
+
+      <div style=${{ display: "grid", gap: 12 }}>
+        <${SectionHead} title="Reported in the last two months" count=${c.updates.length}>
+          Milestones and obstacles on these campuses, most material first.
+        <//>
+        ${!c.updates.length && html`<div style=${{ fontSize: 13, color: "var(--muted-foreground)" }}>
+          Nothing reported about these campuses in the last two months.</div>`}
+        ${c.updates.map((s, i) => html`<${SignalCard} key=${s.key || i} signal=${s} onOpen=${onOpen} />`)}
+      </div>
+    </div>`;
+}
+
+function SourcesTab({ data, p, limit = null, onAll = null }) {
+  const all = p.sources || [];
+  const rows = limit ? all.slice(0, limit) : all;
+  const more = limit && all.length > limit && onAll ? html`
+    <button type="button" class="dc-linkish" style=${{ justifySelf: "start", fontSize: 14 }}
+            onClick=${onAll}>
+      View all ${all.length} citations →</button>` : null;
   return html`
     <div style=${{ display: "grid", gap: 14 }}>
       <p style=${{ margin: 0, fontSize: 14, lineHeight: "22px", color: "var(--muted-foreground)", maxWidth: "88ch" }}>
@@ -3504,7 +3762,9 @@ function MapView({ data, onOpen }) {
                      padding: "22px 26px 60px" }}>
       <${Eyebrow} figure="fig. 02 — geography" title="Roughly where they are">
         A dot sits on the middle of the town, ${html`<b>not</b>`} on the site — almost nobody publishes an
-        address. Bigger dot, more megawatts. A hollow dashed ring means nobody has said how big it is.
+        address. ${is3d
+          ? "Taller column, more megawatts — on a square-root scale with a ceiling, so the few giant campuses stand out without flattening the rest. Darker states hold more projects. A short faint pin means nobody has said how big it is."
+          : "Bigger dot, more megawatts. A hollow dashed ring means nobody has said how big it is."}
         ${" "}${plotted} of ${data.projects.length} projects have coordinates.
       <//>
 
@@ -4831,7 +5091,7 @@ function WatchFilter({ watchlist, tally, filter, onFilter, onGoto, signedIn, wat
  *
  * Passed into Monitor from here (`MonitorView`'s `ListEditor`), because the picker
  * it is built on lives in this file and views-monitor.js cannot import app.js. */
-function WatchlistEditor({ payload, projects, onChanged }) {
+function WatchlistEditor({ payload, projects, onChanged, onOpen, onOpenCompany }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const entities = payload?.watchlist || [];
@@ -4860,6 +5120,15 @@ function WatchlistEditor({ payload, projects, onChanged }) {
       ? { action: "remove", project_id: e.project_id }
       : { action: "remove", entry: e.entry });
   const kind = (e) => (e.project_id != null ? "this project" : e.project_key ? "project name" : "company");
+  /* Where an entry's name leads: the project, when the entry is one campus — a
+     star, or a typed name that matches exactly one — and otherwise the company,
+     whose page lists everything the entry covers. */
+  const open = (e) => {
+    if (e.project_id != null && onOpen) return onOpen(e.project_id);
+    if (e.project_key && e.project_ids.length === 1 && onOpen) return onOpen(e.project_ids[0]);
+    if (e.company_slug && onOpenCompany) return onOpenCompany(e.company_slug);
+    return null;
+  };
 
   return html`
     <div style=${{ display: "grid", gap: 12 }}>
@@ -4878,7 +5147,10 @@ function WatchlistEditor({ payload, projects, onChanged }) {
             <li key=${`${e.project_id ?? ""}:${e.entry}`} class="dc-wl-row">
               <span class="dc-wl-kind">${kind(e)}</span>
               <span class="dc-wl-entry">
-                <b style=${{ fontWeight: 500 }}>${e.entry}</b>
+                <button type="button" class="dc-linkish dc-wl-name" onClick=${() => open(e)}
+                        title=${e.project_id != null || (e.project_key && e.project_ids.length === 1)
+                          ? "Open this project" : `Every campus of ${e.entry.split("|")[0].trim()}`}>
+                  ${e.entry}</button>
                 ${e.note && html`<span class="dc-wl-meta"> · ${e.note}</span>`}
               </span>
               <span class="dc-wl-meta dc-num"
@@ -5807,6 +6079,9 @@ function App() {
      It is a route now, which is the whole change: a project can be linked,
      refreshed and reached with the back button, like every other page here. */
   const [projectId, setProjectId] = useState(() => window.DC_PROJECT || null);
+  /* `/projects/<id>/sources` and `/companies/<slug>`, stamped the same way. */
+  const [projectSub, setProjectSub] = useState(() => window.DC_SUB || "");
+  const [companySlug, setCompanySlug] = useState(() => window.DC_COMPANY || "");
   const [dark, setDark] = useState(false);
   const watch = useWatchState(data?.allow_watch);
 
@@ -5833,6 +6108,8 @@ function App() {
   const goto = useCallback((key, { push = true } = {}) => {
     setView(key);
     setProjectId(null);
+    setProjectSub("");
+    setCompanySlug("");
     /* `pushState`, not a real navigation: the bundle and the dataset are already
        in memory, so re-fetching either to change tab would be slower than the tab
        switch it replaces. The URL is kept honest so refresh, back and a pasted
@@ -5846,14 +6123,31 @@ function App() {
      and the reason every caller switched to it: the drawer this replaces was
      React state with no URL, so a project was the one thing in the console you
      could not link to. */
-  const openProject = useCallback((id, { push = true } = {}) => {
+  const openProject = useCallback((id, { push = true, sub = "" } = {}) => {
     if (id == null) return;
     setView("projects");
     setProjectId(id);
-    const path = `/projects/${id}`;
+    setProjectSub(sub);
+    setCompanySlug("");
+    const path = `/projects/${id}${sub ? `/${sub}` : ""}`;
     if (push && window.location.pathname !== path) {
       window.history.pushState({ view: "projects", project: id }, "", path);
     }
+    window.scrollTo({ top: 0 });
+  }, []);
+
+  /* One company's page: every campus it builds or occupies. */
+  const openCompany = useCallback((slug, { push = true } = {}) => {
+    if (!slug) return;
+    setView("company");
+    setProjectId(null);
+    setProjectSub("");
+    setCompanySlug(slug);
+    const path = `/companies/${slug}`;
+    if (push && window.location.pathname !== path) {
+      window.history.pushState({ view: "company", company: slug }, "", path);
+    }
+    window.scrollTo({ top: 0 });
   }, []);
 
   /* Back and forward. `push: false` so replaying history does not re-push it.
@@ -5862,15 +6156,17 @@ function App() {
   useEffect(() => {
     const onPop = () => {
       const path = window.location.pathname;
-      const match = /^\/projects\/(\d+)$/.exec(path);
-      if (match) return openProject(Number(match[1]), { push: false });
+      const match = /^\/projects\/(\d+)(\/sources)?$/.exec(path);
+      if (match) return openProject(Number(match[1]), { push: false, sub: match[2] ? "sources" : "" });
+      const company = /^\/companies\/([a-z0-9][a-z0-9-]*)$/.exec(path);
+      if (company) return openCompany(company[1], { push: false });
       const key = path.replace(/^\//, "");
       const known = VIEWS.some(([v]) => v === key) || ACCOUNT_VIEWS.includes(key);
       goto(known ? key : "updates", { push: false });
     };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
-  }, [goto, openProject]);
+  }, [goto, openProject, openCompany]);
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => { document.documentElement.classList.toggle("dark", dark); }, [dark]);
@@ -5992,12 +6288,21 @@ function App() {
 
         ${view === "updates" && html`<${UpdatesView} data=${data} onOpen=${openProject} onGoto=${goto} />`}
         ${view === "monitor" && html`<${MonitorView} api=${api} onOpen=${openProject} onGoto=${goto}
+                                                  onOpenCompany=${openCompany}
                                                   ListEditor=${WatchlistEditor} projects=${data.projects}
                                                   onListChanged=${watch.refresh} />`}
+        ${view === "company" && companySlug && html`
+          <${CompanyPage} slug=${companySlug} data=${data} onOpen=${openProject}
+                          onGoto=${goto} onListChanged=${watch.refresh} />`}
         ${/* One project's page, or the table. The page fetches its own detail, so it
               needs the id rather than a row out of the list payload. */ ""}
-        ${view === "projects" && projectId != null
+        ${view === "projects" && projectId != null && projectSub === "sources"
+          ? html`<${ProjectSourcesPage} id=${projectId} data=${data}
+                   onBack=${() => openProject(projectId)} />`
+          : view === "projects" && projectId != null
           ? html`<${ProjectPage} id=${projectId} data=${data} watch=${watch} onGoto=${goto}
+                   onOpenCompany=${openCompany}
+                   onAllSources=${() => openProject(projectId, { sub: "sources" })}
                    onBack=${() => goto("projects")} />`
           : view === "projects" && html`<${ProjectsView} data=${data} onOpen=${openProject}
                                                          watch=${watch} onGoto=${goto} />`}

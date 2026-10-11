@@ -1267,6 +1267,9 @@ button.dc-tile:disabled { cursor: default; }
   letter-spacing: 0.06em; color: var(--muted-foreground);
 }
 .dc-wl-entry { min-width: 0; font-size: 14px; overflow-wrap: anywhere; }
+/* The entry's name is a link to its project or company page; it keeps the weight
+   of the label it replaced so the list does not turn into a column of blue. */
+.dc-wl-name  { font: inherit; font-weight: 500; text-align: left; }
 .dc-wl-meta  { font-size: 12px; color: var(--muted-foreground); white-space: nowrap; }
 @media (max-width: 720px) {
   .dc-wl-row { grid-template-columns: minmax(0, 1fr) 26px; }
@@ -1298,3 +1301,79 @@ button.dc-tile:disabled { cursor: default; }
 @media (max-width: 560px) {
   .dc-wf-tracks { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
+
+/* ---- Company page ---------------------------------------------------------
+ *
+ * A profile, not a report: the mark and name lead, four numbers sit in a strip
+ * under them, and the campus table shares a row with where and at what stage.
+ * The aside drops under the table below 900px. */
+.dc-co-hero {
+  display: grid; gap: 18px; padding: 22px 24px 18px;
+  border: 1px solid var(--border); border-radius: var(--radius-xl);
+  background:
+    radial-gradient(120% 140% at 0% 0%, color-mix(in oklab, var(--primary) 7%, transparent), transparent 60%),
+    var(--surface);
+  box-shadow: var(--shadow-card);
+}
+.dc-co-id { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; }
+.dc-co-mark {
+  flex: none; display: grid; place-items: center; overflow: hidden;
+  border-radius: 16px; border: 1px solid var(--border); background: #fff;
+  box-shadow: var(--shadow-card);
+}
+.dc-co-mark img { width: 72%; height: 72%; object-fit: contain; }
+.dc-co-initials {
+  width: 100%; height: 100%; display: grid; place-items: center;
+  font-family: var(--font-display); letter-spacing: .02em;
+  color: var(--primary); background: color-mix(in oklab, var(--primary) 12%, var(--surface));
+}
+.dc-co-eyebrow {
+  font-family: var(--font-mono); font-size: 11px; letter-spacing: .14em;
+  text-transform: uppercase; color: var(--muted-foreground);
+}
+.dc-co-name { margin: 0; font-family: var(--font-display); font-size: 34px; line-height: 1.05; font-weight: 400; }
+.dc-co-meta {
+  display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: baseline;
+  font-size: 13.5px; color: var(--muted-foreground);
+}
+.dc-co-site { color: var(--primary); text-decoration: none; font-family: var(--font-mono); font-size: 12.5px; }
+.dc-co-site:hover { text-decoration: underline; text-underline-offset: 2px; }
+.dc-co-stats {
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+  border-top: 1px solid var(--border); padding-top: 14px; gap: 14px 0;
+}
+@media (max-width: 640px) {
+  .dc-co-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .dc-co-stat:nth-child(3) { border-left: 0; padding-left: 0; }
+}
+.dc-co-stat { display: grid; gap: 2px; padding: 0 16px; border-left: 1px solid var(--border); }
+.dc-co-stat:first-child { border-left: 0; padding-left: 0; }
+.dc-co-stat-value { font-family: var(--font-display); font-size: 28px; line-height: 1.1; }
+.dc-co-stat-label { font-size: 13px; font-weight: 600; }
+.dc-co-stat-hint { font-size: 12px; color: var(--muted-foreground); }
+
+.dc-co-body { display: grid; grid-template-columns: minmax(0, 1fr) 260px; gap: 18px; align-items: start; }
+@media (max-width: 900px) { .dc-co-body { grid-template-columns: minmax(0, 1fr); } }
+.dc-co-card {
+  border: 1px solid var(--border); border-radius: var(--radius-lg);
+  background: var(--surface); box-shadow: var(--shadow-card);
+}
+.dc-co-panel { padding: 16px 18px; display: grid; gap: 10px; }
+.dc-co-aside { display: grid; gap: 14px; position: sticky; top: calc(var(--dc-header-h, 56px) + 16px); }
+.dc-co-aside-title {
+  font-family: var(--font-mono); font-size: 11px; letter-spacing: .14em;
+  text-transform: uppercase; color: var(--muted-foreground);
+}
+.dc-co-role { margin-left: 8px; font-family: var(--font-mono); font-size: 11px; }
+.dc-co-mw { display: grid; gap: 4px; font-size: 13px; }
+.dc-co-bar {
+  display: block; height: 5px; border-radius: 999px; overflow: hidden;
+  background: color-mix(in oklab, var(--muted-foreground) 14%, transparent);
+}
+.dc-co-bar > span {
+  display: block; height: 100%; border-radius: 999px;
+  background: color-mix(in oklab, var(--primary) 70%, transparent);
+}
+.dc-co-staterow { display: grid; grid-template-columns: 28px 1fr 24px; gap: 10px; align-items: center; font-size: 12.5px; }
+.dc-co-stack { display: flex; height: 10px; border-radius: 999px; overflow: hidden; gap: 2px; }
+.dc-co-stack > span { min-width: 4px; }
