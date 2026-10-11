@@ -84,10 +84,8 @@ _NEEDS_READER: Final = "reader view needs `pip install dc-tracker[reader]`"
 #: every attribute not named here — `on*` handlers cannot survive an allowlist.
 _ALLOWED_ATTRS: Final = frozenset({"href", "src", "alt", "title", "colspan", "rowspan"})
 
-_UA: Final = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
-)
+#: Shown instead of fetching a page on a publisher that has closed its site to us.
+_CLOSED: Final = "this publisher has closed its pages to crawlers, so only the stored text is shown"
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,6 +131,11 @@ def load(
         return _marked(url, title, body, "reader-cache", quotes)
 
     error = ""
+    if fetch and _closed(session, url):
+        # The crawl does not read a publisher that challenges every client, and
+        # the reader is the same project making the same request; one click is
+        # not a reason to knock on a door the crawl has agreed to leave shut.
+        error, fetch = _CLOSED, False
     if fetch:
         refused = reader_dir / _digest(url, ".refused")
         error = _recent_refusal(refused)
@@ -155,6 +158,15 @@ def load(
 
 
 # --- Getting the article ----------------------------------------------------
+
+
+def _closed(session: Any, url: str) -> bool:
+    """Whether `url` is on a publisher the crawl treats as closed."""
+    from tracker.confidence import registrable_domain
+    from tracker.ingest import discover
+
+    closed = discover.closed_domains(reopened=discover.reopened_names(session))
+    return registrable_domain(url) in closed
 
 
 def _extract(url: str) -> tuple[str, str, str]:
@@ -194,11 +206,19 @@ def _get(url: str) -> tuple[str, str]:
     The same reasoning the crawl's first escalation rung is built on: a browser's
     TLS fingerprint clears a class of WAF 403s that no User-Agent can, at the
     cost of one ordinary request.
+
+    **It sends the project's own User-Agent, as every crawl request does.** It used
+    to send a Chrome string, which made the one fetch a person triggers the one
+    fetch a publisher could not attribute to us — and the crawler's public page
+    (`docs/crawler.md`) says every request carries the project's name.
     """
+    from tracker.config import get_settings
+
+    headers = {"user-agent": get_settings().user_agent}
     try:
         from curl_cffi import requests as creq
 
-        response = creq.get(url, impersonate="chrome", timeout=25)
+        response = creq.get(url, impersonate="chrome", timeout=25, headers=headers)
         if response.status_code >= 400:
             return "", f"the publisher answered {response.status_code}"
         return _decode(response.content, response.headers.get("content-type", "")), ""
@@ -210,7 +230,7 @@ def _get(url: str) -> tuple[str, str]:
     try:
         import httpx
 
-        response = httpx.get(url, timeout=25, follow_redirects=True, headers={"user-agent": _UA})
+        response = httpx.get(url, timeout=25, follow_redirects=True, headers=headers)
         if response.status_code >= 400:
             return "", f"the publisher answered {response.status_code}"
         return _decode(response.content, response.headers.get("content-type", "")), ""

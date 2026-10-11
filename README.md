@@ -312,6 +312,7 @@ This file is the tour. The detail lives in [`docs/`](docs/README.md):
 | [Command workflows](docs/workflows/README.md) | The four commands that are pipelines, not operations — `enrich`, `sync`, `duplicates`, `logic` — each with a full-page diagram of its stages |
 | [Architecture](docs/architecture.md) | How the CLI, the database and the console fit together |
 | [Design decisions](docs/design-decisions.md) | Why it works the way it does, and where it diverges from the PRD |
+| [The crawler](docs/crawler.md) | For publishers who see `dc-tracker` in their logs: what it requests, how often, what it keeps, and how to have it slowed or stopped |
 | [Government sources](docs/government-sources.md) | Four routes to bulk permit data, all measured, all rejected — read before going looking |
 
 ## Install
