@@ -394,6 +394,10 @@ source_type = "general_media"
 name = "globenewswire-data-center"  # 2 of 20: press releases tagged "data center"
 url = "https://www.globenewswire.com/RssFeed/keyword/data%20center/feedTitle/GlobeNewswire%20-%20data%20center"
 source_type = "company_filing"
+# Akamai "Access Denied" (403) on the feed, every article and robots.txt from
+# 2026-10-10, from our proxy exit and from a second network alike. Last entry it
+# queued: 2026-10-06. The weekly probe reopens it if that lifts.
+closed = "2026-10-13: Akamai 403 on the feed, articles and robots.txt, from two networks"
 
 
 # Keyword filtering is two-tier, and both tiers must match.

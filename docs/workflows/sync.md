@@ -122,6 +122,10 @@ Those entries now carry `closed = "<date>: <what was measured>"` in
   decide stored values and that the file does not list. datacenterfrontier decides
   more than any other, so deleting it would put it at the head of that list for
   good; a closed entry still counts as listed.
+* **The same rule covers a block that is not a challenge.** globenewswire-data-center
+  answered Akamai's "Access Denied" to the feed, its articles and its robots.txt from
+  2026-10-10, from the proxy exit and from a second network, and was closed on
+  2026-10-13.
 * **A challenge is named when one is met.** Cloudflare marks the page
   `cf-mitigated: challenge`, and the failure line says `HTTP 403 (Cloudflare
   challenge: …)` rather than a bare 403, which reads as a header problem and is not.
