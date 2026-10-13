@@ -301,21 +301,23 @@ def run(
             return result
 
         # Echo the assistant turn back verbatim next time, or the provider rejects
-        # the `tool` results as answering a request it never saw.
-        messages.append(
-            {
-                "role": "assistant",
-                "content": reply.text or "",
-                "tool_calls": [
-                    {
-                        "id": c.id,
-                        "type": "function",
-                        "function": {"name": c.name, "arguments": c.raw_arguments or "{}"},
-                    }
-                    for c in reply.tool_calls
-                ],
-            }
-        )
+        # the `tool` results as answering a request it never saw. Its reasoning too,
+        # when there was any: DeepSeek's thinking mode answers HTTP 400 without it.
+        turn: dict[str, Any] = {
+            "role": "assistant",
+            "content": reply.text or "",
+            "tool_calls": [
+                {
+                    "id": c.id,
+                    "type": "function",
+                    "function": {"name": c.name, "arguments": c.raw_arguments or "{}"},
+                }
+                for c in reply.tool_calls
+            ],
+        }
+        if getattr(reply, "reasoning", ""):
+            turn["reasoning_content"] = reply.reasoning
+        messages.append(turn)
 
         for call in reply.tool_calls:
             tool = by_name.get(call.name)

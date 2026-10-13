@@ -534,6 +534,12 @@ class LLMReply:
     #: None when the provider reported nothing, which is not the same as zero.
     cache_hit_tokens: int | None = None
     cache_miss_tokens: int | None = None
+    #: A tool-calling turn's reasoning, exactly as the provider returned it, so the
+    #: caller can echo it back. DeepSeek's thinking mode refuses the next turn with
+    #: HTTP 400 when an assistant turn that called tools arrives without its
+    #: `reasoning_content`; on 2026-10-13 that lost a duplicate ruling already paid
+    #: for. Set only by `converse`; `complete` folds reasoning into `text` instead.
+    reasoning: str = ""
 
 
 def cache_counts(usage: dict[str, Any]) -> tuple[int | None, int | None]:
@@ -1208,6 +1214,7 @@ class DeepSeekExtractor:
             tool_calls=tuple(calls),
             cache_hit_tokens=hit,
             cache_miss_tokens=miss,
+            reasoning=message.get("reasoning_content") or "",
         )
 
     def stream(self, *, system: str, user: str, max_tokens: int | None = None) -> Iterator[str]:

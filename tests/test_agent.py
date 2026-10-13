@@ -417,6 +417,43 @@ def test_converse_sends_tools_and_never_forces_a_json_response_format(monkeypatc
     assert sent["messages"][0]["role"] == "system"
 
 
+def test_a_tool_turns_reasoning_goes_back_with_it(monkeypatch):
+    """DeepSeek's thinking mode answers HTTP 400 — "The `reasoning_content` in the
+    thinking mode must be passed back" — when a tool-calling turn returns without
+    it. On 2026-10-13 that cost a duplicate ruling already paid for."""
+    body = _reply_with('{"q": "width"}')
+    body["choices"][0]["message"]["reasoning_content"] = "first I should look"
+    reply = _deepseek(monkeypatch, body).converse(system="s", messages=[], tools=[])
+    assert reply.reasoning == "first I should look"
+
+    looked = agent.Tool(
+        name="look",
+        description="look something up",
+        parameters={"type": "object", "properties": {"q": {"type": "string"}}},
+        run=lambda q: "42",
+    )
+    model = _ToolModel(
+        LLMReply(text="", tool_calls=(_call("look", q="width"),), reasoning="first I should look"),
+        LLMReply(text="", tool_calls=(_call("decide", verdict="done"),)),
+    )
+    agent.run("go", tools=[looked, _answer_tool()], extractor=model, system="s")
+
+    echoed = next(m for m in model.seen[1] if m.get("role") == "assistant")
+    assert echoed["reasoning_content"] == "first I should look"
+
+
+def test_a_turn_without_reasoning_sends_no_empty_field():
+    """A provider that never reasons is not sent a field it did not offer."""
+    model = _ToolModel(
+        LLMReply(text="", tool_calls=(_call("look"),)),
+        LLMReply(text="", tool_calls=(_call("decide", verdict="done"),)),
+    )
+    looked = agent.Tool(name="look", description="d", parameters={"type": "object"}, run=lambda: "x")
+    agent.run("go", tools=[looked, _answer_tool()], extractor=model, system="s")
+    echoed = next(m for m in model.seen[1] if m.get("role") == "assistant")
+    assert "reasoning_content" not in echoed
+
+
 # --- the evidence gate -------------------------------------------------------
 
 

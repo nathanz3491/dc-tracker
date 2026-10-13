@@ -143,7 +143,8 @@ answers "what was already ruled out" instead of only "different sites".
 The agent reads at most eight articles and runs four searches a pair
 (`agent.TOOL_LIMITS`), is told with two turns left to answer — `leave_alone` when it
 cannot tell, which the declines ledger remembers — and retries a turn cut off
-mid-reasoning with reasoning off. Running out of steps used to throw the whole run
+mid-reasoning with reasoning off. A tool-calling turn goes back with its reasoning,
+which DeepSeek's thinking mode refuses the next turn without. Running out of steps used to throw the whole run
 away, and a pair left that way was asked again next round.
 
 `--ask` suppresses the agent: paying for a run whose answer is then overridden at
