@@ -153,6 +153,44 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **A date that names a period is no longer called overdue the day the period
+  starts, and the nightly loop stopped deleting correct dates for it**
+  (`tracker/logic.py`, `tracker/gapfill.py`). "The second half of 2026" is stored
+  as 2026-07-01 and "2026" as 2026-01-01, so the overdue check flagged both in
+  October, and its one remedy clears the date: on 2026-10-13 the resolver removed
+  Vantage Frontier's and Novva Mesa's. The check now waits for the end of the month,
+  quarter, half or year the source gave; on the production copy that takes 5 of 13
+  findings off the list. Dates the gap-filling agent finds now record how precisely
+  the sentence gave them, as the article reader's always did, so its "in 2027" is a
+  year and not a promised New Year's Day.
+
+- **Five pages a night the browser could have read failed with "bound to a
+  different event loop"** (`tracker/ingest/fetch.py`). Enrich builds its fetchers
+  once and runs every row's crawl separately; the browser's robots.txt lock belonged
+  to the first of those, so the next row's simultaneous pages died unread. The lock
+  is now made per run.
+
+- **A duplicate ruling no longer fails with HTTP 400 midway through**
+  (`tracker/llm.py`, `tracker/agent.py`). DeepSeek's thinking mode requires a
+  tool-calling turn to be sent back with its reasoning, and the agent loop dropped
+  it, so the next turn was refused and the answer already paid for was lost.
+
+- **The nightly re-read spent 40% of its slots on articles it then refused**
+  (`tracker/ingest/crawl.py`, `tracker/cli/ingest.py`). It took the 60 oldest and
+  only afterwards skipped those with no cached copy, on an ignored publisher, or not
+  in English; a skipped article stays oldest, so the same 24 were taken and refused
+  every night from 2026-10-11. The selection now skips them before counting.
+
+- **The morning report stopped printing "NOTHING" beside values that have a
+  source** (`tracker/changes.py`). A county spelled out by the merge ("Madison" to
+  "Madison County") and a tenant copied up from a building's record were reported as
+  backed by nothing; they now name the citation they came from.
+
+- **GlobeNewswire's feed is closed** (`tracker/seed/feeds.toml`). It has answered
+  "Access Denied" to the feed, its articles and its robots.txt since 2026-10-10,
+  from two networks, so it is counted with the other closed feeds and re-asked
+  weekly instead of failing every night.
+
 - **The console's reader view identifies itself, and leaves closed publishers
   alone** (`tracker/webui/article.py`). Opening a cited article fetched it with a
   Chrome User-Agent, the one request a publisher could not attribute to this
