@@ -111,6 +111,29 @@ def test_robots_is_read_for_this_crawlers_name(monkeypatch):
     assert run(PlaywrightFetcher().permitted("https://site.example/a")) is False
 
 
+def test_one_rung_serves_one_event_loop_after_another(monkeypatch):
+    """`enrich` builds the ladder once and every row's crawl is its own `asyncio.run`.
+
+    The robots lock used to be made in `__init__`, so it belonged to the first loop
+    that waited on it, and the next row's concurrent pages died with "bound to a
+    different event loop" — five pages on the 2026-10-13 night, read by nothing.
+    """
+    async def slow(url, settings):
+        await asyncio.sleep(0)  # a real read yields, so the second page waits on the lock
+        return 200, "User-agent: *\nAllow: /\n"
+
+    monkeypatch.setattr(fetch, "_get_text", slow)
+    rung = PlaywrightFetcher()
+
+    async def two_at_once(site):
+        return await asyncio.gather(
+            rung.permitted(f"https://{site}.example/a"), rung.permitted(f"https://{site}.example/b")
+        )
+
+    assert run(two_at_once("first")) == [True, True]
+    assert run(two_at_once("second")) == [True, True]
+
+
 # --- a real browser, when one is installed ------------------------------------------
 
 _SHELL = b"""<!doctype html><html><head><title>t</title></head><body>

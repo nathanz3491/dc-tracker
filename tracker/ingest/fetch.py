@@ -756,7 +756,8 @@ class PlaywrightFetcher:
         self._playwright = None
         self._browser = None
         self._robots: dict[str, object | None] = {}
-        self._robots_lock = asyncio.Lock()
+        self._robots_lock: asyncio.Lock | None = None
+        self._robots_loop: asyncio.AbstractEventLoop | None = None
 
     @staticmethod
     def available() -> bool:
@@ -877,6 +878,14 @@ class PlaywrightFetcher:
         """Whether `robots.txt` lets this crawler read `url`. Read once per origin."""
         parts = urlsplit(url)
         origin = f"{parts.scheme}://{parts.netloc}"
+        # One lock per event loop, not per instance. `enrich` builds the ladder
+        # once and runs every row's crawl in its own `asyncio.run`, and a lock
+        # belongs to the first loop that waits on it: the next row's concurrent
+        # pages failed with "bound to a different event loop", unread.
+        loop = asyncio.get_running_loop()
+        if self._robots_loop is not loop or self._robots_lock is None:
+            self._robots_lock = asyncio.Lock()
+            self._robots_loop = loop
         async with self._robots_lock:
             if origin not in self._robots:
                 self._robots[origin] = await self._read_robots(origin)
