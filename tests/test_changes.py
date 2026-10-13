@@ -230,3 +230,35 @@ def test_an_untouched_database_has_nothing_to_report(db, tmp_path):
     result = runner.invoke(app, ["--db", str(db), "changes", "--against", str(snapshot)])
     assert result.exit_code == 0, result.output
     assert "nothing" in result.output
+
+
+def test_derived_values_are_traced_rather_than_reported_unbacked():
+    """2026-10-13 printed "NOTHING" against a county the merge spelled out and two
+    customers copied up from tranches — three values that each had a source."""
+    import json
+    from types import SimpleNamespace as NS
+
+    from tracker.changes import backing
+
+    source = NS(
+        id=7,
+        url="https://mississippi.example/aws",
+        claims=json.dumps({"county": "Madison"}),
+        quotes=None,
+        unconfirmed_reasons=None,
+    )
+    tranche = NS(
+        customer="BluSky AI",
+        label="BluSky AI",
+        source_id=7,
+        quotes=json.dumps({"customer": "BluSky AI signs letter of intent"}),
+    )
+    row = NS(county="Madison County", customer="BluSky AI", sources=[source], blocks=[tranche])
+
+    assert backing(row, "county") == ("https://mississippi.example/aws", "")
+    assert backing(row, "customer") == (
+        "https://mississippi.example/aws",
+        "BluSky AI signs letter of intent",
+    )
+    row.customer = "Someone Else"
+    assert backing(row, "customer") == ("", ""), "a tranche naming another tenant is not backing"

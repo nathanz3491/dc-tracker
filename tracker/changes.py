@@ -98,12 +98,19 @@ def backing(project: Project, field_name: str) -> tuple[str, str]:
 
     A quoted claim is preferred over an unquoted one. `("", "")` when no standing claim
     states the value — a value nothing currently supports.
+
+    Two values are derived rather than claimed, and are traced to what they came
+    from: a county the merge spells out ("Madison" stored as "Madison County"), and
+    a customer `blocks.reconcile` copies up from a tranche. Without that, the
+    2026-10-13 report printed "NOTHING" against three values that had a source, and
+    a line that cries wolf is one a reader learns to skip.
     """
     value = _norm(getattr(project, field_name))
+    same = _same_county if field_name == "county" else (lambda a, b: a == b)
     best = ("", "")
     for source in project.sources or ():
         claims = _load(source.claims)
-        if field_name not in claims or _norm(claims[field_name]) != value:
+        if field_name not in claims or not same(_norm(claims[field_name]), value):
             continue
         if _load(source.unconfirmed_reasons).get(field_name) in _DECIDED:
             continue
@@ -111,7 +118,24 @@ def backing(project: Project, field_name: str) -> tuple[str, str]:
         if quote:
             return source.url, quote
         best = best if best[0] else (source.url, "")
+    if best[0] or field_name != "customer":
+        return best
+    urls = {s.id: s.url for s in project.sources or ()}
+    for block in getattr(project, "blocks", None) or ():
+        if _norm(block.customer) != value:
+            continue
+        quote = _load(block.quotes).get("customer") or ""
+        where = urls.get(block.source_id) or f"tranche {block.label!r}"
+        if quote:
+            return where, quote
+        best = best if best[0] else (where, "")
     return best
+
+
+def _same_county(claimed: Any, stored: Any) -> bool:
+    from tracker.dedup import county_key
+
+    return isinstance(claimed, str) and county_key(claimed) == county_key(stored)
 
 
 def _snapshot_rows(path: Path) -> dict[int, Any]:
