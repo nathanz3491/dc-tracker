@@ -2895,7 +2895,14 @@ def stale_sources(
     return urls[:limit] if limit else urls
 
 
-def stale_by_prompt(session: Session, *, stamp: str, limit: int | None = None) -> list[str]:
+def stale_by_prompt(
+    session: Session,
+    *,
+    stamp: str,
+    limit: int | None = None,
+    readable_in: Path | None = None,
+    policy: Any = None,
+) -> list[str]:
     """Source URLs that were extracted by some prompt other than the current one.
 
     `stale_sources` asks whether the *article* might have changed. This asks
@@ -2922,6 +2929,13 @@ def stale_by_prompt(session: Session, *, stamp: str, limit: int | None = None) -
     does not. Refreshing wants to know whether the article changed; this wants
     the *same* article read by a better prompt, and re-fetching would confound
     the two.
+
+    **`readable_in` and `policy` drop what a cache-only re-read would refuse, before
+    the limit.** Without them the limit took the oldest URLs and `run` refused them
+    afterwards — no cached copy, a publisher `seed/sources.toml` ignores, a page not
+    in English — and a refused URL is never re-stamped, so it stayed the oldest. The
+    same 24 of the nightly 60 were refused every night from 2026-10-11, 40% of the
+    step spent on nothing.
     """
     from tracker.confidence import PLACEHOLDER_MARKER
     from tracker.models import Source
@@ -2934,9 +2948,28 @@ def stale_by_prompt(session: Session, *, stamp: str, limit: int | None = None) -
         .group_by(Source.url)
         .order_by("oldest", Source.url)
     )
-    if limit:
-        stmt = stmt.limit(limit)
-    return [row[0] for row in session.execute(stmt)]
+    if readable_in is None and policy is None:
+        if limit:
+            stmt = stmt.limit(limit)
+        return [row[0] for row in session.execute(stmt)]
+
+    urls = [row[0] for row in session.execute(stmt)]
+    if getattr(policy, "entries", ()):
+        # Not `policy.partition`, which moves priority publishers to the front;
+        # this order is oldest first and stays that way.
+        urls = [url for url in urls if not policy.ignores(url)]
+    if readable_in is None:
+        return urls[:limit] if limit else urls
+    picked: list[str] = []
+    for url in urls:
+        path = cache_path(url, readable_in)
+        # Read lazily and only until the limit is met: most of the backlog is
+        # never opened on a given night.
+        if path.is_file() and looks_english(path.read_text(encoding="utf-8")):
+            picked.append(url)
+            if limit and len(picked) >= limit:
+                break
+    return picked
 
 
 def unchanged_reads(session: Session, urls: list[str], *, stamp: str) -> dict[str, str]:

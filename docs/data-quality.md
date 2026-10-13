@@ -408,6 +408,11 @@ cache by default, so it is a re-read rather than a re-fetch — the point is to
 find out what a better prompt makes of the *same* article, and re-fetching would
 confound that with the page having changed.
 
+With `--cached-only` the selection skips, before `--limit` is applied, every URL that
+read would refuse: no cached copy, a publisher `seed/sources.toml` ignores, a page not
+in English. A refused URL is never re-stamped, so it stays the oldest; taken first and
+refused after, the same 24 of the nightly 60 were wasted every night from 2026-10-11.
+
 **Pair it with `--cached-only`.** Serving from the cache "by default" only covers
 the URLs that are *in* the cache; a miss used to fall through to a fetch, silently,
 which turns a free re-read into a paid crawl. On the live database three quarters

@@ -296,9 +296,19 @@ def ingest_crawl(
     elif stale_prompt:
         from tracker.prompts import load_prompt
 
+        from tracker import policy as policy_mod
+
         stamp = load_prompt(prompt_name).stamp
         with session_scope(engine, commit=False) as session:
-            url_list = crawl.stale_by_prompt(session, stamp=stamp, limit=limit)
+            # With --cached-only, only what that read can actually re-read, so the
+            # limit is not spent on the same refusals every night.
+            url_list = crawl.stale_by_prompt(
+                session,
+                stamp=stamp,
+                limit=limit,
+                readable_in=None if (no_cache or not cached_only) else article_cache("articles"),
+                policy=policy_mod.load() if cached_only else None,
+            )
         if not url_list:
             console.print(
                 f"[green]every extracted source is on {stamp}[/green] — nothing to re-read"

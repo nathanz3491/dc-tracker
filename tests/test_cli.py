@@ -1181,6 +1181,42 @@ def test_stale_by_prompt_ignores_rows_no_prompt_produced(initialized: Path):
         assert stale_by_prompt(session, stamp="extract-v1@new") == []
 
 
+def test_a_cache_only_reread_does_not_spend_its_limit_on_refusals(initialized: Path, tmp_path):
+    """The oldest stale URLs were taken first and refused after — no cached copy, an
+    ignored publisher, a page not in English — and a refusal is never re-stamped, so
+    the same 24 of 60 nightly slots were wasted from 2026-10-11 on."""
+    from tracker.db import init_db, session_scope
+    from tracker.ingest.crawl import stale_by_prompt
+    from tracker.ingest.fetch import cache_path
+    from tracker.policy import Entry, Policy
+
+    english = "Acme Data Centers announced a 300 MW campus in Racine County, Wisconsin. " * 5
+    pid = with_real_source(initialized)
+    engine, _ = init_db(initialized)
+    pages = {
+        "https://news.example.com/uncached/": None,
+        "https://ignored.example.org/cached/": english,
+        "https://news.example.com/chinese/": "数据中心项目在威斯康星州宣布建设，规模为三百兆瓦。" * 20,
+        "https://news.example.com/readable-1/": english,
+        "https://news.example.com/readable-2/": english,
+    }
+    with session_scope(engine) as session:
+        for year, (url, text) in enumerate(pages.items(), start=2015):
+            _extracted(session, pid, url, "crawl:extract-v1@old:m:httpx", dt.datetime(year, 1, 1))
+            if text is not None:
+                cache_path(url, tmp_path).write_text(text, encoding="utf-8")
+
+    policy = Policy(entries=(Entry(domain="example.org", rank="ignore", why="test"),))
+    with session_scope(engine, commit=False) as session:
+        assert stale_by_prompt(
+            session, stamp="extract-v1@new", limit=1, readable_in=tmp_path, policy=policy
+        ) == ["https://news.example.com/readable-1/"]
+        # Without the filters the oldest URL still comes first, as before.
+        assert stale_by_prompt(session, stamp="extract-v1@new", limit=1) == [
+            "https://news.example.com/uncached/"
+        ]
+
+
 def test_stale_by_prompt_excludes_placeholders(seeded: Path):
     """Same reason refresh excludes them: a placeholder URL is not fetchable."""
     from tracker.db import open_db, session_scope
