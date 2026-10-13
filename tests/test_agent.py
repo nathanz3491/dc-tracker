@@ -448,7 +448,9 @@ def test_a_turn_without_reasoning_sends_no_empty_field():
         LLMReply(text="", tool_calls=(_call("look"),)),
         LLMReply(text="", tool_calls=(_call("decide", verdict="done"),)),
     )
-    looked = agent.Tool(name="look", description="d", parameters={"type": "object"}, run=lambda: "x")
+    looked = agent.Tool(
+        name="look", description="d", parameters={"type": "object"}, run=lambda: "x"
+    )
     agent.run("go", tools=[looked, _answer_tool()], extractor=model, system="s")
     echoed = next(m for m in model.seen[1] if m.get("role") == "assistant")
     assert "reasoning_content" not in echoed

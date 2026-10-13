@@ -156,7 +156,7 @@ def test_the_fact_is_stored_as_a_quote_backed_citation(session, thin, cached):
 
 
 def test_a_year_the_agent_found_is_stored_as_a_year(session, thin, cached):
-    """"online in 2027" arrives as 2027-01-01. Without the precision the row read it
+    """ "online in 2027" arrives as 2027-01-01. Without the precision the row read it
     as a promised New Year's Day, overdue the morning 2027 began (2026-10-13)."""
     model = _Model(
         {

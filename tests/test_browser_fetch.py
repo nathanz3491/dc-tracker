@@ -118,6 +118,7 @@ def test_one_rung_serves_one_event_loop_after_another(monkeypatch):
     that waited on it, and the next row's concurrent pages died with "bound to a
     different event loop" — five pages on the 2026-10-13 night, read by nothing.
     """
+
     async def slow(url, settings):
         await asyncio.sleep(0)  # a real read yields, so the second page waits on the lock
         return 200, "User-agent: *\nAllow: /\n"

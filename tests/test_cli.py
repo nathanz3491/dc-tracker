@@ -1196,7 +1196,8 @@ def test_a_cache_only_reread_does_not_spend_its_limit_on_refusals(initialized: P
     pages = {
         "https://news.example.com/uncached/": None,
         "https://ignored.example.org/cached/": english,
-        "https://news.example.com/chinese/": "数据中心项目在威斯康星州宣布建设，规模为三百兆瓦。" * 20,
+        "https://news.example.com/chinese/": "数据中心项目在威斯康星州宣布建设规模为三百兆瓦。"
+        * 20,
         "https://news.example.com/readable-1/": english,
         "https://news.example.com/readable-2/": english,
     }

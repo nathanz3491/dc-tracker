@@ -294,9 +294,8 @@ def ingest_crawl(
         # anyway; forcing makes that explicit and independent of the skip rule.
         force = True
     elif stale_prompt:
-        from tracker.prompts import load_prompt
-
         from tracker import policy as policy_mod
+        from tracker.prompts import load_prompt
 
         stamp = load_prompt(prompt_name).stamp
         with session_scope(engine, commit=False) as session:
