@@ -257,7 +257,8 @@ def _coerce(field_name: str, raw: Any) -> Any:
 def _fact_axes(
     facts: dict[str, tuple[Any, str]], site_names: frozenset[str] = frozenset()
 ) -> dict[str, dict[str, Any]]:
-    """The claim envelope for the facts one citation carries: `basis` and `scope`.
+    """The claim envelope for the facts one citation carries: `basis`, `scope` and
+    `date_precision`.
 
     A thin adapter onto the same gate the crawl path uses, rather than a second
     reading of the same wording: `axis_gate` owns which phrases license which
@@ -270,10 +271,19 @@ def _fact_axes(
     keeping.
     """
     from tracker.ingest.crawl import axis_gate
+    from tracker.normalize import precision_in_quote
     from tracker.vocab import BASIS_FIELDS, CLAIM_AXIS_DEFAULTS, PART_FIELDS
 
     out: dict[str, dict[str, Any]] = {}
     for name, (value, quote) in facts.items():
+        if name in ("first_announced", "expected_online"):
+            # The crawl path's reading of how precisely the sentence gave the date.
+            # Without it "in 2027" stored as 2027-01-01 counted as a promised day,
+            # and the overdue check fired the morning the year began.
+            stated = precision_in_quote(value, quote)
+            if stated:
+                out[name] = {"date_precision": stated}
+            continue
         if name not in BASIS_FIELDS and name not in PART_FIELDS:
             continue
         axes = axis_gate({}, quote, site_names=site_names, field=name, value=value)

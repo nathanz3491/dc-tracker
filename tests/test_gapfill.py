@@ -155,6 +155,26 @@ def test_the_fact_is_stored_as_a_quote_backed_citation(session, thin, cached):
     assert "investment_usd" in (added.fields or ""), "not counted as a quote-backed field"
 
 
+def test_a_year_the_agent_found_is_stored_as_a_year(session, thin, cached):
+    """"online in 2027" arrives as 2027-01-01. Without the precision the row read it
+    as a promised New Year's Day, overdue the morning 2027 began (2026-10-13)."""
+    model = _Model(
+        {
+            "field": "expected_online",
+            "value": "2027-01-01",
+            "url": _URL,
+            "quote": "The first hall is expected online in 2027.",
+        }
+    )
+
+    out = gapfill.fill(session, thin, extractor=model)
+    assert out.verdict == "filled", (out.note, out.refused)
+
+    added = next(s for s in thin.sources if s.url == _URL)
+    assert json.loads(added.claim_meta)["expected_online"] == {"date_precision": "year"}
+    assert thin.expected_online_precision == "year"
+
+
 def test_several_facts_from_one_article_become_one_citation(session, thin, cached):
     """Independence is counted by domain, so three citations for one article would
     look like three sources agreeing."""

@@ -42,6 +42,16 @@ entry is a decision somebody wrote down, a missing one is a rule added without
 anybody asking the question — and one of the seven, `value_above_its_evidence`, is
 worth asking about, because a claim does exist there and is too low.
 
+**A date is overdue when the period it names is over, not when it starts.**
+"The second half of 2026" is stored as 2026-07-01 and "2026" as 2026-01-01, so
+`past_its_own_date` compared with the stored day called both late the morning they
+began, and its one action clears the date. On 2026-10-13 the resolver cleared two
+correct dates that way. The rule now reads `expected_online_precision` and waits for
+the end of the month, quarter, half or year (`logic._period_end`); a date on the first
+of a month with no recorded precision is read as the month, or on 1 January as the
+year, because the wider reading only delays a warning and the narrower one deletes a
+value. On the production copy that day it took 5 of 13 findings off the list.
+
 ### Collisions report the policy's answer; they do not re-decide it
 
 The winner is read back from `upsert.resolve_field` — the same function the write
@@ -228,8 +238,10 @@ reading is what makes a run dear: one finding read seventeen articles and three
 searches for ~360,000 tokens. The loop every agent shares (`agent.run`) now gives
 each tool a ration per question — eight `read_article`s, four `search_web`s — past
 which the tool answers that it is used up; tells the model, with two turns left, to
-answer with `leave_alone` if it cannot decide; and retries a turn cut off mid-reasoning
-with reasoning off rather than at a bigger budget. Its searches are answered from a
+answer with `leave_alone` if it cannot decide; retries a turn cut off mid-reasoning
+with reasoning off rather than at a bigger budget; and sends a tool-calling turn's
+reasoning back with it, which DeepSeek's thinking mode requires — without it the next
+turn was refused with HTTP 400 and the answer already paid for was lost. Its searches are answered from a
 week-long cache (`search.CachedProvider`) when the same query was asked before.
 
 ### What a ruling cannot reach, and why that was expensive

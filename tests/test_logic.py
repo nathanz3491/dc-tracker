@@ -176,6 +176,35 @@ def test_a_date_that_has_passed_without_the_project_arriving(session):
     assert "past_its_own_date" not in _codes(dead)
 
 
+@pytest.mark.parametrize(
+    ("stored", "precision", "late"),
+    [
+        # Today is 2026-08-02. Each period below is still running, or just ended.
+        (dt.date(2026, 7, 1), "half", False),  # "the second half of 2026"
+        (dt.date(2026, 1, 1), "year", False),  # "2026"
+        (dt.date(2026, 7, 1), "quarter", False),  # "Q3 2026"
+        (dt.date(2026, 4, 1), "quarter", True),  # Q2 ended 2026-06-30
+        (dt.date(2026, 7, 1), "month", True),  # July is over
+        (dt.date(2026, 7, 15), None, True),  # a day is a day
+        # Unrecorded precision on the first of a month reads the wider period.
+        (dt.date(2026, 1, 1), None, False),
+        (dt.date(2026, 8, 1), None, False),
+        (dt.date(2025, 1, 1), None, True),
+    ],
+)
+def test_a_stated_period_is_not_overdue_until_it_ends(session, stored, precision, late):
+    """2026-10-13: "the second half of 2026" (2026-07-01) and "2026" (2026-01-01) were
+    called overdue in October, and the resolver cleared both correct dates."""
+    project = _project(
+        session,
+        name=f"P{stored}{precision}",
+        phase="announced",
+        expected_online=stored,
+        expected_online_precision=precision,
+    )
+    assert ("past_its_own_date" in _codes(project)) is late
+
+
 def test_an_open_obstacle_on_a_finished_track(session):
     project = _project(session, name="A", phase="construction")
     _event(session, project, "permit_approved", dt.date(2025, 1, 1))
