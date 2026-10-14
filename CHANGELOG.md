@@ -41,6 +41,16 @@ initial build of the v1 PRD.
 
 ### Changed
 
+- **Queued articles nobody can read are taken out of the queue instead of waiting
+  at the back of it** (`tracker/ingest/discover.py`, `tracker/cli/ingest.py`,
+  `tracker/cli/sync.py`, `docs/workflows/sync.md`). A page on a publisher that
+  refuses every client, with no copy saved, can only fail; sorting such pages last
+  stopped them taking crawl slots but left them queued for good: 627 of 1,893 on
+  2026-10-14, inflating every queue count. The nightly crawl and `sync` now mark
+  them skipped before reading the queue, and `tracker queue unreadable [--drop]`
+  shows or does the same on demand. Nothing is deleted: when a publisher's weekly
+  check finds it open again, its pages go back in the queue.
+
 - **Every request asks the site's robots.txt first, and honours Crawl-delay**
   (`tracker/robots.py`, `tracker/ingest/fetch.py`, `tracker/ingest/discover.py`,
   `tracker/webui/article.py`, `tracker/company_logo.py`, `tracker/seed/feeds.toml`,

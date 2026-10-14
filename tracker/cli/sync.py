@@ -737,6 +737,15 @@ def sync(
 
     # --- extract new --------------------------------------------------------
     step("extract new")
+    # A queued page on a publisher closed to us, with no body cached, leaves the
+    # queue before it is read — see `discover.discard_unreadable`, and
+    # `requeue_reopened` for the way back.
+    with session_scope(engine, commit=not dry_run) as session:
+        reopened = disc.reopened_names(session)
+        disc.requeue_reopened(session, reopened)
+        discarded = disc.discard_unreadable(
+            session, disc.unreadable_test(cache_dir, reopened=reopened)
+        )
     with session_scope(engine, commit=False) as session:
         # known_first spends each LLM call on depth: a queued article covering a
         # project we already track becomes a SECOND source, which fills fields one
@@ -776,7 +785,6 @@ def sync(
             reopened = disc.reopened_names(session)
         unreadable = disc.unreadable_test(cache_dir, reopened=reopened)
         kept = disc.readable_first(kept, unreadable)
-        held_back = sum(1 for url in kept if unreadable(url))
         pending_urls = kept[:limit]
         deepening, _fresh = disc.pending_split(session)
         risky = disc.pending_risk_count(session, queue_spec) if queue_spec else 0
@@ -807,10 +815,10 @@ def sync(
             f"[dim]{len(ignored_urls)} candidate(s) skipped — seed/sources.toml ignores "
             f"their publisher[/dim]"
         )
-    if held_back:
+    if discarded:
         console.print(
-            f"[dim]{held_back} candidate(s) are on publishers marked closed in "
-            "seed/feeds.toml with nothing cached; they go after every readable one[/dim]"
+            f"[dim]{discarded} candidate(s) {'would be' if dry_run else 'were'} discarded: "
+            "on publishers marked closed in seed/feeds.toml, with nothing cached[/dim]"
         )
 
     if not pending_urls:
@@ -2022,3 +2030,49 @@ def queue_prune(
         console.print(f"\n[green]dropped {removed} candidate(s)[/green]")
     else:
         console.print("\n[dim]remove them with:[/dim] tracker queue prune --drop")
+
+
+@queue_app.command("unreadable")
+def queue_unreadable(
+    drop: Annotated[
+        bool,
+        typer.Option("--drop", help="Take them out of the queue. Without this it only reports."),
+    ] = False,
+    limit: Annotated[int, typer.Option("--limit", help="Examples to print.")] = 10,
+) -> None:
+    """Queued pages on publishers marked closed in `seed/feeds.toml`, with nothing cached.
+
+    No fetch will read them: those publishers refuse every client this project is
+    willing to be. `ingest crawl --from-queue` and `sync` discard them before reading
+    the queue anyway; this does it on demand and shows what goes. Discarded is
+    `skipped` with a reason that marks it, not deleted: when a publisher's weekly
+    check answers again, its pages are put back.
+    """
+    from collections import Counter
+
+    from tracker.confidence import registrable_domain
+    from tracker.ingest import discover as disc
+
+    engine = _writable("queue unreadable") if drop else _read_engine()
+    with session_scope(engine, commit=drop) as session:
+        reopened = disc.reopened_names(session)
+        unreadable = disc.unreadable_test(article_cache("articles"), reopened=reopened)
+        found = [row.url for row in disc.pending(session) if unreadable(row.url)]
+        removed = disc.discard_unreadable(session, unreadable) if drop else 0
+
+    if json_mode():
+        emit({"unreadable": found, "discarded": removed})
+        return
+    if not found:
+        console.print("[green]nothing queued is unreadable[/green]")
+        return
+    console.print(f"[yellow]{len(found)}[/yellow] queued page(s) no fetch will read\n")
+    for domain, count in Counter(map(registrable_domain, found)).most_common(10):
+        console.print(f"  {count:>5}  {escape(domain or '?')}")
+    console.print("\n[bold]examples[/bold]")
+    for url in found[:limit]:
+        console.print(f"  {escape(url)}")
+    if drop:
+        console.print(f"\n[green]discarded {removed} page(s)[/green]")
+    else:
+        console.print("\n[dim]discard them with:[/dim] tracker queue unreadable --drop")

@@ -291,6 +291,50 @@ def test_a_closed_publishers_page_is_unreadable_unless_its_body_is_cached(tmp_pa
     assert without_cache(cached), "with no cache to serve from, nothing on it can be read"
 
 
+def test_an_unreadable_page_leaves_the_queue_and_returns_when_its_publisher_does(
+    session, tmp_path: Path
+):
+    """Sorted last, 627 of 1,893 queued pages still sat in the queue on 2026-10-14.
+    They are discarded now, and a publisher found open again gets them back."""
+    from tracker.ingest.fetch import cache_path
+
+    config = _closed_config(tmp_path)
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    blocked = "https://www.refused.test/2026/09/blocked/"
+    cached = "https://www.refused.test/2026/09/cached/"
+    other = "https://www.refused.test/2026/09/other-skip/"
+    readable = "https://a.test/2026/09/story/"
+    cache_path(cached, cache).write_text("syndicated before the block", encoding="utf-8")
+    queue_candidates(
+        session,
+        [
+            Candidate(url, "A 100MW data center campus", "f")
+            for url in (blocked, cached, other, readable)
+        ],
+        run_id="r",
+        report=DiscoverReport(),
+    )
+    session.scalars(select(IngestUrl).where(IngestUrl.url == other)).one().status = "skipped"
+
+    unreadable = discover.unreadable_test(cache, path=config)
+    assert discover.discard_unreadable(session, unreadable) == 1
+    status = {row.url: row.status for row in session.scalars(select(IngestUrl))}
+    assert status[blocked] == "skipped"
+    assert status[cached] == status[readable] == PENDING_URL_STATUS
+    assert blocked not in {row.url for row in discover.pending(session)}
+
+    assert discover.requeue_reopened(session, frozenset(), path=config) == 0
+    assert discover.requeue_reopened(session, frozenset({"refused"}), path=config) == 0, (
+        "its archive is still closed"
+    )
+    reopened = frozenset({"refused", "refused-archive"})
+    assert discover.requeue_reopened(session, reopened, path=config) == 1
+    status = {row.url: row.status for row in session.scalars(select(IngestUrl))}
+    assert status[blocked] == PENDING_URL_STATUS
+    assert status[other] == "skipped", "skipped for another reason, so it stays skipped"
+
+
 def _queue_dated(session, *pairs: tuple[str, dt.datetime]) -> None:
     queue_candidates(
         session,

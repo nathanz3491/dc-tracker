@@ -129,10 +129,10 @@ Those entries now carry `closed = "<date>: <what was measured>"` in
 * **A challenge is named when one is met.** Cloudflare marks the page
   `cf-mitigated: challenge`, and the failure line says `HTTP 403 (Cloudflare
   challenge: …)` rather than a bare 403, which reads as a header problem and is not.
-* **What they queued before the block is still queued** — 650 rows on 2026-10-02,
-  522 of them datacenterfrontier's — and those pages answer the same challenge. Only
-  the 22 whose syndicated body was cached when they were queued can be read, so
-  every crawl puts the rest after every page it can read; see rule 4 below.
+* **What they queued before the block is taken out of the queue** — 650 rows on
+  2026-10-02, 522 of them datacenterfrontier's — because those pages answer the same
+  challenge. Only the ones whose syndicated body was cached stay queued; the rest are
+  discarded until the publisher reopens; see rule 4 below.
 
 **Each is asked again once a week** (migration 0034, `discover.probe_closed`):
 one request to the entry's own URL, with discovery's usual client, from
@@ -237,16 +237,19 @@ prioritising after would reorder a batch that was already chosen:
    we already track", which an article about an operator we have **no** rows for can
    never satisfy — so left to the ordinary ordering it sits behind a permanent
    supply of better candidates and is never read.
-4. **A page nothing can read goes last, whatever its rank.** A publisher marked
-   `closed` answers every client with a challenge, its articles included, so a page
-   on one can only fail unless its body was cached before the block. After every
-   rule above — and after the `priority` ranks in `tracker/seed/sources.toml` — such
-   a page is moved behind every readable one, and only then is the limit cut.
-   Nothing is dropped: it stays queued and is tried when nothing readable is left,
-   which is also how a block that has lifted gets noticed. On 2026-10-02, 628 of the
-   2,287 queued articles were such pages. They held six of the nightly crawl's next
-   ten slots and all fifteen of a sync extract, because datacenterfrontier and
-   datacenterdynamics both rank `priority`.
+4. **A page nothing can read leaves the queue.** A publisher marked `closed`
+   answers every client with a challenge, its articles included, so a page on one
+   can only fail unless its body was cached before the block. On 2026-10-02, 628 of
+   the 2,287 queued articles were such pages, and they held six of the nightly
+   crawl's next ten slots and all fifteen of a sync extract, because
+   datacenterfrontier and datacenterdynamics both rank `priority`. Moving them behind
+   every readable page fixed the slots but left them queued for good — 627 of 1,893
+   on 2026-10-14, inflating every queue count. So before the queue is read, each one
+   becomes `skipped` with the reason `discover.DISCARDED_UNREADABLE`
+   (`discover.discard_unreadable`). That is not final: when the weekly check finds a
+   publisher open again (feed and archive both), its discarded pages go back in the
+   queue (`discover.requeue_reopened`), and a page skipped for any other reason
+   stays skipped.
 
 `ingest crawl --from-queue --new-first` asks a different question, and is what the
 nightly loop's discovery step runs. **The news goes first:** every article published
@@ -460,7 +463,7 @@ Touching any of these means the poster is in scope. Re-render with
 | The weekly check of closed entries | `tracker/ingest/discover.py` — `probe_closed`, `record_probe`, `reopened_names`, `without_reopened`, `PROBE_EVERY`; migration `0034_feed_probe`; `tracker/cli/sync.py` — `discover --probe-closed` |
 | Asking robots.txt before every request | `tracker/robots.py` — `allowed`, `allowed_async`, `interpret`, `crawl_delay`; `tracker/ingest/fetch.py` — `permitted`, `refused`, `fetch_with_retry`, `should_escalate`, `fetch_all`; `tracker/ingest/discover.py` — `_RawFetcher`; `tracker/config.py` — `respect_robots` |
 | Headlines-only feeds | `tracker/seed/feeds.toml` — `headlines_of`, `news_search`, `news_pages`; `tracker/ingest/search.py` — `SerperProvider.news`; `tracker/ingest/discover.py` — `news_headlines`, `search_news`, `_poll_news`, `_news_date`, `parse_headlines`, `follow_headlines`, `same_story`, `copies_headline`, `MAX_HEADLINE_LOOKUPS` |
-| Pages nothing can read go last | `tracker/ingest/discover.py` — `closed_domains`, `unreadable_test`, `readable_first`, `pending(unreadable=)`, `retryable(unreadable=)`; `tracker/ingest/crawl.py` — `stale_sources(unreadable=)`; `tracker/cli/sync.py` — `sync` (extract, retry fill, refresh); `tracker/cli/ingest.py` — `crawl --from-queue`; `tracker/ingest/enrich.py` — `run` |
+| Pages nothing can read leave the queue, or go last | `tracker/ingest/discover.py` — `closed_domains`, `unreadable_test`, `discard_unreadable`, `requeue_reopened`, `DISCARDED_UNREADABLE`, `readable_first`, `pending(unreadable=)`, `retryable(unreadable=)`; `tracker/ingest/crawl.py` — `stale_sources(unreadable=)`; `tracker/cli/sync.py` — `sync` (extract, retry fill, refresh); `tracker/cli/ingest.py` — `crawl --from-queue`; `tracker/ingest/enrich.py` — `run` |
 | What search looks for | `tracker/ingest/search.py` — `_PLACE_TEMPLATES`, `rank_places`, `plan_queries`, `PlannedQuery.label`, `templates`; `tracker/normalize.py` — `state_name` |
 | Judging a template | `tracker/funnel.py` — `feed_group`, `survey`, `verdicts`; `tracker/ingest/search.py` — `LabelStat` |
 | Queue ordering and counts | `tracker/ingest/discover.py` — `pending` (`known_first`, `new_first`; news first by `feed.REPORT_WINDOW_DAYS`), `pending_split`, `pending_risk_count`, `failed`, `retryable`, `given_up`, `MAX_SAME_FAILURES`, `failure_summary` |

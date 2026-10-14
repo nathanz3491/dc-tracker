@@ -1012,6 +1012,62 @@ def readable_first(
     return readable + last
 
 
+#: The `error` a queued page carries once it is discarded as unreadable. It is the
+#: key `requeue_reopened` looks for, so it is a constant, not prose.
+DISCARDED_UNREADABLE: Final = "discarded: on a publisher closed to us, with nothing cached"
+
+
+def discard_unreadable(session: Session, unreadable: Callable[[str], bool]) -> int:
+    """Take every queued page `unreadable` flags out of the queue. Returns how many.
+
+    Sorting them last kept them from taking a crawl's slots, but not from sitting in
+    the queue for good: 627 of 1,893 queued pages on 2026-10-14, every `tracker
+    queue` count and every "held back" line inflated by pages nobody will read. They
+    become `skipped` — terminal, never retried — with `DISCARDED_UNREADABLE` as the
+    reason, which is what lets `requeue_reopened` put them back if the block lifts.
+    """
+    rows = [
+        row
+        for row in session.scalars(select(IngestUrl).where(IngestUrl.status == PENDING_URL_STATUS))
+        if unreadable(row.url)
+    ]
+    for row in rows:
+        row.status = "skipped"
+        row.error = DISCARDED_UNREADABLE
+        row.last_tried_at = utcnow()
+    return len(rows)
+
+
+def requeue_reopened(session: Session, reopened: frozenset[str], path: Path | None = None) -> int:
+    """Put back in the queue the discarded pages of every publisher found open again.
+
+    The undo of :func:`discard_unreadable`, run where the queue is read, so a
+    publisher whose weekly check answers gets its backlog back without anybody
+    remembering it was there. Only pages discarded for being unreadable move; a page
+    skipped for any other reason stays skipped.
+    """
+    from tracker.confidence import registrable_domain
+
+    if not reopened:
+        return 0
+    opened = closed_domains(path) - closed_domains(path, reopened=reopened)
+    if not opened:
+        return 0
+    rows = [
+        row
+        for row in session.scalars(
+            select(IngestUrl).where(
+                IngestUrl.status == "skipped", IngestUrl.error == DISCARDED_UNREADABLE
+            )
+        )
+        if registrable_domain(row.url) in opened
+    ]
+    for row in rows:
+        row.status = PENDING_URL_STATUS
+        row.error = None
+    return len(rows)
+
+
 def pending(
     session: Session,
     limit: int | None = None,
@@ -2195,6 +2251,7 @@ __all__ = [
     "CHALLENGE_NOTE",
     "COPY_MIN_WORDS",
     "DEAD_STATUS",
+    "DISCARDED_UNREADABLE",
     "MAX_HEADLINE_LOOKUPS",
     "MAX_PER_FEED",
     "MAX_SAME_FAILURES",
@@ -2216,6 +2273,7 @@ __all__ = [
     "copies_headline",
     "crawl_sitemap",
     "default_feeds_path",
+    "discard_unreadable",
     "drop_ids",
     "drop_pending",
     "failed",
@@ -2237,6 +2295,7 @@ __all__ = [
     "record_probe",
     "refilter_pending",
     "reopened_names",
+    "requeue_reopened",
     "retryable",
     "run",
     "same_story",

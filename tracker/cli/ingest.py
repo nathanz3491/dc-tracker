@@ -264,14 +264,29 @@ def ingest_crawl(
     elif from_queue:
         from tracker.ingest import discover as disc
 
-        # A page on a publisher closed to us, with no body cached, goes after every
-        # page that can be read, so it cannot take one of `--limit`'s slots. On
-        # 2026-10-02 six of the nightly crawl's next ten were such pages.
+        # A page on a publisher closed to us, with no body cached, is taken out of
+        # the queue: no fetch will read it, and sorted last it still sat there,
+        # 627 of 1,893 queued pages on 2026-10-14. A publisher a weekly check finds
+        # open again gets its discarded pages back first.
         with session_scope(engine, commit=False) as session:
             reopened = disc.reopened_names(session)
         unreadable = disc.unreadable_test(
             None if no_cache else article_cache("articles"), reopened=reopened
         )
+        with session_scope(engine, commit=not dry_run) as session:
+            requeued = disc.requeue_reopened(session, reopened)
+            discarded = disc.discard_unreadable(session, unreadable)
+        if requeued:
+            console.print(
+                f"[dim]{requeued} discarded article(s) are back in the queue: their "
+                "publisher answered its weekly check[/dim]"
+            )
+        if discarded:
+            console.print(
+                f"[dim]{discarded} queued article(s) {'would be' if dry_run else 'were'} "
+                "discarded: on publishers marked closed in seed/feeds.toml, with nothing "
+                "cached[/dim]"
+            )
         with session_scope(engine, commit=False) as session:
             url_list = [
                 row.url
@@ -279,12 +294,6 @@ def ingest_crawl(
                     session, limit=limit, new_first=new_first, unreadable=unreadable
                 )
             ]
-            held_back = sum(1 for row in disc.pending(session) if unreadable(row.url))
-        if held_back:
-            console.print(
-                f"[dim]{held_back} queued article(s) are on publishers marked closed in "
-                "seed/feeds.toml with nothing cached; they go after every readable one[/dim]"
-            )
         if not url_list:
             console.print(
                 "[green]queue is empty[/green] — run `tracker discover` to look for articles"
