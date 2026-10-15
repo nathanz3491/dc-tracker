@@ -35,11 +35,11 @@ because it runs on the machine that owns the data.
    └──────────────┘
 ```
 
-**The console reads.** Six views — Updates, Projects, Sources, Map, Capex, Help —
+**The console reads.** Six views — Updates, Monitor, Projects, Sources, Map, Capex —
 and it cannot change a project, a citation or a figure. There is exactly one
 exception, `POST /api/watch`, and the section below is about why it is allowed.
 
-**Each view has its own URL** — `/projects`, `/sources`, `/help` — so a page can
+**Each view has its own URL** — `/projects`, `/sources`, `/capex` — so a page can
 be linked to, refreshed and reached with the back button. The server does not
 render them differently; it stamps which view was asked for and the front end
 opens on it, then `pushState`s as you navigate. The bundle and the dataset are

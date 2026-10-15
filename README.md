@@ -260,8 +260,8 @@ or left — of the 47 measured, 28 are city-vs-county and 8 are name-overlap, an
 
 ## The three ideas
 
-Everything on screen is shaped by these, and they are also in the console's own
-Help tab.
+Everything on screen is shaped by these, and they are also in the reader
+documentation the console's **Help** button opens (`/help`).
 
 **A model's answer is not a fact.** Every stored value carries a tier saying what
 it rests on: `reported` (a verbatim sentence in a fetched article, checked against
@@ -308,7 +308,7 @@ This file is the tour. The detail lives in [`docs/`](docs/README.md):
 | [Backfill and gaps](docs/backfill-and-gaps.md) | Finding thin data and filling it — capacity blocks, county and coordinates |
 | [Analysis](docs/analysis.md) | Who is buying the capacity, what could stop these projects, slippage |
 | [The terminal interface](docs/tui.md) | `tracker tui` — the six panes, why the run pane cannot fall behind the CLI, verifying it over ssh |
-| [The console, and exporting](docs/console-and-export.md) | The live console, accounts (sign-up, invites, approval), driving it without a browser, publishing it |
+| [The console, and exporting](docs/console-and-export.md) | The live console, accounts (sign-up, invites, approval), driving it without a browser, publishing it, and the reader documentation it serves |
 | [Command workflows](docs/workflows/README.md) | The four commands that are pipelines, not operations — `enrich`, `sync`, `duplicates`, `logic` — each with a full-page diagram of its stages |
 | [Architecture](docs/architecture.md) | How the CLI, the database and the console fit together |
 | [Design decisions](docs/design-decisions.md) | Why it works the way it does, and where it diverges from the PRD |

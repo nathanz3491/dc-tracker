@@ -13,7 +13,6 @@
  * the dataset. So `project.standing` comes from the API and nothing here guesses.
  */
 
-import { HelpView } from "/static/views-help.js";
 import { AccountView, AdminView } from "/static/views-account.js";
 import { MonitorView } from "/static/views-monitor.js";
 
@@ -5668,15 +5667,14 @@ function UpdatesView({ data, onOpen, onGoto }) {
  * gone (the database is changed from the CLI, by one person, on the host), so the
  * `/dev` set went with it and `window.DC_MODE` with that.
  *
- * Help stayed and moved here. It explains tiers, tracks and confidence — what a
- * reader needs in order not to misread the data — and was only ever filed under
- * the machinery because that is where the tab happened to sit.
+ * Help is no longer a view: it is the reader documentation, its own site
+ * (`webui/docsite.py`), and the header's Help button goes to it through `/help`.
  *
  * Kept in step with `server.READ_VIEWS`, which decides which paths are pages
  * rather than 404s; a test asserts the two agree. */
 const VIEWS = [
   ["updates", "Updates"], ["monitor", "Monitor"], ["projects", "Projects"],
-  ["sources", "Sources"], ["map", "Map"], ["capex", "Capex"], ["help", "Help"],
+  ["sources", "Sources"], ["map", "Map"], ["capex", "Capex"],
 ];
 
 /* Pages about the reader's account rather than the data, reached from the header
@@ -6269,6 +6267,8 @@ function App() {
             </span>
             <${Button} size="icon" variant="outline" aria-label="Toggle theme"
                        onClick=${() => setDark((d) => !d)}>${dark ? "☀" : "☾"}<//>
+            ${/* The documentation, a site of its own; `/help` sends the browser there. */ ""}
+            <${Button} size="sm" variant="outline" onClick=${() => { window.location.href = "/help"; }}>Help<//>
             ${/* Who is reading, and the way out. `account` is null on a console
                   with no accounts at all, where there is nobody to sign out. */ ""}
             ${data.account && html`
@@ -6310,7 +6310,6 @@ function App() {
         ${view === "map" && html`<${MapView} data=${data} onOpen=${openProject} />`}
         ${view === "capex" && html`
           <${CapexView} data=${data} allowAi=${data.allow_ai} onOpen=${openProject} />`}
-        ${view === "help" && html`<${HelpView} data=${data} />`}
         ${view === "account" && html`<${AccountView} data=${data} api=${api} />`}
         ${view === "admin" && html`<${AdminView} data=${data} api=${api} />`}
       </div>

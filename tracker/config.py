@@ -506,6 +506,11 @@ class Settings(BaseSettings):
     #: every checkout trying to publish to one person's domain.
     tunnel_name: str | None = None
     tunnel_hostname: str | None = None
+    #: The hostname the reader documentation answers on (`webui/docsite.py`). The
+    #: console serves the docs to anybody on it and nothing else; unset, the docs
+    #: are still at `/docs/` on the console's own address. In `.env` for the same
+    #: reason as `tunnel_hostname`.
+    docs_hostname: str | None = None
 
     #: Facility power per H200-equivalent accelerator, in kilowatts, used to
     #: restate a site's megawatts as compute. See `tracker/compute.py` for how

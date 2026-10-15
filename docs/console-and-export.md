@@ -45,7 +45,7 @@ tracker serve
 
 ## One console, and it reads
 
-Six views — **Updates**, Projects, Sources, Map, Capex, Help — each on its own
+Six views — **Updates**, Monitor, Projects, Sources, Map, Capex — each on its own
 URL, so a page can be linked to, refreshed and reached with the back button.
 Sources opens any cited article in a reader view. Nothing here changes a project,
 a citation or a figure.
@@ -494,6 +494,51 @@ fold too; both were permanent furniture above the table. The filter card collaps
 at every width, with a count on the button so a hidden active filter cannot
 mislead you.
 
+## The reader documentation
+
+The console serves a documentation site for the people who read it: what each page
+shows, what the labels and scores mean, where the data comes from. It replaced the
+Help view, and the console's **Help** button and `/help` lead to it. It is public —
+no sign-in — in English and Chinese, with search.
+
+**Where it lives.** Pages are Markdown, one file per page per language, under
+`tracker/webui/docs/{en,zh}/<slug>.md`; `tracker/webui/docs/manifest.json` gives the
+sections, the page order and each title in both languages. The viewer is
+`tracker/webui/static/docs/` (`docs.js`, `markdown.js`, `docs.css`) and the page shell
+is `static/public/docs.html`. The server side is `tracker/webui/docsite.py` plus
+`Handler._docs` in `server.py`. Python serves files and never renders: the Markdown is
+turned into a page in the browser.
+
+**Editing it.** Change the `.md` file, push, and the host serves it within a couple of
+minutes — the manifest is re-read when it changes, so no restart. To add a page, add
+both language files and a manifest entry; `tests/test_docsite.py` refuses a manifest
+naming a missing file, a file the manifest does not name, a stub, or a link to a page
+that does not exist. Preview locally at `http://127.0.0.1:8765/docs/`.
+
+The renderer (`markdown.js`) is our own and reads only what the pages use: headings,
+paragraphs, lists, tables, fenced code, quotes, `> [!NOTE]`-style callouts, links,
+bold, italic and code, plus `{{v:<label>|text}}` for a value drawn with the console's
+provenance styling, `{{tier:T2}}` and `{{kbd:/}}`. It escapes every character and
+passes no raw HTML. Link to another page by its slug — `[tiers](tiers)` — not by path.
+
+**Two addresses.** With `TRACKER_DOCS_HOSTNAME` set in `.env`, that whole host is the
+docs and nothing of the console answers on it — not the API, not the console's code,
+not the sign-in. Route the hostname to the console's tunnel
+(`cloudflared tunnel route dns <tunnel> <hostname>`); the request's `Host` header picks
+the docs. On any other host the same site is under `/docs/`. The shell learns which
+from a `dc-base` meta rather than `<base href>`, because the public pages' CSP says
+`base-uri 'none'`.
+
+**Still an allowlist.** Like the rest of the public surface, nothing becomes public by
+being put in a directory: the content files served are exactly those the manifest
+names, compared as strings, and the viewer's three files are listed in
+`assets.PUBLIC_STATIC`.
+
+**The Chinese pages are product, not client deliverables.** `CLAUDE.md` §6 keeps
+Chinese-language deliverables out of the repo; these are the console's user
+documentation and ship with it, which is why they sit under `tracker/webui/docs/`
+rather than matching `docs/*.zh-CN.md`.
+
 ## Driving the console from outside a browser
 
 ```bash
@@ -536,8 +581,8 @@ The three worth knowing:
 not merely a session — an anonymous visitor to an open console gets a 403 saying
 so rather than a list with no owner.
 
-Opens `http://127.0.0.1:8765/`. Six views — **Updates**, Projects, Sources, Map,
-Capex, Help — reading the database live, so it reflects what the last run did
+Opens `http://127.0.0.1:8765/`. Six views — **Updates**, Monitor, Projects, Sources,
+Map, Capex — reading the database live, so it reflects what the last run did
 without re-exporting anything. The four heavy answers (the shell index, capex, the
 publisher survey, the citations list) are cached until a commit changes the
 database, which SQLite counts for us (`PRAGMA data_version`): a second visit to

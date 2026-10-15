@@ -43,6 +43,11 @@ PUBLIC_STATIC: frozenset[str] = frozenset(
     {
         "public/site.css",
         "public/site.js",
+        # The reader documentation's viewer (`webui/docsite.py`): public because the
+        # docs are, and written for them, so they carry no console code.
+        "docs/docs.css",
+        "docs/docs.js",
+        "docs/markdown.js",
         # Instrument Serif 400, latin.
         "vendor/fonts/jizBRFtNs2ka5fXjeivQ4LroWlx-6zUTjg.woff2",
         # Inter 400 to 700, latin.
@@ -66,6 +71,11 @@ PUBLIC_PAGES: dict[str, str] = {
 
 #: What a stranger gets, with a 404, for a path that is nothing at all.
 NOT_FOUND_PAGE = "notfound.html"
+
+#: The page shell of the reader documentation, served for every docs address with
+#: its `dc-base` meta filled in. Not in `PUBLIC_PAGES`: its routes are the docs',
+#: decided by `Handler._docs`, not a fixed path each.
+DOCS_SHELL = "docs.html"
 
 _EXTRA_TYPES = {
     ".js": "text/javascript; charset=utf-8",
@@ -344,13 +354,14 @@ def missing_public() -> list[str]:
     Checked at startup for the reason `missing_vendor` is: without them every
     signed-out visit is a 500, which a published console would show to everybody.
     """
-    pages = sorted({*PUBLIC_PAGES.values(), NOT_FOUND_PAGE})
+    pages = sorted({*PUBLIC_PAGES.values(), NOT_FOUND_PAGE, DOCS_SHELL})
     missing = [name for name in sorted(PUBLIC_STATIC) if not (STATIC_ROOT / name).is_file()]
     missing += [f"public/{name}" for name in pages if not (PUBLIC_ROOT / name).is_file()]
     return missing
 
 
 __all__ = [
+    "DOCS_SHELL",
     "NOT_FOUND_PAGE",
     "PUBLIC_PAGES",
     "PUBLIC_ROOT",

@@ -15,7 +15,7 @@
  *     `tracks.NEXT_SIGNAL`, so the page never reasons about tracks itself;
  *   - unconfirmed obstacles are kept apart, labelled, and left out of the email.
  *
- * Kept out of app.js for the reason views-help.js is. `api`, `onOpen` and the
+ * Kept out of app.js so a reader of one view need not scroll past another. `api`, `onOpen` and the
  * list editor are passed in, because this file cannot import from app.js (app.js
  * imports it).
  */

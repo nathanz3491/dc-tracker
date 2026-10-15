@@ -1,8 +1,7 @@
 /* The two pages about accounts rather than data: your own, and the admin page.
  *
- * Kept out of app.js for the reason views-help.js is: they share nothing with the
- * dataset views but the design system, and a reader of one should not have to
- * scroll past the other. `api` is passed in rather than re-implemented, so a
+ * Kept out of app.js because they share nothing with the dataset views but the
+ * design system, and a reader of one should not have to scroll past the other. `api` is passed in rather than re-implemented, so a
  * signed-out session sends these pages to the gate exactly as it does the rest.
  *
  * What the server decides and these pages only reflect:

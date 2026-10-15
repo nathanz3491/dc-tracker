@@ -53,7 +53,7 @@ from sqlalchemy.exc import OperationalError
 from tracker import __version__
 from tracker.config import home
 from tracker.db import MigrationError, make_engine, session_scope
-from tracker.webui import assets
+from tracker.webui import assets, docsite
 from tracker.webui.auth import COOKIE, Gate, cookie_value
 from tracker.webui.reads import ReadSide
 
@@ -135,7 +135,7 @@ AUTH_CACHE_S = 5.0
 #: and was only filed under the machinery because that is where the tab happened to
 #: sit.
 READ_VIEWS: frozenset[str] = frozenset(
-    {"updates", "monitor", "projects", "sources", "map", "capex", "help"}
+    {"updates", "monitor", "projects", "sources", "map", "capex"}
 )
 
 #: Pages about the reader's own account rather than the dataset, so not tabs in the
@@ -327,8 +327,17 @@ class Console:
         allow_ai: bool = True,
         allow_watch: bool = True,
         published: bool = False,
+        docs_host: str | None = None,
+        console_host: str | None = None,
     ) -> None:
         self.db_path = db_path
+        #: The hostname on which this server is the reader documentation and
+        #: nothing else, already checked by `docsite.hostname`. None serves the docs
+        #: only under `/docs/`. See `Handler._docs`.
+        self.docs_host = docs_host
+        #: The console's own public hostname, for the docs' "Open the console" link
+        #: when they are read on `docs_host`. Same check, same source (`.env`).
+        self.console_host = console_host
         #: Whether this console was started behind a tunnel — on a public URL.
         #:
         #: **A published console requires a sign-in whatever the account count.**
@@ -788,6 +797,10 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlsplit(self.path)
         route, query = parsed.path, parse_qs(parsed.query)
         try:
+            # Before the sign-in, because the docs are for anybody; and before the
+            # console's routes, because on the docs hostname nothing else answers.
+            if self._docs(route):
+                return None
             if not self._authed:
                 return self._unauthenticated(route, query)
             self._route_get(route, query)
@@ -892,9 +905,133 @@ class Handler(BaseHTTPRequestHandler):
             return self._redirect("/signin")
         if page == "signup":
             return self._redirect("/register")
+        if page == "help":
+            return self._redirect(self._docs_home())
         if app := _app_path(route):
             return self._redirect("/signin?next=" + quote(app, safe="/"))
         self._serve_public(assets.NOT_FOUND_PAGE, status=404)
+
+    def _docs(self, route: str) -> bool:
+        """Answer `route` as the reader documentation if it is theirs. True if handled.
+
+        ===========================  ============================================
+        on the docs hostname         the whole host is the docs; nothing else
+        anywhere else, ``/docs/*``   the same site, for a machine with no tunnel
+        anywhere else, otherwise     not the docs: False, and routing goes on
+        ===========================  ============================================
+
+        Within the site, by the path after its base:
+
+        ===================================  ======================================
+        ``/``, ``/<lang>/``                  the shell, which opens that language's
+                                             first page
+        ``/<lang>/<slug>``                   the shell, or the shell with a 404 when
+                                             the manifest has no such page
+        ``/content/<file>``                  a content file in `docsite.site().files`
+        ``/static/<PUBLIC_STATIC entry>``    on the docs hostname only, the file
+        anything else                        the shell with a 404
+        ===================================  ======================================
+
+        Public for everybody, signed in or not, and safe to be: the shell is fixed
+        bytes plus asset stamps and a base chosen here from two literals; the
+        content is Markdown the repo ships, rendered by the browser with every
+        character escaped. Nothing from the request reaches a response but the
+        choice of file, and that choice is an exact match against the manifest.
+        """
+        on_docs_host = bool(self.console.docs_host) and (
+            docsite.request_host(self.headers.get("Host")) == self.console.docs_host
+        )
+        if on_docs_host:
+            base, rest = "/", route
+        elif route == "/docs":
+            self._redirect("/docs/")
+            return True
+        elif route.startswith("/docs/"):
+            base, rest = "/docs/", route[len("/docs") :]
+        else:
+            return False
+
+        parts = [part for part in rest.split("/") if part]
+        if not parts:
+            self._docs_shell(base)
+        elif parts[0] == "content" and len(parts) >= 2:
+            self._docs_content("/".join(parts[1:]))
+        elif parts[0] == "static" and on_docs_host:
+            relative = rest[len("/static/") :]
+            if relative in assets.PUBLIC_STATIC:
+                self._static(relative, None, anonymous=True)
+            else:
+                self._error(404, "not part of the documentation")
+        elif (len(parts) == 1 and parts[0] in docsite.LANGUAGES) or (
+            len(parts) == 2 and docsite.is_page(parts[0], parts[1])
+        ):
+            self._docs_shell(base)
+        else:
+            self._docs_shell(base, status=404)
+        return True
+
+    def _docs_home(self) -> str:
+        """Where `/help` sends a reader: the docs hostname if there is one."""
+        return f"https://{self.console.docs_host}/" if self.console.docs_host else "/docs/"
+
+    def _docs_shell(self, base: str, *, status: int = 200) -> None:
+        """The docs page shell under `PUBLIC_CSP`, told its base by a `dc-base` meta.
+
+        A meta rather than `<base href>`: `PUBLIC_CSP` says `base-uri 'none'`, which
+        a browser obeys by ignoring the element, and loosening the policy for one
+        page would be the wrong trade. The viewer builds every address from it.
+
+        `base` is one of two literals, `"/"` or `"/docs/"`, never request text.
+        """
+        path = assets.PUBLIC_ROOT / assets.DOCS_SHELL
+        if not path.is_file():
+            return self._error(500, "the documentation's page shell is missing from this install")
+        # The console is the same host under `/docs/`, and another host on the docs
+        # hostname — named only if `.env` names it, else the link is the docs' home.
+        if base == "/":
+            console = f"https://{self.console.console_host}/" if self.console.console_host else "/"
+        else:
+            console = "/"
+        html = (
+            assets.stamp(path.read_text(encoding="utf-8"))
+            .replace(
+                '<meta name="dc-base" content="/">', f'<meta name="dc-base" content="{base}">', 1
+            )
+            .replace(
+                '<meta name="dc-console" content="/">',
+                f'<meta name="dc-console" content="{console}">',
+                1,
+            )
+        )
+        self._send(
+            status,
+            html.encode("utf-8"),
+            "text/html; charset=utf-8",
+            cache=_PUBLIC_CACHE,
+            csp=PUBLIC_CSP,
+            extra={"Referrer-Policy": "no-referrer"},
+        )
+
+    def _docs_content(self, relative: str) -> None:
+        """One file of the docs' content, if the manifest names it.
+
+        `no-cache` rather than a version stamp: the browser asks again each load
+        and a deploy's edits show at once, which matters more for a page of prose
+        than the few kilobytes a cache would save.
+        """
+        try:
+            path = docsite.content(relative)
+        except (OSError, ValueError) as exc:
+            log.error("docs: the manifest cannot be read: %s", exc)
+            return self._error(500, "the documentation's manifest is broken")
+        if path is None:
+            return self._error(404, "not part of the documentation")
+        kind = (
+            "text/markdown; charset=utf-8"
+            if path.suffix == ".md"
+            else "application/json; charset=utf-8"
+        )
+        self._send(200, path.read_bytes(), kind, cache="no-cache", csp=PUBLIC_CSP)
 
     def _public_page(self, page: str, query: dict[str, list[str]]) -> None:
         """One of `assets.PUBLIC_PAGES`, after the two checks its address needs.
@@ -972,6 +1109,10 @@ class Handler(BaseHTTPRequestHandler):
         # here, and an inbox is not something a deploy can update.
         if page == "watch-for":
             return self._redirect("/monitor")
+        # The Help view became the documentation site; old links and the nav's
+        # Help item land on it.
+        if page == "help":
+            return self._redirect(self._docs_home())
         if page in {"signin", "register"}:
             return self._redirect(safe_next((query.get("next") or [""])[0]) or "/")
         if page == "forgot":
@@ -3114,8 +3255,16 @@ def serve(
     for as long as it runs — see `Console.published`.
     """
     from tracker import accounts
+    from tracker.config import get_settings
 
-    console = Console(db_path, allow_ai=allow_ai, allow_watch=allow_watch, published=published)
+    console = Console(
+        db_path,
+        allow_ai=allow_ai,
+        allow_watch=allow_watch,
+        published=published,
+        docs_host=docsite.hostname(get_settings().docs_hostname),
+        console_host=docsite.hostname(get_settings().tunnel_hostname),
+    )
     # Made now rather than on the first sign-in to an unknown address, which
     # would otherwise cost two scrypts where every later one costs one.
     accounts.decoy_hash()

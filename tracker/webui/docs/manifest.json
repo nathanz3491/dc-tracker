@@ -1,0 +1,54 @@
+{
+  "sections": [
+    {
+      "id": "start",
+      "title": { "en": "Getting started", "zh": "入门" },
+      "pages": [
+        { "slug": "introduction", "title": { "en": "What dc-tracker is", "zh": "dc-tracker 是什么" } },
+        { "slug": "signing-in", "title": { "en": "Accounts and signing in", "zh": "账户与登录" } },
+        { "slug": "tour", "title": { "en": "A five-minute tour", "zh": "五分钟导览" } }
+      ]
+    },
+    {
+      "id": "console",
+      "title": { "en": "Using the console", "zh": "使用控制台" },
+      "pages": [
+        { "slug": "updates", "title": { "en": "Updates", "zh": "动态" } },
+        { "slug": "monitor", "title": { "en": "Monitor", "zh": "关注" } },
+        { "slug": "projects", "title": { "en": "Projects", "zh": "项目" } },
+        { "slug": "project-page", "title": { "en": "A project's page", "zh": "项目详情页" } },
+        { "slug": "sources", "title": { "en": "Sources", "zh": "来源" } },
+        { "slug": "map", "title": { "en": "Map", "zh": "地图" } },
+        { "slug": "capex", "title": { "en": "Capex", "zh": "资本支出" } },
+        { "slug": "companies", "title": { "en": "Company pages", "zh": "公司页面" } },
+        { "slug": "account", "title": { "en": "Your account", "zh": "你的账户" } }
+      ]
+    },
+    {
+      "id": "data",
+      "title": { "en": "Reading the data", "zh": "读懂数据" },
+      "pages": [
+        { "slug": "provenance", "title": { "en": "Where a value came from", "zh": "数值从哪里来" } },
+        { "slug": "confidence", "title": { "en": "Confidence", "zh": "可信度" } },
+        { "slug": "tiers", "title": { "en": "Quality tiers", "zh": "质量等级" } },
+        { "slug": "progress", "title": { "en": "Phases and progress", "zh": "阶段与进展" } },
+        { "slug": "numbers-and-dates", "title": { "en": "Numbers and dates", "zh": "数字与日期" } },
+        { "slug": "empty-fields", "title": { "en": "Why a field is empty", "zh": "为什么字段为空" } },
+        { "slug": "duplicates", "title": { "en": "Duplicates", "zh": "重复项目" } }
+      ]
+    },
+    {
+      "id": "reference",
+      "title": { "en": "Methodology and reference", "zh": "方法与参考" },
+      "pages": [
+        { "slug": "methodology", "title": { "en": "Where the data comes from", "zh": "数据来源" } },
+        { "slug": "how-it-is-kept-current", "title": { "en": "How the data is kept current", "zh": "数据如何保持更新" } },
+        { "slug": "fields", "title": { "en": "Field dictionary", "zh": "字段说明" } },
+        { "slug": "glossary", "title": { "en": "Glossary", "zh": "术语表" } },
+        { "slug": "limitations", "title": { "en": "Known limitations", "zh": "已知局限" } },
+        { "slug": "faq", "title": { "en": "FAQ", "zh": "常见问题" } },
+        { "slug": "release-notes", "title": { "en": "Release notes", "zh": "更新说明" } }
+      ]
+    }
+  ]
+}

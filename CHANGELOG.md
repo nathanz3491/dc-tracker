@@ -12,6 +12,24 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **A documentation site for the people who read the console, in English and
+  Chinese, replaces the Help view** (`tracker/webui/docsite.py`,
+  `tracker/webui/docs/`, `tracker/webui/static/docs/`,
+  `tracker/webui/static/public/docs.html`, `tracker/webui/server.py`,
+  `tracker/webui/assets.py`, `tracker/config.py`, `tests/test_docsite.py`). The old
+  Help page was one screen, and half of it described pages and buttons that no longer
+  exist. The new site has 26 pages in four sections: getting started, every page of the
+  console, how to read the data (where a value came from, confidence, tiers, phases,
+  numbers and dates, empty fields, duplicates), and methodology and reference (sources,
+  the nightly update, a field dictionary, a glossary, known limitations, an FAQ and
+  release notes). It has a sidebar, an on-page contents list, previous and next links,
+  search across both languages, a language switch, light and dark themes, and works on
+  a phone. It is public: no sign-in is needed. With `TRACKER_DOCS_HOSTNAME` set, that
+  hostname serves only the docs; otherwise they are at `/docs/`. `/help`, the
+  console's **Help** button and a link on the front page all lead there. Pages are
+  Markdown files edited in the repo and shipped by the usual push; the browser renders
+  them, so the Python side only serves files. See `docs/console-and-export.md`.
+
 - **Every company has a page, and names across the console lead to it**
   (`tracker/company.py`, `tracker/company_logo.py`, `tracker/dedup.py`,
   `tracker/webui/server.py`, `tracker/webui/static/app.js`,

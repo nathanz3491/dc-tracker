@@ -181,7 +181,7 @@ def test_the_shell_payload_ships_nothing_the_page_does_not_read(server, seeded_d
 
     front_end = "".join(
         (assets.STATIC_ROOT / name).read_text(encoding="utf-8")
-        for name in ("app.js", "views-help.js", "vendor/dc-map.js", "vendor/dc-map3d.js")
+        for name in ("app.js", "vendor/dc-map.js", "vendor/dc-map3d.js")
     )
     for key in unread:
         assert f"data.{key}" not in front_end and f"DCTRACKER.{key}" not in front_end, key
@@ -802,7 +802,7 @@ def test_every_view_has_its_own_url(server):
     and swapping.
     """
     address, _ = server
-    for path in ("/updates", "/monitor", "/projects", "/sources", "/map", "/capex", "/help"):
+    for path in ("/updates", "/monitor", "/projects", "/sources", "/map", "/capex"):
         status, body = request(address, path)
         assert status == 200, path
         assert f'window.DC_VIEW="{path.strip("/")}"' in body
@@ -1724,8 +1724,9 @@ PUBLIC_URLS = {
     "confirm": "/confirm?t=x",
 }
 
-#: The public pages above plus the 404 page, which a stranger reads just as often.
-PUBLIC_DOCUMENTS = [*PUBLIC_URLS.values(), "/nonsense"]
+#: The public pages above plus the 404 page, which a stranger reads just as often,
+#: and the documentation's page shell (`webui/docsite.py`), which anybody may read.
+PUBLIC_DOCUMENTS = [*PUBLIC_URLS.values(), "/nonsense", "/docs/"]
 
 
 def test_every_public_page_has_a_url_here():
@@ -2456,10 +2457,10 @@ def test_a_public_page_is_fixed_bytes(gated):
     address, _ = gated
     status, _, to_map = raw(address, "/signin?next=/map")
     assert status == 200
-    status, _, to_help = raw(address, "/signin?next=/help")
+    status, _, to_capex = raw(address, "/signin?next=/capex")
     assert status == 200
-    assert to_map == to_help
-    assert "/map" not in to_map and "/help" not in to_help
+    assert to_map == to_capex
+    assert "/map" not in to_map and "/capex" not in to_capex
 
 
 @pytest.mark.parametrize("path", PUBLIC_DOCUMENTS)
@@ -2496,6 +2497,7 @@ def test_everything_a_public_page_asks_for_is_public(gated):
     address, _ = gated
     served = [raw(address, path)[2] for path in PUBLIC_DOCUMENTS]
     served.append(raw(address, "/static/public/site.css")[2])
+    served.append(raw(address, "/static/docs/docs.css")[2])
 
     asked: set[str] = set()
     for text in served:
@@ -2509,7 +2511,7 @@ def test_everything_a_public_page_asks_for_is_public(gated):
     for relative in assets.PUBLIC_STATIC:
         assert _fetch(address, f"/static/{relative}")[0] == 200, relative
 
-    pages = {*assets.PUBLIC_PAGES.values(), assets.NOT_FOUND_PAGE}
+    pages = {*assets.PUBLIC_PAGES.values(), assets.NOT_FOUND_PAGE, assets.DOCS_SHELL}
     on_disk = {
         path.relative_to(assets.STATIC_ROOT).as_posix()
         for path in assets.PUBLIC_ROOT.rglob("*")
