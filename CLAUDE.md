@@ -148,6 +148,10 @@ moment the code lands, and a reader who finds one cannot tell whether it describ
 the system or an argument somebody had about it. The Chinese-language documents are
 deliverables for the client, not documentation of the repo.
 
+The exception is the console's **user documentation**, `tracker/webui/docs/{en,zh}/`:
+the Chinese pages there are part of the product, shipped and served like the English
+ones, so they are committed. The rule above is about `docs/`, not about them.
+
 ```
 docs/plan-*.md   docs/*-plan.md   docs/review-*.md
 docs/*-review-*.md   docs/feedback-*.md   docs/*.zh-CN.md   HANDOFF.md
