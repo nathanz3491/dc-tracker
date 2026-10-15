@@ -4,6 +4,10 @@ Changes a reader of the console will notice, newest first. The console's version
 
 ## September–October 2026
 
+### API
+
+- **A read-only API.** Programs can read campuses, their figures and sources, companies, capex by buyer and your watchlist's news, with a key made on your Account page. See [The API](api).
+
 ### Documentation
 
 - **These docs.** The console's Help page is replaced by this documentation site, in English and Chinese, with search. **Help** in the console's top bar opens it.

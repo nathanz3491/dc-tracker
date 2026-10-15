@@ -26,6 +26,10 @@
   // browser ignores one. Every address below is built from this instead.
   const BASE = (document.querySelector('meta[name="dc-base"]') || {}).content || "/";
   const CONSOLE = (document.querySelector('meta[name="dc-console"]') || {}).content || "/";
+  // The API's real address. Pages write `{{api}}` instead of a hostname: the repo
+  // never names the host (CLAUDE.md §6), and the server knows it from `.env`.
+  const API = (document.querySelector('meta[name="dc-api"]') || {}).content || "/api/v1";
+  const withAddresses = (text) => text.split("{{api}}").join(API);
   const LANGS = ["en", "zh"];
   const $ = (id) => document.getElementById(id);
 
@@ -89,7 +93,7 @@
     if (!texts.has(key)) {
       const response = await fetch(`${BASE}content/${key}.md`, { cache: "no-cache" });
       if (!response.ok) throw new Error(`${key}: HTTP ${response.status}`);
-      texts.set(key, await response.text());
+      texts.set(key, withAddresses(await response.text()));
     }
     return texts.get(key);
   }

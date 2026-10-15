@@ -8,13 +8,18 @@ Enter the new password twice and press **Change password**. You are not asked fo
 
 If you have forgotten your password, sign out and use **Forgot password?** on the sign-in page instead. See [Accounts and signing in](signing-in).
 
+## API keys
+
+**API keys** lets a program read the tracker through the API with your access. Give a key a name, press **Create key**, and copy it at once: it starts with `dct_` and is shown only that one time. The list shows each key's name, first characters, when it was made and last used, and a **Revoke** button; revoking stops a key at once. An account can hold five active keys. See [The API](api).
+
 ## What is kept about you
 
 - your email address and, if you gave one, your name;
 - your password, stored only in a form that cannot be turned back into the password;
 - your [watchlist](monitor), and which updates you have already been emailed;
 - when you last signed in;
-- whether the AI panels are switched on for you.
+- whether the AI panels are switched on for you;
+- your API keys' names, first characters and dates — never the keys themselves.
 
 ## For administrators
 
@@ -39,4 +44,4 @@ Every account, with its role, status (*active*, *disabled*, *waiting for approva
 - **Sign out everywhere** — ends all their sessions;
 - **Disable / Enable**, and **Delete**, which removes the account and its watchlist for good.
 
-You cannot disable or delete your own account. Making someone an administrator, and creating invite codes, are done by whoever maintains the tracker, not on this page; outstanding invite codes are listed at the bottom with their expiry dates.
+Disabling an account also stops its API keys working; deleting it deletes them. You cannot disable or delete your own account. Making someone an administrator, and creating invite codes, are done by whoever maintains the tracker, not on this page; outstanding invite codes are listed at the bottom with their expiry dates.

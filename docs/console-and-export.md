@@ -539,6 +539,36 @@ Chinese-language deliverables out of the repo; these are the console's user
 documentation and ship with it, which is why they sit under `tracker/webui/docs/`
 rather than matching `docs/*.zh-CN.md`.
 
+## The public API
+
+A read-only JSON API for programs, at `/v1/...` on `TRACKER_API_HOSTNAME` (routed to
+the console's tunnel like the docs hostname) and at `/api/v1/...` on any other host.
+Readers make keys on their own Account page; the reference for API users is in the
+reader docs (`tracker/webui/docs/en/api.md`, `api-reference.md`).
+
+**Keys** (`tracker/apikeys.py`, migration 0036): `dct_` plus 256 random bits, shown
+once, stored as sha256 with an 8-character display prefix. Five active keys per
+account. A key is checked against its account on every request, so disabling an
+account stops its keys; revoking keeps the row, marked. `last_used_at` is written at
+most every ten minutes, best effort, so a read never waits on the nightly loop's
+write lock.
+
+**Requests** (`Handler._public_api`, `webui/publicapi.py`): `Authorization: Bearer`
+or `X-API-Key`, never a query parameter, and never the session cookie — a key is the
+only credential, so another site's page cannot read the API with a reader's session.
+60 requests a minute per key (an in-memory token bucket; it resets on restart),
+answered `429` with `Retry-After`. Every error is `{"error": {"code", "message"}}`.
+Nothing on the API writes: a POST to it, or to anything on its hostname, is a `405`.
+On the API hostname nothing of the console answers, not even `/docs/`.
+
+**Shapes** are this module's own, built from `export.to_json_object` and the existing
+readers rather than passed through from the console's `/api/*`, which change with the
+pages. Within `v1` keys may be added, never renamed or removed.
+
+**Hostnames in the docs.** The reader docs write the API's address as `{{api}}`; the
+docs shell carries the real one in a `dc-api` meta from `.env`, and the viewer
+substitutes it, so the repo never names the host (`CLAUDE.md` §6).
+
 ## Driving the console from outside a browser
 
 ```bash
