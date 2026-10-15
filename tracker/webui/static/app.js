@@ -1505,7 +1505,7 @@ function ProjectPage({ id, data, onBack, watch, onGoto, onOpenCompany, onAllSour
         blurb="Capacity, money and compute, each with what it rests on. A marked capacity is not the kind of megawatt the column is defined as, so it is not comparable with the unmarked ones.">
         <${StatsTab} data=${data} p=${p} populated=${populated} open=${open}
           onQuote=${showQuote} onTab=${() => scrollToSection("obstacles")}
-          claims=${p.claims_by_field} allowAi=${data.allow_ai} />
+          claims=${p.claims_by_field} allowAi=${data.allow_ai} aiOff=${data.ai_off} />
       <//>
 
       ${has("parties") && html`
@@ -1516,8 +1516,10 @@ function ProjectPage({ id, data, onBack, watch, onGoto, onOpenCompany, onAllSour
 
       <${Section} id="fields" title="The twelve tracked fields" count=${`${populated} of 12`}
         blurb="Every field the PRD requires, what each value rests on, and the sentence behind it. A utility's generation, transmission or storage figure is a different quantity and is never added to the megawatts here.">
+        ${/* `onTab` is what the blocker row's "see all N" calls. The page used to
+              render this without it, so the link was there and did nothing. */ ""}
         <${TrackedFields} p=${p} populated=${populated} onQuote=${showQuote}
-          claims=${p.claims_by_field} />
+          claims=${p.claims_by_field} onTab=${() => scrollToSection("obstacles")} />
       <//>
 
       <${Section} id="context" title="In context"
@@ -1995,7 +1997,7 @@ function wordBoundary(text, index) {
  * the legend already teaches, and the caveat as a footnote under the text where a
  * reader lands after the claim rather than before it. Still impossible to mistake
  * for a cited value; no longer shouting. */
-function InsightPanel({ project, allowAi }) {
+function InsightPanel({ project, allowAi, aiOff }) {
   const [state, setState] = useState({ status: "idle", text: "" });
   const [expanded, setExpanded] = useState(false);
   const abort = useRef(null);
@@ -2059,7 +2061,7 @@ function InsightPanel({ project, allowAi }) {
       </div>
 
       ${state.status === "unavailable" && html`
-        <p class="dc-ai-quiet">Unavailable: this console was started with --no-ai.</p>`}
+        <p class="dc-ai-quiet">${aiOff || "The AI panels are not available here."}</p>`}
 
       ${state.status === "failed" && html`
         <p class="dc-ai-quiet">
@@ -2105,7 +2107,7 @@ function InsightPanel({ project, allowAi }) {
  * Everything rendered here is the model's judgement and none of it is evidence.
  * The panel says so once, plainly, at the bottom, and uses the same tint the
  * overview uses so a reader already knows what that colour means. */
-function InferPanel({ project, allowAi }) {
+function InferPanel({ project, allowAi, aiOff }) {
   const [state, setState] = useState({ status: "idle" });
 
   // A new project means the previous project's analysis must go. Without this,
@@ -2145,7 +2147,7 @@ function InferPanel({ project, allowAi }) {
       </div>
 
       ${!allowAi && html`
-        <p class="dc-ai-quiet">Unavailable: this console was started with --no-ai.</p>`}
+        <p class="dc-ai-quiet">${aiOff || "The AI panels are not available here."}</p>`}
 
       ${allowAi && state.status === "idle" && html`
         <p class="dc-ai-quiet">
@@ -2728,7 +2730,7 @@ function basisOf(basis) {
   return BASIS[basis] || { label: "Capacity", hint: "no source records which kind of megawatt" };
 }
 
-function StatsTab({ data, p, populated, open, onQuote, allowAi, onTab, claims }) {
+function StatsTab({ data, p, populated, open, onQuote, allowAi, aiOff, onTab, claims }) {
   const worst = open.slice().sort((a, b) => SEV_ORDER.indexOf(b.severity) - SEV_ORDER.indexOf(a.severity))[0];
   // The label follows the basis rather than asserting one. See `basisOf`.
   const plannedBasis = basisOf(p.mw_planned_basis);
@@ -2761,13 +2763,13 @@ function StatsTab({ data, p, populated, open, onQuote, allowAi, onTab, claims })
             briefly pinned above the tab strip, which made it the one block in the
             drawer you could not scroll past — and put a model's reading in front
             of the figures it is a reading *of*. A card, like the rest. */ ""}
-      <${InsightPanel} project=${p} allowAi=${allowAi} />
+      <${InsightPanel} project=${p} allowAi=${allowAi} aiOff=${aiOff} />
 
       ${/* Under the briefing, because it answers the next question: the overview
             says what this row is, and this says what could stop it. Both are a
             model's words and both carry the same tint; only this one costs a call
             per click, so only this one has a button. */ ""}
-      <${InferPanel} project=${p} allowAi=${allowAi} />
+      <${InferPanel} project=${p} allowAi=${allowAi} aiOff=${aiOff} />
     </div>`;
 }
 
@@ -3957,7 +3959,7 @@ function DuplicateGroup({ ids, byId, evidence, label }) {
  * endpoint, cut at the sentinel server-side, cached by content so re-hovering a
  * buyer whose data has not moved is free. Same honesty framing — a model's
  * reading, never stored, never evidence. */
-function CapexInsight({ posKey, allowAi }) {
+function CapexInsight({ posKey, allowAi, aiOff }) {
   const [state, setState] = useState({ status: "idle", text: "" });
 
   useEffect(() => {
@@ -3994,7 +3996,7 @@ function CapexInsight({ posKey, allowAi }) {
         ${streaming && html`<span class="dc-ai-dots" aria-live="polite" aria-label="writing"><i /><i /><i /></span>`}
       </div>
       ${state.status === "unavailable" && html`
-        <p class="dc-ai-quiet">Unavailable: this console was started with --no-ai.</p>`}
+        <p class="dc-ai-quiet">${aiOff || "The AI panels are not available here."}</p>`}
       ${state.status === "failed" && html`<p class="dc-ai-quiet">${state.error}</p>`}
       ${streaming && !body && html`
         <div class="dc-ai-wait" aria-hidden="true">
@@ -4012,7 +4014,7 @@ function CapexInsight({ posKey, allowAi }) {
 /* The hover card: instant deterministic facts on top, the model's reading
  * streaming underneath. Fixed-position like QuotePopover, but interactive —
  * the reader can mouse into it, so it holds itself open. */
-function CapexHoverCard({ hover, position, allowAi, onHold, onRelease }) {
+function CapexHoverCard({ hover, position, allowAi, aiOff, onHold, onRelease }) {
   if (!hover || !position) return null;
   const facts = [
     [`${position.projects}`, position.projects === 1 ? "site" : "sites"],
@@ -4039,7 +4041,7 @@ function CapexHoverCard({ hover, position, allowAi, onHold, onRelease }) {
             <span style=${{ fontSize: 10.5, color: "var(--muted-foreground)" }}>${label}</span>
           </div>`)}
       </div>
-      <${CapexInsight} posKey=${position.key} allowAi=${allowAi} />
+      <${CapexInsight} posKey=${position.key} allowAi=${allowAi} aiOff=${aiOff} />
       <div style=${{ marginTop: 8, fontSize: 10.5, color: "var(--muted-foreground)" }}>
         click any number in the row to see the sites it is made of
       </div>
@@ -4195,7 +4197,7 @@ function CapexBreakdown({ position, col, byId, bucket, grain, onOpenProject }) {
             </div>`)}
         </div>`}
       <div style=${{ fontSize: 10.5, color: "var(--muted-foreground)", marginTop: 4 }}>
-        click any site to open its citations
+        click any site to open its page
       </div>
     </div>`;
 }
@@ -4207,7 +4209,7 @@ function CapexBreakdown({ position, col, byId, bucket, grain, onOpenProject }) {
  * payload's build time for one view of six. Fetched here instead, with the wait
  * shown rather than hidden: a skeleton in the shape of what is coming, because a
  * blank card for half a second reads as "there is nothing here". */
-function CapexView({ data, allowAi, onOpen }) {
+function CapexView({ data, allowAi, aiOff, onOpen }) {
   const [capex, setCapex] = useState(null);
   const [failed, setFailed] = useState(null);
   const [attempt, setAttempt] = useState(0);
@@ -4244,10 +4246,10 @@ function CapexView({ data, allowAi, onOpen }) {
         <${Skeleton} className="mrd-shimmer" style=${{ height: 180 }} />
       </div>`;
   }
-  return html`<${CapexBody} data=${data} capex=${capex} allowAi=${allowAi} onOpen=${onOpen} />`;
+  return html`<${CapexBody} data=${data} capex=${capex} allowAi=${allowAi} aiOff=${aiOff} onOpen=${onOpen} />`;
 }
 
-function CapexBody({ data, capex, allowAi, onOpen }) {
+function CapexBody({ data, capex, allowAi, aiOff, onOpen }) {
   const cover = capex.coverage;
   const dupes = capex.duplicates;
   const byId = useMemo(
@@ -4310,7 +4312,7 @@ function CapexBody({ data, capex, allowAi, onOpen }) {
       body: html`<span>We can name a buyer for ${Math.round(cover.attributed_pct)}% of projects:
         ${" "}${Math.round(cover.named_tenant_pct)}% because a source said so, and
         ${" "}${Math.round(cover.self_built_pct)}% worked out from who owns the site — those are
-        marked <b>*</b>. Biggest first, with the "nobody named" row pinned to the bottom; it is a
+        marked <b>*</b>. Biggest first, with the "(no named customer)" row pinned to the bottom; it is a
         leftover, not a buyer.</span>` },
     { key: "money", cols: ["confirmed $"],
       body: html`<span><b>Trust the megawatts before the dollars.</b>${" "}This column sums only
@@ -4451,8 +4453,9 @@ function CapexBody({ data, capex, allowAi, onOpen }) {
               ${" "}
               <button type="button" class="dc-link"
                       onClick=${() => reviewRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}>
-                Review them below
-              </button> to fold them for real.
+                See them below
+              </button>; merging them into one row is done by whoever maintains the tracker,
+              not from this page.
             </div>
           </div>
         <//>`}
@@ -4628,7 +4631,7 @@ function CapexBody({ data, capex, allowAi, onOpen }) {
         </div>
       <//>
 
-      <${CapexHoverCard} hover=${hover} position=${hovered} allowAi=${allowAi}
+      <${CapexHoverCard} hover=${hover} position=${hovered} allowAi=${allowAi} aiOff=${aiOff}
         onHold=${holdHover} onRelease=${endHover} />
 
       <${Card}>
@@ -4679,9 +4682,9 @@ function CapexBody({ data, capex, allowAi, onOpen }) {
             <${CardTitle}>One campus, several rows<//>
             <${CardDescription}>Rows that look like the same site, with the reason each pair was
               raised. ${html`<b>Read this before trusting a total above</b>`} — a suspected duplicate is
-              how capacity gets counted twice. Folding them is a decision with no undo, so it is not a
-              button here: ${html`<b class="dc-num">tracker duplicates</b>`} prints the same groups
-              and${" "}${html`<b class="dc-num">tracker merge</b>`} acts on them.<//>
+              how capacity gets counted twice. Until a group is settled, the table above counts one
+              row of it. Merging rows cannot be undone, so it is done by whoever maintains the
+              tracker, not from the console.<//>
           <//>
           ${dupes.groups.map((ids) => html`
             <${DuplicateGroup} key=${ids.join("-")} ids=${ids} byId=${byId}
@@ -6309,7 +6312,7 @@ function App() {
         ${view === "sources" && html`<${SourcesView} data=${data} />`}
         ${view === "map" && html`<${MapView} data=${data} onOpen=${openProject} />`}
         ${view === "capex" && html`
-          <${CapexView} data=${data} allowAi=${data.allow_ai} onOpen=${openProject} />`}
+          <${CapexView} data=${data} allowAi=${data.allow_ai} aiOff=${data.ai_off} onOpen=${openProject} />`}
         ${view === "account" && html`<${AccountView} data=${data} api=${api} />`}
         ${view === "admin" && html`<${AdminView} data=${data} api=${api} />`}
       </div>

@@ -2011,6 +2011,18 @@ class Handler(BaseHTTPRequestHandler):
         # The panels are drawn only where they would answer: the console's `--ai`
         # and this reader's own switch (`_ai_refused` enforces the same pair).
         payload["allow_ai"] = self.console.allow_ai and (account is None or account["ai"])
+        # And, when they are off, which of the two switches is off, in words a reader
+        # can act on. The page used to say "started with --no-ai" in both cases, so a
+        # reader whose account simply had them off was told the console lacked them.
+        if not self.console.allow_ai:
+            payload["ai_off"] = "The AI panels are switched off on this console."
+        elif not payload["allow_ai"]:
+            payload["ai_off"] = (
+                "The AI panels are not switched on for your account. "
+                "An administrator can turn them on."
+            )
+        else:
+            payload["ai_off"] = None
         payload["auth_required"] = self.console.auth_required
         payload["account"] = account
         # **`allow_watch` answers "may *this reader* edit a watchlist", not "is the

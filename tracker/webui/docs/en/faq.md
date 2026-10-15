@@ -40,9 +40,9 @@ The email follows your watchlist on [Monitor](monitor). It is not sent if your w
 
 Empty your watchlist, or switch on **watch everything**. There is no separate unsubscribe setting.
 
-## The AI overview says "Unavailable".
+## The AI panels say they are not switched on.
 
-The AI panels cost money each time they run, so they are switched on per account. Ask an administrator. See [A project's page](project-page).
+The AI panels cost money each time they run, so they are switched on per account. If the panel says they are not switched on for your account, ask an administrator; if it says they are switched off on this console, they are off for everyone. See [A project's page](project-page).
 
 ## How current is the data?
 

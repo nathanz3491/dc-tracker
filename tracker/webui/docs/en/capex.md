@@ -37,7 +37,7 @@ A buyer worked out from who owns the campus, rather than named by a source, is m
 The banner **N campuses are stored more than once** appears when the tracker suspects one campus is held in more than one row — usually because different articles named it differently. Each suspected group is counted **once**; the other rows are set aside and their megawatts shown as *skipped*, never added twice.
 
 > [!NOTE]
-> The banner says to review them "to fold them for real". Folding (merging) rows is done by whoever maintains the tracker, not from the console; nothing on this page changes the data. See [Duplicates](duplicates).
+> Merging duplicate rows into one is done by whoever maintains the tracker, not from the console; nothing on this page changes the data. See [Duplicates](duplicates).
 
 ## The table
 

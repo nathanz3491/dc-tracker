@@ -181,6 +181,18 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **Three things the console told readers that were not true**
+  (`tracker/webui/static/app.js`, `tracker/webui/server.py`, `tests/test_webui.py`).
+  The AI panels said "this console was started with --no-ai" whenever they were off,
+  including for a reader whose own account simply had them switched off; the page now
+  receives which switch is off and says so, pointing the second case at an
+  administrator. The biggest-obstacle row's **see all N** on a project's page did
+  nothing, because the page never passed it a target; it now jumps to Obstacles. And
+  Capex told readers to "review them below to fold them for real", and its review card
+  named two command-line tools: readers cannot merge rows, so both now say merging is
+  done by whoever maintains the tracker. Its drill-down hint said a click opens a
+  site's citations when it opens the site's page.
+
 - **A date that names a period is no longer called overdue the day the period
   starts, and the nightly loop stopped deleting correct dates for it**
   (`tracker/logic.py`, `tracker/gapfill.py`). "The second half of 2026" is stored

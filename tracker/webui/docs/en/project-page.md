@@ -26,7 +26,7 @@ The capacity cards name the **kind** of megawatt the source gave: *IT capacity* 
 **◈ Inferred analysis** asks a model what could obstruct the campus and what news would show it is still moving. It runs only when you press **Run analysis**. Each answer has a five-step meter of the model's confidence.
 
 > [!WARNING]
-> Both panels are a model's reading, not evidence. Nothing they say is stored, nothing they say changes any value, and they can be wrong. Each one costs money to run, so they are switched on per account. If they say *Unavailable: this console was started with --no-ai*, they may simply not be switched on for your account — ask an administrator.
+> Both panels are a model's reading, not evidence. Nothing they say is stored, nothing they say changes any value, and they can be wrong. Each one costs money to run, so they are switched on per account. When they are off, the panel says why: switched off on this console, or not switched on for your account — in which case an administrator can turn them on.
 
 ## Who is involved
 

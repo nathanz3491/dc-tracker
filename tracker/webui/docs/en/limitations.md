@@ -32,5 +32,4 @@ What the tracker cannot do, or does imperfectly. Each one changes how far you sh
 
 - **Merges cannot be undone,** and a merged row's address stops working.
 - **The AI panels are a model's reading.** They can be wrong, and nothing they say is stored or counts as evidence.
-- **The Capex banner says to "fold" duplicates,** but folding is done by whoever maintains the tracker, not from the console.
 - **The console's interface is in English.** These docs are in English and Chinese.

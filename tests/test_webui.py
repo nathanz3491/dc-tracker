@@ -717,6 +717,30 @@ def test_a_published_console_can_read_with_a_model_without_being_writable(seeded
         httpd.server_close()
 
 
+def test_the_page_is_told_which_switch_keeps_the_ai_panels_off(gated, seeded_db):
+    """Two switches turn the panels off, and the page used to blame the console's
+    `--no-ai` for both. A reader whose own account has them off was told the console
+    lacked them, and had no reason to ask an administrator."""
+    from tracker.db import open_db
+    from tracker.models import Account
+
+    address, console = gated
+    _, cookie = sign_in(address)
+    on = json.loads(raw(address, "/api/dataset", cookie=cookie)[2])
+    assert on["allow_ai"] is True and on["ai_off"] is None
+
+    with session_scope(open_db(seeded_db, readonly=False)) as session:
+        session.query(Account).update({"ai_allowed": False})
+    off = json.loads(raw(address, "/api/dataset", cookie=cookie)[2])
+    assert off["allow_ai"] is False
+    assert "your account" in off["ai_off"] and "administrator" in off["ai_off"]
+
+    console.allow_ai = False
+    off = json.loads(raw(address, "/api/dataset", cookie=cookie)[2])
+    assert off["ai_off"] == "The AI panels are switched off on this console."
+    assert "--no-ai" not in json.dumps(off)
+
+
 def test_the_api_index_lists_every_route_the_handler_serves(server):
     """The index is hand-written, so a new route must be added to it deliberately.
 
