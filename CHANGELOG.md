@@ -12,6 +12,20 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **A read-only public API, with keys readers make themselves** (`tracker/apikeys.py`,
+  `tracker/migrations/0036_api_key.sql`, `tracker/models.py`,
+  `tracker/webui/publicapi.py`, `tracker/webui/server.py`, `tracker/config.py`,
+  `tracker/webui/static/views-account.js`, `tests/test_apikeys.py`,
+  `tests/test_publicapi.py`). Programs can now read what a reader reads: campuses
+  filtered, sorted and paged like the Projects table; one campus with every field's
+  label, quote and source; its citations; a company; capex by buyer; and the key
+  owner's watchlist news. It answers on `TRACKER_API_HOSTNAME` at `/v1/...` (and at
+  `/api/v1/...` elsewhere), in JSON, with stable error codes and 60 requests a
+  minute per key. A reader makes, names and revokes up to five keys on their Account
+  page; a key is shown once and only its hash is stored, and disabling an account
+  stops its keys at once. Nothing on the API writes. The reader docs gain an API
+  section, in English and Chinese, with a reference for every endpoint.
+
 - **A documentation site for the people who read the console, in English and
   Chinese, replaces the Help view** (`tracker/webui/docsite.py`,
   `tracker/webui/docs/`, `tracker/webui/static/docs/`,

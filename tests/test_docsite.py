@@ -235,7 +235,15 @@ def test_the_docs_hostname_serves_the_docs_at_its_root(gated):
 
 def test_nothing_of_the_console_answers_on_the_docs_hostname(gated):
     """Not the data, not the console's code, not its sign-in: the docs host is docs."""
-    for path in ("/api/dataset", "/api/health", "/static/app.js", "/signin", "/projects", "/docs/"):
+    for path in (
+        "/api/dataset",
+        "/api/health",
+        "/api/v1/health",
+        "/static/app.js",
+        "/signin",
+        "/projects",
+        "/docs/",
+    ):
         status, _, body = _get(gated, path, host=DOCS_HOST)
         assert status == 404, path
         assert "sign in first" not in body

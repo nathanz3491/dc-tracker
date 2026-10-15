@@ -511,6 +511,10 @@ class Settings(BaseSettings):
     #: are still at `/docs/` on the console's own address. In `.env` for the same
     #: reason as `tunnel_hostname`.
     docs_hostname: str | None = None
+    #: The hostname the read-only public API answers on (`webui/publicapi.py`), at
+    #: `/v1/...`; nothing of the console answers there. Unset, the API is still at
+    #: `/api/v1/` on the console's own address.
+    api_hostname: str | None = None
 
     #: Facility power per H200-equivalent accelerator, in kilowatts, used to
     #: restate a site's megawatts as compute. See `tracker/compute.py` for how

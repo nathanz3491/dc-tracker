@@ -3,11 +3,18 @@
 Routing is written out rather than derived, because the read/write split is the
 security posture and it should be readable in one screen.
 
-**Exactly one route writes anything: ``POST /api/watch``.** Everything else under
-``/api/`` opens the database ``mode=ro``, so a bug in a read path raises instead of
-silently changing a row. And that one write is as narrow as a write gets — it adds
-or drops a row of `watch`, which says whose news Updates shows, which nothing
-derives from and no ingest consults.
+**Nothing here writes the dataset.** The one write a reader makes about the data is
+``POST /api/watch``, and it is as narrow as a write gets — it adds or drops a row of
+`watch`, which says whose news Updates shows, which nothing derives from and no
+ingest consults. The other writes are about accounts only: a reader's own password
+and API keys (``/api/account/*``), and the admin page's account edits. Every read
+opens the database ``mode=ro``, so a bug in a read path raises instead of silently
+changing a row.
+
+**Two more hostnames, each only one thing.** On the docs hostname the server is the
+reader documentation (`_docs`, `webui/docsite.py`); on the API hostname it is the
+read-only public API, authenticated by API key (`_public_api`,
+`webui/publicapi.py`). Neither answers anything of the console.
 
 **Before signing in, a browser can have seven pages and five files, and nothing
 else** — `assets.PUBLIC_PAGES` at their own routes (a short front page at `/`, the
@@ -53,7 +60,7 @@ from sqlalchemy.exc import OperationalError
 from tracker import __version__
 from tracker.config import home
 from tracker.db import MigrationError, make_engine, session_scope
-from tracker.webui import assets, docsite
+from tracker.webui import assets, docsite, publicapi
 from tracker.webui.auth import COOKIE, Gate, cookie_value
 from tracker.webui.reads import ReadSide
 
@@ -329,6 +336,7 @@ class Console:
         published: bool = False,
         docs_host: str | None = None,
         console_host: str | None = None,
+        api_host: str | None = None,
     ) -> None:
         self.db_path = db_path
         #: The hostname on which this server is the reader documentation and
@@ -338,6 +346,11 @@ class Console:
         #: The console's own public hostname, for the docs' "Open the console" link
         #: when they are read on `docs_host`. Same check, same source (`.env`).
         self.console_host = console_host
+        #: The hostname on which this server is the public API and nothing else
+        #: (`Handler._public_api`). None serves the API only under `/api/v1/`.
+        self.api_host = api_host
+        #: Requests per API key per minute, in memory. See `publicapi.RateLimiter`.
+        self.api_limiter = publicapi.RateLimiter()
         #: Whether this console was started behind a tunnel — on a public URL.
         #:
         #: **A published console requires a sign-in whatever the account count.**
@@ -797,9 +810,12 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlsplit(self.path)
         route, query = parsed.path, parse_qs(parsed.query)
         try:
-            # Before the sign-in, because the docs are for anybody; and before the
-            # console's routes, because on the docs hostname nothing else answers.
-            if self._docs(route):
+            # Before the sign-in, because the docs are for anybody and the API has
+            # keys of its own; and before the console's routes, because on either
+            # hostname nothing else answers.
+            # The API first: on its own hostname it claims every path, including
+            # `/docs/`, so nothing but the API ever answers there.
+            if self._public_api(route, query) or self._docs(route):
                 return None
             if not self._authed:
                 return self._unauthenticated(route, query)
@@ -970,6 +986,152 @@ class Handler(BaseHTTPRequestHandler):
             self._docs_shell(base, status=404)
         return True
 
+    def _host_role(self) -> str | None:
+        """`"docs"` or `"api"` when the request was sent to that hostname, else None."""
+        host = docsite.request_host(self.headers.get("Host"))
+        if self.console.docs_host and host == self.console.docs_host:
+            return "docs"
+        if self.console.api_host and host == self.console.api_host:
+            return "api"
+        return None
+
+    def _api_home(self) -> str:
+        """The API's base address: the API hostname if there is one."""
+        return f"https://{self.console.api_host}/v1" if self.console.api_host else "/api/v1"
+
+    def _api_json(
+        self, payload: dict[str, Any], *, status: int = 200, extra: dict[str, str] | None = None
+    ) -> None:
+        """One API answer: JSON, never cached, never indexed."""
+        body = json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8")
+        headers = {"X-Robots-Tag": "noindex", **(extra or {})}
+        self._send(status, body, "application/json; charset=utf-8", cache="no-store", extra=headers)
+
+    def _api_key(self) -> str | None:
+        """The key a request presents: `Authorization: Bearer <key>`, or `X-API-Key`.
+
+        Never a query parameter: a key in a URL ends up in logs, browser history
+        and every proxy between the caller and here.
+        """
+        auth = (self.headers.get("Authorization") or "").strip()
+        if auth[:7].lower() == "bearer ":
+            return auth[7:].strip() or None
+        return (self.headers.get("X-API-Key") or "").strip() or None
+
+    def _public_api(self, route: str, query: dict[str, list[str]]) -> bool:
+        """Answer `route` as the public API if it is the API's. True if handled.
+
+        ===========================  ============================================
+        on the API hostname          the whole host is the API, at `/v1/...`
+        anywhere else, `/api/v1/*`   the same API, for a machine with no tunnel
+        anywhere else, otherwise     not the API: False, and routing goes on
+        ===========================  ============================================
+
+        A key (`apikeys.verify`) is needed for everything but the index and
+        `health`, and is rate limited per key. The console's session cookie is
+        never consulted: a key is the only credential, so a page on another site
+        cannot read the API with a reader's session.
+        """
+        role = self._host_role()
+        if role == "docs":
+            return False
+        if role == "api":
+            if route in {"", "/"}:
+                self._redirect("/v1")
+                return True
+            if route != "/v1" and not route.startswith("/v1/"):
+                self._api_json(
+                    publicapi.ApiError(404, "not_found", "the API lives under /v1").as_json(),
+                    status=404,
+                )
+                return True
+            prefix, rest = "/v1", route[len("/v1") :]
+        elif route == "/api/v1" or route.startswith("/api/v1/"):
+            prefix, rest = "/api/v1", route[len("/api/v1") :]
+        else:
+            return False
+        parts = tuple(part for part in rest.split("/") if part)
+        try:
+            self._api_answer(prefix, parts, query)
+        except publicapi.ApiError as exc:
+            self._api_json(exc.as_json(), status=exc.status, extra=exc.headers)
+        return True
+
+    def _api_answer(self, prefix: str, parts: tuple[str, ...], query: dict[str, list[str]]) -> None:
+        """Check the key, take a token, and send the endpoint's answer."""
+        from tracker import __version__ as version
+
+        # The index and health are open; everything else, a key.
+        is_open = len(parts) <= 1 and (parts[0] if parts else "") in publicapi.OPEN
+        caller = None if is_open else self._api_caller()
+        extra: dict[str, str] = {}
+        if caller is not None:
+            allowed, remaining, retry = self.console.api_limiter.take(caller.key_id)
+            extra = {
+                "X-RateLimit-Limit": str(self.console.api_limiter.per_minute),
+                "X-RateLimit-Remaining": str(remaining),
+            }
+            if not allowed:
+                raise publicapi.ApiError(
+                    429,
+                    "rate_limited",
+                    f"more than {publicapi.RATE_PER_MINUTE} requests a minute",
+                    headers={**extra, "Retry-After": str(retry)},
+                )
+
+        req = publicapi.Request(parts=parts[1:], query=query, caller=caller, prefix=prefix)
+        if not parts:
+            return self._api_json(publicapi.index(prefix, self._docs_home() + "en/api"))
+        if parts == ("health",):
+            return self._api_json({"status": "ok", "version": version})
+        if parts == ("capex",):
+            payload, _positions = self._capex_bundle()
+            return self._api_json(publicapi.capex(payload), extra=extra)
+        with self.console.read_session() as session:
+            if parts == ("me",):
+                answer = publicapi.me(session, req)
+            elif parts == ("projects",):
+                answer = publicapi.projects(session, req)
+            elif len(parts) == 2 and parts[0] == "projects":
+                answer = {
+                    "data": publicapi.project_detail(publicapi._project(session, parts[1]), prefix)
+                }
+            elif len(parts) == 3 and parts[0] == "projects" and parts[2] == "sources":
+                project = publicapi._project(session, parts[1])
+                answer = {"project_id": project.id, "data": publicapi.project_sources(project)}
+            elif len(parts) == 2 and parts[0] == "companies":
+                answer = {"data": publicapi.company(session, parts[1], prefix)}
+            elif parts == ("updates",):
+                answer = publicapi.updates(session, req)
+            else:
+                raise publicapi.ApiError(
+                    404, "not_found", f"no endpoint {prefix}/{'/'.join(parts)}"
+                )
+        self._api_json(answer, extra=extra)
+
+    def _api_caller(self) -> Any:
+        """The verified caller, or a 401. Records the key's use, at most every 10 min."""
+        from tracker import apikeys
+
+        key = self._api_key()
+        if not key:
+            raise publicapi.ApiError(
+                401, "key_required", "send your API key as 'Authorization: Bearer <key>'"
+            )
+        with self.console.read_session() as session:
+            caller = apikeys.verify(session, key)
+        if caller is None:
+            raise publicapi.ApiError(401, "key_invalid", "that API key is not valid or was revoked")
+        if apikeys.needs_touch(caller.last_used_at):
+            # Best effort: a read must not fail because the nightly loop is writing.
+            try:
+                with self.console.write_session(busy_timeout_ms=250) as session:
+                    apikeys.touch(session, caller.key_id)
+            except OperationalError as exc:
+                if not _database_busy(exc):
+                    raise
+        return caller
+
     def _docs_home(self) -> str:
         """Where `/help` sends a reader: the docs hostname if there is one."""
         return f"https://{self.console.docs_host}/" if self.console.docs_host else "/docs/"
@@ -1000,6 +1162,13 @@ class Handler(BaseHTTPRequestHandler):
             .replace(
                 '<meta name="dc-console" content="/">',
                 f'<meta name="dc-console" content="{console}">',
+                1,
+            )
+            # The API's address, which the pages write as `{{api}}`. From `.env`
+            # through `docsite.hostname`, so it is a checked hostname, not request text.
+            .replace(
+                '<meta name="dc-api" content="/api/v1">',
+                f'<meta name="dc-api" content="{self._api_home()}">',
                 1,
             )
         )
@@ -1181,6 +1350,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._watch_state()
         if route == "/api/health":
             return self._json({"ok": True, "version": __version__, "commit": deployed_commit()})
+        if route == "/api/account/keys":
+            return self._own_keys()
         if route == "/api/admin/users":
             return self._admin_users()
         self._error(404, f"no route {route!r}")
@@ -1195,6 +1366,16 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError as exc:
             return self._error(400, str(exc))
         try:
+            # The docs and API hostnames answer reads only. Neither is the console,
+            # so neither may sign anybody in or change anything, whatever the path.
+            role = self._host_role()
+            if role == "api" or (role is None and parsed.path.startswith("/api/v1")):
+                return self._api_json(
+                    publicapi.ApiError(405, "read_only", "the API only answers GET").as_json(),
+                    status=405,
+                )
+            if role == "docs":
+                return self._error(404, "the documentation answers reads only")
             if not self._same_origin():
                 return self._error(403, "cross-site request refused")
             # Signing out needs no session, and is answered ahead of every check
@@ -1233,6 +1414,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._watch(body)
             if parsed.path == "/api/account/password":
                 return self._own_password(body)
+            if parsed.path == "/api/account/keys/create":
+                return self._key_create(body)
+            if parsed.path == "/api/account/keys/revoke":
+                return self._key_revoke(body)
             if parsed.path == "/api/admin/users/update":
                 return self._admin_act("update", body)
             if parsed.path == "/api/admin/users/password":
@@ -1718,6 +1903,74 @@ class Handler(BaseHTTPRequestHandler):
         self.console.gate.restamp(self._session, stamp)
         log.info("console: %s changed their own password", email)
         self._json({"ok": True, "note": "Password changed. Every other device is signed out."})
+
+    def _own_keys(self) -> None:
+        """The signed-in account's API keys, for its Account page. Never a key."""
+        from tracker import apikeys
+
+        account_id = self._account_id
+        if account_id is None:
+            return self._error(403, "API keys belong to an account, and this console has none")
+        with self.console.read_session() as session:
+            rows = [apikeys.as_json(row) for row in apikeys.listed(session, account_id)]
+        self._json(
+            {
+                "keys": rows,
+                "max_active": apikeys.MAX_ACTIVE,
+                "api": self._api_home(),
+                "docs": self._docs_home() + "en/api",
+            }
+        )
+
+    def _key_create(self, body: dict[str, Any]) -> None:
+        """Make an API key for the signed-in account and hand it over once.
+
+        The reply is the only place the key ever appears: the database keeps its
+        hash. `no-store` is `_json`'s default, so no cache keeps the reply either.
+        """
+        from tracker import apikeys
+
+        account_id = self._account_id
+        if account_id is None:
+            return self._error(403, "API keys belong to an account, and this console has none")
+        try:
+            with self.console.write_session() as session:
+                row, key = apikeys.create(session, account_id, str(body.get("name") or ""))
+                listed = apikeys.as_json(row)
+        except apikeys.ApiKeyError as exc:
+            return self._error(400, str(exc))
+        except OperationalError as exc:
+            if not _database_busy(exc):
+                raise
+            return self._error(503, "the database is busy writing; try again in a moment")
+        log.info(
+            "console: account %s made API key %s (%s)", account_id, listed["prefix"], listed["name"]
+        )
+        self._json({"key": key, "api_key": listed})
+
+    def _key_revoke(self, body: dict[str, Any]) -> None:
+        """Turn off one of the signed-in account's API keys."""
+        from tracker import apikeys
+
+        account_id = self._account_id
+        if account_id is None:
+            return self._error(403, "API keys belong to an account, and this console has none")
+        try:
+            key_id = int(body.get("id"))
+        except (TypeError, ValueError):
+            return self._error(400, "id must be a key id")
+        try:
+            with self.console.write_session() as session:
+                row = apikeys.revoke(session, account_id, key_id)
+                listed = apikeys.as_json(row)
+        except apikeys.ApiKeyError as exc:
+            return self._error(404, str(exc))
+        except OperationalError as exc:
+            if not _database_busy(exc):
+                raise
+            return self._error(503, "the database is busy writing; try again in a moment")
+        log.info("console: account %s revoked API key %s", account_id, listed["prefix"])
+        self._json({"api_key": listed})
 
     def _admin(self, session: Any) -> Any:
         """The signed-in account if it may use the admin page, else None.
@@ -2233,6 +2486,22 @@ class Handler(BaseHTTPRequestHandler):
             "note": "Body: {password}. No current password is asked: being signed in "
             "is the authentication. Every other session of the account ends; this one "
             "stays signed in.",
+        },
+        "GET /api/account/keys": {
+            "answers": "the signed-in account's API keys, active first",
+            "reads": "the api_key table",
+            "note": "Never the key itself: only its name, prefix and dates.",
+        },
+        "POST /api/account/keys/create": {
+            "answers": "a new API key for the signed-in account, shown this once",
+            "writes": True,
+            "note": "Body: {name}. The key is in the reply and nowhere else; only its "
+            "sha256 is stored. At most five active keys per account.",
+        },
+        "POST /api/account/keys/revoke": {
+            "answers": "turns one of the signed-in account's keys off",
+            "writes": True,
+            "note": "Body: {id}. The row stays, marked revoked, so the list still shows it.",
         },
         "GET /api/admin/users": {
             "answers": "every account in full, and the unredeemed invites",
@@ -3276,6 +3545,7 @@ def serve(
         published=published,
         docs_host=docsite.hostname(get_settings().docs_hostname),
         console_host=docsite.hostname(get_settings().tunnel_hostname),
+        api_host=docsite.hostname(get_settings().api_hostname),
     )
     # Made now rather than on the first sign-in to an unknown address, which
     # would otherwise cost two scrypts where every later one costs one.

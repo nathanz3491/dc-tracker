@@ -10,7 +10,9 @@
  *   - the admin page is drawn for `account.admin` but every route re-checks it, so
  *     hiding the button is courtesy, not the control;
  *   - an admin cannot disable or delete their own account here, and nobody can
- *     grant admin from a browser — `tracker users admin`, on the host.
+ *     grant admin from a browser — `tracker users admin`, on the host;
+ *   - an API key is shown once, when it is made, and only its hash is kept
+ *     (`tracker/apikeys.py`); disabling an account switches its keys off.
  */
 
 const html = htm.bind(React.createElement);
@@ -108,7 +110,128 @@ export function AccountView({ data, api }) {
           }} />
         </div>
       <//>
+      <${ApiKeys} api=${api} />
     </div>`;
+}
+
+/* Keys for the read-only public API (`tracker/apikeys.py`, `webui/publicapi.py`).
+ *
+ * A new key is shown exactly once, in the reply that made it: the server keeps only
+ * its hash, so there is nothing to fetch it back from. The list shows a key's name
+ * and first characters, which is enough to tell keys apart and to match one in a
+ * log, and never enough to use. */
+function ApiKeys({ api }) {
+  const [state, setState] = useState({ keys: null, max: 5, base: "", docs: "/help", error: null });
+  const [name, setName] = useState("");
+  const [fresh, setFresh] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      const reply = await api("/api/account/keys");
+      setState({ keys: reply.keys, max: reply.max_active, base: reply.api, docs: reply.docs, error: null });
+    } catch (e) {
+      setState((s) => ({ ...s, error: e.message }));
+    }
+  }, [api]);
+  useEffect(() => { load(); }, [load]);
+
+  const create = async (event) => {
+    event.preventDefault();
+    setBusy(true);
+    setFresh(null);
+    setCopied(false);
+    try {
+      const reply = await api("/api/account/keys/create", { method: "POST", body: { name } });
+      setFresh(reply);
+      setName("");
+      await load();
+    } catch (e) {
+      setState((s) => ({ ...s, error: e.message }));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const revoke = async (key) => {
+    if (!window.confirm(`Revoke "${key.name}" (${key.prefix}…)? Anything using it stops working.`)) return;
+    try {
+      await api("/api/account/keys/revoke", { method: "POST", body: { id: key.id } });
+      if (fresh && fresh.api_key.id === key.id) setFresh(null);
+      await load();
+    } catch (e) {
+      setState((s) => ({ ...s, error: e.message }));
+    }
+  };
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(fresh.key);
+      setCopied(true);
+    } catch (_) {
+      setCopied(false);
+    }
+  };
+
+  const active = (state.keys || []).filter((k) => !k.revoked_at).length;
+  const mono = { fontFamily: "var(--font-mono)", fontSize: 12.5 };
+  return html`
+    <${Card}>
+      <div style=${pad}>
+        <div style=${{ fontWeight: 600 }}>API keys</div>
+        <p style=${{ margin: 0, fontSize: 13, color: "var(--muted-foreground)", lineHeight: "20px" }}>
+          A key lets a program read the tracker through the API${state.base && html` at
+          ${" "}<code style=${mono}>${state.base}</code>`}. It reads what you read, and nothing
+          it does changes any data. Send it as <code style=${mono}>${"Authorization: Bearer <key>"}</code>.
+          ${" "}<a href=${state.docs} class="dc-link">How to use the API</a>.
+        </p>
+
+        ${fresh && html`
+          <${Alert} variant="success">
+            <div class="mrd-alert-desc" style=${{ display: "grid", gap: 8 }}>
+              <div><b>Copy your new key now.</b> It is not stored, so it cannot be shown again.</div>
+              <code style=${{ ...mono, wordBreak: "break-all", padding: "8px 10px", borderRadius: 8,
+                              background: "var(--muted)", userSelect: "all" }}>${fresh.key}</code>
+              <div><${Button} size="sm" variant="outline" onClick=${copy}>${copied ? "Copied" : "Copy"}<//></div>
+            </div>
+          <//>`}
+        <${Notice} tone="danger">${state.error}<//>
+
+        <form onSubmit=${create} style=${{ display: "flex", gap: 8, alignItems: "end", flexWrap: "wrap" }}>
+          <div style=${{ display: "grid", gap: 6, flex: "1 1 220px", maxWidth: 360 }}>
+            <label style=${label} htmlFor="api-key-name">name, so you can tell it apart</label>
+            <${Input} id="api-key-name" value=${name} maxLength=${60} placeholder="e.g. analysis notebook"
+                      onChange=${(e) => setName(e.target.value)} />
+          </div>
+          <${Button} type="submit" size="sm" disabled=${busy || !name.trim() || active >= state.max}>
+            ${busy ? "Creating…" : "Create key"}<//>
+        </form>
+        ${active >= state.max && html`<span style=${{ fontSize: 12, color: "var(--muted-foreground)" }}>
+          You have ${state.max} active keys, the most an account can hold. Revoke one to make another.</span>`}
+
+        ${state.keys && state.keys.length > 0 && html`
+          <div style=${{ display: "grid", gap: 0, borderTop: "1px solid var(--border)" }}>
+            ${state.keys.map((k) => html`
+              <div key=${k.id} style=${{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap",
+                                        padding: "10px 0", borderBottom: "1px solid var(--border)",
+                                        opacity: k.revoked_at ? 0.55 : 1 }}>
+                <div style=${{ flex: "1 1 200px", display: "grid", gap: 2 }}>
+                  <span style=${{ fontWeight: 500 }}>${k.name}</span>
+                  <span style=${{ ...mono, color: "var(--muted-foreground)" }}>${k.prefix}…</span>
+                </div>
+                <span style=${{ fontSize: 12, color: "var(--muted-foreground)", minWidth: 200 }}>
+                  made ${when(k.created_at)} · used ${when(k.last_used_at)}
+                </span>
+                ${k.revoked_at
+                  ? html`<span style=${{ fontSize: 12, color: "var(--muted-foreground)" }}>revoked ${when(k.revoked_at)}</span>`
+                  : html`<${Button} size="sm" variant="outline" onClick=${() => revoke(k)}>Revoke<//>`}
+              </div>`)}
+          </div>`}
+        ${state.keys && state.keys.length === 0 && html`
+          <span style=${{ fontSize: 13, color: "var(--muted-foreground)" }}>No keys yet.</span>`}
+      </div>
+    <//>`;
 }
 
 function when(value) {
