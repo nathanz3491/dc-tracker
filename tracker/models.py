@@ -952,6 +952,34 @@ class FeedProbe(Base):
     )
 
 
+class ApiKey(Base):
+    """One key for the read-only public API. See migration 0036 and `tracker.apikeys`.
+
+    Only `key_hash` (sha256) identifies it; the key itself is shown to its owner
+    once, when it is made, and never stored.
+    """
+
+    __tablename__ = "api_key"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    account_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("account.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    prefix: Mapped[str] = mapped_column(Text, nullable=False)
+    key_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False, server_default=_NOW)
+    last_used_at: Mapped[dt.datetime | None] = mapped_column(DateTime)
+    revoked_at: Mapped[dt.datetime | None] = mapped_column(DateTime)
+
+    __table_args__ = (
+        UniqueConstraint("key_hash", name="uq_api_key_hash"),
+        CheckConstraint("length(trim(name)) BETWEEN 1 AND 60", name="ck_api_key_name"),
+        Index("ix_api_key_account", "account_id", "revoked_at"),
+        {"sqlite_autoincrement": True},
+    )
+
+
 class DateProbe(Base):
     """One request for an article's publish date. See migration 0035 and `dates.run`."""
 
