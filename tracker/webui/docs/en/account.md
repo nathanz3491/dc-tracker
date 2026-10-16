@@ -19,6 +19,7 @@ If you have forgotten your password, sign out and use **Forgot password?** on th
 - your [watchlist](monitor), and which updates you have already been emailed;
 - when you last signed in;
 - whether the AI panels are switched on for you;
+- whether you may use the [API](api);
 - your API keys' names, first characters and dates — never the keys themselves.
 
 ## For administrators
@@ -35,11 +36,12 @@ Requests that have confirmed their email, with the address, name and when they s
 
 ### Accounts
 
-Every account, with its role, status (*active*, *disabled*, *waiting for approval*, *email not confirmed*), what it sees (*everything*, or how many entries it watches) and when it last signed in. Click a row to edit it:
+Every account, with its role, status (*active*, *disabled*, *waiting for approval*, *email not confirmed*), what it sees (*everything*, or how many entries it watches), whether it may use the API, and when it last signed in. Click a row to edit it:
 
 - **sign-in email** and **display name**;
 - **Sees the whole database** — this is the person's *watch everything* setting. Every account can already read all the data; this switch only widens their Updates and Monitor pages to everything, and stops their morning email;
 - **May use the AI panels (they spend tokens)**;
+- **May use the API** — switched off, the person's API keys stop working at once and they cannot make new ones. The keys are not revoked: switch it back on and the same keys work again. Accounts made by invite or by whoever maintains the tracker start with it on; accounts that signed up without a code start with it off;
 - **Set a new password** — sets it directly; no email is sent to the person;
 - **Sign out everywhere** — ends all their sessions;
 - **Disable / Enable**, and **Delete**, which removes the account and its watchlist for good.

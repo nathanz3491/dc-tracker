@@ -52,6 +52,7 @@ Every account reads the same data. What is yours is:
 
 - your **watchlist**, which decides what the [Updates](updates) page and the morning email show you (see [Monitor](monitor));
 - your **password**;
-- whether the **AI panels** on a project's page are switched on for you. They cost money each time they run, so new accounts that signed up without a code start with them off; an administrator can switch them on.
+- whether the **AI panels** on a project's page are switched on for you. They cost money each time they run, so new accounts that signed up without a code start with them off; an administrator can switch them on;
+- whether you may use the [API](api). The same rule: accounts that signed up without a code start with it off.
 
 Nothing you do in the console changes the tracker's data. The only things you can change are your own watchlist and password.

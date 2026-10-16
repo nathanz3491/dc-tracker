@@ -1122,6 +1122,12 @@ class Handler(BaseHTTPRequestHandler):
             caller = apikeys.verify(session, key)
         if caller is None:
             raise publicapi.ApiError(401, "key_invalid", "that API key is not valid or was revoked")
+        if not caller.allowed:
+            raise publicapi.ApiError(
+                403,
+                "api_access_off",
+                "API access is off for this key's account; an administrator can turn it on",
+            )
         if apikeys.needs_touch(caller.last_used_at):
             # Best effort: a read must not fail because the nightly loop is writing.
             try:
@@ -1911,10 +1917,15 @@ class Handler(BaseHTTPRequestHandler):
         account_id = self._account_id
         if account_id is None:
             return self._error(403, "API keys belong to an account, and this console has none")
+        from tracker import accounts
+
         with self.console.read_session() as session:
             rows = [apikeys.as_json(row) for row in apikeys.listed(session, account_id)]
+            account = accounts.by_id(session, account_id)
+            allowed = bool(account is not None and account.api_allowed)
         self._json(
             {
+                "allowed": allowed,
                 "keys": rows,
                 "max_active": apikeys.MAX_ACTIVE,
                 "api": self._api_home(),
@@ -2036,6 +2047,9 @@ class Handler(BaseHTTPRequestHandler):
                     ai = body.get("ai")
                     if ai is not None and not isinstance(ai, bool):
                         return self._error(400, "ai must be true or false")
+                    api = body.get("api")
+                    if api is not None and not isinstance(api, bool):
+                        return self._error(400, "api must be true or false")
                     email, name = body.get("email"), body.get("name")
                     if email is not None and not isinstance(email, str):
                         return self._error(400, "email must be a string")
@@ -2049,6 +2063,7 @@ class Handler(BaseHTTPRequestHandler):
                         clear_name=name is not None and not name.strip(),
                         watch_all=watch_all,
                         ai=ai,
+                        api=api,
                     )
                 elif action == "approve":
                     ai = body.get("ai")

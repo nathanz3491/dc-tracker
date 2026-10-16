@@ -152,7 +152,7 @@ tracker users                         # who exists: role, status, how much each 
 tracker users invite --note carol     # a single-use code, printed once
 tracker users approve new@example.com # let a waiting sign-up in; --ai for the AI panels
 tracker users show you@example.com    # everything about one account
-tracker users edit you@example.com --email new@example.com --name "Ann" --see-all --ai
+tracker users edit you@example.com --email new@example.com --name "Ann" --see-all --ai --api
 tracker users passwd you@example.com
 tracker users disable you@example.com # locks it; keeps the watchlist; `enable` undoes it
 tracker users signout you@example.com # ends every session, password unchanged
@@ -277,11 +277,11 @@ Behind a tunnel the front page and the account pages are public URLs, and every
 account reads the whole dataset. So how an account is made decides how much it is
 trusted:
 
-| way in | confirms the email | needs approval | AI panels |
-| --- | --- | --- | --- |
-| `tracker users add`, at the host | no | no | on |
-| an invite code (`tracker users invite`), on `/register` | no | no | on |
-| **Create an account** on `/register`, no code | yes, by a mailed link | yes, by an admin | off until an admin switches them on |
+| way in | confirms the email | needs approval | AI panels | API access |
+| --- | --- | --- | --- | --- |
+| `tracker users add`, at the host | no | no | on | on |
+| an invite code (`tracker users invite`), on `/register` | no | no | on | on |
+| **Create an account** on `/register`, no code | yes, by a mailed link | yes, by an admin | off until an admin switches them on | off, likewise |
 
 An invite is still the way to let somebody straight in: `tracker users invite`
 prints the code once and stores only its sha256, and the holder chooses their own
@@ -304,7 +304,9 @@ your email, or waiting for approval — and nothing else.
 Why both steps. The confirmation is because the morning email goes to that address,
 so it must belong to the person asking; the approval is because a stranger's
 account would otherwise read the whole dataset the moment they clicked the link.
-The AI panels start off because each click spends tokens.
+The AI panels start off because each click spends tokens; API access starts off
+because a key is a stranger reading the whole dataset by program, which an admin
+should decide on separately from letting them read it in a browser.
 
 `/forgot` emails a link that sets a new password: one hour, one use, and every
 other session of the account ends. It works for any account that is not disabled,
@@ -549,7 +551,15 @@ reader docs (`tracker/webui/docs/en/api.md`, `api-reference.md`).
 **Keys** (`tracker/apikeys.py`, migration 0036): `dct_` plus 256 random bits, shown
 once, stored as sha256 with an 8-character display prefix. Five active keys per
 account. A key is checked against its account on every request, so disabling an
-account stops its keys; revoking keeps the row, marked. `last_used_at` is written at
+account stops its keys; revoking keeps the row, marked.
+
+**API access per account** (`account.api_allowed`, migration 0037; the admin page's
+editor, `tracker users edit --api/--no-api`). Off stops the account's keys and
+refuses new ones, but revokes nothing: the key still verifies, the API answers `403
+api_access_off` rather than `401`, and switching it back on restores the same keys.
+Telling the caller why is safe because only the key's owner holds it. Existing
+accounts were backfilled on, since they could all make keys before; new accounts
+follow the AI panels' rule (table above). `last_used_at` is written at
 most every ten minutes, best effort, so a read never waits on the nightly loop's
 write lock.
 

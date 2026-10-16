@@ -400,6 +400,7 @@ def users(ctx: typer.Context) -> None:
                             "status": accounts.status(row),
                             "disabled": row.disabled_at is not None,
                             "ai": bool(row.ai_allowed),
+                            "api": bool(row.api_allowed),
                             "watches": watches.get(row.id, 0),
                             "created_at": row.created_at.isoformat() if row.created_at else None,
                             "last_seen_at": (
@@ -624,6 +625,7 @@ def _print_detail(detail: dict) -> None:
         ("status", status),
         ("sees", "the whole database" if detail["watch_all"] else "its watchlist only"),
         ("AI panels", "on" if detail["ai"] else "off"),
+        ("API access", "on" if detail["api"] else "off"),
         ("email confirmed", when(detail["email_verified_at"])),
         ("approved", when(detail["approved_at"])),
         ("watchlist", f"{count} entr{'y' if count == 1 else 'ies'}"),
@@ -678,8 +680,16 @@ def users_edit(
             show_default=False,
         ),
     ] = None,
+    api: Annotated[
+        bool | None,
+        typer.Option(
+            "--api/--no-api",
+            help="Whether their API keys work. Off stops the keys without revoking them.",
+            show_default=False,
+        ),
+    ] = None,
 ) -> None:
-    """Change an account's sign-in address, display name, what it sees, or its AI panels.
+    """Change an account's sign-in address, name, what it sees, its AI panels or API access.
 
     Their sessions survive: a session is bound to the password, not the address.
     Nobody is emailed — `tracker users notify` does that, to whichever address you
@@ -687,8 +697,15 @@ def users_edit(
     """
     from tracker import accounts
 
-    if new_email is None and name is None and not clear_name and see_all is None and ai is None:
-        _fail("nothing to change. Pass --email, --name, --clear-name, --see-all or --ai.")
+    if (
+        new_email is None
+        and name is None
+        and not clear_name
+        and see_all is None
+        and ai is None
+        and api is None
+    ):
+        _fail("nothing to change. Pass --email, --name, --clear-name, --see-all, --ai or --api.")
     with _explain_db_locks(), session_scope(_watch_engine()) as session:
         row = _one_account(session, email)
         try:
@@ -700,6 +717,7 @@ def users_edit(
                 clear_name=clear_name,
                 watch_all=see_all,
                 ai=ai,
+                api=api,
             )
         except accounts.AccountError as exc:
             _fail(str(exc))

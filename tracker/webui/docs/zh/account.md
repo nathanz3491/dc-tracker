@@ -19,6 +19,7 @@
 - 你的[关注列表](monitor)，以及哪些动态已经通过邮件发送给你；
 - 你最近一次登录的时间；
 - 是否为你开启了 AI 面板；
+- 你是否可以使用 [API](api)；
 - 你的 API 密钥的名称、开头几个字符和相关日期，但绝不保存密钥本身。
 
 ## 管理员须知
@@ -35,11 +36,12 @@
 
 ### 账户
 
-列出每个账户，包括角色、状态（*active*（已启用）、*disabled*（已停用）、*waiting for approval*（等待批准）、*email not confirmed*（邮件未确认））、可见范围（*everything*（全部），或其关注的条目数）以及最近登录时间。点击某一行即可编辑：
+列出每个账户，包括角色、状态（*active*（已启用）、*disabled*（已停用）、*waiting for approval*（等待批准）、*email not confirmed*（邮件未确认））、可见范围（*everything*（全部），或其关注的条目数）、是否可以使用 API，以及最近登录时间。点击某一行即可编辑：
 
 - **sign-in email**（登录邮箱）和 **display name**（显示名称）；
 - **Sees the whole database**（查看整个数据库）：即此人的 *watch everything*（关注全部）设置。每个账户本来就能读取全部数据；这个开关只是把他们的 Updates（动态）和 Monitor（关注）页面扩展到全部内容，并停止向其发送晨报邮件；
 - **May use the AI panels (they spend tokens)**（可使用 AI 面板（会消耗 token））；
+- **May use the API**（可使用 API）——关闭后，此人的 API 密钥立即失效，也无法创建新密钥。密钥不会被撤销：重新开启后，原来的密钥照常可用。通过邀请码或由追踪系统维护者创建的账户默认开启；未使用邀请码注册的账户默认关闭；
 - **Set a new password**（设置新密码）：直接设置，不会给此人发送邮件；
 - **Sign out everywhere**（全部退出登录）：结束其所有会话；
 - **Disable / Enable**（停用 / 启用），以及 **Delete**（删除），后者会永久删除该账户及其关注列表。

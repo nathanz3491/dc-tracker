@@ -766,6 +766,12 @@ class Account(Base):
         Integer, nullable=False, server_default=text("0"), default=0
     )
 
+    #: May use the public API with its keys (0037). Off stops the keys working
+    #: without revoking them; on again and they work.
+    api_allowed: Mapped[bool] = mapped_column(
+        Integer, nullable=False, server_default=text("0"), default=0
+    )
+
     #: Came from the sign-up form rather than the terminal or an invite (0030).
     self_signup: Mapped[bool] = mapped_column(
         Integer, nullable=False, server_default=text("0"), default=0

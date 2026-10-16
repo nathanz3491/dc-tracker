@@ -265,6 +265,7 @@ def create(session: Session, email: str, password: str, *, name: str | None = No
         created_at=now,
         approved_at=now,
         ai_allowed=True,
+        api_allowed=True,
     )
     session.add(row)
     session.flush()
@@ -427,8 +428,9 @@ def update(
     clear_name: bool = False,
     watch_all: bool | None = None,
     ai: bool | None = None,
+    api: bool | None = None,
 ) -> list[str]:
-    """Change an account's address, display name or reach. Returns what changed.
+    """Change an account's address, display name, reach or access. Returns what changed.
 
     Each change is described in words — `email a@x -> b@y` — because both callers
     report it. Changing nothing returns an empty list rather than raising: an edit
@@ -462,6 +464,9 @@ def update(
     if ai is not None and bool(ai) != bool(account.ai_allowed):
         changes.append("model panels on" if ai else "model panels off")
         account.ai_allowed = bool(ai)
+    if api is not None and bool(api) != bool(account.api_allowed):
+        changes.append("API access on" if api else "API access off; its keys stop working")
+        account.api_allowed = bool(api)
     if changes:
         _edited(account)
         session.flush()
@@ -547,6 +552,7 @@ def detail(session: Session, account: Account) -> dict[str, object]:
         "approved_at": when(account.approved_at),
         "email_verified_at": when(account.email_verified_at),
         "ai": bool(account.ai_allowed),
+        "api": bool(account.api_allowed),
         "watch_all": bool(account.watch_all),
         "watches": int(watches or 0),
         "created_at": when(account.created_at),

@@ -10,6 +10,11 @@ a copy of the database holds a working key. See migration 0036.
 yet approved, or gone, checked on every request rather than when the key was
 made — so switching an account off at the admin page switches its keys off at
 once, without anybody having to remember they exist.
+
+**API access is a separate switch on the account** (`api_allowed`, 0037). With it
+off the keys still verify, so the caller can be told *why* it is refused rather
+than that its key is wrong, and they work again the moment it is switched back
+on. The account cannot make new keys meanwhile.
 """
 
 from __future__ import annotations
@@ -61,6 +66,9 @@ class Caller:
     name: str
     prefix: str
     last_used_at: dt.datetime | None = None
+    #: The account's API access (`api_allowed`). A key whose account has it off
+    #: is still recognised, and refused with that reason.
+    allowed: bool = True
 
 
 def _hash(key: str) -> str:
@@ -94,12 +102,14 @@ def listed(session: Session, account_id: int) -> list[ApiKey]:
 def create(session: Session, account_id: int, name: str) -> tuple[ApiKey, str]:
     """Make a key for the account. Returns the row and the key, which is not stored.
 
-    Refused for an account that may not sign in, for a blank or overlong name, and
-    past `MAX_ACTIVE` active keys.
+    Refused for an account that may not sign in or has no API access, for a
+    blank or overlong name, and past `MAX_ACTIVE` active keys.
     """
     account = accounts.by_id(session, account_id)
     if account is None or accounts.status(account) != "active":
         raise ApiKeyError("only an active account can have API keys")
+    if not account.api_allowed:
+        raise ApiKeyError("API access is off for this account; an administrator can turn it on")
     clean = " ".join(str(name or "").split())
     if not clean:
         raise ApiKeyError("give the key a name, so you can tell it apart later")
@@ -139,7 +149,9 @@ def verify(session: Session, key: str | None) -> Caller | None:
     """The caller a presented key speaks for, or None if it may not be used.
 
     None for a key that is malformed, unknown, revoked, or whose account is not
-    active — one answer for all four, so a caller cannot probe which.
+    active — one answer for all four, so a caller cannot probe which. A key whose
+    account has API access off is returned with `allowed` false: only its owner
+    holds it, so saying why it is refused tells nobody else anything.
     """
     if not key or not key.startswith(KEY_PREFIX) or len(key) > 200:
         return None
@@ -155,6 +167,7 @@ def verify(session: Session, key: str | None) -> Caller | None:
         name=row.name,
         prefix=row.prefix,
         last_used_at=row.last_used_at,
+        allowed=bool(account.api_allowed),
     )
 
 

@@ -67,6 +67,30 @@ def test_only_an_active_account_can_make_a_key(session, person):
         apikeys.create(session, person, "laptop")
 
 
+def test_api_access_off_stops_the_keys_without_revoking_them(session, person):
+    """Off: the key is still recognised, so the refusal can say why, and no new key
+    can be made. On again: the same key works, with nothing to redistribute."""
+    row, key = apikeys.create(session, person, "server")
+    account = accounts.by_id(session, person)
+    assert accounts.update(session, account, api=False) == ["API access off; its keys stop working"]
+    caller = apikeys.verify(session, key)
+    assert caller is not None and caller.allowed is False
+    with pytest.raises(apikeys.ApiKeyError, match="API access is off"):
+        apikeys.create(session, person, "another")
+    apikeys.revoke(session, person, row.id)  # what you have, you can still revoke
+    accounts.update(session, account, api=True)
+    _row, fresh = apikeys.create(session, person, "another")
+    assert apikeys.verify(session, fresh).allowed is True
+
+
+def test_who_starts_with_api_access(session, person):
+    """Made at the terminal or by invite: on. A plain sign-up: off, like the AI panels."""
+    assert accounts.by_id(session, person).api_allowed
+    signup = accounts.sign_up(session, "stranger@example.com", "a-long-password")
+    assert not signup.pending.api_allowed
+    assert accounts.detail(session, signup.pending)["api"] is False
+
+
 def test_one_account_cannot_revoke_anothers_key(session, person):
     other = accounts.create(session, "other@example.com", "another-long-password").id
     row, key = apikeys.create(session, person, "mine")

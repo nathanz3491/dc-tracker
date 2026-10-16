@@ -323,6 +323,38 @@ def test_a_reader_makes_lists_uses_and_revokes_a_key(api, key):
     assert status == 400 and "name" in body["error"]
 
 
+def test_an_admin_switches_a_readers_api_access(api, db, key):
+    """Off: the reader's key is refused with a reason, their card says so, and they
+    cannot make another. On: the same key works again."""
+    address, _ = api
+    with session_scope(open_db(db, readonly=False)) as session:
+        boss = accounts.create(session, "boss@example.com", "a-long-password")
+        accounts.set_admin(session, boss, True)
+        reader = accounts.by_email(session, "reader@example.com").id
+    admin = _signed_in(address, "boss@example.com")
+    status, body = _console(address, "/api/admin/users/update", admin, {"id": reader, "api": False})
+    assert status == 200 and body["account"]["api"] is False
+    assert any("API access off" in c for c in body["changes"])
+
+    status, _, body = call(address, "/v1/me", key=key, host=API_HOST)
+    assert status == 403 and body["error"]["code"] == "api_access_off"
+    cookie = _signed_in(address)
+    status, listed = _console(address, "/api/account/keys", cookie)
+    assert status == 200 and listed["allowed"] is False and len(listed["keys"]) == 1
+    status, body = _console(address, "/api/account/keys/create", cookie, {"name": "laptop"})
+    assert status == 400 and "API access is off" in body["error"]
+
+    status, body = _console(address, "/api/admin/users/update", admin, {"id": reader, "api": "no"})
+    assert status == 400
+    _console(address, "/api/admin/users/update", admin, {"id": reader, "api": True})
+    assert call(address, "/v1/me", key=key, host=API_HOST)[0] == 200
+    reader_session = _signed_in(address)
+    status, _ = _console(
+        address, "/api/admin/users/update", reader_session, {"id": reader, "api": True}
+    )
+    assert status == 403, "only an admin can switch it"
+
+
 def test_key_routes_need_a_session(api, key):
     """With an account on the console the gate is closed; with none there is nobody
     a key could belong to."""

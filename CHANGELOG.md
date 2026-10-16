@@ -12,6 +12,17 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **Admins switch API access on or off per account** (`tracker/migrations/0037_api_allowed.sql`,
+  `tracker/models.py`, `tracker/accounts.py`, `tracker/apikeys.py`,
+  `tracker/webui/server.py`, `tracker/cli/people.py`,
+  `tracker/webui/static/views-account.js`). The admin page's account editor has a
+  **May use the API** switch and the accounts table an API column; `tracker users
+  edit --api/--no-api` does the same at the terminal. Switched off, the person's keys
+  stop working at once — the API answers `403 api_access_off`, saying why — and
+  they cannot make new ones, but nothing is revoked, so switching it back on
+  restores the same keys. Sign-ups without an invite start with it off, like the AI
+  panels; every existing account keeps the access it had.
+
 - **A read-only public API, with keys readers make themselves** (`tracker/apikeys.py`,
   `tracker/migrations/0036_api_key.sql`, `tracker/models.py`,
   `tracker/webui/publicapi.py`, `tracker/webui/server.py`, `tracker/config.py`,

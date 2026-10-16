@@ -24,6 +24,8 @@ An account can hold five active keys. The list on the Account page shows each ke
 
 A key works only while your account does. If an administrator disables the account, every key on it stops working; if the account is deleted, its keys go with it.
 
+API access is also switched on or off per account by an administrator. Accounts that signed up without an invite code start with it off: the Account page says so, and there is no **Create key** button until it is on. If it is switched off later, your keys stop working but are kept, and work again, unchanged, once it is back on.
+
 ## Your first request
 
 ```bash
@@ -69,6 +71,7 @@ Every error is JSON with a stable code and a sentence:
 | --- | --- | --- |
 | 400 | `bad_parameter`, `unknown_parameter`, `bad_id`, `bad_slug` | The request asked for something the API does not understand. The message says what. |
 | 401 | `key_required`, `key_invalid` | No key, or a key that is wrong, revoked, or on an account that is disabled. |
+| 403 | `api_access_off` | The key is right, but API access is switched off for its account. Ask an administrator. |
 | 404 | `not_found` | No such endpoint, campus or company. |
 | 405 | `read_only` | Something other than GET. The API never changes data. |
 | 429 | `rate_limited` | More than 60 requests in a minute. Wait the number of seconds in `Retry-After`. |

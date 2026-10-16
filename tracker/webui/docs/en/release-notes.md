@@ -7,6 +7,7 @@ Changes a reader of the console will notice, newest first. The console's version
 ### API
 
 - **A read-only API.** Programs can read campuses, their figures and sources, companies, capex by buyer and your watchlist's news, with a key made on your Account page. See [The API](api).
+- **API access per account.** An administrator can switch it on or off for each person on the Admin page. Off stops that person's keys without deleting them. Accounts that signed up without an invite code start with it off.
 
 ### Documentation
 

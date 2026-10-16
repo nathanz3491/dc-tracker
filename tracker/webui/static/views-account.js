@@ -121,7 +121,7 @@ export function AccountView({ data, api }) {
  * and first characters, which is enough to tell keys apart and to match one in a
  * log, and never enough to use. */
 function ApiKeys({ api }) {
-  const [state, setState] = useState({ keys: null, max: 5, base: "", docs: "/help", error: null });
+  const [state, setState] = useState({ keys: null, allowed: true, max: 5, base: "", docs: "/help", error: null });
   const [name, setName] = useState("");
   const [fresh, setFresh] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -130,7 +130,8 @@ function ApiKeys({ api }) {
   const load = useCallback(async () => {
     try {
       const reply = await api("/api/account/keys");
-      setState({ keys: reply.keys, max: reply.max_active, base: reply.api, docs: reply.docs, error: null });
+      setState({ keys: reply.keys, allowed: reply.allowed !== false, max: reply.max_active,
+                 base: reply.api, docs: reply.docs, error: null });
     } catch (e) {
       setState((s) => ({ ...s, error: e.message }));
     }
@@ -197,8 +198,11 @@ function ApiKeys({ api }) {
             </div>
           <//>`}
         <${Notice} tone="danger">${state.error}<//>
+        ${!state.allowed && html`<${Notice} tone="warning">
+          API access is off for your account, so your keys do not work and you cannot make new ones.
+          An administrator can turn it on; your keys work again as they are.<//>`}
 
-        <form onSubmit=${create} style=${{ display: "flex", gap: 8, alignItems: "end", flexWrap: "wrap" }}>
+        ${state.allowed && html`<form onSubmit=${create} style=${{ display: "flex", gap: 8, alignItems: "end", flexWrap: "wrap" }}>
           <div style=${{ display: "grid", gap: 6, flex: "1 1 220px", maxWidth: 360 }}>
             <label style=${label} htmlFor="api-key-name">name, so you can tell it apart</label>
             <${Input} id="api-key-name" value=${name} maxLength=${60} placeholder="e.g. analysis notebook"
@@ -206,8 +210,8 @@ function ApiKeys({ api }) {
           </div>
           <${Button} type="submit" size="sm" disabled=${busy || !name.trim() || active >= state.max}>
             ${busy ? "Creating…" : "Create key"}<//>
-        </form>
-        ${active >= state.max && html`<span style=${{ fontSize: 12, color: "var(--muted-foreground)" }}>
+        </form>`}
+        ${state.allowed && active >= state.max && html`<span style=${{ fontSize: 12, color: "var(--muted-foreground)" }}>
           You have ${state.max} active keys, the most an account can hold. Revoke one to make another.</span>`}
 
         ${state.keys && state.keys.length > 0 && html`
@@ -306,6 +310,7 @@ function Row({ a, active, onPick }) {
       <td class="dc-cell">${a.admin ? "admin" : ""}</td>
       <td class="dc-cell" style=${{ color: STATUS_TONE[a.status] }}>${STATUS_WORDS[a.status]}</td>
       <td class="dc-cell">${a.watch_all ? "everything" : `${a.watches} watched`}</td>
+      <td class="dc-cell" style=${a.api ? undefined : { color: "var(--muted-foreground)" }}>${a.api ? "on" : "off"}</td>
       <td class="dc-cell dc-num" style=${{ fontSize: 12 }}>${when(a.last_seen_at)}</td>
     </tr>`;
 }
@@ -317,6 +322,7 @@ function Editor({ a, self, act, onDeleted }) {
   const [name, setName] = useState(a.name || "");
   const [watchAll, setWatchAll] = useState(!!a.watch_all);
   const [ai, setAi] = useState(!!a.ai);
+  const [apiOn, setApiOn] = useState(!!a.api);
   const [message, setMessage] = useState(null);
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -337,7 +343,7 @@ function Editor({ a, self, act, onDeleted }) {
     }
   };
   const dirty = email.trim() !== a.email || (name.trim() || null) !== (a.name || null)
-    || watchAll !== !!a.watch_all || ai !== !!a.ai;
+    || watchAll !== !!a.watch_all || ai !== !!a.ai || apiOn !== !!a.api;
 
   return html`
     <${Card}>
@@ -370,8 +376,10 @@ function Editor({ a, self, act, onDeleted }) {
                      onCheckedChange=${(v) => setWatchAll(!!v)} />
           <${Switch} size="sm" label="May use the AI panels (they spend tokens)" checked=${ai}
                      onCheckedChange=${(v) => setAi(!!v)} />
+          <${Switch} size="sm" label="May use the API (off pauses their keys)"
+                     checked=${apiOn} onCheckedChange=${(v) => setApiOn(!!v)} />
           <div><${Button} size="sm" disabled=${busy || !dirty}
-            onClick=${() => run("update", { email: email.trim(), name, watch_all: watchAll, ai }, "saved")}>
+            onClick=${() => run("update", { email: email.trim(), name, watch_all: watchAll, ai, api: apiOn }, "saved")}>
             Save changes<//></div>
         </div>
 
@@ -438,7 +446,7 @@ export function AdminView({ data, api }) {
         <${Table} density="compact">
           <${TableHeader}><${TableRow}>
             <${TableHead}>email<//><${TableHead}>name<//><${TableHead}>role<//>
-            <${TableHead}>status<//><${TableHead}>sees<//><${TableHead}>last signed in<//>
+            <${TableHead}>status<//><${TableHead}>sees<//><${TableHead}>API<//><${TableHead}>last signed in<//>
           <//><//>
           <${TableBody}>
             ${accounts.map((a) => html`
