@@ -1750,7 +1750,7 @@ PUBLIC_URLS = {
 
 #: The public pages above plus the 404 page, which a stranger reads just as often,
 #: and the documentation's page shell (`webui/docsite.py`), which anybody may read.
-PUBLIC_DOCUMENTS = [*PUBLIC_URLS.values(), "/nonsense", "/docs/"]
+PUBLIC_DOCUMENTS = [*PUBLIC_URLS.values(), "/nonsense", "/docs/", "/status/", "/public-map/"]
 
 
 def test_every_public_page_has_a_url_here():
@@ -2522,6 +2522,7 @@ def test_everything_a_public_page_asks_for_is_public(gated):
     served = [raw(address, path)[2] for path in PUBLIC_DOCUMENTS]
     served.append(raw(address, "/static/public/site.css")[2])
     served.append(raw(address, "/static/docs/docs.css")[2])
+    served.append(raw(address, "/static/pages/pages.css")[2])
 
     asked: set[str] = set()
     for text in served:
@@ -2535,7 +2536,13 @@ def test_everything_a_public_page_asks_for_is_public(gated):
     for relative in assets.PUBLIC_STATIC:
         assert _fetch(address, f"/static/{relative}")[0] == 200, relative
 
-    pages = {*assets.PUBLIC_PAGES.values(), assets.NOT_FOUND_PAGE, assets.DOCS_SHELL}
+    pages = {
+        *assets.PUBLIC_PAGES.values(),
+        assets.NOT_FOUND_PAGE,
+        assets.DOCS_SHELL,
+        assets.STATUS_SHELL,
+        assets.MAP_SHELL,
+    }
     on_disk = {
         path.relative_to(assets.STATIC_ROOT).as_posix()
         for path in assets.PUBLIC_ROOT.rglob("*")

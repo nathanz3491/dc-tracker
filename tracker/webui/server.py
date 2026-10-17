@@ -38,6 +38,7 @@ still here.
 
 from __future__ import annotations
 
+import datetime as dt
 import gzip
 import hmac
 import json
@@ -49,6 +50,7 @@ import webbrowser
 from collections.abc import Callable, Hashable, Iterator
 from contextlib import contextmanager
 from functools import lru_cache
+from html import escape as html_escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, ClassVar
@@ -60,7 +62,7 @@ from sqlalchemy.exc import OperationalError
 from tracker import __version__
 from tracker.config import home
 from tracker.db import MigrationError, make_engine, session_scope
-from tracker.webui import assets, docsite, publicapi
+from tracker.webui import assets, docsite, publicapi, publicmap, statussite
 from tracker.webui.auth import COOKIE, Gate, cookie_value
 from tracker.webui.reads import ReadSide
 
@@ -337,6 +339,10 @@ class Console:
         docs_host: str | None = None,
         console_host: str | None = None,
         api_host: str | None = None,
+        status_host: str | None = None,
+        map_host: str | None = None,
+        map_detail: str = "dots",
+        status_interval_s: int = 300,
     ) -> None:
         self.db_path = db_path
         #: The hostname on which this server is the reader documentation and
@@ -351,6 +357,18 @@ class Console:
         self.api_host = api_host
         #: Requests per API key per minute, in memory. See `publicapi.RateLimiter`.
         self.api_limiter = publicapi.RateLimiter()
+        #: The hostnames on which this server is the status page, or the public map,
+        #: and nothing else (`Handler._status_site`, `Handler._map_site`). None serves
+        #: each under `/status/` or `/map/` on any other host.
+        self.status_host = status_host
+        self.map_host = map_host
+        #: How much of each campus the public map shows (`publicmap.FIELDS`).
+        self.map_detail = map_detail
+        #: Seconds between the status page's checks, which `serve` runs.
+        self.status_interval_s = status_interval_s
+        #: Where the checks are kept: `status.db`, beside the database and apart
+        #: from it. See `webui/statussite.py` for why it is not a migration.
+        self.status_store = statussite.Store(db_path.parent / "status.db")
         #: Whether this console was started behind a tunnel — on a public URL.
         #:
         #: **A published console requires a sign-in whatever the account count.**
@@ -815,7 +833,12 @@ class Handler(BaseHTTPRequestHandler):
             # hostname nothing else answers.
             # The API first: on its own hostname it claims every path, including
             # `/docs/`, so nothing but the API ever answers there.
-            if self._public_api(route, query) or self._docs(route):
+            if (
+                self._public_api(route, query)
+                or self._docs(route)
+                or self._status_site(route)
+                or self._map_site(route)
+            ):
                 return None
             if not self._authed:
                 return self._unauthenticated(route, query)
@@ -954,9 +977,10 @@ class Handler(BaseHTTPRequestHandler):
         character escaped. Nothing from the request reaches a response but the
         choice of file, and that choice is an exact match against the manifest.
         """
-        on_docs_host = bool(self.console.docs_host) and (
-            docsite.request_host(self.headers.get("Host")) == self.console.docs_host
-        )
+        role = self._host_role()
+        on_docs_host = role == "docs"
+        if role in ("api", "status", "map"):
+            return False
         if on_docs_host:
             base, rest = "/", route
         elif route == "/docs":
@@ -987,12 +1011,17 @@ class Handler(BaseHTTPRequestHandler):
         return True
 
     def _host_role(self) -> str | None:
-        """`"docs"` or `"api"` when the request was sent to that hostname, else None."""
+        """Which public site the request's hostname is — `"docs"`, `"api"`,
+        `"status"` or `"map"` — or None for the console's own address."""
         host = docsite.request_host(self.headers.get("Host"))
-        if self.console.docs_host and host == self.console.docs_host:
-            return "docs"
-        if self.console.api_host and host == self.console.api_host:
-            return "api"
+        for role, configured in (
+            ("docs", self.console.docs_host),
+            ("api", self.console.api_host),
+            ("status", self.console.status_host),
+            ("map", self.console.map_host),
+        ):
+            if configured and host == configured:
+                return role
         return None
 
     def _api_home(self) -> str:
@@ -1033,7 +1062,7 @@ class Handler(BaseHTTPRequestHandler):
         cannot read the API with a reader's session.
         """
         role = self._host_role()
-        if role == "docs":
+        if role in ("docs", "status", "map"):
             return False
         if role == "api":
             if route in {"", "/"}:
@@ -1177,6 +1206,17 @@ class Handler(BaseHTTPRequestHandler):
                 f'<meta name="dc-api" content="{self._api_home()}">',
                 1,
             )
+            # The status page and the map, written `{{status}}` and `{{map}}`.
+            .replace(
+                '<meta name="dc-status" content="/status/">',
+                f'<meta name="dc-status" content="{self._site_link(self.console.status_host, "/status/")}">',
+                1,
+            )
+            .replace(
+                '<meta name="dc-map" content="/public-map/">',
+                f'<meta name="dc-map" content="{self._site_link(self.console.map_host, "/public-map/")}">',
+                1,
+            )
         )
         self._send(
             status,
@@ -1207,6 +1247,231 @@ class Handler(BaseHTTPRequestHandler):
             else "application/json; charset=utf-8"
         )
         self._send(200, path.read_bytes(), kind, cache="no-cache", csp=PUBLIC_CSP)
+
+    # --- the status page and the public map ------------------------------------------
+
+    #: Where each public site lives on a host that is not its own. The map is not at
+    #: `/map/`: that is the console's own Map view, behind the sign-in.
+    _PUBLIC_PATHS: ClassVar[dict[str, str]] = {"status": "status", "map": "public-map"}
+
+    def _public_site(self, role: str, route: str) -> tuple[str, str] | None:
+        """(base, the path below it) when `route` belongs to the `role` site, else None.
+
+        The same two addresses as the docs: on its own hostname the whole host is
+        the site and nothing else answers; anywhere else it is under its path in
+        `_PUBLIC_PATHS`.
+        """
+        current = self._host_role()
+        if current == role:
+            return "/", route or "/"
+        if current is not None:
+            return None
+        prefix = self._PUBLIC_PATHS[role]
+        if route == f"/{prefix}":
+            return f"/{prefix}/", ""
+        if route.startswith(f"/{prefix}/"):
+            return f"/{prefix}/", route[len(prefix) + 1 :]
+        return None
+
+    def _site_link(self, host: str | None, fallback: str) -> str:
+        """Another public site's address: its hostname if `.env` names one."""
+        return f"https://{host}/" if host else fallback
+
+    def _status_site(self, route: str) -> bool:
+        """Answer `route` as the status page if it is the status page's. True if handled.
+
+        ``/`` is the page, ``/status.json`` its numbers, ``/static/<public file>`` on
+        the status hostname its assets; anything else is a 404. Public, never
+        indexed, and nothing from the request reaches a response but the choice
+        among those.
+        """
+        found = self._public_site("status", route)
+        if found is None:
+            return False
+        base, rest = found
+        if base != "/" and rest == "":
+            self._redirect(base)
+            return True
+        parts = [part for part in rest.split("/") if part]
+        noindex = {"X-Robots-Tag": "noindex", "Referrer-Policy": "no-referrer"}
+        if not parts:
+            self._public_shell(
+                assets.STATUS_SHELL,
+                {"dc-base": base, **self._site_links()},
+                extra=noindex,
+            )
+        elif parts == ["status.json"]:
+            body = json.dumps(self._status_payload(), ensure_ascii=False).encode("utf-8")
+            self._send(
+                200,
+                body,
+                "application/json; charset=utf-8",
+                cache="no-cache",
+                csp=PUBLIC_CSP,
+                extra={**noindex, "Access-Control-Allow-Origin": "*"},
+            )
+        elif (
+            parts[0] == "static" and base == "/" and rest[len("/static/") :] in assets.PUBLIC_STATIC
+        ):
+            self._static(rest[len("/static/") :], None, anonymous=True)
+        else:
+            self._error(404, "not part of the status page")
+        return True
+
+    def _site_links(self) -> dict[str, str]:
+        """The other public sites' addresses, for a page's `dc-*` metas."""
+        console = self.console
+        return {
+            "dc-console": self._site_link(console.console_host, "/"),
+            "dc-docs": self._docs_home(),
+            "dc-api": self._api_home(),
+            "dc-status": self._site_link(console.status_host, "/status/"),
+            "dc-map": self._site_link(console.map_host, "/public-map/"),
+        }
+
+    def _status_payload(self) -> dict[str, Any]:
+        """The status page's numbers, reused for half a minute."""
+        from tracker.config import home
+
+        console = self.console
+        hosts = {
+            "console": console.console_host,
+            "api": console.api_host,
+            "docs": console.docs_host,
+            "map": console.map_host,
+        }
+        checked = [service for service, _url in statussite.targets(hosts)]
+
+        def fresh() -> dict[str, Any]:
+            return statussite.payload(
+                console.status_store,
+                services=checked,
+                interval_s=console.status_interval_s,
+                nights=statussite.read_nights(home() / "data" / "runs"),
+                data=self._freshness(),
+                links={s: f"https://{h}/" if h else None for s, h in hosts.items()},
+            )
+
+        return statussite.cached(tuple(checked), fresh)
+
+    def _freshness(self) -> dict[str, Any]:
+        """When the data last moved (`statussite.freshness`), or nothing if unreadable."""
+        try:
+            with self.console.read_session() as session:
+                return statussite.freshness(session)
+        except Exception:  # the page must render when the database cannot be read
+            log.exception("status: the database could not be read")
+            return {"campuses": None, "last_read_at": None, "last_change_at": None}
+
+    def _map_site(self, route: str) -> bool:
+        """Answer `route` as the public map if it is the map's. True if handled.
+
+        On its own hostname, or at `/public-map/` on any other.
+
+        ``/`` is the page, with the headline figures and the state table written
+        into it so a reader without JavaScript — and a search engine — gets them;
+        ``/data.json`` the dots; ``/robots.txt`` and ``/sitemap.xml`` on the map
+        hostname; ``/static/<public file>`` its assets.
+        """
+        found = self._public_site("map", route)
+        if found is None:
+            return False
+        base, rest = found
+        if base != "/" and rest == "":
+            self._redirect(base)
+            return True
+        parts = [part for part in rest.split("/") if part]
+        on_host = base == "/"
+        if not parts:
+            data = self._map_payload()
+            canonical = f"https://{self.console.map_host}/" if self.console.map_host else None
+            self._public_shell(
+                assets.MAP_SHELL,
+                {"dc-base": base, **self._site_links()},
+                fill={
+                    "<!--summary-->": publicmap.summary_html(data),
+                    "<!--canonical-->": (
+                        f'<link rel="canonical" href="{html_escape(canonical)}">'
+                        if canonical
+                        else ""
+                    ),
+                },
+                extra={"Referrer-Policy": "no-referrer"},
+            )
+        elif parts == ["data.json"]:
+            body = json.dumps(self._map_payload(), ensure_ascii=False).encode("utf-8")
+            self._send(
+                200, body, "application/json; charset=utf-8", cache="no-cache", csp=PUBLIC_CSP
+            )
+        elif on_host and parts == ["robots.txt"]:
+            lines = ["User-agent: *", "Allow: /"]
+            if self.console.map_host:
+                lines.append(f"Sitemap: https://{self.console.map_host}/sitemap.xml")
+            self._send(
+                200,
+                ("\n".join(lines) + "\n").encode(),
+                "text/plain; charset=utf-8",
+                cache="no-cache",
+            )
+        elif on_host and parts == ["sitemap.xml"] and self.console.map_host:
+            data = self._map_payload()
+            body = (
+                '<?xml version="1.0" encoding="UTF-8"?>\n'
+                '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+                f"<url><loc>https://{self.console.map_host}/</loc>"
+                f"<lastmod>{data.get('updated_at') or ''}</lastmod></url></urlset>\n"
+            )
+            self._send(200, body.encode(), "application/xml; charset=utf-8", cache="no-cache")
+        elif parts[0] == "static" and on_host and rest[len("/static/") :] in assets.PUBLIC_STATIC:
+            self._static(rest[len("/static/") :], None, anonymous=True)
+        else:
+            self._error(404, "not part of the map")
+        return True
+
+    def _map_payload(self) -> dict[str, Any]:
+        """The public map's allow-listed payload, recomputed when the database changes."""
+        level = self.console.map_detail
+
+        def fresh() -> dict[str, Any]:
+            with self.console.read_session() as session:
+                return publicmap.build(session, level=level)
+
+        return self.console.cached(("public-map", level), fresh)
+
+    def _public_shell(
+        self,
+        name: str,
+        metas: dict[str, str],
+        *,
+        fill: dict[str, str] | None = None,
+        extra: dict[str, str] | None = None,
+    ) -> None:
+        """A public page shell under `PUBLIC_CSP`, its `dc-*` metas filled in.
+
+        Each meta is written `<meta name="dc-x" content="">` in the shell and given
+        its value here — a checked hostname from `.env` or a literal, escaped all
+        the same. `fill` replaces placeholder comments with markup built here.
+        """
+        path = assets.PUBLIC_ROOT / name
+        if not path.is_file():
+            return self._error(500, f"the page shell {name} is missing from this install")
+        page = assets.stamp(path.read_text(encoding="utf-8"))
+        for meta, value in metas.items():
+            page = page.replace(
+                f'<meta name="{meta}" content="">',
+                f'<meta name="{meta}" content="{html_escape(value)}">',
+                1,
+            )
+        for marker, markup in (fill or {}).items():
+            page = page.replace(marker, markup, 1)
+        self._send(
+            200,
+            page.encode("utf-8"),
+            "text/html; charset=utf-8",
+            cache=_PUBLIC_CACHE,
+            csp=PUBLIC_CSP,
+            extra=extra,
+        )
 
     def _public_page(self, page: str, query: dict[str, list[str]]) -> None:
         """One of `assets.PUBLIC_PAGES`, after the two checks its address needs.
@@ -1380,8 +1645,8 @@ class Handler(BaseHTTPRequestHandler):
                     publicapi.ApiError(405, "read_only", "the API only answers GET").as_json(),
                     status=405,
                 )
-            if role == "docs":
-                return self._error(404, "the documentation answers reads only")
+            if role in ("docs", "status", "map"):
+                return self._error(404, "this site answers reads only")
             if not self._same_origin():
                 return self._error(403, "cross-site request refused")
             # Signing out needs no session, and is answered ahead of every check
@@ -2933,7 +3198,6 @@ class Handler(BaseHTTPRequestHandler):
         week, because "no updates" and "your filter was ignored" look identical on
         the page.
         """
-        import datetime as dt
 
         from tracker import feed
 
@@ -3553,15 +3817,39 @@ def serve(
     from tracker import accounts
     from tracker.config import get_settings
 
+    settings = get_settings()
     console = Console(
         db_path,
         allow_ai=allow_ai,
         allow_watch=allow_watch,
         published=published,
-        docs_host=docsite.hostname(get_settings().docs_hostname),
-        console_host=docsite.hostname(get_settings().tunnel_hostname),
-        api_host=docsite.hostname(get_settings().api_hostname),
+        docs_host=docsite.hostname(settings.docs_hostname),
+        console_host=docsite.hostname(settings.tunnel_hostname),
+        api_host=docsite.hostname(settings.api_hostname),
+        status_host=docsite.hostname(settings.status_hostname),
+        map_host=docsite.hostname(settings.map_hostname),
+        map_detail=settings.public_map_detail,
+        status_interval_s=settings.status_interval_s,
     )
+    # The status page's checks, only where there is a status page to show them: a
+    # console on a laptop has no public address to check.
+    prober = None
+    addresses = statussite.targets(
+        {
+            "console": console.console_host,
+            "api": console.api_host,
+            "docs": console.docs_host,
+            "map": console.map_host,
+        }
+    )
+    if console.status_host and addresses:
+        prober = statussite.Prober(
+            console.status_store, addresses, interval_s=console.status_interval_s
+        )
+        prober.start()
+        log.info(
+            "status: checking %d public address(es) every %ds", len(addresses), prober.interval_s
+        )
     # Made now rather than on the first sign-in to an unknown address, which
     # would otherwise cost two scrypts where every later one costs one.
     accounts.decoy_hash()
@@ -3578,6 +3866,8 @@ def serve(
     except KeyboardInterrupt:
         pass
     finally:
+        if prober is not None:
+            prober.stop()
         httpd.server_close()
         console.close()
 

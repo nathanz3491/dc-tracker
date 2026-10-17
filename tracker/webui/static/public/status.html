@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="dc-base" content="">
+<meta name="dc-console" content="">
+<meta name="dc-docs" content="">
+<meta name="dc-api" content="">
+<meta name="dc-status" content="">
+<meta name="dc-map" content="">
+<meta name="referrer" content="no-referrer">
+<meta name="robots" content="noindex">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#faf6ef" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#1b1410" media="(prefers-color-scheme: dark)">
+<meta name="description" content="Whether dc-tracker's console, API, documentation and map are answering, and when its data was last updated.">
+<title>dc-tracker status</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23a05e1c'><path d='M2 2h6v3H5v14h3v3H2zM22 2h-6v3h3v14h-3v3h6z'/><path d='M5 10h8v4H5z'/></svg>">
+<link rel="preload" href="/static/vendor/fonts/UcC73FwrK3iLTeHuS_nVMrMxCp50SjIa1ZL7.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/static/pages/pages.css">
+<script src="/static/pages/pages.js" defer></script>
+<script src="/static/pages/status.js" defer></script>
+</head>
+<body class="page-status">
+<a class="skip" href="#main" data-i18n="skip">Skip to content</a>
+
+<header class="topbar">
+  <a class="brand" id="brand" href="">
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><path d="M2 2h6v3H5v14h3v3H2zM22 2h-6v3h3v14h-3v3h6z"/><path d="M5 10h8v4H5z"/></svg>
+    <b>dc-tracker</b><span class="brand-tag" data-i18n="tag">status</span>
+  </a>
+  <nav class="top-actions" aria-label="Site">
+    <button class="text-btn" type="button" id="lang-btn" lang="zh">中文</button>
+    <button class="icon-btn" type="button" id="theme-btn" aria-label="Theme: follows your system">
+      <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><circle cx="12" cy="12" r="4.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 2.5v2.5M12 19v2.5M2.5 12H5M19 12h2.5M5.3 5.3l1.8 1.8M16.9 16.9l1.8 1.8M5.3 18.7l1.8-1.8M16.9 7.1l1.8-1.8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+    </button>
+    <a class="cta" id="console-link" href=""><span class="cta-long" data-i18n="openConsole">Open the console</span><span class="cta-short" data-i18n="console">Console</span></a>
+  </nav>
+</header>
+
+<main class="wrap" id="main" tabindex="-1">
+  <section class="overall" id="overall" aria-live="polite">
+    <span class="overall-dot" aria-hidden="true"></span>
+    <div>
+      <h1 id="overall-title" data-i18n="loading">Checking…</h1>
+      <p class="overall-sub" id="overall-sub"></p>
+    </div>
+  </section>
+
+  <section class="block" aria-labelledby="services-h">
+    <header class="block-head">
+      <p class="eyebrow" data-i18n="servicesEyebrow">Public addresses</p>
+      <h2 id="services-h" data-i18n="servicesTitle">Is it answering?</h2>
+      <p class="block-note" id="services-note"></p>
+    </header>
+    <ol class="services" id="services"></ol>
+  </section>
+
+  <section class="block" aria-labelledby="nightly-h">
+    <header class="block-head">
+      <p class="eyebrow" data-i18n="nightlyEyebrow">The nightly update</p>
+      <h2 id="nightly-h" data-i18n="nightlyTitle">Is the data current?</h2>
+      <p class="block-note" data-i18n="nightlyNote">Every evening the tracker reads new articles, settles what it can and recounts. When it ran, and how it ended:</p>
+    </header>
+    <div class="fresh" id="fresh"></div>
+    <ol class="nights" id="nights"></ol>
+  </section>
+
+  <section class="block" aria-labelledby="incidents-h">
+    <header class="block-head">
+      <p class="eyebrow" data-i18n="incidentsEyebrow">The last 90 days</p>
+      <h2 id="incidents-h" data-i18n="incidentsTitle">What went wrong</h2>
+    </header>
+    <ol class="incidents" id="incidents"></ol>
+  </section>
+
+  <section class="block block--quiet" aria-labelledby="how-h">
+    <h2 id="how-h" class="small-h" data-i18n="howTitle">How this page knows</h2>
+    <p data-i18n="how1">Every few minutes the server asks each public address for a page, over the internet, the way a reader would. A page that answers is up; one that fails twice running is down.</p>
+    <p data-i18n="how2">The checks run on the same server as everything they check, so when that server is off nothing is checked at all. A stretch with no checks is counted as downtime for every address, and marked as a restart when the machine booted during it — never left out, which would make the worst days look the best.</p>
+    <p data-i18n="how3">The nightly update is read from its own log. Times are shown in your time zone.</p>
+    <p class="how-links"><a id="json-link" href="status.json">status.json</a></p>
+  </section>
+</main>
+
+<footer class="foot">
+  <nav class="foot-links" aria-label="dc-tracker">
+    <a id="foot-console" href="" data-i18n="console">Console</a>
+    <a id="foot-docs" href="" data-i18n="docs">Documentation</a>
+    <a id="foot-api" href="" data-i18n="api">API</a>
+    <a id="foot-map" href="" data-i18n="map">Map</a>
+  </nav>
+  <p class="foot-updated" id="updated"></p>
+</footer>
+
+<noscript><p class="noscript">This page needs JavaScript to draw its history. The same figures are at <a href="status.json">status.json</a>.</p></noscript>
+</body>
+</html>

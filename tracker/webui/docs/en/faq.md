@@ -46,11 +46,19 @@ The AI panels cost money each time they run, so they are switched on per account
 
 ## How current is the data?
 
-It is updated every evening; **last crawl** on [Updates](updates) shows when new articles were last fetched. See [How the data is kept current](how-it-is-kept-current).
+It is updated every evening; **last crawl** on [Updates](updates) shows when new articles were last fetched. The [status page]({{status}}) shows when each night's update ran and how it ended. See [How the data is kept current](how-it-is-kept-current).
+
+## Is the tracker down?
+
+The [status page]({{status}}) says whether the console, the API, the documentation and the public map are answering, checked every few minutes, with 90 days of history and every outage and restart listed. It is public, so it works without signing in.
 
 ## Can I download the data?
 
-Not from the console. Ask whoever gave you access.
+Not as a file from the console. A program can read it through [the API](api), with a key from your Account page.
+
+## Can I show the map to someone without an account?
+
+Yes: the [public map]({{map}}) is open to anybody. It shows where the campuses are, their stage and roughly how big, and the national and state totals, counted the same way as the Capex page. It leaves out what the console is for: the sources, the money, the tenants, the dates and the obstacles.
 
 ## Is the console available in Chinese?
 

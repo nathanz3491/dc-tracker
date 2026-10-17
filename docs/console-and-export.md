@@ -541,6 +541,58 @@ Chinese-language deliverables out of the repo; these are the console's user
 documentation and ship with it, which is why they sit under `tracker/webui/docs/`
 rather than matching `docs/*.zh-CN.md`.
 
+## The status page and the public map
+
+Two more public sites on the same server, each on its own hostname from `.env`
+(`TRACKER_STATUS_HOSTNAME`, `TRACKER_MAP_HOSTNAME`, routed to the console's tunnel
+like the docs) and at `/status/` and `/public-map/` on any other host (`/map` is
+the console's own Map view). On its own hostname
+each answers only its own pages: nothing of the console, the API or the docs is
+reachable there, and neither answers a write.
+
+**The status page** (`webui/statussite.py`, `static/pages/status.js`) answers three
+questions: does each public address answer, did last night's update run, and how
+fresh is the data.
+
+- *Checks.* With a status hostname set, `serve` starts a thread that asks the
+  console's front page, the API's `/v1/health`, the docs and the map through the
+  internet every `TRACKER_STATUS_INTERVAL_S` (300) seconds — through the tunnel,
+  because that is the part that fails without the process noticing. Two failures
+  running are an outage; one, or an answer slower than 4 s, is degraded.
+- *Where they are kept.* `status.db`, beside `tracker.db`, written with the standard
+  library: not a migration and not the dataset, because a check every five minutes
+  would otherwise queue behind the nightly loop's writes, and a write that waited past
+  its slot would leave a gap that reads as an outage. Safe to delete; 90 days kept.
+- *Gaps are downtime.* The checks run in the process that serves every address, so a
+  stretch with no checks means that process or the machine was down. It is counted
+  as downtime for every address — never left out, which would report the best uptime
+  on the worst days — and called a restart when the machine's boot time, recorded at
+  each start, falls inside it. One missed round is enough to count.
+- *The nightly update* is read from `data/runs/overnight.log`: a night is from one
+  "overnight starting" to the next, finished if it printed "overnight complete",
+  running if the loop holds its lock with a live pid, cut off otherwise. A run
+  restarted by hand within three hours is a false start, not a missed night. The
+  log is quiet while a phase runs, so a cut-off night's last moment comes from its
+  spend ledger.
+- *Notes.* `tracker status note "…" --zh "…" --from … --to …` adds an explanation to
+  the incident list; `tracker status notes`, `tracker status unnote N`. Bare
+  `tracker status` prints what the page shows.
+
+**The public map** (`webui/publicmap.py`, `static/pages/map.js`) shows a stranger
+where the campuses are. What it may say is an allowlist built on the server,
+`publicmap.FIELDS`, at one of three levels set by `TRACKER_PUBLIC_MAP_DETAIL`:
+`states` (totals and shaded states), `dots` (default: a dot per campus with its
+operator, state, stage and a capacity band, positions to 0.1°) or `campuses` (also
+its name, town and exact planned capacity). No level carries investment, a tenant, a
+date, an obstacle or a source. The totals count the campuses `capex.rollup` counts —
+paused and cancelled left out, one row per suspected duplicate — each at its own
+planned capacity; the Capex page's buyer rows can sum higher where a campus's
+buildings, listed by buyer, add up past the campus's own figure. The headline
+figures and the state table are written into the page on the server, so a reader
+without JavaScript and a search engine both get them; the page is indexed, with a
+`robots.txt` and a one-page `sitemap.xml` on its hostname. The reader docs write the
+two addresses as `{{status}}` and `{{map}}`, filled from `.env` like `{{api}}`.
+
 ## The public API
 
 A read-only JSON API for programs, at `/v1/...` on `TRACKER_API_HOSTNAME` (routed to

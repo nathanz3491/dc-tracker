@@ -29,7 +29,11 @@
   // The API's real address. Pages write `{{api}}` instead of a hostname: the repo
   // never names the host (CLAUDE.md §6), and the server knows it from `.env`.
   const API = (document.querySelector('meta[name="dc-api"]') || {}).content || "/api/v1";
-  const withAddresses = (text) => text.split("{{api}}").join(API);
+  // The status page and the public map, written `{{status}}` and `{{map}}` the same way.
+  const STATUS = (document.querySelector('meta[name="dc-status"]') || {}).content || "/status/";
+  const MAP = (document.querySelector('meta[name="dc-map"]') || {}).content || "/public-map/";
+  const withAddresses = (text) =>
+    text.split("{{api}}").join(API).split("{{status}}").join(STATUS).split("{{map}}").join(MAP);
   const LANGS = ["en", "zh"];
   const $ = (id) => document.getElementById(id);
 

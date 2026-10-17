@@ -20,6 +20,8 @@ from tracker.cli._shared import (
     _read_engine,
     app,
     console,
+    emit,
+    json_mode,
 )
 from tracker.config import get_settings
 from tracker.db import MigrationError, open_db, session_scope
@@ -678,3 +680,154 @@ def _cloudflare_check(name: str | None, hostname: str | None = None) -> None:
         console.print(f"\n[green]ready to publish[/green] — run `{invocation}`")
     else:
         _fail("not ready to publish; see above")
+
+
+# --- the public status page ---------------------------------------------------------
+
+status_app = typer.Typer(
+    name="status",
+    invoke_without_command=True,
+    help="What the public status page says, and notes on what went wrong.",
+)
+app.add_typer(status_app)
+
+
+def _status_store():
+    from tracker.webui import statussite
+
+    return statussite.Store(_db_path().parent / "status.db")
+
+
+def _when(raw: str | None, flag: str):
+    """A note's time, as typed: an ISO date or datetime, read in this machine's zone."""
+    import datetime as dt
+
+    if not raw:
+        return None
+    try:
+        value = dt.datetime.fromisoformat(raw)
+    except ValueError:
+        _fail(f"{flag} must be an ISO date or datetime, such as 2026-10-16T19:26, not {raw!r}")
+        raise
+    return value if value.tzinfo else value.astimezone()
+
+
+@status_app.callback()
+def status(ctx: typer.Context) -> None:
+    """Each public address, last night's update and the last incidents, as the page shows them.
+
+    Read from `status.db` beside the database, which the console's checks fill on
+    the machine that serves the status page. Elsewhere it is usually empty.
+    """
+    if ctx.invoked_subcommand:
+        return
+    from tracker.config import home
+    from tracker.webui import docsite, statussite
+
+    settings = get_settings()
+    hosts = {
+        "console": docsite.hostname(settings.tunnel_hostname),
+        "api": docsite.hostname(settings.api_hostname),
+        "docs": docsite.hostname(settings.docs_hostname),
+        "map": docsite.hostname(settings.map_hostname),
+    }
+    with session_scope(_read_engine(), commit=False) as session:
+        data = statussite.freshness(session)
+    payload = statussite.payload(
+        _status_store(),
+        services=[service for service, _url in statussite.targets(hosts)],
+        interval_s=settings.status_interval_s,
+        nights=statussite.read_nights(home() / "data" / "runs"),
+        data=data,
+        links={s: f"https://{h}/" if h else None for s, h in hosts.items()},
+    )
+    if json_mode():
+        emit(payload)
+        return
+    console.print(f"[bold]{payload['overall'].replace('_', ' ')}[/bold]")
+    for row in payload["services"]:
+        uptime = f"{row['uptime'] * 100:.2f}%" if row["uptime"] is not None else "—"
+        console.print(f"  {row['id']:<8} {row['state']:<12} 90-day {uptime}")
+    latest = payload["nightly"]["latest"]
+    if latest:
+        stop = f" ({latest['stop']})" if latest["stop"] else ""
+        console.print(f"last night: {latest['outcome']}{stop}, started {latest['started_at']}")
+    for incident in payload["incidents"][:10]:
+        title = incident.get("title") or incident["kind"]
+        console.print(f"  [dim]{incident['start']}[/dim] {escape(title)}")
+
+
+@status_app.command("note")
+def status_note(
+    title: Annotated[str, typer.Argument(help="What happened, in a sentence a reader can follow.")],
+    zh: Annotated[
+        str | None, typer.Option("--zh", help="The same sentence in Chinese.", show_default=False)
+    ] = None,
+    start: Annotated[
+        str | None,
+        typer.Option("--from", help="When it began (ISO). Default: now.", show_default=False),
+    ] = None,
+    end: Annotated[
+        str | None, typer.Option("--to", help="When it ended (ISO).", show_default=False)
+    ] = None,
+    service: Annotated[
+        str | None,
+        typer.Option(
+            "--service", help="console, api, docs or map, if only one.", show_default=False
+        ),
+    ] = None,
+) -> None:
+    """Add a note to the status page's incidents: a move, planned work, an explanation."""
+    try:
+        note_id = _status_store().add_note(
+            title,
+            title_zh=zh,
+            starts_at=_when(start, "--from"),
+            ends_at=_when(end, "--to"),
+            service=service,
+        )
+    except ValueError as exc:
+        _fail(str(exc))
+        raise
+    if json_mode():
+        emit({"id": note_id})
+        return
+    console.print(
+        f"[green]note {note_id} added[/green] — it shows on the status page within a minute"
+    )
+
+
+@status_app.command("notes")
+def status_notes() -> None:
+    """Every note on the status page, newest first."""
+    notes = _status_store().notes()
+    if json_mode():
+        emit(
+            [
+                {
+                    "id": n.id,
+                    "title": n.title,
+                    "title_zh": n.title_zh,
+                    "starts_at": n.starts_at.isoformat() if n.starts_at else None,
+                    "ends_at": n.ends_at.isoformat() if n.ends_at else None,
+                    "service": n.service,
+                }
+                for n in notes
+            ]
+        )
+        return
+    if not notes:
+        console.print("[dim]no notes[/dim]")
+    for n in notes:
+        when = (n.starts_at or n.created_at).isoformat(timespec="minutes")
+        console.print(f"  {n.id:>3}  [dim]{when}[/dim]  {escape(n.title)}")
+
+
+@status_app.command("unnote")
+def status_unnote(
+    note_id: Annotated[int, typer.Argument(help="The note's number, from `notes`.")],
+) -> None:
+    """Take a note off the status page."""
+    if not _status_store().remove_note(note_id):
+        _fail(f"no note {note_id}")
+    console.print(f"[green]note {note_id} removed[/green]")

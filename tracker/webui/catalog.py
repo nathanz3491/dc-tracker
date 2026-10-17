@@ -102,6 +102,12 @@ BLOCKED: dict[str, str] = {
     # somebody at a terminal, not a button on the page.
     "cloudflare": "run it from a terminal — publishing this page is not a click",
     "version": "shown in the header",
+    # The status page shows the same thing to anybody, and a note on it is public
+    # text: written at a terminal, by whoever runs the tracker.
+    "status": "it is the public status page",
+    "status note": "a status note is public — write it from a terminal",
+    "status notes": "they are on the public status page",
+    "status unnote": "a status note is public — remove it from a terminal",
     # The same argument `cloudflare` makes, one step further out. That command puts
     # the page on the internet; this one puts a message in somebody's inbox, which
     # is the only thing in the palette whose effect leaves the machine and cannot

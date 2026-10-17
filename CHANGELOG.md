@@ -12,6 +12,28 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **A public status page and a public map, each on its own hostname**
+  (`tracker/webui/statussite.py`, `tracker/webui/publicmap.py`,
+  `tracker/webui/server.py`, `tracker/webui/assets.py`, `tracker/config.py`,
+  `tracker/cli/serve.py`, `tracker/webui/static/pages/`,
+  `tracker/webui/static/public/status.html`, `tracker/webui/static/public/map.html`,
+  `tests/test_public_sites.py`, `docs/console-and-export.md`, `.env.example`).
+  - *Status* says whether the console, the API, the docs and the map are answering —
+    checked through the internet every five minutes, 90 days of daily bars — whether
+    last night's update finished, stopped at a ceiling or was cut off, and when an
+    article was last read. A stretch with no checks counts as downtime for every
+    address and is named a restart when the machine booted inside it, so the page
+    cannot report its best day on the day the server was off. An operator adds
+    explanations with `tracker status note`. Never indexed.
+  - *Map* shows anybody where the campuses are, their stage and roughly how big,
+    with the national and state totals counted like the Capex page (paused,
+    cancelled and suspected duplicates left out). What a dot may say is an
+    allowlist on the server at one of three levels (`TRACKER_PUBLIC_MAP_DETAIL`,
+    default `dots`: operator, state, stage, capacity band); no level carries
+    investment, tenants, dates, obstacles or sources. The figures are written into
+    the page so search engines read them. Both pages in English and Chinese, light
+    and dark; the reader docs link them as `{{status}}` and `{{map}}`.
+
 - **Admins switch API access on or off per account** (`tracker/migrations/0037_api_allowed.sql`,
   `tracker/models.py`, `tracker/accounts.py`, `tracker/apikeys.py`,
   `tracker/webui/server.py`, `tracker/cli/people.py`,

@@ -4,6 +4,10 @@ Changes a reader of the console will notice, newest first. The console's version
 
 ## September–October 2026
 
+### Status and map
+
+- **A status page and a public map.** The [status page]({{status}}) shows whether the console, the API, these docs and the map are answering, and when each night's update ran. The [public map]({{map}}) shows anybody where the campuses are, their stage and roughly how big, with the national and state totals.
+
 ### API
 
 - **A read-only API.** Programs can read campuses, their figures and sources, companies, capex by buyer and your watchlist's news, with a key made on your Account page. See [The API](api).
