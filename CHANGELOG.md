@@ -230,8 +230,8 @@ initial build of the v1 PRD.
   - *Rows already stored* are re-judged by a new nightly step, `recheck`
     (`tracker ingest crawl --refused-before-gate`, `scripts/overnight.sh
     --recheck`): 60 cached articles a night holding a refusal from before the
-    change, most refusals first, each read once. 1,633 articles qualified, so about
-    four weeks at about ¥1.2 a night; then the step finds nothing and costs
+    change, most refusals first, each read once. 1,293 cached, readable articles
+    qualified, so about 22 nights at about ¥1.2 a night; then the step finds nothing and costs
     nothing. The prompt re-read could not do this, because a gate change does not
     change the prompt.
   - *Not changed:* words like "operates", "planned" and "completed" as evidence of

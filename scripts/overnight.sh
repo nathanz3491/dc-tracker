@@ -523,8 +523,8 @@ for round in $(seq 1 "$ROUNDS"); do
 
   # Re-read what the gate refused before it last changed. v3.7.5 (2026-10-17)
   # began accepting short exact quotes, quotes with one slip, hyphenated figures,
-  # pre-2020 years and coarse dates; 1,633 cached articles held a refusal it may
-  # reverse. 60 a night, about ¥1.2, so the backlog clears in about four weeks and
+  # pre-2020 years and coarse dates; 1,293 cached, readable articles held a refusal
+  # it may reverse. 60 a night, about ¥1.2, so the backlog clears in about 22 nights and
   # then the step finds nothing and costs nothing.
   if [ "$round" -eq 1 ] && [ "$RECHECK" -gt 0 ] 2>/dev/null; then
     if capped recheck; then break; fi
