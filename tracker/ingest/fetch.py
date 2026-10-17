@@ -97,7 +97,7 @@ async def permitted(url: str, settings: Settings, get: robots.AsyncGetter) -> bo
     """Whether this project may fetch `url`, asking the site's `robots.txt` through `get`."""
     if not settings.respect_robots:
         return True
-    return await robots.allowed_async(url, settings.user_agent, get)
+    return await robots.allowed_async(url, settings.user_agent_for(url), get)
 
 
 # --- Publication date -------------------------------------------------------
@@ -388,7 +388,9 @@ class HttpxFetcher:
     async def _get(self, url: str) -> tuple[int | None, str]:
         try:
             async with self._client() as client:
-                response = await client.get(url)
+                response = await client.get(
+                    url, headers={"User-Agent": self.settings.user_agent_for(url)}
+                )
         except (httpx.RequestError, httpx.InvalidURL):
             return None, ""
         return response.status_code, response.text
@@ -398,7 +400,9 @@ class HttpxFetcher:
             return refused(url)
         try:
             async with self._client() as client:
-                response = await client.get(url)
+                response = await client.get(
+                    url, headers={"User-Agent": self.settings.user_agent_for(url)}
+                )
         # `InvalidURL` is not a `RequestError`: a URL httpx cannot parse raises it
         # before any request, and it used to escape here and take the whole batch.
         except (httpx.RequestError, httpx.InvalidURL) as exc:
@@ -506,7 +510,7 @@ class CurlCffiFetcher:
         if not await permitted(url, self.settings, lambda u: _get_text(u, self.settings)):
             return refused(url)
         headers = {
-            "User-Agent": self.settings.user_agent,
+            "User-Agent": self.settings.user_agent_for(url),
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.9",
         }
@@ -821,7 +825,7 @@ class PlaywrightFetcher:
             )
 
         context = await self._browser.new_context(
-            user_agent=self.settings.user_agent, locale="en-US"
+            user_agent=self.settings.user_agent_for(url), locale="en-US"
         )
         try:
             page = await context.new_page()
@@ -892,7 +896,7 @@ class PlaywrightFetcher:
         parser = self._robots[origin]
         if parser is None:
             return False
-        return bool(parser.can_fetch(self.settings.user_agent, url))
+        return bool(parser.can_fetch(self.settings.user_agent_for(url), url))
 
     async def _read_robots(self, origin: str):
         """A parser for `origin/robots.txt`, or None if it could not be read.
@@ -921,7 +925,7 @@ class PlaywrightFetcher:
 
 async def _get_text(url: str, settings: Settings) -> tuple[int | None, str]:
     """(status, body) for one small GET, through curl_cffi when it is installed."""
-    headers = {"User-Agent": settings.user_agent}
+    headers = {"User-Agent": settings.user_agent_for(url)}
     try:
         if CurlCffiFetcher.available():
             from curl_cffi.requests import AsyncSession
@@ -1197,7 +1201,7 @@ async def fetch_all(
             # The project's own gap, or the site's `Crawl-delay` when that is longer.
             pause = settings.politeness_delay_s
             if settings.respect_robots:
-                pause = max(pause, robots.crawl_delay(url, settings.user_agent))
+                pause = max(pause, robots.crawl_delay(url, settings.user_agent_for(url)))
             if pause and result.via != robots.VIA:
                 await asyncio.sleep(pause)
             return result

@@ -206,6 +206,27 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **Three faults found checking the 2026-10-16 night** (`scripts/overnight.sh`,
+  `tracker/config.py`, `tracker/ingest/fetch.py`, `tracker/ingest/edgar.py`,
+  `tracker/ingest/discover.py`, `tracker/webui/article.py`, `tracker/ingest/crawl.py`,
+  `tracker/models.py`, `tracker/migrations/0038_ingest_url_read_by.sql`,
+  `tests/test_overnight.py`, `tests/test_robots.py`, `tests/test_cli.py`,
+  `docs/crawler.md`, `docs/data-quality.md`).
+  - *A crash stopped every later night.* The host was reset at 19:32 mid-run, the
+    run never removed its lock, and a held lock refused every later start — no
+    night would have run again until somebody deleted it by hand. A lock whose pid
+    is not a live overnight run is now taken over, and the log says so.
+  - *SEC refused every request since 2026-10-11.* SEC answers 403 to a User-Agent
+    carrying a link, and the link to the crawler page was added that day: 33 filings
+    and every EDGAR search failed from then on. SEC now gets the same name and
+    contact without the link; every other site still gets the link.
+  - *The prompt re-read read the same articles every night.* A re-read that wrote no
+    citation — no single campus named, not English, not an article — re-stamped
+    nothing, so the URL stayed first in line: 45 of the nightly 60 had been read the
+    night before, some 20 to 84 times, while 1,543 others waited. Each URL now
+    records which prompt last read it (`ingest_url.read_by`), and the re-read skips
+    what the current prompt has already read.
+
 - **Real quotes were being refused, and sentences that state a value read as not
   stating it** (`tracker/ingest/crawl.py`, `tracker/normalize.py`,
   `tracker/ingest/edgar.py`, `tracker/agent.py`, `tracker/triage.py`,

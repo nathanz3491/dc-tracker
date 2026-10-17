@@ -26,6 +26,10 @@ That covers feeds, sitemaps, articles, the date check, a company's site icon,
 and the page a reader opens from inside the console. The string does not
 change when the crawler falls back to a different HTTP client (below).
 
+The one exception is the SEC (`sec.gov`), which refuses any User-Agent that
+contains a link and asks for a name and an email instead. Requests there send
+`dc-tracker/0.1 (<contact address>)`: the same name and contact, without the link.
+
 ## What it requests, and how often
 
 - **Feeds and sitemaps** that are listed by hand in

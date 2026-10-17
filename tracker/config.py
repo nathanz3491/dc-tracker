@@ -155,6 +155,19 @@ def seed_path(name: str) -> Path:
     return override if override.is_file() else package_root() / "seed" / name
 
 
+def without_links(user_agent: str) -> str:
+    """`user_agent` with any URL taken out, the name and the contact kept.
+
+    ``dc-tracker/0.1 (+https://…/crawler.md; you@example.com)`` becomes
+    ``dc-tracker/0.1 (you@example.com)``. See `Settings.user_agent_for`.
+    """
+    import re
+
+    text = re.sub(r"\+?https?://[^\s;)]+\s*;?\s*", "", user_agent)
+    text = re.sub(r"\(\s*\)", "", re.sub(r"\(\s+", "(", text))
+    return " ".join(text.split()) or user_agent
+
+
 class Settings(BaseSettings):
     # Two .env locations, and the order matters. pydantic-settings resolves a
     # relative env_file against the CURRENT DIRECTORY, so a bare ".env" is
@@ -678,6 +691,27 @@ class Settings(BaseSettings):
         """
         chosen = override or self.db
         return chosen if chosen.is_absolute() else (home() / chosen).resolve()
+
+    def user_agent_for(self, url: str | None) -> str:
+        """The User-Agent to send to `url`: `user_agent`, except where a site refuses it.
+
+        SEC answers 403 to any User-Agent carrying a link — the `+https://…` that
+        points every other publisher at `docs/crawler.md` — for EDGAR, the archive and
+        its `robots.txt` alike, and asks instead for a name and an email. The link was
+        added on 2026-10-11 and every SEC request failed from that night. SEC gets the
+        same identity without the link.
+        """
+        from urllib.parse import urlsplit
+
+        try:
+            host = (urlsplit(url).hostname or "").lower() if url else ""
+        except ValueError:
+            # A URL nobody can parse is the request's own failure to report, not
+            # this lookup's: callers pass it on and let the client refuse it.
+            host = ""
+        if host == "sec.gov" or host.endswith(".sec.gov"):
+            return without_links(self.user_agent)
+        return self.user_agent
 
     def has_api_key(self) -> bool:
         return bool(self.deepseek_api_key and self.deepseek_api_key.get_secret_value().strip())

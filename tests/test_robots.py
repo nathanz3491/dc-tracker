@@ -115,6 +115,34 @@ def test_a_refusal_is_neither_retried_nor_escalated():
     assert asked == ["/robots.txt"]
 
 
+def test_sec_is_sent_the_identity_without_the_link():
+    """SEC answers 403 to a User-Agent carrying a URL, robots.txt included, and every
+    SEC request failed from the night the crawler page's link was added (2026-10-11).
+    It gets the name and the contact; every other site still gets the link."""
+    seen: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.url.host + request.url.path, request.headers["user-agent"]))
+        if request.url.path == "/robots.txt":
+            return httpx.Response(200, text="User-agent: *\nAllow: /\n")
+        body = "<html><body><article>" + "A data-center campus. " * 40 + "</article></body></html>"
+        return httpx.Response(200, text=body, headers={"content-type": "text/html"})
+
+    fetcher = HttpxFetcher(get_settings(), transport=httpx.MockTransport(handler))
+    assert asyncio.run(fetcher.fetch("https://www.sec.gov/Archives/edgar/data/1/x.htm")).ok
+    assert asyncio.run(fetcher.fetch("https://a.example/news/campus")).ok
+    sent = dict(seen)
+    assert sent["www.sec.gov/robots.txt"] == "dc-tracker/0.1 (someone@example.com)"
+    assert sent["www.sec.gov/Archives/edgar/data/1/x.htm"] == "dc-tracker/0.1 (someone@example.com)"
+    assert sent["a.example/news/campus"] == UA
+
+
+def test_edgar_search_sends_the_identity_without_the_link():
+    from tracker.ingest import edgar
+
+    assert edgar._headers(get_settings())["User-Agent"] == "dc-tracker/0.1 (someone@example.com)"
+
+
 def test_the_feed_client_asks_too():
     transport, asked = site(robots_body="User-agent: *\nDisallow: /\n")
     result = asyncio.run(

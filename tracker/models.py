@@ -276,6 +276,11 @@ class IngestUrl(Base):
         DateTime, nullable=False, server_default=_NOW
     )
 
+    #: The prompt stamp of the last read that reached the model or was refused by
+    #: the reader (0038). `crawl.stale_by_prompt` skips a URL the current prompt has
+    #: read, whether or not that read wrote a citation.
+    read_by: Mapped[str | None] = mapped_column(Text)
+
     __table_args__ = (
         UniqueConstraint("url", name="uq_ingest_url_url"),
         CheckConstraint(sql_in("status", URL_STATUSES), name="ck_ingest_url_status"),

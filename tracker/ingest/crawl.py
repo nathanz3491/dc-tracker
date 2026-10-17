@@ -242,6 +242,9 @@ class ExtractionOutcome:
     #: not put to the model; see `run(skip_unchanged=)`. Recorded as `ok` so the
     #: bookkeeping moves and the URL goes to the back of the refresh line.
     unchanged: bool = False
+    #: The stamp of the prompt that read the page, set by `extract_one` and for an
+    #: unchanged page; None when nothing read it. Becomes `ingest_url.read_by`.
+    prompt: str | None = None
 
 
 def classify_source_type(url: str, *, operator_hosts: frozenset[str] | None = None) -> str:
@@ -2744,6 +2747,7 @@ def extract_one(
         # Set before any early return, so a page refused as thin still records the
         # date it stated. The refusal is about prose, not about metadata.
         published_at=result.published_at,
+        prompt=prompt.stamp,
     )
 
     # Before the call, not after: a page with nothing to quote cannot produce a
@@ -2870,6 +2874,12 @@ def extract_one(
 #: judged it. A later try that fails does not take that answer away.
 SETTLED_STATUSES: Final[frozenset[str]] = frozenset({"ok", "no_project"})
 
+#: Outcomes in which the reader looked at the page: the model read it, or the reader
+#: refused it as not an article or not in English. Reading it again under the same
+#: prompt gives the same answer, so these set `ingest_url.read_by`. A fetch or model
+#: failure does not: nothing read the page.
+READ_STATUSES: Final[frozenset[str]] = frozenset({"ok", "no_project", "thin_content", "skipped"})
+
 #: A quoted slice of the model's reply, which varies between tries of one failure.
 _REPLY_SLICE: Final = re.compile(r"reply began.*", re.IGNORECASE | re.DOTALL)
 _DIGITS: Final = re.compile(r"\d+")
@@ -2930,6 +2940,8 @@ def record_url(session: Session, run_id: str, outcome: ExtractionOutcome) -> Non
     row.attempts = (row.attempts or 0) + outcome.attempts
     row.error = error
     row.last_tried_at = now
+    if outcome.prompt and outcome.status in READ_STATUSES:
+        row.read_by = outcome.prompt
     if failed and row.status in SETTLED_STATUSES:
         session.flush()
         return
@@ -3092,6 +3104,12 @@ def stale_by_prompt(
     wrong because the model was worse; they are wrong because the gate that would
     have caught them did not exist yet, and nothing re-ran it.
 
+    **A URL the current prompt has already read is skipped** (`ingest_url.read_by`),
+    because a re-read that writes no citation — the page names no single campus, is
+    not an article, or names one `--existing-only` refuses — re-stamps nothing, and
+    the URL used to stay at the head of the line: 45 of the nightly 60 on
+    2026-10-17 had been read the night before, some 20 to 84 times.
+
     Distinct URLs, oldest first, so a `--limit`ed run works steadily through the
     oldest stratum instead of reshuffling between runs. Placeholders are excluded
     for the same reason `stale_sources` excludes them — they are not fetchable.
@@ -3115,9 +3133,13 @@ def stale_by_prompt(
 
     stmt = (
         select(Source.url, func.min(Source.fetched_at).label("oldest"))
+        .outerjoin(IngestUrl, IngestUrl.url == Source.url)
         .where(Source.extractor.like("crawl:%"))
         .where(Source.extractor.not_like(f"crawl:{stamp}:%"))
         .where(Source.url.not_like(f"%{PLACEHOLDER_MARKER}%"))
+        # Already read by this prompt, whether or not that read wrote a citation —
+        # see migration 0038. Without it the same 45 were re-read every night.
+        .where(IngestUrl.read_by.is_(None) | (IngestUrl.read_by != stamp))
         .group_by(Source.url)
         .order_by("oldest", Source.url)
     )
@@ -3463,6 +3485,7 @@ def run(
                 content_sha1=result.sha1,
                 published_at=result.published_at,
                 unchanged=True,
+                prompt=prompt.stamp,
             )
         return extract_one(
             result,

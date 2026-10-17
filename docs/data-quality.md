@@ -422,6 +422,12 @@ out: nothing was offered, and the same article offers nothing new. The nightly l
 runs it at 60 a night (`--recheck`). When a later gate change should reach old rows,
 move `GATE_REVISED_AT` forward with it.
 
+**A URL the current prompt has read is not read again**, whatever the read produced.
+A re-read that wrote no citation used to re-stamp nothing and so stayed first in
+line; `ingest_url.read_by` (migration 0038) records the prompt of every read that
+reached the model or was refused by the reader, and `--stale-prompt` skips a URL
+whose `read_by` is the current stamp.
+
 **Pair it with `--cached-only`.** Serving from the cache "by default" only covers
 the URLs that are *in* the cache; a miss used to fall through to a fetch, silently,
 which turns a free re-read into a paid crawl. On the live database three quarters

@@ -216,9 +216,9 @@ def _get(url: str) -> tuple[str, str]:
     from tracker.config import get_settings
 
     settings = get_settings()
-    headers = {"user-agent": settings.user_agent}
+    headers = {"user-agent": settings.user_agent_for(url)}
     if settings.respect_robots and not robots.allowed(
-        url, settings.user_agent, lambda u: _robots_get(u, headers)
+        url, headers["user-agent"], lambda u: _robots_get(u, headers)
     ):
         return "", robots.REFUSED
     try:

@@ -2197,7 +2197,7 @@ class _RawFetcher:
         import httpx
 
         try:
-            async with self._client({"User-Agent": self.settings.user_agent}) as client:
+            async with self._client({"User-Agent": self.settings.user_agent_for(url)}) as client:
                 response = await client.get(url)
         except (httpx.RequestError, httpx.InvalidURL):
             return None, ""
@@ -2209,7 +2209,7 @@ class _RawFetcher:
         if not await permitted(url, self.settings, self._get):
             return refused(url)
         headers = {
-            "User-Agent": self.settings.user_agent,
+            "User-Agent": self.settings.user_agent_for(url),
             "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml, */*",
         }
         try:

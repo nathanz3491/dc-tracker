@@ -262,7 +262,10 @@ export TRACKER_DEEPSEEK_JUDGEMENT_EFFORT="$JUDGEMENT_EFFORT"
 LOCK="$REPO/data/runs/overnight.lock"
 
 if [ "$STATUS_ONLY" -eq 1 ]; then
-  if [ -d "$LOCK" ]; then
+  if [ -d "$LOCK" ] && [ "$(cat "$LOCK/pid" 2>/dev/null)" != "" ] \
+      && ! ps -p "$(cat "$LOCK/pid")" -o command= 2>/dev/null | grep -q "overnight.sh"; then
+    echo "not running (a stale lock is left from pid $(cat "$LOCK/pid"); the next run takes it over)"
+  elif [ -d "$LOCK" ]; then
     echo "running, pid $(cat "$LOCK/pid" 2>/dev/null || echo '?')"
   else
     echo "not running"
@@ -282,13 +285,45 @@ export TRACKER_SPEND_LEDGER="${TRACKER_SPEND_LEDGER:-$(dirname "$LOG")/overnight
 exec > >(tee -a "$LOG") 2>&1
 
 # One at a time. `mkdir` is the atomic primitive available everywhere; macOS has no
-# flock. The pid inside is for whoever finds a stale one.
-if ! mkdir "$LOCK" 2>/dev/null; then
-  echo "another overnight run holds $LOCK (pid $(cat "$LOCK/pid" 2>/dev/null || echo '?'))"
-  echo "if that is stale: rm -rf $LOCK"
-  exit 1
-fi
-echo $$ > "$LOCK/pid"
+# flock. The pid inside says whose it is.
+#
+# A lock outlives its run whenever the run never reaches its EXIT trap — the machine
+# loses power or is reset. On 2026-10-16 a reset at 19:32 left one behind, and since
+# a held lock refused every later start, no night would ever have run again until
+# somebody removed it by hand. So a lock whose pid is not a live overnight run is
+# taken over, and the log says so. A lock with no pid yet is a run between its
+# `mkdir` and its `echo`, and is left alone.
+lock_holder() {
+  local pid
+  pid=$(cat "$LOCK/pid" 2>/dev/null || true)
+  if [ -z "$pid" ]; then
+    echo "starting"
+  elif ps -p "$pid" -o command= 2>/dev/null | grep -q "overnight.sh"; then
+    echo "$pid"
+  else
+    echo "stale"
+  fi
+}
+
+take_lock() {
+  if mkdir "$LOCK" 2>/dev/null; then
+    echo $$ > "$LOCK/pid"
+    return 0
+  fi
+  local holder
+  holder=$(lock_holder)
+  if [ "$holder" = "stale" ]; then
+    echo "taking over a stale lock: pid $(cat "$LOCK/pid" 2>/dev/null) is not an overnight run (a reset or power loss ended it)"
+    rm -rf "$LOCK"
+    mkdir "$LOCK" 2>/dev/null || { echo "another run took the lock first"; return 1; }
+    echo $$ > "$LOCK/pid"
+    return 0
+  fi
+  echo "another overnight run holds $LOCK (pid $holder)"
+  return 1
+}
+
+take_lock || exit 1
 trap 'rm -rf "$LOCK"' EXIT
 
 say()   { printf '\n[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }

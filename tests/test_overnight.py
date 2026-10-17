@@ -192,6 +192,58 @@ def test_an_unreadable_ledger_prices_at_nothing_and_does_not_end_the_night(tmp_p
     assert done.stdout.strip() == "alive 0.00"
 
 
+def _lock(tmp_path: Path, body: str) -> subprocess.CompletedProcess:
+    """`body` with the script's lock functions defined, the lock under `tmp_path`."""
+    script = (
+        "set -euo pipefail\nLOCK=lock\n" + _function("lock_holder") + _function("take_lock") + body
+    )
+    return subprocess.run(
+        [BASH, "-c", script], cwd=tmp_path, capture_output=True, text=True, timeout=60, check=False
+    )
+
+
+@needs_bash
+def test_a_lock_left_by_a_run_the_machine_killed_is_taken_over(tmp_path):
+    """2026-10-16: a reset at 19:32 ended the run before its EXIT trap, and the lock it
+    left refused every later night. A lock whose pid is not a live overnight run is
+    stale, and the next run takes it over and says so."""
+    (tmp_path / "lock").mkdir()
+    (tmp_path / "lock" / "pid").write_text("999999\n")
+    done = _lock(tmp_path, 'take_lock && echo "took $$" && cat lock/pid\n')
+    assert done.returncode == 0, done.stderr
+    lines = done.stdout.splitlines()
+    assert "stale lock" in lines[0]
+    assert lines[1].startswith("took ")
+    assert lines[2] == lines[1].removeprefix("took ")
+
+
+@needs_bash
+def test_a_lock_still_being_written_is_left_alone(tmp_path):
+    """No pid yet means another run is between its `mkdir` and its `echo`."""
+    (tmp_path / "lock").mkdir()
+    done = _lock(tmp_path, "take_lock\n")
+    assert done.returncode == 1
+    assert "another overnight run holds" in done.stdout
+    assert not (tmp_path / "lock" / "pid").exists()
+
+
+@needs_bash
+def test_a_live_run_keeps_its_lock(tmp_path):
+    probe = subprocess.run(
+        [BASH, "-c", "ps -p $$ -o command="], capture_output=True, text=True, check=False
+    )
+    if probe.returncode != 0 or not probe.stdout.strip():
+        pytest.skip("this bash's ps cannot name a process (Git Bash)")
+    (tmp_path / "overnight.sh").write_text("sleep 30\n")
+    done = _lock(
+        tmp_path,
+        "bash ./overnight.sh & holder=$!\nmkdir lock && echo $holder > lock/pid\n"
+        "take_lock; status=$?; kill $holder; exit $status\n",
+    )
+    assert done.returncode == 1
+    assert "another overnight run holds" in done.stdout
+
+
 def test_every_paid_phase_is_preceded_by_a_ceiling_check():
     """The header promised a check "between phases" and the loop made one per round,
     so a single round could overshoot the ceiling by a round's worth of agent runs."""

@@ -549,7 +549,8 @@ def _make_it_legacy(session) -> int:
     Not a synthetic fixture: this is exactly what a row written before migration
     `0007` looks like — the values and `fields` intact, the per-field quotes
     absent because the column did not exist, and an `extractor` stamp naming the
-    prompt that produced it.
+    prompt that produced it — on the citation and, since 0038, on the URL's own
+    record of which prompt last read it.
     """
     stripped = 0
     for source in session.scalars(select(Source)).all():
@@ -557,6 +558,8 @@ def _make_it_legacy(session) -> int:
             source.quotes = None
             stripped += 1
         source.extractor = "crawl:extract-v1@8eb51f2a:MiniMax-M2.7-highspeed:httpx"
+    for row in session.scalars(select(IngestUrl)).all():
+        row.read_by = "extract-v1@8eb51f2a"
     session.flush()
     return stripped
 

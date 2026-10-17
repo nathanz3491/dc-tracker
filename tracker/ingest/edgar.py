@@ -45,7 +45,7 @@ from typing import Any
 
 import httpx
 
-from tracker.config import Settings, get_settings, seed_path
+from tracker.config import Settings, get_settings, seed_path, without_links
 from tracker.ingest.crawl import _MONEY_EXPR, _MW_EXPR, _RECENT_DATE_EXPR
 from tracker.ingest.fetch import cache_path, html_to_text
 
@@ -190,7 +190,8 @@ def _headers(settings: Settings) -> dict[str, str]:
             "  TRACKER_USER_AGENT=dc-tracker/0.1 (+contact: you@example.com)\n\n"
             "Sending the placeholder gets the whole run blocked rather than one request."
         )
-    return {"User-Agent": ua, "Accept-Encoding": "gzip, deflate"}
+    # SEC refuses a User-Agent that carries a link; see `Settings.user_agent_for`.
+    return {"User-Agent": without_links(ua), "Accept-Encoding": "gzip, deflate"}
 
 
 class _Client:

@@ -1297,6 +1297,48 @@ def test_refused_before_gate_takes_each_reversible_refusal_once(initialized: Pat
         assert refused_before_gate(session, limit=1) == ["https://news.example.com/two/"]
 
 
+def test_a_reread_that_wrote_nothing_is_not_read_again(initialized: Path):
+    """A re-read that writes no citation re-stamps nothing, and the URL used to stay
+    at the head of the line: 45 of the nightly 60 on 2026-10-17 had been read the
+    night before. `ingest_url.read_by` records the read itself."""
+    from tracker.db import init_db, session_scope
+    from tracker.ingest.crawl import ExtractionOutcome, record_url, stale_by_prompt
+
+    pid = with_real_source(initialized)
+    engine, _ = init_db(initialized)
+    old = "crawl:extract-v1@old:m:httpx"
+    with session_scope(engine) as session:
+        for year, url in enumerate(
+            ("https://news.example.com/no-campus/", "https://news.example.com/failed/"), 2019
+        ):
+            _extracted(session, pid, url, old, dt.datetime(year, 1, 1))
+        # Read by the current prompt, which found no campus it could write.
+        record_url(
+            session,
+            "r1",
+            ExtractionOutcome(
+                url="https://news.example.com/no-campus/",
+                status="no_project",
+                prompt="extract-v1@new",
+            ),
+        )
+        # Not read: the model call failed. It stays in the line.
+        record_url(
+            session,
+            "r1",
+            ExtractionOutcome(
+                url="https://news.example.com/failed/", status="llm_error", prompt="extract-v1@new"
+            ),
+        )
+
+    with session_scope(engine, commit=False) as session:
+        assert stale_by_prompt(session, stamp="extract-v1@new") == [
+            "https://news.example.com/failed/"
+        ]
+        # A newer prompt still re-reads both.
+        assert len(stale_by_prompt(session, stamp="extract-v1@newer")) == 2
+
+
 def test_stale_by_prompt_excludes_placeholders(seeded: Path):
     """Same reason refresh excludes them: a placeholder URL is not fetchable."""
     from tracker.db import open_db, session_scope
