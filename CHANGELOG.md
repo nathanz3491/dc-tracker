@@ -206,6 +206,33 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **Real quotes were being refused, and sentences that state a value read as not
+  stating it** (`tracker/ingest/crawl.py`, `tracker/normalize.py`,
+  `tracker/ingest/edgar.py`, `tracker/agent.py`, `tracker/triage.py`,
+  `tests/test_quote_repair.py`, `docs/design-decisions.md`). Measured on a replay of
+  40 articles: the model's quotes were almost all exact copies, and the losses were
+  the checker's.
+  - *Short exact quotes.* Milestones, companies involved, the nightly agent and the
+    obstacle re-check refused any quote under 40 characters, even an exact copy —
+    a dateline, a table row, a legal name. 208 milestones and 75 companies are
+    marked unverified today, mostly for this. An exact copy now counts from five
+    characters, stored as its whole sentence or line.
+  - *Quotes with one slip.* One changed word in a long sentence was refused about
+    half the time, and an edited table line always. A quote whose matching pieces
+    cover 85% of it now counts, as long as every number in it is in the article's
+    sentence. One changed word: 54% → 97% accepted; against unrelated articles,
+    2 wrong matches in about 2,500 tries.
+  - *What the checker could not read.* "A 60-megawatt campus" and "a $2-billion
+    project" (the hyphen); any year before 2020 ("since breaking ground in 2017");
+    and a date the sentence states less precisely than the model wrote it
+    ("announced in 2021" against 2021-06-01), which is now kept as the year. 12 of
+    the replay's 51 "the sentence does not state this value" refusals were these.
+  - *Not changed:* words like "operates", "planned" and "completed" as evidence of
+    a stage. Measured on 1,800 quotes already confirmed for a stage, they would
+    have supported a *different* stage in roughly half the quotes they appear in
+    ("9 planned data centers, with 5 operational"), and a campus's stage is the
+    furthest any source confirms.
+
 - **Three things the console told readers that were not true**
   (`tracker/webui/static/app.js`, `tracker/webui/server.py`, `tests/test_webui.py`).
   The AI panels said "this console was started with --no-ai" whenever they were off,

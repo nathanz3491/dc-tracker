@@ -349,6 +349,14 @@ _POWER_UNITS = {
 }
 
 
+#: "a 300-megawatt campus", "a $2-billion project": the hyphen English puts between
+#: an amount and its unit when the two qualify a noun. It is the usual way news
+#: prose writes a figure, and neither parser below accepted it, so the evidence
+#: gate refused the sentence that stated the value. A hyphen between two numbers is
+#: a range and is left alone.
+_UNIT_HYPHEN = re.compile(r"(?<=\d)-(?=[a-z])", re.IGNORECASE)
+
+
 def _to_float(token: str, field: str, raw: Any) -> float:
     try:
         return float(token.replace(",", "").replace("_", ""))
@@ -394,7 +402,7 @@ def norm_mw_detail(raw: Any, *, field: str = "mw_planned") -> ParsedNumber:
             raise NormalizationError(field, raw, "negative capacity")
         return ParsedNumber(value)
 
-    text = _clean(str(raw))
+    text = _UNIT_HYPHEN.sub(" ", _clean(str(raw)))
     note: str | None = None
     stripped = _APPROX.sub("", text)
     if stripped != text:
@@ -480,7 +488,7 @@ def norm_money_detail(raw: Any, *, field: str = "investment_usd") -> ParsedNumbe
     text = _CURRENCY_PREFIX.sub("", text)
     # Any remaining "$" is an interior marker, as in "$500 million to $1 billion".
     text = _CURRENCY_WORD.sub(" ", text.replace("$", " "))
-    text = _clean(text)
+    text = _UNIT_HYPHEN.sub(" ", _clean(text))
 
     range_match = re.match(
         r"^(?P<lo>[\d,.]+)\s*(?P<lounit>[a-z]*)\s*(?:-|to|–)\s*(?P<hi>[\d,.]+)\s*(?P<hiunit>[a-z]*)$",

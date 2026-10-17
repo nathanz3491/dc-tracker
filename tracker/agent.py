@@ -389,10 +389,12 @@ def verbatim(quote: str, article: str) -> tuple[str, str]:
     `inferred`, and **`capex` does not sum `inferred`**. An agent writing freely
     without quotes would do correct work that never reaches a published total.
 
-    A quote must match at least `crawl.MIN_RUN_CHARS` (40) characters and half its
-    own length. Callers prompting an agent should ask for a whole sentence: "250
-    MW" is in every article about a 250 MW site and evidences nothing, which is
-    what the floor is there to refuse.
+    An exact copy is accepted from `crawl.MIN_EXACT_CHARS` (5) characters — a table
+    line or a dateline is real evidence — and an edited quote when the article's
+    words cover nearly all of it. Either way what is returned is the article's
+    whole sentence or line around the match, so a short quote is stored with the
+    context a reader needs to judge it. Callers prompting an agent should still ask
+    for a whole sentence: it is what ties a figure to one campus.
     """
     from tracker.ingest.crawl import _verbatim_run
 

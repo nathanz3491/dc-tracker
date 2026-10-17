@@ -46,7 +46,7 @@ from typing import Any
 import httpx
 
 from tracker.config import Settings, get_settings, seed_path
-from tracker.ingest.crawl import _DATE_EXPR, _MONEY_EXPR, _MW_EXPR
+from tracker.ingest.crawl import _MONEY_EXPR, _MW_EXPR, _RECENT_DATE_EXPR
 from tracker.ingest.fetch import cache_path, html_to_text
 
 log = logging.getLogger(__name__)
@@ -366,7 +366,7 @@ _WEIGHTS: tuple[tuple[re.Pattern[str], float], ...] = (
     (_MONEY_EXPR, 4.0),
     (_TENANT, 3.0),
     (_PHASE, 2.5),
-    (_DATE_EXPR, 1.5),
+    (_RECENT_DATE_EXPR, 1.5),
 )
 
 #: Below this, a "paragraph" is a table cell or a page number.

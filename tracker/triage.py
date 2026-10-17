@@ -204,9 +204,9 @@ def rule_out_tool() -> Any:
                     "type": "string",
                     "description": (
                         "A whole sentence, verbatim from one of the articles you read, "
-                        "that shows the claim is wrong. Must be at least 40 characters "
-                        "— a fragment like '250 MW' appears in every article about a "
-                        "250 MW site and evidences nothing."
+                        "that shows the claim is wrong. A fragment like '250 MW' is "
+                        "stored as the sentence around it, but only a whole sentence "
+                        "shows which campus the figure belongs to."
                     ),
                 },
                 "confidence": {"type": "number", "description": "0 to 1."},
@@ -460,8 +460,8 @@ one building, or a whole programme, stored as if it described this campus. A
 "total" in an article about a campus expansion is often the campus, not the
 expansion. Watch for it.
 
-Quote a WHOLE SENTENCE, copied exactly. A quote under 40 characters is rejected,
-and so is a paraphrase. If you cannot quote it, you cannot rule on it — call
+Quote a WHOLE SENTENCE, copied exactly. A paraphrase is rejected, and a fragment
+tells nobody which campus it is about. If you cannot quote it, you cannot rule on it — call
 `leave_alone` and say what you found. Declining is a respected answer; guessing is
 not."""
 

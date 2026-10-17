@@ -56,6 +56,7 @@ from tracker.llm import (
 from tracker.models import IngestUrl, utcnow
 from tracker.normalize import (
     NormalizationError,
+    ParsedDate,
     canonical_url,
     is_blank,
     looks_english,
@@ -450,6 +451,35 @@ def _normalize_with_offsets(text: str) -> tuple[str, list[int]]:
 MIN_RUN_CHARS: Final = 40
 MIN_RUN_FRACTION: Final = 0.5
 
+#: An exact copy is accepted at any length from here up — a table line, a dateline,
+#: a company's legal name. The run floors above were written for *edited* quotes
+#: and were being applied to exact ones too, so every caller that went straight to
+#: `_verbatim_run` (milestones, parties, the agent, the obstacle re-check) refused
+#: "Denver, CO - November 28, 2018" and "Broderick Acquisition Company, LLC" while
+#: the field gate, which tests containment first, accepted the same strings. In a
+#: replay of 40 articles, 46 of 461 quotes were exact and shorter than 40
+#: characters. Below five characters a match is a bare token — "2022", "$5M" — and
+#: says nothing about where in the article it sat.
+MIN_EXACT_CHARS: Final = 5
+
+#: An edited quote is also accepted when the article's own words cover this much of
+#: it, counted over every matching piece rather than the single longest one. One
+#: changed word in the middle of a sentence split it into two halves that each
+#: missed `MIN_RUN_FRACTION` ("Core Scientific is a leader in digital
+#: infrastructure…", 106 of 226 characters), and a short table line could never
+#: reach `MIN_RUN_CHARS` at all ("Dalton, GA ~175 MW Est. completion early 2027",
+#: 35 of 45). The pieces must lie in order inside one window the length of the
+#: quote, so scattered common words cannot add up. Twenty characters, not fifteen:
+#: at fifteen, "expansion in VA" matched generic text in an unrelated article.
+#: Measured against unrelated articles on about 2,500 edited quotes (see
+#: `docs/design-decisions.md`); the cases are pinned in `tests/test_quote_repair.py`.
+MIN_COVERAGE: Final = 0.85
+MIN_COVERED_CHARS: Final = 20
+
+#: Matching pieces shorter than this do not count toward coverage: two or one
+#: characters in common is what any two English sentences have.
+_MIN_PIECE: Final = 3
+
 
 #: How much of a rejected quote to put in the log. Long enough to recognise the
 #: sentence and judge the refusal, short enough that a wall of them stays readable.
@@ -485,21 +515,97 @@ class _Run(NamedTuple):
 
 
 def _verbatim_run(quote: str, article: str) -> _Run:
-    """The article's own words for the longest stretch of `quote` it really contains."""
+    """The article's own words for what of `quote` it really contains.
+
+    Three ways in, strictest first: the quote is an exact copy
+    (`MIN_EXACT_CHARS`); one unbroken stretch of it is (`MIN_RUN_CHARS`,
+    `MIN_RUN_FRACTION`); or its matching pieces together cover nearly all of it
+    (`MIN_COVERAGE`). Whichever admits it, what comes back is the article's own
+    sentence around the match, never the model's text.
+    """
     normalized_quote = _normalize_for_match(quote)
     if not normalized_quote:
         return _Run(None, 0, 0)
+    length = len(normalized_quote)
     haystack, offsets = _normalize_with_offsets(article)
+
+    exact = haystack.find(normalized_quote)
+    if exact != -1:
+        run = _Run(None, length, length)
+        if length < MIN_EXACT_CHARS:
+            return run
+        return _sentence_of(article, offsets, exact, exact + length, run)
+
     match = difflib.SequenceMatcher(
         None, normalized_quote, haystack, autojunk=False
-    ).find_longest_match(0, len(normalized_quote), 0, len(haystack))
-    run = _Run(None, match.size, len(normalized_quote))
-    if match.size < MIN_RUN_CHARS:
+    ).find_longest_match(0, length, 0, len(haystack))
+    run = _Run(None, match.size, length)
+    if match.size >= MIN_RUN_CHARS and match.size / length >= MIN_RUN_FRACTION:
+        return _sentence_of(article, offsets, match.b, match.b + match.size, run)
+
+    span = _covered_span(normalized_quote, haystack, match)
+    if span is None:
         return run
-    if match.size / len(normalized_quote) < MIN_RUN_FRACTION:
+    covered = _sentence_of(article, offsets, span[0], span[1], run)
+    # Coverage is counted in characters, and a number is a few of them: "broke
+    # ground on the site in 2024" covers 97% of an article sentence that says 2023.
+    # A milestone is not re-checked against its sentence the way a field value is,
+    # so an edit that changed a figure would be credited with the article's other
+    # one. Every number the model wrote has to be in the sentence it gets.
+    if not _numbers_in(quote) <= _numbers_in(covered.text or ""):
         return run
-    start = offsets[match.b]
-    end = offsets[match.b + match.size - 1] + 1
+    return covered
+
+
+def _numbers_in(text: str) -> set[str]:
+    """The figures in `text`, thousands separators dropped: "1,200" is "1200"."""
+    return {token.replace(",", "") for token in re.findall(r"\d+(?:[.,]\d+)*", text)}
+
+
+def _covered_span(
+    normalized_quote: str, haystack: str, anchor: difflib.Match
+) -> tuple[int, int] | None:
+    """Where in `haystack` the pieces of an edited quote lie, if they cover enough.
+
+    The window is the quote's own length around its longest matching stretch, with
+    a little slack for a word the model added or dropped, so the pieces have to sit
+    where the sentence is rather than anywhere in the article.
+    """
+    length = len(normalized_quote)
+    if length < MIN_COVERED_CHARS or anchor.size < _MIN_PIECE:
+        return None
+    slack = max(20, length // 5)
+    low = max(0, anchor.b - anchor.a - slack)
+    high = min(len(haystack), anchor.b + (length - anchor.a) + slack)
+    pieces = [
+        piece
+        for piece in difflib.SequenceMatcher(
+            None, normalized_quote, haystack[low:high], autojunk=False
+        ).get_matching_blocks()
+        if piece.size >= _MIN_PIECE
+    ]
+    if not pieces or sum(p.size for p in pieces) / length < MIN_COVERAGE:
+        return None
+    return low + pieces[0].b, low + pieces[-1].b + pieces[-1].size
+
+
+#: A match that fills this much of its own line is that line — a table row, a
+#: dateline, a caption — and is returned as it stands. Widening to sentence edges is
+#: for prose; a row has no full stop, so widening ran on into the next rows.
+_WHOLE_LINE: Final = 0.8
+
+
+def _sentence_of(article: str, offsets: list[int], start: int, end: int, run: _Run) -> _Run:
+    """`run` carrying the article's own sentence (or line) around a normalized span."""
+    start, end = offsets[start], offsets[end - 1] + 1
+    line_start = article.rfind("\n", 0, start) + 1
+    line_end = article.find("\n", end)
+    line_end = len(article) if line_end == -1 else line_end
+    line = article[line_start:line_end].strip()
+    # Only when the whole quote lies on that line: hard-wrapped prose puts the first
+    # part of a two-sentence quote on one line, and stopping there drops the figure.
+    if line and (end - start) / len(line) >= _WHOLE_LINE and end - start >= 0.9 * run.of:
+        return run._replace(text=re.sub(r"\s+", " ", line))
     start, end = _widen_to_sentence(article, start, end)
     # Collapse the wrapping. Filings and PDF-derived text carry hard newlines
     # mid-sentence, and a quote rendered with them looks broken in the drawer.
@@ -727,22 +833,40 @@ _RISK_EVIDENCE: dict[str, tuple[str, ...]] = {
 }
 
 #: Quantity expressions to hunt for inside a verified quote, per field.
-_MW_EXPR = re.compile(r"[\d][\d.,]*\s*(?:mw|gw|megawatt|gigawatt)s?\b", re.I)
+#:
+#: Each allows a hyphen between the amount and its unit — "a 300-megawatt campus",
+#: "a $2-billion project" — which is how news prose writes a figure that qualifies a
+#: noun. Without it the gate refused the very sentence that stated the value.
+_MW_EXPR = re.compile(r"[\d][\d.,]*(?:-|\s*)(?:mw|gw|megawatt|gigawatt)s?\b", re.I)
 _MONEY_EXPR = re.compile(
-    r"(?:us)?\$\s?[\d][\d.,]*\s*(?:billion|million|bn|b|m)?\b|"
-    r"[\d][\d.,]*\s*(?:billion|million)\s*dollars?\b",
+    r"(?:us)?\$\s?[\d][\d.,]*(?:-(?=[a-z])|\s*)(?:billion|million|bn|b|m)?\b|"
+    r"[\d][\d.,]*(?:-|\s*)(?:billion|million)\s*dollars?\b",
     re.I,
 )
-_DATE_EXPR = re.compile(
-    r"\b(?:q[1-4]\s*(?:of\s*)?20[2-4]\d|"
-    r"(?:early|mid|late|end of|beginning of|start of|first half of|second half of|"
-    r"spring|summer|fall|autumn|winter)\s+20[2-4]\d|"
-    r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2},?\s+20[2-4]\d|"
-    r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+20[2-4]\d|"
-    r"20[2-4]\d-\d{2}-\d{2}|"
-    r"20[2-4]\d)\b",
-    re.I,
-)
+
+
+def _date_expr(year: str) -> re.Pattern[str]:
+    """The date wordings `_stated_in` reads, for years matching `year`."""
+    return re.compile(
+        rf"\b(?:q[1-4]\s*(?:of\s*)?{year}|"
+        r"(?:early|mid|late|end of|beginning of|start of|first half of|second half of|"
+        rf"spring|summer|fall|autumn|winter)\s+{year}|"
+        rf"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{{1,2}},?\s+{year}|"
+        rf"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+{year}|"
+        rf"{year}-\d{{2}}-\d{{2}}|"
+        rf"{year})\b",
+        re.I,
+    )
+
+
+#: Every year a tracked date can be: 1980 to 2049. This read only 2020-2049, so
+#: "since breaking ground in 2017" or "completed in Q4 2019" could never evidence
+#: a date and every older campus's dates stayed 待确认 however plainly stated.
+_DATE_EXPR = _date_expr(r"(?:19[89]\d|20[0-4]\d)")
+
+#: Recent years only, for `edgar`'s paragraph scoring, where a recent date is what
+#: marks a paragraph as news and a filing's older history is noise.
+_RECENT_DATE_EXPR = _date_expr(r"20[2-4]\d")
 
 
 #: Fields whose value is a *paraphrase* of the article rather than a copy of it.
@@ -1133,13 +1257,51 @@ def axis_gate(
     return out
 
 
+#: Date fields a coarser sentence may confirm at its own precision.
+_DATE_FIELDS: Final = frozenset({"first_announced", "expected_online", "energized_on"})
+
+#: How long each stated precision spans, in months, from the date it parses to.
+_PRECISION_MONTHS: Final = {"month": 1, "quarter": 3, "half": 6, "year": 12}
+
+
+def _coarser_date(field: str, value: Any, sentences: list[str]) -> tuple[ParsedDate, str] | None:
+    """A date a sentence states less precisely than `value`, and that contains it.
+
+    "Project announced in 2021" states the year 2021, which contains 2021-06-01 but
+    does not state it. The caller keeps the year rather than refusing the field,
+    because the year is exactly what the article published.
+    """
+    if field not in _DATE_FIELDS or not isinstance(value, dt.date):
+        return None
+    for sentence in sentences:
+        for match in _DATE_EXPR.finditer(sentence):
+            try:
+                parsed = norm_date_detail(match.group(0), field=field)
+            except NormalizationError:
+                continue
+            months = _PRECISION_MONTHS.get(parsed.precision or "")
+            if parsed.value is None or months is None:
+                continue
+            start = parsed.value
+            index = start.year * 12 + start.month - 1 + months
+            end = dt.date(index // 12, index % 12 + 1, 1)
+            if start <= value < end:
+                return parsed, sentence
+    return None
+
+
 def evidence_gate(
-    values: dict[str, Any], evidence: list[dict[str, Any]], article_text: str
+    values: dict[str, Any],
+    evidence: list[dict[str, Any]],
+    article_text: str,
+    precisions: dict[str, str] | None = None,
 ) -> tuple[dict[str, Any], dict[str, str], dict[str, str]]:
     """Keep only values the article is verified to actually state.
 
     Returns ``(kept, quotes_by_field, dropped)``, where `dropped` maps each
-    refused field to *why*, from `vocab.UNCONFIRMED_REASONS`.
+    refused field to *why*, from `vocab.UNCONFIRMED_REASONS`. A date a sentence
+    states only coarsely is kept at the sentence's precision (`_coarser_date`), and
+    that precision is written into `precisions` when the caller passes one.
 
     The reason is not decoration. "Nobody quoted this" and "the quote is real and
     does not say that" land in the same 待确认 bucket and ask for opposite work —
@@ -1244,6 +1406,16 @@ def evidence_gate(
             # value — a mislabelled quote would state something the row does not.
             if name not in quotes or not _stated_in(name, value, quotes[name]):
                 quotes[name] = support
+        elif (coarse := _coarser_date(name, value, verified)) is not None:
+            # The sentence states the date less precisely than the model wrote it:
+            # "announced in 2021" against 2021-06-01. The month was never published,
+            # so what is kept is what was — the year — with its precision recorded
+            # for the caller rather than the model's day.
+            stated, sentence = coarse
+            kept[name] = stated.value
+            quotes[name] = sentence
+            if precisions is not None and stated.precision:
+                precisions[name] = stated.precision
         else:
             # Which of the three refusals this was, in the order that makes the
             # strongest true statement. A verified quote filed under this name
@@ -2153,7 +2325,7 @@ def build_records(
             continue
         values, coercion_notes, precisions = _coerce(raw)
         evidence = raw.get("evidence") if isinstance(raw.get("evidence"), list) else []
-        kept, quotes, dropped = evidence_gate(values, evidence, result.markdown)
+        kept, quotes, dropped = evidence_gate(values, evidence, result.markdown, precisions)
 
         # Identity: without a company and a locality there is nothing to dedup on,
         # so the "project" is a passing mention rather than a record.

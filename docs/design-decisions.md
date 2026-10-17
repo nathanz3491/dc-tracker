@@ -229,6 +229,35 @@ negative control in which every sampled quote was also tested against an unrelat
 article. Nothing crossed. Acceptance went from **75% to 95%** with zero false
 positives.
 
+**Those floors were later found to be too strict in two ways** (2026-10-17), on a
+replay of 40 articles and on 300 stored quotes edited the ways a model edits them:
+
+- *They applied to exact quotes too.* The field gate tests containment first, but
+  milestones, parties, the agent and the obstacle re-check went straight to
+  `_verbatim_run`, so an exact dateline ("Denver, CO - November 28, 2018") or a
+  legal name was refused there. An exact copy now passes from `MIN_EXACT_CHARS`
+  (5) characters; below that a match is a bare token like "2022".
+- *One edit in the middle split a quote.* The longest unbroken stretch of a
+  sentence with one changed word is about half of it, so a long quote with one
+  slip failed the fraction floor (54% accepted) and a short table line could never
+  reach 40 characters at all. An edited quote now also passes when its matching
+  pieces, in order and inside one window the quote's length, cover
+  `MIN_COVERAGE` (85%) of it, from `MIN_COVERED_CHARS` (20). One changed word: 54%
+  → 97% accepted; one dropped word: 78% → 100%; short exact quotes: 0% → 100%.
+
+Coverage is counted in characters, and a number is a few of them — "broke ground on
+the site in 2024" covers 97% of a sentence that says 2023 — so the coverage path
+also requires every number the model wrote to be in the sentence it is given. A
+milestone is not re-checked against its sentence the way a field value is, so
+without this it would be credited with the article's other year. Against unrelated
+articles the new path matched 2 of about 2,500 edited short quotes, both short
+generic phrases ("Being developed by Data Centers."); the checks after it —
+the value stated, the company named, the category's wording — still apply.
+
+A match that fills most of its own line is returned as that line rather than
+widened to sentence edges: a table row has no full stop, and widening ran on into
+the next rows.
+
 The span is then widened to its sentence boundaries, because a recovery that drops
 the number is worthless — one observed run ended at "…the offering was $", the
 article having wrapped the line inside the figure, so the quote was real but no

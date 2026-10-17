@@ -484,10 +484,18 @@ def test_verbatim_refuses_a_paraphrase():
     assert refusal
 
 
-def test_verbatim_refuses_a_fragment_too_short_to_evidence_anything():
-    """`MIN_RUN_CHARS` is 40. "250 MW" appears in every article about a 250 MW
-    site, so a floor is what stops a true fragment passing as evidence."""
+def test_a_short_exact_fragment_comes_back_as_its_whole_sentence():
+    """A table cell or a dateline is real evidence, so an exact fragment is accepted —
+    but what is stored is the article's sentence around it, which is what ties the
+    figure to a campus and what a reader judges."""
     accepted, refusal = agent.verbatim("250 MW", _ARTICLE)
+    assert refusal == ""
+    assert accepted == "The campus will draw 250 MW of grid power at full build, the operator said."
+
+
+def test_verbatim_refuses_a_bare_token():
+    """Below `MIN_EXACT_CHARS` a match is a token that says nothing about where it sat."""
+    accepted, refusal = agent.verbatim("250", _ARTICLE)
     assert accepted == ""
     assert refusal
 
