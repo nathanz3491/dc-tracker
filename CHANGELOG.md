@@ -116,7 +116,8 @@ initial build of the v1 PRD.
   and the public map is gone. The page now leads with the campuses, planned and
   operating capacity and states, counted the way the Capex page counts — paused,
   cancelled and suspected duplicates left out, which the old map's own counts did
-  not do — and ends with every state's figures in a table. Each dot is coloured by
+  not do — and puts every state's figures in a table beside the map, whose card
+  keeps the old one's 600px height. Each dot is coloured by
   stage and sized by one of five capacity bands, with a hollow ring where no size
   is published; a stage can be hidden, the map zooms to 10× with dots that keep
   their size, and a click still opens the campus. A suspected duplicate is drawn

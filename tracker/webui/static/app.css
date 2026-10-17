@@ -964,8 +964,17 @@ h5.dc-md-h {
 .mapv-btn--text { font-size: 13px; padding: 0 11px; }
 .mapv-btn:hover:not(:disabled) { border-color: var(--primary); }
 .mapv-btn:disabled { opacity: .45; cursor: default; }
-.mapv-frame { position: relative; margin: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 18px; overflow: hidden; }
-.mapv-canvas { position: relative; width: 100%; aspect-ratio: 16 / 9.4; min-height: 300px; touch-action: none; }
+/* The map and the state table sit side by side, the map's card 600px tall, the
+   size the console's map has always been: at the full width of the page and the
+   map's own proportions it stood over 800px, taller than the window. */
+.mapv-body { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; }
+.mapv-main { flex: 1 1 540px; min-width: 0; display: grid; gap: 10px; }
+.mapv-side { flex: 1 1 300px; min-width: 280px; max-width: 420px; max-height: 600px; overflow-y: auto; }
+.mapv-frame {
+  position: relative; margin: 0; height: 600px; display: flex; flex-direction: column;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 18px; overflow: hidden;
+}
+.mapv-canvas { position: relative; flex: 1 1 auto; min-height: 0; touch-action: none; }
 .mapv-canvas svg { display: block; width: 100%; height: 100%; cursor: grab; }
 .mapv-canvas svg:active { cursor: grabbing; }
 .mapv-loading { position: absolute; inset: 0; display: grid; place-items: center; margin: 0; color: var(--muted-foreground); font-size: 13px; }
@@ -995,21 +1004,20 @@ h5.dc-md-h {
   display: inline-block; width: 90px; height: 8px; border-radius: 99px; vertical-align: middle;
   background: linear-gradient(90deg, var(--map-land), var(--primary));
 }
-.mapv-note { margin: -6px 0 0; font-size: 13.5px; color: var(--muted-foreground); }
+.mapv-note { margin: 0; font-size: 13.5px; color: var(--muted-foreground); }
 .mapv-failed { margin: 0; color: var(--danger); font-size: 14px; }
-.mapv-states { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0 32px; }
 .mapv-table { width: 100%; border-collapse: collapse; font-size: 14px; }
-.mapv-table caption { text-align: left; font: 500 11.5px/1.3 var(--font-mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted-foreground); padding-bottom: 8px; min-height: 1.3em; }
+.mapv-table caption { text-align: left; font: 500 11.5px/1.3 var(--font-mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted-foreground); padding-bottom: 8px; }
 .mapv-table th, .mapv-table td { padding: 7px 8px; border-top: 1px solid var(--border); text-align: right; font-variant-numeric: tabular-nums; }
 .mapv-table th:first-child, .mapv-table td:first-child { text-align: left; }
-.mapv-table thead th { font-weight: 500; color: var(--muted-foreground); font-size: 12.5px; }
+.mapv-table thead th { position: sticky; top: 0; background: var(--background); font-weight: 500; color: var(--muted-foreground); font-size: 12.5px; }
 .mapv-table tbody th { font-weight: 550; }
-@media (max-width: 900px) { .mapv-states { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 900px) { .mapv-side { max-width: none; max-height: none; } }
 @media (max-width: 760px) {
   .mapv-figures { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .mapv-figures dd { font-size: 28px; }
 }
-@media (max-width: 560px) { .mapv-canvas { aspect-ratio: 16 / 11; min-height: 220px; } }
+@media (max-width: 720px) { .mapv-frame { height: 60vh; min-height: 320px; } }
 
 /* Getting to the data on a phone.
    Measured before this: 940px of chrome above the first card. The intro

@@ -210,7 +210,7 @@ export function MapView({ data, api, onOpen, Eyebrow }) {
   const [failed, setFailed] = useState(null);
   const [hidden, setHidden] = useState(() => new Set());
   const [zoomK, setZoomK] = useState(1);
-  const [width, setWidth] = useState(0);
+  const [size, setSize] = useState("");
   const [theme, setTheme] = useState(0);
   const hostRef = useRef(null);
   const tipRef = useRef(null);
@@ -231,7 +231,7 @@ export function MapView({ data, api, onOpen, Eyebrow }) {
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return undefined;
-    const sized = new ResizeObserver(() => setWidth(host.clientWidth));
+    const sized = new ResizeObserver(() => setSize(`${host.clientWidth}x${host.clientHeight}`));
     sized.observe(host);
     const themed = new MutationObserver(() => setTheme((n) => n + 1));
     themed.observe(document.documentElement, { attributes: true, attributeFilter: ["class", "data-theme"] });
@@ -261,7 +261,7 @@ export function MapView({ data, api, onOpen, Eyebrow }) {
     });
     setZoomK(1);
     // `hidden` is applied by the effect below without a redraw.
-  }, [atlas, summary, points, width, theme, onOpen]);
+  }, [atlas, summary, points, size, theme, onOpen]);
 
   useEffect(() => { handles.current?.filter(hidden); }, [hidden]);
 
@@ -276,20 +276,11 @@ export function MapView({ data, api, onOpen, Eyebrow }) {
     points.forEach((p) => { out[p.phase] = (out[p.phase] || 0) + 1; });
     return out;
   }, [points]);
-  const scale = dotScale(width);
+  const scale = dotScale(Number(size.split("x")[0]));
   const tot = summary ? summary.totals : null;
   const stateRows = summary
     ? Object.entries(summary.states).sort((a, b) => b[1].planned_mw - a[1].planned_mw || a[0].localeCompare(b[0]))
     : [];
-  const half = Math.ceil(stateRows.length / 2);
-  const table = (rows, caption) => html`
-    <table class="mapv-table">
-      <caption aria-hidden=${caption ? null : "true"}>${caption || " "}</caption>
-      <thead><tr><th scope="col">State</th><th scope="col">Campuses</th><th scope="col">Planned</th></tr></thead>
-      <tbody>${rows.map(([code, r]) => html`
-        <tr key=${code}><th scope="row">${stateName(code)}</th><td>${fmtNum(r.campuses)}</td>
-          <td>${fmtCapacity(r.planned_mw)}</td></tr>`)}</tbody>
-    </table>`;
 
   return html`
     <div class="dc-view dc-rise mapv" style=${{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 18,
@@ -329,29 +320,38 @@ export function MapView({ data, api, onOpen, Eyebrow }) {
         </div>
       </div>
 
-      <figure class="mapv-frame">
-        <div class="mapv-canvas" ref=${hostRef}>
-          ${(!atlas || !summary) && !failed && html`<p class="mapv-loading">Loading the map…</p>`}
+      <div class="mapv-body">
+        <div class="mapv-main">
+          <figure class="mapv-frame">
+            <div class="mapv-canvas" ref=${hostRef}>
+              ${(!atlas || !summary) && !failed && html`<p class="mapv-loading">Loading the map…</p>`}
+            </div>
+            <div class="mapv-tip" ref=${tipRef} role="status" hidden></div>
+            <figcaption class="mapv-legend">
+              <span><span class="mapv-ramp" aria-hidden="true"></span> fewer — more GW planned</span>
+              ${BANDS.map(([key, , r, label]) => html`
+                <span key=${key} class="mapv-scale"><i style=${{ width: `${(r * scale * 2).toFixed(1)}px`,
+                  height: `${(r * scale * 2).toFixed(1)}px` }}></i>${label}</span>`)}
+              <span class="mapv-scale"><i style=${{ width: `${(HOLLOW * scale * 2).toFixed(1)}px`,
+                height: `${(HOLLOW * scale * 2).toFixed(1)}px`, borderStyle: "dashed" }}></i>size not published</span>
+            </figcaption>
+          </figure>
+          <p class="mapv-note">
+            ${fmtNum(points.length)} of ${fmtNum(projects.length)} campuses have a location and are drawn.
+            Hover a dot for the campus, click it to open it; hover a state for its figures.
+          </p>
         </div>
-        <div class="mapv-tip" ref=${tipRef} role="status" hidden></div>
-        <figcaption class="mapv-legend">
-          <span><span class="mapv-ramp" aria-hidden="true"></span> fewer — more GW planned</span>
-          ${BANDS.map(([key, , r, label]) => html`
-            <span key=${key} class="mapv-scale"><i style=${{ width: `${(r * scale * 2).toFixed(1)}px`,
-              height: `${(r * scale * 2).toFixed(1)}px` }}></i>${label}</span>`)}
-          <span class="mapv-scale"><i style=${{ width: `${(HOLLOW * scale * 2).toFixed(1)}px`,
-            height: `${(HOLLOW * scale * 2).toFixed(1)}px`, borderStyle: "dashed" }}></i>size not published</span>
-        </figcaption>
-      </figure>
-      <p class="mapv-note">
-        ${fmtNum(points.length)} of ${fmtNum(projects.length)} campuses have a location and are drawn.
-        Hover a dot for the campus, click it to open it; hover a state for its figures.
-      </p>
 
-      ${stateRows.length > 0 && html`
-        <div class="mapv-states">
-          ${table(stateRows.slice(0, half), "By state, planned capacity first")}
-          ${stateRows.length > half && table(stateRows.slice(half), null)}
-        </div>`}
+        ${stateRows.length > 0 && html`
+          <div class="mapv-side">
+            <table class="mapv-table">
+              <caption>By state, planned capacity first</caption>
+              <thead><tr><th scope="col">State</th><th scope="col">Campuses</th><th scope="col">Planned</th></tr></thead>
+              <tbody>${stateRows.map(([code, r]) => html`
+                <tr key=${code}><th scope="row">${stateName(code)}</th><td>${fmtNum(r.campuses)}</td>
+                  <td>${fmtCapacity(r.planned_mw)}</td></tr>`)}</tbody>
+            </table>
+          </div>`}
+      </div>
     </div>`;
 }

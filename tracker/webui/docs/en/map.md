@@ -40,4 +40,4 @@ You can also zoom with the wheel or by pinching, and drag to move. Dots keep the
 
 ## By state
 
-Below the map, a table lists every state with a counted campus, the largest planned capacity first, with how many campuses each has. It counts the same way as the figures above it.
+Beside the map (below it on a narrow screen), a table lists every state with a counted campus, the largest planned capacity first, with how many campuses each has. It scrolls on its own, and counts the same way as the figures above it.
