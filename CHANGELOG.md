@@ -227,6 +227,13 @@ initial build of the v1 PRD.
     and a date the sentence states less precisely than the model wrote it
     ("announced in 2021" against 2021-06-01), which is now kept as the year. 12 of
     the replay's 51 "the sentence does not state this value" refusals were these.
+  - *Rows already stored* are re-judged by a new nightly step, `recheck`
+    (`tracker ingest crawl --refused-before-gate`, `scripts/overnight.sh
+    --recheck`): 60 cached articles a night holding a refusal from before the
+    change, most refusals first, each read once. 1,633 articles qualified, so about
+    four weeks at about ¥1.2 a night; then the step finds nothing and costs
+    nothing. The prompt re-read could not do this, because a gate change does not
+    change the prompt.
   - *Not changed:* words like "operates", "planned" and "completed" as evidence of
     a stage. Measured on 1,800 quotes already confirmed for a stage, they would
     have supported a *different* stage in roughly half the quotes they appear in

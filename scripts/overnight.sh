@@ -47,6 +47,11 @@
 #   reread    first round only: re-reads, from the cache, up to `--reread` articles
 #             that a superseded extraction prompt last read, oldest vintage first, so
 #             a tightened gate reaches rows written before it. Existing rows only.
+#   recheck   first round only: the same cached re-read, of up to `--recheck` articles
+#             holding a value, milestone or party the gate refused before its last
+#             revision (`crawl.GATE_REVISED_AT`). A gate change does not move the
+#             prompt's stamp, so `reread` never sees it. Most refusals first; each
+#             article is taken once. Existing rows only.
 #   discover  the news and new campuses, first round only: polls the feeds (free —
 #             no fetch, no model), asks each closed feed again once a week, looks
 #             up DCD/DCF headlines elsewhere (≤40 web searches, ~$0.04, no model)
@@ -149,6 +154,7 @@ ENRICH_ROUNDS=1
 DISCOVER=40
 DATES=150
 REREAD=60
+RECHECK=60
 MIN_CONF=0.85
 DO_MERGE=1
 DO_ENRICH=1
@@ -185,6 +191,8 @@ started in tmux and left.
   --dates N          pages to ask for a publish date, first round (default 150); 0 to skip
   --reread N         articles to re-read under the current prompt, first round
                      (default 60); 0 to skip
+  --recheck N        articles holding a refusal from before the gate's last
+                     revision to re-read, first round (default 60); 0 to skip
   --min-confidence F floor a duplicate fold needs (default 0.85)
   --no-merge         never fold duplicates; park and rule only. Deletes nothing.
   --cny N            stop when the night's spend, priced, reaches N yuan (default 12)
@@ -222,6 +230,7 @@ while [ $# -gt 0 ]; do
     --discover)       shift; DISCOVER="${1:?}" ;;
     --dates)          shift; DATES="${1:?}" ;;
     --reread)         shift; REREAD="${1:?}" ;;
+    --recheck)        shift; RECHECK="${1:?}" ;;
     --min-confidence) shift; MIN_CONF="${1:?}" ;;
     --cny)            shift; CNY_CAP="${1:?}" ;;
     --tokens)         shift; TOKEN_CAP="${1:?}" ;;
@@ -510,6 +519,18 @@ for round in $(seq 1 "$ROUNDS"); do
     phase "reread — $REREAD article(s) last read by a superseded prompt"
     tracker ingest crawl --stale-prompt --cached-only --existing-only \
       --limit "$REREAD" < /dev/null || true
+  fi
+
+  # Re-read what the gate refused before it last changed. v3.7.5 (2026-10-17)
+  # began accepting short exact quotes, quotes with one slip, hyphenated figures,
+  # pre-2020 years and coarse dates; 1,633 cached articles held a refusal it may
+  # reverse. 60 a night, about ¥1.2, so the backlog clears in about four weeks and
+  # then the step finds nothing and costs nothing.
+  if [ "$round" -eq 1 ] && [ "$RECHECK" -gt 0 ] 2>/dev/null; then
+    if capped recheck; then break; fi
+    phase "recheck — $RECHECK article(s) holding a refusal from before the gate's last revision"
+    tracker ingest crawl --refused-before-gate --cached-only --existing-only \
+      --limit "$RECHECK" < /dev/null || true
   fi
 
   # --- discover: new campuses, through the identity check -----------------

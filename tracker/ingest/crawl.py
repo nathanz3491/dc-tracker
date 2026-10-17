@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import datetime as dt
 import difflib
+import json
 import logging
 import re
 import unicodedata
@@ -3125,10 +3126,16 @@ def stale_by_prompt(
             stmt = stmt.limit(limit)
         return [row[0] for row in session.execute(stmt)]
 
-    urls = [row[0] for row in session.execute(stmt)]
+    return _rereadable([row[0] for row in session.execute(stmt)], limit, readable_in, policy)
+
+
+def _rereadable(
+    urls: list[str], limit: int | None, readable_in: Path | None, policy: Any
+) -> list[str]:
+    """`urls`, in order, less what a cache-only re-read would refuse, up to `limit`."""
     if getattr(policy, "entries", ()):
         # Not `policy.partition`, which moves priority publishers to the front;
-        # this order is oldest first and stays that way.
+        # the caller's order stays.
         urls = [url for url in urls if not policy.ignores(url)]
     if readable_in is None:
         return urls[:limit] if limit else urls
@@ -3142,6 +3149,78 @@ def stale_by_prompt(
             if limit and len(picked) >= limit:
                 break
     return picked
+
+
+#: When the evidence gate last changed what it accepts, in UTC — v3.7.5, which
+#: began accepting short exact quotes, quotes with one slip, hyphenated figures,
+#: years before 2020 and coarse dates.
+#:
+#: A gate change does not move the prompt's stamp, so `stale_by_prompt` never sees
+#: it: the articles it refused are only re-judged if something re-reads them.
+#: `refused_before_gate` is that something. Move this forward when a later change
+#: to the gate should reach rows written before it.
+GATE_REVISED_AT: Final = dt.datetime(2026, 10, 17, 6, 24)
+
+#: Refusals a later gate may reverse. `no_quote` is not one: nothing was offered,
+#: and reading the same article again offers nothing new.
+_REVERSIBLE: Final = ("quote_off_target", "quote_unverified")
+
+
+def refused_before_gate(
+    session: Session,
+    *,
+    limit: int | None = None,
+    readable_in: Path | None = None,
+    policy: Any = None,
+) -> list[str]:
+    """Source URLs carrying a refusal from before `GATE_REVISED_AT`, not tried since.
+
+    A refusal is a field value, a milestone or a party the gate marked off-target or
+    unverified. Most refusals first, so a limited run reaches the articles with the
+    most to gain; then oldest first. Every re-read moves `ingest_url.last_tried_at`
+    past the revision, whatever it finds, so each article is taken once.
+    """
+    from tracker.models import Event, ProjectParty, Source
+
+    tried = {
+        url: when
+        for url, when in session.execute(select(IngestUrl.url, IngestUrl.last_tried_at))
+        if when is not None
+    }
+    counts: dict[str, int] = {}
+    oldest: dict[str, dt.datetime] = {}
+
+    def note(url: str, refusals: int, fetched: dt.datetime | None) -> None:
+        if refusals <= 0 or (tried.get(url) and tried[url] >= GATE_REVISED_AT):
+            return
+        counts[url] = counts.get(url, 0) + refusals
+        if fetched is not None and (url not in oldest or fetched < oldest[url]):
+            oldest[url] = fetched
+
+    sources = session.execute(
+        select(Source.id, Source.url, Source.unconfirmed_reasons, Source.fetched_at).where(
+            Source.extractor.like("crawl:%")
+        )
+    ).all()
+    by_id = {row.id: row for row in sources}
+    for row in sources:
+        try:
+            reasons = json.loads(row.unconfirmed_reasons or "{}")
+        except (TypeError, ValueError):
+            reasons = {}
+        if isinstance(reasons, dict):
+            note(row.url, sum(why in _REVERSIBLE for why in reasons.values()), row.fetched_at)
+    for model in (Event, ProjectParty):
+        for (source_id,) in session.execute(
+            select(model.source_id).where(model.unconfirmed == "quote_unverified")
+        ):
+            row = by_id.get(source_id)
+            if row is not None:
+                note(row.url, 1, row.fetched_at)
+
+    floor = dt.datetime.min
+    urls = sorted(counts, key=lambda url: (-counts[url], oldest.get(url, floor), url))
+    return _rereadable(urls, limit, readable_in, policy)
 
 
 def unchanged_reads(session: Session, urls: list[str], *, stamp: str) -> dict[str, str]:

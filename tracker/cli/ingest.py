@@ -110,10 +110,21 @@ def ingest_crawl(
             help="Re-read sources extracted by an older version of the prompt.",
         ),
     ] = False,
+    refused: Annotated[
+        bool,
+        typer.Option(
+            "--refused-before-gate",
+            help=(
+                "Re-read sources holding a value, milestone or party the evidence gate "
+                "refused before its last revision, most refusals first."
+            ),
+        ),
+    ] = False,
     limit: Annotated[
         int | None,
         typer.Option(
-            "--limit", help="With --from-queue or --stale-prompt, take at most this many."
+            "--limit",
+            help="With --from-queue, --stale-prompt or --refused-before-gate, take at most this many.",
         ),
     ] = None,
     new_first: Annotated[
@@ -194,6 +205,11 @@ def ingest_crawl(
     which makes it a re-read rather than a re-fetch: `--no-cache` would confound
     "the prompt improved" with "the page changed".
 
+    `--refused-before-gate` is the same re-read for a change to the gate rather than
+    to the prompt, which does not move the prompt's stamp and so is invisible to
+    `--stale-prompt`: articles holding a refusal from before `crawl.GATE_REVISED_AT`
+    that no crawl has tried since. Each is taken once.
+
     **Pair a re-read with `--existing-only`.** An article this database already
     cites also names other things — re-reading Hyperion's coverage yields "Project
     Everest" and a parish's generating units — and a repair pass that quietly adds
@@ -227,18 +243,21 @@ def ingest_crawl(
             ("--url", url),
             ("--from-queue", from_queue),
             ("--stale-prompt", stale_prompt),
+            ("--refused-before-gate", refused),
         )
         if given
     ]
     if len(chosen) > 1:
         _fail(
-            "pass only one of --urls, --url, --from-queue or --stale-prompt "
+            "pass only one of --urls, --url, --from-queue, --stale-prompt or "
+            "--refused-before-gate "
             f"(got {', '.join(chosen)})"
         )
         return
     if not chosen:
         _fail(
             "pass --urls FILE, --url URL, --from-queue, --stale-prompt, "
+            "--refused-before-gate, "
             "or --check to test connectivity"
         )
         return
@@ -326,6 +345,23 @@ def ingest_crawl(
         # Every one of these is already `ok`, so the skip rule would drop all of
         # them. Re-reading an article we have already read, under a prompt that
         # has since been tightened, is the entire point of this selector.
+        force = True
+    elif refused:
+        from tracker import policy as policy_mod
+
+        with session_scope(engine, commit=False) as session:
+            url_list = crawl.refused_before_gate(
+                session,
+                limit=limit,
+                readable_in=None if (no_cache or not cached_only) else article_cache("articles"),
+                policy=policy_mod.load() if cached_only else None,
+            )
+        if not url_list:
+            console.print(
+                "[green]no refusal from before the gate's last revision is left to re-read[/green]"
+            )
+            return
+        source_label = f"refusals from before {crawl.GATE_REVISED_AT:%Y-%m-%d %H:%M} UTC"
         force = True
     else:
         if not urls.is_file():

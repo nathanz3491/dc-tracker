@@ -1218,6 +1218,85 @@ def test_a_cache_only_reread_does_not_spend_its_limit_on_refusals(initialized: P
         ]
 
 
+def test_refused_before_gate_takes_each_reversible_refusal_once(initialized: Path):
+    """A gate change does not move the prompt's stamp, so `stale_by_prompt` never sees
+    it. This picks what a later gate may reverse — most refusals first — and drops an
+    article as soon as any crawl has tried it since the revision."""
+    from tracker.db import init_db, session_scope
+    from tracker.ingest.crawl import GATE_REVISED_AT, refused_before_gate
+    from tracker.models import Event, IngestUrl, Source
+
+    pid = with_real_source(initialized)
+    engine, _ = init_db(initialized)
+    after = GATE_REVISED_AT + dt.timedelta(hours=1)
+    with session_scope(engine) as session:
+
+        def source(url, reasons, when, extractor="crawl:extract-v1@x:m:httpx"):
+            row = Source(
+                project_id=pid,
+                url=url,
+                source_type="trade_press",
+                extractor=extractor,
+                fetched_at=when,
+                unconfirmed_reasons=json.dumps(reasons) if reasons else None,
+            )
+            session.add(row)
+            session.flush()
+            return row
+
+        two = {"mw_planned": "quote_off_target", "first_announced": "quote_unverified"}
+        source("https://news.example.com/two/", two, dt.datetime(2024, 1, 1))
+        source(
+            "https://news.example.com/one/", {"phase": "quote_off_target"}, dt.datetime(2019, 1, 1)
+        )
+        source(
+            "https://news.example.com/nothing-offered/",
+            {"phase": "no_quote"},
+            dt.datetime(2018, 1, 1),
+        )
+        source(
+            "https://news.example.com/tried/",
+            {"phase": "quote_off_target"},
+            dt.datetime(2017, 1, 1),
+        )
+        session.add(
+            IngestUrl(
+                url="https://news.example.com/tried/",
+                run_id="r",
+                status="ok",
+                attempts=1,
+                failures=0,
+                first_seen_at=dt.datetime(2017, 1, 1),
+                last_tried_at=after,
+            )
+        )
+        source(
+            "https://census.example.com/derived/",
+            {"county": "quote_off_target"},
+            dt.datetime(2016, 1, 1),
+            extractor="derived:census-place-2020",
+        )
+        milestone = source("https://news.example.com/milestone/", None, dt.datetime(2021, 1, 1))
+        session.add(
+            Event(
+                project_id=pid,
+                event_date=dt.date(2018, 11, 28),
+                event_type="announced",
+                description="Announced.",
+                source_id=milestone.id,
+                unconfirmed="quote_unverified",
+            )
+        )
+
+    with session_scope(engine, commit=False) as session:
+        assert refused_before_gate(session) == [
+            "https://news.example.com/two/",
+            "https://news.example.com/one/",
+            "https://news.example.com/milestone/",
+        ]
+        assert refused_before_gate(session, limit=1) == ["https://news.example.com/two/"]
+
+
 def test_stale_by_prompt_excludes_placeholders(seeded: Path):
     """Same reason refresh excludes them: a placeholder URL is not fetchable."""
     from tracker.db import open_db, session_scope

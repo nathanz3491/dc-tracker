@@ -413,6 +413,15 @@ read would refuse: no cached copy, a publisher `seed/sources.toml` ignores, a pa
 in English. A refused URL is never re-stamped, so it stays the oldest; taken first and
 refused after, the same 24 of the nightly 60 were wasted every night from 2026-10-11.
 
+**A change to the gate needs its own re-read**, because it does not change the prompt
+and so moves no stamp. `--refused-before-gate` takes the articles holding a value,
+milestone or party marked `quote_off_target` or `quote_unverified` before
+`crawl.GATE_REVISED_AT`, most refusals first, and drops each once any crawl has tried
+it since — so it is a backlog that empties, not a nightly rotation. `no_quote` is left
+out: nothing was offered, and the same article offers nothing new. The nightly loop
+runs it at 60 a night (`--recheck`). When a later gate change should reach old rows,
+move `GATE_REVISED_AT` forward with it.
+
 **Pair it with `--cached-only`.** Serving from the cache "by default" only covers
 the URLs that are *in* the cache; a miss used to fall through to a fetch, silently,
 which turns a free re-read into a paid crawl. On the live database three quarters
