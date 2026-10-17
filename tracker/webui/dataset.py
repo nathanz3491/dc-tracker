@@ -7,8 +7,7 @@ were copied into this file it would be a second definition free to drift from th
 one the CLI enforces, and the whole value of the console is that it shows the same
 judgements the commands make.
 
-The shape is the mockup's ``window.DCTRACKER``, so the ported view code needs no
-translation layer.
+The shape is the mockup's, so the ported view code needs no translation layer.
 """
 
 from __future__ import annotations
@@ -673,12 +672,10 @@ INDEX_FIELDS: tuple[str, ...] = (
 def index_rows(session: Session) -> list[dict[str, Any]]:
     """Every project, in the ~0.7 KB per row the maps and the pickers need.
 
-    **This is what `window.DCTRACKER.projects` is, and it cannot be emptied.**
-    `static/vendor/dc-map3d.js` reads that global directly rather than taking
-    props, and both map components call `p.risks.some(...)` unguarded — a row
-    without a `risks` array throws inside a custom element, which reaches the
-    reader as a blank map and no error in the console. So every row here carries
-    `risks`, even when it is empty, and the test suite pins that.
+    **This is what the page's `data.projects` is, and it cannot be emptied.** The
+    Map view (`static/views-map.js`) plots every row at once and reads `risks` to
+    say when an obstacle is blocking a campus, so every row here carries `risks`,
+    even when it is empty, and the test suite pins that.
 
     Read with a bare select rather than `export.fetch_projects`, which eagerly
     loads sources, events, blocks and parties — the four things this deliberately

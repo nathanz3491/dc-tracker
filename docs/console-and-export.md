@@ -541,21 +541,20 @@ Chinese-language deliverables out of the repo; these are the console's user
 documentation and ship with it, which is why they sit under `tracker/webui/docs/`
 rather than matching `docs/*.zh-CN.md`.
 
-## The status page and the public map
+## The status page
 
-Two more public sites on the same server, each on its own hostname from `.env`
-(`TRACKER_STATUS_HOSTNAME`, `TRACKER_MAP_HOSTNAME`, routed to the console's tunnel
-like the docs) and at `/status/` and `/public-map/` on any other host (`/map` is
-the console's own Map view). On its own hostname
-each answers only its own pages: nothing of the console, the API or the docs is
-reachable there, and neither answers a write.
+One more public site on the same server, on its own hostname from `.env`
+(`TRACKER_STATUS_HOSTNAME`, routed to the console's tunnel like the docs) and at
+`/status/` on any other host. On its own hostname it answers only its own pages:
+nothing of the console, the API or the docs is reachable there, and it answers no
+write.
 
 **The status page** (`webui/statussite.py`, `static/pages/status.js`) answers three
 questions: does each public address answer, did last night's update run, and how
 fresh is the data.
 
 - *Checks.* With a status hostname set, `serve` starts a thread that asks the
-  console's front page, the API's `/v1/health`, the docs and the map through the
+  console's front page, the API's `/v1/health` and the docs through the
   internet every `TRACKER_STATUS_INTERVAL_S` (300) seconds — through the tunnel,
   because that is the part that fails without the process noticing. Two failures
   running are an outage; one, or an answer slower than 4 s, is degraded.
@@ -578,20 +577,42 @@ fresh is the data.
   the incident list; `tracker status notes`, `tracker status unnote N`. Bare
   `tracker status` prints what the page shows.
 
-**The public map** (`webui/publicmap.py`, `static/pages/map.js`) shows a stranger
-where the campuses are. What it may say is an allowlist built on the server,
-`publicmap.FIELDS`, at one of three levels set by `TRACKER_PUBLIC_MAP_DETAIL`:
-`states` (totals and shaded states), `dots` (default: a dot per campus with its
-operator, state, stage and a capacity band, positions to 0.1°) or `campuses` (also
-its name, town and exact planned capacity). No level carries investment, a tenant, a
-date, an obstacle or a source. The totals count the campuses `capex.rollup` counts —
-paused and cancelled left out, one row per suspected duplicate — each at its own
-planned capacity; the Capex page's buyer rows can sum higher where a campus's
-buildings, listed by buyer, add up past the campus's own figure. The headline
-figures and the state table are written into the page on the server, so a reader
-without JavaScript and a search engine both get them; the page is indexed, with a
-`robots.txt` and a one-page `sitemap.xml` on its hostname. The reader docs write the
-two addresses as `{{status}}` and `{{map}}`, filled from `.env` like `{{api}}`.
+The reader docs write its address as `{{status}}`, filled from `.env` like
+`{{api}}`.
+
+**A hostname this server does not serve is sent to the console.** Every name routed
+to the tunnel reaches this process, including one whose site has been taken down
+while its DNS record still points here. Answered as the console, it would serve the
+sign-in page — and set its cookie — under a name that is not the console's. So once
+`TRACKER_TUNNEL_HOSTNAME` is set, a request for any other name that is not the docs,
+API or status hostname gets a `307` to the same path on the console. An IP address
+and `localhost` are never redirected (the deployer's health check asks `127.0.0.1`),
+and with no console hostname set nothing is. Temporary rather than permanent,
+because a browser keeps a permanent redirect long after a name is given a site of
+its own.
+
+### The Map view
+
+`static/views-map.js` draws the console's Map with d3 on the Census state
+boundaries (`static/vendor/us-states-10m.json`, projected with `geoAlbersUsa`): a
+dot per campus with coordinates, coloured by stage and sized by a capacity band, a
+hollow dashed ring where no size is published, states shaded by planned capacity,
+stage toggles, zoom to 10× with dots that keep their size, and a table by state. The
+dots are the console's own dataset, so a click opens the campus.
+
+The figures beside it come from the server, at `GET /api/map`
+(`webui/mapsummary.py`, behind the sign-in like every console route, cached until
+the data changes): the totals, stage counts and per-state figures, counted over the
+campuses `capex.rollup` counts — paused and cancelled left out, one row per
+suspected duplicate — each at its own planned capacity, and the ids of the
+duplicate rows not to draw. The Capex page's buyer rows can sum higher where a
+campus's buildings, listed by buyer, add up past the campus's own figure; the map
+takes the campus's. The browser cannot work this out alone, because which rows the
+Capex page counts depends on the duplicate pairs, which the dataset does not carry.
+
+This design was first built as a public map on its own hostname, then moved into the
+console in its place (2026-10-17): a picture of every campus is what the console is
+for, and one map kept in step with the data is better than two.
 
 ## The public API
 
@@ -784,9 +805,9 @@ infer` has never written its answer anywhere, which is why spending was always i
 own switch rather than a consequence of some other one. `serve --no-ai` is for a
 console you would rather nobody could run up a bill on.
 
-**No network requests at all** — React, d3, three.js, Lucide, the Census boundary
+**No network requests at all** — React, d3, Lucide, the Census boundary
 file and all three webfonts are vendored under `tracker/webui/static/vendor/`
-(3 MB), and the server sends a `default-src 'self'` CSP so a CDN URL creeping back
+(2 MB), and the server sends a `default-src 'self'` CSP so a CDN URL creeping back
 in fails loudly instead of quietly reintroducing the dependency. The front end has
 no build step and the repo has no `package.json`: React is a UMD global, the
 Meridian component bundle is already compiled, and `htm` supplies JSX-like

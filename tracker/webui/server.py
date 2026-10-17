@@ -41,6 +41,7 @@ from __future__ import annotations
 import datetime as dt
 import gzip
 import hmac
+import ipaddress
 import json
 import logging
 import re
@@ -62,7 +63,7 @@ from sqlalchemy.exc import OperationalError
 from tracker import __version__
 from tracker.config import home
 from tracker.db import MigrationError, make_engine, session_scope
-from tracker.webui import assets, docsite, publicapi, publicmap, statussite
+from tracker.webui import assets, docsite, mapsummary, publicapi, statussite
 from tracker.webui.auth import COOKIE, Gate, cookie_value
 from tracker.webui.reads import ReadSide
 
@@ -340,8 +341,6 @@ class Console:
         console_host: str | None = None,
         api_host: str | None = None,
         status_host: str | None = None,
-        map_host: str | None = None,
-        map_detail: str = "dots",
         status_interval_s: int = 300,
     ) -> None:
         self.db_path = db_path
@@ -357,13 +356,9 @@ class Console:
         self.api_host = api_host
         #: Requests per API key per minute, in memory. See `publicapi.RateLimiter`.
         self.api_limiter = publicapi.RateLimiter()
-        #: The hostnames on which this server is the status page, or the public map,
-        #: and nothing else (`Handler._status_site`, `Handler._map_site`). None serves
-        #: each under `/status/` or `/map/` on any other host.
+        #: The hostname on which this server is the status page and nothing else
+        #: (`Handler._status_site`). None serves it under `/status/` on any host.
         self.status_host = status_host
-        self.map_host = map_host
-        #: How much of each campus the public map shows (`publicmap.FIELDS`).
-        self.map_detail = map_detail
         #: Seconds between the status page's checks, which `serve` runs.
         self.status_interval_s = status_interval_s
         #: Where the checks are kept: `status.db`, beside the database and apart
@@ -833,12 +828,9 @@ class Handler(BaseHTTPRequestHandler):
             # hostname nothing else answers.
             # The API first: on its own hostname it claims every path, including
             # `/docs/`, so nothing but the API ever answers there.
-            if (
-                self._public_api(route, query)
-                or self._docs(route)
-                or self._status_site(route)
-                or self._map_site(route)
-            ):
+            if self._foreign_host(route, query):
+                return None
+            if self._public_api(route, query) or self._docs(route) or self._status_site(route):
                 return None
             if not self._authed:
                 return self._unauthenticated(route, query)
@@ -979,7 +971,7 @@ class Handler(BaseHTTPRequestHandler):
         """
         role = self._host_role()
         on_docs_host = role == "docs"
-        if role in ("api", "status", "map"):
+        if role in ("api", "status"):
             return False
         if on_docs_host:
             base, rest = "/", route
@@ -1012,13 +1004,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def _host_role(self) -> str | None:
         """Which public site the request's hostname is — `"docs"`, `"api"`,
-        `"status"` or `"map"` — or None for the console's own address."""
+        or `"status"` — or None for the console's own address."""
         host = docsite.request_host(self.headers.get("Host"))
         for role, configured in (
             ("docs", self.console.docs_host),
             ("api", self.console.api_host),
             ("status", self.console.status_host),
-            ("map", self.console.map_host),
         ):
             if configured and host == configured:
                 return role
@@ -1062,7 +1053,7 @@ class Handler(BaseHTTPRequestHandler):
         cannot read the API with a reader's session.
         """
         role = self._host_role()
-        if role in ("docs", "status", "map"):
+        if role in ("docs", "status"):
             return False
         if role == "api":
             if route in {"", "/"}:
@@ -1206,15 +1197,10 @@ class Handler(BaseHTTPRequestHandler):
                 f'<meta name="dc-api" content="{self._api_home()}">',
                 1,
             )
-            # The status page and the map, written `{{status}}` and `{{map}}`.
+            # The status page, written `{{status}}`.
             .replace(
                 '<meta name="dc-status" content="/status/">',
                 f'<meta name="dc-status" content="{self._site_link(self.console.status_host, "/status/")}">',
-                1,
-            )
-            .replace(
-                '<meta name="dc-map" content="/public-map/">',
-                f'<meta name="dc-map" content="{self._site_link(self.console.map_host, "/public-map/")}">',
                 1,
             )
         )
@@ -1248,25 +1234,70 @@ class Handler(BaseHTTPRequestHandler):
         )
         self._send(200, path.read_bytes(), kind, cache="no-cache", csp=PUBLIC_CSP)
 
-    # --- the status page and the public map ------------------------------------------
+    # --- hostnames this server does not serve -----------------------------------------
 
-    #: Where each public site lives on a host that is not its own. The map is not at
-    #: `/map/`: that is the console's own Map view, behind the sign-in.
-    _PUBLIC_PATHS: ClassVar[dict[str, str]] = {"status": "status", "map": "public-map"}
+    @staticmethod
+    def _is_address(host: str) -> bool:
+        """Whether a request's host is an IP address (`[::1]:8765` included), not a name."""
+        literal = host[1 : host.find("]")] if host.startswith("[") else host
+        try:
+            ipaddress.ip_address(literal)
+        except ValueError:
+            return False
+        return True
+
+    def _foreign_host(self, route: str, query: dict[str, list[str]]) -> bool:
+        """Send a request for a hostname this server does not serve to the console.
+
+        Every hostname routed to the tunnel reaches this process, including one whose
+        site has been taken down while its DNS record still points here — the public
+        map's, retired on 2026-10-17. Answering it as the console would serve the
+        sign-in page, and set its cookie, under a name that is not the console's. So
+        once the console's own hostname is known, any other *name* that is not one of
+        this server's sites is redirected to the same path on the console. An address
+        is never redirected (the deployer's health check asks `127.0.0.1`), and nor is
+        `localhost`; with no console hostname set — a laptop, a quick tunnel — nothing
+        is.
+
+        Temporary (307), not permanent: the rule is about every unknown name, and a
+        browser keeps a permanent redirect long after a hostname is given a site of
+        its own.
+        """
+        console = self.console
+        if not console.console_host:
+            return False
+        host = docsite.request_host(self.headers.get("Host"))
+        known = {console.console_host, console.docs_host, console.api_host, console.status_host}
+        if host in known or host in ("", "localhost") or self._is_address(host):
+            return False
+        target = f"https://{console.console_host}{route}"
+        if query:
+            from urllib.parse import urlencode
+
+            target += "?" + urlencode(query, doseq=True)
+        self._send(
+            307,
+            b"",
+            "text/plain; charset=utf-8",
+            cache=_PUBLIC_CACHE,
+            extra={"Location": target},
+        )
+        return True
+
+    # --- the status page ---------------------------------------------------------------
 
     def _public_site(self, role: str, route: str) -> tuple[str, str] | None:
         """(base, the path below it) when `route` belongs to the `role` site, else None.
 
         The same two addresses as the docs: on its own hostname the whole host is
-        the site and nothing else answers; anywhere else it is under its path in
-        `_PUBLIC_PATHS`.
+        the site and nothing else answers; anywhere else it is under `/<role>/`.
         """
         current = self._host_role()
         if current == role:
             return "/", route or "/"
         if current is not None:
             return None
-        prefix = self._PUBLIC_PATHS[role]
+        prefix = role
         if route == f"/{prefix}":
             return f"/{prefix}/", ""
         if route.startswith(f"/{prefix}/"):
@@ -1326,7 +1357,6 @@ class Handler(BaseHTTPRequestHandler):
             "dc-docs": self._docs_home(),
             "dc-api": self._api_home(),
             "dc-status": self._site_link(console.status_host, "/status/"),
-            "dc-map": self._site_link(console.map_host, "/public-map/"),
         }
 
     def _status_payload(self) -> dict[str, Any]:
@@ -1338,7 +1368,6 @@ class Handler(BaseHTTPRequestHandler):
             "console": console.console_host,
             "api": console.api_host,
             "docs": console.docs_host,
-            "map": console.map_host,
         }
         checked = [service for service, _url in statussite.targets(hosts)]
 
@@ -1363,80 +1392,14 @@ class Handler(BaseHTTPRequestHandler):
             log.exception("status: the database could not be read")
             return {"campuses": None, "last_read_at": None, "last_change_at": None}
 
-    def _map_site(self, route: str) -> bool:
-        """Answer `route` as the public map if it is the map's. True if handled.
-
-        On its own hostname, or at `/public-map/` on any other.
-
-        ``/`` is the page, with the headline figures and the state table written
-        into it so a reader without JavaScript — and a search engine — gets them;
-        ``/data.json`` the dots; ``/robots.txt`` and ``/sitemap.xml`` on the map
-        hostname; ``/static/<public file>`` its assets.
-        """
-        found = self._public_site("map", route)
-        if found is None:
-            return False
-        base, rest = found
-        if base != "/" and rest == "":
-            self._redirect(base)
-            return True
-        parts = [part for part in rest.split("/") if part]
-        on_host = base == "/"
-        if not parts:
-            data = self._map_payload()
-            canonical = f"https://{self.console.map_host}/" if self.console.map_host else None
-            self._public_shell(
-                assets.MAP_SHELL,
-                {"dc-base": base, **self._site_links()},
-                fill={
-                    "<!--summary-->": publicmap.summary_html(data),
-                    "<!--canonical-->": (
-                        f'<link rel="canonical" href="{html_escape(canonical)}">'
-                        if canonical
-                        else ""
-                    ),
-                },
-                extra={"Referrer-Policy": "no-referrer"},
-            )
-        elif parts == ["data.json"]:
-            body = json.dumps(self._map_payload(), ensure_ascii=False).encode("utf-8")
-            self._send(
-                200, body, "application/json; charset=utf-8", cache="no-cache", csp=PUBLIC_CSP
-            )
-        elif on_host and parts == ["robots.txt"]:
-            lines = ["User-agent: *", "Allow: /"]
-            if self.console.map_host:
-                lines.append(f"Sitemap: https://{self.console.map_host}/sitemap.xml")
-            self._send(
-                200,
-                ("\n".join(lines) + "\n").encode(),
-                "text/plain; charset=utf-8",
-                cache="no-cache",
-            )
-        elif on_host and parts == ["sitemap.xml"] and self.console.map_host:
-            data = self._map_payload()
-            body = (
-                '<?xml version="1.0" encoding="UTF-8"?>\n'
-                '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
-                f"<url><loc>https://{self.console.map_host}/</loc>"
-                f"<lastmod>{data.get('updated_at') or ''}</lastmod></url></urlset>\n"
-            )
-            self._send(200, body.encode(), "application/xml; charset=utf-8", cache="no-cache")
-        elif parts[0] == "static" and on_host and rest[len("/static/") :] in assets.PUBLIC_STATIC:
-            self._static(rest[len("/static/") :], None, anonymous=True)
-        else:
-            self._error(404, "not part of the map")
-        return True
-
-    def _map_payload(self) -> dict[str, Any]:
-        """The public map's allow-listed payload, recomputed when the database changes."""
-        level = self.console.map_detail
+    def _map_summary(self) -> dict[str, Any]:
+        """The Map view's figures (`mapsummary.build`), recomputed when the data changes."""
 
         def fresh() -> dict[str, Any]:
             with self.console.read_session() as session:
-                return publicmap.build(session, level=level)
+                return mapsummary.build(session)
 
-        return self.console.cached(("public-map", level), fresh)
+        return self.console.cached(("map-summary",), fresh)
 
     def _public_shell(
         self,
@@ -1619,6 +1582,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._monitor()
         if route == "/api/watch":
             return self._watch_state()
+        if route == "/api/map":
+            return self._json(self._map_summary())
         if route == "/api/health":
             return self._json({"ok": True, "version": __version__, "commit": deployed_commit()})
         if route == "/api/account/keys":
@@ -1640,12 +1605,14 @@ class Handler(BaseHTTPRequestHandler):
             # The docs and API hostnames answer reads only. Neither is the console,
             # so neither may sign anybody in or change anything, whatever the path.
             role = self._host_role()
+            if self._foreign_host(parsed.path, {}):
+                return None
             if role == "api" or (role is None and parsed.path.startswith("/api/v1")):
                 return self._api_json(
                     publicapi.ApiError(405, "read_only", "the API only answers GET").as_json(),
                     status=405,
                 )
-            if role in ("docs", "status", "map"):
+            if role in ("docs", "status"):
                 return self._error(404, "this site answers reads only")
             if not self._same_origin():
                 return self._error(403, "cross-site request refused")
@@ -2518,8 +2485,7 @@ class Handler(BaseHTTPRequestHandler):
         detail and the capex rollup taken out; the table asks `/api/projects` for
         thirty rows at a time and the capex view asks `/api/capex` when it opens.
 
-        The index it does still carry is not optional — `window.DCTRACKER.projects`
-        is what the vendored map elements read, directly, and the maps plot every
+        The index it does still carry is not optional — the Map view plots every
         project at once by definition.
 
         **Cached until the database changes**, and only the part that is the same
@@ -2624,6 +2590,10 @@ class Handler(BaseHTTPRequestHandler):
     API: ClassVar[dict[str, dict[str, Any]]] = {
         "GET /api": {"answers": "this index", "reads": None},
         "GET /api/health": {"answers": "liveness and version", "reads": None},
+        "GET /api/map": {
+            "answers": "the Map view's totals, stage counts and states, counted like Capex",
+            "reads": "projects",
+        },
         "GET /api/article": {
             "answers": "the text behind one cited URL, with its stored quotes located in it",
             "reads": "the article cache, and the network on a miss",
@@ -3827,8 +3797,6 @@ def serve(
         console_host=docsite.hostname(settings.tunnel_hostname),
         api_host=docsite.hostname(settings.api_hostname),
         status_host=docsite.hostname(settings.status_hostname),
-        map_host=docsite.hostname(settings.map_hostname),
-        map_detail=settings.public_map_detail,
         status_interval_s=settings.status_interval_s,
     )
     # The status page's checks, only where there is a status page to show them: a
@@ -3839,7 +3807,6 @@ def serve(
             "console": console.console_host,
             "api": console.api_host,
             "docs": console.docs_host,
-            "map": console.map_host,
         }
     )
     # Made now rather than on the first sign-in to an unknown address, which

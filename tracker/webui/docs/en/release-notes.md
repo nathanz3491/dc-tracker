@@ -6,7 +6,8 @@ Changes a reader of the console will notice, newest first. The console's version
 
 ### Status and map
 
-- **A status page and a public map.** The [status page]({{status}}) shows whether the console, the API, these docs and the map are answering, and when each night's update ran. The [public map]({{map}}) shows anybody where the campuses are, their stage and roughly how big, with the national and state totals.
+- **A status page.** The [status page]({{status}}) shows whether the console, the API and these docs are answering, and when each night's update ran. It is public, so it works without signing in.
+- **A new Map.** The [Map](map) shows the national and state totals, counted the way the Capex page counts, sizes each dot by its planned capacity, and lets you hide a stage, zoom to 10× and read every state's figures in a table. The 3D view and the confidence and operator colours are gone.
 
 ### API
 

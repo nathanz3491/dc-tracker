@@ -1,4 +1,4 @@
-/* dc-tracker's public pages that are not the docs: the status page and the map.
+/* dc-tracker's public pages that are not the docs: the status page.
 
    The same paper, ink and amber as the front page and the docs, and the console's
    masthead lockup. Nothing is imported: a public stylesheet may only pull in public
@@ -6,8 +6,7 @@
 
    THEME  follows the system unless the reader picks one; `data-theme` on <html> is
           the pick, and both dark blocks below say the same thing.
-   WIDTH  one column, 1120px at most; the map's side table drops below the map
-          under 900px; 16px gutters on a phone.
+   WIDTH  one column, 1120px at most; 16px gutters on a phone.
 */
 
 @font-face {
@@ -348,74 +347,3 @@ a.service-name:hover { text-decoration: underline; }
 .incident-title { font-weight: 600; }
 .incident-when { grid-column: 2; font-family: var(--mono); font-size: 12.5px; color: var(--muted); }
 .incident-body { grid-column: 2; margin: 4px 0 0; color: var(--muted); font-size: 14px; max-width: 70ch; }
-
-/* ---- map --------------------------------------------------------------------- */
-
-.hero { max-width: 760px; }
-.hero h1 { font-size: clamp(36px, 5.6vw, 58px); line-height: 1.04; }
-.lede { margin: 14px 0 0; font-size: 17px; color: var(--muted); max-width: 60ch; }
-
-.summary { margin-top: 28px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; }
-.figures { margin: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
-.figures div { padding: 16px 18px; background: var(--surface); border: 1px solid var(--rule); border-radius: 14px; }
-.figures dt { font: 500 11.5px/1.3 var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
-:lang(zh) .figures dt { letter-spacing: 0; }
-.figures dd { margin: 6px 0 0; font: 400 34px/1.05 var(--serif); }
-@media (max-width: 760px) { .figures { grid-template-columns: repeat(2, minmax(0, 1fr)); } .figures dd { font-size: 28px; } }
-
-.map-block { margin-top: 26px; }
-.map-tools { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; justify-content: space-between; margin-bottom: 10px; }
-.chips { display: flex; flex-wrap: wrap; gap: 6px; }
-.chip {
-  display: inline-flex; align-items: center; gap: 7px; height: 30px; padding: 0 11px;
-  border: 1px solid var(--rule-strong); border-radius: 99px; background: var(--surface);
-  font-size: 13px; cursor: pointer; color: var(--ink);
-}
-.chip i { width: 9px; height: 9px; border-radius: 99px; background: var(--c); }
-.chip small { font-family: var(--mono); font-size: 11.5px; color: var(--muted); }
-.chip[aria-pressed="false"] { background: transparent; color: var(--faint); }
-.chip[aria-pressed="false"] i { background: transparent; box-shadow: inset 0 0 0 1.5px var(--c); }
-.chip:hover { border-color: var(--amber); }
-.map-zoom { display: flex; gap: 6px; }
-
-.map-frame {
-  position: relative; margin: 0;
-  background: var(--surface); border: 1px solid var(--rule); border-radius: 18px; overflow: hidden;
-}
-.map-canvas { position: relative; width: 100%; aspect-ratio: 16 / 9.4; min-height: 300px; touch-action: none; }
-@media (max-width: 560px) { .map-canvas { aspect-ratio: 16 / 11; min-height: 220px; } }
-.map-canvas svg { display: block; width: 100%; height: 100%; cursor: grab; }
-.map-canvas svg:active { cursor: grabbing; }
-.state-shape { stroke: var(--land-edge); stroke-width: .8; transition: opacity .15s; }
-.state-shape:hover { stroke: var(--amber); stroke-width: 1.6; }
-.state-label { font: 500 10.5px var(--mono); fill: var(--muted); pointer-events: none; letter-spacing: .04em; }
-.dot { stroke-width: 1.4; cursor: pointer; transition: opacity .15s; }
-.dot.hollow { fill: none !important; stroke-dasharray: 2.5 2.5; }
-.dot.off { opacity: 0; pointer-events: none; }
-.dot:hover { stroke-width: 2.6; }
-.map-tip {
-  position: absolute; z-index: 5; pointer-events: none;
-  max-width: 300px; padding: 9px 12px;
-  background: var(--surface); border: 1px solid var(--rule-strong); border-radius: 12px; box-shadow: var(--shadow);
-  font-size: 13px; line-height: 1.45;
-}
-.map-tip b { display: block; font-weight: 600; }
-.map-tip span { color: var(--muted); }
-.map-legend {
-  display: flex; flex-wrap: wrap; gap: 6px 18px; align-items: center;
-  padding: 10px 16px; border-top: 1px solid var(--rule);
-  font: 400 12px/1.4 var(--mono); color: var(--muted);
-}
-.legend-scale { display: inline-flex; align-items: center; gap: 6px; }
-.legend-scale i { display: inline-block; border-radius: 99px; border: 1.4px solid var(--muted); }
-.legend-ramp { display: inline-block; width: 90px; height: 8px; border-radius: 99px; vertical-align: middle; }
-.map-note { margin: 10px 0 0; font-size: 13.5px; color: var(--muted); max-width: 80ch; }
-
-.state-table { width: 100%; border-collapse: collapse; font-size: 14px; }
-.state-table caption { text-align: left; font: 500 11.5px/1.3 var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); padding-bottom: 8px; }
-.state-table th, .state-table td { padding: 7px 8px; border-top: 1px solid var(--rule); text-align: right; font-variant-numeric: tabular-nums; }
-.state-table th:first-child, .state-table td:first-child { text-align: left; }
-.state-table thead th { font-weight: 500; color: var(--muted); font-size: 12.5px; }
-.state-table tbody th { font-weight: 550; }
-.state-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0 32px; margin-top: 28px; }
-@media (max-width: 900px) { .state-grid { grid-template-columns: minmax(0, 1fr); } }

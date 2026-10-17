@@ -90,10 +90,8 @@ def test_no_page_is_a_stub_and_each_opens_with_its_title():
 def test_links_between_pages_name_real_pages():
     """A relative link is a slug in the same language; a broken one is a dead end."""
     slugs = docsite.site().slugs
-    # `{{status}}` and `{{map}}` are other sites' addresses, filled in by the viewer.
-    link = re.compile(
-        r"\]\((?!https?:|mailto:|#|\{\{(?:status|map|api)\}\})([^)#\s]+)(#[^)\s]*)?\)"
-    )
+    # `{{status}}` and `{{api}}` are other sites' addresses, filled in by the viewer.
+    link = re.compile(r"\]\((?!https?:|mailto:|#|\{\{(?:status|api)\}\})([^)#\s]+)(#[^)\s]*)?\)")
     for page in docsite.site().pages:
         for lang in docsite.LANGUAGES:
             text = (docsite.DOCS_ROOT / lang / f"{page.slug}.md").read_text(encoding="utf-8")

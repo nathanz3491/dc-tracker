@@ -1,4 +1,4 @@
-/* dc-tracker public pages: what the status page and the map share.
+/* dc-tracker public pages: what the status page is built on.
  *
  *   theme      system, light or dark, remembered, cycled by the sun button
  *   language   English or 中文, remembered, else the browser's; every element with
@@ -30,7 +30,7 @@
     en: {
       htmlLang: "en", other: "中文", skip: "Skip to content",
       theme: { system: "Theme: follows your system", light: "Theme: light", dark: "Theme: dark" },
-      console: "Console", docs: "Documentation", api: "API", map: "Map", status: "Status",
+      console: "Console", docs: "Documentation", api: "API", status: "Status",
       updated: "Updated", never: "never", justNow: "just now",
       ago: (n, unit) => `${n} ${unit}${n === 1 ? "" : "s"} ago`,
       units: { minute: "minute", hour: "hour", day: "day" },
@@ -38,7 +38,7 @@
     zh: {
       htmlLang: "zh-CN", other: "English", skip: "跳到正文",
       theme: { system: "主题：跟随系统", light: "主题：浅色", dark: "主题：深色" },
-      console: "控制台", docs: "文档", api: "API", map: "地图", status: "运行状态",
+      console: "控制台", docs: "文档", api: "API", status: "运行状态",
       updated: "更新于", never: "从未", justNow: "刚刚",
       ago: (n, unit) => `${n} ${unit}前`,
       units: { minute: "分钟", hour: "小时", day: "天" },
@@ -144,7 +144,6 @@
     set("foot-console", meta("dc-console"));
     set("foot-docs", meta("dc-docs"));
     set("foot-api", meta("dc-api"));
-    set("foot-map", meta("dc-map"));
     set("foot-status", meta("dc-status"));
   }
 

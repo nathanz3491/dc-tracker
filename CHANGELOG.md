@@ -12,27 +12,28 @@ initial build of the v1 PRD.
 
 ### Added
 
-- **A public status page and a public map, each on its own hostname**
-  (`tracker/webui/statussite.py`, `tracker/webui/publicmap.py`,
+- **A public status page on its own hostname** (`tracker/webui/statussite.py`,
   `tracker/webui/server.py`, `tracker/webui/assets.py`, `tracker/config.py`,
   `tracker/cli/serve.py`, `tracker/webui/static/pages/`,
-  `tracker/webui/static/public/status.html`, `tracker/webui/static/public/map.html`,
-  `tests/test_public_sites.py`, `docs/console-and-export.md`, `.env.example`).
-  - *Status* says whether the console, the API, the docs and the map are answering —
-    checked through the internet every five minutes, 90 days of daily bars — whether
-    last night's update finished, stopped at a ceiling or was cut off, and when an
-    article was last read. A stretch with no checks counts as downtime for every
-    address and is named a restart when the machine booted inside it, so the page
-    cannot report its best day on the day the server was off. An operator adds
-    explanations with `tracker status note`. Never indexed.
-  - *Map* shows anybody where the campuses are, their stage and roughly how big,
-    with the national and state totals counted like the Capex page (paused,
-    cancelled and suspected duplicates left out). What a dot may say is an
-    allowlist on the server at one of three levels (`TRACKER_PUBLIC_MAP_DETAIL`,
-    default `dots`: operator, state, stage, capacity band); no level carries
-    investment, tenants, dates, obstacles or sources. The figures are written into
-    the page so search engines read them. Both pages in English and Chinese, light
-    and dark; the reader docs link them as `{{status}}` and `{{map}}`.
+  `tracker/webui/static/public/status.html`, `tests/test_public_sites.py`,
+  `docs/console-and-export.md`, `.env.example`). It says whether the console, the
+  API and the docs are answering — checked through the internet every five minutes,
+  90 days of daily bars — whether last night's update finished, stopped at a
+  ceiling or was cut off, and when an article was last read. A stretch with no
+  checks counts as downtime for every address and is named a restart when the
+  machine booted inside it, so the page cannot report its best day on the day the
+  server was off. An operator adds explanations with `tracker status note`. English
+  and Chinese, light and dark, never indexed; the reader docs link it as
+  `{{status}}`.
+
+- **A hostname the server does not serve is sent to the console**
+  (`tracker/webui/server.py`, `tests/test_public_sites.py`,
+  `docs/console-and-export.md`). A public map ran on its own hostname for a day
+  before moving into the console (below); its DNS record still reaches the server,
+  and was being answered as the console — the sign-in page, and its cookie, under
+  a name that is not the console's. Any name that is not one of the server's sites
+  now gets a temporary redirect to the same page on the console. Addresses and
+  `localhost` are left alone, so the deployer's own check is unaffected.
 
 - **Admins switch API access on or off per account** (`tracker/migrations/0037_api_allowed.sql`,
   `tracker/models.py`, `tracker/accounts.py`, `tracker/apikeys.py`,
@@ -105,6 +106,23 @@ initial build of the v1 PRD.
   `robots.txt` only on the browser path and no `Crawl-delay`, were closed the same day; see below.)
 
 ### Changed
+
+- **The Map view is redrawn: national and state figures, stage toggles, and dots
+  sized by capacity** (`tracker/webui/static/views-map.js`,
+  `tracker/webui/mapsummary.py`, `tracker/webui/server.py`,
+  `tracker/webui/static/app.js`, `tracker/webui/static/app.css`,
+  `tracker/webui/docs/{en,zh}/map.md`, `tests/test_public_sites.py`,
+  `tests/test_webui.py`). The design built for the public map replaces the old one
+  and the public map is gone. The page now leads with the campuses, planned and
+  operating capacity and states, counted the way the Capex page counts — paused,
+  cancelled and suspected duplicates left out, which the old map's own counts did
+  not do — and ends with every state's figures in a table. Each dot is coloured by
+  stage and sized by one of five capacity bands, with a hollow ring where no size
+  is published; a stage can be hidden, the map zooms to 10× with dots that keep
+  their size, and a click still opens the campus. A suspected duplicate is drawn
+  once. Removed with the old map: the 3D relief view (and three.js with it), the
+  confidence and operator colourings, operator rings, and the campus list beside
+  the map, whose rows are all in Projects.
 
 - **Queued articles nobody can read are taken out of the queue instead of waiting
   at the back of it** (`tracker/ingest/discover.py`, `tracker/cli/ingest.py`,

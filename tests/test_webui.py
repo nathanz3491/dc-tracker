@@ -136,8 +136,7 @@ def test_dataset_carries_the_shape_the_page_expects(server):
     address, _ = server
     status, data = request(address, "/api/dataset")
     assert status == 200
-    # Every key here is read by `app.js` or by the vendored maps, which read
-    # `projects` and `phases` off `window.DCTRACKER` directly.
+    # Every key here is read by `app.js` or by the Map view (`views-map.js`).
     for key in (
         "projects",
         "totals",
@@ -181,10 +180,10 @@ def test_the_shell_payload_ships_nothing_the_page_does_not_read(server, seeded_d
 
     front_end = "".join(
         (assets.STATIC_ROOT / name).read_text(encoding="utf-8")
-        for name in ("app.js", "vendor/dc-map.js", "vendor/dc-map3d.js")
+        for name in ("app.js", "views-map.js")
     )
     for key in unread:
-        assert f"data.{key}" not in front_end and f"DCTRACKER.{key}" not in front_end, key
+        assert f"data.{key}" not in front_end, key
 
     with session_scope(open_db(seeded_db), commit=False) as session:
         whole = build(session, db_path=str(seeded_db), schema_version=1)
@@ -192,12 +191,11 @@ def test_the_shell_payload_ships_nothing_the_page_does_not_read(server, seeded_d
 
 
 def test_the_light_index_always_carries_risks(server):
-    """A contract with vendored code, and its failure mode is a blank map.
+    """Every row carries the array, so a reader of it never meets a missing one.
 
-    `static/vendor/dc-map.js` and `dc-map3d.js` both call `p.risks.some(...)`
-    unguarded, and the 3D one reads `window.DCTRACKER.projects` directly rather
-    than taking props. A row without the array throws a TypeError inside a custom
-    element: no error reaches the page, the map simply does not draw.
+    The Map view reads it to say an obstacle is blocking a campus. It guards
+    itself, but the old map elements did not and drew nothing when one row lacked
+    it; the payload keeps the promise either way.
     """
     address, _ = server
     _status, data = request(address, "/api/dataset")
@@ -1683,10 +1681,12 @@ def sign_in(address, password=PASSWORD, email=EMAIL):
     "path",
     [
         "/api/dataset",
+        "/api/map",
         "/api/updates",
         "/api/claims",
         "/api/health",
         "/static/app.js",
+        "/static/views-map.js",
         "/static/app.css",
         "/api",
         "/api/admin/users",
@@ -1750,7 +1750,7 @@ PUBLIC_URLS = {
 
 #: The public pages above plus the 404 page, which a stranger reads just as often,
 #: and the documentation's page shell (`webui/docsite.py`), which anybody may read.
-PUBLIC_DOCUMENTS = [*PUBLIC_URLS.values(), "/nonsense", "/docs/", "/status/", "/public-map/"]
+PUBLIC_DOCUMENTS = [*PUBLIC_URLS.values(), "/nonsense", "/docs/", "/status/"]
 
 
 def test_every_public_page_has_a_url_here():
@@ -1782,6 +1782,19 @@ def test_no_public_file_leaks_anything(gated, path):
         "React",
     ):
         assert leak not in body, f"{path} mentions {leak}"
+
+
+def test_the_map_figures_are_the_capex_pages(gated):
+    """The Map view's totals, stages and states, behind the sign-in like the rest."""
+    address, _console = gated
+    _, cookie = sign_in(address)
+    status, _, body = raw(address, "/api/map", cookie=cookie)
+    data = json.loads(body)
+    assert status == 200
+    assert set(data) == {"updated_at", "totals", "stages", "states", "skipped"}
+    assert data["totals"]["campuses"] == 1 and data["totals"]["planned_mw"] == 900.0
+    assert data["states"] == {"WI": {"campuses": 1, "planned_mw": 900.0}}
+    assert sum(data["stages"].values()) == 1 and data["skipped"] == []
 
 
 def test_signing_in_sets_an_httponly_lax_session_cookie(gated):
@@ -2541,7 +2554,6 @@ def test_everything_a_public_page_asks_for_is_public(gated):
         assets.NOT_FOUND_PAGE,
         assets.DOCS_SHELL,
         assets.STATUS_SHELL,
-        assets.MAP_SHELL,
     }
     on_disk = {
         path.relative_to(assets.STATIC_ROOT).as_posix()

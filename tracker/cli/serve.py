@@ -729,7 +729,6 @@ def status(ctx: typer.Context) -> None:
         "console": docsite.hostname(settings.tunnel_hostname),
         "api": docsite.hostname(settings.api_hostname),
         "docs": docsite.hostname(settings.docs_hostname),
-        "map": docsite.hostname(settings.map_hostname),
     }
     with session_scope(_read_engine(), commit=False) as session:
         data = statussite.freshness(session)
@@ -772,9 +771,7 @@ def status_note(
     ] = None,
     service: Annotated[
         str | None,
-        typer.Option(
-            "--service", help="console, api, docs or map, if only one.", show_default=False
-        ),
+        typer.Option("--service", help="console, api or docs, if only one.", show_default=False),
     ] = None,
 ) -> None:
     """Add a note to the status page's incidents: a move, planned work, an explanation."""

@@ -50,15 +50,11 @@ It is updated every evening; **last crawl** on [Updates](updates) shows when new
 
 ## Is the tracker down?
 
-The [status page]({{status}}) says whether the console, the API, the documentation and the public map are answering, checked every few minutes, with 90 days of history and every outage and restart listed. It is public, so it works without signing in.
+The [status page]({{status}}) says whether the console, the API and the documentation are answering, checked every few minutes, with 90 days of history and every outage and restart listed. It is public, so it works without signing in.
 
 ## Can I download the data?
 
 Not as a file from the console. A program can read it through [the API](api), with a key from your Account page.
-
-## Can I show the map to someone without an account?
-
-Yes: the [public map]({{map}}) is open to anybody. It shows where the campuses are, their stage and roughly how big, and the national and state totals, counted the same way as the Capex page. It leaves out what the console is for: the sources, the money, the tenants, the dates and the obstacles.
 
 ## Is the console available in Chinese?
 

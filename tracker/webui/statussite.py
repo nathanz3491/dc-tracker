@@ -3,8 +3,8 @@ run, and how fresh is the data.
 
 Three sources, none of them the dataset's own tables:
 
-* **Checks.** `Prober` asks each public address — the console, the API, the docs,
-  the map — through the internet, the way a reader reaches it, every
+* **Checks.** `Prober` asks each public address — the console, the API, the
+  docs — through the internet, the way a reader reaches it, every
   `Settings.status_interval_s`. Through the tunnel rather than to the local port,
   because the tunnel is the part that fails without the process noticing.
 * **The nightly log.** Whether the night's update started, finished, stopped at a
@@ -58,7 +58,6 @@ SERVICES: Final[tuple[tuple[str, str], ...]] = (
     ("console", "/"),
     ("api", "/v1/health"),
     ("docs", "/"),
-    ("map", "/"),
 )
 
 #: Days of history the page draws, and the store keeps.

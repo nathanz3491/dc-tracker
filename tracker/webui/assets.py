@@ -48,17 +48,11 @@ PUBLIC_STATIC: frozenset[str] = frozenset(
         "docs/docs.css",
         "docs/docs.js",
         "docs/markdown.js",
-        # The status page and the public map (`webui/statussite.py`,
-        # `webui/publicmap.py`): one stylesheet and a shared script for both, a
-        # script each, and the map's drawing libraries and state boundaries — the
-        # console's own copies, which carry no console code or data.
+        # The status page (`webui/statussite.py`): its stylesheet, the script it
+        # shares with any later public page, and its own.
         "pages/pages.css",
         "pages/pages.js",
         "pages/status.js",
-        "pages/map.js",
-        "vendor/d3.js",
-        "vendor/topojson-client.js",
-        "vendor/us-states-10m.json",
         # Instrument Serif 400, latin.
         "vendor/fonts/jizBRFtNs2ka5fXjeivQ4LroWlx-6zUTjg.woff2",
         # Inter 400 to 700, latin.
@@ -88,10 +82,9 @@ NOT_FOUND_PAGE = "notfound.html"
 #: decided by `Handler._docs`, not a fixed path each.
 DOCS_SHELL = "docs.html"
 
-#: The status page's and the public map's shells, served by `Handler._status_site`
-#: and `Handler._map_site` with their `dc-*` metas filled in.
+#: The status page's shell, served by `Handler._status_site` with its `dc-*` metas
+#: filled in.
 STATUS_SHELL = "status.html"
-MAP_SHELL = "map.html"
 
 _EXTRA_TYPES = {
     ".js": "text/javascript; charset=utf-8",
@@ -358,8 +351,6 @@ def missing_vendor() -> list[str]:
         "vendor/topojson-client.js",
         "vendor/meridian/styles.css",
         "vendor/meridian/_ds_bundle.js",
-        "vendor/dc-map.js",
-        "vendor/dc-map3d.js",
     )
     return [name for name in required if not (STATIC_ROOT / name).is_file()]
 
@@ -370,7 +361,7 @@ def missing_public() -> list[str]:
     Checked at startup for the reason `missing_vendor` is: without them every
     signed-out visit is a 500, which a published console would show to everybody.
     """
-    pages = sorted({*PUBLIC_PAGES.values(), NOT_FOUND_PAGE, DOCS_SHELL, STATUS_SHELL, MAP_SHELL})
+    pages = sorted({*PUBLIC_PAGES.values(), NOT_FOUND_PAGE, DOCS_SHELL, STATUS_SHELL})
     missing = [name for name in sorted(PUBLIC_STATIC) if not (STATIC_ROOT / name).is_file()]
     missing += [f"public/{name}" for name in pages if not (PUBLIC_ROOT / name).is_file()]
     return missing
@@ -378,7 +369,6 @@ def missing_public() -> list[str]:
 
 __all__ = [
     "DOCS_SHELL",
-    "MAP_SHELL",
     "NOT_FOUND_PAGE",
     "PUBLIC_PAGES",
     "PUBLIC_ROOT",

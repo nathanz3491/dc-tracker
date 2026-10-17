@@ -914,15 +914,102 @@ h5.dc-md-h {
   align-self: flex-start;
 }
 
-/* ---- Map zoom -------------------------------------------------------------
-   Only the button path eases; wheel and drag stay instant, because a transition
-   on a continuous gesture reads as lag rather than as polish. */
-dc-map.dc-map--easing svg > g,
-dc-map.dc-map--easing svg > g > g {
-  transition: transform 240ms var(--ease-spring);
+/* ---- Map (`views-map.js`) ----------------------------------------------------
+   The stage colours and the land are the map's own: the theme's chart colours are
+   tuned for bars, and six stages read best as six hues that keep apart in both
+   themes. The state shading runs from the land to the theme's amber. */
+:root {
+  --stage-announced: #7a69a0;
+  --stage-permitting: #43739c;
+  --stage-construction: #a05e1c;
+  --stage-operational: #4c7a46;
+  --stage-paused: #8a680a;
+  --stage-cancelled: #9a8a7a;
+  --map-land: #ece3d4;
+  --map-land-edge: #fffaf1;
 }
-dc-map svg { cursor: grab; }
-dc-map svg:active { cursor: grabbing; }
+.dark {
+  --stage-announced: #b9a6cf;
+  --stage-permitting: #8fb3d6;
+  --stage-construction: #dca75f;
+  --stage-operational: #8fbf86;
+  --stage-paused: #dfb75c;
+  --stage-cancelled: #7f705f;
+  --map-land: #2b2018;
+  --map-land-edge: #1b1410;
+}
+.mapv-figures { margin: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.mapv-figures div { padding: 16px 18px; background: var(--surface); border: 1px solid var(--border); border-radius: 14px; }
+.mapv-figures dt { font: 500 11.5px/1.3 var(--font-mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted-foreground); }
+.mapv-figures dd { margin: 6px 0 0; font: 400 34px/1.05 var(--font-display); letter-spacing: -.01em; }
+.mapv-tools { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; justify-content: space-between; }
+.mapv-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.mapv-chip {
+  display: inline-flex; align-items: center; gap: 7px; height: 30px; padding: 0 11px;
+  border: 1px solid var(--border); border-radius: 99px; background: var(--surface);
+  font: inherit; font-size: 13px; color: var(--foreground); cursor: pointer;
+}
+.mapv-chip i { width: 9px; height: 9px; border-radius: 99px; background: var(--c); }
+.mapv-chip small { font-family: var(--font-mono); font-size: 11.5px; color: var(--muted-foreground); }
+.mapv-chip[aria-pressed="false"] { background: transparent; color: var(--muted-foreground); }
+.mapv-chip[aria-pressed="false"] i { background: transparent; box-shadow: inset 0 0 0 1.5px var(--c); }
+.mapv-chip:hover { border-color: var(--primary); }
+.mapv-zoom { display: flex; align-items: center; gap: 6px; }
+.mapv-k { min-width: 38px; text-align: center; font-size: 12px; color: var(--muted-foreground); }
+.mapv-btn {
+  display: inline-flex; align-items: center; justify-content: center; height: 32px; min-width: 32px; padding: 0 8px;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--surface);
+  font: inherit; font-size: 17px; line-height: 1; color: var(--foreground); cursor: pointer;
+}
+.mapv-btn--text { font-size: 13px; padding: 0 11px; }
+.mapv-btn:hover:not(:disabled) { border-color: var(--primary); }
+.mapv-btn:disabled { opacity: .45; cursor: default; }
+.mapv-frame { position: relative; margin: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 18px; overflow: hidden; }
+.mapv-canvas { position: relative; width: 100%; aspect-ratio: 16 / 9.4; min-height: 300px; touch-action: none; }
+.mapv-canvas svg { display: block; width: 100%; height: 100%; cursor: grab; }
+.mapv-canvas svg:active { cursor: grabbing; }
+.mapv-loading { position: absolute; inset: 0; display: grid; place-items: center; margin: 0; color: var(--muted-foreground); font-size: 13px; }
+.mapv-state { stroke: var(--map-land-edge); stroke-width: .8; }
+.mapv-state:hover { stroke: var(--primary); stroke-width: 1.6; }
+.mapv-state-label { font: 500 10.5px var(--font-mono); fill: var(--muted-foreground); pointer-events: none; letter-spacing: .04em; }
+.mapv-dot { stroke-width: 1.4; cursor: pointer; transition: opacity .15s; }
+.mapv-dot.hollow { fill: none !important; stroke-dasharray: 2.5 2.5; }
+.mapv-dot.off { opacity: 0; pointer-events: none; }
+.mapv-dot:hover { stroke-width: 2.6; }
+.mapv-tip {
+  position: absolute; z-index: 5; pointer-events: none; max-width: 300px; padding: 9px 12px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow-pop);
+  font-size: 13px; line-height: 1.45; color: var(--foreground);
+}
+.mapv-tip b { display: block; font-weight: 600; }
+.mapv-tip span { color: var(--muted-foreground); }
+.mapv-tip em { display: block; font-style: normal; color: var(--danger); margin-top: 2px; }
+.mapv-tip small { display: block; margin-top: 3px; font-family: var(--font-mono); font-size: 11px; color: var(--muted-foreground); }
+.mapv-legend {
+  display: flex; flex-wrap: wrap; gap: 6px 18px; align-items: center; padding: 10px 16px;
+  border-top: 1px solid var(--border); font: 400 12px/1.4 var(--font-mono); color: var(--muted-foreground);
+}
+.mapv-scale { display: inline-flex; align-items: center; gap: 6px; }
+.mapv-scale i { display: inline-block; border-radius: 99px; border: 1.4px solid var(--muted-foreground); }
+.mapv-ramp {
+  display: inline-block; width: 90px; height: 8px; border-radius: 99px; vertical-align: middle;
+  background: linear-gradient(90deg, var(--map-land), var(--primary));
+}
+.mapv-note { margin: -6px 0 0; font-size: 13.5px; color: var(--muted-foreground); }
+.mapv-failed { margin: 0; color: var(--danger); font-size: 14px; }
+.mapv-states { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0 32px; }
+.mapv-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.mapv-table caption { text-align: left; font: 500 11.5px/1.3 var(--font-mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted-foreground); padding-bottom: 8px; min-height: 1.3em; }
+.mapv-table th, .mapv-table td { padding: 7px 8px; border-top: 1px solid var(--border); text-align: right; font-variant-numeric: tabular-nums; }
+.mapv-table th:first-child, .mapv-table td:first-child { text-align: left; }
+.mapv-table thead th { font-weight: 500; color: var(--muted-foreground); font-size: 12.5px; }
+.mapv-table tbody th { font-weight: 550; }
+@media (max-width: 900px) { .mapv-states { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 760px) {
+  .mapv-figures { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .mapv-figures dd { font-size: 28px; }
+}
+@media (max-width: 560px) { .mapv-canvas { aspect-ratio: 16 / 11; min-height: 220px; } }
 
 /* Getting to the data on a phone.
    Measured before this: 940px of chrome above the first card. The intro

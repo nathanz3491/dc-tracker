@@ -533,16 +533,6 @@ class Settings(BaseSettings):
     #: keeps the results for the page. Unset, the page is at `/status/` and nothing
     #: is checked.
     status_hostname: str | None = None
-    #: The hostname the public map answers on (`webui/publicmap.py`). Unset, the
-    #: map is at `/public-map/` on the console's own address (`/map` is the
-    #: console's own Map view).
-    map_hostname: str | None = None
-    #: How much of each campus the public map shows a stranger. `states`: totals and
-    #: shaded states, no dots. `dots`: a dot per campus with its operator, state,
-    #: stage and a capacity band. `campuses`: also its name, its town and its exact
-    #: planned capacity. Never more than that at any level — no investment, tenant,
-    #: date, obstacle or source. See `publicmap.FIELDS`.
-    public_map_detail: Literal["states", "dots", "campuses"] = "dots"
     #: Seconds between the status page's checks of each public address.
     status_interval_s: int = Field(default=300, ge=60, le=3600)
 

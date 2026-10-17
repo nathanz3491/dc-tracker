@@ -1,11 +1,14 @@
-"""The status page and the public map: what they compute, and what they let out.
+"""The status page, the console map's figures, and the hostnames: what they compute,
+and what they let out.
 
 In the order a mistake would cost:
 
-* the map sends a stranger exactly the fields its level allows — never investment,
-  a tenant, a date, an obstacle or a source — and counts each campus once;
 * each hostname answers only its own pages: nothing of the console, the API or the
-  docs is reachable on the status or map hostnames, and neither answers a write;
+  docs is reachable on the status hostname, and it answers no write; a hostname this
+  server does not serve (the retired public map's) is sent to the console rather
+  than answered as it;
+* the Map view's totals count what the Capex page counts — no paused or cancelled
+  campus, each suspected duplicate once — and draw a duplicate once;
 * the status page counts a stretch with no checks as downtime, names a restart a
   restart, and reads the nightly log the way the loop writes it.
 """
@@ -15,6 +18,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import threading
+from contextlib import contextmanager
 from http.client import HTTPConnection
 from pathlib import Path
 
@@ -22,19 +26,19 @@ import pytest
 
 from tracker.db import init_db, session_scope
 from tracker.models import Project
-from tracker.webui import publicmap, statussite
+from tracker.webui import mapsummary, statussite
 from tracker.webui.server import Console, Handler
 from tracker.webui.statussite import Check, Store
 
 UTC = dt.UTC
 STATUS_HOST = "status.console.example"
-MAP_HOST = "map.console.example"
 API_HOST = "api.console.example"
 DOCS_HOST = "docs.console.example"
 CONSOLE_HOST = "console.example"
+RETIRED_HOST = "map.console.example"
 
 
-# --- the map's payload ------------------------------------------------------------
+# --- the Map view's figures -------------------------------------------------------
 
 
 def _campus(session, n: int, **kw) -> Project:
@@ -59,15 +63,7 @@ def db(tmp_path, migrated_copy):
     path = migrated_copy(tmp_path / "tracker.db")
     engine, _ = init_db(path)
     with session_scope(engine) as session:
-        _campus(
-            session,
-            1,
-            mw_planned=1200.0,
-            mw_built=200.0,
-            investment_usd=15_000_000_000,
-            customer="BigCo",
-            blocker="The substation is late.",
-        )
+        _campus(session, 1, mw_planned=1200.0, mw_built=200.0)
         _campus(
             session,
             2,
@@ -94,42 +90,11 @@ def db(tmp_path, migrated_copy):
     return path
 
 
-def test_each_level_sends_exactly_its_fields(db):
-    """The allowlist is the whole of what a stranger gets; a key outside it is a leak."""
+def test_totals_leave_out_a_cancelled_campus_but_its_stage_is_counted(db):
+    """The figures are the Capex page's; the stage chips count every row drawn."""
     engine, _ = init_db(db)
     with session_scope(engine, commit=False) as session:
-        for level in publicmap.LEVELS:
-            data = publicmap.build(session, level=level)
-            for point in data["points"]:
-                assert set(point) == set(publicmap.FIELDS[level]), level
-            blob = json.dumps(data)
-            for secret in (
-                "15000000000",
-                "BigCo",
-                "substation",
-                "investment",
-                "customer",
-                "blocker",
-            ):
-                assert secret not in blob, (level, secret)
-
-
-def test_states_level_draws_no_dots_and_dots_level_no_names(db):
-    engine, _ = init_db(db)
-    with session_scope(engine, commit=False) as session:
-        assert publicmap.build(session, level="states")["points"] == []
-        dots = publicmap.build(session, level="dots")["points"]
-        assert all("name" not in p and "mw" not in p and "place" not in p for p in dots)
-        assert {p["band"] for p in dots} == {"1000_2999", "100_299", "300_999", None}
-        assert all(p["lat"] == round(p["lat"], 1) for p in dots)
-        campuses = publicmap.build(session, level="campuses")["points"]
-        assert {p["name"] for p in campuses} >= {"Campus 1", "Campus 2"}
-
-
-def test_totals_leave_out_cancelled_campuses_but_the_map_draws_them(db):
-    engine, _ = init_db(db)
-    with session_scope(engine, commit=False) as session:
-        data = publicmap.build(session, level="dots")
+        data = mapsummary.build(session)
     assert data["totals"] == {
         "campuses": 4,
         "planned_mw": 1500.0,
@@ -137,40 +102,32 @@ def test_totals_leave_out_cancelled_campuses_but_the_map_draws_them(db):
         "states": 4,
     }
     assert data["stages"]["cancelled"] == 1
-    assert any(p["stage"] == "cancelled" for p in data["points"])
+    assert data["stages"]["construction"] == 3
+    assert list(data["stages"]) == list(mapsummary.STAGES)
     assert data["states"]["VA"] == {"campuses": 1, "planned_mw": 250.0}
-    # No coordinates, no dot — but still counted.
-    assert data["states"]["WY"]["campuses"] == 1
-    assert len(data["points"]) == 4
+    # A campus with no coordinates draws no dot, but it is still counted.
+    assert data["states"]["WY"] == {"campuses": 1, "planned_mw": 50.0}
+    # A size nobody published counts as zero, not as a gap in the table.
+    assert data["states"]["OH"] == {"campuses": 1, "planned_mw": 0.0}
+    assert data["skipped"] == []
+    assert data["updated_at"]
 
 
-def test_a_suspected_duplicate_is_counted_and_drawn_once(db, monkeypatch):
+def test_a_suspected_duplicate_is_counted_once_and_not_drawn(db, monkeypatch):
+    """Two dots for one campus would be the double count again, in a picture."""
     engine, _ = init_db(db)
     with session_scope(engine, commit=False) as session:
         ids = {p.name: p.id for p in session.query(Project)}
         monkeypatch.setattr(
-            publicmap,
+            mapsummary,
             "counted_ids",
             lambda _s: ({ids["Campus 1"], ids["Campus 4"]}, {ids["Campus 2"]}),
         )
-        data = publicmap.build(session, level="campuses")
-    assert "Campus 2" not in {p["name"] for p in data["points"]}
+        data = mapsummary.build(session)
+    assert data["skipped"] == [ids["Campus 2"]]
     assert data["totals"]["campuses"] == 2
-
-
-def test_the_written_summary_says_not_published_rather_than_zero(db):
-    engine, _ = init_db(db)
-    with session_scope(engine, commit=False) as session:
-        html = publicmap.summary_html(publicmap.build(session, level="dots"))
-    assert "<dd>4</dd>" in html and "1.5 GW" in html
-    assert "OH</th><td>1</td><td>not published</td>" in html
-
-
-def test_bands():
-    assert publicmap.band(None) is None and publicmap.band(0) is None
-    assert publicmap.band(99.9) == "under_100"
-    assert publicmap.band(100) == "100_299"
-    assert publicmap.band(3000) == "3000_plus"
+    assert "VA" not in data["states"]
+    assert data["stages"]["operational"] == 0
 
 
 # --- the status numbers -----------------------------------------------------------
@@ -406,19 +363,10 @@ def test_a_quiet_night_takes_its_last_moment_from_its_spend_ledger(tmp_path):
 # --- the hostnames ----------------------------------------------------------------
 
 
-@pytest.fixture
-def live(db):
+@contextmanager
+def _serving(console):
     from http.server import ThreadingHTTPServer
 
-    console = Console(
-        db,
-        published=True,
-        console_host=CONSOLE_HOST,
-        docs_host=DOCS_HOST,
-        api_host=API_HOST,
-        status_host=STATUS_HOST,
-        map_host=MAP_HOST,
-    )
     handler = type("Bound", (Handler,), {"console": console})
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     httpd.daemon_threads = True
@@ -429,6 +377,20 @@ def live(db):
         httpd.shutdown()
         httpd.server_close()
         console.close()
+
+
+@pytest.fixture
+def live(db):
+    console = Console(
+        db,
+        published=True,
+        console_host=CONSOLE_HOST,
+        docs_host=DOCS_HOST,
+        api_host=API_HOST,
+        status_host=STATUS_HOST,
+    )
+    with _serving(console) as address:
+        yield address
 
 
 def call(address, path, host=None, method="GET"):
@@ -445,52 +407,57 @@ def test_the_status_hostname_is_the_status_page_and_nothing_else(live):
     status, headers, body = call(live, "/", STATUS_HOST)
     assert status == 200 and "dc-tracker status" in body
     assert headers["X-Robots-Tag"] == "noindex"
-    assert f'<meta name="dc-map" content="https://{MAP_HOST}/">' in body
+    assert 'name="dc-map"' not in body, "the public map is gone"
+    assert f'<meta name="dc-docs" content="https://{DOCS_HOST}/">' in body
     status, _, body = call(live, "/status.json", STATUS_HOST)
-    assert status == 200 and json.loads(body)["overall"] == "unknown"
+    data = json.loads(body)
+    assert status == 200 and data["overall"] == "unknown"
+    assert [s["id"] for s in data["services"]] == ["console", "api", "docs"]
     status, _, _ = call(live, "/static/pages/status.js", STATUS_HOST)
     assert status == 200
-    for path in ("/api/dataset", "/api/v1/health", "/docs/", "/signin", "/map/", "/static/app.js"):
+    for path in ("/api/dataset", "/api/map", "/api/v1/health", "/docs/", "/signin", "/map"):
         assert call(live, path, STATUS_HOST)[0] == 404, path
+    assert call(live, "/static/app.js", STATUS_HOST)[0] == 404
     assert call(live, "/api/login", STATUS_HOST, method="POST")[0] == 404
 
 
-def test_the_map_hostname_is_the_map_and_nothing_else(live):
-    status, headers, body = call(live, "/", MAP_HOST)
-    assert status == 200
-    assert f'<link rel="canonical" href="https://{MAP_HOST}/">' in body
-    assert "<dd>4</dd>" in body, "the figures are written into the page for search engines"
-    assert "X-Robots-Tag" not in headers
-    status, _, body = call(live, "/data.json", MAP_HOST)
-    data = json.loads(body)
-    assert status == 200 and data["level"] == "dots"
-    assert all(set(p) == set(publicmap.FIELDS["dots"]) for p in data["points"])
-    status, _, body = call(live, "/robots.txt", MAP_HOST)
-    assert status == 200 and f"Sitemap: https://{MAP_HOST}/sitemap.xml" in body
-    assert call(live, "/sitemap.xml", MAP_HOST)[0] == 200
-    assert call(live, "/static/vendor/us-states-10m.json", MAP_HOST)[0] == 200
-    for path in (
-        "/api/dataset",
-        "/api/v1/projects",
-        "/docs/",
-        "/signin",
-        "/status/",
-        "/static/app.js",
-    ):
-        assert call(live, path, MAP_HOST)[0] == 404, path
-    assert call(live, "/api/login", MAP_HOST, method="POST")[0] == 404
-
-
-def test_both_are_public_under_a_path_on_the_console(live):
-    """Behind the sign-in the console needs, but these two are for anybody."""
+def test_the_status_page_is_public_under_a_path_on_the_console(live):
+    """Behind the sign-in the console needs, but the status page is for anybody."""
     assert call(live, "/status/", CONSOLE_HOST)[0] == 200
-    assert call(live, "/public-map/", CONSOLE_HOST)[0] == 200
-    assert call(live, "/public-map/data.json", CONSOLE_HOST)[0] == 200
-    # `/map` stays the console's own Map view, behind the sign-in.
-    assert call(live, "/map", CONSOLE_HOST)[0] != 200
     assert call(live, "/status", CONSOLE_HOST)[0] == 303
-    # Not on the other public hostnames: the API claims its whole host, the docs theirs.
+    # Not on the API's hostname: it claims every path there.
     assert call(live, "/status/", API_HOST)[0] == 404
-    assert call(live, "/public-map/", DOCS_HOST)[0] == 404
-    # And the console's data stays behind the sign-in.
+    # The retired public map's path is nothing now, and the Map view and its
+    # figures stay behind the sign-in.
+    assert call(live, "/public-map/", CONSOLE_HOST)[0] != 200
+    assert call(live, "/map", CONSOLE_HOST)[0] != 200
+    assert call(live, "/api/map", CONSOLE_HOST)[0] == 401
     assert call(live, "/api/dataset", CONSOLE_HOST)[0] == 401
+
+
+def test_a_hostname_this_server_does_not_serve_is_sent_to_the_console(live):
+    """The public map's DNS record outlives its site. Answered as the console, it
+    would serve the sign-in page — and set its cookie — under a name that is not
+    the console's."""
+    status, headers, body = call(live, "/map?stage=construction", RETIRED_HOST)
+    assert status == 307
+    assert headers["Location"] == f"https://{CONSOLE_HOST}/map?stage=construction"
+    assert body == "" and "Set-Cookie" not in headers
+    assert call(live, "/", "MAP.console.example:443")[1]["Location"] == f"https://{CONSOLE_HOST}/"
+    status, headers, _ = call(live, "/api/login", RETIRED_HOST, method="POST")
+    assert status == 307 and headers["Location"] == f"https://{CONSOLE_HOST}/api/login"
+
+
+@pytest.mark.parametrize(
+    "host",
+    [None, "localhost:8765", "127.0.0.1", "[::1]:8765", "10.0.0.5", CONSOLE_HOST, DOCS_HOST],
+)
+def test_this_machine_and_the_known_sites_are_never_redirected(live, host):
+    """The deployer's health check asks an address, and the other sites are ours."""
+    assert call(live, "/signin", host)[0] != 307
+
+
+def test_without_a_console_hostname_nothing_is_redirected(db):
+    """A laptop or a quick tunnel has no name to send anybody to."""
+    with _serving(Console(db)) as address:
+        assert call(address, "/api/map", RETIRED_HOST)[0] == 200

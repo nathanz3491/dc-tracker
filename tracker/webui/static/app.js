@@ -15,6 +15,7 @@
 
 import { AccountView, AdminView } from "/static/views-account.js";
 import { MonitorView } from "/static/views-monitor.js";
+import { MapView } from "/static/views-map.js";
 
 const html = htm.bind(React.createElement);
 const { useState, useEffect, useMemo, useRef, useCallback } = React;
@@ -3726,147 +3727,7 @@ function SourcesTab({ data, p, limit = null, onAll = null }) {
 
 /* ---- Map ----------------------------------------------------------------- */
 
-function MapView({ data, onOpen }) {
-  const has3d = !!window.customElements?.get("dc-map3d");
-  const [mode, setMode] = useState("2d");
-  const [enc, setEnc] = useState("phase");
-  const [chor, setChor] = useState("count");
-  const [clusters, setClusters] = useState(false);
-  const [zoom, setZoom] = useState(1);
-  const hostRef = useRef(null);
-  const mapRef = useRef(null);
-  const narrow = useMedia(NARROW);
-
-  // The element owns its own zoom (wheel, drag, pinch); these just drive it, so
-  // the buttons and the gesture can never disagree about the current scale.
-  const command = (how) => mapRef.current?.dispatchEvent(
-    new CustomEvent("dc-zoom-cmd", { detail: { how } }),
-  );
-
-  // The custom elements dispatch a bubbling `dc-pick`; React has no synthetic
-  // event for it, so listen on the host.
-  useEffect(() => {
-    const el = hostRef.current;
-    if (!el) return;
-    const onPick = (e) => e.detail?.id && onOpen(e.detail.id);
-    const onZoom = (e) => setZoom(e.detail?.k || 1);
-    el.addEventListener("dc-pick", onPick);
-    el.addEventListener("dc-zoom", onZoom);
-    return () => { el.removeEventListener("dc-pick", onPick); el.removeEventListener("dc-zoom", onZoom); };
-  }, [onOpen]);
-
-  const plotted = data.projects.filter((p) => p.lat != null).length;
-  const is3d = mode === "3d";
-
-  return html`
-    <div class="dc-view dc-rise" style=${{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 16,
-                     padding: "22px 26px 60px" }}>
-      <${Eyebrow} figure="fig. 02 — geography" title="Roughly where they are">
-        A dot sits on the middle of the town, ${html`<b>not</b>`} on the site — almost nobody publishes an
-        address. ${is3d
-          ? "Taller column, more megawatts — on a square-root scale with a ceiling, so the few giant campuses stand out without flattening the rest. Darker states hold more projects. A short faint pin means nobody has said how big it is."
-          : "Bigger dot, more megawatts. A hollow dashed ring means nobody has said how big it is."}
-        ${" "}${plotted} of ${data.projects.length} projects have coordinates.
-      <//>
-
-      <${Card}>
-        <div style=${{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "12px 16px", padding: "14px 20px" }}>
-          ${has3d && html`
-            <div class="dc-seg">
-              ${[["2d", "Flat"], ["3d", "Relief"]].map(([m, label]) => html`
-                <button key=${m} type="button" class="dc-seg-btn" aria-pressed=${mode === m}
-                        onClick=${() => setMode(m)}>${label}</button>`)}
-            </div>`}
-          <div style=${{ display: "flex", alignItems: "center", gap: 8 }}>
-            <label for="m-enc" style=${{ fontSize: 12, fontWeight: 500, textTransform: "uppercase",
-                                         letterSpacing: "0.08em", color: "var(--muted-foreground)" }}>colour</label>
-            <${Select} id="m-enc" size="sm" value=${enc} onChange=${(e) => setEnc(e.target.value)}
-                       style=${{ width: 150 }}>
-              <option value="phase">phase</option>
-              <option value="confidence">confidence</option>
-              <option value="company">operator</option>
-            <//>
-          </div>
-          <div style=${{ display: "flex", alignItems: "center", gap: 8 }}>
-            <label for="m-chor" style=${{ fontSize: 12, fontWeight: 500, textTransform: "uppercase",
-                                          letterSpacing: "0.08em", color: "var(--muted-foreground)" }}>state fill</label>
-            <${Select} id="m-chor" size="sm" value=${chor} disabled=${is3d}
-                       onChange=${(e) => setChor(e.target.value)} style=${{ width: 150 }}>
-              <option value="count">project count</option>
-              <option value="mw">cited MW</option>
-              <option value="none">none</option>
-            <//>
-          </div>
-          <${Switch} size="sm" label="Operator clusters" checked=${clusters} disabled=${is3d}
-                     onCheckedChange=${(v) => setClusters(!!v)} />
-          <span style=${{ flex: 1 }} />
-          ${!is3d && html`
-            <div style=${{ display: "flex", alignItems: "center", gap: 6 }}>
-              <${Button} size="icon" variant="outline" aria-label="Zoom out"
-                         disabled=${zoom <= 1.001} onClick=${() => command("out")}>−<//>
-              <span class="dc-num" style=${{ minWidth: 42, textAlign: "center", fontSize: 12,
-                                             color: "var(--muted-foreground)" }}>
-                ${zoom.toFixed(1)}×</span>
-              <${Button} size="icon" variant="outline" aria-label="Zoom in"
-                         disabled=${zoom >= 11.9} onClick=${() => command("in")}>+<//>
-            </div>`}
-          <${Button} size="sm" variant="outline" disabled=${!is3d && zoom <= 1.001}
-            onClick=${() => (is3d
-              ? window.dispatchEvent(new Event("dc-reset-view"))
-              : command("reset"))}>Reset view<//>
-        </div>
-      <//>
-
-      <div style=${{ display: "flex", flexWrap: "wrap", gap: 16, alignItems: "stretch" }} ref=${hostRef}>
-        <div style=${{ flex: "1 1 540px", minWidth: 0 }}>
-          <${Card}>
-            <div style=${{ position: "relative", height: narrow ? "60vh" : 600,
-                           borderRadius: 20, overflow: "hidden" }}>
-              ${!is3d && html`<div style=${{ position: "absolute", inset: narrow ? 4 : 12 }}>
-                ${/* `compact` is dc-map's own narrow mode: no legend, no state
-                     labels, tighter padding and smaller marks. At 300px the
-                     labels overlap into illegibility. */ ""}
-                <dc-map ref=${mapRef} encoding=${enc} choropleth=${chor}
-                        clusters=${clusters ? "true" : null} compact=${narrow ? "true" : null}
-                        selected="" />
-              </div>`}
-              ${is3d && html`<div style=${{ position: "absolute", inset: 0 }}>
-                <dc-map3d encoding=${enc} selected="" />
-              </div>`}
-            </div>
-          <//>
-        </div>
-
-        <div style=${{ flex: "1 1 300px", minWidth: 280, maxWidth: 420, display: "flex",
-                       flexDirection: "column", gap: 9, maxHeight: 600, overflowY: "auto", paddingRight: 2 }}>
-          ${data.projects.slice().sort((a, b) => (b.mw_planned || 0) - (a.mw_planned || 0)).map((p) => {
-            const blocking = p.risks.some((r) => r.status === "open" && r.severity === "blocking");
-            const token = enc === "confidence"
-              ? ["--muted-foreground", "--warning", "--chart-1", "--success"][p.confidence]
-              : PHASE_TOKEN[p.phase] || "--chart-1";
-            return html`
-              <button key=${p.id} type="button" class="dc-tile"
-                      onClick=${() => onOpen(p.id)}>
-                <div style=${{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <span style=${{ flex: "none", width: 10, height: 10, borderRadius: 999,
-                    ...(p.mw_planned == null ? { border: `1.5px dashed var(${token})` } : { background: `var(${token})` }) }} />
-                  <span style=${{ flex: 1, minWidth: 0, fontSize: 14, fontWeight: 600, overflow: "hidden",
-                                  textOverflow: "ellipsis", whiteSpace: "nowrap" }}>${p.company} — ${p.name}</span>
-                  <span class="dc-num" style=${{ fontSize: 12,
-                    color: p.mw_planned == null ? "var(--muted-foreground)" : "var(--foreground)" }}>
-                    ${p.mw_planned == null ? "no MW" : p.mw_planned.toLocaleString() + " MW"}</span>
-                </div>
-                <div style=${{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
-                               fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--muted-foreground)" }}>
-                  <span>${place(p)}</span><span>·</span><span>${p.phase}</span>
-                  ${blocking && html`<span style=${{ color: "var(--danger)" }}>· blocking</span>`}
-                </div>
-              </button>`;
-          })}
-        </div>
-      </div>
-    </div>`;
-}
+/* In `views-map.js`. */
 
 /* ---- Operations views ---------------------------------------------------- */
 
@@ -6089,11 +5950,6 @@ function App() {
   const load = useCallback(() => api("/api/dataset").then((payload) => {
     if (payload.kwPerH200) H200_KW = payload.kwPerH200;
     setData(payload);
-    // The vendored custom elements read `window.DCTRACKER`. They were written
-    // against the mockup's shape, which the API deliberately matches, so they
-    // need no adaptation — only to be told the data has arrived.
-    window.DCTRACKER = payload;
-    window.dispatchEvent(new Event("dctracker-ready"));
     setError(null);
     // The whole error object, not just its message: `unreachable` is what lets
     // the page say "nothing answered" instead of blaming the database. A network
@@ -6310,7 +6166,8 @@ function App() {
           : view === "projects" && html`<${ProjectsView} data=${data} onOpen=${openProject}
                                                          watch=${watch} onGoto=${goto} />`}
         ${view === "sources" && html`<${SourcesView} data=${data} />`}
-        ${view === "map" && html`<${MapView} data=${data} onOpen=${openProject} />`}
+        ${view === "map" && html`<${MapView} data=${data} api=${api} onOpen=${openProject}
+                                            Eyebrow=${Eyebrow} />`}
         ${view === "capex" && html`
           <${CapexView} data=${data} allowAi=${data.allow_ai} aiOff=${data.ai_off} onOpen=${openProject} />`}
         ${view === "account" && html`<${AccountView} data=${data} api=${api} />`}

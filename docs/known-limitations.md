@@ -283,8 +283,7 @@ charged to five views that never draw it.
 
 The table asks a question now — `?q=&state=&sort=&offset=` — and gets thirty rows
 and a count for the whole filter. The shell keeps a light index of every project,
-because the two map components plot all of them at once and one of them reads
-`window.DCTRACKER` directly. Capex and the citations list fetch their own data
+because the Map view plots all of them at once. Capex and the citations list fetch their own data
 when opened; a publisher's articles arrive when its card is expanded.
 
 | | before | after |
