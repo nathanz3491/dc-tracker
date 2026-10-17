@@ -307,6 +307,24 @@ def test_the_prober_records_a_start_and_a_round(tmp_path):
     assert [(c.service, c.ok) for _at, c in rounds] == [("console", True), ("api", False)]
 
 
+def test_the_first_round_waits_for_the_server_to_be_listening(tmp_path):
+    """The first deploy checked before the port was serving and recorded its own
+    restart as an outage. The start is recorded at once; the round waits."""
+    store = Store(tmp_path / "status.db")
+    prober = statussite.Prober(
+        store,
+        [("console", "https://console.example/")],
+        interval_s=60,
+        checker=lambda service, url: pytest.fail("checked before the delay ended"),
+        clock=lambda: T,
+        first_delay_s=30,
+    )
+    prober.halt.set()  # stopped during the delay
+    prober.run()
+    assert len(store.starts_since(T - STEP)) == 1
+    assert store.checks_since(T - STEP) == []
+
+
 def test_a_check_reports_status_and_failure():
     import httpx
 

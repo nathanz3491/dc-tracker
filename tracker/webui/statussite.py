@@ -77,6 +77,10 @@ DOWN_AFTER: Final = 2
 #: Nights the page lists.
 NIGHTS_SHOWN: Final = 14
 
+#: Seconds the prober waits after the server starts before its first round: long
+#: enough for `serve_forever` to be accepting and the tunnel to have reconnected.
+FIRST_DELAY_S: Final = 15.0
+
 #: A run that another run follows within this was restarted by hand, not cut off.
 FALSE_START: Final = dt.timedelta(hours=3)
 
@@ -309,7 +313,11 @@ def check(service: str, url: str, *, timeout: float = CHECK_TIMEOUT_S, client=No
 
 
 class Prober(threading.Thread):
-    """Checks every public address each interval, for as long as the server runs."""
+    """Checks every public address each interval, for as long as the server runs.
+
+    The start is recorded at once — it carries the boot time a restart is named
+    from — and the first round follows `first_delay_s` later.
+    """
 
     def __init__(
         self,
@@ -319,6 +327,7 @@ class Prober(threading.Thread):
         interval_s: int,
         checker: Callable[[str, str], Check] = check,
         clock: Callable[[], dt.datetime] = utc_now,
+        first_delay_s: float = 0.0,
     ) -> None:
         super().__init__(name="status-prober", daemon=True)
         self.store = store
@@ -326,6 +335,7 @@ class Prober(threading.Thread):
         self.interval_s = interval_s
         self.checker = checker
         self.clock = clock
+        self.first_delay_s = first_delay_s
         self.halt = threading.Event()
 
     def round(self) -> None:
@@ -340,6 +350,8 @@ class Prober(threading.Thread):
             log.error("status: cannot open %s: %s", self.store.path, exc)
             return
         pruned_on: dt.date | None = None
+        if self.first_delay_s and self.halt.wait(self.first_delay_s):
+            return
         # A round first, then the wait: a server that has just come back up says so
         # at once, rather than an interval later.
         while True:

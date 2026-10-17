@@ -3842,20 +3842,26 @@ def serve(
             "map": console.map_host,
         }
     )
-    if console.status_host and addresses:
-        prober = statussite.Prober(
-            console.status_store, addresses, interval_s=console.status_interval_s
-        )
-        prober.start()
-        log.info(
-            "status: checking %d public address(es) every %ds", len(addresses), prober.interval_s
-        )
     # Made now rather than on the first sign-in to an unknown address, which
     # would otherwise cost two scrypts where every later one costs one.
     accounts.decoy_hash()
     handler = type("BoundHandler", (Handler,), {"console": console})
     httpd = ThreadingHTTPServer((host, port), handler)
     httpd.daemon_threads = True
+    # Started once the port is bound, so a request the first round sends waits in
+    # the listen queue instead of meeting a closed port: the first deploy started it
+    # before, and its first round recorded the server's own restart as an outage.
+    if console.status_host and addresses:
+        prober = statussite.Prober(
+            console.status_store,
+            addresses,
+            interval_s=console.status_interval_s,
+            first_delay_s=statussite.FIRST_DELAY_S,
+        )
+        prober.start()
+        log.info(
+            "status: checking %d public address(es) every %ds", len(addresses), prober.interval_s
+        )
 
     url = f"http://{host}:{port}/"
     log.info("console on %s", url)
