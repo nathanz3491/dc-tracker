@@ -1675,11 +1675,15 @@ def pending(
     adversarial second source is the only way that fact is ever recorded.
 
     **Second come what was looked for on purpose**: the news watch's results
-    (`watch:#<id>`, :mod:`tracker.ingest.watch`) and the posts an operator's own
-    newsroom added (:func:`watch_newsrooms`), newest first. Both are about a campus
-    by construction, so the "names no tracked campus" rule would put them last of all,
-    behind a backlog of a thousand; and the watch's first, year-long look at each
-    campus finds news older than the email's window.
+    (`watch:#<id>`, :mod:`tracker.ingest.watch`), and a builder's own posts -- those
+    its newsroom added since the last walk (:func:`watch_newsrooms`), and those about
+    a campus the database does not hold, which is how a campus Meta announced and the
+    database never had comes in. The two take turns, each newest first: the watch's
+    first look at every campus queued about 5,000 results on 2026-10-19, and read
+    one after the other they would have kept the 703 builder posts about unknown
+    campuses -- the misses this whole order exists for -- waiting two weeks. Both
+    are about a campus by construction, so the "names no tracked campus" rule would
+    put the watch's results last of all, behind a backlog of a thousand.
 
     **A date in the future is no date.** An event page dated 2026-12-01 led the
     news-first order on 2026-10-17; such a row sorts as undated.
@@ -1725,23 +1729,34 @@ def pending(
                 select(SeenUrl.url).where(SeenUrl.verdict == QUEUED, SeenUrl.reason == NEWSROOM_NEW)
             )
         )
-        sought = [
-            row
-            for row in rows
-            if row.id not in taken and ((row.feed or "").startswith("watch:") or row.url in posted)
-        ]
-        taken |= {row.id for row in sought}
-        backlog = [row for row in rows if row.id not in taken]
         identities = project_identities(session)
         implied = newsroom_companies()
-        fresh = [
-            row
+        backlog = [row for row in rows if row.id not in taken]
+        unheard = {
+            row.id
             for row in backlog
             if not matches_known_project(row.url, row.title, identities, implied_companies=implied)
+        }
+
+        def builders(row: IngestUrl) -> bool:
+            return urlsplit(row.url).netloc.lower().removeprefix("www.") in implied
+
+        def watched(row: IngestUrl) -> bool:
+            return (row.feed or "").startswith("watch:")
+
+        sought = [
+            row
+            for row in backlog
+            if watched(row) or row.url in posted or (row.id in unheard and builders(row))
         ]
+        taken |= {row.id for row in sought}
+        fresh = [row for row in backlog if row.id in unheard and row.id not in taken]
         taken |= {row.id for row in fresh}
         ordered = (
-            news + newest(sought) + newest(fresh) + [row for row in rows if row.id not in taken]
+            news
+            + in_turn(newest(sought), key=lambda row: "watch" if watched(row) else "builder")
+            + newest(fresh)
+            + [row for row in rows if row.id not in taken]
         )
     elif known_first:
         # Scored in Python: the match needs slug normalization that SQL cannot do,

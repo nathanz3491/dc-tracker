@@ -160,6 +160,13 @@ initial build of the v1 PRD.
 
 ### Changed
 
+- **A builder's post about a campus the database does not hold is read alongside
+  the news watch's finds** (`tracker/ingest/discover.py`, `docs/workflows/sync.md`).
+  The watch's first look at every campus queued about 5,000 results on 2026-10-19,
+  read straight after the news; the 703 posts from builders' own sites about
+  campuses the database has never held -- what Meta's "Hello Tulsa" is -- sat behind
+  them in the backlog and would have waited two weeks. The two now take turns.
+
 - **The keyword filter matches whole words, and its bank is rebuilt to keep the
   news** (`tracker/ingest/discover.py`, `tracker/seed/feeds.toml`,
   `tracker/ingest/search.py`, `tracker/ingest/wiki.py`, `tracker/dedup.py`,

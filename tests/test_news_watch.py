@@ -395,6 +395,33 @@ def test_watch_results_come_after_the_news_and_before_the_backlog(session, monke
     assert order[0] != "https://a.test/future", "a date in the future is no date"
 
 
+def test_a_builders_post_about_an_unknown_campus_takes_turns_with_the_watch(session, monkeypatch):
+    """The watch's first look queued about 5,000 results; read first, they would have
+    kept Meta's "Hello Tulsa" -- a campus the database never held -- waiting weeks."""
+    monkeypatch.setattr(discover, "utcnow", lambda: NOW)
+    days = dt.timedelta(days=1)
+    _queue(session, "https://a.test/news", "lead", NOW - 2 * days)
+    _queue(session, "https://a.test/w-undated", "watch:#1", None)
+    for n in (210, 220, 230):
+        _queue(session, f"https://a.test/w{n}", "watch:#1", NOW - n * days)
+    meta = "https://datacenters.atmeta.com"
+    _queue(session, f"{meta}/2026/04/hello-tulsa/", "meta-datacenters", dt.datetime(2026, 4, 1))
+    _queue(session, f"{meta}/2024/05/hello-x/", "meta-datacenters", dt.datetime(2024, 5, 1))
+    _queue(session, "https://dir.test/a-campus", "servercountry-archive", NOW - 100 * days)
+    session.flush()
+    order = [row.url for row in discover.pending(session, new_first=True)]
+    assert order == [
+        "https://a.test/news",
+        f"{meta}/2026/04/hello-tulsa/",
+        "https://a.test/w210",
+        f"{meta}/2024/05/hello-x/",
+        "https://a.test/w220",
+        "https://a.test/w230",
+        "https://a.test/w-undated",
+        "https://dir.test/a-campus",
+    ]
+
+
 # --- the campus news watch ------------------------------------------------------------
 
 

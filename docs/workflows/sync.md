@@ -348,11 +348,16 @@ within the email's window (`feed.REPORT_WINDOW_DAYS`, 60 days), newest first,
 whatever campus it names, because what the crawl reads tonight is mailed tomorrow. A
 2026-09-21 report of a lawsuit against a *tracked* campus used to sort behind 1,600
 backlog articles; it was read on 10-03 and mailed on 10-04 as news. **Then what was
-looked for on purpose** — the news watch's results and the posts an operator's own
-newsroom added since the night before (`seen_url.reason` = `NEWSROOM_NEW`, not a
-first walk's catch-up and not an old `--deep` sweep's rows), newest first: both are
-about a campus by construction, so the next rule would put them last, and the
-watch's first look finds news older than the window. Then the articles naming **no** tracked campus, newest published first, then
+looked for on purpose**, the two taking turns, each newest first: the news watch's
+results, and a builder's own posts — those its newsroom added since the night before
+(`seen_url.reason` = `NEWSROOM_NEW`) and those about a campus the database does not
+hold, which is how a campus Meta announced and the database never had comes in. An
+old `--deep` sweep's builder rows about tracked campuses stay in the backlog. The
+watch's results are about a campus by construction, so the next rule would put them
+last, and its first look finds news older than the window; the turns are because that
+first look queued about 5,000 results on 2026-10-19, which read one after the other
+would have kept the 703 builder posts about unknown campuses waiting two weeks. Then
+the articles naming **no** tracked campus, newest published first, then
 the rest — rule 4 applying throughout. A date more than a day in the future is no
 date: an event page dated 2026-12-01 led the order on 2026-10-17. **The news group
 is read in turn across its sources** (`discover.in_turn`), newest first within each:
@@ -570,7 +575,7 @@ Touching any of these means the poster is in scope. Re-render with
 | Pages nothing can read leave the queue, or go last | `tracker/ingest/discover.py` — `closed_domains`, `unreadable_test`, `discard_unreadable`, `requeue_reopened`, `DISCARDED_UNREADABLE`, `readable_first`, `pending(unreadable=)`, `retryable(unreadable=)`; `tracker/ingest/crawl.py` — `stale_sources(unreadable=)`; `tracker/cli/sync.py` — `sync` (extract, retry fill, refresh); `tracker/cli/ingest.py` — `crawl --from-queue`; `tracker/ingest/enrich.py` — `run` |
 | What search looks for | `tracker/ingest/search.py` — `_PLACE_TEMPLATES`, `rank_places`, `plan_queries`, `PlannedQuery.label`, `templates`; `tracker/normalize.py` — `state_name` |
 | Judging a template | `tracker/funnel.py` — `feed_group`, `survey`, `verdicts`; `tracker/ingest/search.py` — `LabelStat` |
-| Queue ordering and counts | `tracker/ingest/discover.py` — `pending` (`known_first`, `new_first`; news first by `feed.REPORT_WINDOW_DAYS`, read in turn across sources by `in_turn` and `_source_of`, then the watch's and the newsrooms' finds, a future date as none), `pending_split`, `pending_risk_count`, `failed`, `retryable`, `given_up`, `MAX_SAME_FAILURES`, `failure_summary` |
+| Queue ordering and counts | `tracker/ingest/discover.py` — `pending` (`known_first`, `new_first`; news first by `feed.REPORT_WINDOW_DAYS`, read in turn across sources by `in_turn` and `_source_of`, then the watch's finds in turn with builders' posts, a future date as none), `pending_split`, `pending_risk_count`, `failed`, `retryable`, `given_up`, `MAX_SAME_FAILURES`, `failure_summary` |
 | Prospect | `tracker/prospect.py`; `tracker/roster.py` — `hunt_order`, `measure` |
 | Extract and refresh | `tracker/ingest/crawl.py` — `run` (`origins=`), `stale_sources`, `unchanged_reads`, `record_url` (`origin=`), `_origin`, `failure_reason`, `MAX_REFRESH_BACKOFF` |
 | The party gate | `tracker/ingest/crawl.py` — `_parties`, `_ROLE_MARKERS`, `_role_is_licensed` |
