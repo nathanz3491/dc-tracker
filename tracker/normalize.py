@@ -1105,15 +1105,23 @@ def url_variants(url: str) -> list[str]:
     For an indexed lookup — `ingest_url.url IN (...)` — where computing the
     identity of every stored row would be a scan.
     """
-    parts = urlsplit(canonical_url(url))
+    canon = canonical_url(url)
+    parts = urlsplit(canon)
     bare = parts.netloc.removeprefix("www.")
     path = parts.path.rstrip("/")
+    # The exact spelling first: a string with no scheme ("/news/x") builds no
+    # variant equal to itself, and a lookup that missed it inserted a duplicate.
     return list(
         dict.fromkeys(
-            urlunsplit((scheme, host, trail, parts.query, parts.fragment))
-            for scheme in ("https", "http")
-            for host in (bare, f"www.{bare}")
-            for trail in (path, f"{path}/")
+            [
+                canon,
+                *(
+                    urlunsplit((scheme, host, trail, parts.query, parts.fragment))
+                    for scheme in ("https", "http")
+                    for host in (bare, f"www.{bare}")
+                    for trail in (path, f"{path}/")
+                ),
+            ]
         )
     )
 

@@ -6,6 +6,7 @@ Entirely offline — feeds come from fixture XML through an injected fetcher.
 from __future__ import annotations
 
 import datetime as dt
+import json
 import re
 import tomllib
 from pathlib import Path
@@ -87,8 +88,9 @@ def test_only_specialist_feeds_imply_the_topic():
         "datacenterdynamics",
         "datacenterfrontier",
         "datacenterknowledge",
-        # A pure-play operator's own newsroom, like the [[sitemap]] entries.
+        # Pure-play operators' own newsrooms, like the [[sitemap]] entries.
         "qts-newsroom",
+        "flexential-news",
         # Not `bisnow-latest`: Bisnow's data-center vertical had a feed of its own,
         # and the feed that replaced it carries every property type.
     }
@@ -159,8 +161,8 @@ url = "https://c.test/feed/"
 closed = true
 
 [filter]
-topic = ["data cent"]
-signal = ["campus"]
+topic = ["data cent*"]
+signal = ["campus*"]
 
 [[sitemap]]
 name = "refused-archive"
@@ -203,7 +205,12 @@ def test_a_closed_feed_is_not_polled_and_not_counted_as_failed(session, tmp_path
         }
     )
     report, _ = discover.run(
-        session, feeds_path=_closed_config(tmp_path), fetcher=fetcher, since_days=None, probe=False
+        session,
+        feeds_path=_closed_config(tmp_path),
+        fetcher=fetcher,
+        since_days=None,
+        probe=False,
+        sitemaps=False,
     )
 
     assert "https://refused.test/feed/" not in fetcher.calls
@@ -241,7 +248,9 @@ def test_every_shipped_closure_says_when_it_was_measured():
 
 def test_the_shipped_closed_feeds_are_not_polled(session):
     fetcher = FakeFeedFetcher({})
-    report, _ = discover.run(session, fetcher=fetcher, since_days=None, dry_run=True, probe=False)
+    report, _ = discover.run(
+        session, fetcher=fetcher, since_days=None, dry_run=True, probe=False, sitemaps=False
+    )
 
     feeds, _ = load_config()
     closed_urls = {f.url for f in feeds if f.closed}
@@ -657,7 +666,7 @@ def test_excluded_headline_shapes_are_dropped(spec, headline):
 def test_obstacle_headlines_are_kept(spec, headline):
     keep, reason = spec.matches(headline)
     assert keep, f"{headline!r} was dropped: {reason}"
-    assert "risk" in reason
+    assert spec.risk_term(headline), "an obstacle term is what reads it ahead in the queue"
 
 
 def test_the_topic_tier_still_gates_an_obstacle_headline(spec):
@@ -705,7 +714,7 @@ def test_risk_tier_is_optional_in_the_config(tmp_path: Path):
 
 def test_risk_term_ignores_the_other_tiers(spec):
     """`risk_term` is for ordering the queue, not for deciding what enters it."""
-    assert spec.risk_term("data center construction delayed again") == "delay"
+    assert (spec.risk_term("data center construction delayed again") or "").startswith("delay")
     assert spec.risk_term("Microsoft breaks ground on a new campus") is None
 
 
@@ -718,12 +727,13 @@ def test_risk_term_ignores_the_other_tiers(spec):
     ],
 )
 def test_short_risk_terms_do_not_match_inside_a_word(spec, headline):
-    """Terms are plain substrings, so "sue" hits "issued" unless it is padded.
+    """A term matches whole words, so "sue" does not hit "issued".
 
-    Found on a live run: the PJM headline below was queued as litigation news. Same
-    class of bug the signal tier already guards with " mw".
+    Found on a live run when terms were plain substrings: the PJM headline below was
+    queued as litigation news. (It is still kept since 2026-10-18 — "pjm" is a risk
+    term now — but not as a lawsuit.)
     """
-    assert spec.risk_term(headline) is None
+    assert spec.risk_term(headline) not in {"sue", "sues", "sued"}
 
 
 @pytest.mark.parametrize(
@@ -749,7 +759,10 @@ def test_selection_applies_the_age_cutoff(spec):
     assert any("microsoft-fairwater" in u for u in urls)
     assert not any("ancient-campus" in u for u in urls), "2020 article is outside the window"
     assert report.entries_seen == 6
-    assert report.filtered == 4
+    # The opinion piece, the earnings item and the 2020 article. "AI power demand is
+    # reshaping utility planning" is kept since the 2026-10-18 bank ("planning" names
+    # a planning commission as often as a utility's plans): recall over precision.
+    assert report.filtered == 3
 
 
 def test_selection_matches_against_the_url_slug(spec):
@@ -781,7 +794,9 @@ def test_the_host_is_not_evidence_about_an_article(spec):
 
 def test_a_specialist_feed_keeps_a_headline_that_never_says_data_center(spec):
     """A publication about nothing else does not repeat itself in every headline."""
-    headline = "Crusoe expands Abilene campus to 1.2GW"
+    # Not "Crusoe expands Abilene campus to 1.2GW": since 2026-10-18 a campus and a
+    # gigawatt figure are topic terms of their own.
+    headline = "Crusoe expands Abilene operations"
     assert spec.matches(headline)[0] is False
     assert spec.matches(headline, topic_implied=True)[0] is True
 
@@ -1448,8 +1463,8 @@ name = "x"
 url = "https://x.test/rss"
 
 [filter]
-topic = ["data cent"]
-signal = ["campus"]
+topic = ["data cent*"]
+signal = ["campus*"]
 
 [[sitemap]]
 name = "stack-newsroom"
@@ -1617,8 +1632,8 @@ url = "https://www.datacenterdynamics.com/en/rss/"
 closed = "2026-10-02: Cloudflare challenge on every page"
 
 [filter]
-topic = ["data cent"]
-signal = ["campus"]
+topic = ["data cent*"]
+signal = ["campus*"]
 """
 
 
@@ -1766,8 +1781,8 @@ url = "https://www.datacenterdynamics.com/en/rss/"
 closed = "2026-10-02: Cloudflare challenge on every page"
 
 [filter]
-topic = ["data cent"]
-signal = ["campus"]
+topic = ["data cent*"]
+signal = ["campus*"]
 """
 
 
@@ -2010,3 +2025,20 @@ def test_a_result_matching_only_in_its_snippet_is_not_the_same_story():
         "Council in northern Italy rejects 80MW data center, citing water",
         "",
     )
+
+
+# --- The shipped keyword bank, against what it was measured on -------------------
+
+#: 345 headlines and slugs with the verdict the 2026-10-18 bank was built to give:
+#: real production rows, live feed items, web headlines, and a few constructed cases
+#: that pin why a proposed exclusion was refused. `source` says which.
+KEYWORD_CASES = json.loads((FIXTURES / "keyword_cases.json").read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize(
+    "case", KEYWORD_CASES, ids=[f"{i}-{c['text'][:40]}" for i, c in enumerate(KEYWORD_CASES)]
+)
+def test_the_shipped_bank_judges_each_measured_case_as_measured(spec, case):
+    """A change to `[filter]` that flips one of these is a decision, not an accident."""
+    keep, reason = spec.matches(case["text"], topic_implied=case["implied"])
+    assert keep is case["keep"], f"{reason} ({case['source']})"

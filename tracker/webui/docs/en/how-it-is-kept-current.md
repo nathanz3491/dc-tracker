@@ -4,7 +4,13 @@ The tracker updates itself every evening, China time, and the morning email at 8
 
 ## The nightly update
 
-It runs in rounds and stops when a round no longer improves anything. Each round:
+**It looks for news first**, before anything else, so that nothing later in the night can cost the day's news:
+
+- it reads the news feeds, and the builders' own data-center sites for anything they have posted since the night before;
+- it searches the news for every campus it tracks, for what has been said since it last looked — daily for a campus still being decided or built, every three days once it operates, and daily for every campus of a company on a reader's watchlist;
+- then it reads what it found: the last two months' news first, then what those searches and the builders' sites turned up, then articles about campuses it has never heard of, which is where new campuses come from.
+
+Then it runs in rounds and stops when a round no longer improves anything. Each round:
 
 1. **Re-works what it already has, for free.** Fields are worked out again from their sources, dates are filled from articles that state them, and safe repairs are applied.
 2. **Settles figures that cannot be true** — two units mixed up, a programme's total stored as one site's.
@@ -13,7 +19,6 @@ It runs in rounds and stops when a round no longer improves anything. Each round
 5. **Settles suspected duplicates** — rules different sites apart, and merges a pair only when a model is highly confident and none of the safety limits applies. See [Duplicates](duplicates).
 6. **Fills gaps** on incomplete campuses: searches for and reads more articles about them, and asks targeted questions for the fields still missing.
 7. **Re-reads older articles** read before the reading instructions were last tightened, so old rows meet today's checks.
-8. **Finds new articles**, news first, and reads them — which is where new campuses come from.
 
 A copy of the database is kept before anything is merged or removed, and every value the night changed is listed with the sentence now behind it, for a person to review.
 
@@ -21,7 +26,8 @@ A copy of the database is kept before anything is merged or removed, and every v
 
 | What | When |
 | --- | --- |
-| New articles found and read | Every evening |
+| News feeds and builders' own sites checked; new articles read | Every evening |
+| Each campus searched for news | Daily while it is being decided or built, every three days once it operates; daily for a watched company's campuses |
 | Gaps filled on incomplete campuses | Every evening, a few dozen campuses at a time |
 | Cited articles re-read for changes | Every few weeks per article |
 | Publishers that block the tracker re-checked | Weekly |

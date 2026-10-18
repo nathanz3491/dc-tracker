@@ -262,6 +262,19 @@ def project_urls(session: Session, project_id: int) -> set[str]:
     return set(session.scalars(select(Source.url).where(Source.project_id == project_id)))
 
 
+def _origins(harvests: list[Harvest]) -> dict[str, str]:
+    """url -> "enrich:<harvester>", the first harvester that offered it.
+
+    Recorded on the queue row of a URL the queue did not hold, so the night's
+    report can say which method found what (`crawl.record_url`).
+    """
+    out: dict[str, str] = {}
+    for harvest in harvests:
+        for url in harvest.urls:
+            out.setdefault(url, f"enrich:{harvest.name}")
+    return out
+
+
 def harvest_queue(session: Session, project_id: int) -> Harvest:
     """Queued candidates whose slug or headline names this project."""
     from tracker.ingest.discover import (
@@ -828,6 +841,7 @@ def run(
                 # #552 on 2026-09-30, both counted twice in the totals until merged.
                 # The reading still lands wherever it routes to an existing row.
                 existing_only=focus,
+                origins=_origins(current.harvests),
             )
         # A page skipped as unchanged cost nothing and is not counted against the
         # article budget, so the share it would have taken goes to a page that is new.

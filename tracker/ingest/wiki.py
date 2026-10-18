@@ -39,12 +39,13 @@ same article dedupe to one candidate keyed on the real address.
 from __future__ import annotations
 
 import logging
+from functools import lru_cache
 from urllib.parse import unquote, urlsplit
 
 import httpx
 
 from tracker.config import Settings, get_settings
-from tracker.ingest.discover import Candidate, FilterSpec, normalize_haystack
+from tracker.ingest.discover import Candidate, FilterSpec, first_term, normalize_haystack
 
 log = logging.getLogger(__name__)
 
@@ -156,14 +157,25 @@ def external_links(
 
 
 def _keyword_pass(url: str, spec: FilterSpec) -> bool:
-    """Any tier keeps a reference; the exclude tier still drops one."""
+    """Any tier keeps a reference; the exclude tier still drops one.
+
+    A two-letter signal term — a state's postal code, which the signal tier holds
+    since 2026-10-18 — is not enough on its own: a registry's path carries the code
+    of the state a company is filed in ("/companies/us_la/46043373Q"), and that is
+    no evidence the page is news.
+    """
     parts = urlsplit(url)
     haystack = normalize_haystack(f"{parts.netloc.lower().removeprefix('www.')} {parts.path}")
-    if any(term in haystack for term in spec.exclude):
+    if first_term(spec.exclude, haystack):
         return False
-    return any(
-        term in haystack for tier in (spec.topic, spec.signal, spec.risk_signal) for term in tier
-    )
+    signal = _substantive(spec.signal)
+    return any(first_term(tier, haystack) for tier in (spec.topic, signal, spec.risk_signal))
+
+
+@lru_cache(maxsize=8)
+def _substantive(terms: tuple[str, ...]) -> tuple[str, ...]:
+    """`terms` without the two-letter ones."""
+    return tuple(t for t in terms if len(normalize_haystack(t.rstrip("*")).strip()) > 2)
 
 
 def mine(

@@ -26,7 +26,7 @@ numbering a long run is that somebody watching it knows how much is left.
 
 | | Phase | Default | Cap |
 | --- | --- | --- | --- |
-| 1 | **discover** — poll feeds, sweep archives (`--deep`), run place-anchored searches | on | `--since-days 45`, `--search` |
+| 1 | **discover** — poll feeds, walk every archive for what it added, run place-anchored searches | on | `--since-days 45`, `--search` |
 | 2 | **prospect** — chase operators the roster says we hold no rows for | **off** | `--prospect N` |
 | 3 | **extract** — crawl the queue into new project rows | on | `--limit 15` |
 | 4 | **refresh** — re-read the cited articles tried longest ago | on | `--refresh-days 30`, `--refresh-limit 15` |
@@ -57,6 +57,89 @@ silently favour whichever phase ran first.
   the row being enriched only, and a row with no fillable field left empty is not
   chosen. See [enrich](enrich.md#what-a-read-costs-and-what-is-not-read-again).
 
+## Keeping up: what discovery looks at every night
+
+Built on 2026-10-18 after Meta's own post "Kuna, we are online!" (published 09-03)
+reached the database on 10-17, by accident. Three things had to change, and the
+nightly loop (`scripts/overnight.sh`) now runs all three **first**, before anything
+else can crash or spend the night: a host reset at 19:32 on 10-16 came before
+discovery, which then ran last, and the day's news was lost.
+
+**The keyword filter matches whole words, and remembers what it drops.** A term in
+`[filter]` (`tracker/seed/feeds.toml`) matches whole words, and one ending in `*` the
+start of a word: `stock` no longer drops Stockton, `jobs` no longer drops "creating
+100 jobs", and `announc*` still catches "announced". A headline that names a tracked
+campus is kept even with no keyword (`discover.known_project_test`), unless an
+exclusion names it a podcast or a careers page. Every entry a feed or archive shows
+is remembered with its verdict in `seen_url` (migration 0039) — queued, already
+known, dropped (with the term or the missing tier), or listed — so a miss can be
+counted, and `tracker discover --rejudge` puts every drop through a revised filter
+and queues what it keeps. Before this, a dropped entry left no trace at all.
+
+**Every archive is walked every night, and only what it added is judged.** The
+[[sitemap]] entries used to be walked only by a hand-run `--deep`, last on 09-25,
+and through the keyword filter, which dropped every one of Meta's milestone posts
+("Hello Tulsa", "Kuna, we are online!", "Montgomery, we're growing"). Now
+`discover.watch_newsrooms` walks them all each night and compares what each lists
+with what it listed before:
+
+* **An operator's own data-center newsroom is read whole** — an entry with
+  `company` and `topic_implied`. Everything new on it is queued with no keyword
+  test; only the exclusions still apply, so a careers page stays out. A mixed
+  newsroom (about.fb.com, which also announces Instagram features) and a trade
+  archive keep the filter.
+* **The first walk of an archive is a catch-up, not news.** On an operator's own
+  newsroom it queues what passes the filter or names a tracked campus, from every
+  year, and records the rest as `listed`; from the second night on, an entry the
+  archive did not list before is new. That is what brings in the campuses Meta
+  announced and the database never held (Tulsa, Beaver Dam, Bowling Green, Henrico,
+  Los Lunas). A third-party archive (a trade site's back catalogue, a directory) was
+  swept under the old filter already, so its first walk queues only pages naming a
+  tracked campus: rehearsed on a copy of production on 2026-10-18, the broader filter
+  would otherwise have queued 1,700 of their old pages, 851 from one directory. The
+  first walk of all 28 archives queued 1,106 entries; the second, nothing.
+  "First" means most of what the archive lists is unseen, not that its name is new,
+  so renaming an entry does not start it over.
+* **A surge is a catch-up too.** More than 25 unseen posts on an operator's own
+  newsroom in one night (`NEWSROOM_SURGE`) is not what it publishes: it is a child
+  sitemap that failed on the first walk, a child newly in reach, or moved URLs. Read
+  whole, DataBank's 488-post second sitemap would have taken three nights of reading
+  ahead of the news, dated by a site-wide edit. They are judged as on a first walk,
+  and the morning report names the archive.
+* **A post is dated from its address when it can be** (`/2026/09/`), and from the
+  sitemap's `lastmod` only when it is new tonight: Meta's 2021 posts carry 2025
+  dates, a site-wide edit.
+* **Media sitemaps are not walked.** Meta's index names its children `sitemap-1`,
+  `image-sitemap-1` and `video-sitemap-1`, none of them a "post" or "news" name, so
+  all three were walked and logo attachment pages were queued (`_MEDIA_SITEMAP`).
+
+**Every campus is searched for news, on a schedule.** `tracker news`
+(`tracker/ingest/watch.py`) is the per-campus question the research never asked:
+*what has been said about this campus since we last looked?* One news search per
+campus — its company as the press writes it ("QTS", not "QTS Data Centers"; both
+halves of "Amazon (AWS)"; Meta for a row filed as Facebook), and its town, county or
+distinctive name — limited to the dates since its last look and sorted newest first
+(a page of ten ranked by relevance could be filled by the week's older stories),
+daily for a campus being decided or built, every three days once it operates, daily
+for any campus of a company a reader watches. "Daily" allows six hours' slack: the
+watch starts after discovery, whose length varies, and an exact 24 hours skipped
+every daily campus on a night that began a few seconds early. A look whose search
+fails leaves the clock where it was, so the next one reaches back past it. A campus's **first** look reaches back a year,
+with a second search for the words its stage is waiting on ("online", "energized",
+"delayed" for one under construction); up to `--baselines` campuses get one a
+night, largest first, so switching the watch on catches the whole database up in
+two nights. A result is queued as `watch:#<id>` when its headline and snippet pass
+the filter or name the campus, and its date is in the window. No model is called.
+
+**Searches have their own cap.** They are prepaid credit, not the model bill, so
+the spend ledger records each one (model `serper`) and `TRACKER_SEARCH_CAP` — 2,000
+a night from the loop, of which the watch, running first, may use all but 500 —
+stops every command at it, the research's searches included. A search the cap
+refuses is not a search that found nothing: the research records no attempt for it. `tracker news report` prints, in the morning, what each source showed,
+kept, read and changed, how late the news arrived, and warns when no discovery ran,
+when a feed's newest entry is over 45 days old, and when search credit will not
+last a fortnight.
+
 ## What search looks for, and why it is not a model's idea
 
 Search used to ask a model to **name projects** to look for. That can only ever
@@ -77,10 +160,12 @@ already holding two or more projects first, because campuses cluster; then state
 carrying capacity on thin coverage; then, capped at two slots, states holding
 nothing at all.
 
-**A place the filter cannot accept is reported, not skipped.** `exclude` is a
-substring test, so `summit` (there for conference write-ups) and `stock` (there for
-finance coverage) make Summit County and Stockton unsearchable for any query. Left
-in the plan such a place spends a slot every run and returns nothing.
+**A place the filter cannot accept is reported, not skipped.** An `exclude` term
+matches whole words anywhere in the haystack, so a place named by one would be
+unsearchable for any query. Until 2026-10-18 terms were substrings, and `summit`
+(there for conference write-ups) and `stock` (there for finance coverage) made
+Summit County and Stockton unsearchable. Left in the plan such a place spends a slot
+every run and returns nothing.
 
 **Each run walks the diagonal of the cross product**, preferring pairs that have
 never produced anything. Taking the first N in rank order instead would spend a
@@ -256,9 +341,17 @@ nightly loop's discovery step runs. **The news goes first:** every article publi
 within the email's window (`feed.REPORT_WINDOW_DAYS`, 60 days), newest first,
 whatever campus it names, because what the crawl reads tonight is mailed tomorrow. A
 2026-09-21 report of a lawsuit against a *tracked* campus used to sort behind 1,600
-backlog articles; it was read on 10-03 and mailed on 10-04 as news. Then the articles
-naming **no** tracked campus, newest published first, then the rest — rule 4 applying
-throughout. Enrich reads for
+backlog articles; it was read on 10-03 and mailed on 10-04 as news. **Then what was
+looked for on purpose** — the news watch's results and the posts an operator's own
+newsroom added since the night before (`seen_url.reason` = `NEWSROOM_NEW`, not a
+first walk's catch-up and not an old `--deep` sweep's rows), newest first: both are
+about a campus by construction, so the next rule would put them last, and the
+watch's first look finds news older than the window. Then the articles naming **no** tracked campus, newest published first, then
+the rest — rule 4 applying throughout. A date more than a day in the future is no
+date: an event page dated 2026-12-01 led the order on 2026-10-17. **The news group
+is read in turn across its sources** (`discover.in_turn`), newest first within each:
+a directory re-dated 60 pages in one site-wide edit on 10-14 and, read newest first,
+they took 60 of the night's first reads. Enrich reads for
 one row and creates none, so that step is the loop's only source of new campuses;
 each article still goes through the identity arbiter below before it can insert a
 row. The same rule orders `--retry-failed`'s fill, the refresh phase below, and
@@ -458,7 +551,12 @@ Touching any of these means the poster is in scope. Re-render with
 | Concern | Where |
 | --- | --- |
 | Phase order, plan numbering, `--full`, the lock | `tracker/cli/sync.py` — `sync`, its `plan` list and `step` |
-| Discover, archives, search | `tracker/ingest/discover.py` — `run`, `load_config`, `load_sitemaps`, `sweep_sitemaps`, `queue_candidates`; `tracker/ingest/search.py`; `tracker/normalize.py` — `canonical_url`, `url_identity`, `url_variants`; `tracker/backfill.py` — `repair_urls` |
+| Discover, archives, search | `tracker/ingest/discover.py` — `run`, `load_config`, `load_sitemaps`, `sweep_sitemaps`, `walk_sitemap`, `index_children`, `_MEDIA_SITEMAP`, `parse_feed` (newest `lastmod` first), `queue_candidates`; `tracker/ingest/search.py`; `tracker/normalize.py` — `canonical_url`, `url_identity`, `url_variants`; `tracker/backfill.py` — `repair_urls` |
+| The keyword filter, and what it dropped | `tracker/seed/feeds.toml` — `[filter]`; `tests/fixtures/keyword_cases.json`; `tracker/ingest/discover.py` — `normalize_haystack`, `_SEPARATORS`, `_term_pattern`, `_term_regex`, `_tier`, `_TERM_START`, `term_in`, `first_term`, `_terms`, `FilterSpec.matches`, `judge_candidates`, `known_project_test`, `_GENERIC_NAME_TOKENS`, `_company_words`, `record_seen`, `rejudge`, `TOO_OLD`; `tracker/dedup.py` — `company_aliases`; `tracker/ingest/wiki.py` — `_keyword_pass`, `_substantive`; migration `0039_news_watch` (`seen_url`); `tracker/cli/sync.py` — `discover --rejudge` |
+| Archives every night | `tracker/ingest/discover.py` — `watch_newsrooms`, `NEWSROOM_SURGE`, `NEWSROOM_NEW`, `_month_from_path`, `_absolute`, `run(sitemaps=)`; `tracker/ingest/fetch.py` — `date_from_url`; `tracker/normalize.py` — `url_variants`; `tracker/cli/sync.py` — `discover --archives` |
+| The news watch | `tracker/ingest/watch.py` — `run`, `due`, `cadence`, `EARLY`, `plan_queries`, `anchor`, `_company_term`, `_places`, `_names`, `_VAGUE`, `window_for`, `judge`, `CADENCE`, `NEXT_WORDS`, `BASELINE_PER_RUN`; migration `0039_news_watch` (`news_watch`); `tracker/cli/sync.py` — `news`; `tracker/ingest/crawl.py` — `record_url` (a watch row's date gives way to the page's) |
+| A search the cap refused | `tracker/agent.py` — `SEARCH_REFUSED`, `_search_web`; `tracker/gapfill.py` — `fill` |
+| Searches counted and capped; the morning report | `tracker/ingest/search.py` — `SerperProvider._spend_one`, `_post`; `tracker/llm.py` — `record_search`; `tracker/spend.py` — `searches`, `SEARCH_MODEL`; `tracker/config.py` — `search_cap`; `tracker/ingest/desk.py` — `build`, `serper_credit`; `tracker/cli/sync.py` — `news report`; `scripts/overnight.sh` — the news phase |
 | Closed feeds, and naming a challenge | `tracker/seed/feeds.toml` — `closed`; `tracker/ingest/discover.py` — `FeedSpec.closed`, `SitemapSpec.closed`, `_closed_reason`, `DiscoverReport.closed`, `_RawFetcher`, `CHALLENGE_NOTE`; `tracker/ingest/probe.py` — `configured_hosts` |
 | The weekly check of closed entries | `tracker/ingest/discover.py` — `probe_closed`, `record_probe`, `reopened_names`, `without_reopened`, `PROBE_EVERY`; migration `0034_feed_probe`; `tracker/cli/sync.py` — `discover --probe-closed` |
 | Asking robots.txt before every request | `tracker/robots.py` — `allowed`, `allowed_async`, `interpret`, `crawl_delay`; `tracker/ingest/fetch.py` — `permitted`, `refused`, `fetch_with_retry`, `should_escalate`, `fetch_all`; `tracker/ingest/discover.py` — `_RawFetcher`; `tracker/config.py` — `respect_robots` |
@@ -466,9 +564,9 @@ Touching any of these means the poster is in scope. Re-render with
 | Pages nothing can read leave the queue, or go last | `tracker/ingest/discover.py` — `closed_domains`, `unreadable_test`, `discard_unreadable`, `requeue_reopened`, `DISCARDED_UNREADABLE`, `readable_first`, `pending(unreadable=)`, `retryable(unreadable=)`; `tracker/ingest/crawl.py` — `stale_sources(unreadable=)`; `tracker/cli/sync.py` — `sync` (extract, retry fill, refresh); `tracker/cli/ingest.py` — `crawl --from-queue`; `tracker/ingest/enrich.py` — `run` |
 | What search looks for | `tracker/ingest/search.py` — `_PLACE_TEMPLATES`, `rank_places`, `plan_queries`, `PlannedQuery.label`, `templates`; `tracker/normalize.py` — `state_name` |
 | Judging a template | `tracker/funnel.py` — `feed_group`, `survey`, `verdicts`; `tracker/ingest/search.py` — `LabelStat` |
-| Queue ordering and counts | `tracker/ingest/discover.py` — `pending` (`known_first`, `new_first`; news first by `feed.REPORT_WINDOW_DAYS`), `pending_split`, `pending_risk_count`, `failed`, `retryable`, `given_up`, `MAX_SAME_FAILURES`, `failure_summary` |
+| Queue ordering and counts | `tracker/ingest/discover.py` — `pending` (`known_first`, `new_first`; news first by `feed.REPORT_WINDOW_DAYS`, read in turn across sources by `in_turn` and `_source_of`, then the watch's and the newsrooms' finds, a future date as none), `pending_split`, `pending_risk_count`, `failed`, `retryable`, `given_up`, `MAX_SAME_FAILURES`, `failure_summary` |
 | Prospect | `tracker/prospect.py`; `tracker/roster.py` — `hunt_order`, `measure` |
-| Extract and refresh | `tracker/ingest/crawl.py` — `run`, `stale_sources`, `unchanged_reads`, `record_url`, `failure_reason`, `MAX_REFRESH_BACKOFF` |
+| Extract and refresh | `tracker/ingest/crawl.py` — `run` (`origins=`), `stale_sources`, `unchanged_reads`, `record_url` (`origin=`), `_origin`, `failure_reason`, `MAX_REFRESH_BACKOFF` |
 | The party gate | `tracker/ingest/crawl.py` — `_parties`, `_ROLE_MARKERS`, `_role_is_licensed` |
 | Identity arbiter | `tracker/cli/ingest.py` — `_identity_arbiter`, `_report_arbiter`; `tracker/gatekeeper.py` — `same_site_arbiter`, `_warm_verdict`, `_cold_verdict`, `_rejection`, `_suspicion`, `_verdict_tools`, `RULES`, `MIN_CONFIDENCE`; `tracker/triage.py` — `CONTRADICTIONS`; `tracker/ingest/crawl.py` — `ExtractionContext` |
 | Enrich phase | `tracker/ingest/enrich.py` — `select_projects`, `run_many`; `tracker/cli/enrich.py` — `_gapfill_batch`; and [enrich](enrich.md) |

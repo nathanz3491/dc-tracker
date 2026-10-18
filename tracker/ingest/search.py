@@ -58,6 +58,7 @@ from tracker.ingest.discover import (
     Candidate,
     DiscoverReport,
     FilterSpec,
+    first_term,
     load_config,
     normalize_haystack,
     queue_candidates,
@@ -1073,19 +1074,19 @@ def rank_places(
     def offer(place: Place) -> None:
         """Keep a place unless the discovery filter could never accept it.
 
-        `exclude` is a plain substring test over the whole haystack, so two real
-        county names are already unsearchable for ANY query: "summit" (added for
-        conference write-ups) kills Summit County in CO, OH and UT, and "stock"
-        (added for finance coverage) kills Stockton, Woodstock and Comstock.
-        Left in the plan, such a place spends its slot every run and returns
-        nothing, with no queued row to explain the silence.
+        An `exclude` term matches whole words anywhere in the haystack, so a
+        place named by an excluded word is unsearchable for ANY query: before
+        2026-10-18, when terms were substrings, "summit" killed Summit County in
+        CO, OH and UT and "stock" killed Stockton, Woodstock and Comstock. Left in
+        the plan, such a place spends its slot every run and returns nothing,
+        with no queued row to explain the silence.
 
         Checked against every template rather than one, so a term tripped by a
         particular pairing is caught too. Ten string tests per place.
         """
         for phrase in _PLACE_TEMPLATES.values():
             probe = normalize_haystack(f"{place.phrase} data center {phrase}")
-            hit = next((t for t in spec.exclude if t in probe), None)
+            hit = first_term(spec.exclude, probe)
             if hit:
                 refused.append((place.phrase, f"the discovery filter excludes {hit!r}"))
                 return

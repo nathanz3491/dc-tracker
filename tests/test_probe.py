@@ -14,7 +14,7 @@ from tracker.ingest import probe
 from tracker.ingest.discover import FilterSpec
 from tracker.ingest.fetch import FetchResult
 
-SPEC = FilterSpec(topic=("data cent",), signal=("megawatt", " mw ", "campus"))
+SPEC = FilterSpec(topic=("data cent*",), signal=("megawatt*", "mw", "campus*"))
 
 RSS = """<?xml version="1.0"?>
 <rss version="2.0"><channel>

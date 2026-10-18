@@ -2899,8 +2899,27 @@ def failure_reason(status: str | None, http_status: int | None, error: str | Non
     return f"{status or ''}|{http_status if http_status is not None else ''}|{text}"
 
 
-def record_url(session: Session, run_id: str, outcome: ExtractionOutcome) -> None:
+def _origin(origins: dict[str, str] | None, url: str) -> str | None:
+    """How `url` was found, under any spelling of it, from `run(origins=...)`."""
+    if not origins:
+        return None
+    if url in origins:
+        return origins[url]
+    from tracker.normalize import url_identity
+
+    wanted = url_identity(url)
+    return next((label for u, label in origins.items() if url_identity(u) == wanted), None)
+
+
+def record_url(
+    session: Session, run_id: str, outcome: ExtractionOutcome, *, origin: str | None = None
+) -> None:
     """Upsert the per-URL outcome.
+
+    `origin` labels a URL the queue did not already hold with how it was found
+    (`ingest_url.feed`: "enrich:search", "watch:#1543"). Before 2026-10-18 a URL
+    enrich found carried no label at all: 178 of about 205 touched on 10-17, the
+    Kuna go-live among them, so nobody could say which method found news.
 
     This table is why re-running a URL list is cheap: URLs already `ok` are
     skipped, and `--retry-failed` can target just the ones that were not.
@@ -2923,6 +2942,8 @@ def record_url(session: Session, run_id: str, outcome: ExtractionOutcome) -> Non
     if row is None:
         row = IngestUrl(url=outcome.url, run_id=run_id, first_seen_at=now, attempts=0, failures=0)
         session.add(row)
+    if origin and not row.feed:
+        row.feed = origin
     failed = outcome.status in RETRYABLE_STATUSES
     error = (outcome.error or None) and outcome.error[:1000]
     if not failed:
@@ -2955,7 +2976,11 @@ def record_url(session: Session, run_id: str, outcome: ExtractionOutcome) -> Non
     # None is what makes a cache hit harmless — cached bodies are text with the
     # metadata already stripped, so they always report None, and without this a
     # re-extraction run would erase every date the original fetch found.
-    if row.published_at is None and outcome.published_at is not None:
+    # Except a news-watch row's: its date is a search result's estimate ("3 days
+    # ago"), and the page's own is better.
+    if outcome.published_at is not None and (
+        row.published_at is None or (row.feed or "").startswith("watch:")
+    ):
         row.published_at = outcome.published_at
     session.flush()
 
@@ -3332,8 +3357,12 @@ def run(
     arbiter: Any = None,
     skip_unchanged: bool = False,
     focus: str | None = None,
+    origins: dict[str, str] | None = None,
 ) -> IngestReport:
     """Fetch, extract and upsert a list of article URLs.
+
+    `origins` maps a URL to how it was found, for the queue's record of a URL it did
+    not hold (:func:`record_url`).
 
     `focus` asks the model about one named project only — see :func:`focus_note`.
     For a caller reading on behalf of one row; a crawl reads for every row there is.
@@ -3492,7 +3521,8 @@ def run(
             prompt=prompt,
             extractor=extractor,
             settings=settings,
-            published_date=published.get(result.url, "unknown"),
+            published_date=published.get(result.url)
+            or (result.published_at.date().isoformat() if result.published_at else "unknown"),
             focus=focus,
         )
 
@@ -3511,14 +3541,14 @@ def run(
         if not result.ok:
             report.fetch_error += 1
             log.warning("fetch failed: %s (%s)", result.url, result.error)
-            record_url(session, run_id, outcome)
+            record_url(session, run_id, outcome, origin=_origin(origins, outcome.url))
             _checkpoint(session, dry_run)
             continue
 
         if outcome.unchanged:
             report.skipped_unchanged += 1
             log.info("unchanged since its last read under this prompt: %s", result.url)
-            record_url(session, run_id, outcome)
+            record_url(session, run_id, outcome, origin=_origin(origins, outcome.url))
             _checkpoint(session, dry_run)
             continue
 
@@ -3598,7 +3628,7 @@ def run(
             if upsert.duplicate_of is not None:
                 report.duplicates_flagged += 1
 
-        record_url(session, run_id, outcome)
+        record_url(session, run_id, outcome, origin=_origin(origins, outcome.url))
         _checkpoint(session, dry_run)
 
     if dry_run:

@@ -963,6 +963,64 @@ class FeedProbe(Base):
     )
 
 
+#: What discovery decided about an entry it saw. See migration 0039.
+SEEN_VERDICTS: tuple[str, ...] = ("queued", "known", "dropped", "listed")
+
+
+class SeenUrl(Base):
+    """One entry a feed, sitemap or news search showed discovery, and its verdict.
+
+    Kept apart from `ingest_url`, the queue: a URL there blocks every later route to
+    it. A dropped entry keeps its reason so `tracker discover --rejudge` can put it
+    through a changed filter. See migration 0039 and `discover.record_seen`.
+    """
+
+    __tablename__ = "seen_url"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    url: Mapped[str] = mapped_column(Text, nullable=False)
+    source: Mapped[str] = mapped_column(Text, nullable=False)
+    title: Mapped[str | None] = mapped_column(Text)
+    published_at: Mapped[dt.datetime | None] = mapped_column(DateTime)
+    verdict: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text)
+    first_seen_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False)
+    last_seen_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("url", name="uq_seen_url_url"),
+        CheckConstraint(
+            "verdict IN ('queued', 'known', 'dropped', 'listed')", name="ck_seen_url_verdict"
+        ),
+        Index("ix_seen_url_source", "source", "first_seen_at"),
+        Index("ix_seen_url_verdict", "verdict", "first_seen_at"),
+    )
+
+
+class NewsWatch(Base):
+    """When the news watch last searched for one campus. See migration 0039 and
+    `tracker.ingest.watch`."""
+
+    __tablename__ = "news_watch"
+
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("project.id", ondelete="CASCADE"), primary_key=True
+    )
+    baseline_at: Mapped[dt.datetime | None] = mapped_column(DateTime)
+    checked_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False)
+    queries: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    results: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    queued: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    last_queued_at: Mapped[dt.datetime | None] = mapped_column(DateTime)
+
+    __table_args__ = (
+        CheckConstraint(
+            "queries >= 0 AND results >= 0 AND queued >= 0", name="ck_news_watch_counts"
+        ),
+        Index("ix_news_watch_checked", "checked_at"),
+    )
+
+
 class ApiKey(Base):
     """One key for the read-only public API. See migration 0036 and `tracker.apikeys`.
 

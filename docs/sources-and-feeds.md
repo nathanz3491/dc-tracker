@@ -201,10 +201,50 @@ search templates are where the volume is.
 
 **That line used to say "search and archive sweeps", and it was wrong about both.**
 Search records a `search:` label and an archive sweep records the sitemap's own
-name, so neither has ever been in the `(no feed)` bucket. What is actually there is
-`enrich`'s harvesters, whose URLs go straight to `crawl.record_url` — which never
-sets the column — plus anything supplied by hand. The magnitude stands; the split
-behind it was measured before anyone noticed and wants re-measuring.
+name, so neither has ever been in the `(no feed)` bucket. What was actually there is
+`enrich`'s harvesters, whose URLs went straight to `crawl.record_url`, plus anything
+supplied by hand. **Since 2026-10-18 a harvester's URL carries its name**
+(`enrich:search`, `enrich:archive`, ...), and the news watch's carries `watch:#<id>`,
+so the `(no feed)` bucket holds only what was supplied by hand and what was read
+before then.
+
+## The keyword filter
+
+`[filter]` in `tracker/seed/feeds.toml` has four tiers — `topic`, `signal`,
+`risk_signal`, `exclude` — matched over a headline and the URL path. **A term matches
+whole words; a term ending in `*` matches the start of a word.** `stock` matches
+"stock" and not Stockton, `announc*` matches "announces" and "announcement", `data
+cent*` matches "data center" and "data centre". Until 2026-10-18 every term was a
+plain substring, which threw news away both ways: `jobs` dropped "creating 100 jobs",
+`summit` dropped Summit County, and `ebook` could not be used because it matched
+inside "facebook". Punctuation and quotes become spaces on both sides, so a term can
+be written as a headline writes it ("data-center", "we're"); a contraction becomes
+two words ("we re") where a slug has one ("were"), so a term that matters in both is
+listed in both forms.
+
+A headline that **names a tracked campus** is kept with no keyword at all, unless an
+exclusion names it (a podcast, a careers page). And **every entry is remembered** in
+`seen_url` with its verdict and the reason, so a filter change can be applied to
+what the old filter dropped: `tracker discover --rejudge`.
+
+**The bank was rebuilt on 2026-10-18 to keep news over saving reads**: about 1,900
+terms (topic 173, signal 831, risk 684, exclude 228), grouped in the file with a
+line on what each group catches. Measured on production's own rows: of headlines
+that produced a project it keeps 604 of 614 (the old bank, 533); of URL-only pages
+that did, 1,938 of 2,965 (old, 866). It also keeps more of what produced nothing —
+639 of 728 titled rows, against 567 — which costs about a hundredth of a yuan a
+read; a dropped headline is news lost for good. What it adds: a campus, a gigawatt
+figure, a codename or a data-center-only operator now proves the topic; milestone,
+trouble and operator-newsroom phrasing ("hello", "we are online", "withdraws",
+"pulls out") are signals; exclusions are narrow phrases (a scholarship, a speaker
+notice, a SOC 2 certificate) that drop no real news measured.
+`tests/fixtures/keyword_cases.json` holds 345 headlines with the verdict the bank
+gives each; a change to `[filter]` that flips one fails the suite, so it is made on
+purpose.
+
+A term is tried only where a word of the headline starts with the term's first word
+(`discover._tier`), which keeps nearly 2,000 terms at about 0.09 ms a headline: one
+pattern per term cost 0.75 ms, and one alternation of them all, ten times that.
 
 **Web search is grouped by template, not by query.** A row stores
 `search:<template>:<place>` and the funnel rolls the place up, so `search:rezoning`

@@ -467,7 +467,7 @@ def enrich() -> Canvas:
 
 
 def sync() -> Canvas:
-    c = Canvas(1500, 920)
+    c = Canvas(1500, 980)
     c.title(
         "tracker sync — the whole loop, in seven phases",
         "Five phases run by default. The two that spend the most are off until asked for, and every "
@@ -480,7 +480,7 @@ def sync() -> Canvas:
 
     #: title, sub-lines, role, cap, and whether the phase is off until asked for
     phases = [
-        ("1 · discover", ["poll the feeds, sweep", "archives, run searches"], "cool", "--since-days 45", False),
+        ("1 · discover", ["poll the feeds, walk the", "archives, run searches"], "cool", "--since-days 45", False),
         ("2 · prospect", ["chase operators the", "roster says we lack"], "orange", "--prospect · off", True),
         ("3 · extract", ["crawl the queue into", "new project rows"], "orange", "--limit 15", False),
         ("4 · refresh", ["re-read the cited pages", "tried longest ago"], "orange", "--refresh-limit 15", False),
@@ -513,17 +513,18 @@ def sync() -> Canvas:
     c.rule(414)
     c.section(48, 454, "where the rows come from", "three phases end in one queue, and one gate stands between the queue and a new row")
 
-    feeds = c.box(48, 500, 176, 62, "Feeds", ["what was published lately;", "a closed one, asked weekly"], role="cool", title_size=11.5)
-    search = c.box(48, 574, 176, 62, "Search", ["a place and an event, or", "a headline, via a news API"], role="orange", title_size=11.5)
-    roster = c.box(48, 648, 176, 62, "Roster", ["who we hold no rows for"], role="cool", title_size=11.5)
-    archives = c.box(48, 722, 176, 62, "Archives (--deep)", ["sitemaps, no key needed;", "a closed one is not walked"], role="cool", title_size=11.5)
+    feeds = c.box(48, 500, 176, 58, "Feeds", ["whole-word keywords; every", "entry and verdict remembered"], role="cool", title_size=11.5)
+    watch = c.box(48, 570, 176, 58, "News watch", ["a dated news search per", "campus, since its last look"], role="orange", title_size=11.5)
+    search = c.box(48, 640, 176, 58, "Search", ["a place and an event, or", "a headline, via a news API"], role="orange", title_size=11.5)
+    roster = c.box(48, 710, 176, 58, "Roster", ["who we hold no rows for"], role="cool", title_size=11.5)
+    archives = c.box(48, 780, 176, 58, "Archives, every night", ["a builder's own newsroom", "read whole; only what is new"], role="cool", title_size=11.5)
 
     queue = c.box(
-        280, 500, 190, 284, "The queue",
-        ["ingest_url rows,", "status = discovered", "", "Ordered before the limit", "bites, never after:", "", "· rows covering a project", "  we already track go first", "· among those, the ones", "  reporting an obstacle", "· prospect finds jump the", "  whole queue", "· an unreadable page leaves", "  until its publisher reopens"],
+        280, 500, 190, 338, "The queue",
+        ["ingest_url rows,", "status = discovered", "", "sync, before the limit bites:", "· rows on a tracked project", "  first, obstacles first", "· prospect finds jump it", "", "the nightly loop:", "· the last two months' news", "· then what the watch and", "  the newsrooms found", "· then unheard-of campuses", "· an unreadable page leaves", "  until its publisher reopens"],
         role="panel",
     )
-    for b in (feeds, search, roster, archives):
+    for b in (feeds, watch, search, roster, archives):
         c.arrow([b.right(), (280, b.cy)])
 
     gate = c.box(
@@ -553,13 +554,13 @@ def sync() -> Canvas:
     )
 
     c.text(
-        48, 804,
+        48, 870,
         "Every request, whether feed, sitemap or article, asks the site's robots.txt first and honours its Crawl-delay "
         "(tracker/robots.py). A disallowed page is not fetched, retried or escalated.",
         size=10.5, colour=SLATE,
     )
     c.text(
-        48, 826,
+        48, 892,
         "Not this command: scripts/sync_db.py moves the database file between machines. It shares only the word. See docs/workflows/sync.md.",
         size=10.5, colour=RED, bold=True,
     )

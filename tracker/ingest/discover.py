@@ -29,7 +29,8 @@ import re
 import tomllib
 import xml.etree.ElementTree as ET
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, TypeVar
 from urllib.parse import urlsplit
@@ -43,6 +44,7 @@ from tracker.ingest.fetch import (
     Fetcher,
     FetchResult,
     cache_path,
+    date_from_url,
     html_to_text,
     parse_timestamp,
     permitted,
@@ -74,29 +76,137 @@ class DiscoverError(RuntimeError):
     """The feed configuration is missing or unusable."""
 
 
+#: Characters `normalize_haystack` turns into spaces: URL separators, punctuation,
+#: and quotes straight and curly (U+2018, U+2019, U+201C, U+201D).
+_SEPARATORS: Final = re.compile(r"[-_/.:,;()\[\]'\"\u2018\u2019\u201c\u201d!?|&+#@%=]+")
+
+
 def normalize_haystack(text: str) -> str:
-    """Prepare a title-plus-URL string for plain substring matching.
+    """Prepare a title-plus-URL string for keyword matching (:func:`first_term`).
 
     Two normalizations, both load-bearing:
 
-    * **Separators to spaces.** URL slugs are hyphenated, so ``data-center`` has
-      to match the term ``data cent``. Matching the URL is the only way to filter
-      a sitemap entry or a feed with empty titles, and without this it never
-      matched anything.
+    * **Separators and punctuation to spaces.** URL slugs are hyphenated, so
+      ``data-center`` has to match the term ``data center``. Matching the URL is
+      the only way to filter a sitemap entry or a feed with empty titles, and
+      without this it never matched anything. Quotes and apostrophes, straight
+      or curly, go too, so "Meta's" still holds the whole word "meta". A
+      contraction becomes two words ("we're" -> "we re") where its slug has one
+      ("were"), so a term that matters in both is listed in both forms.
     * **A space between a digit and a letter.** ``900MW`` becomes ``900 mw`` so
       the ``mw`` signal fires. A capacity figure in a headline is the single
       strongest indicator that an article is about a specific project, and it is
       almost always written closed-up.
-
-    Terms stay plain substrings rather than regexes so `seed/feeds.toml` remains
-    editable by someone who does not write regular expressions.
     """
     lowered = text.lower()
-    lowered = re.sub(r"[-_/.:,;()\[\]]+", " ", lowered)
+    lowered = _SEPARATORS.sub(" ", lowered)
     lowered = re.sub(r"(\d)\s*([a-z])", r"\1 \2", lowered)
     collapsed = re.sub(r"\s+", " ", lowered).strip()
-    # Padded with spaces so a term like " mw" cannot match inside a longer word.
     return f" {collapsed} "
+
+
+def _term_pattern(term: str) -> str | None:
+    """The regular expression for one `seed/feeds.toml` term, or None if it has no
+    letter or digit (`load_config` refuses those). See :func:`first_term`."""
+    stem = term.rstrip().endswith("*")
+    body = normalize_haystack(term.strip().rstrip("*")).strip()
+    if not body:
+        return None
+    tail = "" if stem else r"(?![a-z0-9])"
+    return r"(?<![a-z0-9])" + re.escape(body) + tail
+
+
+@lru_cache(maxsize=8192)
+def _term_regex(term: str) -> re.Pattern[str]:
+    """One term, compiled. A term with nothing to match matches nothing."""
+    pattern = _term_pattern(term)
+    return re.compile(pattern if pattern is not None else r"(?!)")
+
+
+@dataclass(frozen=True)
+class _Tier:
+    """One tier of terms, indexed by the word each starts with.
+
+    Testing ~1,900 terms one pattern at a time cost 0.75 ms a headline, and one
+    alternation of them all was slower still (Python's engine tries every branch at
+    every position). A term can only match where a word of the haystack starts with
+    its first word, so only those terms are tried, in the order they are listed.
+    """
+
+    terms: tuple[str, ...]
+    patterns: tuple[re.Pattern[str] | None, ...]
+    #: First word -> indices of the terms whose first word must be whole.
+    whole: dict[str, tuple[int, ...]]
+    #: Stem -> indices of one-word stems ("announc*"): any word starting with it.
+    stems: dict[str, tuple[int, ...]]
+    longest_stem: int
+
+
+#: Where a term can start: a word, or a run of symbols and the word after it ("$5").
+_TERM_START = re.compile(r"[a-z0-9]+|[^a-z0-9\s]+[a-z0-9]*")
+
+
+@lru_cache(maxsize=64)
+def _tier(terms: tuple[str, ...]) -> _Tier:
+    whole: dict[str, list[int]] = {}
+    stems: dict[str, list[int]] = {}
+    patterns: list[re.Pattern[str] | None] = []
+    for index, term in enumerate(terms):
+        pattern = _term_pattern(term)
+        patterns.append(re.compile(pattern) if pattern is not None else None)
+        if pattern is None:
+            continue
+        body = normalize_haystack(term.strip().rstrip("*")).strip()
+        words = body.split(" ")
+        if len(words) == 1 and term.rstrip().endswith("*"):
+            stems.setdefault(words[0], []).append(index)
+        else:
+            whole.setdefault(words[0], []).append(index)
+    return _Tier(
+        terms=terms,
+        patterns=tuple(patterns),
+        whole={k: tuple(v) for k, v in whole.items()},
+        stems={k: tuple(v) for k, v in stems.items()},
+        longest_stem=max((len(k) for k in stems), default=0),
+    )
+
+
+def term_in(term: str, haystack: str) -> bool:
+    """Whether `term` occurs in an already-normalized `haystack`. See :func:`first_term`."""
+    return _term_regex(term).search(haystack) is not None
+
+
+def first_term(terms: tuple[str, ...] | list[str], haystack: str) -> str | None:
+    """The first of `terms` found in `haystack` (from :func:`normalize_haystack`).
+
+    **A term matches whole words, and a term ending in `*` matches the start of a
+    word.** "stock" matches "stock" and not Stockton; "announc*" matches
+    "announces", "announced" and "announcement"; "data cent*" matches "data
+    center" and "data centre". Until 2026-10-18 every term was a plain substring,
+    which threw news away in both directions: "jobs" cut "creating 100 jobs",
+    "stock" cut Stockton, "summit" cut Summit County, and "ebook" could not be
+    used because it matched inside "facebook". The padded terms that worked around
+    it (" mw", " sue ") are unnecessary now and read the same.
+
+    Terms are normalized the way the haystack is, so a term may be written as it
+    appears in a headline ("data-center", "we're") and still match its slug. Of
+    several that match, the one listed first is named.
+    """
+    if not terms:
+        return None
+    tier = _tier(tuple(terms))
+    words = set(haystack.split()) | set(_TERM_START.findall(haystack))
+    found: set[int] = set()
+    for word in words:
+        found.update(tier.whole.get(word, ()))
+        if tier.stems:
+            for size in range(1, min(len(word), tier.longest_stem) + 1):
+                found.update(tier.stems.get(word[:size], ()))
+    for index in sorted(found):
+        pattern = tier.patterns[index]
+        if pattern is not None and pattern.search(haystack):
+            return tier.terms[index]
+    return None
 
 
 @dataclass(frozen=True)
@@ -192,19 +302,19 @@ class FilterSpec:
     def matches(self, text: str, *, topic_implied: bool = False) -> tuple[bool, str]:
         """Two-tier keyword test. Returns ``(keep, reason)``."""
         haystack = normalize_haystack(text)
-        hit_exclude = next((t for t in self.exclude if t in haystack), None)
+        hit_exclude = first_term(self.exclude, haystack)
         if hit_exclude:
             return False, f"excluded by {hit_exclude!r}"
 
-        topic = next((t for t in self.topic if t in haystack), None)
+        topic = first_term(self.topic, haystack)
         if not topic and not topic_implied:
             return False, "no data-center topic term"
 
         found = repr(topic) if topic else "topic implied by the feed"
-        signal = next((t for t in self.signal if t in haystack), None)
+        signal = first_term(self.signal, haystack)
         if signal:
             return True, f"{found} + {signal!r}"
-        risk = next((t for t in self.risk_signal if t in haystack), None)
+        risk = first_term(self.risk_signal, haystack)
         if risk:
             return True, f"{found} + risk {risk!r}"
         return False, f"topic {found} but no project or risk signal"
@@ -216,8 +326,7 @@ class FilterSpec:
         wrong is the most valuable LLM call available, because no press release
         names its own blocker.
         """
-        haystack = normalize_haystack(text)
-        return next((t for t in self.risk_signal if t in haystack), None)
+        return first_term(self.risk_signal, normalize_haystack(text))
 
 
 @dataclass(frozen=True)
@@ -264,6 +373,14 @@ class DiscoverReport:
     headlines_new: int = 0
     headlines_looked_up: int = 0
     leads_queued: int = 0
+    #: Archives walked tonight (:func:`watch_newsrooms`), the entries they listed,
+    #: and how many of those were new and kept.
+    sitemaps_walked: int = 0
+    sitemap_entries: int = 0
+    sitemap_new: int = 0
+    sitemap_dropped: int = 0
+    #: Entries a revised filter was asked about again (:func:`rejudge`).
+    rejudged: int = 0
 
     def as_rows(self) -> list[tuple[str, int]]:
         return [
@@ -279,6 +396,10 @@ class DiscoverReport:
             ("headlines, new", self.headlines_new),
             ("headlines looked up", self.headlines_looked_up),
             ("readable copies queued", self.leads_queued),
+            ("archives walked", self.sitemaps_walked),
+            ("archive entries", self.sitemap_entries),
+            ("archive entries new and kept", self.sitemap_new),
+            ("archive entries dropped", self.sitemap_dropped),
         ]
 
 
@@ -327,8 +448,8 @@ def load_config(path: Path | None = None) -> tuple[list[FeedSpec], FilterSpec]:
     ]
 
     raw_filter = data.get("filter") or {}
-    topic = tuple(str(t).lower() for t in raw_filter.get("topic") or ())
-    signal = tuple(str(t).lower() for t in raw_filter.get("signal") or ())
+    topic = _terms(path, raw_filter, "topic")
+    signal = _terms(path, raw_filter, "signal")
     if not topic or not signal:
         raise DiscoverError(
             f"{path.name} needs both `topic` and `signal` term lists under [filter]. "
@@ -337,12 +458,25 @@ def load_config(path: Path | None = None) -> tuple[list[FeedSpec], FilterSpec]:
     return feeds, FilterSpec(
         topic=topic,
         signal=signal,
-        exclude=tuple(str(t).lower() for t in raw_filter.get("exclude") or ()),
+        exclude=_terms(path, raw_filter, "exclude"),
         # Optional, unlike topic/signal above: an operator's existing feeds.toml
         # predates this tier and must keep working. Absent means the filter behaves
         # exactly as it did before, which is a narrower filter, never a broader one.
-        risk_signal=tuple(str(t).lower() for t in raw_filter.get("risk_signal") or ()),
+        risk_signal=_terms(path, raw_filter, "risk_signal"),
     )
+
+
+def _terms(path: Path, raw_filter: dict[str, Any], key: str) -> tuple[str, ...]:
+    """One tier of `[filter]`, lowercased. A term with no letter or digit is refused:
+    it would match every headline, and one stray in `exclude` would drop them all."""
+    terms = tuple(str(t).lower() for t in raw_filter.get(key) or ())
+    for term in terms:
+        if not normalize_haystack(term.strip().rstrip("*")).strip():
+            raise DiscoverError(
+                f"{path.name} [filter] {key}: the term {term!r} has no letter or digit, "
+                "so it would match every headline"
+            )
+    return terms
 
 
 # --- Parsing ----------------------------------------------------------------
@@ -365,12 +499,27 @@ def _parse_date(raw: str) -> dt.datetime | None:
     return parse_timestamp(raw)
 
 
-def parse_feed(xml: str, feed: FeedSpec, *, cap: int | None = None) -> list[Candidate]:
+def _absolute(link: str, base: str) -> str:
+    """`link` resolved against the document it came from; "" unless http(s)."""
+    from urllib.parse import urljoin
+
+    url = urljoin(base, (link or "").strip())
+    return url if urlsplit(url).scheme in ("http", "https") else ""
+
+
+def parse_feed(
+    xml: str, feed: FeedSpec, *, cap: int | None = None, base: str | None = None
+) -> list[Candidate]:
     """Extract entries from an RSS 2.0, Atom, or sitemap document.
 
     All three are handled in one function because they differ only in element
     names, and a feed silently switching format should not stop discovery.
+
+    Links are resolved against `base` (the document's own URL, `feed.url` by
+    default) and anything that is not http(s) is dropped: a relative link stored as
+    written could never be fetched, and was never found again under its own spelling.
     """
+    base = base or feed.url
     try:
         root = ET.fromstring(xml.strip())
     except ET.ParseError as exc:
@@ -380,7 +529,7 @@ def parse_feed(xml: str, feed: FeedSpec, *, cap: int | None = None) -> list[Cand
 
     # RSS 2.0 / RDF: <item><title/><link/><pubDate/>
     for item in root.iter("item"):
-        link = _text(item.find("link"))
+        link = _absolute(_text(item.find("link")), base)
         if not link:
             continue
         candidates.append(
@@ -408,7 +557,7 @@ def parse_feed(xml: str, feed: FeedSpec, *, cap: int | None = None) -> list[Cand
         for link_el in entry.findall(f"{{{_NS['atom']}}}link"):
             rel = link_el.get("rel") or "alternate"
             if rel == "alternate" and link_el.get("href"):
-                link = link_el.get("href", "")
+                link = _absolute(link_el.get("href", ""), base)
                 break
         if not link:
             continue
@@ -430,7 +579,7 @@ def parse_feed(xml: str, feed: FeedSpec, *, cap: int | None = None) -> list[Cand
     # Sitemap: <url><loc/><lastmod/>. No titles, so filtering falls back to the
     # URL slug -- workable because news slugs are usually the headline.
     for url_el in root.iter(f"{{{_NS['sitemap']}}}url"):
-        loc = _text(url_el.find(f"{{{_NS['sitemap']}}}loc"))
+        loc = _absolute(_text(url_el.find(f"{{{_NS['sitemap']}}}loc")), base)
         if not loc:
             continue
         candidates.append(
@@ -444,7 +593,39 @@ def parse_feed(xml: str, feed: FeedSpec, *, cap: int | None = None) -> list[Cand
             )
         )
 
+    if root.tag.endswith("urlset"):
+        # A sitemap lists pages in its own order, usually not newest first:
+        # morethanjustparks lists 5,781 campus pages, and the 1,234 it modified on
+        # 2026-10-14 all sat beyond the first 60. Newest `lastmod` first, then, so
+        # the cap keeps what changed rather than what happens to come first -- but
+        # not a site-wide edit's date (`_undate_site_wide_edits`).
+        candidates = _undate_site_wide_edits(candidates)
+        candidates.sort(key=lambda c: c.published_at or dt.datetime.min, reverse=True)
     return candidates[: cap or MAX_PER_FEED]
+
+
+def _undate_site_wide_edits(candidates: list[Candidate]) -> list[Candidate]:
+    """`candidates`, a `lastmod` shared by more than :data:`NEWSROOM_SURGE` of them
+    replaced by the date the address carries, or by none.
+
+    **A day on which that many pages changed is an edit, not news.**
+    morethanjustparks's 1,234 pages of 2026-10-14 included its index pages -- a
+    state, a ZIP code, "near" -- and, dated that day, they took 60 of the night's
+    first 150 reads as news in a rehearsal on 2026-10-18. Undated, they sort after
+    every page that changed on its own, which the cap then keeps first.
+    """
+    from collections import Counter
+
+    days = Counter(c.published_at.date() for c in candidates if c.published_at)
+    edits = {day for day, n in days.items() if n > NEWSROOM_SURGE}
+    if not edits:
+        return candidates
+    return [
+        replace(c, published_at=date_from_url(c.url) or _month_from_path(c.url))
+        if c.published_at and c.published_at.date() in edits
+        else c
+        for c in candidates
+    ]
 
 
 def _slug_to_title(url: str) -> str:
@@ -508,9 +689,57 @@ def index_children(xml: str) -> list[str]:
         _text(el.find(f"{{{_NS['sitemap']}}}loc"))
         for el in root.iter(f"{{{_NS['sitemap']}}}sitemap")
     ]
-    locs = [u for u in locs if u]
-    preferred = [u for u in locs if re.search(r"article|news|post|story", u, re.I)]
+    locs = [u for u in locs if u and not _MEDIA_SITEMAP.search(urlsplit(u).path.rsplit("/", 1)[-1])]
+    preferred = [u for u in locs if re.search(r"article|news|post|story|press", u, re.I)]
     return preferred or locs
+
+
+#: Child sitemaps that list media, taxonomy or authors rather than pages. Meta's
+#: data-center index names its children `sitemap-1`, `image-sitemap-1` and
+#: `video-sitemap-1`; none carries a preferred word, so all three were walked and
+#: logo and rendering attachment pages ("dpr-construction-logo-2") were queued.
+#: Matched on the file name, and only where the word sits against "sitemap", so a
+#: `media-releases-sitemap.xml` or a sitemap under `/media/` is still walked.
+_SITEMAP_KIND = r"(?:image|video|attachment|author|categor(?:y|ies)|post_tag|tag)s?"
+_MEDIA_SITEMAP = re.compile(
+    rf"(?:^|[-_]){_SITEMAP_KIND}[-_]?sitemap"
+    rf"|sitemap[-_](?:tax(?:onomies)?[-_])?{_SITEMAP_KIND}(?=[-_.\d]|$)"
+    r"|^media[-_]?sitemap",
+    re.I,
+)
+
+
+async def walk_sitemap(spec: SitemapSpec, fetcher: Fetcher) -> tuple[list[Candidate], list[str]]:
+    """Every entry of one sitemap, following an index one level. No filtering."""
+    problems: list[str] = []
+    root_result = await fetcher.fetch(spec.url)
+    if not root_result.ok:
+        return [], [f"{spec.name}: {root_result.error or 'fetch failed'}"]
+    if not is_sitemap_index(root_result.markdown):
+        # Already a urlset; reuse the body we have.
+        try:
+            return parse_feed(root_result.markdown, spec.as_feed(), cap=spec.max_urls), problems
+        except DiscoverError as exc:
+            return [], [f"{spec.name}: {exc}"]
+
+    children = index_children(root_result.markdown)
+    if not children:
+        return [], [f"{spec.name}: sitemap index listed no children"]
+    targets = children[: spec.max_children]
+    log.info("%s is an index; fetching %d child sitemap(s)", spec.name, len(targets))
+    entries: list[Candidate] = []
+    for child in targets:
+        result = await fetcher.fetch(child)
+        if not result.ok:
+            problems.append(f"{spec.name}: child {child} {result.error or 'failed'}")
+            continue
+        try:
+            entries.extend(
+                parse_feed(result.markdown, spec.as_feed(), cap=spec.max_urls, base=child)
+            )
+        except DiscoverError as exc:
+            problems.append(f"{spec.name}: {exc}")
+    return entries, problems
 
 
 async def crawl_sitemap(
@@ -521,36 +750,8 @@ async def crawl_sitemap(
     Filtering happens here rather than in the caller because a sitemap can yield
     thousands of URLs and only the matches are worth carrying further.
     """
-    problems: list[str] = []
-    root_result = await fetcher.fetch(spec.url)
-    if not root_result.ok:
-        return [], [f"{spec.name}: {root_result.error or 'fetch failed'}"]
-
-    targets = [spec.url]
-    if is_sitemap_index(root_result.markdown):
-        children = index_children(root_result.markdown)
-        if not children:
-            return [], [f"{spec.name}: sitemap index listed no children"]
-        targets = children[: spec.max_children]
-        log.info("%s is an index; fetching %d child sitemap(s)", spec.name, len(targets))
-    else:
-        # Already a urlset; reuse the body we have.
-        entries = parse_feed(root_result.markdown, spec.as_feed(), cap=spec.max_urls)
-        return _match_sitemap(entries, filter_spec, spec), problems
-
-    kept: list[Candidate] = []
-    for child in targets:
-        result = await fetcher.fetch(child)
-        if not result.ok:
-            problems.append(f"{spec.name}: child {child} {result.error or 'failed'}")
-            continue
-        try:
-            entries = parse_feed(result.markdown, spec.as_feed(), cap=spec.max_urls)
-        except DiscoverError as exc:
-            problems.append(f"{spec.name}: {exc}")
-            continue
-        kept.extend(_match_sitemap(entries, filter_spec, spec))
-    return kept, problems
+    entries, problems = await walk_sitemap(spec, fetcher)
+    return _match_sitemap(entries, filter_spec, spec), problems
 
 
 def _match_sitemap(
@@ -615,21 +816,32 @@ async def sweep_sitemaps(
 # --- Filtering and queueing -------------------------------------------------
 
 
-def select_candidates(
+def judge_candidates(
     candidates: list[Candidate],
     spec: FilterSpec,
     *,
     since: dt.datetime | None = None,
     report: DiscoverReport | None = None,
-) -> list[Candidate]:
-    """Apply the keyword tiers and the age cutoff."""
+    known: Callable[[Candidate], int | None] | None = None,
+) -> tuple[list[Candidate], list[tuple[Candidate, str]]]:
+    """Apply the age cutoff and the keyword tiers: (kept, [(dropped, why)]).
+
+    **A headline that names a tracked campus is kept** even when it carries no
+    keyword (`known`, :func:`known_project_test`): news about a campus already
+    held is the most useful thing a feed can carry, and its wording is the
+    least predictable. An exclusion still drops it — those name kinds of page
+    (podcasts, earnings calls, job listings) that are not news whatever they
+    mention.
+    """
     kept: list[Candidate] = []
+    dropped: list[tuple[Candidate, str]] = []
     for candidate in candidates:
         if report is not None:
             report.entries_seen += 1
         if since and candidate.published_at and candidate.published_at < since:
             if report is not None:
                 report.filtered += 1
+            dropped.append((candidate, TOO_OLD))
             continue
         # The URL PATH participates in matching: slugs carry the headline, and
         # some feeds ship empty or truncated titles. The host is deliberately
@@ -638,13 +850,31 @@ def select_candidates(
         keep, reason = spec.matches(
             f"{candidate.title} {path}", topic_implied=candidate.topic_implied
         )
+        if not keep and known is not None and not reason.startswith("excluded"):
+            project_id = known(candidate)
+            if project_id is not None:
+                keep, reason = True, f"names tracked campus #{project_id}"
         if not keep:
             log.debug("skip %s (%s)", candidate.url, reason)
             if report is not None:
                 report.filtered += 1
+            dropped.append((candidate, reason))
             continue
         log.debug("match %s (%s)", candidate.url, reason)
         kept.append(candidate)
+    return kept, dropped
+
+
+def select_candidates(
+    candidates: list[Candidate],
+    spec: FilterSpec,
+    *,
+    since: dt.datetime | None = None,
+    report: DiscoverReport | None = None,
+    known: Callable[[Candidate], int | None] | None = None,
+) -> list[Candidate]:
+    """Apply the keyword tiers and the age cutoff. See :func:`judge_candidates`."""
+    kept, _ = judge_candidates(candidates, spec, since=since, report=report, known=known)
     return kept
 
 
@@ -766,6 +996,302 @@ def cache_feed_text(candidates: list[Candidate], cache_dir: Path | None) -> int:
     return written
 
 
+# --- What discovery has seen (migration 0039) --------------------------------
+#
+# Every entry a feed or an archive shows discovery is remembered with its verdict.
+# Two things depend on it. A filter that drops an entry leaves a record, so a miss
+# can be counted and a corrected filter can be applied to what it once dropped
+# (`rejudge`). And an operator's newsroom is read every night, queuing what it
+# added since the night before; "added" needs a memory of what it listed.
+
+#: Verdicts, as stored in `seen_url.verdict`.
+QUEUED, KNOWN, DROPPED, LISTED = "queued", "known", "dropped", "listed"
+
+#: The reason recorded for an entry dropped for its age rather than by a term.
+#: `rejudge` leaves these alone: a changed filter does not make them news.
+TOO_OLD = "older than the discovery window"
+
+#: The reason recorded for a post an operator's own newsroom added since the last
+#: walk. `pending` reads these straight after the news.
+NEWSROOM_NEW = "new on the operator's newsroom"
+
+#: More unseen posts than an operator newsroom publishes in a night: judged as a
+#: catch-up, not queued whole. See :func:`watch_newsrooms`.
+NEWSROOM_SURGE: Final = 25
+
+
+def _identities_in(session: Session, model: Any, urls: list[str]) -> set[str]:
+    """`url_identity` of every spelling of `urls` stored in `model.url`."""
+    spellings = list(dict.fromkeys(v for url in urls for v in url_variants(url)))
+    found: set[str] = set()
+    for start in range(0, len(spellings), 500):  # SQLite caps bound parameters
+        found.update(
+            url_identity(url)
+            for url in session.scalars(
+                select(model.url).where(model.url.in_(spellings[start : start + 500]))
+            )
+        )
+    return found
+
+
+def record_seen(
+    session: Session,
+    rows: list[tuple[Candidate, str, str | None]],
+    *,
+    now: dt.datetime | None = None,
+) -> None:
+    """Remember each `(entry, verdict, reason)`.
+
+    An entry seen on an earlier night keeps its first sighting, so `source` stays
+    the place it first appeared; only `last_seen_at` moves, and its verdict becomes
+    `queued` when a later sighting queued it. Within one batch the strongest verdict
+    wins, with its source: utilitydive's feed and its archive list the same story,
+    and the one that queued it is the one that found it.
+    """
+    from tracker.models import SeenUrl
+
+    if not rows:
+        return
+    now = now or utcnow()
+    rank = {QUEUED: 2, KNOWN: 1}
+    first: dict[str, tuple[str, Candidate, str, str | None]] = {}
+    for candidate, verdict, reason in rows:
+        url = canonical_url(candidate.url)
+        identity = url_identity(url)
+        held = first.get(identity)
+        if held is None or rank.get(verdict, 0) > rank.get(held[2], 0):
+            first[identity] = (url, candidate, verdict, reason)
+    spellings = list(dict.fromkeys(v for url, *_ in first.values() for v in url_variants(url)))
+    stored: dict[str, Any] = {}
+    for start in range(0, len(spellings), 500):
+        for row in session.scalars(
+            select(SeenUrl).where(SeenUrl.url.in_(spellings[start : start + 500]))
+        ):
+            stored[url_identity(row.url)] = row
+    for identity, (url, candidate, verdict, reason) in first.items():
+        row = stored.get(identity)
+        if row is None:
+            session.add(
+                SeenUrl(
+                    url=url,
+                    source=candidate.feed,
+                    title=norm_text(candidate.title, max_len=300) or None,
+                    published_at=candidate.published_at,
+                    verdict=verdict,
+                    reason=reason[:300] if reason else None,
+                    first_seen_at=now,
+                    last_seen_at=now,
+                )
+            )
+            continue
+        row.last_seen_at = now
+        if verdict == QUEUED and row.verdict != QUEUED:
+            row.verdict, row.reason = QUEUED, (reason[:300] if reason else None)
+    session.flush()
+
+
+def known_project_test(
+    session: Session, path: Path | None = None
+) -> Callable[[Candidate], int | None]:
+    """A test for an entry that names a tracked campus: its project id, or None.
+
+    `matches_known_project` against every row, the company implied on an
+    operator's own newsroom. Built once per run: the identities are read once.
+    """
+    identities = project_identities(session)
+    implied = newsroom_companies(path)
+
+    def known(candidate: Candidate) -> int | None:
+        return matches_known_project(
+            candidate.url, candidate.title, identities, implied_companies=implied
+        )
+
+    return known
+
+
+_PATH_MONTH = re.compile(r"/(20\d{2})/(0[1-9]|1[0-2])/")
+
+
+def _month_from_path(url: str) -> dt.datetime | None:
+    """`/2026/09/slug` -> 2026-09-01: the month a WordPress post was filed under."""
+    match = _PATH_MONTH.search(urlsplit(url).path)
+    return dt.datetime(int(match.group(1)), int(match.group(2)), 1) if match else None
+
+
+def watch_newsrooms(
+    session: Session,
+    specs: list[SitemapSpec],
+    fetcher: Fetcher,
+    spec: FilterSpec,
+    *,
+    report: DiscoverReport,
+    known: Callable[[Candidate], int | None] | None = None,
+) -> tuple[list[Candidate], list[tuple[Candidate, str, str | None]]]:
+    """Every sitemap, walked nightly: what is new tonight, and what was seen.
+
+    Returns (to queue, [(entry, verdict, reason)] for :func:`record_seen`).
+
+    **An operator's own data-center newsroom is read without the keyword test**
+    (`company` set and `topic_implied`): every post there is about that operator's
+    data centers, and its wording is its own. Meta titles a campus announcement
+    "Hello Tulsa", a go-live "Kuna, we are online!" and an expansion "Montgomery,
+    we're growing", and the filter dropped all three on every walk until
+    2026-10-18. Only the exclusions still apply, so a careers page stays out.
+    Mixed newsrooms (about.fb.com, which also announces Instagram features) and
+    trade archives keep the full filter.
+
+    **The first walk of a sitemap is not news.** Everything it lists was published
+    before tonight. On an operator's own newsroom a URL the queue does not hold is
+    queued when it passes the filter or names a tracked campus -- the catch-up, from
+    every year, which is how campuses Meta announced in 2020 and the database never
+    held come in. A third-party archive (a trade site's back catalogue, a directory)
+    was swept under the old filter by `sync --deep`, so its first walk queues only
+    pages that name a tracked campus: measured on 2026-10-18, the broader filter would
+    otherwise have queued 1,700 old pages from them, 851 from one directory. The
+    rest is recorded as `listed`. From the second night on, a URL the
+    sitemap did not list before is new, and its `lastmod` is close to when it was
+    published. On the first walk `lastmod` is not trusted for that: Meta's 2021
+    posts carry 2025 dates, a site-wide edit. A date in the URL path is used
+    whenever there is one.
+
+    "First" is decided by what was seen, not only by name: a sitemap whose name has
+    no rows yet but most of whose listing is already remembered (renamed in the file,
+    or recorded first by a feed) is not on its first walk. And **a surge is a
+    catch-up too**: more than :data:`NEWSROOM_SURGE` unseen posts in one night is not
+    what an operator publishes — it is a child sitemap that failed on the first walk,
+    a child newly in reach, or moved URLs — so they are judged as on a first walk,
+    and the morning report names it.
+    """
+    import asyncio
+    from dataclasses import replace
+
+    from tracker.models import SeenUrl
+
+    walked_before = set(session.scalars(select(SeenUrl.source).distinct()))
+    to_queue: list[Candidate] = []
+    seen: list[tuple[Candidate, str, str | None]] = []
+    for sitemap in specs:
+        if sitemap.closed:
+            continue
+        try:
+            entries, problems = asyncio.run(walk_sitemap(sitemap, fetcher))
+        except Exception as exc:  # one site failing never stops the others
+            entries, problems = [], [f"{sitemap.name}: {exc}"]
+        report.sitemaps_walked += 1
+        for problem in problems:
+            report.failures.append((sitemap.name, problem))
+        if not entries:
+            continue
+        # One judgement per URL: DataBank's press-release and news sitemaps list the
+        # same 204 pages.
+        unique: dict[str, Candidate] = {}
+        for entry in entries:
+            unique.setdefault(url_identity(entry.url), entry)
+        report.sitemap_entries += len(unique)
+        urls = [canonical_url(e.url) for e in unique.values()]
+        held = _identities_in(session, IngestUrl, urls)
+        listed = _identities_in(session, SeenUrl, urls)
+        own = bool(sitemap.company) and sitemap.topic_implied
+        first_walk = sitemap.name not in walked_before and len(listed) * 2 < len(unique)
+        unseen = [i for i in unique if i not in listed and i not in held]
+        if own and not first_walk and len(unseen) > NEWSROOM_SURGE:
+            first_walk = True
+            report.failures.append(
+                (
+                    sitemap.name,
+                    f"{len(unseen)} unseen entries in one night, read as a catch-up: "
+                    "a child sitemap that failed before, or moved URLs",
+                )
+            )
+        for identity, entry in unique.items():
+            if identity in listed:
+                continue  # seen on an earlier night: nothing new
+            dated = date_from_url(entry.url) or _month_from_path(entry.url)
+            entry = replace(
+                entry, published_at=dated or (None if first_walk else entry.published_at)
+            )
+            if identity in held:
+                seen.append((entry, KNOWN, None))
+                continue
+            path = urlsplit(entry.url).path
+            if own and not first_walk:
+                hit = first_term(spec.exclude, normalize_haystack(f"{entry.title} {path}"))
+                keep = not hit
+                reason = f"excluded by {hit!r}" if hit else NEWSROOM_NEW
+            elif first_walk and not own:
+                project_id = known(entry) if known is not None else None
+                keep = project_id is not None
+                reason = (
+                    f"catch-up: names tracked campus #{project_id}"
+                    if keep
+                    else "on the archive before its first walk"
+                )
+            else:
+                keep, reason = spec.matches(
+                    f"{entry.title} {path}", topic_implied=sitemap.topic_implied
+                )
+                if not keep and known is not None and not reason.startswith("excluded"):
+                    project_id = known(entry)
+                    if project_id is not None:
+                        keep, reason = True, f"names tracked campus #{project_id}"
+                if keep:
+                    reason = f"catch-up: {reason}" if first_walk else reason
+            if keep:
+                to_queue.append(entry)
+                seen.append((entry, QUEUED, reason))
+                report.sitemap_new += 1
+            elif first_walk:
+                seen.append((entry, LISTED, reason))
+            else:
+                seen.append((entry, DROPPED, reason))
+                report.sitemap_dropped += 1
+    return to_queue, seen
+
+
+def rejudge(
+    session: Session,
+    *,
+    feeds_path: Path | None = None,
+    run_id: str | None = None,
+    report: DiscoverReport | None = None,
+) -> list[Candidate]:
+    """Put every entry the filter once dropped through today's filter; queue the kept.
+
+    For after a change to `[filter]` in `seed/feeds.toml`: an entry dropped by a
+    term that has since been narrowed, or for lacking one that has since been added,
+    is news the old filter cost. An entry dropped for its age is left alone.
+    """
+    from tracker.models import SeenUrl
+
+    report = report if report is not None else DiscoverReport()
+    feeds, spec = load_config(feeds_path)
+    implied = {f.name: f.topic_implied for f in feeds}
+    implied.update({s.name: s.topic_implied for s in load_sitemaps(feeds_path)})
+    known = known_project_test(session, feeds_path)
+    rows = list(
+        session.scalars(
+            select(SeenUrl).where(SeenUrl.verdict == DROPPED, SeenUrl.reason != TOO_OLD)
+        )
+    )
+    candidates = [
+        Candidate(
+            url=row.url,
+            title=row.title or _slug_to_title(row.url),
+            feed=row.source,
+            published_at=row.published_at,
+            topic_implied=implied.get(row.source, False),
+        )
+        for row in rows
+    ]
+    kept = select_candidates(candidates, spec, known=known)
+    queued = queue_candidates(
+        session, kept, run_id=run_id or utcnow().strftime("rejudge-%Y%m%dT%H%M%S"), report=report
+    )
+    record_seen(session, [(c, QUEUED, "kept by a revised filter") for c in queued])
+    report.rejudged = len(rows)
+    return queued
+
+
 # --- Prioritising the queue toward depth ------------------------------------
 #
 # The queue drains oldest-first, which grows the database *sideways*: every run
@@ -795,6 +1321,18 @@ _GENERIC_NAME_TOKENS = frozenset(
         "south",
         "east",
         "west",
+        # Administrative words. "Newton County Data Center" made every Meta post
+        # naming any county (Utah County, Henrico County) about Newton County.
+        "county",
+        "parish",
+        "township",
+        "borough",
+        "village",
+        "centers",
+        "campuses",
+        "datacenters",
+        "buildings",
+        "projects",
     }
 )
 
@@ -810,15 +1348,24 @@ class ProjectIdentity:
 
 
 def _company_words(company: str | None) -> frozenset[str]:
-    """Every word that belongs to the operator's name, raw and normalized.
+    """Every word that belongs to the operator's name, raw, normalized and aliased.
 
-    Both forms are needed: the raw name carries suffixes `company_key` strips, and
-    the key carries alias substitutions the raw name does not (Facebook -> meta).
+    All three are needed: the raw name carries suffixes `company_key` strips, the key
+    carries alias substitutions the raw name does not (Facebook -> meta), and the
+    aliases carry the names the company is also known by. Without the last, "Facebook
+    Prineville Campus", filed under Meta, had "facebook" as a distinctive name token,
+    and every about.fb.com post with "facebook" in its address read as news of
+    Prineville: 100 of them on the first nightly walk of that archive (2026-10-18).
     """
-    from tracker.dedup import company_key
+    from tracker.dedup import company_aliases, company_key
 
-    raw = re.split(r"[^a-z0-9]+", (company or "").lower())
-    return frozenset(w for w in [*raw, *company_key(company).split()] if w)
+    key = company_key(company)
+    words = [
+        *re.split(r"[^a-z0-9]+", (company or "").lower()),
+        *key.split(),
+        *(w for alias in company_aliases(key) for w in re.split(r"[^a-z0-9]+", alias)),
+    ]
+    return frozenset(w for w in words if w)
 
 
 def project_identities(session: Session) -> list[ProjectIdentity]:
@@ -1101,6 +1648,21 @@ def pending(
     the queue: a project's own press release never names its blocker, so an
     adversarial second source is the only way that fact is ever recorded.
 
+    **Second come what was looked for on purpose**: the news watch's results
+    (`watch:#<id>`, :mod:`tracker.ingest.watch`) and the posts an operator's own
+    newsroom added (:func:`watch_newsrooms`), newest first. Both are about a campus
+    by construction, so the "names no tracked campus" rule would put them last of all,
+    behind a backlog of a thousand; and the watch's first, year-long look at each
+    campus finds news older than the email's window.
+
+    **A date in the future is no date.** An event page dated 2026-12-01 led the
+    news-first order on 2026-10-17; such a row sorts as undated.
+
+    **The news is read in turn across its sources**, newest first within each
+    (:func:`in_turn`): a directory that re-dates 60 pages in one site-wide edit, or
+    the watch's first look at 300 campuses, would otherwise fill the night's reads
+    before another source's story from yesterday was reached.
+
     ``unreadable`` (:func:`unreadable_test`) flags the pages no fetch will read,
     which then go after every other row, whichever order was asked for, before the
     limit is cut.
@@ -1114,10 +1676,35 @@ def pending(
         from tracker.feed import REPORT_WINDOW_DAYS
 
         rows = list(session.scalars(stmt))
-        cutoff = utcnow() - dt.timedelta(days=REPORT_WINDOW_DAYS)
-        news = [row for row in rows if row.published_at is not None and row.published_at >= cutoff]
-        news.sort(key=lambda row: (row.published_at, row.id), reverse=True)
+        now = utcnow()
+        cutoff = now - dt.timedelta(days=REPORT_WINDOW_DAYS)
+        ceiling = now + dt.timedelta(days=1)
+
+        def when(row: IngestUrl) -> dt.datetime | None:
+            return row.published_at if row.published_at and row.published_at <= ceiling else None
+
+        def newest(group: list[IngestUrl]) -> list[IngestUrl]:
+            """Newest published first; an undated one after, since nothing says it is new."""
+            dated = sorted((r for r in group if when(r)), key=lambda r: (when(r), r.id))
+            return dated[::-1] + [r for r in group if not when(r)]
+
+        news = [row for row in rows if (w := when(row)) is not None and w >= cutoff]
+        news.sort(key=lambda row: (when(row), row.id), reverse=True)
+        news = in_turn(news, key=lambda row: _source_of(row.feed))
         taken = {row.id for row in news}
+        from tracker.models import SeenUrl
+
+        posted = set(
+            session.scalars(
+                select(SeenUrl.url).where(SeenUrl.verdict == QUEUED, SeenUrl.reason == NEWSROOM_NEW)
+            )
+        )
+        sought = [
+            row
+            for row in rows
+            if row.id not in taken and ((row.feed or "").startswith("watch:") or row.url in posted)
+        ]
+        taken |= {row.id for row in sought}
         backlog = [row for row in rows if row.id not in taken]
         identities = project_identities(session)
         implied = newsroom_companies()
@@ -1126,12 +1713,10 @@ def pending(
             for row in backlog
             if not matches_known_project(row.url, row.title, identities, implied_companies=implied)
         ]
-        # Newest first; an undated article last, since nothing says it is recent.
-        dated = [row for row in fresh if row.published_at is not None]
-        undated = [row for row in fresh if row.published_at is None]
-        dated.sort(key=lambda row: (row.published_at, row.id), reverse=True)
         taken |= {row.id for row in fresh}
-        ordered = news + dated + undated + [row for row in rows if row.id not in taken]
+        ordered = (
+            news + newest(sought) + newest(fresh) + [row for row in rows if row.id not in taken]
+        )
     elif known_first:
         # Scored in Python: the match needs slug normalization that SQL cannot do,
         # and the queue is thousands of rows, not millions.
@@ -1160,6 +1745,37 @@ def pending(
         ordered = list(session.scalars(stmt))
     ordered = readable_first(ordered, unreadable, url=lambda row: row.url)
     return ordered[:limit] if limit else ordered
+
+
+def _source_of(feed: str | None) -> str:
+    """The source a queued row is counted under for :func:`in_turn`: every news-watch
+    result is one source, the watch; every search template another."""
+    if not feed:
+        return ""
+    for prefix in ("watch:", "search:", "prospect:", "enrich:"):
+        if feed.startswith(prefix):
+            return prefix
+    return feed
+
+
+def in_turn(rows: list[T], *, key: Callable[[T], str]) -> list[T]:
+    """`rows`, already in order, re-ordered so each source takes a turn.
+
+    The first row of every source, in the order their first rows came; then every
+    source's second; and so on. Order within a source is kept.
+    """
+    from collections import deque
+
+    queues: dict[str, deque[T]] = {}
+    for row in rows:
+        queues.setdefault(key(row), deque()).append(row)
+    out: list[T] = []
+    while queues:
+        for source in list(queues):
+            out.append(queues[source].popleft())
+            if not queues[source]:
+                del queues[source]
+    return out
 
 
 def pending_split(session: Session) -> tuple[int, int]:
@@ -2009,8 +2625,16 @@ def run(
     probe: bool = True,
     probe_force: bool = False,
     search_provider: Any = None,
+    sitemaps: bool = True,
+    rejudge_dropped: bool = False,
 ) -> tuple[DiscoverReport, list[Candidate]]:
     """Poll every configured feed and queue the matching articles.
+
+    `sitemaps` also walks every [[sitemap]] (:func:`watch_newsrooms`): an
+    operator's own data-center newsroom is read every night, and what it added is
+    queued without the keyword test. Every entry seen is remembered with its
+    verdict (:func:`record_seen`); `rejudge_dropped` first puts what the filter
+    once dropped through today's filter (:func:`rejudge`).
 
     A feed that fails is recorded and the run continues: one outlet changing its
     URL must not stop discovery from the other six. A feed marked closed is not
@@ -2041,6 +2665,11 @@ def run(
     report.closed = [(f.name, f.closed) for f in feeds if f.closed]
     feeds = [f for f in feeds if not f.closed]
     closed = closed_domains(feeds_path, reopened=reopened)
+    known = known_project_test(session, feeds_path)
+    seen_rows: list[tuple[Candidate, str, str | None]] = []
+    rejudged: list[Candidate] = []
+    if rejudge_dropped:
+        rejudged = rejudge(session, feeds_path=feeds_path, run_id=run_id, report=report)
 
     from tracker.ingest.fetch import fetch_all
 
@@ -2085,10 +2714,27 @@ def run(
             continue
         if not entries:
             report.failures.append((feed.name, "parsed but contained no entries"))
-        kept = select_candidates(entries, spec, since=since, report=report)
-        (headlines if feed.headlines_of else all_kept).extend(kept)
+        if feed.headlines_of:
+            headlines.extend(select_candidates(entries, spec, since=since, report=report))
+            continue
+        kept, dropped = judge_candidates(entries, spec, since=since, report=report, known=known)
+        all_kept.extend(kept)
+        seen_rows.extend((c, DROPPED, why) for c, why in dropped)
+
+    if sitemaps:
+        specs = without_reopened(load_sitemaps(feeds_path), reopened)
+        new_posts, walked = watch_newsrooms(
+            session, specs, fetcher or _RawFetcher(settings), spec, report=report, known=known
+        )
+        all_kept.extend(new_posts)
+        seen_rows.extend(walked)
 
     queued = queue_candidates(session, all_kept, run_id=run_id, report=report)
+    put = {url_identity(c.url) for c in queued}
+    seen_rows.extend(
+        (c, QUEUED if url_identity(canonical_url(c.url)) in put else KNOWN, None) for c in all_kept
+    )
+    record_seen(session, seen_rows)
     queued += follow_headlines(
         session,
         headlines,
@@ -2104,13 +2750,13 @@ def run(
         # The report still describes what would have happened. No bodies are
         # written either: a dry run must not leave files behind any more than it
         # leaves rows behind.
-        return report, all_kept + headlines
+        return report, rejudged + all_kept + headlines
     # Only for the newly queued. A candidate already in `ingest_url` has had its
     # turn, and rewriting its body would resurrect an article the operator dropped
     # from the queue on purpose.
     report.bodies_cached = cache_feed_text(queued, cache_dir)
     session.commit()
-    return report, queued
+    return report, rejudged + queued
 
 
 def _poll_news(
@@ -2278,6 +2924,7 @@ __all__ = [
     "drop_pending",
     "failed",
     "failure_summary",
+    "first_term",
     "follow_headlines",
     "given_up",
     "load_config",
@@ -2301,6 +2948,7 @@ __all__ = [
     "same_story",
     "select_candidates",
     "sweep_sitemaps",
+    "term_in",
     "unreadable_test",
     "verify_urls",
     "without_reopened",

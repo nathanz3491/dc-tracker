@@ -12,6 +12,59 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **The news watch: every campus is searched for news, on a schedule set by its
+  stage** (`tracker/ingest/watch.py`, `tracker/migrations/0039_news_watch.sql`,
+  `tracker/models.py`, `tracker/cli/sync.py`, `tracker/cli/_shared.py`,
+  `scripts/overnight.sh`, `tests/test_news_watch.py`, `docs/workflows/sync.md`).
+  Meta's own "Kuna, we are online!" (2026-09-03) reached the database on 10-17, by
+  accident: the research that fills a row asks only what it is missing, and stops
+  asking once it is full, so nothing ever asked whether a campus had gone live.
+  `tracker news` asks each campus what has been said since it was last looked at —
+  one dated news search for its company and its town, county or name — daily while a
+  campus is being decided or built, every three days once it operates, daily for any
+  campus of a company a reader watches. A campus's first look reaches back a year,
+  with a second search for the words its stage is waiting on ("online", "energized",
+  "delayed"); 300 a night get one, largest first, so the whole database is caught up
+  in two nights (`--all` does it at once). Results that pass the keyword filter or
+  name the campus, dated inside the window, are queued as `watch:#<id>` and read
+  ahead of the backlog. No model is called; a search is about ¥0.007.
+
+- **Builders' own newsrooms are read every night, without the keyword test**
+  (`tracker/ingest/discover.py`, `tracker/seed/feeds.toml`, `tracker/cli/sync.py`,
+  `docs/workflows/sync.md`). The 17 operator sitemaps were walked only by a hand-run
+  `--deep` (last on 09-25), and through the keyword filter, which dropped every
+  milestone post Meta writes ("Hello Tulsa", "Kuna, we are online!", "Montgomery,
+  we're growing"): 34 of Meta's 64 posts had never reached the database, among them
+  campuses with no row at all. `tracker discover` now walks every archive each night
+  and queues only what it added since the last walk; on an operator's own
+  data-center site that is everything new, with no keyword needed. The first walk
+  of an archive catches up, queuing every post that passes the filter or names a
+  tracked campus, from every year. Posts are dated from their address, not from a
+  sitemap's site-wide edit date; media sitemaps are no longer walked. Added:
+  Google's data-center site, Aligned, EdgeCore, Crusoe, Nscale, Flexential, and
+  Microsoft's community site; repaired: Microsoft's newsroom feed (dead since
+  2025-05), Google's (now its infrastructure category), Amazon's (its corporate
+  news, not the AWS product blog); closed with the date measured: NTT (robots.txt,
+  and redirected abroad), Prime (Cloudflare challenge). A third-party archive's
+  first walk queues only pages naming a tracked campus: it was swept under the old
+  filter already, and the new one would have queued 1,700 of its old pages.
+
+- **Discovery remembers everything it saw, and `--rejudge` reapplies a revised
+  filter** (`tracker/ingest/discover.py`, migration 0039 `seen_url`). A dropped entry
+  used to leave no trace, so a miss could not be counted or undone. Every entry is
+  now kept with its verdict — queued, already known, dropped (and by which term), or
+  listed on a newsroom's first walk — and `tracker discover --rejudge` queues what a
+  changed filter would now keep.
+
+- **The morning report says how the news came in** (`tracker/ingest/desk.py`,
+  `tracker/cli/sync.py` `news report`, `scripts/overnight.sh`). Per source: entries
+  seen, kept, read, and how many changed something; the median and 90th-percentile
+  delay from publication to the database; and a line when no discovery ran, when a
+  feed's newest entry is over 45 days old, when fresh news is still waiting, and
+  when search credit will not last a fortnight (Serper's balance is read directly).
+  Every URL the research finds is labelled with the harvester that found it
+  (`enrich:search`, ...); 178 of about 205 on 10-17 carried no label.
+
 - **A public status page on its own hostname** (`tracker/webui/statussite.py`,
   `tracker/webui/server.py`, `tracker/webui/assets.py`, `tracker/config.py`,
   `tracker/cli/serve.py`, `tracker/webui/static/pages/`,
@@ -107,6 +160,37 @@ initial build of the v1 PRD.
 
 ### Changed
 
+- **The keyword filter matches whole words, and its bank is rebuilt to keep the
+  news** (`tracker/ingest/discover.py`, `tracker/seed/feeds.toml`,
+  `tracker/ingest/search.py`, `tracker/ingest/wiki.py`, `tracker/dedup.py`,
+  `tests/fixtures/keyword_cases.json`, `docs/sources-and-feeds.md`). Every term was a
+  plain substring, which threw news away both ways: "jobs" dropped "creating 100
+  jobs", "stock" dropped Stockton, "summit" Summit County, "bitcoin" every
+  crypto-mine-to-AI conversion. A term now matches whole words, and one ending in `*`
+  the start of a word ("announc*"). The bank grew from about 90 terms to about 1,900,
+  built and checked against production's own rows: of headlines that produced a
+  project it keeps 604 of 614 (the old bank, 533), of URL-only pages that did, 1,938
+  of 2,965 (old, 866), including every "Hello X" and "we are online" post Meta
+  writes. A headline that names a tracked campus is kept even with no keyword;
+  "county" no longer counts as a distinctive campus name (Meta's Utah County post
+  matched Newton County), nor does a company's other name ("Facebook" in "Facebook
+  Prineville Campus", filed under Meta, made 100 old Facebook posts news of
+  Prineville). 345 headlines with their verdicts pin the bank in the tests. A
+  `feeds.toml` from elsewhere needs its stems marked with `*`.
+
+- **The night reads the news first, reads more, and may spend ¥15**
+  (`scripts/overnight.sh`, `tracker/ingest/discover.py`, `.env.example`). Discovery
+  ran last, so a host reset at 19:32 on 10-16 meant no discovery that day; it now
+  runs first — feeds and archives, then the news watch, then the read — and the read
+  is 150 articles, not 40, with the news watch's results and the newsrooms' posts
+  read straight after the last two months' news and before the backlog, and the news
+  itself read in turn across its sources, so one site that re-dates 60 pages cannot
+  take 60 of the night's first reads. A date more than a day in the future no longer
+  puts a page first. The model ceiling rises from ¥12 to ¥15 (OpenCode Go's DeepSeek
+  V4.1 Flash allowance became $80 a month, about ¥18 a day), and the night may send
+  2,000 web searches (`--search-cap`), all but 500 of them available to the news
+  watch, so the research that runs later still has some.
+
 - **The ledger prices the night at OpenCode Go's rates, and web searches have a
   cap of their own** (`tracker/spend.py`, `tracker/llm.py`,
   `tracker/ingest/search.py`, `tracker/config.py`, `tracker/agent.py`,
@@ -122,6 +206,14 @@ initial build of the v1 PRD.
   Daytime runs on OpenCode Go are now held at peak hours like DeepSeek's: the guard
   let them through on the belief that Go did not double its price, and it does, in
   the same hours.
+
+- **A sitemap read as a feed keeps its newest entries**
+  (`tracker/ingest/discover.py`). It kept the first 60 in file order, so the 1,234
+  campus pages morethanjustparks changed on 10-14 were all past the cut. A day on
+  which more than 25 of a sitemap's pages changed is a site-wide edit, not news:
+  those pages keep only a date their address carries, so a directory's index pages
+  (a state, a ZIP code) are not read first as news, as 60 of them were in a
+  rehearsal.
 
 - **The Map view is redrawn: national and state figures, stage toggles, and dots
   sized by capacity** (`tracker/webui/static/views-map.js`,

@@ -170,20 +170,45 @@ name = "utilitydive"
 url = "https://www.utilitydive.com/feeds/news/"
 source_type = "trade_press"
 
+# The hyperscalers' own feeds. Until 2026-10-18 these four had never queued a URL:
+# `news.microsoft.com/feed/` had nothing newer than 2025-05-07, Google's whole-blog
+# feed and the AWS product blog are product news that fails the filter, and the
+# keyword test dropped what data-center news they did carry (Google's 2026-09-14
+# "We're exploring a potential data center in Lea County, New Mexico"). Each URL
+# below answered the tracker's own client with a live feed on 2026-10-18.
 [[feed]]
 name = "microsoft-news"
-url = "https://news.microsoft.com/feed/"
+# Microsoft's newsroom moved under /source/; the old /feed/ still answers, stale.
+url = "https://news.microsoft.com/source/feed/"
+source_type = "company_filing"
+
+[[feed]]
+name = "microsoft-local"
+# Microsoft's community site, where its datacenter campuses post updates
+# ("Cheyenne datacenter update", 2026-10-15). Not topic_implied: it also carries
+# grants and skills programmes.
+url = "https://local.microsoft.com/feed/"
 source_type = "company_filing"
 
 [[feed]]
 name = "google-blog"
-url = "https://blog.google/rss/"
+# The infrastructure and global-network category, where Google announces campuses,
+# rather than the whole blog.
+url = "https://blog.google/innovation-and-ai/infrastructure-and-cloud/global-network/rss/"
 source_type = "company_filing"
 
 [[feed]]
 name = "aws-blog"
-url = "https://aws.amazon.com/blogs/aws/feed/"
+# Amazon's corporate news, where its data-center investments are announced; the
+# AWS product blog this replaced announces services.
+url = "https://www.aboutamazon.com/rss/feed.rss"
 source_type = "company_filing"
+
+[[feed]]
+name = "flexential-news"
+url = "https://www.flexential.com/rss.xml"
+source_type = "company_filing"
+topic_implied = true
 
 [[feed]]
 name = "meta-newsroom"
@@ -400,44 +425,338 @@ source_type = "company_filing"
 closed = "2026-10-13: Akamai 403 on the feed, articles and robots.txt, from two networks"
 
 
+[filter]
 # Keyword filtering is two-tier, and both tiers must match.
 #
 # `topic` establishes that the article is about a data center at all. `signal`
 # establishes that it concerns a specific PROJECT rather than industry commentary
-# — an opinion piece about AI power demand matches `topic` but has no project to
+# -- an opinion piece about AI power demand matches `topic` but has no project to
 # extract, and would waste an LLM call.
-[filter]
+#
+# A term matches whole words; a term ending in `*` matches the start of a word
+# ("announc*" is announces, announced, announcement). Terms are normalized like
+# the haystack, so "we're" is "we re" and "data-center" is "data center".
+#
+# Recall is worth more than precision here: a kept headline costs about a
+# hundredth of a yuan to read, and a dropped one is news lost for good.
 topic = [
-  "data cent",
-  "datacent",
-  "hyperscale",
-  "colocation",
-  "compute campus",
-  "ai campus",
-  "ai factory",
-  "gigafactory",
+  # --- The facility itself ---
+  # "data cent*" is "data center", "data centre" and their plurals. "data processing
+  # use" and "data information processing" are how zoning codes and county agendas
+  # name a data center when they avoid the phrase.
+  "data cent*", "datacent*", "data hall*", "data campus*", "data project*",
+  "ai data hub*", "data processing facilit*", "data processing cent*",
+  "data processing use*", "data information processing", "hyperscal*", "colocat*",
+  "colo", "co location*", "co located", "server farm*", "serverfarm*",
+  "mission critical",
+  # --- AI and compute campuses ---
+  # An AI campus is often announced without the words "data center" (Crusoe, xAI's
+  # Colossus, Microsoft's Fairwater, OpenAI's Stargate). The old bank's bare
+  # "gigafactory" is narrowed to "ai gigafactor*" and xAI's "gigafactory of
+  # compute": on its own it is Tesla's battery plants, which are not data centers.
+  # "hpc*" is a stem because trade-press slugs fuse "HPC/AI" into "hpcai"; it matches
+  # nothing else. "ai project*" is the weakest term here (one real headline, "PJM
+  # plans to study SoftBank's Ohio AI project", against three that were not news of
+  # a campus), kept because a missed project costs more than three reads.
+  "ai campus*", "ai factor*", "ai gigafactor*", "ai hub*", "ai center*",
+  "ai infrastructure", "infrastructure for ai", "ai capacity", "ai compute",
+  "ai cloud", "supercomput*", "supercluster*", "compute campus*", "computing campus*",
+  "compute cent*", "computing cent*", "computing facilit*", "compute capacity",
+  "compute infrastructure", "computing infrastructure", "compute cluster*",
+  "gpu cluster*", "ai cluster*", "hpc*", "high performance comput*", "neocloud*",
+  "stargate", "colossus", "gigafactory of compute", "fairwater", "ai power plant*",
+  "ai project*",
+  # --- Capacity phrasing only data centers use ---
+  # A gigawatt is said of a campus or of the power plant built for one ("TeraWulf's
+  # Kentucky campus to reach 1GW in 2029", "Google signs 3.6GW deal with
+  # Constellation"); "megawatt" alone is not here, because a 5 MW solar farm is not.
+  # "campus" is how operators and trade press name a site without saying "data
+  # center" ("Riot acquires additional 238 acres at Corsicana campus"): it kept 51
+  # URL-only pages that produced a project. Its noise is university and office
+  # campuses, which need a project signal as well. "gw", "gigawatt*" and "campus*"
+  # are in `signal` too, so each keeps a headline on its own. "university campus" is
+  # not excluded: an exclusion always wins, and would cut a data center on one.
+  "mw campus*", "gw campus*", "megawatt campus*", "gigawatt campus*", "mw lease*",
+  "megawatt lease*", "gw", "gigawatt*", "mw of ai", "gw of ai", "megawatts of ai",
+  "gigawatts of ai", "campus*",
+  # --- Campus codenames ---
+  # A campus filed under a codename is reported under it, often without "data center"
+  # ("Fermi announces $6.5B lease agreement at Project Matador", "Project Blue's
+  # Billion-Dollar Secrecy"). Taken from the tracked projects' names and the
+  # headlines that named them; a codename that surfaces later belongs here too.
+  "polaris forge", "delta forge", "lake mariner", "hyperion", "prometheus", "supernap",
+  "prince william digital gateway", "pw digital gateway", "project aquila",
+  "project azalea", "project blue", "project camellia", "project caprock",
+  "project cardinal", "project clydesdale", "project dorothy", "project double reed",
+  "project eagle", "project hercules", "project horizon", "project hyper",
+  "project iron spur", "project jupiter", "project kati", "project loch",
+  "project marvel", "project matador", "project meriwether", "project merlin",
+  "project morgan", "project nova", "project peanut", "project pegasus",
+  "project rainier", "project red clay", "project ruby", "project sail",
+  "project southgate", "project steamboat", "project tamarack", "project tango",
+  "project tembo", "project washington", "project zodiac",
+  # --- Pure-play data-center operators ---
+  # Companies whose only business is data centers, so their name in a headline is
+  # the topic ("Nebius x Independence, Missouri", "Applied Digital secures $5bn
+  # hyperscaler lease"). They kept 105 URL-only pages that produced a project,
+  # against about 70 financing and investor pages. Hyperscalers (Google, Amazon,
+  # Microsoft, Meta, OpenAI, xAI) and miners or neoclouds (CoreWeave, Crusoe, IREN,
+  # TeraWulf, Hut 8) are NOT here: their names alone kept hundreds of product
+  # launches, earnings dates and mining reports, and their campus news says
+  # "campus", a GW figure or "data center" anyway. "evoque" is left out: it is also a
+  # Range Rover.
+  "equinix", "digital realty", "cyrusone", "qts", "stack infrastructure", "cologix",
+  "databank", "flexential", "sabey", "yondr", "edgecore", "novva", "cloudhq",
+  "radiusdc", "dc blox", "element critical", "corscale", "quantum loophole",
+  "applied digital", "nebius", "lancium", "fermi america", "rowan digital",
+  "tierpoint",
+  # --- Cloud and network buildings ---
+  # "global network" is the section of Google's blog where it announces campuses.
+  # Its URL path carries the phrase, and it is in the signal tier too, so every post
+  # there is kept: some campus pages say nothing else
+  # ("/global-network/data-center-pine-island/"). "cloud computing" was proposed and
+  # left out: it names a market, not a building, and kept nothing the rest of this
+  # tier did not.
+  "cloud region*", "availability zone*", "cloud campus*", "cloud infrastructure",
+  "digital infrastructure", "internet infrastructure", "carrier hotel*",
+  "internet exchange*", "interconnection hub*", "global network",
+  "amazon web services",
+  # --- Crypto-mine-to-AI conversions ---
+  # A miner turning a site into an AI campus is project news even when the headline
+  # never says "data center" ("Bitcoin miner Core Scientific shifts to AI with
+  # 1.5GW"). Pure mining news is still dropped: it says neither. In every corpus
+  # measured, "pivots to AI" was only ever said of miners.
+  "crypto to ai", "bitcoin to ai", "miner to ai", "miners to ai", "mining to ai",
+  "mine to ai", "crypto to hpc", "bitcoin to hpc", "miner to hpc", "mining to hpc",
+  "mine to hpc", "pivot to ai", "pivots to ai", "pivoting to ai", "shift to ai",
+  "shifts to ai", "shifting to ai",
+  # --- Land-use and zoning language ---
+  # What a county calls a data-center site when it rezones for one.
+  "technology park*", "tech park*", "tech campus*", "technology campus*",
+  "technology zone*", "tech zone*", "technology overlay*", "tech overlay*",
+  "tech district*",
+  # --- Power language that means a data center ---
+  # Utilities' word for a data-center customer is "large load". "large load*",
+  # "behind the meter", "powered land" and "powered shell*" are also in a signal
+  # tier below on purpose, so each keeps a headline on its own; so do "global
+  # network", "supercomput*" (signal "supercomputer*"), "technology park", and
+  # "campus*", "gw" and "gigawatt*" above.
+  "large load*", "behind the meter", "energy campus*", "powered land",
+  "powered shell*",
 ]
+
+# Announcement, land, approvals, construction, power, money, leasing, going live,
+# expansion, sale. Any one of these, with the topic tier, keeps the headline.
 signal = [
-  "megawatt",
-  " mw",
-  "gigawatt",
-  " gw",
-  "billion",
-  "bn",
-  "million",
-  "campus",
-  "break ground",
-  "breaks ground",
-  "groundbreaking",
-  "announce",
-  "expansion",
-  "expand",
-  "invest",
-  "build",
-  "construct",
-  "site",
-  "facility",
-  "plans",
+  # --- Capacity and money ---
+  # A capacity figure in a headline is the single strongest sign of a specific
+  # project, and it is almost always written closed-up ("900MW"), which the matcher
+  # splits into "900 mw". "$*" is any dollar figure, which catches "$1.1B" and
+  # "$500M" where no unit word follows. It is the one term with no letter or digit:
+  # "$" is not a separator, so it survives normalization and the loader accepts it.
+  "megawatt*", "mw", "gigawatt*", "gw", "mva", "kv", "kilovolt*", "billion*", "bn",
+  "million*", "mn", "trillion*", "$*", "sq ft", "sqft", "square foot", "square feet",
+  "feet", "sf", "msf", "racks",
+  # --- Announcing and proposing ---
+  # Google writes "We're exploring a potential data center in Lea County"; a
+  # developer "eyes", "mulls" or "pitches" one; a newsroom posts an "update". Bare
+  # "first" is narrowed to the firsts a project claims ("first data center", "first
+  # AI campus", and "first phase", "first power", "first review" below): alone it
+  # kept 13 pages such as "lead sponsor of the 2019 FIRST Robotics Competition" and
+  # "my first 30 days of COVID-19", and no real headline needed it.
+  "announc*", "plan", "plans", "planned", "planning", "propos*", "unveil*", "reveal*",
+  "explore", "explores", "exploring", "explored", "exploratory", "consider",
+  "considers", "considering", "evaluat*", "eyes", "eyeing", "eyed", "mulls", "weighs",
+  "targeting", "targeted", "targets", "selects", "selected", "chooses", "chose",
+  "chosen", "picks", "picked", "taps", "tapped", "debut*", "launch*", "pitch*",
+  "floats", "floated", "seeks", "seeking", "sought", "pursu*", "intends", "intent",
+  "envision*", "prep", "preps", "prepares", "preparing", "readies", "gears up",
+  "in the works", "coming", "coming to", "comes to", "came to", "come to", "headed to",
+  "heading to", "heads to", "bound for", "set to", "develop*", "promis*", "flock*",
+  "popping up", "pops up", "pop up", "springs up", "sprout*", "project", "projects",
+  "potential", "possible", "newest", "new data cent*", "new ai data cent*",
+  "new hyperscale*", "new ai campus*", "new campus", "new site*", "new facility",
+  "new investment*", "first data cent*", "first ai data cent*",
+  "first hyperscale data cent*", "first ai campus*", "first ai factor*", "happening",
+  "update", "updates", "details", "detailed", "reported", "in talks", "talks with",
+  "talks to", "negotiat*", "nears", "nearing", "bid", "bids", "offer", "offers",
+  "offered", "touts",
+  # --- Who is behind it ---
+  # A campus is often filed under a shell company or a codename; the news is the
+  # reveal ("Google confirmed as parent company for data center project in Roanoke
+  # County").
+  "confirm*", "parent company", "named as", "company behind", "customer behind",
+  "is behind", "mystery", "unnamed", "end user", "codename*", "code name*",
+  # --- Approvals ---
+  # The yes side of a public decision. The process words themselves (vote, council,
+  # hearing, permit, zoning) are in `risk_signal`, where a vote is also where a
+  # refusal shows up. "advanced" is left out: in a headline it is nearly always the
+  # adjective ("advanced cooling"). "secure" is left out for the same reason.
+  # "wins" and "receives" are left out: on an operator's newsroom they are award
+  # pages ("Compass Datacenters wins 2014 Red Herring 100 Global award", eight in
+  # all), and the approvals and financings they also matched say "approv*", "rezon*",
+  # "financing" or a dollar figure.
+  "approv*", "recommend*", "greenlight*", "green light*", "green lit", "greenlit",
+  "go ahead", "nod", "ok", "oks", "okd", "ok d", "okay*", "advance", "advances",
+  "advancing", "moves forward", "move forward", "moving forward", "moved forward",
+  "goes forward", "moves ahead", "move ahead", "moving ahead", "clears", "cleared",
+  "clearing", "clearance*", "win", "won", "pass", "passes", "passed", "gets",
+  "secures", "secured", "securing", "received", "obtain*", "granted", "grant",
+  "grants", "first review", "design review", "special exception", "plat",
+  "subdivision", "pud", "overlay", "zoned", "agenda", "public meeting",
+  "community meeting*", "open house", "forum", "city of", "village of",
+  "development agreement", "community benefit*",
+  # --- Permits and filings ---
+  # Bare "files" and "applied" are left out: one is a directory in half the URLs a
+  # county publishes ("/sites/default/files/"), the other is Applied Digital.
+  "filed", "files to", "files for", "files plans", "files with", "filing*", "submit*",
+  "application*", "applies", "applied for", "request*", "registration", "registers",
+  "registered", "tdlr", "army corps", "corps of engineers", "environmental review",
+  "environmental impact", "eis", "nepa", "cpcn", "psc", "docket*",
+  # --- Land and transactions ---
+  # "site" is a whole word now: as a substring it matched "website" and "sitemap".
+  # Conversions ("converts Lake Mariner bitcoin mining site to AI data center") and
+  # reuse of a retired plant or a former mill are how many campuses begin.
+  "land", "acquir*", "acquisition*", "purchas*", "buy", "buys", "buying", "bought",
+  "acre*", "parcel*", "tract", "tracts", "site", "sites", "siting", "propert*",
+  "assemblage", "option", "optioned", "under contract", "closes", "closed on",
+  "closing on", "closes on", "sale", "sells", "sold", "sell", "selling", "seller",
+  "deed", "pays", "paid", "worth", "valued", "price tag", "megasite*", "mega site*",
+  "gigasite*", "industrial park", "technology park", "tech park", "business park",
+  "innovation park", "logistics park", "farm", "farmland", "former", "brownfield*",
+  "redevelop*", "repurpos*", "convert*", "conversion*", "reuse", "retired",
+  "decommission*", "pivot*", "transition*", "rebrand*",
+  # --- Construction ---
+  # Bare "work" is narrowed to its construction phrases: alone it is in every
+  # headline about how AI workloads work.
+  "construct*", "precon*", "build*", "built", "boom", "demo", "demolish*",
+  "demolition", "raze*", "tear down", "torn down", "accelerat*", "steps up",
+  "ambition*", "groundbreak*", "ground breaking", "break ground", "breaks ground",
+  "broke ground", "broken ground", "breaking ground", "ground broken", "shovel*",
+  "topping out", "topped out", "tops out", "top out", "goes vertical",
+  "going vertical", "went vertical", "crane*", "steel", "sitework", "grading",
+  "earthwork*", "dirt", "concrete", "shell", "shells", "underway", "under way",
+  "begin", "begins", "began", "begun", "start", "starts", "started", "starting",
+  "kick off", "kicks off", "kicked off", "kicking off", "kickoff*", "commenc*",
+  "work begins", "work began", "work starts", "work started", "work underway",
+  "work on", "begin work", "begins work", "start work", "starts work", "resum*",
+  "restart*", "reviv*", "back on", "reopen*", "progress*", "milestone*", "on track",
+  "on schedule", "ahead of schedule", "reaches", "reached", "fid", "complet*",
+  "finish*", "wraps", "deliver*", "handover", "upgrade*", "retrofit*", "contractor*",
+  "awarded", "contract*", "phase*", "first phase", "hall", "halls", "tour", "tours",
+  "touring", "toured", "inside", "inside look", "look inside", "rendering*",
+  "takes shape", "taking shape", "ramp up", "ramps up", "ramping up", "ramped up",
+  "scale up", "scales up", "scaling up",
+  # --- Expansion and growth ---
+  # "staying" and "stays" are the other side of a move ("Yahoo staying in Lockport
+  # data center").
+  "expan*", "grows", "growing", "grew", "add", "adds", "adding", "added", "addition",
+  "additional", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth",
+  "ninth", "tenth", "3rd", "4th", "5th", "6th", "another", "doubl*", "tripl*",
+  "upsiz*", "boost*", "extend*", "enlarg*", "footprint", "campus*", "megacampus*",
+  "mega campus*", "facilit*", "location*", "presence", "region", "establish",
+  "establishes", "enters", "entered", "entering", "enter", "entry", "new market",
+  "moves into", "arrives", "arrival", "lands", "landed", "nabs", "snags", "attracts",
+  "lures", "lure", "bring", "brings", "bringing", "deepen*", "strengthen*", "bigger",
+  "larger", "largest", "massive", "huge", "giant", "major", "megaproject*",
+  "mega project*", "staying", "stays",
+  # --- Going live ---
+  # Bare "live", "open" and "operating" are left out: "live webinar", "Open Compute
+  # Project" and "operating income" are what they mostly matched. Bare "ready" is
+  # left out for the same reason: it was "AI-ready" and "NVIDIA DGX-ready"
+  # certifications (eight pages), never a facility coming online.
+  "online", "on line", "goes live", "go live", "went live", "is live", "now live",
+  "live in", "operational", "operates", "begins operations", "began operations",
+  "start of operations", "operations begin", "opens", "opened", "opening", "now open",
+  "to open", "will open", "grand opening", "ribbon*", "inaugurat*", "dedicates",
+  "dedication*", "ceremony", "celebrat*", "serving", "serves", "serving traffic",
+  "rfs", "ready for service", "available", "availability", "turned on", "switched on",
+  "flips the switch", "flip the switch", "running", "activat*", "energiz*", "power on",
+  "powered on", "powers up", "power up", "powering up", "first power",
+  # --- Leasing and customers ---
+  "lease*", "leasing", "prelease*", "sublease*", "tenant*", "anchor*", "customer*",
+  "new customer*", "hyperscaler", "occupan*", "occupy", "move in", "moves in", "rent",
+  "rents", "renting", "rented", "rental*", "take or pay", "deploy*", "install*",
+  "cluster*", "supercomputer*", "supercluster*", "hub", "hubs", "capacity",
+  "contracted", "signs", "signed", "signing", "inks", "inked",
+  # --- Financing and investment ---
+  # "financ*" is narrowed so that "financial" (as in "financial results") does not
+  # count; "financing" itself is in `risk_signal`, where the old bank put it. Bare
+  # "pilot", "teams" and "notes" are narrowed to their deal senses: alone they are a
+  # technology pilot, Microsoft Teams and release notes. "commitment" is left out:
+  # it was CyrusOne's /commitments/ policy shelf and "our commitment to community"
+  # pages; a real commitment ("$1B commitment to Pennsylvania") carries a dollar
+  # figure, "billion" or "announc*".
+  "finance", "finances", "financed", "refinanc*", "fund", "funds", "funding", "funded",
+  "raise", "raises", "raised", "raising", "loan*", "lender*", "lending", "mortgage",
+  "debt", "credit*", "bond", "bonds", "senior notes", "notes offering",
+  "secured notes", "abs", "cmbs", "securitization", "equity", "capital",
+  "capital investment", "invest*", "backs", "backed", "backing", "commit", "commits",
+  "committed", "pledg*", "spend*", "recapitaliz*", "stake", "lines up", "in lieu",
+  "pilot agreement*", "pilot payment*", "tax", "taxes", "taxpayer*", "incentive*",
+  "tax break*", "tax credit*", "exemption*", "tif", "enterprise zone", "irb",
+  "economic impact", "jv", "jvs", "joint venture*", "venture", "partner*", "teams up",
+  "teamed up", "teaming up", "team up", "teams with", "collaborat*", "alliance",
+  "deal", "deals", "agreement*", "agree*", "mou", "memorandum", "loi",
+  "letter of intent", "term sheet", "strike", "strikes", "struck", "seal", "seals",
+  "sealed", "finaliz*", "executes", "executed", "transaction*", "merger",
+  # --- Jobs and economic development ---
+  # "jobs" was an exclusion in the substring bank, which threw away every "creating
+  # 100 jobs" announcement. Recruiting pages are now dropped by the narrower terms
+  # under "Recruiting and executive moves".
+  "jobs", "new jobs", "create", "creates", "creating", "created", "employ", "employs",
+  "employment", "employees", "employing", "employer", "employers", "workers",
+  "governor", "gov", "economic development", "locate", "locates", "locating",
+  "relocat*",
+  # --- Power supply ---
+  # "reactor*" is a campus's own nuclear supply ("Fermi America, Westinghouse AP1000
+  # reactors in Amarillo"); it matches only "reactor" and "reactors".
+  "ppa", "ppas", "power purchase*", "esa", "esas", "grid connection*", "load*",
+  "load customer*", "new load", "electric service", "service agreement*",
+  "supply agreement*", "special contract", "behind the meter", "btm", "on site power",
+  "onsite power", "gas plant*", "power plant*", "power station*", "energy center",
+  "utilit*", "fuel cell*", "microgrid*", "smr", "smrs", "reactor*", "to power",
+  "will power", "to serve", "powered land", "powered shell*", "energy storage",
+  "battery storage", "bess",
+  # --- A hyperscaler named next to a data center ---
+  # The topic tier still has to match, so this keeps "Microsoft ... data center" and
+  # not every Microsoft headline.
+  "google", "amazon", "aws", "microsoft", "meta", "facebook*", "oracle", "openai",
+  "xai", "apple", "anthropic", "alphabet",
+  # --- Operator newsroom idioms ---
+  # Meta's data-center site announces campuses as "hello-tulsa",
+  # "kuna-we-are-online" and "montgomery-were-growing", in the URL slug alone. A
+  # contraction is two words in a headline ("we're" -> "we re") and one in a slug
+  # ("were"), so both forms are listed.
+  "hello", "hej", "we are online", "we re online", "is online", "now online",
+  "were growing", "we re growing", "keep on growing", "is growing", "growing again",
+  "good news", "big things", "joining the", "deepening", "welcome*",
+  "project overview", "datacenters in", "datacenter in", "data center in",
+  "data centers in", "data centre in", "data centres in", "global network",
+  # --- Trackers and directories ---
+  # A tracker, map or FAQ page lists many campuses at once, or answers residents'
+  # questions about one ("Amazon's Gilroy data center: your top questions answered").
+  "tracker", "tracked", "tracking", "map", "mapped", "maps", "directory", "census",
+  "faq", "faqs", "questions answered", "your questions",
+  # --- Places ---
+  # Project news names a place; commentary mostly does not.
+  "county", "counties", "parish", "parishes", "township", "city", "cities", "town",
+  "village", "borough", "mayor*", "near", "nearby", "local", "locals", "rural",
+  # --- US states ---
+  # The postal codes that are also common words or abbreviations (in, or, me, de, hi,
+  # id, co, ma, mi, ms, mt, ne, al, ar, sd) are left out; "ok" and "mn" are already
+  # signals, as the verb and as "$5mn".
+  "alabama*", "alaska*", "arizona*", "arkansas*", "california*", "colorado*",
+  "connecticut*", "delaware*", "florida*", "georgia*", "hawaii*", "idaho*",
+  "illinois*", "indiana*", "iowa*", "kansas*", "kentucky*", "louisiana*", "maine*",
+  "maryland*", "massachusetts*", "michigan*", "minnesota*", "mississippi*",
+  "missouri*", "montana*", "nebraska*", "nevada*", "new hampshire*", "new jersey*",
+  "new mexico*", "new york*", "north carolina*", "north dakota*", "ohio*", "oklahoma*",
+  "oregon*", "pennsylvania*", "rhode island*", "south carolina*", "south dakota*",
+  "tennessee*", "texas*", "utah*", "vermont*", "virginia*", "washington*",
+  "west virginia*", "wisconsin*", "wyoming*", "tx", "va", "az", "nc", "sc", "nj", "ny",
+  "wv", "wy", "nv", "ut", "ks", "ky", "tn", "wi", "ia", "fl", "ga", "il", "oh", "mo",
+  "pa", "la", "md", "ct", "nh", "vt", "ri", "nd", "ak", "ca", "wa",
 ]
 
 # A third tier, and the second way to satisfy `signal`.
@@ -454,164 +773,326 @@ signal = [
 #
 # So the corpus the extractor ever saw was announcements only, and no schema change
 # recovers an obstacle from an article that was never queued. A term here satisfies
-# the signal tier on its own, but `topic` above must still match — a transformer
-# shortage at a steel mill is still dropped.
+# the signal tier on its own, but `topic` above must still match -- a transformer
+# shortage at a steel mill is still dropped. A term here also moves a queued
+# article about a tracked project to the front of the queue, so the tier holds
+# obstacle vocabulary and the public decisions where obstacles appear, not
+# announcements.
 #
 # This is NOT a lever for `blocker` coverage. Most projects genuinely have no
 # blocker (see tracker/gaps.py, which reports the field as unmeasurable for exactly
 # that reason). The point is to stop discarding the articles where one is real.
 risk_signal = [
-  # Schedule
-  "delay",
-  "delayed",
-  "postpone",
-  "pause",
-  "paused",
-  "halt",
-  "stalled",
-  "scrapped",
-  # Government and legal. "permit" and "zoning" are knowingly broad — they match
-  # approvals as well as refusals — but permitting is itself one of the risk
+  # --- Schedule ---
+  "delay*", "postpon*", "pause*", "pausing", "halt", "halts", "halted", "halting",
+  "stall", "stalls", "stalled", "stalling", "defer*", "suspend*", "suspension*",
+  "freeze", "freezes", "frozen", "froze", "on hold", "brakes", "puts off", "put off",
+  "putting off", "push back", "pushes back", "pushed back", "pushing back",
+  "pushback*", "behind schedule", "slips", "slipped", "slow", "slows", "slowed",
+  "slowing", "slowdown*", "idled", "mothball*", "standstill", "stuck", "empty",
+  "awaiting", "stop", "stops", "stopped", "stopping", "stoppage*", "stop work",
+  "cease", "ceases", "ceased", "setback*", "hurdle*", "obstacle*", "roadblock*",
+  "snag*", "bottleneck*", "hamper*", "hinder*", "impede", "impedes", "impeded",
+  "stymie*", "thwart*", "complicat*", "headwind*", "turmoil", "woes", "deadline*",
+  "missed", "misses", "fail", "fails", "failed", "reevaluat*", "re evaluat*",
+  "reassess*", "rethink*", "reconsider*", "uncertain*", "unclear", "in question",
+  "limbo", "doubt*", "jeopard*", "imperil*", "at risk", "clouded", "redesign*",
+  "incomplete", "refile*", "resubmit*", "continuance",
+  # --- Cancellation and withdrawal ---
+  # The vocabulary of a project ending, which the announcement-shaped signal tier
+  # never had: "Developer withdraws data center application", "Data center developer
+  # pulls out of Peculiar", "AI data center project shelved". A slug drops the
+  # apostrophe ("wont-move-forward"), so those forms are listed too. Stems that
+  # matched other words are spelled out ("nix*" is Nixon, "scrap*" is scrapyard,
+  # "deni*" is Denison).
+  "cancel*", "scrap", "scraps", "scrapped", "scrapping", "shelv*", "abandon*",
+  "terminat*", "surrender*", "kill", "kills", "killed", "killing", "pull out",
+  "pulls out", "pulled out", "pulling out", "pullout*", "pull the plug",
+  "pulls the plug", "pulled the plug", "pulling the plug", "pulls plug", "pulled plug",
+  "plug pulled", "pull back", "pulls back", "pulled back", "pullback*", "pulls",
+  "pulled", "walk away", "walks away", "walked away", "walking away", "back out",
+  "backs out", "backed out", "backing out", "back off", "backs off", "backed off",
+  "backs away", "backed away", "withdraw*", "withdrew", "rescind*", "scale back",
+  "scales back", "scaled back", "scaling back", "scale down", "scales down",
+  "scaled down", "scaling down", "downsiz*", "shrink*", "shrank", "shrunk", "cut back",
+  "cuts back", "cutback*", "cut", "cuts", "retreat*", "exit", "exits", "exited",
+  "exiting", "drop", "drops", "dropped", "dropping", "nix", "nixes", "nixed", "axed",
+  "axes", "derail*", "collaps*", "fizzl*", "torpedo*", "quash*", "doomed", "dooms",
+  "sours", "soured", "souring", "rebuff*", "spurn*", "falls through", "fell through",
+  "fall through", "falls apart", "fell apart", "ends plans", "ended plans",
+  "end plans", "call off", "calls off", "called off", "calling off", "flatline*",
+  "die", "dies", "died", "dead", "decides not to", "decided not to", "clean break",
+  "no longer", "not moving forward", "not move forward", "won't move forward",
+  "wont move forward", "will not move forward", "not proceed*", "won't proceed",
+  "wont proceed", "will not proceed", "won't be built", "wont be built", "won't build",
+  "wont build", "will not be built", "expir*", "lapse*", "reverses", "reversed",
+  "reversal*", "reverse course", "backtrack*", "u turn", "elsewhere", "loses",
+  "losing", "votes down", "voted down",
+  # --- Refusals, votes and government ---
+  # Government and legal. "permit" and "zoning" are knowingly broad: they match
+  # approvals as well as refusals. But permitting is itself one of the risk
   # categories, and the queue is a triage checkpoint where over-collecting is
-  # cheaper than a keyword rule that drops real obstacles.
-  "moratorium",
-  "lawsuit",
-  # Padded, like " mw" in the signal tier above. `normalize_haystack` surrounds the
-  # haystack with spaces and terms are plain substrings, so a bare "sue" matches
-  # inside "issued" — which put "PJM Issued First Backup-Generator Warnings" in the
-  # queue on a live run.
-  " sue ",
-  " sues ",
-  " sued ",
-  "permit",
-  "zoning",
-  "rezoning",
-  # A county granting or refusing a tax abatement is the public decision that
-  # most often precedes a campus, and the vote is reported where the
-  # announcement is not. Added for the `abatement` search template, which was
-  # measured producing nothing at all without it: "Maricopa County Arizona data
-  # center tax abatement approved" matched the topic tier and no signal, so
-  # every hit was discarded before it cost a fetch — and a template that queues
-  # nothing is invisible in `tracker queue stats`, indistinguishable from one
-  # that never ran.
+  # cheaper than a keyword rule that drops real obstacles. The same holds for the
+  # bodies that vote (council, commission, supervisors, board) and for the vote.
   #
-  # This widens the queue for every feed and sitemap, not only for search. The
-  # topic tier is what bounds it: "Ohio steel mill wins tax abatement" and
-  # "Asbestos abatement contract awarded" are both still dropped, because
-  # neither says data center. "noise abatement" already matched via "noise".
-  "abatement",
-  "referendum",
-  "denied",
-  "rejected",
-  "appeal",
-  "challenge",
-  "injunction",
-  # Community and environment
-  "opposition",
-  "oppose",
-  "protest",
-  "noise",
-  "water use",
-  "aquifer",
-  "groundwater",
-  "emissions",
-  "air quality",
-  # Power
-  "transformer",
-  "substation",
-  "interconnection",
-  "transmission",
-  "curtail",
-  "grid capacity",
-  "tariff",
-  # Commercial
-  "financing",
-  "anchor tenant",
-  "offtake",
-  "shortage",
-  "supply chain",
+  # A county granting or refusing a tax abatement is the public decision that most
+  # often precedes a campus, and the vote is reported where the announcement is
+  # not. "abatement" was added for the `abatement` search template, which was
+  # measured producing nothing at all without it: "Maricopa County Arizona data
+  # center tax abatement approved" matched the topic tier and no signal, so every
+  # hit was discarded before it cost a fetch. The topic tier is what bounds it:
+  # "Ohio steel mill wins tax abatement" and "Asbestos abatement contract awarded"
+  # are both still dropped, because neither says data center.
+  "deny", "denies", "denied", "denial*", "denying", "reject*", "veto*", "overrid*",
+  "overrode", "overrul*", "vote*", "vote down", "voting down", "vote against",
+  "votes against", "voted against", "voting against", "votes no", "voted no",
+  "vote no", "declines", "declined", "turn down", "turns down", "turned down",
+  "shoot down", "shoots down", "shot down", "shut down", "shuts down", "shutdown*",
+  "shutting down", "tabled", "tables", "to table", "block", "blocks", "blocked",
+  "blocking", "bars", "barred", "barring", "ban", "bans", "banned", "banning",
+  "outlaw*", "moratori*", "prohibit*", "restrict*", "limit", "limits", "limiting",
+  "curb", "curbs", "curbed", "curbing", "crack down", "cracks down", "cracking down",
+  "crackdown*", "clamp down", "clamps down", "clamping down", "clampdown*", "defeat*",
+  "rein in", "reins in", "revok*", "revocation*", "void", "voids", "voided", "voiding",
+  "set aside", "throw out", "throws out", "threw out", "thrown out", "send back",
+  "sends back", "sent back", "unpermitted", "fine", "fined", "fines", "overturn*",
+  "struck down", "strikes down", "strike down", "upheld", "upholds", "uphold",
+  "vacates", "vacated", "vacating", "remand*", "ordinance*", "zoning*", "rezon*",
+  "permit*", "special use", "conditional use", "variance*", "hearing*",
+  "public comment*", "planning commission*", "plan commission*", "planning board*",
+  "council*", "commission*", "commissioners", "supervisors", "aldermen", "trustees",
+  "selectboard", "select board", "board", "committee*", "annex*", "abatement*",
+  "legislat*", "lawmaker*", "bill", "bills", "regulator*", "audit*", "investigat*",
+  "probe", "probes", "probed", "subpoena*", "penalt*", "violat*", "enforcement",
+  "cease and desist", "condemn*", "eminent domain", "attorney general", "recall*",
+  "referend*", "ballot*", "petition*", "local control", "public notice*",
+  # --- Lawsuits and appeals ---
+  # "sue" is a whole word now. As a substring it matched inside "issued", which put
+  # "PJM Issued First Backup-Generator Warnings" in the queue on a live run; the
+  # padded " sue " that worked around it is no longer needed.
+  "lawsuit*", "suit", "suits", "sue", "sues", "sued", "suing", "countersu*",
+  "litigat*", "court", "courts", "courthouse", "courtroom*", "dismiss*", "judge",
+  "judges", "ruling", "rules against", "ruled", "plaintiff*", "defendant*", "verdict*",
+  "arbitrat*", "complaint*", "appeal*", "injunction*", "restraining order",
+  "class action", "nuisance", "settles", "settled", "settlement*", "challenge*",
+  "dispute*", "contested", "contests", "objection*", "objectors", "objected", "amicus",
+  "legal battle*", "legal fight*", "legal challenge*", "legal action*",
+  # --- Opposition ---
+  "oppos*", "opponent*", "against", "resident", "residents", "neighbor*", "neighbour*",
+  "homeowner*", "protest*", "backlash*", "outcry", "uproar", "furor", "furore",
+  "firestorm", "resistance", "dissent*", "fight", "fights", "fighting", "fought",
+  "battle*", "showdown*", "clash*", "feud*", "critics", "criticism", "criticiz*",
+  "criticis*", "concern*", "worr*", "fear*", "ire", "sounds the alarm",
+  "sound the alarm", "raises alarm*", "alarm bells", "anger*", "angry", "outrage*",
+  "furious", "frustrat*", "skeptic*", "sceptic*", "rally against", "rallies against",
+  "rallied against", "demonstrators", "activist*", "coalition*", "nimby*",
+  "controvers*", "contentious", "divisive", "divided", "divides", "boycott*",
+  "speak out", "speaks out", "spoke out", "speak against", "speaks against",
+  "spoke against", "say no", "says no", "said no", "no data cent*", "save our",
+  "unwelcome", "not welcome", "anti", "town hall*", "secret", "secrets", "secretive",
+  "secrecy", "nda", "ndas", "non disclosure", "nondisclosure", "transparen*",
+  "property values", "quality of life", "health risk*", "health impact*",
+  # --- Environment and water ---
+  # Bare "water" is narrowed to the phrases a dispute uses: alone it also matched
+  # every "water positive" pledge and water-free cooling brochure. "historic" is
+  # narrowed the same way: alone it is mostly "historic investment".
+  "water use", "water usage", "water consumption", "water supply", "water rights",
+  "water permit*", "water demand*", "water needs", "water withdrawal*",
+  "water shortage*", "water concerns", "water bill*", "water rates", "water source*",
+  "water table", "water district*", "water board", "water utility", "water authority",
+  "water plant", "water line*", "water system*", "water treatment",
+  "water restrictions", "water woes", "water war*", "water fight*", "water battle*",
+  "water capacity", "water infrastructure", "water agreement*", "water contract*",
+  "water deal", "water service", "drinking water", "potable water", "gallons",
+  "groundwater", "aquifer*", "wastewater", "drought*", "noise*", "noisy", "decibel*",
+  "hum", "diesel*", "turbine*", "emission*", "pollut*", "air permit*", "air quality",
+  "clean air", "smog", "toxic*", "contaminated", "pfas", "spill*", "wetland*",
+  "stormwater", "runoff", "erosion", "flood*", "endanger*", "habitat*", "wildlife",
+  "species", "trees", "clear cut*", "clearcut*", "deforest*", "forest*",
+  "historic district*", "historic site*", "historic preservation", "historic home*",
+  "historical society", "historic landmark*", "battlefield*", "environmental*",
+  "conservation*", "sierra club", "earthjustice", "southern environmental law center",
+  "heat island", "methane",
+  # --- Power constraints ---
+  # The grid operators and regulators are where a campus's power is granted or
+  # refused ("PJM market monitor ... MARA data center at Long Ridge"). "miso" the
+  # soup never matched; the topic tier still has to.
+  "curtail*", "interconnection*", "interconnect", "queue*", "waitlist*", "wait times",
+  "transmission", "transformer*", "substation*", "grid capacity", "grid", "strain*",
+  "load shed*", "blackout*", "brownout*", "shortage*", "shortfall*", "constrain*",
+  "crunch*", "backlog*", "large load*", "ratepayer*", "tariff*", "emergency",
+  "disconnect*", "kill switch", "pjm", "ercot", "miso", "ferc", "caiso", "nyiso",
+  "puc",
+  # --- Commercial trouble ---
+  # The first four are the old bank's "Commercial" group, kept where it put them
+  # (its fifth, "shortage", is under Power constraints).
+  "financing*", "anchor tenant*", "offtake*", "supply chain*", "bankrupt*",
+  "chapter 11", "chapter 7", "insolven*", "receivership", "foreclos*", "lien", "liens",
+  "creditor*", "default", "defaults", "defaulted", "distress*", "liquidat*",
+  "restructur*", "impair*", "write down", "writedown*", "write off", "writeoff*",
+  "delinquen*", "evict*", "unpaid", "owes", "owed", "non renewal", "nonrenewal",
+  "not renew*", "won't renew", "wont renew", "layoff*", "lays off", "laid off",
+  "lay off", "furlough*", "fraud*", "indict*", "scandal*", "downgrade*", "struggl*",
+  "unwind*", "stranded", "speculat*", "phantom",
+  # --- Incidents ---
+  "fire", "fires", "blaze", "explosion*", "accident*", "injur*", "death*", "osha",
+  "evacuat*",
+  # --- Plan changes ---
+  "revis*", "amend*", "modif*",
 ]
 
-# Headlines that match the tiers above but are reliably not project news.
+# Headlines that match the tiers above but are reliably not project news. Any hit
+# drops the item, before the other tiers are consulted.
 #
 # Tuned against a real discovery run: these categories accounted for most of the
 # false positives. Kept categorical rather than headline-specific, so the list
 # does not silently overfit to whatever was in the news the day it was written.
+# Because an exclusion wins outright, each is the narrowest form that still names
+# its category: a whole word that also appears in project news is not used.
 #
 # Geographic noise (a data center in Islamabad or Johor Bahru) is deliberately NOT
 # filtered here. Judging a country from a headline is unreliable, and the crawl
-# path already drops any project whose state will not normalize to a US code — so
+# path already drops any project whose state will not normalize to a US code -- so
 # a non-US article costs one LLM call and is then discarded correctly, which is
 # better than a keyword rule that also throws away real US projects.
 exclude = [
-  # Commentary and analysis rather than an announcement
-  "opinion",
-  "podcast",
-  "webinar",
-  "roundup",
-  "explainer",
-  "how to",
-  "what is",
-  "lessons",
-  "signal for",
-  # Market research, not a project
-  "forecast",
-  "outlook",
-  "market size",
-  "predictions",
-  "pegs us",
-  # Events and recruiting
-  "jobs",
-  "hiring",
-  "careers",
-  "job cuts",
-  "summit",
-  "conference",
-  "expo",
-  "awards",
-  # Finance coverage
-  "earnings call transcript",
-  "stock",
-  "shares",
-  "analyst",
-  "etf",
-  # Adjacent industries that match the keywords but are not data centers
-  "cryptomine",
-  "crypto mine",
-  "bitcoin",
-  # Sections of a site that are structurally not project news.
+  # --- Commentary and analysis rather than an announcement ---
+  # "explainer" and "lessons" from the old bank are left out: both cut pages that
+  # produced a project ("Lessons for Delaware's future found in Virginia's data
+  # center alley", "/explainers/what-does-switch-do-las-vegas").
+  "opinion", "letter to the editor", "letters to the editor", "editorial",
+  "commentary", "podcast*", "webinar*", "roundup", "how to", "what is", "signal for",
+  "myths", "debunk*", "tips", "year in review",
+  # A vendor's advice column on "your AI project" is not a project ("Pretraining vs.
+  # Fine-Tuning vs. RAG: What's Best for Your AI Project?", CoreWeave's blog).
+  "your ai project*", "best for your ai",
+  # --- Market research, not a project ---
+  # "annual report" was proposed and left out: the reports it matched were Illinois's
+  # data-center incentive program reports, which list certified campuses.
+  "forecast", "outlook", "market size", "market report*", "market research",
+  "market to reach", "market landscape*", "research report*", "cagr", "predictions",
+  "pegs us", "ranking", "sustainability report*", "esg report*", "impact report*",
+  "environmental social and governance",
+  # --- Events ---
+  # Bare "summit" cut Summit County and bare "conference" would cut a governor's
+  # press conference, so events are named by their other words. Bare "expo" cut a
+  # job-fair story about construction hiring at Amazon's campus. The last six are
+  # the industry circuit operators announce speakers at; "Advancing Data Center
+  # Construction" alone was 13 rows (Sabey's speaker notices and the event's own
+  # pages, which search keeps finding). "to speak at" and "to present at" were
+  # proposed and left out: "Hundreds sign up to speak at data center hearing" is the
+  # same phrase. "data center summit" was left out too: it is also the start of a
+  # "/data-center-summit-county-..." slug.
+  "summit 20*", "summits", "trends summit", "conference 20*", "conferences",
+  "conference and expo", "conference expo", "technology conference*",
+  "investment conference", "annual conference", "developer conference",
+  "conference call", "expo 20*", "exhibitor*", "industry event*", "roundtable*",
+  "register now", "data center world", "data centre world", "leadership summit",
+  "safety summit", "dcd connect", "nanog*", "advancing data center construction",
+  "advancing data center design",
+  # --- Awards and rankings ---
+  # Bare "awards" is left out: "County awards contract for data center" is news.
+  "award winner*", "award finalist*", "awards 20*", "awards gala", "awards ceremony",
+  "wins award", "entrepreneur of the year", "project of the year", "global awards",
+  "impact awards", "top workplace*", "great place to work", "inc 5000",
+  "fastest growing compan*",
+  # --- Finance coverage ---
+  # Bare "stock" and "shares" were exclusions in the substring bank; "stock" cut
+  # Stockton, and "shares" would cut "TeraWulf shares new information about data
+  # center planned in Hawesville". Stock coverage is named by what it says about
+  # the price. Bare "earnings" is left out too: earnings-call pages are where
+  # several miners first named a new site, and 11 of them produced a project.
+  # "instant alerts" is MarketBeat's fund-filing section ("Fairtree Asset Management
+  # takes 462000 position in Equinix Inc"), eight pages, all noise. Bare "position
+  # in" was proposed for them and left out: "strengthens its position in Northern
+  # Virginia" is expansion news.
+  "earnings call transcript", "earnings preview", "earnings date", "financial results",
+  "operational update*", "price target*", "target price*", "analyst", "analysts",
+  "outperform", "overweight", "underweight", "buy point", "buy rating",
+  "initiates coverage", "stock price*", "share price*", "stock of the day",
+  "stocks to buy", "stocks to watch", "best stocks", "data center stock*",
+  "stock holdings", "cash dividend*", "stock dividend*", "quarterly dividend*",
+  "declares dividend", "etf", "etfs", "new position in", "boosts position",
+  "shareholder alert", "lead plaintiff", "securities class action", "misled investors",
+  "stock rises", "stock rose", "stock jumps", "stock jumped", "stock soars",
+  "stock soared", "stock surges", "stock surged", "stock falls", "stock fell",
+  "stock drops", "stock dropped", "stock plunges", "stock plunged", "stock tumbles",
+  "stock slides", "stock sinks", "stock climbs", "stock gains", "stock slips",
+  "stock rallies", "shares rise", "shares rose", "shares jump", "shares jumped",
+  "shares soar", "shares soared", "shares surge", "shares surged", "shares fall",
+  "shares fell", "shares drop", "shares dropped", "shares plunge", "shares plunged",
+  "shares tumble", "shares slide", "shares sink", "shares climb", "shares gain",
+  "shares slip", "shares rally", "instant alerts",
+  # --- Pure crypto mining ---
+  # The substring bank dropped every headline containing "bitcoin" or "crypto mine",
+  # which threw away the mine-to-AI conversions ("TeraWulf converts Lake Mariner
+  # bitcoin mining site to AI data center"). Pure mining news is named by what only
+  # it reports: production, hashrate in EH/s, holdings, the halving. A miner's
+  # headline that says neither "data center" nor "AI" fails the topic tier anyway.
+  "bitcoin production", "monthly production", "production update*", "mining update*",
+  "exahash*", "eh s", "hashprice", "bitcoin price*", "btc price*", "bitcoin treasury",
+  "bitcoin holdings", "btc holdings", "btc mined", "bitcoin mined", "halving",
+  "stablecoin*", "crypto trading",
+  # --- Recruiting and executive moves ---
+  # Bare "jobs" and "hiring" are no longer here: "creating 100 jobs" and "electrical
+  # contractor for new Facebook data center in Mesa hiring 500" are project news.
+  # "officer" is every "chief ... officer" appointment and the job listings for
+  # security officers; no kept headline used it otherwise. The "as <title>" forms
+  # catch the welcomes that "officer" misses ("Vantage Data Centers welcomes Jeremy
+  # Deutsch as President of APAC"), which is what lets "welcome*" stay a signal for
+  # a town that welcomes a campus.
+  "careers", "career opportunit*", "job opening*", "job spotlight", "job details",
+  "browse jobs", "technician jobs", "salary", "job cuts", "appoint*",
+  "board of directors", "board director*", "to step down", "steps down",
+  "vice president", "officer", "managing director", "senior leadership",
+  "leadership post", "employee spotlight*", "as president of", "as svp", "as new svp",
+  "as evp", "as cfo", "as ceo", "as coo", "as cto", "as chief",
+  # --- Compliance certifications ---
+  # An operator's audit and certification notices ("DataBank completes annual PCI DSS
+  # audits for all Texas facilities", "Vantage awarded ISO 27001 certification"):
+  # about 25 newsroom pages. Bare "certification" is not used: it would cut
+  # "EdgeCore announces expansion of Greater Phoenix data center campus", whose
+  # release mentions one, and bare "fedramp" would cut a new government cloud region.
+  "ssae*", "hipaa", "pci dss", "soc 2", "iso 27001", "fedramp authorization",
+  "fedramp certif*", "fedramp compliant",
+  # --- Community programmes ---
+  # Sponsorships an operator announces in its newsroom ("New scholarship to offer at
+  # least $10,000 to Bessemer City High School graduates"): about a dozen pages.
+  # "donat*" and "sponsor" are not used: "Compass Datacenters donates training
+  # facility to Texas State Technical College" and a sponsor story about Pataskala
+  # produced projects.
+  "scholarship*", "robotics competition*", "robotics team*", "first robotics",
+  # --- Sections of a site that are structurally not project news ---
+  # `normalize_haystack` turns the URL path's slashes and hyphens into spaces, so a
+  # two-word term matches a path segment pair. That is what makes these safe: a bare
+  # "resources" would drop `databank.com/resources/news/...`, which is real press,
+  # while "resources blogs" only ever matches the blog shelf.
   #
-  # `normalize_haystack` turns the URL path's slashes and hyphens into spaces, so
-  # a two-word term matches a path segment pair. That is what makes these safe: a
-  # bare "resources" would drop `databank.com/resources/news/...`, which is real
-  # press, while "resources blogs" only ever matches the blog shelf.
-  #
-  # Every one of these is measured against the live queue rather than guessed at.
-  # 1,241 candidates had accumulated, and these accounted for 260 of them: 103
+  # These are measured against the live queue rather than guessed at. When 1,241
+  # candidates had accumulated, site sections accounted for 260 of them: 103
   # DataBank compliance blogs, 62 sponsored posts, 60 NTT marketing articles, 18
-  # executive roundtables. Each would have cost an extraction call to discover it
-  # says nothing about any specific project.
+  # executive roundtables (now under Events). Each would have cost an extraction
+  # call to discover it says nothing about any specific project. "logo", "copy of",
+  # "siterendering" and "website construction" are the image-attachment pages of
+  # Meta's data-center sitemap.
   #
-  # "ebook" was tried and rejected: it matches inside "facebook", which is the same
-  # trap the padded " sue " above documents.
-  "resources blogs",
-  "en us insights",
-  "en us services",
-  "en us accounts",
-  "en us industries",
-  "en us about us",
-  "case studies",
-  "sponsored",
-  "roundtable",
-  "voices of the industry",
-  "white paper",
-  "whitepaper",
-  "spec sheets",
+  # "ebook" is safe now that terms match whole words from the start: it no longer
+  # matches inside "facebook". Left out on measurement: "case studies" (a
+  # contractor's case study names the campus; four produced a project), "en us
+  # services" (NTT's facility pages live under it; eleven produced a project) and
+  # "en us insights" (its NTT blog shelf is closed with the sitemap, and the one
+  # headline it still dropped was "Cleaner Air Oregon program clears new Hillsboro
+  # data center for construction").
+  "resources blogs", "en us accounts", "en us industries", "en us about us",
+  "sponsored", "voices of the industry", "white paper*", "whitepaper*", "ebook*",
+  "spec sheet*", "datasheet*", "data sheet*", "prospectus", "press kit*", "media kit*",
+  "privacy policy", "glossary", "data center chips", "logo", "copy of",
+  "siterendering*", "website construction*",
 ]
 
 
 # ---------------------------------------------------------------------------
-# Sitemaps, walked by `tracker sync --deep`.
+# Sitemaps, walked every night by `tracker discover` (and in full by `tracker sync --deep`).
 #
 # A feed shows only what published in the last few days, so a project announced
 # in 2023 never appears in one. Sitemaps solve that without any API key: they
@@ -707,6 +1188,7 @@ company = "NTT Global Data Centers Americas"
 topic_implied = false
 max_children = 8
 max_urls = 20000
+closed = "2026-10-18: robots.txt now says Disallow: / and the host redirects to NTT DATA Singapore"
 
 [[sitemap]]
 name = "prime-newsroom"
@@ -715,6 +1197,7 @@ source_type = "company_filing"
 company = "Prime Data Centers"
 topic_implied = true
 max_urls = 20000
+closed = "2026-10-18: Cloudflare challenge on the sitemap, even for curl; robots.txt forbids the WordPress API"
 
 [[sitemap]]
 name = "cologix-newsroom"
@@ -956,4 +1439,62 @@ name = "epoch-data"
 # fetch; the first candidate to drop if --deep gets slow.
 url = "https://epoch.ai/sitemap-data-0.xml"
 source_type = "general_media"
+max_urls = 5000
+
+# --- Added 2026-10-18 -------------------------------------------------------------
+#
+# Builders whose sitemaps answer the tracker's own client and whose robots.txt allows
+# them, measured on 2026-10-18. Every archive is now walked every night by `tracker
+# discover`, and an entry the archive did not list before is news. `topic_implied`
+# only where every page is about that company's data centers; the others keep the
+# filter. Not added: xAI (403), Tract and Stream (403 to any User-Agent carrying an
+# email address), Digital Realty (its sitemap is ~1,800 facility pages worldwide;
+# its press releases need their own door).
+
+# Google's data-center site: one page per campus and its "latest news". A changed
+# campus page is how Google reports a campus going live.
+[[sitemap]]
+name = "google-datacenters"
+url = "https://datacenters.google/sitemap.xml"
+source_type = "company_filing"
+company = "Google"
+topic_implied = true
+max_urls = 5000
+
+[[sitemap]]
+name = "aligned-newsroom"
+url = "https://aligneddc.com/sitemap.xml"
+source_type = "company_filing"
+company = "Aligned Data Centers"
+topic_implied = true
+max_children = 4
+max_urls = 5000
+
+[[sitemap]]
+name = "edgecore-newsroom"
+url = "https://edgecore.com/sitemap.xml"
+source_type = "company_filing"
+company = "EdgeCore Digital Infrastructure"
+topic_implied = true
+max_children = 4
+max_urls = 5000
+
+# AI clouds that build their own campuses: their sitemaps carry product pages too,
+# so the filter decides.
+[[sitemap]]
+name = "crusoe-newsroom"
+url = "https://www.crusoe.ai/sitemap.xml"
+source_type = "company_filing"
+company = "Crusoe"
+topic_implied = false
+max_children = 4
+max_urls = 5000
+
+[[sitemap]]
+name = "nscale-newsroom"
+url = "https://www.nscale.com/sitemap.xml"
+source_type = "company_filing"
+company = "Nscale"
+topic_implied = false
+max_children = 4
 max_urls = 5000

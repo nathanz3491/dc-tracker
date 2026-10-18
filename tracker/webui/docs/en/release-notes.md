@@ -4,6 +4,11 @@ Changes a reader of the console will notice, newest first. The console's version
 
 ## September–October 2026
 
+### Keeping up with news
+
+- **Every campus is searched for news.** Each night the tracker asks what has been said about each campus since it last looked, so a campus going live, breaking ground or being cancelled is picked up within a day or two, not when somebody happens to research it. See [How the data is kept current](how-it-is-kept-current).
+- **Builders' own sites are read every night.** Anything new on a builder's own data-center site — Meta's "Hello, Tulsa!" and "Kuna, we are online!" posts, for example — is read the next night. Campuses those sites announced long ago and the tracker had missed are being added now.
+
 ### Status and map
 
 - **A status page.** The [status page]({{status}}) shows whether the console, the API and these docs are answering, and when each night's update ran. It is public, so it works without signing in.

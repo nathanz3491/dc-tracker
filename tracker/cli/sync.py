@@ -36,6 +36,7 @@ from tracker.cli._shared import (
     emit,
     err,
     json_mode,
+    news_app,
     queue_app,
 )
 from tracker.cli.enrich import _gapfill_batch, _render_batch
@@ -1528,6 +1529,23 @@ def discover(
             "instead of only those not asked in the last week.",
         ),
     ] = False,
+    archives: Annotated[
+        bool,
+        typer.Option(
+            "--archives/--no-archives",
+            help="Also walk every [[sitemap]] and queue what each added since the last "
+            "walk. An operator's own data-center newsroom is read without the keyword "
+            "test.",
+        ),
+    ] = True,
+    rejudge: Annotated[
+        bool,
+        typer.Option(
+            "--rejudge",
+            help="First put every entry the filter has dropped through today's filter "
+            "and queue what it keeps. For after editing [filter] in seed/feeds.toml.",
+        ),
+    ] = False,
 ) -> None:
     """Poll news feeds for candidate articles and queue them for crawling.
 
@@ -1543,6 +1561,16 @@ def discover(
     publisher we cannot read) is not queued: each new headline is searched for once,
     the closed publishers excluded, and the copies that tell the same story are
     queued instead. About $0.001 a headline, at most 40 a run.
+
+    **Archives are walked every run** (`--no-archives` to skip): each [[sitemap]]
+    is compared with what it listed before, and only the new entries are judged.
+    An operator's own data-center newsroom ("company" and "topic_implied" set) is
+    queued without the keyword test, because its posts are about its data centers
+    and phrased its own way ("Hello Tulsa", "Kuna, we are online!"). The first walk
+    of an archive queues only what passes the filter and records the rest.
+
+    **Everything seen is remembered** with what was decided (table `seen_url`), so
+    `--rejudge` can put what the filter dropped through a revised one.
     """
     from tracker.ingest import discover as disc
 
@@ -1556,13 +1584,15 @@ def discover(
                 dry_run=dry_run,
                 cache_dir=article_cache("articles"),
                 probe_force=probe_closed,
+                sitemaps=archives,
+                rejudge_dropped=rejudge,
             )
     except disc.DiscoverError as exc:
         _fail(str(exc))
         return
 
     _print_report_rows(
-        report.as_rows(),
+        report.as_rows() + ([("dropped entries judged again", report.rejudged)] if rejudge else []),
         title=f"discover{' (dry run)' if dry_run else ''}",
         warn={"feeds failed"},
     )
@@ -1604,6 +1634,148 @@ def discover(
             "\n[dim]next:[/dim] tracker queue        [dim]# review what was found[/dim]\n"
             "[dim]then:[/dim] tracker ingest crawl --from-queue"
         )
+
+
+@news_app.callback(invoke_without_command=True)
+def news(
+    ctx: typer.Context,
+    followups: Annotated[
+        int | None,
+        typer.Option(
+            "--followups",
+            help="Campuses due a follow-up to look at, most overdue first. Default: all.",
+            show_default=False,
+        ),
+    ] = None,
+    baselines: Annotated[
+        int,
+        typer.Option(
+            "--baselines",
+            help="Campuses never looked at to give their first, year-long look, largest first.",
+        ),
+    ] = 300,
+    every: Annotated[
+        bool,
+        typer.Option(
+            "--all",
+            help="Give every campus never looked at its first look now, however many.",
+        ),
+    ] = False,
+    max_queries: Annotated[
+        int | None,
+        typer.Option(
+            "--max-queries",
+            help="Stop after this many searches. The night's cap (TRACKER_SEARCH_CAP) "
+            "applies as well.",
+            show_default=False,
+        ),
+    ] = None,
+    project: Annotated[
+        list[int] | None,
+        typer.Option("--project", help="Only this campus, due or not. Repeatable."),
+    ] = None,
+    show: Annotated[
+        bool, typer.Option("--show/--no-show", help="List each campus looked at.")
+    ] = False,
+) -> None:
+    """Search the news for every campus that is due, and queue what is new.
+
+    The research that fills a row asks what it is missing, and stops asking once it is
+    full; this asks **what has been said about the campus since we last looked**. Each
+    campus is one news search for its company and its town, county or name, limited
+    to the time since its last look, on a schedule set by its stage: daily while it
+    is being decided or built, every three days once it operates, daily for any
+    campus of a company a reader watches.
+
+    **A campus's first look reaches back a year**, with a second search for the words
+    its stage is waiting on ("online", "energized", "delayed" for one under
+    construction). Up to `--baselines` campuses get theirs each run, so switching the
+    watch on catches the whole database up over a night or two; `--all` does it now.
+
+    A result is queued (`watch:#<id>`) when its headline and snippet pass the
+    discovery filter or name the campus, and its date is in the window. The crawl
+    reads them ahead of the backlog. No model is called; a search is about ¥0.007.
+    """
+    if ctx.invoked_subcommand:
+        return
+    from tracker.ingest import watch as watch_mod
+
+    engine, _ = init_db(_db_path())
+    with session_scope(engine) as session:
+        report = watch_mod.run(
+            session,
+            followups=followups,
+            baselines=None if every else baselines,
+            max_queries=max_queries,
+            project_ids=project or None,
+        )
+    _print_report_rows(report.as_rows(), title="news watch", warn={"searches failed"})
+    if report.stopped:
+        err.print(f"[yellow]stopped early:[/yellow] {report.stopped}")
+    if show and report.looks:
+        table = Table(title="campuses", header_style="bold", title_justify="left", box=TABLE_BOX)
+        for column in ("id", "campus", "look", "searches", "results", "kept", "queued"):
+            table.add_column(column)
+        for look in report.looks:
+            table.add_row(
+                str(look.project_id),
+                look.label[:60],
+                "first" if look.baseline else "follow-up",
+                str(look.queries),
+                str(look.results),
+                str(look.kept),
+                str(look.queued),
+            )
+        console.print(table)
+
+
+@news_app.command("report")
+def news_report(
+    since: Annotated[
+        str | None,
+        typer.Option(
+            "--since",
+            help="UTC start, 'YYYY-MM-DD HH:MM:SS' (the nightly loop passes its own start). "
+            "Default: the last 24 hours.",
+            show_default=False,
+        ),
+    ] = None,
+    credit: Annotated[
+        bool,
+        typer.Option("--credit/--no-credit", help="Ask Serper how much search credit is left."),
+    ] = True,
+) -> None:
+    """How the news came in: per source seen, kept, read and found; how late; what broke.
+
+    "found" is a read that changed something (`ok`). The delay is from publication to
+    the database, for what was read with a date. A line warns when no discovery ran,
+    when a feed's newest entry is over 45 days old, when fresh news is still waiting
+    in the queue, and when search credit will not last a fortnight at tonight's rate.
+    """
+    import datetime as dt
+
+    from tracker.ingest import desk as desk_mod
+    from tracker.models import utcnow
+
+    start = utcnow() - dt.timedelta(hours=24)
+    if since:
+        try:
+            start = dt.datetime.fromisoformat(since)
+        except ValueError:
+            _fail(f"--since must look like 2026-10-18 10:01:00, not {since!r}")
+            return
+    settings = get_settings()
+    engine = _read_engine()
+    with session_scope(engine, commit=False) as session:
+        report = desk_mod.build(
+            session,
+            since=start,
+            ledger=settings.spend_ledger,
+            credit=desk_mod.serper_credit(settings) if credit else None,
+            search_cap=settings.search_cap,
+        )
+    for line in report.lines():
+        console.print(escape(line), highlight=False)
 
 
 def utcnow_placeholder():

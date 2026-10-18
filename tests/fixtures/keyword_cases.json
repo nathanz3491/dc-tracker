@@ -1,0 +1,2072 @@
+[
+ {
+  "text": "/2026/04/hello-tulsa/",
+  "implied": true,
+  "keep": true,
+  "source": "topic-exclude: live feed: datacenters.atmeta.com/post-sitemap.xml"
+ },
+ {
+  "text": "/2026/09/kuna-we-are-online/",
+  "implied": true,
+  "keep": true,
+  "source": "topic-exclude: production ingest_url ok (meta-datacenters)"
+ },
+ {
+  "text": "/2025/09/montgomery-were-growing/",
+  "implied": true,
+  "keep": true,
+  "source": "topic-exclude: production ingest_url ok (meta-datacenters)"
+ },
+ {
+  "text": "QTS and Lancium Announce Data Center Campus in Hall County, Texas /news/qts-and-lancium-announce-data-center-campus-in-hall-county-texas/",
+  "implied": true,
+  "keep": true,
+  "source": "topic-exclude: production ingest_url ok (qts-newsroom)"
+ },
+ {
+  "text": "terawulfs lake mariner campus how a retired coal plant became an ai factory prototype /site-selection/article/55379784/terawulfs-lake-mariner-campus-how-a-retired-coal-plant-became-an-ai-factory-prototype",
+  "implied": true,
+  "keep": true,
+  "source": "topic-exclude: production ingest_url ok (datacenterfrontier)"
+ },
+ {
+  "text": "[Industry Event] Advancing Data Center Construction East 2026 /events/advancing-data-center-construction-east-2026",
+  "implied": true,
+  "keep": false,
+  "source": "topic-exclude: live feed: datacenterknowledge.com/rss.xml"
+ },
+ {
+  "text": "Virginia Tops AI Data Center Readiness Ranking as Smaller Markets Advance /data-center-site-selection/virginia-tops-ai-data-center-readiness-ranking-as-smaller-mark",
+  "implied": true,
+  "keep": false,
+  "source": "topic-exclude: live feed: datacenterknowledge.com/rss.xml"
+ },
+ {
+  "text": "data center job spotlight data center construction superintendent /cloud/article/11429880/data-center-job-spotlight-data-center-construction-superintendent",
+  "implied": true,
+  "keep": false,
+  "source": "topic-exclude: production ingest_url skipped (datacenterfrontier-archive)"
+ },
+ {
+  "text": "cyrusone announces owen morris as chief financial officer /resources/press-releases/cyrusone-announces-owen-morris-as-chief-financial-officer",
+  "implied": true,
+  "keep": false,
+  "source": "topic-exclude: production ingest_url discovered (cyrusone-newsroom)"
+ },
+ {
+  "text": "ey announces chris crosby of compass datacenters as anentrepreneur of the year 2023 southwest award winner /news/ey-announces-chris-crosby-of-compass-datacenters-as-anentrepreneur-of-the-year-2023-southwest-award-winner",
+  "implied": true,
+  "keep": false,
+  "source": "topic-exclude: production ingest_url no_project (compass-newsroom)"
+ },
+ {
+  "text": "We’re exploring a potential data center in Lea County, New Mexico. /innovation-and-ai/infrastructure-and-cloud/global-network/lea-county-new-mexico/",
+  "implied": false,
+  "keep": true,
+  "source": "topic-exclude: live feed: blog.google global-network RSS"
+ },
+ {
+  "text": "Google confirmed to be considering Wood Haven Technology Park for potential data center /2026/10/16/google-confirmed-be-considering-wood-haven-technology-park-potential-data-center/",
+  "implied": false,
+  "keep": true,
+  "source": "topic-exclude: WebSearch (wdbj7.com)"
+ },
+ {
+  "text": "IN: Google to Build $2 Billion Data Center in Fort Wayne, Creating Up to 200 New Jobs /region/indiana/news/google-build-2-billion-data-center-fort-wayne-33109.md",
+  "implied": false,
+  "keep": true,
+  "source": "topic-exclude: WebSearch (tradeandindustrydev.com)"
+ },
+ {
+  "text": " /news-releases/doe-site-in-western-kentucky-revitalized-with-data-center-campus-and-dedicated-energy-project-creating-jobs-and-protecting-residents-a",
+  "implied": false,
+  "keep": true,
+  "source": "topic-exclude: production ingest_url ok (prnewswire slug)"
+ },
+ {
+  "text": "electrical contractor for new facebook data center in mesa hiring 500 /arizona-news/electrical-contractor-for-new-facebook-data-center-in-mesa-hiring-500",
+  "implied": false,
+  "keep": true,
+  "source": "topic-exclude: WebSearch (ktar.com)"
+ },
+ {
+  "text": " /data-center-tracker/amazon-summit-crossing-tech-campus-va--8309c4aa-0805-4ab5-b541-262072d0069d",
+  "implied": false,
+  "keep": true,
+  "source": "topic-exclude: production ingest_url ok (morethanjustparks)"
+ },
+ {
+  "text": "Lancium: Fort Stockton Expansion /data-center/lancium-fort-stockton-expansion",
+  "implied": false,
+  "keep": true,
+  "source": "topic-exclude: WebSearch (baxtel.com)"
+ },
+ {
+  "text": " /en/news/riot-platforms-files-to-add-building-to-cryptomine-and-data-center-campus-in-corsicana-texas/",
+  "implied": false,
+  "keep": true,
+  "source": "topic-exclude: production ingest_url ok (datacenterdynamics slug)"
+ },
+ {
+  "text": " /ai-data-centers/bitcoin-miner-core-scientific-converts-data-center-infrastructure-for-ai",
+  "implied": false,
+  "keep": true,
+  "source": "topic-exclude: production ingest_url ok (datacenterknowledge slug)"
+ },
+ {
+  "text": "Bitfarms Joins Peer Bitcoin Miners in Halting Hashrate Expansion, Citing HPC Focus /news/2025-05-01/bitfarms-halt-bitcoin-hashrate",
+  "implied": false,
+  "keep": true,
+  "source": "topic-exclude: WebSearch (theenergymag.com)"
+ },
+ {
+  "text": "bitdeer taps contractor to begin conversion of norwegian crypto mine to hpc /en/news/bitdeer-taps-contractor-to-begin-conversion-of-norwegian-crypto-mine-to-hpc/",
+  "implied": false,
+  "keep": true,
+  "source": "topic-exclude: WebSearch (datacenterdynamics.com)"
+ },
+ {
+  "text": " /riot-platforms-launches-formal-evaluation-of-potential-ai-hpc-uses-for-remaining-600-mw-of-power-capacity-at-corsicana-facility/",
+  "implied": false,
+  "keep": true,
+  "source": "topic-exclude: production ingest_url ok"
+ },
+ {
+  "text": "crusoe plans 900 mw campus in abilene to support microsoft workloads /crusoe-plans-900-mw-campus-in-abilene-to-support-microsoft-workloads/",
+  "implied": false,
+  "keep": true,
+  "source": "topic-exclude: WebSearch (convergedigest.com)"
+ },
+ {
+  "text": "PowerHouse & Big Watt secure approval for 1GW behind-the-meter campus in Taylor, Texas /en/news/powerhouse-big-watt-secure-approval-for-1gw-behind-the-meter-campus-in-taylor-texas/",
+  "implied": false,
+  "keep": true,
+  "source": "topic-exclude: production ingest_url skipped (datacenterdynamics-headlines)"
+ },
+ {
+  "text": " /en/news/google-to-pay-920-million-to-spacex-monthly-for-ai-capacity/",
+  "implied": false,
+  "keep": true,
+  "source": "topic-exclude: production ingest_url ok (datacenterdynamics slug)"
+ },
+ {
+  "text": "Building AI infrastructure with the Effingham County community /index/building-ai-infrastructure-with-the-effingham-county-community/",
+  "implied": false,
+  "keep": true,
+  "source": "topic-exclude: live feed: openai.com/blog/rss.xml (ok in production)"
+ },
+ {
+  "text": "Google Creates New Cloud Region in Dallas, Expanding Capacity and Flexibility /google-creates-new-cloud-region-in-dallas-expanding-capacity-and-flexibility/",
+  "implied": false,
+  "keep": true,
+  "source": "topic-exclude: WebSearch (dallasinnovates.com)"
+ },
+ {
+  "text": "Developer withdraws data center plan after legal issue halts zoning meeting /news/articles/developer-withdraws-data-center-plan-050749314.html",
+  "implied": false,
+  "keep": true,
+  "source": "topic-exclude: WebSearch (yahoo.com)"
+ },
+ {
+  "text": "developer pulls out of project atlas data center /2026/03/30/news/post/developer-pulls-out-of-project-atlas-data-center/",
+  "implied": false,
+  "keep": true,
+  "source": "topic-exclude: WebSearch (tulsaflyer.org)"
+ },
+ {
+  "text": "ai data centres application in moose jaw scrapped documents show /regina/article/ai-data-centres-application-in-moose-jaw-scrapped-documents-show/",
+  "implied": false,
+  "keep": true,
+  "source": "topic-exclude: WebSearch (ctvnews.ca)"
+ },
+ {
+  "text": "oracle and openai abandon texas ai data center expansion plans bloomberg reports /en/story/oracle-and-openai-abandon-texas-ai-data-center-expansion-plans-bloomberg-reports",
+  "implied": false,
+  "keep": true,
+  "source": "topic-exclude: WebSearch (news.ainauten.com)"
+ },
+ {
+  "text": "peculiar officials in missouri remove data centers from ordinance blocking 15bn diode project /en/news/peculiar-officials-in-missouri-remove-data-centers-from-ordinance-blocking-15bn-diode-project",
+  "implied": false,
+  "keep": true,
+  "source": "topic-exclude: WebSearch (datacenterdynamics.com)"
+ },
+ {
+  "text": "Tyler planning commission denies permit for proposed data center /2026/07/07/tyler-planning-commission-denies-permit-proposed-data-center/",
+  "implied": false,
+  "keep": true,
+  "source": "topic-exclude: WebSearch (kltv.com)"
+ },
+ {
+  "text": "Kansas City Planning Commission rejects proposal for 20- ... /news/kansas-city-planning-commission-rejects-proposal-for-20-story-data-center/",
+  "implied": false,
+  "keep": true,
+  "source": "topic-exclude: production ingest_url discovered (search:opposition)"
+ },
+ {
+  "text": "Matthews data center project withdrawn, mayor confirms /news/local/article312427810.html",
+  "implied": false,
+  "keep": true,
+  "source": "topic-exclude: production ingest_url discovered (search:rezoning)"
+ },
+ {
+  "text": "Goochland supervisors approve tech overlay district in 4-1 vote after marathon meeting /?p=169797",
+  "implied": false,
+  "keep": true,
+  "source": "topic-exclude: WebSearch (richmondbizsense.com)"
+ },
+ {
+  "text": "Debunking the Biggest Data Center Myths /news/2026/10/debunking-the-biggest-data-center-myths/",
+  "implied": false,
+  "keep": false,
+  "source": "topic-exclude: live feed: about.fb.com/news/feed"
+ },
+ {
+  "text": "Data Center Market Size Projected to Reach USD 517.17 Billion by 2030, at a CAGR 10.5% | Allied Market Research /nota-de-prensa_amp/mercados/data-center-market-size-projected-to-reach-usd-51717-billion-by-2030-at-a-cagr-105-allied-market-research--22322091.html",
+  "implied": false,
+  "keep": false,
+  "source": "topic-exclude: WebSearch (bolsamania.com)"
+ },
+ {
+  "text": "these are the 3 best data center stocks to buy for 2026 /story/news/36952682/these-are-the-3-best-data-center-stocks-to-buy-for-2026",
+  "implied": false,
+  "keep": false,
+  "source": "topic-exclude: WebSearch (barchart.com)"
+ },
+ {
+  "text": "SPX Technologies: JPMorgan Initiates With Overweight Citing Data Center Demand and Capacity Expansion /news/spx-technologies-jpmorgan-initiates-overweight-203140352.html",
+  "implied": false,
+  "keep": false,
+  "source": "topic-exclude: WebSearch (finance.yahoo.com)"
+ },
+ {
+  "text": " /resources/blogs/data-center-frontier-podcast-with-ceo-eric-schwartz",
+  "implied": false,
+  "keep": false,
+  "source": "topic-exclude: production ingest_url no_project (databank.com)"
+ },
+ {
+  "text": " /careers/search/job/power-architect-design-lead-data-center-267283",
+  "implied": false,
+  "keep": false,
+  "source": "topic-exclude: production ingest_url fetch_error"
+ },
+ {
+  "text": "Register now for the DCF Trends Summit, Aug. 4-6 /events",
+  "implied": false,
+  "keep": false,
+  "source": "topic-exclude: WebSearch (datacenterfrontier.com)"
+ },
+ {
+  "text": "Data Center Energy Storage Systems Market to Reach USD 10.48 Billion by 2032, at a CAGR of 12.5% - MarketsandMarketsTM /news-release/2026/10/07/3376570/0/en/",
+  "implied": false,
+  "keep": false,
+  "source": "topic-exclude: production ingest_url no_project (globenewswire-data-center)"
+ },
+ {
+  "text": "Bitdeer monthly bitcoin production jumps 251% as hashrate hits 45.7 EH/s /news/bitdeer-monthly-bitcoin-production-jumps-153950538.html",
+  "implied": false,
+  "keep": false,
+  "source": "topic-exclude: WebSearch (finance.yahoo.com)"
+ },
+ {
+  "text": "https://datacenters.atmeta.com/2026/04/hello-tulsa/",
+  "implied": true,
+  "keep": true,
+  "source": "milestones: live: datacenters.atmeta.com/post-sitemap.xml"
+ },
+ {
+  "text": "https://datacenters.atmeta.com/2026/09/kuna-we-are-online/",
+  "implied": true,
+  "keep": true,
+  "source": "milestones: prod ingest_url ok (meta-datacenters)"
+ },
+ {
+  "text": "https://datacenters.atmeta.com/2025/09/montgomery-were-growing/",
+  "implied": true,
+  "keep": true,
+  "source": "milestones: prod ingest_url ok"
+ },
+ {
+  "text": "https://datacenters.atmeta.com/2022/04/good-news-from-dekalb/",
+  "implied": true,
+  "keep": true,
+  "source": "milestones: live: atmeta post-sitemap"
+ },
+ {
+  "text": "https://datacenters.atmeta.com/2021/08/facebook-is-joining-the-arizona-community/",
+  "implied": true,
+  "keep": true,
+  "source": "milestones: live: atmeta post-sitemap"
+ },
+ {
+  "text": "https://datacenters.atmeta.com/2012/04/facebook-data-center-opens-in-forest-city-n-c/",
+  "implied": true,
+  "keep": true,
+  "source": "milestones: live: atmeta post-sitemap"
+ },
+ {
+  "text": "https://datacenters.atmeta.com/richland-parish-data-center/",
+  "implied": true,
+  "keep": true,
+  "source": "milestones: prod ingest_url ok; live atmeta sitemap"
+ },
+ {
+  "text": "https://datacenters.atmeta.com/2026/03/big-things-are-happening-el-paso/",
+  "implied": true,
+  "keep": true,
+  "source": "milestones: live: atmeta post-sitemap"
+ },
+ {
+  "text": "https://datacenters.atmeta.com/2025/06/data-centers-careers/",
+  "implied": true,
+  "keep": false,
+  "source": "milestones: live: atmeta post-sitemap"
+ },
+ {
+  "text": "https://datacenters.atmeta.com/2026/02/2025-year-in-review-meta-data-center-community-support/",
+  "implied": true,
+  "keep": false,
+  "source": "milestones: live: atmeta post-sitemap"
+ },
+ {
+  "text": "https://datacenters.atmeta.com/2026/04/restoring-water-in-our-data-center-communities/",
+  "implied": true,
+  "keep": false,
+  "source": "milestones: live: atmeta post-sitemap"
+ },
+ {
+  "text": "We're exploring a potential data center in Lea County, New Mexico. /innovation-and-ai/infrastructure-and-cloud/global-network/lea-county-new-mexico/",
+  "implied": false,
+  "keep": true,
+  "source": "milestones: live: blog.google global-network RSS"
+ },
+ {
+  "text": "We're announcing a new data center and energy investments in Gray and Roberts Counties, Texas. /innovation-and-ai/infrastructure-and-cloud/global-network/meitner-energy-center/",
+  "implied": false,
+  "keep": true,
+  "source": "milestones: live: blog.google global-network RSS"
+ },
+ {
+  "text": "QTS 2025 Sustainability Report /news/qts-2025-sustainability-report/",
+  "implied": true,
+  "keep": false,
+  "source": "milestones: live: qtsdatacenters.com/news/feed"
+ },
+ {
+  "text": "Amazon will share its Q3 2026 earnings on October 29 /news/company-news/amazon-earnings-q3-2026-report",
+  "implied": false,
+  "keep": false,
+  "source": "milestones: live: aboutamazon.com RSS"
+ },
+ {
+  "text": "Google confirmed as parent company for data center project in Roanoke County /2026/10/16/google-confirmed-as-parent-company-for-a-data-center-project-in-roanoke-county",
+  "implied": false,
+  "keep": true,
+  "source": "milestones: live: cardinalnews.org/feed"
+ },
+ {
+  "text": "Google confirmed to be considering Wood Haven Technology Park for potential data center",
+  "implied": false,
+  "keep": true,
+  "source": "milestones: web: wdbj7.com 2026-10-16"
+ },
+ {
+  "text": "$5B data center project promises 195 new jobs for Columbus area",
+  "implied": false,
+  "keep": true,
+  "source": "milestones: web: walb.com 2026-02-12"
+ },
+ {
+  "text": "One of nation's poorest counties to receive $6 billion data center",
+  "implied": false,
+  "keep": true,
+  "source": "milestones: web: planetizen.com 2026-10"
+ },
+ {
+  "text": "Galaxy Buys 500-Acre Data Center Site in McGregor, TX",
+  "implied": false,
+  "keep": true,
+  "source": "milestones: web: news.bgov.com"
+ },
+ {
+  "text": "Microsoft acquires 600 acres for data center development in Woodward Iowa",
+  "implied": false,
+  "keep": true,
+  "source": "milestones: web: baxtel.com 2026-10"
+ },
+ {
+  "text": "Planning commission OKs Sand Springs data center, city council to vote Feb. 3 /news/local-news/planning-commission-oks-sand-springs-data-center-city-council-to-vote-feb-3",
+  "implied": false,
+  "keep": true,
+  "source": "milestones: web: kjrh.com"
+ },
+ {
+  "text": "Columbia County data center gets planning panel recommendation",
+  "implied": false,
+  "keep": true,
+  "source": "milestones: web: wrdw.com 2026-01-22"
+ },
+ {
+  "text": "Brookwood approves annexation and rezoning tied to proposed data center",
+  "implied": false,
+  "keep": true,
+  "source": "milestones: web: abc3340.com"
+ },
+ {
+  "text": "/independence-city-council-approves-tax-breaks-data-center/",
+  "implied": false,
+  "keep": true,
+  "source": "milestones: web: ingrams.com 2026-03"
+ },
+ {
+  "text": "TeraWulf secures 482MW electrical service agreement for planned data center campus in Kentucky",
+  "implied": false,
+  "keep": true,
+  "source": "milestones: web: datacenterdynamics.com"
+ },
+ {
+  "text": "Newmark Arranges $7.1B Construction Loan for West Texas Data Center Project",
+  "implied": false,
+  "keep": true,
+  "source": "milestones: web: rebusinessonline.com"
+ },
+ {
+  "text": "Aligned tops out Maryland data center /en/news/aligned-tops-out-maryland-data-center/",
+  "implied": false,
+  "keep": true,
+  "source": "milestones: web: datacenterdynamics.com 2026-05"
+ },
+ {
+  "text": "Meta's billion-dollar KC data center just came online",
+  "implied": false,
+  "keep": true,
+  "source": "milestones: prod ingest_url ok"
+ },
+ {
+  "text": "Iron Mountain signs 72 megawatt lease at its Manassas data center",
+  "implied": false,
+  "keep": true,
+  "source": "milestones: prod ingest_url ok (datacenterfrontier-archive)"
+ },
+ {
+  "text": "Cleaner Air Oregon program clears new Hillsboro data center for construction",
+  "implied": false,
+  "keep": true,
+  "source": "milestones: prod ingest_url ok"
+ },
+ {
+  "text": "Ascent Enters Dallas Market With Storm-Hardened Data Center in ...",
+  "implied": false,
+  "keep": true,
+  "source": "milestones: prod ingest_url ok"
+ },
+ {
+  "text": "/nautilus-commissions-water-cooled-data-center-port-stockton/",
+  "implied": false,
+  "keep": true,
+  "source": "milestones: web: irei.com"
+ },
+ {
+  "text": "Planners adding data center guidelines to eastern Summit County general plan /summit-county/2026-07-10/planners-adding-data-center-guidelines-to-eastern-summit-county-general-plan",
+  "implied": false,
+  "keep": true,
+  "source": "milestones: web: kpcw.org 2026-07-10"
+ },
+ {
+  "text": "Amherst County hits the trifecta of issues: off-track betting, data centers and nuclear energy",
+  "implied": false,
+  "keep": true,
+  "source": "milestones: live: cardinalnews.org/feed"
+ },
+ {
+  "text": "/ai-data-centers/bitcoin-miner-core-scientific-converts-data-center-infrastructure-for-ai",
+  "implied": false,
+  "keep": true,
+  "source": "milestones: prod ingest_url ok (datacenterknowledge.com)"
+ },
+ {
+  "text": "/en/news/bitfarms-files-to-convert-cryptomine-into-ai-data-center/",
+  "implied": false,
+  "keep": true,
+  "source": "milestones: web: datacenterdynamics.com"
+ },
+ {
+  "text": "terawulfs lake mariner campus how a retired coal plant became an ai factory prototype",
+  "implied": true,
+  "keep": true,
+  "source": "milestones: prod ingest_url ok (datacenterfrontier)"
+ },
+ {
+  "text": "TeraWulf gets approval for more data centers at Lake Mariner campus in New York",
+  "implied": false,
+  "keep": true,
+  "source": "milestones: web: datacenterdynamics.com"
+ },
+ {
+  "text": "Developer withdraws rezoning request for controversial data center in Hoffman Estates /news/developer-withdraws-rezoning-request-for-controversial-data-center-in-hoffman-estates/",
+  "implied": false,
+  "keep": true,
+  "source": "milestones: prod ingest_url ok (capitolnewsillinois.com)"
+ },
+ {
+  "text": "/briefs/developer-withdraws-boulder-city-data-center-signals-move-to-federal-land/",
+  "implied": false,
+  "keep": true,
+  "source": "milestones: prod ingest_url ok (nevadacurrent.com)"
+ },
+ {
+  "text": "/en/news/aws-withdraws-plans-for-third-data-center-campus-in-louisa-county-virginia/",
+  "implied": false,
+  "keep": true,
+  "source": "milestones: prod ingest_url ok (datacenterdynamics.com)"
+ },
+ {
+  "text": "Developer for proposed data center in Coweta pulls application",
+  "implied": false,
+  "keep": true,
+  "source": "milestones: web: krmg.com 2026-03-30"
+ },
+ {
+  "text": "Deep Green pulls request to rezone downtown Lansing parcel, axing data center proposal",
+  "implied": false,
+  "keep": true,
+  "source": "milestones: web: michiganadvance.com 2026-04-06"
+ },
+ {
+  "text": "Westfield planning board kills $3 billion data center project",
+  "implied": false,
+  "keep": true,
+  "source": "milestones: web: boston.com 2026-10-16"
+ },
+ {
+  "text": "Microsoft halts Ohio data center project, surprising local officials",
+  "implied": false,
+  "keep": true,
+  "source": "milestones: web: sherwood.news"
+ },
+ {
+  "text": "Wisconsin Rapids plan commission rejects permit for data center",
+  "implied": false,
+  "keep": true,
+  "source": "milestones: web: wsau.com 2026-09-16"
+ },
+ {
+  "text": "Edgerton denies Logistics Park data center proposal, as city weighs broader moratorium",
+  "implied": false,
+  "keep": true,
+  "source": "milestones: web: johnsoncountypost.com 2026-06-11"
+ },
+ {
+  "text": "/en/news/peculiar-officials-in-missouri-remove-data-centers-from-ordinance-blocking-15bn-diode-project",
+  "implied": false,
+  "keep": true,
+  "source": "milestones: web: datacenterdynamics.com"
+ },
+ {
+  "text": "Largest Data Center Project Ever Proposed Is Officially Dead",
+  "implied": false,
+  "keep": true,
+  "source": "milestones: prod ingest_url ok"
+ },
+ {
+  "text": "Why AI Data Center Cooling Needs to Get Smarter /cooling/why-ai-data-center-cooling-needs-to-get-smarter",
+  "implied": true,
+  "keep": false,
+  "source": "milestones: live: datacenterknowledge.com/rss.xml"
+ },
+ {
+  "text": "Designing Layered Drone Defenses for Data Centers /physical-security/designing-layered-drone-defenses-for-data-centers",
+  "implied": true,
+  "keep": false,
+  "source": "milestones: live: datacenterknowledge.com/rss.xml"
+ },
+ {
+  "text": "Zinc Whiskers: The Hidden Contamination Risk Beneath Data Center Floors /management/zinc-whiskers-the-hidden-contamination-risk-beneath-data-center-floors",
+  "implied": true,
+  "keep": false,
+  "source": "milestones: live: datacenterknowledge.com/rss.xml"
+ },
+ {
+  "text": "Enterprises Adopt Colocation for AI and Hybrid Cloud Initiatives /colocation/enterprises-adopt-colocation-for-ai-and-hybrid-cloud-initiatives",
+  "implied": true,
+  "keep": false,
+  "source": "milestones: live: datacenterknowledge.com/rss.xml"
+ },
+ {
+  "text": "Space Data Centers Inch Toward Reality, With Caveats /next-gen-data-centers/space-data-centers-inch-toward-reality-with-caveats",
+  "implied": true,
+  "keep": false,
+  "source": "milestones: live: datacenterknowledge.com/rss.xml"
+ },
+ {
+  "text": "How to Secure Data Centers During the Construction Phase /physical-security/how-to-secure-data-centers-during-the-construction-phase",
+  "implied": true,
+  "keep": false,
+  "source": "milestones: live: datacenterknowledge.com/rss.xml"
+ },
+ {
+  "text": "Data Center Operations Coordinator @ Together AI",
+  "implied": false,
+  "keep": false,
+  "source": "milestones: prod ingest_url no_project"
+ },
+ {
+  "text": "Data Center Energy Storage Systems Market to Reach USD 10.48 Billion by 2032, at a CAGR of 12.5% - MarketsandMarketsTM",
+  "implied": false,
+  "keep": false,
+  "source": "milestones: prod ingest_url no_project"
+ },
+ {
+  "text": "Why Hut 8 (HUT) Is Up 5.2% After Pivoting Toward AI Data ...",
+  "implied": false,
+  "keep": false,
+  "source": "milestones: prod ingest_url no_project"
+ },
+ {
+  "text": "Bitdeer expands Soluna mining agreement to 35MW",
+  "implied": false,
+  "keep": false,
+  "source": "milestones: prod ingest_url skipped (datacenterdynamics-headlines)"
+ },
+ {
+  "text": "Developer drops Boulder City data center request lasvegassun.com/news/2026/jul/08/developer-drops-boulder-city-data-center-request-a/",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: lasvegassun.com"
+ },
+ {
+  "text": "Company behind Downtown Lansing data center project withdraws application, officials say",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: wilx.com 2026-04-06"
+ },
+ {
+  "text": "Proposed data center in Lansing MI has been cancelled",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: dailykos.com 2026-04-06"
+ },
+ {
+  "text": "Data center developer pulls out of Mooresville after pushback from residents",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: wccbcharlotte.com"
+ },
+ {
+  "text": "Potential data center developer pulls out of land deal in Broken Arrow",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: ktul.com 2026-06-10"
+ },
+ {
+  "text": "Controversial data center pulled after company withdraws",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: yahoo.com"
+ },
+ {
+  "text": "Data center is no longer on Pekin's plate: 'It's done'",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: nprillinois.org 2026-05-13"
+ },
+ {
+  "text": "EDCCC formalizes contract termination with data center project",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: arkadelphian.com 2026-05-01"
+ },
+ {
+  "text": "Microsoft to Rent Texas Data Center Dropped by Oracle, OpenAI",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: news.bgov.com"
+ },
+ {
+  "text": "Mesa megahub no more: EdgeCore shrinks giant data center dream /2026/03/mesa-megahub-no-more-edgecore-shrinks-giant-data-center-dream/",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: hoodline.com"
+ },
+ {
+  "text": "Shark Tank Star Shrinks Data Center Footprint After Backlash",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: news.bgov.com"
+ },
+ {
+  "text": "Matthews data center project withdrawn, mayor confirms",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: db: discovered, search:rezoning:charlotte-nc"
+ },
+ {
+  "text": "Douglas County leaders just killed a massive data center project",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: fox5atlanta.com"
+ },
+ {
+  "text": "County officials deny data center zoning request in Georgia",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: datacenterdynamics.com"
+ },
+ {
+  "text": "Hermantown tables vote on key agreements for contentious Google data center",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: mprnews.org 2026-05-05"
+ },
+ {
+  "text": "Marietta City Council tables vote on proposed data center",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: atlantanewsfirst.com 2026-07-09"
+ },
+ {
+  "text": "Naperville City Council Shuts Down Data Center Plan",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: bisnow.com"
+ },
+ {
+  "text": "Gov. Scott vetoes AI data center bill",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: wcax.com 2026-05-28"
+ },
+ {
+  "text": "KCMO City Plan Commission votes to deny application for ... /news/local-news/missouri/kansas-city/kcmo-city-plan-commission-votes-to-deny-application-for-proposed-downtown-data-center",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: db: discovered, search:rezoning:kansas-city"
+ },
+ {
+  "text": "Hillsboro bans new data centers in surprise city council ...",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: db: discovered, search:moratorium:hillsboro"
+ },
+ {
+  "text": "Georgia County Puts Off Key Data Center Vote After Public ...",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: db: discovered, search:opposition:atlanta"
+ },
+ {
+  "text": "New Texas data center projects frozen until state audits them",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: db: no_project, search:interconnect:dallas"
+ },
+ {
+  "text": "Independence, MO councilman recalled by voters in his district after his vote for data center tax incentives",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: kshb.com"
+ },
+ {
+  "text": "Ashburn family loses fight to stop 185-foot data center ...",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: db: discovered, search:substation:ashburn"
+ },
+ {
+  "text": "Data center power line gets pushback in Northern Virginia",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: db: discovered, search:substation:ashburn"
+ },
+ {
+  "text": "Mesa residents are fighting a Tokyo tech giant's data center",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: db: ok, search:opposition:mesa"
+ },
+ {
+  "text": "Residents rally against data centers in Hillsboro",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: db: discovered, search:opposition:hillsboro"
+ },
+ {
+  "text": "Arizona Tapping Brakes on Data Center Development",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: db: no_project, search:moratorium:mesa"
+ },
+ {
+  "text": "Why does one data center need nearly 650 diesel generators?",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: wral.com 2026-07"
+ },
+ {
+  "text": "Digital Core REIT seeks new tenant for data center in Prince William County, Northern Virginia",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: datacenterdynamics.com"
+ },
+ {
+  "text": "Oracle Data Center Funding Clouded by Blue Owl Exit",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: db: discovered, prospect:Oracle"
+ },
+ {
+  "text": "Second Major Virginia Data Center Project Dies, Raising AI Site Selection Stakes",
+  "implied": true,
+  "keep": true,
+  "source": "trouble: db: no_project, datacenterknowledge"
+ },
+ {
+  "text": "texas commission on environmental quality holds public meeting on fermis air quality permit",
+  "implied": true,
+  "keep": true,
+  "source": "trouble: db: discovered, fermi-america-newsroom"
+ },
+ {
+  "text": "Permits, Not Power, Halt Google’s Finland Data Centers /regulations/permits-not-power-halt-google-s-finland-data-centers",
+  "implied": true,
+  "keep": true,
+  "source": "trouble: db: no_project, datacenterknowledge"
+ },
+ {
+  "text": "Virginia’s Loudoun County board votes to pause new data center applications",
+  "implied": true,
+  "keep": true,
+  "source": "trouble: db: skipped, datacenterdynamics"
+ },
+ {
+  "text": "New Jersey town sued for $300m by data center developer",
+  "implied": true,
+  "keep": true,
+  "source": "trouble: db: skipped, datacenterdynamics"
+ },
+ {
+  "text": "The Role of Optical Frequency Comb Generators in AI Data Centers /networking/the-role-of-optical-frequency-comb-generators-in-ai-data-centers",
+  "implied": true,
+  "keep": false,
+  "source": "trouble: live: datacenterknowledge rss"
+ },
+ {
+  "text": "Could the Societal Value of Workloads Shape Data Center Policy? /regulations/could-the-societal-value-of-workloads-shape-data-center-policy",
+  "implied": true,
+  "keep": false,
+  "source": "trouble: live: datacenterknowledge rss"
+ },
+ {
+  "text": "Same Roof, 10 Different Gases: What a Data Center Is Quietly Holding /outages/same-roof-10-different-gases-what-a-data-center-is-quietly-holding",
+  "implied": true,
+  "keep": false,
+  "source": "trouble: live: datacenterknowledge rss"
+ },
+ {
+  "text": "The Hidden Failure Domain in N+1 Data Center Cooling /cooling/the-hidden-failure-domain-in-n-1-data-center-cooling",
+  "implied": true,
+  "keep": false,
+  "source": "trouble: live: datacenterknowledge rss"
+ },
+ {
+  "text": "Zombie Workloads Haunt Data Center Efficiency Efforts /cloud/zombie-workloads-haunt-data-center-efficiency-efforts",
+  "implied": true,
+  "keep": false,
+  "source": "trouble: live: datacenterknowledge rss"
+ },
+ {
+  "text": "PJM Issued First Backup-Generator Warnings During Heat Wave",
+  "implied": false,
+  "keep": false,
+  "source": "trouble: tests/test_discover.py (live-run regression)"
+ },
+ {
+  "text": "Pennsylvania County Denies Rezoning Plan That Would Have Allowed a Data Center",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: insideclimatenews.org"
+ },
+ {
+  "text": "Rezoning for proposed data center in Kosciusko County denied",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: wsbt.com"
+ },
+ {
+  "text": "3-0 vote halts proposed data center rezoning in Clinton County",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: ftimes.com"
+ },
+ {
+  "text": "Prince William Planning Commission recommends denial of PW Digital Gateway data center project",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: insidenova.com"
+ },
+ {
+  "text": "Unnamed developer withdraws data center in Brownsville, Texas",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: datacenterdynamics.com"
+ },
+ {
+  "text": "Developer withdraws proposal to convert El Segundo hotel into data center",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: baxtel.com"
+ },
+ {
+  "text": "Sentinel DC withdraws Maine paper mill data center proposal",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: baxtel.com"
+ },
+ {
+  "text": "Developer withdraws Fayetteville, Georgia data center application",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: baxtel.com"
+ },
+ {
+  "text": "Firm pulls out of deal to buy Avtex parcel amid data center pushback",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: nvdaily.com"
+ },
+ {
+  "text": "Developer pulls proposed data center project in Pekin, Illinois",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: baxtel.com"
+ },
+ {
+  "text": "Developer of proposed Pekin data center pauses project, asks for termination of current agreement",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: 25newsnow.com"
+ },
+ {
+  "text": "Rowan County approves one-year moratorium on new data centers",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: wfae.org"
+ },
+ {
+  "text": "Data center proposals put on hold as Sedgwick County delays rules until late December",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: foxkansas.com"
+ },
+ {
+  "text": "Leavenworth Co. officials reverse course, slow down on data center proposed for site near Tonganoxie",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: ljworld.com"
+ },
+ {
+  "text": "Dallas Exurb Hits Pause on Data Centers in Rare Texas Rebuke",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: news.bgov.com"
+ },
+ {
+  "text": "Majority of Clinton City Council vote down data center moratorium",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: wvik.org"
+ },
+ {
+  "text": "Warren Council Tables Proposed Ban on Data Centers",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: ground.news"
+ },
+ {
+  "text": "Lawsuit challenges zoning approval process for Joliet data center",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: shawlocal.com"
+ },
+ {
+  "text": "Residents, organizations file lawsuit against proposed Midtown data center",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: firstalert4.com"
+ },
+ {
+  "text": "'We were completely ignored': Farmington residents sue the city in attempt to stop $5B data center park",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: yahoo.com"
+ },
+ {
+  "text": "Swinerton Builders records $3.4 million lien on Prime Data Centers facility in Sacramento, California",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: datacenterdynamics.com"
+ },
+ {
+  "text": "Exelon's Data Center Pipeline Cut as AI Plans Face Pushback",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: news.bgov.com"
+ },
+ {
+  "text": "Georgia developer finalizes plans to downsize $2 billion data center on Indy's east side, cites community feedback",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: fox59.com"
+ },
+ {
+  "text": "Vermont vetoes data center bill as New England grid fight grows",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: environmentenergyleader.com"
+ },
+ {
+  "text": "Maine Governor Mills Vetoes Statewide Data Center Moratorium",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: news.bgov.com"
+ },
+ {
+  "text": "Residents plead with DNR to deny Port Washington data center air pollution permit",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: wisconsinexaminer.com"
+ },
+ {
+  "text": "Richmond County residents push stricter air quality standards for new Amazon data center",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: wfae.org"
+ },
+ {
+  "text": "Residents push back against large Amazon data center project during packed public meeting",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: wfae.org"
+ },
+ {
+  "text": "Recall petitions filed against Festus mayor, three council members over data center votes",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: stlpr.org"
+ },
+ {
+  "text": "Judge to decide whether Festus recall election will proceed amid data center dispute",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: firstalert4.com"
+ },
+ {
+  "text": "Australia's Adisyn surrenders lease of Perth data center",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: datacenterdynamics.com"
+ },
+ {
+  "text": "Construction ceases at Apple's Danish data center after contractor dispute",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: datacenterdynamics.com"
+ },
+ {
+  "text": "Death of worker halts construction at future site of data center in Medina County",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: ksat.com"
+ },
+ {
+  "text": "Facebook data center worker criticizes decision to shut down site over hate messages",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: kjzz.com"
+ },
+ {
+  "text": "East Whiteland, PA Data Center Developer Withdraws Application After Fierce Public Opposition",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: foodandwaterwatch.org"
+ },
+ {
+  "text": "Microsoft abandons some data center projects, Mt. Pleasant on track",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: jsonline.com (db: fetch_error)"
+ },
+ {
+  "text": "Data center developer pulls out of Peculiar",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: task brief (real headline)"
+ },
+ {
+  "text": "AI data center project shelved",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: task brief (real headline)"
+ },
+ {
+  "text": "Chandler residents rally against $2B data center as City Council vote looms",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: 12news.com (db: discovered)"
+ },
+ {
+  "text": "Montour County denies rezoning plan that would have allowed a data center",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: penncapital-star.com"
+ },
+ {
+  "text": "Developer withdraws Proposed Data Center Project in Citrus County, Florida",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: baxtel.com"
+ },
+ {
+  "text": "Developer backs out of 1.7 GW Virginia data center plan",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: bisnow.com"
+ },
+ {
+  "text": "Data center developer backs off",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: yahoo.com"
+ },
+ {
+  "text": "AI data center no longer coming to Wisconsin Rapids",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: waow.com"
+ },
+ {
+  "text": "$800m data center project proposed for Pasewalk, Germany falls through",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: datacenterdynamics.com"
+ },
+ {
+  "text": "Fermi Data Center Funding Deal Falls Through",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: energyintel.com"
+ },
+ {
+  "text": "$750M data center falls through in western Virginia",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: virginiabusiness.com"
+ },
+ {
+  "text": "Data center project no longer moving forward in Henderson, Nev.",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: govtech.com"
+ },
+ {
+  "text": "Google, Xcel call off $600M data center deal in Becker, Minnesota",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: dptribune.com"
+ },
+ {
+  "text": "Google's plans to build data center in Becker fizzle",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: mprnews.org"
+ },
+ {
+  "text": "Modular data center project in Alberta, Canada dropped",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: datacenterdynamics.com"
+ },
+ {
+  "text": "Data center provider Cyxtera files for bankruptcy",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: bisnow.com"
+ },
+ {
+  "text": "Colocation Provider Cyxtera Files for Chapter 11 Bankruptcy",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: datacenterfrontier.com"
+ },
+ {
+  "text": "Cyxtera rejects lease at Stack-owned data center in the Elk Grove, Illinois",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: datacenterdynamics.com"
+ },
+ {
+  "text": "Windstream-occupied data center at risk of foreclosure in Milwaukee, Wisconsin",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: datacenterdynamics.com"
+ },
+ {
+  "text": "Okmulgee County residents seek answers on proposed data center near wildlife refuge",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: fox23.com"
+ },
+ {
+  "text": "Lawsuit pushes California city to reevaluate data center's environmental harms",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: biologicaldiversity.org"
+ },
+ {
+  "text": "Stokes court officially voids earlier data center rezoning following community win with planning board",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: selc.org"
+ },
+ {
+  "text": "Data Center Opponents Urge County To Let 2,100-Acre Project Die After Court Ruling",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: bisnow.com"
+ },
+ {
+  "text": "Judge throws out zoning approval for 2,100-acre Northern Virginia data center project",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: bisnow.com"
+ },
+ {
+  "text": "Developers dispute published report that financing for controversial Michigan data center project is in limbo",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: michiganpublic.org"
+ },
+ {
+  "text": "Hanover County officials vote down a controversial data center proposal",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: 12onyourside.com"
+ },
+ {
+  "text": "Prince William County Board of Supervisors rejects plans for 2,000-acre data center",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: wjla.com"
+ },
+ {
+  "text": "County board votes to table data center proposal",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: springfieldbusinessjournal.com"
+ },
+ {
+  "text": "NDAs are hiding data center deals, drawing ire from locals — and attention from lawmakers",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: opb.org"
+ },
+ {
+  "text": "Georgia fines 2 companies over data center, power plant permit violations",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: atlantanewsfirst.com"
+ },
+ {
+  "text": "NJ data center DataOne fined $1.07M for air violations",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: njbiz.com"
+ },
+ {
+  "text": "New Jersey hits AI company with state's largest fine on a data center",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: costar.com"
+ },
+ {
+  "text": "Judge extends restraining order in Benton County, Mo., data center case",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: ky3.com"
+ },
+ {
+  "text": "Judge grants temporary restraining order to halt Pine Island data center construction",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: kaaltv.com"
+ },
+ {
+  "text": "Data center lawsuit continues in Pine Island",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: kttc.com"
+ },
+ {
+  "text": "Vistra seeks dismissal of key claims in Sulphur Springs legal fight over data center site",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: kltv.com"
+ },
+ {
+  "text": "Data center moratorium fight plays out in Benton County courtroom",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: ky3.com"
+ },
+ {
+  "text": "Denver data center public meeting outrage",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: denverite.com (slug)"
+ },
+ {
+  "text": "Residents turn out to oppose data center in Contra Costa County",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: danvillesanramon.com"
+ },
+ {
+  "text": "Anger boils over as Kenilworth moves ahead with AI data center proposal",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: news12.com"
+ },
+ {
+  "text": "East Whiteland residents oppose data center as planners send revised plan back for further review",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: 6abc.com"
+ },
+ {
+  "text": "Prineville data center with connection to Meta will lay off 66",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: klcc.org"
+ },
+ {
+  "text": "Oregon data center to cut 66 jobs. Here's why",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: newsnationnow.com"
+ },
+ {
+  "text": "Bayonne bans data centers citywide in unanimous council vote",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: hudpost.com"
+ },
+ {
+  "text": "Fairfax votes to ban high-impact data centers with no end date",
+  "implied": false,
+  "keep": true,
+  "source": "trouble: web: kcrg.com"
+ },
+ {
+  "text": "/2022/07/keep-on-growing-sarpy-county/",
+  "implied": true,
+  "keep": true,
+  "source": "operators: datacenters.atmeta.com post-sitemap (live)"
+ },
+ {
+  "text": "/2021/12/hej-odense/",
+  "implied": true,
+  "keep": true,
+  "source": "operators: datacenters.atmeta.com post-sitemap (live)"
+ },
+ {
+  "text": "/2013/06/lulea-goes-live/",
+  "implied": true,
+  "keep": true,
+  "source": "operators: datacenters.atmeta.com post-sitemap (live)"
+ },
+ {
+  "text": "/2022/04/good-news-from-dekalb/",
+  "implied": true,
+  "keep": true,
+  "source": "operators: datacenters.atmeta.com post-sitemap (live)"
+ },
+ {
+  "text": "/2026/03/big-things-are-happening-el-paso/",
+  "implied": true,
+  "keep": true,
+  "source": "operators: datacenters.atmeta.com post-sitemap (live)"
+ },
+ {
+  "text": "/2012/04/facebook-data-center-opens-in-forest-city-n-c/",
+  "implied": true,
+  "keep": true,
+  "source": "operators: datacenters.atmeta.com post-sitemap (live)"
+ },
+ {
+  "text": "/2025/06/data-centers-careers/",
+  "implied": true,
+  "keep": false,
+  "source": "operators: datacenters.atmeta.com post-sitemap (live): recruiting"
+ },
+ {
+  "text": "We're strengthening our presence in Alabama through new investments and community support. /innovation-and-ai/infrastructure-and-cloud/global-network/alabama-investment-june-2026/",
+  "implied": false,
+  "keep": true,
+  "source": "operators: blog.google global-network RSS (live)"
+ },
+ {
+  "text": "/innovation-and-ai/infrastructure-and-cloud/global-network/data-center-pine-island/",
+  "implied": false,
+  "keep": true,
+  "source": "operators: blog.google en-us sitemap"
+ },
+ {
+  "text": "Growing the next generation of American workers /company-news/outreach-and-initiatives/google-org/skilled-trades/",
+  "implied": false,
+  "keep": false,
+  "source": "operators: blog.google global-network RSS (live): workforce programme"
+ },
+ {
+  "text": "Silver Springs datacenter construction update /blog/silver-springs-datacenter-construction-update/",
+  "implied": false,
+  "keep": true,
+  "source": "operators: local.microsoft.com feed (live)"
+ },
+ {
+  "text": "Understanding Microsoft datacenters in Licking County /blog/understanding-microsoft-datacenters-in-licking-county/",
+  "implied": false,
+  "keep": true,
+  "source": "operators: local.microsoft.com community page (live)"
+ },
+ {
+  "text": "/news/company-news/amazon-data-center-louisiana-new-jobs",
+  "implied": false,
+  "keep": true,
+  "source": "operators: aboutamazon.com sitemap"
+ },
+ {
+  "text": "/news/stack-acquires-land-for-data-center-outside-of-oslo/",
+  "implied": true,
+  "keep": true,
+  "source": "operators: stackinfra.com news-sitemap"
+ },
+ {
+  "text": "/news/sdc-austin-progress-q2-2026",
+  "implied": true,
+  "keep": true,
+  "source": "operators: sabeydatacenters.com news sitemap"
+ },
+ {
+  "text": "/news/sabey-data-centers-celebrates-going-vertical-milestone-at-sdc-umatilla",
+  "implied": true,
+  "keep": true,
+  "source": "operators: sabeydatacenters.com news sitemap"
+ },
+ {
+  "text": "/resources/press-releases/databank-celebrates-grand-opening-of-newest-metro-denver-data-center",
+  "implied": true,
+  "keep": true,
+  "source": "operators: databank.com press-release sitemap"
+ },
+ {
+  "text": "/news/cologix-adds-3rd-dallas-data-center/",
+  "implied": true,
+  "keep": true,
+  "source": "operators: cologix.com news-sitemap"
+ },
+ {
+  "text": "/press-release/aligned-data-centers-signs-insight-to-lease-in-plano-texas/",
+  "implied": true,
+  "keep": true,
+  "source": "operators: aligneddc.com post-sitemap"
+ },
+ {
+  "text": "/blog/aligned-tops-out-its-second-ashburn-va-hyperscale-data-center/",
+  "implied": true,
+  "keep": true,
+  "source": "operators: aligneddc.com post-sitemap"
+ },
+ {
+  "text": "/press-release/aligned-data-centers-appoints-meghan-baivier-as-chief-financial-officer/",
+  "implied": true,
+  "keep": false,
+  "source": "operators: aligneddc.com post-sitemap: executive hire"
+ },
+ {
+  "text": "/news/compass-datacenters-ranks-no-1292-on-the-2024-inc-5000",
+  "implied": true,
+  "keep": false,
+  "source": "operators: compassdatacenters.com news-sitemap: ranking"
+ },
+ {
+  "text": "/news/meta-selects-northeast-louisiana-as-site-10-billion-data-center",
+  "implied": false,
+  "keep": true,
+  "source": "operators: entergy.com (DB ok row)"
+ },
+ {
+  "text": "Hut 8 Selects Southeast Louisiana as Site of $10 Billion Artificial ... /news/hut-8-selects-southeast-louisiana-as-site-of-10-billion-artificial-intelligence-data-center",
+  "implied": false,
+  "keep": true,
+  "source": "operators: opportunitylouisiana.gov (DB ok row, prospect:Fluidstack)"
+ },
+ {
+  "text": "/newsroom/news-press/facebook-chooses-ohio-for-its-newest-data-center",
+  "implied": false,
+  "keep": true,
+  "source": "operators: jobsohio.com sitemap"
+ },
+ {
+  "text": "/amazon-web-services-breaks-ground-on-largest-economic-development-project-in-mississippi-history/",
+  "implied": false,
+  "keep": true,
+  "source": "operators: governorreeves.ms.gov (DB ok row)"
+ },
+ {
+  "text": "Gov. Holcomb announces Google is building a $2B Data Center in ...",
+  "implied": false,
+  "keep": true,
+  "source": "operators: DB discovered row, search:Google Fort Wayne"
+ },
+ {
+  "text": "Pritzker touts Illinois' economic development at data center groundbreaking",
+  "implied": false,
+  "keep": true,
+  "source": "operators: DB discovered row, search:groundbreak:chicago"
+ },
+ {
+  "text": "/releases/duke-energy-data-center-growth-will-deliver-billions-of-dollars-in-customer-savings",
+  "implied": false,
+  "keep": true,
+  "source": "operators: news.duke-energy.com sitemap"
+ },
+ {
+  "text": "Google Data Center | Engage Fort Wayne",
+  "implied": false,
+  "keep": true,
+  "source": "operators: DB ok row, search:Google Fort Wayne (dropped by old bank)"
+ },
+ {
+  "text": "OpenAI Targets Savannah For $20B Data Center",
+  "implied": false,
+  "keep": true,
+  "source": "operators: DB ok row, bisnow-datacenter (dropped by old bank)"
+ },
+ {
+  "text": "Say Hello To Google, The Mystery Owner Behind ... /2026/07/08/google-revealed-as-owner-of-wyomings-largest-data-center-now-project-tembo/",
+  "implied": false,
+  "keep": true,
+  "source": "operators: DB ok row, search:permit:cheyenne-wy"
+ },
+ {
+  "text": "Google confirmed as parent company for data center project in Roanoke County /2026/10/16/google-confirmed-as-parent-company-for-a-data-center-project-in-roanoke-county/",
+  "implied": false,
+  "keep": true,
+  "source": "operators: cardinalnews.org feed (live)"
+ },
+ {
+  "text": "columbus cologix data center to house lambdas ai computing installation worth hundreds of millions",
+  "implied": true,
+  "keep": true,
+  "source": "operators: DB ok row, cologix-newsroom (dropped by old bank)"
+ },
+ {
+  "text": "/4b-bitcoin-to-ai-data-center-project-eyed-in-denton-texas",
+  "implied": false,
+  "keep": true,
+  "source": "operators: DB ok row"
+ },
+ {
+  "text": "Developer Withdraws Rezoning Request for Controversial ... /2026/07/01/developer-withdraws-rezoning-request-controversial-data-center-hoffman-estates",
+  "implied": false,
+  "keep": true,
+  "source": "operators: news.wttw.com (DB ok row, search:rezoning:chicago-il)"
+ },
+ {
+  "text": "/news/local-news/data-centers/northland-ai-data-center-withdraws-bond-application-with-port-kc",
+  "implied": false,
+  "keep": true,
+  "source": "operators: kshb.com (DB ok row)"
+ },
+ {
+  "text": "/new-york/terawulf-brings-102-mw-online-at-lake-mariner-data-center-campus-in-new-york",
+  "implied": false,
+  "keep": true,
+  "source": "operators: usdatacenterprojects.com (DB ok row)"
+ },
+ {
+  "text": "/coweta-data-center-proposal-withdrawn",
+  "implied": false,
+  "keep": true,
+  "source": "operators: kosu.org (web search 2026-10-18)"
+ },
+ {
+  "text": "massive pwc data center project thwarted after final developer drops supreme court appeal",
+  "implied": false,
+  "keep": true,
+  "source": "operators: ground.news (web search 2026-10-18)"
+ },
+ {
+  "text": "4bn data center in indianapolis indiana gets go ahead /en/news/4bn-data-center-in-indianapolis-indiana-gets-go-ahead/",
+  "implied": false,
+  "keep": true,
+  "source": "operators: datacenterdynamics.com (web search 2026-10-18)"
+ },
+ {
+  "text": "google is customer behind 27gw data center campus near cheyenne wyoming",
+  "implied": false,
+  "keep": true,
+  "source": "operators: datacenterdynamics.com (web search 2026-10-18)"
+ },
+ {
+  "text": "Big data center in SE Mesa passes first review",
+  "implied": false,
+  "keep": true,
+  "source": "operators: DB ok row, search:permit:mesa (dropped by old bank)"
+ },
+ {
+  "text": "/news/vantage-signs-two-new-customers/",
+  "implied": true,
+  "keep": true,
+  "source": "operators: vantage-dc.com news-sitemap (dropped by old bank)"
+ },
+ {
+  "text": "/resources/press-releases/cyrusone-announces-owen-morris-as-chief-financial-officer",
+  "implied": true,
+  "keep": false,
+  "source": "operators: cyrusone.com sitemap: executive hire (KEPT by old bank via announce*)"
+ },
+ {
+  "text": "/news/cologix-publishes-third-annual-environmental-social-and-governance-esg-report/",
+  "implied": true,
+  "keep": false,
+  "source": "operators: cologix.com news-sitemap: ESG report"
+ },
+ {
+  "text": "/2025/09/meta-launches-2025-sustainability-report/",
+  "implied": true,
+  "keep": false,
+  "source": "operators: datacenters.atmeta.com post-sitemap: ESG report"
+ },
+ {
+  "text": "/news/compass-datacenters-recognized-in-the-inc-5000-for-the-third-consecutive-year/",
+  "implied": true,
+  "keep": false,
+  "source": "operators: compassdatacenters.com news-sitemap: ranking"
+ },
+ {
+  "text": "dpr construction logo 2 /dpr-construction-logo-2/",
+  "implied": true,
+  "keep": false,
+  "source": "operators: DB discovered row, meta-datacenters: WordPress image page"
+ },
+ {
+  "text": "Emerging Technology Conference will offer focus on entrepreneurship and managing growth",
+  "implied": false,
+  "keep": false,
+  "source": "operators: cardinalnews.org feed (live): event, no topic"
+ },
+ {
+  "text": "We're exploring a potential data center in Lea County, New Mexico",
+  "implied": false,
+  "keep": true,
+  "source": "user-goal: user goal: Google headline alone"
+ },
+ {
+  "text": "Google confirmed as parent company for data center project in Roanoke County /2026/10/16/google-confirmed-as-parent-company-for-data-center-project-in-roanoke-county/",
+  "implied": false,
+  "keep": true,
+  "source": "user-goal: user goal: cardinalnews"
+ },
+ {
+  "text": "Data center coming to Mason County, creating 100 jobs",
+  "implied": false,
+  "keep": true,
+  "source": "user-goal: user goal: creating 100 jobs"
+ },
+ {
+  "text": "/news/company-plans-data-center-creating-100-jobs/",
+  "implied": true,
+  "keep": true,
+  "source": "user-goal: user goal: creating 100 jobs, slug only"
+ },
+ {
+  "text": "Nautilus commissions water-cooled data center at Port of Stockton /nautilus-commissions-water-cooled-data-center-port-stockton/",
+  "implied": false,
+  "keep": true,
+  "source": "user-goal: user goal: Stockton (old 'stock' cut it)"
+ },
+ {
+  "text": "Stockton council approves data center rezoning",
+  "implied": false,
+  "keep": true,
+  "source": "user-goal: user goal: Stockton"
+ },
+ {
+  "text": "Planners adding data center guidelines to eastern Summit County general plan /summit-county/2026-07-10/planners-adding-data-center-guidelines/",
+  "implied": false,
+  "keep": true,
+  "source": "user-goal: user goal: Summit County (old 'summit' cut it)"
+ },
+ {
+  "text": "Summit County weighs new rules for east side data centers",
+  "implied": false,
+  "keep": true,
+  "source": "user-goal: user goal: Summit County"
+ },
+ {
+  "text": "TeraWulf converts Lake Mariner bitcoin mining site to AI data center",
+  "implied": false,
+  "keep": true,
+  "source": "user-goal: user goal: crypto-to-AI conversion"
+ },
+ {
+  "text": "Developer withdraws data center application",
+  "implied": false,
+  "keep": true,
+  "source": "user-goal: user goal: withdrawal"
+ },
+ {
+  "text": "County commission denies data center rezoning",
+  "implied": false,
+  "keep": true,
+  "source": "user-goal: user goal: denies"
+ },
+ {
+  "text": "Planning board rejects data center plan",
+  "implied": false,
+  "keep": true,
+  "source": "user-goal: user goal: rejects"
+ },
+ {
+  "text": "Opinion: Data centers are eating the grid",
+  "implied": false,
+  "keep": false,
+  "source": "user-goal: user goal: commentary"
+ },
+ {
+  "text": "Data Center Market Size to Reach USD 517 Billion by 2030, at a CAGR of 10.5%",
+  "implied": false,
+  "keep": false,
+  "source": "user-goal: user goal: market research"
+ },
+ {
+  "text": "/careers/search/job/power-architect-design-lead-data-center-267283",
+  "implied": true,
+  "keep": false,
+  "source": "user-goal: user goal: recruiting"
+ },
+ {
+  "text": "These are the 3 best data center stocks to buy for 2026",
+  "implied": false,
+  "keep": false,
+  "source": "user-goal: user goal: stock coverage"
+ },
+ {
+  "text": "Equinix stock jumps after data center expansion plans beat forecasts",
+  "implied": true,
+  "keep": false,
+  "source": "user-goal: user goal: stock coverage"
+ },
+ {
+  "text": "Iron Mountain Q4 2025 earnings call transcript: data center leasing record",
+  "implied": true,
+  "keep": false,
+  "source": "user-goal: user goal: earnings coverage"
+ },
+ {
+  "text": "Riot Platforms announces September 2026 bitcoin production and operations update",
+  "implied": true,
+  "keep": false,
+  "source": "user-goal: user goal: pure crypto mining"
+ },
+ {
+  "text": "Marathon expands hashrate to 60 EH/s with new Texas mining site",
+  "implied": true,
+  "keep": false,
+  "source": "user-goal: user goal: pure crypto mining"
+ },
+ {
+  "text": "TeraWulf's Kentucky campus to reach 1GW in 2029 /en/news/terawulfs-kentucky-campus-to-reach-1gw-in-2029/",
+  "implied": false,
+  "keep": true,
+  "source": "review: review 1: 'campus*'/'gw' as topic (DCD, skipped row)"
+ },
+ {
+  "text": " /en/news/riot-platforms-acquires-additional-238-acres-at-corsicana-texas-campus/",
+  "implied": false,
+  "keep": true,
+  "source": "review: review 1: 'campus*' as topic (ok URL row)"
+ },
+ {
+  "text": "Campuses /campuses.html",
+  "implied": false,
+  "keep": true,
+  "source": "review: review 1: 'campus*' as topic (Lancium, ok row)"
+ },
+ {
+  "text": "Google signs 3.6GW deal with Constellation to secure power in PJM service area /en/news/google-signs-36gw-deal-with-constellation-to-secure-power-in-pjm-service-area/",
+  "implied": false,
+  "keep": true,
+  "source": "review: review 1: 'gw' as topic (DCD, skipped row)"
+ },
+ {
+  "text": "Meta Secures 6.6 GW Nuclear Power: Largest Tech-Nuclear Deal in History /blog/meta-nuclear-power-deal-oklo-terrapower-vistra-6gw-2026",
+  "implied": false,
+  "keep": true,
+  "source": "review: review 1: 'gw' as topic (web search)"
+ },
+ {
+  "text": "Soluna and Metrobloks to Partner to Unlock 100+ MW of AI ... /news/metrobloks-project-kati/",
+  "implied": false,
+  "keep": true,
+  "source": "review: review 1: 'mw of ai' (Soluna, ok row)"
+ },
+ {
+  "text": "Fermi announces $6.5B lease agreement at Project Matador AI ... /technology/ai/articles/fermi-announces-6-5b-lease-170022692.html",
+  "implied": false,
+  "keep": true,
+  "source": "review: review 1: codename (ok row)"
+ },
+ {
+  "text": "Project Blue's Billion-Dollar Secrecy: County Supervisors Admit They Don't Have All the Facts /p/buckmaster-071025",
+  "implied": false,
+  "keep": true,
+  "source": "review: review 1: codename (web search)"
+ },
+ {
+  "text": " /news/local_news/demonstrators-arrested-jobs-promised-at-rowdy-project-jupiter-meeting/article_1103bf1d-1b21-4f98-b868-c7cb4ab5e795.html",
+  "implied": false,
+  "keep": true,
+  "source": "review: review 1: codename (ok URL row)"
+ },
+ {
+  "text": " /news-events/press-releases/detail/127/applied-digital-to-break-ground-on-3-billion-polaris-forge",
+  "implied": false,
+  "keep": true,
+  "source": "review: review 1: codename (ok URL row)"
+ },
+ {
+  "text": "Nebius x Independence, Missouri /independencemo",
+  "implied": false,
+  "keep": true,
+  "source": "review: review 1: operator name (ok row)"
+ },
+ {
+  "text": "applied digital secures 5bn pyperscaler lease /applied-digital-secures-5bn-pyperscaler-lease/",
+  "implied": false,
+  "keep": true,
+  "source": "review: review 1: operator name (web search)"
+ },
+ {
+  "text": "Quantum Loophole no longer involved in ... /en/news/quantum-loophole-no-longer-involved-in-quantum-frederick-project-tpg-real-estate-takes-full-control/",
+  "implied": false,
+  "keep": true,
+  "source": "review: review 1: operator name (skipped row)"
+ },
+ {
+  "text": "bitfarms to convert washington cryptomine to hpcai hosting /en/news/bitfarms-to-convert-washington-cryptomine-to-hpcai-hosting/",
+  "implied": false,
+  "keep": true,
+  "source": "review: review 1: 'hpc*' (web search)"
+ },
+ {
+  "text": "ai power plant pennsylvania homer city coal demolition energy /2025/04/02/ai-power-plant-pennsylvania-homer-city-coal-demolition-energy",
+  "implied": false,
+  "keep": true,
+  "source": "review: review 1: 'ai power plant*' (web search)"
+ },
+ {
+  "text": "PJM plans to study SoftBank’s Ohio AI project under state agreement approach /news/pjm-softbank-ohio-ai-flagship-state-agreement-approach/832962/",
+  "implied": false,
+  "keep": true,
+  "source": "review: review 1: 'ai project*' (Utility Dive feed, live)"
+ },
+ {
+  "text": " /article/whats-that-sound-its-mount-pleasants-new-ai-data-center/70850595",
+  "implied": false,
+  "keep": true,
+  "source": "review: review 1: 'new ai data cent*' (ok URL row)"
+ },
+ {
+  "text": " /news/yahoo-staying-lockport-data-center-045900704.html",
+  "implied": false,
+  "keep": true,
+  "source": "review: review 1: 'staying' (ok URL row)"
+ },
+ {
+  "text": " /guest-view-amazons-gilroy-data-center-your-top-questions-answered/",
+  "implied": false,
+  "keep": true,
+  "source": "review: review 1: 'questions answered' (ok URL row)"
+ },
+ {
+  "text": " /fermi-america-westinghouse-ap1000-reactors-amarillo/",
+  "implied": true,
+  "keep": true,
+  "source": "review: review 1: 'reactor*' (Fermi sitemap, live)"
+ },
+ {
+  "text": " /how-caledonia-defeated-a-data-center/",
+  "implied": false,
+  "keep": true,
+  "source": "review: review 1: 'defeat*' (ok URL row)"
+ },
+ {
+  "text": "Phoenix to clamp down on data centers /news/phoenix-to-clamp-down-on-data-centers",
+  "implied": false,
+  "keep": true,
+  "source": "review: review 1: 'clamp down' (web search)"
+ },
+ {
+  "text": "Public Notice on Data Centers /home-page/page/public-notice-data-centers",
+  "implied": false,
+  "keep": true,
+  "source": "review: review 1: 'public notice*' (web search)"
+ },
+ {
+  "text": " /news/pjm-market-monitor-mara-data-center-long-ridge/821574/",
+  "implied": false,
+  "keep": true,
+  "source": "review: review 1: 'pjm' (ok URL row)"
+ },
+ {
+  "text": "Fairtree Asset Management takes 462000 position in Equinix Inc /instant-alerts/filing-fairtree-asset-management-pty-ltd-takes-462000-position-in-equinix-inc-nasdaqeqix-2025-05-28",
+  "implied": false,
+  "keep": false,
+  "source": "review: review 1/this pass: MarketBeat fund filing, dropped by 'instant alerts'"
+ },
+ {
+  "text": "OpenAI Five defeats Dota 2 world champions /index/openai-five-defeats-dota-2-world-champions",
+  "implied": false,
+  "keep": false,
+  "source": "review: this pass: 'defeat*' is bounded by the topic tier"
+ },
+ {
+  "text": " /yondr-intel/my-first-30-days-of-covid-19/",
+  "implied": true,
+  "keep": false,
+  "source": "review: review 2: bare 'first' removed (Yondr newsroom)"
+ },
+ {
+  "text": " /switch-returns-as-the-lead-sponsor-of-the-2019-first-robotics-competition-in-las-vegas/",
+  "implied": true,
+  "keep": false,
+  "source": "review: review 2: 'first' removed, 'first robotics' excluded (Switch newsroom)"
+ },
+ {
+  "text": " /commitments/health-safety",
+  "implied": true,
+  "keep": false,
+  "source": "review: review 2: 'commitment*' removed (CyrusOne site)"
+ },
+ {
+  "text": " /resources/press-releases/databank-achieves-nvidia-dgx-ready-data-center-program-certification/",
+  "implied": true,
+  "keep": false,
+  "source": "review: review 2: bare 'ready' removed (DataBank newsroom)"
+ },
+ {
+  "text": " /news/compass-datacenters-wins-2014-red-herring-100-global-award/",
+  "implied": true,
+  "keep": false,
+  "source": "review: review 2: 'wins' removed (Compass newsroom)"
+ },
+ {
+  "text": " /switch-receives-epa-excellence-in-green-power-leadership-award/",
+  "implied": true,
+  "keep": false,
+  "source": "review: review 2: 'receives' removed (Switch newsroom)"
+ },
+ {
+  "text": "dave buckner to speak at advancing data center construction west 2025 /news/dave-buckner-to-speak-at-advancing-data-center-construction-west-2025",
+  "implied": true,
+  "keep": false,
+  "source": "review: review 2/this pass: speaker notice, excluded by 'advancing data center construction' (Sabey, no_project)"
+ },
+ {
+  "text": "Advancing Data Center Construction Texas /event/advancing-data-center-construction-texas/",
+  "implied": false,
+  "keep": false,
+  "source": "review: this pass: event page found by search (no_project)"
+ },
+ {
+  "text": " /resources/press-releases/databank-completes-annual-pci-dss-audits-for-all-texas-facilities/",
+  "implied": true,
+  "keep": false,
+  "source": "review: review 2: compliance audit (DataBank newsroom)"
+ },
+ {
+  "text": " /news/vantage-data-centers-awarded-iso-27001-certification-for-information-security-management/",
+  "implied": true,
+  "keep": false,
+  "source": "review: review 2: certification (Vantage newsroom)"
+ },
+ {
+  "text": "New scholarship to offer at least $10,000 to Bessemer City High School graduates /news/new-scholarship-to-offer-at-least-10000-to-bessemer-city-high-school-graduates/",
+  "implied": true,
+  "keep": false,
+  "source": "review: review 2: scholarship (QTS newsroom)"
+ },
+ {
+  "text": " /news/vantage-data-centers-welcomes-jeremy-deutsch-as-president-of-apac/",
+  "implied": true,
+  "keep": false,
+  "source": "review: review 2: executive welcome (Vantage newsroom)"
+ },
+ {
+  "text": " /resources/press-releases/databank-adds-two-new-board-directors-with-deep-expertise-in-data-center-infrastructure-and-technology/",
+  "implied": true,
+  "keep": false,
+  "source": "review: review 2: board appointment (DataBank newsroom)"
+ },
+ {
+  "text": " /news/vantage-data-centers-launches-inaugural-safety-summit-for-industry-leaders-safety-professionals-and-key-stakeholders/",
+  "implied": true,
+  "keep": false,
+  "source": "review: review 2: industry event (Vantage newsroom)"
+ },
+ {
+  "text": "Hundreds sign up to speak at data center hearing",
+  "implied": false,
+  "keep": true,
+  "source": "review: constructed: why 'to speak at' is not an exclusion"
+ },
+ {
+  "text": "Developer to present at council meeting on proposed data center",
+  "implied": false,
+  "keep": true,
+  "source": "review: constructed: why 'to present at' is not an exclusion"
+ },
+ {
+  "text": "Equinix strengthens its position in Northern Virginia with new campus",
+  "implied": false,
+  "keep": true,
+  "source": "review: constructed: why bare 'position in' is not an exclusion"
+ },
+ {
+  "text": "/news/data-center-summit-county-planning-commission-hearing/",
+  "implied": false,
+  "keep": true,
+  "source": "review: constructed: why 'data center summit' is not an exclusion (the user's Summit County)"
+ },
+ {
+  "text": "Oracle opens FedRAMP-authorized government cloud region in Virginia",
+  "implied": false,
+  "keep": true,
+  "source": "review: constructed: why bare 'fedramp' is not an exclusion"
+ },
+ {
+  "text": "University campus to host new AI data center",
+  "implied": false,
+  "keep": true,
+  "source": "review: constructed: why 'university campus' is not an exclusion"
+ },
+ {
+  "text": "Inside the state's first AI data center",
+  "implied": false,
+  "keep": true,
+  "source": "review: constructed: the narrowed 'first' forms still keep a first"
+ }
+]

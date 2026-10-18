@@ -113,6 +113,11 @@ app.add_typer(notify_app)
 users_app = typer.Typer(name="users", invoke_without_command=True)
 app.add_typer(users_app)
 
+#: The news watch: bare `tracker news` searches the news for every campus that is due;
+#: `report` is the morning's account of what every source found.
+news_app = typer.Typer(name="news", invoke_without_command=True)
+app.add_typer(news_app)
+
 #: The discovery queue: bare `tracker queue` lists it; `check`, `stats` and `prune`
 #: work on it. Last, so the group order in `--help` is unchanged from before the
 #: package split, when this was defined beside its commands.

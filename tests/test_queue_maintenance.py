@@ -51,8 +51,8 @@ name = "wire"
 url = "https://x.test/rss"
 
 [filter]
-topic = ["data cent"]
-signal = ["campus", "megawatt"]
+topic = ["data cent*"]
+signal = ["campus*", "megawatt*"]
 exclude = ["resources blogs"]
 
 [[sitemap]]

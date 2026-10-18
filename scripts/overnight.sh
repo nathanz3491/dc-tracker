@@ -19,8 +19,20 @@
 # duplicate groups going 12, 14, 12, 11 and rows below T2 525, 527, 524, 528, and
 # stopped with nothing moved. Against the running minimum it stops after three.
 #
-# THE PHASE ORDER IS THE ARGUMENT, cheapest and most-blocking first:
+# THE PHASE ORDER IS THE ARGUMENT. The news first, then cheapest and most-blocking:
 #
+#   news      first round only, and FIRST since 2026-10-18: it ran last, so a host
+#             reset at 19:32 on 10-16 meant no discovery that day, and feeds that
+#             hold less than a day (Bisnow: five hours) lost those stories for good.
+#             `discover` polls the feeds and walks every archive — an operator's own
+#             data-center newsroom read without the keyword test — and remembers
+#             every entry it saw (`seen_url`); `news` searches the news for every
+#             campus that is due (`tracker.ingest.watch`: daily while a campus is
+#             decided or built, a year back on its first look, up to `--baselines`
+#             first looks a night); the crawl then reads `--discover` queued
+#             articles, the news first, then what the watch and the newsrooms found,
+#             then campuses the database has not heard of, through its identity
+#             check. Then one duplicate attempt per row it created.
 #   free      dates, geo, scope, derive, logic --auto. No model, no cost. `scope`
 #             re-gates stored labels against their own quotes; `derive` re-applies
 #             every derived value, and both are pure functions of what is stored.
@@ -52,24 +64,26 @@
 #             revision (`crawl.GATE_REVISED_AT`). A gate change does not move the
 #             prompt's stamp, so `reread` never sees it. Most refusals first; each
 #             article is taken once. Existing rows only.
-#   discover  the news and new campuses, first round only: polls the feeds (free —
-#             no fetch, no model), asks each closed feed again once a week, looks
-#             up DCD/DCF headlines elsewhere (≤40 web searches, ~$0.04, no model)
-#             and reads `--discover` queued articles through
-#             the ordinary crawl, whose identity check asks before it inserts.
-#             Everything published within the email's two-month window goes first,
-#             newest first, whatever campus it names, because what is read tonight
-#             is mailed tomorrow: a 09-21 lawsuit against a tracked campus once
-#             waited behind the backlog until 10-03 and was mailed as news. Then
-#             articles naming no tracked campus — enrich reads for one row and
-#             creates none, so this is where new campuses come from.
+#   (news)    see the top: what used to be the `discover` phase here, last, now
+#             runs before everything else. Everything published within the email's
+#             two-month window is read first, newest first, whatever campus it
+#             names, because what is read tonight is mailed tomorrow: a 09-21
+#             lawsuit against a tracked campus once waited behind the backlog until
+#             10-03 and was mailed as news.
 #
-# WHAT IT COSTS, AND THE CEILING. The ceiling is money: `--cny` (default ¥12), priced
-# from the spend ledger by `tracker.spend` at DeepSeek's published rates for the hour
-# each call was made. A ceiling in tokens (`--tokens`, still honoured) mostly counted
-# cached prompt, which is billed at a fiftieth of the rate; about 93% of the money is
-# the reply, most of it reasoning. 25,000,000 tokens was anything from ¥20 to ¥31, and
-# on the six nights to 2026-09-29 the loop cost ¥9-34 without the token ceiling ever
+# WHAT IT COSTS, AND THE CEILING. The ceiling is money: `--cny` (default ¥15, from
+# 2026-10-18, when OpenCode Go's DeepSeek V4.1 Flash allowance became $80 a month —
+# about ¥18 a day), priced from the spend ledger by `tracker.spend` at OpenCode Go's
+# rates for the hour each call was made. Web searches are a separate bill (prepaid
+# Serper credit, about ¥0.007 each): the ledger records them and `--search-cap`
+# (default 2000 a night, `TRACKER_SEARCH_CAP`) stops every command at it; the news
+# watch, which runs first, may use all but 500 of them, so the research that runs
+# later still has searches to send. The money ceiling does not count them.
+#
+# A ceiling in tokens (`--tokens`, still honoured) mostly counted cached prompt,
+# which is billed at a fiftieth of the rate; about 93% of the money is the reply,
+# most of it reasoning. 25,000,000 tokens was anything from ¥20 to ¥31, and on the
+# six nights to 2026-09-29 the loop cost ¥9-34 without the token ceiling ever
 # firing. The check runs before every paid phase, so a night ends below `--cny` plus
 # one phase.
 #
@@ -151,7 +165,9 @@ RISKS=40
 ENRICH=40
 ENRICH_BUDGET=160
 ENRICH_ROUNDS=1
-DISCOVER=40
+DISCOVER=150
+BASELINES=300
+SEARCH_CAP=2000
 DATES=150
 REREAD=60
 RECHECK=60
@@ -160,7 +176,7 @@ DO_MERGE=1
 DO_ENRICH=1
 DO_DISCOVER=1
 TOKEN_CAP=25000000
-CNY_CAP=12
+CNY_CAP=15
 JUDGEMENT_EFFORT=high
 EXTRACTION_EFFORT=
 LOCAL_JUDGEMENT=0
@@ -187,7 +203,12 @@ started in tmux and left.
   --enrich N         projects to enrich (default 40); 0 to skip
   --enrich-budget N  articles the enrich phase may read (default 160)
   --enrich-rounds N  enrich in the first N rounds only (default 1)
-  --discover N       queued articles to read, the news first (default 40); 0 to skip
+  --discover N       queued articles to read, the news first (default 150); 0 to skip
+                     discovery, the news watch and the read altogether
+  --baselines N      campuses the news watch gives their first, year-long look each
+                     night (default 300); 0 for follow-ups only
+  --search-cap N     web searches the whole night may send (default 2000); the news
+                     watch may use all but 500, which the research keeps
   --dates N          pages to ask for a publish date, first round (default 150); 0 to skip
   --reread N         articles to re-read under the current prompt, first round
                      (default 60); 0 to skip
@@ -195,7 +216,7 @@ started in tmux and left.
                      revision to re-read, first round (default 60); 0 to skip
   --min-confidence F floor a duplicate fold needs (default 0.85)
   --no-merge         never fold duplicates; park and rule only. Deletes nothing.
-  --cny N            stop when the night's spend, priced, reaches N yuan (default 12)
+  --cny N            stop when the night's model spend, priced, reaches N yuan (default 15)
   --tokens N         also stop when prompt+reply tokens pass N (default 25,000,000)
   --judgement-effort E  reasoning for risks, audit and settle: low|high|max (default high)
   --extraction-effort E reasoning for reading articles (default: whatever .env says)
@@ -228,6 +249,8 @@ while [ $# -gt 0 ]; do
     --enrich-budget)  shift; ENRICH_BUDGET="${1:?}" ;;
     --enrich-rounds)  shift; ENRICH_ROUNDS="${1:?}" ;;
     --discover)       shift; DISCOVER="${1:?}" ;;
+    --baselines)      shift; BASELINES="${1:?}" ;;
+    --search-cap)     shift; SEARCH_CAP="${1:?}" ;;
     --dates)          shift; DATES="${1:?}" ;;
     --reread)         shift; REREAD="${1:?}" ;;
     --recheck)        shift; RECHECK="${1:?}" ;;
@@ -256,6 +279,7 @@ effort_ok "$JUDGEMENT_EFFORT" || { echo "--judgement-effort must be low, high or
 # Exported, so every `tracker` child reads them. The environment wins over `.env`,
 # which is the point: these are the night's settings, not the machine's.
 export TRACKER_DEEPSEEK_JUDGEMENT_EFFORT="$JUDGEMENT_EFFORT"
+export TRACKER_SEARCH_CAP="$SEARCH_CAP"
 [ -z "$EXTRACTION_EFFORT" ] || export TRACKER_DEEPSEEK_EXTRACTION_EFFORT="$EXTRACTION_EFFORT"
 [ "$LOCAL_JUDGEMENT" -eq 0 ] || export TRACKER_JUDGEMENT_PROVIDER=ollama
 
@@ -443,7 +467,8 @@ CAPPED=0
 
 say "overnight starting  (pid $$)"
 printf '    repo      %s\n' "$REPO"
-printf '    ceilings  %sh, %s rounds, ¥%s, %s tokens\n' "$HOURS" "$ROUNDS" "$CNY_CAP" "$TOKEN_CAP"
+printf '    ceilings  %sh, %s rounds, ¥%s, %s tokens, %s searches\n' \
+  "$HOURS" "$ROUNDS" "$CNY_CAP" "$TOKEN_CAP" "$SEARCH_CAP"
 printf '    per round %s findings, %s audit, %s risks, %s pairs\n' \
   "$FINDINGS" "$AUDIT" "$RISKS" "$PAIRS"
 printf '    enrich    %s row(s) below T2, %s article budget, first %s round(s)\n' \
@@ -485,6 +510,37 @@ for round in $(seq 1 "$ROUNDS"); do
 
   say "round $round of $ROUNDS  (¥$CNY, ~$SPENT tokens, $(( (DEADLINE - now) / 60 ))m left)"
   if [ "$round" -gt 1 ] && [ $((round % BACKUP_EVERY)) -eq 1 ]; then backup; fi
+
+  # --- news: first, so nothing later can cost the day's news ----------------
+  # The one phase that adds rows. First round only: the queue does not change
+  # between rounds. Polling the feeds and walking the archives costs nothing; the
+  # news watch is one search a campus (prepaid credit, under `--search-cap`); each
+  # article read is one extraction (about ¥0.03), and the crawl's identity check —
+  # one call, only when a record nearly matches a row — is what keeps a campus
+  # already held under another name from becoming its twin. Rounds after this one
+  # run `duplicates` over whatever it added.
+  if [ "$DO_DISCOVER" -eq 1 ] && [ "$round" -eq 1 ]; then
+    phase "news — feeds and archives, the campus news watch, $DISCOVER queued article(s) read"
+    tracker discover --no-show < /dev/null || true
+    tracker news --baselines "$BASELINES" \
+      --max-queries "$((SEARCH_CAP > 500 ? SEARCH_CAP - 500 : SEARCH_CAP))" < /dev/null || true
+    if capped news; then break; fi
+    tracker ingest crawl --from-queue --new-first --limit "$DISCOVER" < /dev/null || true
+
+    # One attempt to fold per row tonight added, each against its likeliest twin
+    # wherever that twin is filed (`duplicates resolve --created-since`). The
+    # regular pass only sees pairs within one town or one company, and on
+    # 2026-10-05 a new 10 GW PORTS campus row sat unpaired beside its duplicate
+    # because one row named the town and a different company, the other the county.
+    if capped duplicates; then break; fi
+    phase "duplicates — one attempt per row created tonight"
+    if [ "$DO_MERGE" -eq 1 ]; then
+      tracker duplicates resolve --merge --min-confidence "$MIN_CONF" \
+        --created-since "$STARTED_UTC" < /dev/null || true
+    else
+      tracker duplicates resolve --created-since "$STARTED_UTC" < /dev/null || true
+    fi
+  fi
 
   # --- free: no model, no cost --------------------------------------------
   # `|| true` throughout: one phase failing must not end the night, and every
@@ -568,34 +624,6 @@ for round in $(seq 1 "$ROUNDS"); do
       --limit "$RECHECK" < /dev/null || true
   fi
 
-  # --- discover: new campuses, through the identity check -----------------
-  # The one phase that adds rows. First round only, for the reason enrich is: the
-  # queue does not change between rounds. Polling the feeds costs nothing; each
-  # article read is one extraction (about ¥0.03), and the crawl's identity check —
-  # one call, only when a record nearly matches a row — is what keeps a campus
-  # already held under another name from becoming its twin. Rounds after this one
-  # run `duplicates` over whatever it added.
-  if [ "$DO_DISCOVER" -eq 1 ] && [ "$round" -eq 1 ]; then
-    if capped discover; then break; fi
-    phase "discover — poll the feeds, read $DISCOVER queued article(s), the news first"
-    tracker discover < /dev/null || true
-    tracker ingest crawl --from-queue --new-first --limit "$DISCOVER" < /dev/null || true
-
-    # One attempt to fold per row tonight added, each against its likeliest twin
-    # wherever that twin is filed (`duplicates resolve --created-since`). The
-    # regular pass only sees pairs within one town or one company, and on
-    # 2026-10-05 a new 10 GW PORTS campus row sat unpaired beside its duplicate
-    # because one row named the town and a different company, the other the county.
-    if capped duplicates; then break; fi
-    phase "duplicates — one attempt per row created tonight"
-    if [ "$DO_MERGE" -eq 1 ]; then
-      tracker duplicates resolve --merge --min-confidence "$MIN_CONF" \
-        --created-since "$STARTED_UTC" < /dev/null || true
-    else
-      tracker duplicates resolve --created-since "$STARTED_UTC" < /dev/null || true
-    fi
-  fi
-
   # --- reconcile and measure ----------------------------------------------
   phase 'settle — re-derive and score'
   tracker backfill derive < /dev/null || true
@@ -643,6 +671,12 @@ tracker duplicates < /dev/null 2>&1 | sed -n '1,2p' || true
 ELAPSED=$(( ($(date +%s) - STARTED) / 60 ))
 say "overnight complete — ${ELAPSED}m, ¥$(spent_cny), ~$(spent_so_far) tokens"
 spend_by_command
+
+# How the news came in: per source, what was seen, kept, read and found; how late it
+# was; and whatever is wrong with the intake itself — no discovery tonight, a feed
+# gone quiet, fresh news left waiting, search credit running low.
+say 'how the news came in'
+tracker news report --since "$STARTED_UTC" < /dev/null || true
 
 # Every value the night changed, each with the sentence now behind it. The quality
 # counts above cannot see a wrong value that has a real quote; a reader can, in the

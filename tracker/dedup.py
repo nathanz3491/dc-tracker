@@ -170,6 +170,12 @@ def company_key(company: str | None) -> str:
             return slug
 
 
+def company_aliases(key: str) -> tuple[str, ...]:
+    """Every other name `company_key` reads as `key`: "facebook" and "meta platforms"
+    for "meta"."""
+    return tuple(alias for alias, canonical in _COMPANY_ALIASES.items() if canonical == key)
+
+
 def is_undisclosed(customer: str | None) -> bool:
     """True when a `customer` value hedges instead of naming anybody.
 
@@ -711,6 +717,7 @@ def same_company_and_state(a: str, b: str) -> bool:
 __all__ = [
     "Locality",
     "city_key",
+    "company_aliases",
     "company_key",
     "company_parts",
     "company_slug",

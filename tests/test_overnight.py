@@ -248,7 +248,7 @@ def test_every_paid_phase_is_preceded_by_a_ceiling_check():
     """The header promised a check "between phases" and the loop made one per round,
     so a single round could overshoot the ceiling by a round's worth of agent runs."""
     text = SCRIPT.read_text(encoding="utf-8")
-    for phase in ("audit", "risks", "logic", "duplicates", "enrich", "reread", "discover"):
+    for phase in ("audit", "risks", "logic", "duplicates", "enrich", "reread", "news"):
         assert f"if capped {phase}; then break; fi" in text, phase
 
 
@@ -257,11 +257,31 @@ def test_the_loop_adds_campuses_through_the_identity_check():
     First round only, capped, and through the ordinary crawl — whose identity check
     is what keeps a campus held under another name from gaining a twin."""
     text = SCRIPT.read_text(encoding="utf-8")
-    assert "DISCOVER=40\n" in text
+    assert "DISCOVER=150\n" in text
     assert 'if [ "$DO_DISCOVER" -eq 1 ] && [ "$round" -eq 1 ]; then' in text
-    assert "tracker discover < /dev/null || true" in text
+    assert "tracker discover --no-show < /dev/null || true" in text
+    assert 'tracker news --baselines "$BASELINES"' in text
+    assert '--max-queries "$((SEARCH_CAP > 500 ? SEARCH_CAP - 500 : SEARCH_CAP))"' in text
     assert 'tracker ingest crawl --from-queue --new-first --limit "$DISCOVER"' in text
     assert "--no-verify-identity" not in text
+
+
+def test_the_news_comes_first_in_the_night():
+    """Discovery ran last, so a reset at 19:32 on 2026-10-16 meant no discovery that
+    day, and feeds that hold less than a day lost those stories for good."""
+    text = SCRIPT.read_text(encoding="utf-8")
+    loop = text[text.index('for round in $(seq 1 "$ROUNDS"); do') :]
+    news = loop.index("tracker discover --no-show")
+    for later in ("tracker backfill dates", "tracker audit resolve", "tracker enrich --select"):
+        assert news < loop.index(later), later
+
+
+def test_the_night_has_a_model_ceiling_and_a_separate_search_cap():
+    text = SCRIPT.read_text(encoding="utf-8")
+    assert "CNY_CAP=15\n" in text, "OpenCode Go's $80 a month, about ¥18 a day; ¥15 is the plan"
+    assert "SEARCH_CAP=2000\n" in text
+    assert 'export TRACKER_SEARCH_CAP="$SEARCH_CAP"' in text
+    assert 'tracker news report --since "$STARTED_UTC"' in text
 
 
 def test_enrich_runs_once_a_night_on_rows_below_t2():

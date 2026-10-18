@@ -236,7 +236,7 @@ def test_a_search_hit_never_implies_the_topic(spec):
     """
     report = SearchReport()
     kept = hits_to_candidates(
-        [hit("https://a.test/1", "Crusoe expands Abilene campus to 1.2GW")],
+        [hit("https://a.test/1", "Crusoe expands Abilene operations")],
         spec,
         report=report,
     )
@@ -1064,19 +1064,24 @@ def test_a_county_gains_the_word_a_search_engine_needs(session):
 
 
 def test_a_place_the_exclude_list_forbids_is_refused_and_named(session):
-    """Two real counties cannot be searched for, and silence is the wrong answer.
+    """A place an exclusion names cannot be searched for, and silence is the wrong answer.
 
-    `exclude` is a plain substring test, so "summit" — there for conference
-    write-ups — drops every headline about Summit County in CO, OH and UT, and
-    "stock", there for finance coverage, takes Stockton, Woodstock and Comstock
-    with it. Left in the plan such a place spends its slot on every run and
-    returns nothing, with no queued row to explain why. So it is reported as a
-    refusal, the way a feed we cannot fetch is.
+    Left in the plan such a place spends its slot on every run and returns nothing,
+    with no queued row to explain why. So it is reported as a refusal, the way a
+    feed we cannot fetch is. Until 2026-10-18 terms were substrings and the shipped
+    "summit" did this to Summit County; terms match whole words now and the shipped
+    bank refuses no real county, so the rule is shown with a bank that does.
     """
+    from tracker.ingest.discover import FilterSpec
+
     project(session, "Vantage", county="Summit", state="OH")
     project(session, "Aligned", county="Summit", state="OH")
 
-    places, refused = srch.rank_places(session)
+    shipped, _ = srch.rank_places(session)
+    assert any("summit" in p.slug for p in shipped), "Summit County is searchable again"
+
+    spec = FilterSpec(topic=("data cent*",), signal=("rezon*",), exclude=("summit",))
+    places, refused = srch.rank_places(session, spec=spec)
     assert not any("summit" in p.slug for p in places)
     assert any("Summit" in phrase and "summit" in why for phrase, why in refused)
 

@@ -21,7 +21,10 @@ Three ingest paths converge on one normalizer and one write path:
 | SEC filings | `tracker ingest edgar` | Investment, in-service dates and named tenants, from the one publisher that cannot refuse us |
 
 Articles to extract from come from `tracker discover`, which polls news feeds and
-queues candidates for triage — and from `tracker prospect`, which starts from the
+walks builders' own newsrooms for what they added, and queues candidates for triage;
+from `tracker news`, which searches the news for every campus we hold, on a schedule
+set by its stage, for what has been said since it last looked; and from `tracker
+prospect`, which starts from the
 opposite end: `tracker/seed/operators.toml` names the operators this database is supposed
 to know about, `tracker coverage` says which of them have no rows, and `prospect`
 goes and looks for those specifically.
@@ -120,6 +123,7 @@ Then the real loop, which needs one API key — or a local Ollama model instead,
 ```bash
 tracker tui           # all of the below, on screen, in six panes
 tracker discover      # poll news feeds, queue candidates
+tracker news          # search the news for every campus that is due (`news report`: how it came in)
 tracker ingest crawl  # extract the tracked fields, gated on quoted evidence
 tracker gaps          # see what is thin
 tracker coverage      # which operators we hold no rows for at all

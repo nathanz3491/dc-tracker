@@ -67,6 +67,8 @@ COMMANDS = {
     "logic resolve",
     "logic rule-out",
     "merge",
+    "news",
+    "news report",
     "notify",
     "notify preview",
     "notify send",

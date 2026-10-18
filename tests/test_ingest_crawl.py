@@ -3288,9 +3288,9 @@ def test_extraction_overlaps_while_writes_stay_on_one_thread(session, monkeypatc
     writers: list[str] = []
     real_record_url = crawl.record_url
 
-    def spy_record_url(session_, run_id, outcome):
+    def spy_record_url(session_, run_id, outcome, **kwargs):
         writers.append(threading.current_thread().name)
-        return real_record_url(session_, run_id, outcome)
+        return real_record_url(session_, run_id, outcome, **kwargs)
 
     monkeypatch.setattr(crawl, "record_url", spy_record_url)
 

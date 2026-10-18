@@ -119,6 +119,18 @@ A search result is also kept on disk for `TRACKER_SEARCH_CACHE_DAYS` (default 7)
 each overnight round is a new process, so the per-run memo forgot every query, and
 one night sent 487 of them, most the same queries round after round.
 
+**Every URL a harvester offers is labelled with its name** when the queue did not
+already hold it (`ingest_url.feed` = `enrich:search`, `enrich:archive`, ...). Until
+2026-10-18 nothing was: 178 of about 205 URLs the phase touched on 10-17 carried no
+label, the Kuna go-live among them, so nobody could say which harvester finds what.
+`tracker news report` now counts each one. Each search is also a line in the night's
+spend ledger and counts against the night's search cap (`TRACKER_SEARCH_CAP`), which
+this phase shares with the news watch.
+
+This is not the news watch. Enrich asks what a row is *missing* and stops asking once
+it is full; `tracker news` asks every campus what has been *said* since the last
+look. See [sync](sync.md#keeping-up-what-discovery-looks-at-every-night).
+
 ## What a read costs, and what is not read again
 
 The reply is what the bill is made of, so the first three of these shorten or skip
@@ -296,7 +308,7 @@ Touching any of these means the poster is in scope. Re-render with
 | Row selection order | `tracker/ingest/enrich.py` — `select_projects`, `pursuable`, `t2_gaps`, `DEFAULT_TARGET_FIELDS`; `tracker/gaps.py` — `t2_gaps`, `unpublished`, `_NOT_BUILT_PHASES` |
 | Harvesters | `tracker/ingest/enrich.py` — `harvest_queue`, `harvest_retry`, `harvest_archive`, `harvest_search`, `harvest_refresh`, `_derive`; `tracker/ingest/search.py` — `CachedProvider`, `cached` |
 | Ignore-list filtering | `tracker/ingest/enrich.py` — `Round.urls`; `tracker/policy.py` |
-| Reading, and not re-reading | `tracker/ingest/enrich.py` — `run(reread=, focus=)`, `Round.refused_new`; `tracker/ingest/crawl.py` — `run(existing_only=)`, `unchanged_reads`, `focus_note`, `extract_one`; `tracker/llm.py` — `without_thinking` |
+| Reading, and not re-reading | `tracker/ingest/enrich.py` — `run(reread=, focus=)`, `Round.refused_new`, `_origins`; `tracker/ingest/crawl.py` — `run(existing_only=, origins=)`, `record_url(origin=)`, `_origin`, `unchanged_reads`, `focus_note`, `extract_one`; `tracker/llm.py` — `without_thinking` |
 | Pages nothing can read go last | `tracker/ingest/enrich.py` — `run`; `tracker/ingest/discover.py` — `unreadable_test`, `readable_first`, `closed_domains` |
 | Settle stage | `tracker/ingest/enrich.py` — `_settle`, `settle_key`; `tracker/conflicts.py` — `disputes`, `solve`, `apply_outcome`; `tracker/declines.py` |
 | Agent pass | `tracker/cli/enrich.py` — `_gapfill_batch(t2_only=)`, and its landed/unlanded check; `tracker/gapfill.py` — `apply_facts`, `_fact_axes`, `Filled.missed`; `tracker/agent.py` — `run`, `TOOL_LIMITS`, `WRAP_UP_TURNS` |

@@ -215,7 +215,7 @@ def _enum_hints() -> dict[Any, tuple[str, ...]]:
 #: but in an "Other" bucket at the bottom, which is where the four commands added
 #: with `capex` and `duplicates` sat until they were listed.
 GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("The loop", ("sync", "discover", "prospect", "enrich", "search", "point")),
+    ("The loop", ("sync", "discover", "news", "prospect", "enrich", "search", "point")),
     (
         "Load data",
         ("ingest manual", "ingest pjm", "ingest crawl", "ingest edgar", "ingest geo"),
@@ -237,6 +237,8 @@ GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
             # Beside `clean`: that counts how sound the values are, this lists the
             # ones a run changed with the sentence behind each, which a count cannot.
             "changes",
+            # How the news came in last night, per source.
+            "news report",
             "queue",
             "queue stats",
             "blocks",
