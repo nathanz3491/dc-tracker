@@ -355,6 +355,14 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **An archive page listed late is a catch-up, not news**
+  (`tracker/ingest/discover.py`, `docs/workflows/sync.md`). On the first nightly walk
+  in production, Utility Dive's archive answered six of its monthly sitemaps with a
+  Cloudflare challenge. The night they answer, their 2024 articles are new to the
+  walk, and would have been judged as that night's news. An entry first seen more
+  than 45 days after its own date is now judged as a first walk's would be: a trade
+  archive's only if it names a tracked campus, a builder's by the keyword filter.
+
 - **"robots.txt could not be read" is no longer reported as a refusal**
   (`tracker/robots.py`, `tracker/ingest/fetch.py`, `tracker/webui/article.py`). A
   site that did not answer for its `robots.txt` is left alone for 30 minutes, as

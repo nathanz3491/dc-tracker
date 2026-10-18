@@ -197,7 +197,12 @@ def test_an_operator_newsroom_is_caught_up_once_then_read_whole(session):
         ("https://dc.test/careers/", "2026-09-04T00:00:00+00:00"),
     )
     queued, seen = discover.watch_newsrooms(
-        session, [OWN], Fetcher({OWN.url: second}), NEWSROOM_SPEC, report=DiscoverReport()
+        session,
+        [OWN],
+        Fetcher({OWN.url: second}),
+        NEWSROOM_SPEC,
+        report=DiscoverReport(),
+        now=dt.datetime(2026, 9, 4, 10),
     )
     # From then on everything new on the operator's own site is read, no keyword
     # needed, dated by its lastmod; an exclusion still keeps a careers page out.
@@ -210,6 +215,7 @@ def test_an_operator_newsroom_is_caught_up_once_then_read_whole(session):
 
 
 def _walk(session, spec, body, **kw):
+    kw.setdefault("now", NOW)
     queued, seen = discover.watch_newsrooms(
         session, [spec], Fetcher({spec.url: body}), NEWSROOM_SPEC, report=DiscoverReport(), **kw
     )
@@ -228,6 +234,33 @@ def test_a_surge_of_unseen_posts_is_read_as_a_catch_up_not_as_news(session):
     assert [c.url for c in queued] == ["https://dc.test/2026/10/hello-tulsa/"]
     assert queued[0].published_at == dt.datetime(2026, 10, 1), "the path's month, not lastmod"
     assert sum(1 for _, v, _ in seen if v == discover.LISTED) == 40
+
+
+THIRD = SitemapSpec("utilitydive-archive", "https://ud.test/sitemap.xml")
+
+
+def test_an_entry_listed_late_is_a_catch_up_not_news(session):
+    """Utility Dive answered six monthly child sitemaps with a challenge on the first
+    walk (2026-10-19). The night they answer, their 2024 articles are unseen."""
+    _walk(session, THIRD, _urlset(("https://ud.test/news/first/", "2026-10-18")), now=NOW)
+    _walk(session, OWN, _urlset(("https://dc.test/first/", "2026-10-18")), now=NOW)
+    rows = [
+        ("https://ud.test/news/data-center-campus-hello-2024/", "2024-11-20"),
+        ("https://ud.test/news/data-center-campus-hello-today/", "2026-10-17"),
+    ]
+    queued, seen = _walk(session, THIRD, _urlset(*rows), now=NOW)
+    assert [c.url for c in queued] == ["https://ud.test/news/data-center-campus-hello-today/"]
+    late = {c.url: (v, why) for c, v, why in seen}[
+        "https://ud.test/news/data-center-campus-hello-2024/"
+    ]
+    assert late == (discover.LISTED, "listed late")
+
+    # On an operator's own site a late post is judged by the filter, not read whole.
+    rows = [("https://dc.test/2024/05/a-community-grant/", "2024-05-02")]
+    rows += [("https://dc.test/2024/06/hello-tulsa/", "2024-06-02")]
+    queued, seen = _walk(session, OWN, _urlset(*rows), now=NOW)
+    assert [c.url for c in queued] == ["https://dc.test/2024/06/hello-tulsa/"]
+    assert {why for _, _, why in seen} >= {"catch-up: topic implied by the feed + 'hello'"}
 
 
 def test_a_renamed_newsroom_is_not_walked_for_the_first_time_again(session):

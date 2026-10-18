@@ -1019,6 +1019,12 @@ NEWSROOM_NEW = "new on the operator's newsroom"
 #: catch-up, not queued whole. See :func:`watch_newsrooms`.
 NEWSROOM_SURGE: Final = 25
 
+#: An archive entry first seen this many days after its own date was listed late --
+#: a child sitemap that failed before, or one newly in reach -- and is judged as a
+#: catch-up, not as news. Wider than a month, because a WordPress path dates a post
+#: only to the first of its month.
+LATE_LISTING_DAYS: Final = 45
+
 
 def _identities_in(session: Session, model: Any, urls: list[str]) -> set[str]:
     """`url_identity` of every spelling of `urls` stored in `model.url`."""
@@ -1126,6 +1132,7 @@ def watch_newsrooms(
     *,
     report: DiscoverReport,
     known: Callable[[Candidate], int | None] | None = None,
+    now: dt.datetime | None = None,
 ) -> tuple[list[Candidate], list[tuple[Candidate, str, str | None]]]:
     """Every sitemap, walked nightly: what is new tonight, and what was seen.
 
@@ -1160,7 +1167,11 @@ def watch_newsrooms(
     catch-up too**: more than :data:`NEWSROOM_SURGE` unseen posts in one night is not
     what an operator publishes — it is a child sitemap that failed on the first walk,
     a child newly in reach, or moved URLs — so they are judged as on a first walk,
-    and the morning report names it.
+    and the morning report names it. So is **an entry listed late**: one first seen
+    more than :data:`LATE_LISTING_DAYS` after its own date. Utility Dive's archive
+    answered six of its monthly child sitemaps with a Cloudflare challenge on the
+    first production walk (2026-10-19); the night they answer, their 2024 articles
+    are unseen, and would otherwise be judged as that night's news.
     """
     import asyncio
     from dataclasses import replace
@@ -1168,6 +1179,7 @@ def watch_newsrooms(
     from tracker.models import SeenUrl
 
     walked_before = set(session.scalars(select(SeenUrl.source).distinct()))
+    late_before = (now or utcnow()) - dt.timedelta(days=LATE_LISTING_DAYS)
     to_queue: list[Candidate] = []
     seen: list[tuple[Candidate, str, str | None]] = []
     for sitemap in specs:
@@ -1203,6 +1215,7 @@ def watch_newsrooms(
                     "a child sitemap that failed before, or moved URLs",
                 )
             )
+        late = 0
         for identity, entry in unique.items():
             if identity in listed:
                 continue  # seen on an earlier night: nothing new
@@ -1213,18 +1226,23 @@ def watch_newsrooms(
             if identity in held:
                 seen.append((entry, KNOWN, None))
                 continue
+            catch_up = first_walk
+            if not first_walk and entry.published_at and entry.published_at < late_before:
+                catch_up, late = True, late + 1
             path = urlsplit(entry.url).path
-            if own and not first_walk:
+            if own and not catch_up:
                 hit = first_term(spec.exclude, normalize_haystack(f"{entry.title} {path}"))
                 keep = not hit
                 reason = f"excluded by {hit!r}" if hit else NEWSROOM_NEW
-            elif first_walk and not own:
+            elif catch_up and not own:
                 project_id = known(entry) if known is not None else None
                 keep = project_id is not None
                 reason = (
                     f"catch-up: names tracked campus #{project_id}"
                     if keep
                     else "on the archive before its first walk"
+                    if first_walk
+                    else "listed late"
                 )
             else:
                 keep, reason = spec.matches(
@@ -1235,16 +1253,24 @@ def watch_newsrooms(
                     if project_id is not None:
                         keep, reason = True, f"names tracked campus #{project_id}"
                 if keep:
-                    reason = f"catch-up: {reason}" if first_walk else reason
+                    reason = f"catch-up: {reason}" if catch_up else reason
             if keep:
                 to_queue.append(entry)
                 seen.append((entry, QUEUED, reason))
                 report.sitemap_new += 1
-            elif first_walk:
+            elif catch_up:
                 seen.append((entry, LISTED, reason))
             else:
                 seen.append((entry, DROPPED, reason))
                 report.sitemap_dropped += 1
+        if late:
+            report.failures.append(
+                (
+                    sitemap.name,
+                    f"{late} entries listed more than {LATE_LISTING_DAYS} days after their "
+                    "date, read as a catch-up: a child sitemap that failed before",
+                )
+            )
     return to_queue, seen
 
 
@@ -2898,11 +2924,19 @@ __all__ = [
     "COPY_MIN_WORDS",
     "DEAD_STATUS",
     "DISCARDED_UNREADABLE",
+    "DROPPED",
+    "KNOWN",
+    "LATE_LISTING_DAYS",
+    "LISTED",
     "MAX_HEADLINE_LOOKUPS",
     "MAX_PER_FEED",
     "MAX_SAME_FAILURES",
+    "NEWSROOM_NEW",
+    "NEWSROOM_SURGE",
     "PROBE_EVERY",
+    "QUEUED",
     "RETRYABLE_STATUSES",
+    "TOO_OLD",
     "UNEXPLAINED_CLOSURE",
     "Candidate",
     "DiscoverError",
@@ -2927,6 +2961,8 @@ __all__ = [
     "first_term",
     "follow_headlines",
     "given_up",
+    "in_turn",
+    "known_project_test",
     "load_config",
     "load_sitemaps",
     "matches_known_project",
@@ -2940,7 +2976,9 @@ __all__ = [
     "queue_candidates",
     "readable_first",
     "record_probe",
+    "record_seen",
     "refilter_pending",
+    "rejudge",
     "reopened_names",
     "requeue_reopened",
     "retryable",
@@ -2951,5 +2989,6 @@ __all__ = [
     "term_in",
     "unreadable_test",
     "verify_urls",
+    "watch_newsrooms",
     "without_reopened",
 ]
