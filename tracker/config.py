@@ -484,6 +484,16 @@ class Settings(BaseSettings):
     #: published this week is its whole job.
     search_cache_days: int = Field(default=7, ge=0)
 
+    #: Web searches one process may send while a spend ledger is kept, counting those
+    #: the ledger already holds. None — the default — sets no cap.
+    #:
+    #: Searches are prepaid credits, a separate bill from the model calls the money
+    #: ceiling reads. `scripts/overnight.sh` sets `TRACKER_SEARCH_CAP` for the night,
+    #: and every command then stops searching at it (`search.SerperProvider`): the
+    #: nightly news watch alone can ask a thousand questions, and enrich asked
+    #: 177-418 a night before the watch existed.
+    search_cap: int | None = Field(default=None, ge=0)
+
     # --- Database ---------------------------------------------------------
     #: Relative paths resolve against the project root, not the CWD.
     db: Path = Path("data/tracker.db")

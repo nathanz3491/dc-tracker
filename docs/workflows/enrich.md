@@ -254,6 +254,9 @@ with two turns left the model is told to answer (`agent.WRAP_UP_TURNS`): running
 of steps threw away everything the run had spent, and on 2026-09-29 this pass ended
 "reached 12 steps without deciding" twelve times and found one fact all night. A
 "nothing found" answer is an attempt `tracker.attempts` records; running out is not.
+Nor is a run whose searches the night's search cap refused (`agent.SEARCH_REFUSED`,
+`TRACKER_SEARCH_CAP`): it never looked, so its "nothing" is an error, and a field it
+was refused is not retired as unpublished.
 
 **Under `--t2` a row is asked only about the gaps that hold it below T2.** It was
 chosen for those, and asking about every empty field as well is how a self-built Meta

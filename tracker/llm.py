@@ -364,9 +364,11 @@ class ResponseTruncated(LLMError):
 #
 # DeepSeek bills a call made between 09:00 and 12:00 or 14:00 and 18:00, Beijing
 # time, Monday to Friday, at twice the rate of the same call at any other hour
-# (`tracker.spend`). The overnight loop starts at 18:00 for that reason. The runs
-# that paid double were the ones started by hand in the day: on 2026-09-25 three
-# `logic conflicts` passes and two `sync`s cost ¥18 for what would have been ¥9.
+# (`tracker.spend`), and so does OpenCode Go, the reserve, in the same hours (01-04
+# and 06-10 UTC on its pricing page, checked 2026-10-18). The overnight loop starts
+# at 18:00 for that reason. The runs that paid double were the ones started by hand
+# in the day: on 2026-09-25 three `logic conflicts` passes and two `sync`s cost ¥18
+# for what would have been ¥9.
 #
 # So a command that spends refuses to start a DeepSeek extractor in those hours,
 # exactly the way it refuses without a key — `PeakHours` is an `LLMUnavailable`, and
@@ -400,20 +402,22 @@ def check_peak(settings: Settings, *, now: Any = None) -> None:
     when = now or dt.datetime.now(dt.UTC)
     if not spend.is_peak(when):
         return
-    # DeepSeek's peak price is the reason for the guard, so a run the reserve will
-    # answer has nothing to wait for. Asked only here, at peak, so an ordinary start
-    # makes no extra request.
-    choose_route(settings)
-    if settings.has_reserve_key() and (settings.reserve_when == "always" or _ON_RESERVE.is_set()):
-        return
+    # The reserve is no way round it: OpenCode Go doubles in the same hours. Until
+    # 2026-10-18 a run the reserve would answer was let through, on the belief that
+    # Go did not, and since October every night has gone to Go.
     resume = spend.next_off_peak(when).strftime("%H:%M")
     if settings.peak_guard == "warn":
         if not _PEAK_WARNED.is_set():
             _PEAK_WARNED.set()
-            log.warning("DeepSeek's peak hours: every call costs double until %s Beijing", resume)
+            log.warning(
+                "peak hours: every DeepSeek call, direct or through OpenCode Go, costs "
+                "double until %s Beijing",
+                resume,
+            )
         return
     raise PeakHours(
-        f"DeepSeek bills double until {resume} Beijing time (peak is 09-12 and 14-18, "
+        f"DeepSeek, direct or through OpenCode Go, bills double until {resume} Beijing "
+        "time (peak is 09-12 and 14-18, "
         "Monday to Friday), so this command will not start paying now. Run it after "
         f"{resume}, or prefix it with TRACKER_PEAK_GUARD=off to pay the peak rate "
         "deliberately. `--llm-provider ollama` is never refused."
@@ -653,6 +657,36 @@ def record_spend(settings: Settings, data: dict[str, Any], model: str) -> None:
         # and O_APPEND keeps separate processes' lines whole.
         with _LEDGER_LOCK, open(path, "a", encoding="utf-8") as handle:
             handle.write(line)
+    except OSError as exc:
+        log.warning("could not append to the spend ledger %s: %s", path, exc)
+
+
+def record_search(settings: Settings, kind: str) -> None:
+    """Append one web search to :data:`Settings.spend_ledger`: model `serper`, no tokens.
+
+    Same format as :func:`record_spend`, so one file says what a night asked as well
+    as what it paid for; `tracker.spend` counts these apart from the model bill. The
+    stage is the one set by :func:`spend_stage`, or `kind` ("search", "news").
+    """
+    from tracker.spend import SEARCH_MODEL
+
+    path = settings.spend_ledger
+    if path is None:
+        return
+    fields = (
+        time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        os.getpid(),
+        _command(),
+        SEARCH_MODEL,
+        0,
+        0,
+        0,
+        0,
+        _STAGE[0] or kind,
+    )
+    try:
+        with _LEDGER_LOCK, open(path, "a", encoding="utf-8") as handle:
+            handle.write("\t".join(str(value) for value in fields) + "\n")
     except OSError as exc:
         log.warning("could not append to the spend ledger %s: %s", path, exc)
 

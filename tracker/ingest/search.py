@@ -520,6 +520,9 @@ class SerperProvider:
         self.settings = settings or get_settings()
         if not self.settings.has_serper_key():
             raise SearchError(SEARCH_KEY_HELP)
+        #: Searches this provider has sent, added to what the ledger held when it
+        #: first checked (`_spend_one`). None until then.
+        self._sent: int | None = None
 
     def search(self, query: str, *, limit: int = 10) -> list[SearchHit]:
         response = self._post(
@@ -587,7 +590,30 @@ class SerperProvider:
             if item.get("link")
         ]
 
+    def _spend_one(self) -> None:
+        """Count one search against `Settings.search_cap`, or refuse it.
+
+        The cap counts the whole night, not this process: the first check reads how
+        many searches the ledger already holds, so the watch and enrich share one
+        allowance however many commands the loop runs.
+        """
+        cap = self.settings.search_cap
+        if cap is None or self.settings.spend_ledger is None:
+            return
+        if self._sent is None:
+            from tracker import spend
+
+            self._sent = spend.searches(spend.read(self.settings.spend_ledger))
+        if self._sent >= cap:
+            raise QuotaExhausted(
+                f"the night's search cap is reached ({self._sent} of {cap}, TRACKER_SEARCH_CAP)"
+            )
+        self._sent += 1
+
     def _post(self, endpoint: str, body: dict[str, Any]) -> httpx.Response:
+        from tracker.llm import record_search
+
+        self._spend_one()
         try:
             response = httpx.post(
                 endpoint,
@@ -610,6 +636,7 @@ class SerperProvider:
             )
         if response.status_code >= 400:
             raise SearchError(f"search returned HTTP {response.status_code}: {response.text[:400]}")
+        record_search(self.settings, "news" if endpoint == self.NEWS_ENDPOINT else "search")
         return response
 
 

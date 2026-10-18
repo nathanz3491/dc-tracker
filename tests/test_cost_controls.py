@@ -50,24 +50,71 @@ def _line(when="2026-09-26T12:00:00Z", model="deepseek-flash", p=0, c=0, hit=0, 
     return f"{when}\t1\tenrich\t{model}\t{p}\t{c}\t{hit}\t{miss}\n"
 
 
+HIT, MISS, OUT = spend.PRICES["deepseek-flash"]
+
+
 def test_a_call_is_priced_by_what_was_cached_what_was_not_and_the_reply():
     """The reply is four times an uncached prompt token and 200 times a cached one,
     which is why a token count was no measure of a night."""
     call = spend.parse(_line(p=1_000_000, c=1_000_000, hit=900_000, miss=100_000))
-    assert call.cost() == pytest.approx(0.018 + 0.1 + 4.0)
+    assert call.cost() == pytest.approx(0.9 * HIT + 0.1 * MISS + OUT)
+    assert pytest.approx(4 * MISS) == OUT and pytest.approx(50 * HIT) == MISS
+
+
+def test_the_prices_are_opencode_gos_in_yuan():
+    """The plan's limit is dollars of OpenCode Go's metering, so the ledger prices at
+    its rates: a ceiling in yuan is then an overcount of either bill, never under."""
+    assert pytest.approx((0.003 * 7.1, 0.15 * 7.1, 0.60 * 7.1)) == (HIT, MISS, OUT)
+    assert OUT > 4.0, "above DeepSeek's own ¥4 a million reply tokens"
+
+
+def test_a_search_is_counted_and_never_priced_as_a_model_call(tmp_path):
+    """Searches are prepaid credits, another bill: the model ceiling must not see them."""
+    ledger = tmp_path / "night.spend"
+    ledger.write_text(
+        _line(c=1_000_000) + _line(model=spend.SEARCH_MODEL) + _line(model=spend.SEARCH_MODEL),
+        encoding="utf-8",
+    )
+    calls = spend.read(ledger)
+    assert spend.total(calls) == pytest.approx(OUT)
+    assert spend.searches(calls) == 2
+    assert spend.report(calls)[0] == "    2 web search(es): 2 enrich"
+
+
+def test_the_nights_search_cap_counts_the_ledger_and_refuses_past_it(tmp_path, monkeypatch):
+    """The cap is the whole night's, not one process's: the first check reads what the
+    ledger already holds, so the news watch and enrich share one allowance."""
+    import httpx
+
+    from tracker.ingest.search import QuotaExhausted, SerperProvider
+
+    ledger = tmp_path / "night.spend"
+    ledger.write_text(_line(model=spend.SEARCH_MODEL), encoding="utf-8")
+    settings = Settings(_env_file=None, serper_api_key="k", spend_ledger=ledger, search_cap=3)
+
+    def post(url, **_kw):
+        return httpx.Response(200, json={"news": []}, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(httpx, "post", post)
+    provider = SerperProvider(settings)
+    provider.news("a")
+    provider.news("b")
+    with pytest.raises(QuotaExhausted, match="TRACKER_SEARCH_CAP"):
+        provider.news("c")
+    assert spend.searches(spend.read(ledger)) == 3, "one before, two now, none refused"
 
 
 def test_a_peak_call_costs_double():
     off = spend.parse(_line(when="2026-09-29T10:00:00Z", c=1_000_000))
     peak = spend.parse(_line(when="2026-09-29T02:00:00Z", c=1_000_000))
-    assert off.cost() == pytest.approx(4.0)
-    assert peak.cost() == pytest.approx(8.0)
+    assert off.cost() == pytest.approx(OUT)
+    assert peak.cost() == pytest.approx(2 * OUT)
 
 
 def test_an_unknown_model_and_an_unsplit_prompt_are_priced_as_the_dearer_case():
     """So an unknown line can make a ceiling fire early, never late."""
     call = spend.parse(_line(model="some-new-model", p=1_000_000))
-    assert call.cost() == pytest.approx(2.0)
+    assert call.cost() == pytest.approx(2 * MISS)
 
 
 def test_the_report_names_phases_and_the_peak_surcharge(tmp_path):
@@ -79,7 +126,7 @@ def test_the_report_names_phases_and_the_peak_surcharge(tmp_path):
         encoding="utf-8",
     )
     calls = spend.read(ledger)
-    assert spend.total(calls) == pytest.approx(4.8)
+    assert spend.total(calls) == pytest.approx(1.2 * OUT)
     lines = spend.report(calls)
     assert lines[0].split()[0] == "enrich/extract"
     assert "at peak rates" in lines[-1]

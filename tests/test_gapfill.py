@@ -373,3 +373,23 @@ def test_a_row_with_no_gaps_costs_nothing(session, thin):
 
     assert out.verdict == "nothing"
     assert out.prompt_tokens == 0
+
+
+def test_a_run_whose_searches_the_cap_refused_retires_nothing(session, thin, monkeypatch):
+    """A search the night's cap refused never looked: "nothing found" after it is not
+    evidence that nobody published the field, so no attempt is recorded."""
+    from tracker import agent
+
+    def refused(*_a, **_k):
+        return agent.AgentResult(
+            outcome="answered",
+            answer={"reason": "no results"},
+            tool_name="nothing_found",
+            steps=[
+                agent.Step("search_web", {"query": "q"}, f"{agent.SEARCH_REFUSED} the night's cap")
+            ],
+        )
+
+    monkeypatch.setattr(agent, "run", refused)
+    out = gapfill.fill(session, thin, extractor=object(), gaps=["mw_planned"])
+    assert out.verdict == "error" and out.missed == ()

@@ -37,7 +37,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Final
 
 log = logging.getLogger(__name__)
 
@@ -694,8 +694,14 @@ def _find_projects(session: Any, query: str, limit: int = 10) -> str:
     )
 
 
+#: How a search the night's cap refused begins. `gapfill.fill` looks for it: a run
+#: whose searches were refused never looked, so its "nothing found" must not retire
+#: a field as unpublished.
+SEARCH_REFUSED: Final = "search refused:"
+
+
 def _search_web(query: str, limit: int = 5) -> str:
-    from tracker.ingest.search import SearchError, build_provider, cached
+    from tracker.ingest.search import QuotaExhausted, SearchError, build_provider, cached
 
     try:
         # Behind the result cache: the same row's questions come back night after
@@ -707,6 +713,8 @@ def _search_web(query: str, limit: int = 5) -> str:
         return "web search unavailable: no search provider is configured"
     try:
         hits = provider.search(query, limit=max(1, min(limit, 10)))
+    except QuotaExhausted as exc:
+        return f"{SEARCH_REFUSED} {exc}"
     except SearchError as exc:
         return f"search failed: {exc}"
     except Exception as exc:
@@ -726,6 +734,7 @@ __all__ = [
     "MAX_STEPS",
     "MAX_TOKENS",
     "MAX_TOKENS_ESCALATED",
+    "SEARCH_REFUSED",
     "TOOL_LIMITS",
     "WRAP_UP_TURNS",
     "AgentResult",

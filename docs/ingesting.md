@@ -51,8 +51,9 @@ on DeepSeek as before. Each new command asks again, so topping up takes effect b
 itself, with no setting to flip back. `TRACKER_RESERVE_WHEN=empty` restores the old
 rule, and `always` sends every call to Go.
 
-A run the reserve will answer is not held back by the peak-hours guard below: the
-guard is there for DeepSeek's double price, which a call to Go does not pay.
+The peak-hours guard below holds a run on the reserve as well: OpenCode Go doubles
+its price in the same hours (its pricing page, checked 2026-10-18). Until then a run
+the reserve would answer was let through.
 
 Without a reserve, an empty balance ends a night where it happens: every call
 after it fails the same way, and the loop stops with the rest of its work undone.

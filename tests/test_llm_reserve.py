@@ -258,10 +258,9 @@ def test_always_sends_every_call_to_the_reserve_without_asking(settings, monkeyp
     assert reserve.call_count == 1, "no balance request and no DeepSeek request were mocked"
 
 
-def test_a_run_the_reserve_will_answer_is_not_held_for_deepseeks_peak_hours(
-    low_balance_rule, monkeypatch
-):
-    """The guard exists for DeepSeek's double price; a run on the reserve does not pay it."""
+def test_a_run_on_the_reserve_is_held_at_peak_too(low_balance_rule):
+    """OpenCode Go doubles in DeepSeek's peak hours as well, so the reserve is no way
+    round the guard."""
     import datetime as dt
 
     from tracker import llm, spend
@@ -269,9 +268,8 @@ def test_a_run_the_reserve_will_answer_is_not_held_for_deepseeks_peak_hours(
     llm.arm_peak_guard()
     try:
         peak = dt.datetime(2026, 9, 30, 15, 0, tzinfo=spend.BEIJING)
-        with respx.mock:
-            respx.get(BALANCE).respond(200, json=_balance("0.10"))
-            llm.check_peak(low_balance_rule.model_copy(update={"peak_guard": "refuse"}), now=peak)
-        assert llm._ON_RESERVE.is_set()
+        settings = low_balance_rule.model_copy(update={"peak_guard": "refuse"})
+        with pytest.raises(llm.PeakHours, match="OpenCode Go"):
+            llm.check_peak(settings.model_copy(update={"reserve_when": "always"}), now=peak)
     finally:
         llm._PEAK_GUARD.clear()

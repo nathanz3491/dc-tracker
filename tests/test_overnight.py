@@ -162,7 +162,7 @@ def test_the_money_ceiling_fires_on_the_bill_not_the_token_count(tmp_path):
     nights with the same token count can differ tenfold in money, and money is what
     the ceiling is for."""
     # A Saturday, so off-peak: a million cached prompt tokens is ¥0.02; a hundred
-    # thousand reply tokens is ¥0.40.
+    # thousand reply tokens is ¥0.43 (OpenCode Go's $0.60 a million, at ¥7.1).
     (tmp_path / "cached.spend").write_text(
         "2026-09-26T12:00:00Z\t1\tlogic resolve\tdeepseek-flash\t1000000\t0\t1000000\t0\n",
         encoding="utf-8",
@@ -181,7 +181,7 @@ def test_the_money_ceiling_fires_on_the_bill_not_the_token_count(tmp_path):
     )
     done = _run(tmp_path, body)
     assert done.returncode == 0, done.stderr
-    assert done.stdout.split("\n")[:2] == ["under 0.02", "over 0.40"]
+    assert done.stdout.split("\n")[:2] == ["under 0.02", "over 0.43"]
 
 
 @needs_bash
@@ -448,7 +448,7 @@ def test_the_morning_report_breaks_spend_down_by_phase_and_in_money(tmp_path):
     )
     assert done.returncode == 0, done.stderr
     lines = [line.split() for line in done.stdout.decode("utf-8").strip().splitlines()]
-    assert lines[0][0] == "enrich/extract" and "¥4.00" in lines[0]
+    assert lines[0][0] == "enrich/extract" and "¥4.26" in lines[0]
     assert lines[1][:2] == ["logic", "resolve"] and "~20,000" in lines[1] and "89%" in lines[1]
     assert lines[2][:2] == ["risks", "confirm"] and "n/a" in lines[2]
 

@@ -475,6 +475,16 @@ def fill(
         cache_hit_tokens=result.cache_hit_tokens,
         cache_miss_tokens=result.cache_miss_tokens,
     )
+    # A run whose searches the night's cap refused never looked: its "nothing" is
+    # an error, and records no attempt (`tracker enrich` rolls an error back).
+    refused_search = any(
+        step.name == "search_web" and str(step.result).startswith(agent.SEARCH_REFUSED)
+        for step in result.steps
+    )
+    if refused_search and result.tool_name != "record_facts":
+        out.verdict, out.missed = "error", ()
+        out.note = "the night's search cap refused its searches; nothing was looked for"
+        return out
     if not result.answered:
         out.verdict = "nothing" if result.outcome in {"stopped", "exhausted"} else "error"
         # An error is not evidence that nobody published the field, so only a run

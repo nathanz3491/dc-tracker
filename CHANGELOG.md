@@ -107,6 +107,22 @@ initial build of the v1 PRD.
 
 ### Changed
 
+- **The ledger prices the night at OpenCode Go's rates, and web searches have a
+  cap of their own** (`tracker/spend.py`, `tracker/llm.py`,
+  `tracker/ingest/search.py`, `tracker/config.py`, `tracker/agent.py`,
+  `tracker/gapfill.py`, `.env.example`, `docs/ingesting.md`,
+  `docs/workflows/enrich.md`). Since October every night's calls have
+  gone to OpenCode Go, whose allowance is metered in dollars at its own rates, about
+  6% above DeepSeek's: the ledger now prices at those, so the ceiling overcounts
+  either bill and never undercounts. Web searches are prepaid credit, another bill:
+  each is now a line in the same ledger, left out of the model ceiling and counted
+  against `TRACKER_SEARCH_CAP`, which holds for the whole night rather than one
+  command. A search the cap refuses is not a search that found nothing, so the
+  research no longer records a field it was refused as looked for and unpublished.
+  Daytime runs on OpenCode Go are now held at peak hours like DeepSeek's: the guard
+  let them through on the belief that Go did not double its price, and it does, in
+  the same hours.
+
 - **The Map view is redrawn: national and state figures, stage toggles, and dots
   sized by capacity** (`tracker/webui/static/views-map.js`,
   `tracker/webui/mapsummary.py`, `tracker/webui/server.py`,
