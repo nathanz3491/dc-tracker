@@ -89,7 +89,7 @@ class Fetcher(Protocol):
 def refused(url: str) -> FetchResult:
     """The result of a fetch `robots.txt` did not permit: no request was made."""
     return FetchResult(
-        url, False, error=robots.REFUSED, fetched_at=utcnow(), via=robots.VIA, attempts=0
+        url, False, error=robots.refusal(url), fetched_at=utcnow(), via=robots.VIA, attempts=0
     )
 
 

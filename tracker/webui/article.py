@@ -220,7 +220,7 @@ def _get(url: str) -> tuple[str, str]:
     if settings.respect_robots and not robots.allowed(
         url, headers["user-agent"], lambda u: _robots_get(u, headers)
     ):
-        return "", robots.REFUSED
+        return "", robots.refusal(url)
     try:
         from curl_cffi import requests as creq
 

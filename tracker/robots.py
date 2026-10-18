@@ -53,6 +53,16 @@ MAX_CRAWL_DELAY_S: Final[float] = 60.0
 REFUSED: Final[str] = "robots.txt does not permit this crawler to read this page"
 VIA: Final[str] = "robots"
 
+#: The `error` when the site could not say -- no answer, a timeout, a 5xx -- which
+#: holds the site back exactly as a refusal does, for `UNREACHABLE_TTL_S`. Worded
+#: apart because the two call for opposite responses: a refusal is a reason to close
+#: a source, an unanswered request is a reason to wait a night. One wording for both
+#: nearly closed OpenAI's feed on 2026-10-18 over a timeout; its file allows all.
+UNREACHABLE: Final[str] = (
+    "robots.txt could not be read (no answer, a timeout or a server error), so the "
+    f"site is left alone for {UNREACHABLE_TTL_S / 60:.0f} minutes"
+)
+
 #: `(status, body)` for one GET; status None when nothing answered.
 Getter = Callable[[str], tuple[int | None, str]]
 AsyncGetter = Callable[[str], Awaitable[tuple[int | None, str]]]
@@ -112,6 +122,14 @@ def _verdict(rules: _Rules, url: str, user_agent: str) -> bool:
     return bool(rules.parser.can_fetch(user_agent, url))
 
 
+def refusal(url: str) -> str:
+    """Why a fetch of `url` was refused: :data:`UNREACHABLE` when the site could not
+    say, else :data:`REFUSED`."""
+    with _lock:
+        rules = _cache.get(origin(url))
+    return UNREACHABLE if rules is not None and rules.parser is None else REFUSED
+
+
 def _is_robots_file(url: str) -> bool:
     return urlsplit(url).path == "/robots.txt"
 
@@ -158,6 +176,7 @@ __all__ = [
     "MAX_CRAWL_DELAY_S",
     "REFUSED",
     "TTL_S",
+    "UNREACHABLE",
     "UNREACHABLE_TTL_S",
     "VIA",
     "allowed",
@@ -165,5 +184,6 @@ __all__ = [
     "clear",
     "crawl_delay",
     "interpret",
+    "refusal",
     "robots_url",
 ]

@@ -143,6 +143,21 @@ def test_edgar_search_sends_the_identity_without_the_link():
     assert edgar._headers(get_settings())["User-Agent"] == "dc-tracker/0.1 (someone@example.com)"
 
 
+def test_a_site_that_did_not_answer_is_not_reported_as_refusing():
+    """OpenAI's feed was nearly closed on 2026-10-18 over "robots.txt does not
+    permit", and its file allows everything: the request for it had timed out."""
+    transport, _ = site(robots_status=503, robots_body="")
+    result = asyncio.run(
+        HttpxFetcher(get_settings(), transport=transport).fetch("https://b.example/x")
+    )
+    assert result.via == robots.VIA and result.error == robots.UNREACHABLE
+    transport, _ = site()
+    result = asyncio.run(
+        HttpxFetcher(get_settings(), transport=transport).fetch("https://a.example/private/x")
+    )
+    assert result.error == robots.REFUSED
+
+
 def test_the_feed_client_asks_too():
     transport, asked = site(robots_body="User-agent: *\nDisallow: /\n")
     result = asyncio.run(

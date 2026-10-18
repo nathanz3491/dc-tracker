@@ -355,6 +355,14 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **"robots.txt could not be read" is no longer reported as a refusal**
+  (`tracker/robots.py`, `tracker/ingest/fetch.py`, `tracker/webui/article.py`). A
+  site that did not answer for its `robots.txt` is left alone for 30 minutes, as
+  before, but the failure said "robots.txt does not permit this crawler" — the words
+  for a site that forbids us, and the two call for opposite responses: a refusal is
+  a reason to close a source, no answer a reason to wait a night. OpenAI's feed,
+  whose file allows everything, was nearly closed over a timeout.
+
 - **Three faults found checking the 2026-10-16 night** (`scripts/overnight.sh`,
   `tracker/config.py`, `tracker/ingest/fetch.py`, `tracker/ingest/edgar.py`,
   `tracker/ingest/discover.py`, `tracker/webui/article.py`, `tracker/ingest/crawl.py`,
