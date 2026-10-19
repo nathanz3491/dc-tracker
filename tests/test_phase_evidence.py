@@ -230,3 +230,35 @@ def test_the_backfill_reports_first_and_writes_only_when_asked(session):
     assert done.total == 2
     assert [r.unconfirmed for r in rows] == ["forecast", "forecast", None]
     assert demote_forecast_events(session).total == 0, "run twice, changes nothing"
+
+
+def test_the_backfill_files_an_announcement_a_directory_dated(session):
+    """A re-read cannot do this — upsert never lets a later reading demote a
+    milestone an earlier one confirmed — so the stored sentence is judged here."""
+    from tracker.backfill import file_listing_dates
+
+    project = _campus(session)
+    listed = Event(
+        project_id=project.id,
+        event_date=dt.date(2026, 9, 17),
+        event_type="announced",
+        description="Project first reported in the tracker.",
+        quote="Proposed · first reported Sep 17, 2026",
+    )
+    announced = Event(
+        project_id=project.id,
+        event_date=dt.date(2021, 6, 2),
+        event_type="announced",
+        description="Switch unveiled plans for the campus",
+        quote="Switch unveiled plans for The Rock on June 2, 2021.",
+    )
+    session.add_all([listed, announced])
+    session.flush()
+
+    preview = file_listing_dates(session)
+    assert (preview.total, listed.unconfirmed) == (1, None)
+
+    file_listing_dates(session, apply=True)
+    assert [listed.unconfirmed, announced.unconfirmed] == ["listing_date", None]
+    assert listed.quote, "nothing is deleted: the sentence that dated it stays"
+    assert file_listing_dates(session).total == 0, "run twice, changes nothing"

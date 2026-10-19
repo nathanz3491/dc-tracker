@@ -457,8 +457,10 @@ __all__ = [
     "BackfillReport",
     "Candidate",
     "ForecastReport",
+    "ListingReport",
     "candidates",
     "demote_forecast_events",
+    "file_listing_dates",
     "run",
 ]
 
@@ -993,6 +995,65 @@ def demote_forecast_events(session: Session, *, apply: bool = False) -> Forecast
             )
         if apply:
             event.unconfirmed = "forecast"
+    if apply:
+        session.flush()
+    return report
+
+
+@dataclass
+class ListingReport:
+    """What re-checking stored announcements for a directory's own date found."""
+
+    #: Announcement milestones with a stored sentence, examined.
+    events: int = 0
+    #: A few of those filed, for the report: (project id, date, sentence).
+    examples: list[tuple[int, str, str]] = field(default_factory=list)
+    #: Projects holding one.
+    projects: set[int] = field(default_factory=set)
+    #: How many were filed as `listing_date`.
+    total: int = 0
+
+    def as_rows(self) -> list[tuple[str, int]]:
+        return [
+            ("announcements read", self.events),
+            ("dated only by a directory", self.total),
+        ]
+
+
+def file_listing_dates(session: Session, *, apply: bool = False) -> ListingReport:
+    """File as `listing_date` every stored announcement a directory's own date dated.
+
+    The rule a fresh ingest applies (`crawl._only_listing_dates`): a sentence whose
+    only dates are a tracker's — "Proposed · first reported Sep 17, 2026" — dates the
+    listing, not the announcement. On the 2026-10-19 copy that was 15 milestones,
+    9 written that night.
+
+    A re-read cannot do this, which is why it is a backfill: `upsert` never lets a
+    later reading demote a milestone an earlier one confirmed. Nothing is deleted —
+    the date, description and sentence stay, so a reader can see what dated it. No
+    LLM, no network.
+    """
+    from tracker.ingest.crawl import _only_listing_dates
+    from tracker.models import Event
+
+    report = ListingReport()
+    rows = session.scalars(
+        select(Event)
+        .where(Event.event_type == "announced", Event.quote.is_not(None))
+        .order_by(Event.id)
+    ).all()
+    for event in rows:
+        report.events += 1
+        if event.unconfirmed == "listing_date" or not _only_listing_dates(event.quote or ""):
+            continue
+        report.total += 1
+        report.projects.add(event.project_id)
+        if len(report.examples) < 12:
+            report.examples.append(
+                (event.project_id, str(event.event_date or ""), (event.quote or "")[:80])
+            )
+        if apply:
+            event.unconfirmed = "listing_date"
     if apply:
         session.flush()
     return report

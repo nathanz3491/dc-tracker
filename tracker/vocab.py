@@ -332,6 +332,15 @@ UNCONFIRMED_REASONS: Final[tuple[str, ...]] = (
     #: counts, because a milestone somebody reported without a clean sentence may
     #: well have happened, and a forecast has not.
     "forecast",
+    #: Quoted and verified, and the only date the sentence gives is a directory's
+    #: own — "Canceled · first reported Oct 7, 2026", "Data updated Oct 2026" — the
+    #: day a tracker listed or last touched the site, filed as the day the project
+    #: was announced (`first_announced`, or an `announced` milestone). Its own reason
+    #: because it asks for different work from `quote_off_target`: the page will
+    #: never say anything else, so re-reading it is pointless and only another
+    #: source can date the announcement. Measured on 2026-10-19: 17 new rows were
+    #: dated this way, 8 of them projects already cancelled or paused.
+    "listing_date",
     #: Quoted, verified, and still not credible for this project: the `$/MW`
     #: ceiling, which fires on a programme-wide total quoted in an article about
     #: one campus.

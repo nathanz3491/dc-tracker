@@ -248,6 +248,140 @@ def test_evidence_gate_drops_a_quote_that_is_not_in_the_article(caplog):
     assert "not in the article" in caplog.text
 
 
+# --- a directory's own date is not an announcement --------------------------------
+#
+# On 2026-10-19, 17 new rows took a tracker's "first reported Oct 7, 2026" as the day
+# the project was announced — 8 of them already cancelled or paused, so a dead
+# project read as fresh news — and 10 announcement milestones were a listing date.
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "Canceled · first reported Oct 7, 2026",
+        "Proposed · first reported Sep 17, 2026",
+        "Blocked by moratorium · first reported Sep 21, 2026",
+        "First reported June 2009",
+        "Hyperscaler · Updated Aug 2026",
+        "Data updated Oct 2026",
+        "Last updated: September 2026",
+        "Source: DC Hub facilities registry · As of: Mar 18, 2026",
+        "Data center projects by CoreWeave (accessed October 19, 2026).",
+        "Removed from the tracker in September 2026.",
+        "Source-checked, read back against the document on Sep 10, 2026.",
+        "Date added: 2026-09-17",
+        "Tracked since March 2025",
+    ],
+)
+def test_a_directory_s_own_date_is_recognised(line):
+    assert crawl._only_listing_dates(line)
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        # A newspaper saying when the project became public — what the field means.
+        "The project was first reported on March 3, 2025 by the Business Journal.",
+        "Published: Jun. 5, 2024",
+        "Sep 2022 Announced · Novva Las Vegas, Nicco Way Campus · Campus",
+        "Microsoft first announced the Racine County project in March 2023.",
+        # A listing date beside the real one does not hide the real one.
+        "Google announced the campus in March 2023 (accessed October 19, 2026).",
+        # No date at all: nothing to judge.
+        "Proposed · first reported",
+    ],
+)
+def test_a_date_that_states_something_is_not_a_listing(line):
+    assert not crawl._only_listing_dates(line)
+
+
+def test_a_listing_date_is_not_an_announcement_date():
+    text = "Battery Brooke Parkway\n\nCanceled · first reported Oct 7, 2026\n\nThe source is on file.\n"
+    kept, _, dropped = crawl.evidence_gate(
+        {"first_announced": dt.date(2026, 10, 7)},
+        [{"field": "first_announced", "quote": "Canceled · first reported Oct 7, 2026"}],
+        text,
+    )
+    assert kept == {}
+    assert dropped == {"first_announced": "listing_date"}
+
+
+def test_a_listing_month_is_not_an_announcement_month_either():
+    """The coarse-date path keeps a month a sentence states; a listing's month is
+    no more the announcement than its day."""
+    text = "Grande Valley Data Center\n\nProposed · first reported Oct 2026\n"
+    kept, _, dropped = crawl.evidence_gate(
+        {"first_announced": dt.date(2026, 10, 7)},
+        [{"field": "first_announced", "quote": "Proposed · first reported Oct 2026"}],
+        text,
+    )
+    assert kept == {}
+    assert dropped == {"first_announced": "listing_date"}
+
+
+def test_the_real_announcement_beside_a_listing_date_is_kept():
+    text = "Microsoft first announced the Racine County project in March 2023. Data updated Oct 2026.\n"
+    kept, _, dropped = crawl.evidence_gate(
+        {"first_announced": dt.date(2023, 3, 1)},
+        [{"field": "first_announced", "quote": text.strip()}],
+        text,
+    )
+    assert kept == {"first_announced": dt.date(2023, 3, 1)}
+    assert dropped == {}
+
+
+def test_only_the_announcement_date_reads_the_labels():
+    """For the other date fields "updated" is ordinary prose — a schedule is updated
+    to a new date — so the label refuses nothing there."""
+    text = "Schedule updated: January 2027 for the first 100 MW.\n"
+    evidence = [{"field": "expected_online", "quote": text.strip()}]
+    kept, _, _ = crawl.evidence_gate({"expected_online": dt.date(2027, 1, 1)}, evidence, text)
+    assert kept == {"expected_online": dt.date(2027, 1, 1)}
+
+    kept, _, dropped = crawl.evidence_gate({"first_announced": dt.date(2027, 1, 1)}, evidence, text)
+    assert kept == {}
+    assert dropped == {"first_announced": "listing_date"}
+
+
+def test_an_announcement_milestone_dated_by_a_listing_is_kept_as_unconfirmed():
+    text = "Project MidSpan Data Center\n\nProposed · first reported Sep 17, 2026\n"
+    (got,) = crawl._events(
+        {
+            "events": [
+                {
+                    "event_date": "2026-09-17",
+                    "event_type": "announced",
+                    "description": "Project first reported in Bradley County, Tennessee.",
+                    "quote": "Proposed · first reported Sep 17, 2026",
+                }
+            ]
+        },
+        text,
+        URL,
+    )
+    assert got.unconfirmed == "listing_date"
+    assert got.quote is None
+
+
+def test_an_announcement_milestone_with_its_own_date_is_confirmed():
+    text = "Sep 14, 2026 Google is exploring a new data center project in Lea County.\n"
+    (got,) = crawl._events(
+        {
+            "events": [
+                {
+                    "event_date": "2026-09-14",
+                    "event_type": "announced",
+                    "description": "Google disclosed the Lea County project.",
+                    "quote": "Sep 14, 2026 Google is exploring a new data center project in Lea County.",
+                }
+            ]
+        },
+        text,
+        URL,
+    )
+    assert got.unconfirmed is None
+
+
 def test_evidence_gate_tolerates_whitespace_and_quote_style():
     """A quote reflowed by the model must still match.
 

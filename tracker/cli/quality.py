@@ -1282,18 +1282,21 @@ def _backfill_precision(*, apply: bool, dry_run: bool) -> None:
 
 
 def _backfill_events(*, apply: bool, dry_run: bool) -> None:
-    """File forecast-worded milestones as forecasts. Reports before it writes.
+    """File forecast-worded milestones as forecasts, and listing-dated announcements
+    as `listing_date`. Reports before it writes.
 
     A campus whose "energized" milestone was only ever expected read as energised
-    once the expected date passed. This applies the ingest rule to what is stored;
-    the tracks recompute on read, so nothing else needs to run afterwards.
+    once the expected date passed; a project a directory listed on 2026-10-07 read
+    as announced that day, cancelled or not. This applies the ingest rules to what is
+    stored; the tracks recompute on read, so nothing else needs to run afterwards.
     """
-    from tracker.backfill import demote_forecast_events
+    from tracker.backfill import demote_forecast_events, file_listing_dates
 
     writing = apply and not dry_run
     engine = _writable("backfill events") if writing else _read_engine()
     with _explain_db_locks(), session_scope(engine, commit=writing) as session:
         report = demote_forecast_events(session, apply=writing)
+        listings = file_listing_dates(session, apply=writing)
 
     if json_mode():
         emit(
@@ -1304,19 +1307,28 @@ def _backfill_events(*, apply: bool, dry_run: bool) -> None:
                     for (kind, was), n in sorted(report.demoted.items())
                 ],
                 "projects": sorted(report.projects),
+                "listing_dates": {
+                    "announcements": listings.events,
+                    "filed": listings.total,
+                    "projects": sorted(listings.projects),
+                },
                 "applied": writing,
             }
         )
         return
 
     title = "backfill events" + ("" if writing else " (preview)")
-    _print_report_rows(report.as_rows(), title=title)
+    _print_report_rows(report.as_rows() + listings.as_rows(), title=title)
     for (kind, was), count in sorted(report.demoted.items(), key=lambda kv: -kv[1]):
         console.print(f"  {kind:<26} was {was:<18} {count:>5}")
     for pid, kind, when, text in report.examples:
         console.print(f"  [dim]#{pid} {kind} {when}: {escape(text)}[/dim]")
+    for pid, when, text in listings.examples:
+        console.print(f"  [dim]#{pid} announced {when}: {escape(text)}[/dim]")
     if not writing:
-        console.print("\n[dim]Nothing written. `--apply` files them as forecasts.[/dim]")
+        console.print(
+            "\n[dim]Nothing written. `--apply` files them as forecasts and as listing dates.[/dim]"
+        )
 
 
 def _backfill_urls(*, apply: bool, dry_run: bool) -> None:
@@ -1563,7 +1575,9 @@ def backfill(
       of its URL, and take articles already read out of the retry pool. Free.
     * `events` — file as forecasts the stored milestones that only say they are
       expected ("expected to begin operations"), so no progress track counts them
-      as reached. The rule a fresh ingest applies. Free.
+      as reached, and as `listing_date` the announcements whose only date is a
+      directory's own ("first reported Oct 7, 2026"). The rules a fresh ingest
+      applies. Free.
     * `blocks` — re-read stored articles to fill in capacity blocks. The default,
       and the only one that spends anything.
 

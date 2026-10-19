@@ -999,6 +999,57 @@ _DATE_EXPR = _date_expr(r"(?:19[89]\d|20[0-4]\d)")
 #: marks a paragraph as news and a filing's older history is noise.
 _RECENT_DATE_EXPR = _date_expr(r"20[2-4]\d")
 
+#: The labels a directory or tracker page prints before a date of its OWN — when it
+#: listed, last updated or last checked a site — which says nothing about when the
+#: project was announced.
+#:
+#: Written from what those pages print, read off a copy of production on
+#: 2026-10-19: "Canceled · first reported Oct 7, 2026" and "Proposed · first reported
+#: Sep 17, 2026" (a tracker that also says "Nothing dated on this site yet beyond its
+#: listing"), "Removed from the tracker in September 2026", "read back against the
+#: document on Sep 10, 2026", "Hyperscaler · Updated Aug 2026", "Data updated Oct
+#: 2026", "Last updated: September 2026", "As of: Mar 18, 2026", "(accessed October
+#: 19, 2026)", "in a source dated June 19, 2026". That night 17 new rows took such a
+#: date as `first_announced` — 8 of them cancelled or paused, so a dead project read
+#: as newly announced — and 9 "announced" milestones were a tracker's listing line.
+#:
+#: Matched only where the label sits directly before the date. "was first reported
+#: on" is a newspaper saying when a project became public, which is what
+#: `first_announced` means, so the passive form is not a label; neither is a
+#: publication byline ("Published: Jun. 5, 2024"), a dated "Announced" line, nor a
+#: contract "dated as of July 23" — "as of" is a label only with its colon.
+#:
+#: A tracker's "first reported" is the date of the earliest source it holds, which
+#: for a project it met in news of the cancellation is the cancellation. On an old
+#: site it may well be near the announcement — so the value is kept as 待确认 with
+#: this reason, not discarded.
+_LISTING_LABEL: Final = re.compile(
+    r"(?:(?<!\bwas )(?<!\bwere )(?<!\bbeen )(?<!\bis )\bfirst (?:reported|listed|seen|tracked)"
+    r"|\bdate (?:added|listed)|\blisting date|\blisted|\badded"
+    r"|\b(?:tracked|tracking) since|\bin (?:the|our) tracker since"
+    r"|\bremoved from (?:the|our) (?:tracker|map|list)"
+    r"|\b(?:last |data |page )?updated|\bas of\s*:|\baccessed|\bretrieved|\bsource dated"
+    r"|\bread back against the document)"
+    r"\s*[:·|\-–—]?\s*(?:on|in|since)?\s*$",
+    re.IGNORECASE,
+)
+
+
+def _listing_dated(text: str, at: int) -> bool:
+    """Whether the date that starts at `text[at]` is a directory's own (`_LISTING_LABEL`)."""
+    return bool(_LISTING_LABEL.search(text[max(0, at - 64) : at]))
+
+
+def _only_listing_dates(quote: str) -> bool:
+    """Whether every date `quote` gives is a directory's own, and it gives at least one.
+
+    For a milestone, whose date the gate does not otherwise read: a sentence whose
+    only dates are a tracker's listing and update dates cannot date anything that
+    happened to the project.
+    """
+    dates = [m.start() for m in _DATE_EXPR.finditer(quote)]
+    return bool(dates) and all(_listing_dated(quote, at) for at in dates)
+
 
 #: Fields whose value is a *paraphrase* of the article rather than a copy of it.
 #:
@@ -1058,7 +1109,9 @@ def _stated_in(field: str, value: Any, quote: str) -> bool:
     if field == "investment_usd":
         return _matches_quantity(value, quote, _MONEY_EXPR, norm_money_detail, field)
     if field in {"first_announced", "expected_online", "energized_on"}:
-        return _matches_quantity(value, quote, _DATE_EXPR, norm_date_detail, field)
+        return _matches_quantity(
+            value, quote, _DATE_EXPR, norm_date_detail, field, skip=_skipped_dates(field)
+        )
 
     # Everything else is a string we copied out of the article, so it has to be
     # in the quote verbatim.
@@ -1067,9 +1120,33 @@ def _stated_in(field: str, value: Any, quote: str) -> bool:
     return False
 
 
-def _matches_quantity(value: Any, quote: str, expr: re.Pattern[str], parser, field: str) -> bool:
-    """True when any quantity in `quote` normalizes to `value`."""
+def _skipped_dates(field: str) -> Callable[[str, int], bool] | None:
+    """Which dates in a sentence cannot state `field`: a directory's own, for an announcement.
+
+    Only `first_announced`. A tracker's "first reported Oct 7, 2026" is the date of
+    the earliest source it holds, not the day the project was made public; for the
+    other date fields "updated" and "added" are ordinary prose ("the schedule was
+    updated in March 2026"), so the same labels would refuse true sentences there.
+    """
+    return _listing_dated if field == "first_announced" else None
+
+
+def _matches_quantity(
+    value: Any,
+    quote: str,
+    expr: re.Pattern[str],
+    parser,
+    field: str,
+    *,
+    skip: Callable[[str, int], bool] | None = None,
+) -> bool:
+    """True when any quantity in `quote` normalizes to `value`.
+
+    `skip(quote, start)` rules a match out by where it sits — see `_skipped_dates`.
+    """
     for match in expr.finditer(quote):
+        if skip is not None and skip(quote, match.start()):
+            continue
         try:
             parsed = parser(match.group(0), field=field)
         except NormalizationError:
@@ -1395,17 +1472,24 @@ _DATE_FIELDS: Final = frozenset({"first_announced", "expected_online", "energize
 _PRECISION_MONTHS: Final = {"month": 1, "quarter": 3, "half": 6, "year": 12}
 
 
-def _coarser_date(field: str, value: Any, sentences: list[str]) -> tuple[ParsedDate, str] | None:
+def _coarser_date(
+    field: str, value: Any, sentences: list[str], *, listings: bool = False
+) -> tuple[ParsedDate, str] | None:
     """A date a sentence states less precisely than `value`, and that contains it.
 
     "Project announced in 2021" states the year 2021, which contains 2021-06-01 but
     does not state it. The caller keeps the year rather than refusing the field,
-    because the year is exactly what the article published.
+    because the year is exactly what the article published. A directory's own date
+    is no more an announcement at a month's precision than at a day's, so it is
+    passed over here as in `_stated_in`, unless `listings` asks for it.
     """
     if field not in _DATE_FIELDS or not isinstance(value, dt.date):
         return None
+    skip = None if listings else _skipped_dates(field)
     for sentence in sentences:
         for match in _DATE_EXPR.finditer(sentence):
+            if skip is not None and skip(sentence, match.start()):
+                continue
             try:
                 parsed = norm_date_detail(match.group(0), field=field)
             except NormalizationError:
@@ -1419,6 +1503,20 @@ def _coarser_date(field: str, value: Any, sentences: list[str]) -> tuple[ParsedD
             if start <= value < end:
                 return parsed, sentence
     return None
+
+
+def _listing_only(field: str, value: Any, quote: str) -> bool:
+    """Whether `quote` would state `value` for `field` if a directory's own dates counted.
+
+    Asked once the value is refused, so a date the sentence states some other way has
+    already been looked for: true here means its only statement of the date is a
+    listing, update or check date (`_LISTING_LABEL`).
+    """
+    if _skipped_dates(field) is None:
+        return False
+    return _matches_quantity(value, quote, _DATE_EXPR, norm_date_detail, field) or (
+        _coarser_date(field, value, [quote], listings=True) is not None
+    )
 
 
 def evidence_gate(
@@ -1548,12 +1646,16 @@ def evidence_gate(
             if precisions is not None and stated.precision:
                 precisions[name] = stated.precision
         else:
-            # Which of the three refusals this was, in the order that makes the
-            # strongest true statement. A verified quote filed under this name
-            # means the article does have a sentence about it and the sentence
-            # does not state this value; a failed quote means the model wrote one
-            # nobody published; neither means simply that nothing backed it.
-            if name in quotes:
+            # Which of the refusals this was, in the order that makes the strongest
+            # true statement. A sentence stating the date only as a directory's own
+            # is the most specific: the date is real and is not this one's. A
+            # verified quote filed under this name means the article does have a
+            # sentence about it and the sentence does not state this value; a failed
+            # quote means the model wrote one nobody published; neither means simply
+            # that nothing backed it.
+            if any(_listing_only(name, value, q) for q in verified):
+                dropped[name] = "listing_date"
+            elif name in quotes:
                 dropped[name] = "quote_off_target"
             elif name in unverified:
                 dropped[name] = "quote_unverified"
@@ -1709,6 +1811,16 @@ def _events(raw: dict[str, Any], article_text: str, url: str) -> list[EventRecor
                     event_type,
                 )
                 unconfirmed = "forecast"
+            elif event_type == "announced" and _only_listing_dates(recovered.text):
+                # A directory's listing line — "Proposed · first reported Sep 17,
+                # 2026" — dates the listing, not the announcement. Nine announcements
+                # on 2026-10-19 were dated this way, some on projects already dead.
+                log.warning(
+                    "event quote for announced gives only a directory's listing date; "
+                    "keeping it as 待确认: %r",
+                    _for_log(recovered.text),
+                )
+                unconfirmed = "listing_date"
             else:
                 quote = recovered.text[:500]
         # The model's own description can say it plainly when the quote does not:

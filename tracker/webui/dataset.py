@@ -94,6 +94,8 @@ _REASON_NOTES: dict[str, str] = {
     "quote_off_target": "the article's sentence for this does not state this value",
     "out_of_scale": "quoted, but implausible for a site this size — usually a "
     "programme-wide total quoted in an article about one campus",
+    "listing_date": "the only date given is a directory's own — when it listed, "
+    "updated or first reported the site — not when the project was announced",
 }
 
 

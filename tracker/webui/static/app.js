@@ -2596,8 +2596,12 @@ function Timeline({ p, data }) {
                       <span style=${{ ...chip("--warning"), marginLeft: 8 }}
                             title=${e.unconfirmed === "forecast"
                               ? "The article only expected this, so no track counts it as reached."
-                              : undefined}>
-                        ${e.unconfirmed === "forecast" ? "expected, not reported done" : "not cited"}</span>`}
+                              : e.unconfirmed === "listing_date"
+                                ? "The only date the source gives is when a directory listed the site, not when the project was announced."
+                                : undefined}>
+                        ${e.unconfirmed === "forecast" ? "expected, not reported done"
+                          : e.unconfirmed === "listing_date" ? "listing date, not announced"
+                          : "not cited"}</span>`}
                   </span>
                 </div>`)}
               ${moreEvents}

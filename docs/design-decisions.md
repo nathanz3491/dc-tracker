@@ -338,6 +338,19 @@ programme-wide total quoted in an article about one campus — sends you to corr
 a figure you already have. Going looking for a citation for that one would find
 one, and it would still be the wrong number.
 
+`listing_date` is the same kind of case for a date. Directory and tracker pages
+print dates of their own — "Canceled · first reported Oct 7, 2026", "Data updated
+Oct 2026", "Last updated: September 2026", "(accessed October 19, 2026)" — and the
+model read them as the day a project was announced: 17 new rows on 2026-10-19, 8 of
+them projects already cancelled or paused, and 9 announcement milestones. The gate
+now passes over a date introduced by one of those labels (`crawl._LISTING_LABEL`,
+written from what the pages actually print) when it checks `first_announced`, and
+refuses an `announced` milestone whose sentence has no other date. Only there:
+for an expected-online date, "operational as of January 2027" is ordinary prose.
+The value is kept as 待确认 with that reason, because the work it asks for is
+neither a correction nor a re-read — the page will never say anything else — but
+another source.
+
 ## Deriving county and coordinates
 
 Three of the twelve fields are a lookup, not a research problem, and no amount of

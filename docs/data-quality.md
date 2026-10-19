@@ -155,6 +155,14 @@ filed 46 of them as forecasts, 31 announcements among them, throwing their quote
 away; `--refused-before-gate` re-reads those articles first (below), and the re-read
 confirms each milestone through the same path that confirms any re-read one.
 
+An announcement is also not dated by a directory's own date. Tracker pages print
+when they listed or last touched a site — "Canceled · first reported Oct 7, 2026",
+"Data updated Oct 2026" — and the gate keeps such a date as 待确认 with the reason
+`listing_date`, for `first_announced` and for an `announced` milestone whose
+sentence gives no other date. `tracker backfill events` applies the milestone half
+to what is stored (15 on the 2026-10-19 copy); the field half reaches stored rows
+when their article is re-read.
+
 Two of them ask a narrower question than the rest: not whether the row's fields
 agree with each other, but whether a stored **number** agrees with the citations
 under it.
