@@ -137,6 +137,7 @@ def version(
 @app.command()
 def init() -> None:
     """Create or upgrade the database, then recompute the cached derived values."""
+    from tracker import keys as keys_mod
     from tracker.upsert import (
         recompute_blocks,
         recompute_confidence,
@@ -147,6 +148,9 @@ def init() -> None:
     path = _db_path()
     engine, applied = init_db(path)
     with session_scope(engine) as session:
+        # First, so a deploy that teaches the company rules a new spelling makes
+        # every stored row reachable by it before the next article arrives.
+        remembered = len(keys_mod.sync(session).added)
         rescored = recompute_confidence(session)
         # Both of these are restatements of stored facts rather than facts, so
         # they are recomputed rather than migrated: the conversion ratio lives in
@@ -161,6 +165,8 @@ def init() -> None:
     else:
         console.print("schema already current, nothing to apply")
     console.print(f"schema version: {schema_version(engine)}")
+    if remembered:
+        console.print(f"remembered {remembered} key(s) campuses can now be reached by")
     if rescored:
         console.print(f"recomputed confidence on {rescored} project(s)")
     if reblocked:

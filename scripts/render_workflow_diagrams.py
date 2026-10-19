@@ -608,8 +608,8 @@ def duplicates() -> Canvas:
         role="cool", title_size=12,
     )
     p5 = c.box(
-        48, 496, 236, 70, "5 · tonight's new rows",
-        ["each against its likeliest twin: one", "row's town, the other's county, or", "within 25 km (--created-since)"],
+        48, 496, 236, 70, "5 · the last 3 days' new rows",
+        ["each against its likeliest twin: a shared", "town or county, one operator within reach,", "or one operator's project name; 60 a night"],
         role="cool", title_size=12,
     )
 
@@ -644,7 +644,7 @@ def duplicates() -> Canvas:
     c.text(576, 362, "can never carry a merge on its own.", size=10.5, colour=SLATE)
     c.text(
         576, 378,
-        "'shared operator' reads project_party as well as the two company strings — the case where four articles each named one party.",
+        "'shared operator' reads project_party as well as the two company strings — never a utility or a contractor, who serve a region.",
         size=10.5, colour=SLATE,
     )
 
@@ -697,7 +697,7 @@ def duplicates() -> Canvas:
 
     rails = c.box(
         556, 696, 356, 198, "Rails · what --merge still refuses, one function for both judges",
-        ["· confidence under the floor — 0.85 for the agent, 0.9 for", "   the one-call path, far above what a park needs", "· evidence is only a shared name word, even with --weak", "· evidence is only a cross-granularity key match — the old", "   path refuses outright; the agent may rule, because it", "   can read the articles and be a person with a map", "· the only shared tranche names a market and a sequence:", "   iad-3, hillsboro-1, held by two operators 60 km apart", "· the names differ by an ordinal — Polaris Forge 1 and 2", "· the coordinates are over 25 km apart. Geography wins", "· the agent quoted no sentence from an article it read"],
+        ["· confidence under the floor — 0.85 for the agent, 0.9 for", "   the one-call path, far above what a park needs", "· evidence is only a shared name word — unless both rows are", "   one operator's and the judge read the articles", "· evidence is only a cross-granularity key match — the old", "   path refuses outright; the agent may rule, because it", "   can read the articles and be a person with a map", "· the only shared tranche names a market and a sequence:", "   iad-3, hillsboro-1, held by two operators 60 km apart", "· the names differ by an ordinal — Polaris Forge 1 and 2", "· further apart than a campus spans: 25 km, +20 a town centre", "· the agent quoted no sentence from an article it read"],
         role="red", title_size=13, align="left", sub_size=10.2,
     )
     c.arrow([same.right(), (533, same.cy), (533, rails.cy), (556, rails.cy)], colour=RED)

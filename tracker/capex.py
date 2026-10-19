@@ -1405,8 +1405,18 @@ def twin_pairs(session: Session, project_ids: list[int]) -> list[DuplicatePair]:
     much evidence it carries, then by distance. A row with none is simply checked.
 
     Pairs already ruled out are skipped, as everywhere else.
+
+    **Distances are read as what they are.** Most stored coordinates are a town's
+    Census centre, so the rail allows for that (`dupresolve.distance_limit`): Crusoe's
+    campus filed under Amarillo and under Claude is 44 km of centroid from itself.
+    And **one operator in one state is a candidate on its own**: two rows of one
+    company within that reach are asked about even when nothing else connects them,
+    since the operator is exactly what a twin shares — on 2026-10-19 Menlo Digital's
+    campus sat filed under Phoenix and under Ahwatukee, a Phoenix neighbourhood, with
+    no word in common to raise it.
     """
-    from tracker.dupresolve import FAR_APART_KM, km_apart
+    from tracker.dedup import same_operator
+    from tracker.dupresolve import FAR_APART_KM, centroid_ids, distance_limit, km_apart
     from tracker.pairs import canonical, parked_keys
 
     projects = session.scalars(select(Project)).all()
@@ -1415,8 +1425,10 @@ def twin_pairs(session: Session, project_ids: list[int]) -> list[DuplicatePair]:
     where = block_key_localities(projects)
     parked = parked_keys(session)
     raised = {canonical(p.a_id, p.b_id): p for p in suspected_duplicates(session)}
+    centroids = centroid_ids(session)
 
     out: list[DuplicatePair] = []
+    asked: set[tuple[int, int]] = set()
     for pid in sorted(set(project_ids)):
         row = by_id.get(pid)
         if row is None:
@@ -1430,22 +1442,36 @@ def twin_pairs(session: Session, project_ids: list[int]) -> list[DuplicatePair]:
             if pair_key in parked:
                 continue
             distance = km_apart(row, other)
-            if distance is not None and distance > FAR_APART_KM:
+            if distance is not None and distance > distance_limit(row, other, centroids):
                 continue
             pair = raised.get(pair_key)
             if pair is None:
                 shared_place = places & _place_words(other)
-                if not shared_place and distance is None:
+                operator = same_operator(row.company, other.company)
+                if not shared_place and distance is None and not operator:
                     continue
                 found = _pair_evidence(row, other, keys, where)
-                if not any(found.values()):
+                if not shared_place and distance is None and not found["shared_tokens"]:
+                    # Unplaced, so only a name can connect them: one operator naming
+                    # one project in one state. Galaxy's Helios under "Afton" and under
+                    # Dickens County, TeraWulf's Chesapeake under "Newburg" and under
+                    # Charles County — towns the Census file does not list, so nothing
+                    # ever placed them near each other.
+                    continue
+                if not any(found.values()) and not operator:
                     continue
                 a, b = (row, other) if row.id < other.id else (other, row)
-                granularity = (
+                granularity: tuple[str, ...] = (
                     ("city and county granularity differ",)
                     if shared_place and (a.city is None) != (b.city is None)
                     else ()
                 )
+                if operator and not granularity and not any(found.values()):
+                    # Nothing but the operator and the place: say so, in the field a
+                    # reading judge is allowed to act on (`identity`), with the
+                    # measure that raised it.
+                    reach = "in one place" if distance is None else f"{distance:.0f} km apart"
+                    granularity = (f"one operator, {reach}",)
                 pair = DuplicatePair(
                     a_id=a.id,
                     a_company=a.company,
@@ -1467,7 +1493,10 @@ def twin_pairs(session: Session, project_ids: list[int]) -> list[DuplicatePair]:
             )
             if best is None or weight < best[0]:
                 best = (weight, pair)
-        if best is not None:
+        # Once per pair: two rows both created in the window are each the other's
+        # likeliest twin, and on 2026-10-19 such pairs were asked twice a night.
+        if best is not None and canonical(best[1].a_id, best[1].b_id) not in asked:
+            asked.add(canonical(best[1].a_id, best[1].b_id))
             out.append(best[1])
     return out
 

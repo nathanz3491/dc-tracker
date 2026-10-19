@@ -419,7 +419,28 @@ def shared_across_companies(a: Any, b: Any) -> set[str]:
     """
     if company_key(getattr(a, "company", None)) == company_key(getattr(b, "company", None)):
         return set()
-    return keys_for(a) & keys_for(b)
+    return _identifying_keys(a) & _identifying_keys(b)
+
+
+#: Roles that say nothing about *which* campus a row is. A utility serves every site
+#: in its territory and a contractor builds for anybody — Dominion is a party on ten
+#: rows and Oncor on seven — so sharing one is a statement about a region, and
+#: `dupresolve.HARD_EVIDENCE` trusts `party` enough to carry a merge. On 2026-10-19
+#: the twin pass offered AWS's Project Rainier and Microsoft's La Porte campus, two
+#: companies 50 km apart in Indiana, on a shared utility alone; the one pair of that
+#: kind already in the report linked two RagingWire rows through a door vendor.
+#: A shared tenant still counts: Stargate filed under Crusoe and under Oracle, both
+#: naming OpenAI, is the shape this signal was built for.
+_NOT_IDENTIFYING_ROLES: frozenset[str] = frozenset({"utility", "contractor"})
+
+
+def _identifying_keys(project: Any) -> set[str]:
+    """`keys_for`, without the parties whose role names a region rather than a site."""
+    from tracker.dedup import company_parts
+
+    rows = list(getattr(project, "parties", ()) or ())
+    keys = {p.party_key for p in rows if p.party_key and p.role not in _NOT_IDENTIFYING_ROLES}
+    return keys | company_parts(getattr(project, "company", None))
 
 
 def buying_keys(project: Any) -> set[str]:

@@ -34,10 +34,10 @@
 <text x="166.0" y="469.7" font-size="10" fill="#5C6B73" text-anchor="middle">places that do not match: Colossus,</text>
 <text x="166.0" y="483.3" font-size="10" fill="#5C6B73" text-anchor="middle">Project Jupiter, Polaris Forge 1</text>
 <rect x="48.0" y="496.0" width="236.0" height="70.0" rx="7" fill="#EDF1F2" stroke="#B9C6CC" stroke-width="1.3"/>
-<text x="166.0" y="515.1" font-size="12" fill="#16242E" text-anchor="middle" font-weight="700">5 · tonight's new rows</text>
-<text x="166.0" y="532.1" font-size="10" fill="#5C6B73" text-anchor="middle">each against its likeliest twin: one</text>
-<text x="166.0" y="545.7" font-size="10" fill="#5C6B73" text-anchor="middle">row's town, the other's county, or</text>
-<text x="166.0" y="559.3" font-size="10" fill="#5C6B73" text-anchor="middle">within 25 km (--created-since)</text>
+<text x="166.0" y="515.1" font-size="12" fill="#16242E" text-anchor="middle" font-weight="700">5 · the last 3 days' new rows</text>
+<text x="166.0" y="532.1" font-size="10" fill="#5C6B73" text-anchor="middle">each against its likeliest twin: a shared</text>
+<text x="166.0" y="545.7" font-size="10" fill="#5C6B73" text-anchor="middle">town or county, one operator within reach,</text>
+<text x="166.0" y="559.3" font-size="10" fill="#5C6B73" text-anchor="middle">or one operator's project name; 60 a night</text>
 <rect x="330.0" y="274.0" width="200.0" height="200.0" rx="7" fill="#F7F9F9" stroke="#B9C6CC" stroke-width="1.3"/>
 <text x="430.0" y="324.1" font-size="13" fill="#16242E" text-anchor="middle" font-weight="700">A suspected pair</text>
 <text x="430.0" y="341.1" font-size="10" fill="#5C6B73" text-anchor="middle">carrying every signal that</text>
@@ -67,7 +67,7 @@
 <text x="576.0" y="330.0" font-size="10.5" fill="#5C6B73" text-anchor="start">The order is what a reader can act on. 'city vs county' led it on the strength of being structural, so the report opened</text>
 <text x="576.0" y="346.0" font-size="10.5" fill="#5C6B73" text-anchor="start">with 31 of 49 pairs of the one class no automated path can settle. A shared name word is a word: it sorts last, and it</text>
 <text x="576.0" y="362.0" font-size="10.5" fill="#5C6B73" text-anchor="start">can never carry a merge on its own.</text>
-<text x="576.0" y="378.0" font-size="10.5" fill="#5C6B73" text-anchor="start">'shared operator' reads project_party as well as the two company strings — the case where four articles each named one party.</text>
+<text x="576.0" y="378.0" font-size="10.5" fill="#5C6B73" text-anchor="start">'shared operator' reads project_party as well as the two company strings — never a utility or a contractor, who serve a region.</text>
 <rect x="576.0" y="408.0" width="216.0" height="104.0" rx="7" fill="#E7EDEE" stroke="#B9C6CC" stroke-width="1.3"/>
 <text x="684.0" y="437.3" font-size="12" fill="#16242E" text-anchor="middle" font-weight="700">Grouped</text>
 <text x="684.0" y="454.3" font-size="10" fill="#5C6B73" text-anchor="middle">pairs sharing an id are the</text>
@@ -127,18 +127,19 @@
 <text x="1036.0" y="717.1" font-size="10" fill="#5C6B73" text-anchor="middle">which of them read the sources</text>
 <polyline points="510.0,659.0 700.0,659.0 700.0,682.0 936.0,682.0" fill="none" stroke="#0F6E75" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#a0F6E75)"/>
 <rect x="556.0" y="696.0" width="356.0" height="198.0" rx="7" fill="#F7EBE9" stroke="#A83E33" stroke-width="1.3"/>
-<text x="570.0" y="724.7" font-size="13" fill="#A83E33" text-anchor="left" font-weight="700">Rails · what --merge still refuses, one function for both judges</text>
-<text x="570.0" y="741.7" font-size="10.2" fill="#5C6B73" text-anchor="left">· confidence under the floor — 0.85 for the agent, 0.9 for</text>
-<text x="570.0" y="755.3" font-size="10.2" fill="#5C6B73" text-anchor="left">   the one-call path, far above what a park needs</text>
-<text x="570.0" y="768.9" font-size="10.2" fill="#5C6B73" text-anchor="left">· evidence is only a shared name word, even with --weak</text>
-<text x="570.0" y="782.5" font-size="10.2" fill="#5C6B73" text-anchor="left">· evidence is only a cross-granularity key match — the old</text>
-<text x="570.0" y="796.1" font-size="10.2" fill="#5C6B73" text-anchor="left">   path refuses outright; the agent may rule, because it</text>
-<text x="570.0" y="809.7" font-size="10.2" fill="#5C6B73" text-anchor="left">   can read the articles and be a person with a map</text>
-<text x="570.0" y="823.3" font-size="10.2" fill="#5C6B73" text-anchor="left">· the only shared tranche names a market and a sequence:</text>
-<text x="570.0" y="836.9" font-size="10.2" fill="#5C6B73" text-anchor="left">   iad-3, hillsboro-1, held by two operators 60 km apart</text>
-<text x="570.0" y="850.5" font-size="10.2" fill="#5C6B73" text-anchor="left">· the names differ by an ordinal — Polaris Forge 1 and 2</text>
-<text x="570.0" y="864.1" font-size="10.2" fill="#5C6B73" text-anchor="left">· the coordinates are over 25 km apart. Geography wins</text>
-<text x="570.0" y="877.7" font-size="10.2" fill="#5C6B73" text-anchor="left">· the agent quoted no sentence from an article it read</text>
+<text x="570.0" y="717.9" font-size="13" fill="#A83E33" text-anchor="left" font-weight="700">Rails · what --merge still refuses, one function for both judges</text>
+<text x="570.0" y="734.9" font-size="10.2" fill="#5C6B73" text-anchor="left">· confidence under the floor — 0.85 for the agent, 0.9 for</text>
+<text x="570.0" y="748.5" font-size="10.2" fill="#5C6B73" text-anchor="left">   the one-call path, far above what a park needs</text>
+<text x="570.0" y="762.1" font-size="10.2" fill="#5C6B73" text-anchor="left">· evidence is only a shared name word — unless both rows are</text>
+<text x="570.0" y="775.7" font-size="10.2" fill="#5C6B73" text-anchor="left">   one operator's and the judge read the articles</text>
+<text x="570.0" y="789.3" font-size="10.2" fill="#5C6B73" text-anchor="left">· evidence is only a cross-granularity key match — the old</text>
+<text x="570.0" y="802.9" font-size="10.2" fill="#5C6B73" text-anchor="left">   path refuses outright; the agent may rule, because it</text>
+<text x="570.0" y="816.5" font-size="10.2" fill="#5C6B73" text-anchor="left">   can read the articles and be a person with a map</text>
+<text x="570.0" y="830.1" font-size="10.2" fill="#5C6B73" text-anchor="left">· the only shared tranche names a market and a sequence:</text>
+<text x="570.0" y="843.7" font-size="10.2" fill="#5C6B73" text-anchor="left">   iad-3, hillsboro-1, held by two operators 60 km apart</text>
+<text x="570.0" y="857.3" font-size="10.2" fill="#5C6B73" text-anchor="left">· the names differ by an ordinal — Polaris Forge 1 and 2</text>
+<text x="570.0" y="870.9" font-size="10.2" fill="#5C6B73" text-anchor="left">· further apart than a campus spans: 25 km, +20 a town centre</text>
+<text x="570.0" y="884.5" font-size="10.2" fill="#5C6B73" text-anchor="left">· the agent quoted no sentence from an article it read</text>
 <polyline points="510.0,735.0 533.0,735.0 533.0,795.0 556.0,795.0" fill="none" stroke="#A83E33" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#aA83E33)"/>
 <rect x="936.0" y="756.0" width="200.0" height="110.0" rx="7" fill="#E7EDEE" stroke="#B9C6CC" stroke-width="1.3"/>
 <text x="1036.0" y="774.7" font-size="12.5" fill="#16242E" text-anchor="middle" font-weight="700">tracker merge</text>

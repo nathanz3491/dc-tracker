@@ -87,6 +87,9 @@ class DeriveReport:
     changed: int = 0
     #: Blocks inserted, updated or deleted by the rebuild.
     blocks_touched: int = 0
+    #: Keys written to `project_alias` so a row stays reachable under the key it
+    #: would be filed under today (`tracker.keys.sync`). Whole-table runs only.
+    keys_remembered: int = 0
     #: Every field that moved, in project order.
     changes: list[Change] = dc_field(default_factory=list)
     #: Fields the sources still disagree about, as `recompute_from_sources`
@@ -109,6 +112,7 @@ class DeriveReport:
             ("projects changed", self.changed),
             ("field values moved", len(self.changes)),
             ("blocks rebuilt", self.blocks_touched),
+            ("keys remembered", self.keys_remembered),
         ]
 
 
@@ -130,6 +134,13 @@ def run(session: Session, *, project_id: int | None = None) -> DeriveReport:
         query = query.where(Project.id == project_id)
 
     report = DeriveReport()
+    if project_id is None:
+        # Before the recompute, and on every whole-table run: a change to the
+        # company rules reaches stored rows only through here and `tracker init`,
+        # and the nightly loop runs this twice a round. See `tracker.keys`.
+        from tracker import keys as keys_mod
+
+        report.keys_remembered = len(keys_mod.sync(session).added)
     for project in session.scalars(query).all():
         report.projects += 1
         if not project.sources:

@@ -35,6 +35,7 @@ from dataclasses import dataclass, field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from tracker import keys as keys_mod
 from tracker import watchlist
 from tracker.models import Event, Project, ProjectAlias, Risk, utcnow
 from tracker.normalize import url_identity
@@ -181,6 +182,15 @@ def merge_projects(
             # identity. See `_record_alias`, where a re-recorded key is different.
             alias.to_project_id = keep.id
         result.aliases_recorded += _record_alias(session, dupe.dedup_key, keep, by=by)
+        # And the key the folded row would be filed under today, when that is not
+        # the key it was born with — a town learned since, a spelling the company
+        # rules have learned since. Otherwise the next article computes that key,
+        # finds no row and no alias, and re-creates the campus. See `tracker.keys`.
+        # Only when unclaimed: an alias already answering that key is somebody's
+        # earlier decision about a third row, and this fold says nothing about it.
+        natural = keys_mod.natural_key(dupe)
+        if natural != dupe.dedup_key and keys_mod.remember(session, keep, key=natural, by=by):
+            result.aliases_recorded += 1
 
         # Read the decision history off before the row goes. Sources, events,
         # risks and the identity are all carried across; the record of what a

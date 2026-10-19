@@ -58,6 +58,12 @@
 # Digital Realty), and subsidiaries filed under their own name. `tracker coverage`
 # prints the spellings it matched, so a wrong alias is visible rather than quietly
 # folding two operators into one.
+#
+# **Since 2026-10-20 these aliases are identity, not only coverage.**
+# `dedup.company_key` reads them (exact spellings only, never the loose token
+# match), so an article about "RagingWire, Sacramento" files under the NTT row
+# there. That is what an alias claims — the same operator — and a wrong one now
+# routes evidence to the wrong row: add a spelling only when it is one company.
 
 # --- hyperscalers ------------------------------------------------------------
 
@@ -341,7 +347,8 @@ kind = "landlord"
 [[operator]]
 name = "PowerHouse Data Centers"
 kind = "landlord"
-aliases = ["Powerhouse Data Centers", "Related Digital", "PowerHouse"]
+aliases = ["Powerhouse Data Centers", "PowerHouse"]
+note = "American Real Estate Partners' data-center arm. Not Related Digital, which is the Related Companies' (Stargate Michigan's developer) and was listed here by mistake until aliases became identity."
 
 [[operator]]
 name = "Corscale"

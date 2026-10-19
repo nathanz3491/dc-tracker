@@ -189,6 +189,21 @@ class Place:
         return len(self.counties) > 1
 
 
+def _decode(raw: bytes) -> str:
+    """Census text, which is UTF-8 — read as Latin-1 it garbled every accented name.
+
+    Both reference files were read as Latin-1, so "Doña Ana County" (NM) came out as
+    "DoÃ±a Ana County" and matched nothing: the county canonicalisation could not
+    reach Project Jupiter's two rows, which store "Doña Ana County" and "Doña Ana".
+    Latin-1 stays as the fallback, since it decodes any byte, for a file that is
+    ever not UTF-8.
+    """
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return raw.decode("latin-1")
+
+
 def load_counties(path: Path) -> dict[tuple[str, str], list[str]]:
     """(state, place_key) → every county the place touches, in file order.
 
@@ -198,7 +213,7 @@ def load_counties(path: Path) -> dict[tuple[str, str], list[str]]:
     out: dict[tuple[str, str], list[str]] = {}
     aliased: list[tuple[tuple[str, str], str]] = []
 
-    with path.open(encoding="latin-1", newline="") as handle:
+    with io.StringIO(_decode(path.read_bytes()), newline="") as handle:
         for row in csv.DictReader(handle, delimiter="|"):
             state = (row.get("STATE") or "").strip().upper()
             name = row.get("PLACENAME")
@@ -253,8 +268,8 @@ def _read_gazetteer(path: Path) -> str:
             members = [n for n in archive.namelist() if n.lower().endswith(".txt")]
             if not members:
                 raise GeoDataMissing(f"{path} contains no .txt member")
-            return archive.read(members[0]).decode("latin-1")
-    return path.read_text(encoding="latin-1")
+            return _decode(archive.read(members[0]))
+    return _decode(path.read_bytes())
 
 
 def load_places(data_dir: Path) -> dict[tuple[str, str], Place]:
@@ -316,7 +331,7 @@ def county_names(data_dir: Path) -> dict[tuple[str, str], str]:
         raise GeoDataMissing(f"missing {path.name} in {data_dir}\n  <-  {SOURCE_URLS[COUNTY_FILE]}")
 
     out: dict[tuple[str, str], str] = {}
-    with path.open(encoding="latin-1", newline="") as handle:
+    with io.StringIO(_decode(path.read_bytes()), newline="") as handle:
         for row in csv.DictReader(handle, delimiter="|"):
             state = (row.get("STATE") or "").strip().upper()
             name = (row.get("COUNTYNAME") or "").strip()

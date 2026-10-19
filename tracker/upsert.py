@@ -36,6 +36,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from tracker import confidence as conf
+from tracker import keys as keys_mod
 from tracker.dedup import (
     all_keys,
     dedup_key,
@@ -1612,6 +1613,13 @@ def upsert_record(
             f"{NOTE_PREFIX} a record arriving as `{routed_from}` was routed here: that "
             "identity was merged into this row, and `project_alias` remembers the decision."
         )
+    elif routed_from is not None and routed_by == "arbiter":
+        derived.append(
+            f"{NOTE_PREFIX} a record arriving as `{routed_from}` was routed here by the "
+            "identity check, which read the article and judged it this campus; "
+            "`project_alias` now remembers that key, so the next article spelled that way "
+            "comes straight here. Undo with `tracker merge` or by deleting the alias."
+        )
     elif routed_from is not None:
         # Deliberately not the sentence above. Nothing remembers this one: it was a
         # judgement made while reading one article, so the note has to say that the
@@ -1686,6 +1694,17 @@ def upsert_record(
         else:
             project.updated_at = utcnow()
     session.flush()
+
+    # --- Every key this row answers to --------------------------------------
+    # The identity check's route is remembered: an article spelled that way will
+    # arrive again, and on 2026-10-19 the same key was routed at insert and then,
+    # two hours later, refused by a re-read that had no alias to follow. And the
+    # row's own natural key is remembered when its identity has moved since it was
+    # born — a town filled in, a spelling the company rules have since learned —
+    # because the stored key is never rewritten. See `tracker.keys`.
+    if routed_from is not None and routed_by == "arbiter":
+        keys_mod.remember(session, project, key=routed_from, by=keys_mod.ARBITER)
+    keys_mod.remember(session, project)
 
     return UpsertResult(
         project_id=project.id,

@@ -475,12 +475,38 @@ def test_the_morning_report_breaks_spend_down_by_phase_and_in_money(tmp_path):
 
 def test_every_row_the_night_adds_gets_one_attempt_to_fold():
     """The regular pass only sees pairs within one town or one company, which is how
-    a new 10 GW PORTS row sat beside its duplicate unpaired on 2026-10-05."""
+    a new 10 GW PORTS row sat beside its duplicate unpaired on 2026-10-05.
+
+    Over a lookback rather than tonight alone (10-19 left about 16 twins a capped or
+    blind pass never revisited), capped, and after the Census lookup has placed the
+    new rows — before it, a row filed by town met a twin filed by county and saw
+    nothing in common."""
     text = SCRIPT.read_text(encoding="utf-8")
     assert "STARTED_UTC=$(date -u '+%Y-%m-%d %H:%M:%S')" in text
-    assert '--created-since "$STARTED_UTC"' in text
+    assert "TWINS=60\n" in text and "TWIN_DAYS=3\n" in text
+    assert '--created-since "$TWIN_SINCE" --limit "$TWINS"' in text
     discover = text.index('tracker ingest crawl --from-queue --new-first --limit "$DISCOVER"')
-    assert text.index('--created-since "$STARTED_UTC"') > discover, "after the rows exist"
+    geo = text.index("tracker ingest geo", discover)
+    twins = text.index('--created-since "$TWIN_SINCE"')
+    assert discover < geo < twins, "after the rows exist, and after they are placed"
+
+
+@needs_bash
+def test_the_twin_lookback_is_days_before_now_in_utc(tmp_path):
+    """The lookback is computed in Python because BSD and GNU `date` disagree."""
+    import datetime as dt
+
+    text = SCRIPT.read_text(encoding="utf-8")
+    start = text.index("TWIN_SINCE=$(")
+    line = text[start : text.index('"$TWIN_DAYS")', start) + len('"$TWIN_DAYS")')]
+    script = f'PY="{PY}"\nTWIN_DAYS=3\n{line}\necho "$TWIN_SINCE"\n'
+    done = subprocess.run(
+        [BASH, "-c", script], cwd=tmp_path, capture_output=True, text=True, timeout=60, check=False
+    )
+    assert done.returncode == 0, done.stderr
+    since = dt.datetime.strptime(done.stdout.strip(), "%Y-%m-%d %H:%M:%S")
+    expected = dt.datetime.now(dt.UTC).replace(tzinfo=None) - dt.timedelta(days=3)
+    assert abs((since - expected).total_seconds()) < 120
 
 
 def test_the_first_round_asks_publishers_for_dates_and_rereads_old_prompts():

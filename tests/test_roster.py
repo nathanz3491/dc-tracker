@@ -134,7 +134,9 @@ def test_identity_drops_the_words_every_operator_shares():
     ("stored", "how"),
     [
         ("Nebius", "exact"),
-        ("Nebius Group N.V.", "loose"),
+        # Exact since "N.V." stopped slugging to an unmatched "n v": the initialism is
+        # a legal suffix like "nv", and "Nebius Group" is an alias.
+        ("Nebius Group N.V.", "exact"),
         ("NEBIUS GROUP", "exact"),  # via the alias, normalized
         ("Nebius AI Cloud", "loose"),
     ],
@@ -154,7 +156,9 @@ def test_matching_is_one_directional():
     operator = roster.Operator(name="Cipher Mining", kind="neocloud")
     assert operator.matches("Cipher Mining Inc.") is not None
     assert operator.matches("Cipher") is None
-    assert operator.matches("Cipher Digital Inc.") is None
+    # Not "Cipher Digital": the roster records that one as Cipher Mining's own
+    # subsidiary, and identity now reads the roster's aliases (`dedup._alias_table`).
+    assert operator.matches("Cipher Robotics Inc.") is None
 
 
 def test_a_generic_stored_name_matches_nothing():

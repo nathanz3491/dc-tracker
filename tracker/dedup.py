@@ -21,18 +21,42 @@ from __future__ import annotations
 import re
 import unicodedata
 from dataclasses import dataclass
+from functools import lru_cache
 
 #: Legal and structural suffixes that carry no identity. Order matters only in
 #: that longer forms must be tried before their prefixes.
+#:
+#: **The industry's own words are suffixes too.** "Compass Datacenters", "Novva
+#: Data Centers", "EdgeCore Digital Infrastructure" and plain "Compass", "Novva",
+#: "EdgeCore" are one company each, and on 2026-10-19 the night's 96 new rows held
+#: five companies a second time under the longer spelling — every one a key no
+#: earlier row carried, so a campus the database already held came in as a new row
+#: beside it. Only *trailing* words are stripped, so "Digital Realty" and "Applied
+#: Digital" keep the word that is their name.
 # fmt: off
 _COMPANY_SUFFIXES = (
-    "incorporated", "corporation", "holdings", "technologies", "platforms",
-    "properties", "partners", "ventures", "international", "industries",
-    "enterprises", "solutions", "services", "systems", "group", "company",
-    "limited", "inc", "corp", "llc", "lllp", "llp", "lp", "ltd", "plc",
-    "co", "sa", "nv", "ag", "gmbh", "pte", "pty",
+    "digital infrastructure",
+    "data centers", "data centres", "data center", "data centre",
+    "datacenters", "datacentres", "datacenter", "datacentre",
+    "incorporated", "corporation", "holdings", "technologies", "technology",
+    "platforms", "properties", "partners", "ventures", "international",
+    "industries", "enterprises", "solutions", "services", "systems", "group",
+    "company", "limited", "inc", "corp", "llc", "lllp", "llp", "lp", "ltd",
+    "plc", "co", "sa", "nv", "ag", "gmbh", "pte", "pty",
 )
 # fmt: on
+
+#: "(AWS)", "[NYSE: CORZ]": what a company is also called, or its ticker. Read as
+#: the company's name it would make "Amazon (AWS)" a key of its own — measured, one
+#: of three keys Amazon's rows were split across.
+_PARENTHETICAL = re.compile(r"\s*[\(\[][^)\]]*[\)\]]")
+
+#: "L.P.", "N.V.", "S.A.": an initialism whose dots `_slug` would turn into spaces,
+#: leaving "l p" that no suffix in the table matches ("Prologis, L.P.").
+_INITIALISM = re.compile(r"\b(?:[A-Za-z]\.){2,}")
+
+#: "Amazon.com" is Amazon. Only `.com`: ".ai" is part of a name ("X.AI").
+_DOT_COM = re.compile(r"\.com\b", re.IGNORECASE)
 
 #: Distinct legal names for one operator. Without these, "Amazon Web Services"
 #: and "Amazon" produce two projects for one site — the exact failure the PRD
@@ -141,27 +165,26 @@ def company_slug(key: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", (key or "").lower()).strip("-")[:81]
 
 
-def company_key(company: str | None) -> str:
-    """Normalized company identity.
+def _company_slug(company: str) -> str:
+    """`_slug` after the punctuation that hides a company's name is dealt with."""
+    text = _PARENTHETICAL.sub(" ", company).strip() or company
+    text = _INITIALISM.sub(lambda m: m.group(0).replace(".", ""), text)
+    text = _DOT_COM.sub("", text)
+    return _slug(text)
 
-    ``"Microsoft Corporation"`` → ``"microsoft"``,
-    ``"Amazon Web Services, Inc."`` → ``"amazon"``.
+
+def _reduce(slug: str, table: dict[str, str]) -> str:
+    """Strip trailing suffixes, consulting `table` after every strip.
+
+    The alias check has to happen INSIDE the loop, not just before and after:
+    "Amazon Web Services, Inc." loses "inc" to leave "amazon web services", which
+    is an alias — but "services" is itself a strippable suffix, so a loop that ran
+    to completion first would reduce it to "amazon web" and miss the alias
+    entirely. Same trap for "Crusoe Energy Systems LLC".
     """
-    if not company:
-        return ""
-    slug = _slug(company)
-
-    # Strip trailing legal suffixes repeatedly ("Foo Holdings LLC" -> "foo"),
-    # re-checking the alias table after every strip.
-    #
-    # The alias check has to happen INSIDE the loop, not just before and after:
-    # "Amazon Web Services, Inc." loses "inc" to leave "amazon web services",
-    # which is an alias — but "services" is itself a strippable suffix, so a
-    # loop that ran to completion first would reduce it to "amazon web" and miss
-    # the alias entirely. Same trap for "Crusoe Energy Systems LLC".
     while True:
-        if slug in _COMPANY_ALIASES:
-            return _COMPANY_ALIASES[slug]
+        if slug in table:
+            return table[slug]
         for suffix in _COMPANY_SUFFIXES:
             if slug.endswith(" " + suffix):
                 slug = slug[: -(len(suffix) + 1)].strip()
@@ -170,10 +193,68 @@ def company_key(company: str | None) -> str:
             return slug
 
 
+@lru_cache(maxsize=1)
+def _alias_table() -> dict[str, str]:
+    """`_COMPANY_ALIASES` plus every alias the operator roster records.
+
+    **The roster's aliases are identity, so identity reads them.** `seed/operators.toml`
+    lists, for each operator, "the other spellings of the SAME operator" — renames
+    (RagingWire is NTT), acquisitions (DuPont Fabros is Digital Realty), subsidiaries
+    filed under their own name (Cipher Digital is Cipher Mining). Until 2026-10-19
+    only the coverage report read them, while the key that decides whether an
+    arriving campus is a row we hold knew 23 spellings: measured that night, 29 real
+    companies sat under 69 keys, NTT alone under 9, and five of the night's new rows
+    were a known company under a new spelling.
+
+    Exact spellings only, after the same normalisation `company_key` applies. The
+    roster's *loose* token match is deliberately not used here: it is safe for a
+    coverage report a person reads and unsafe for a key that routes evidence, since
+    it would read "Prime Group and Capri Investment" as Prime Data Centers.
+
+    The hand-written table wins any disagreement, and a roster file that cannot be
+    read leaves the hand-written table alone rather than failing every write.
+    """
+    import tomllib
+
+    from tracker.config import seed_path
+
+    table = dict(_COMPANY_ALIASES)
+    try:
+        data = tomllib.loads(seed_path("operators.toml").read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError):
+        return table
+    for entry in data.get("operator", []):
+        name = str(entry.get("name") or "").strip()
+        if not name:
+            continue
+        canonical = _reduce(_company_slug(name), table)
+        for alias in entry.get("aliases") or []:
+            form = _company_slug(str(alias))
+            if form and form != canonical:
+                table.setdefault(form, canonical)
+    return table
+
+
+def company_key(company: str | None) -> str:
+    """Normalized company identity.
+
+    ``"Microsoft Corporation"`` → ``"microsoft"``,
+    ``"Amazon Web Services, Inc."`` → ``"amazon"``,
+    ``"Amazon (AWS)"`` → ``"amazon"``, ``"Compass Datacenters"`` → ``"compass"``,
+    ``"RagingWire Data Centers"`` → ``"ntt"`` (an alias the roster records).
+
+    Strip trailing legal suffixes repeatedly ("Foo Holdings LLC" -> "foo"),
+    re-checking the alias table after every strip.
+    """
+    if not company:
+        return ""
+    return _reduce(_company_slug(company), _alias_table())
+
+
 def company_aliases(key: str) -> tuple[str, ...]:
     """Every other name `company_key` reads as `key`: "facebook" and "meta platforms"
     for "meta"."""
-    return tuple(alias for alias, canonical in _COMPANY_ALIASES.items() if canonical == key)
+    return tuple(alias for alias, canonical in _alias_table().items() if canonical == key)
 
 
 def is_undisclosed(customer: str | None) -> bool:
@@ -395,6 +476,28 @@ def company_parts(company: str | None) -> set[str]:
     # removes a suffix that follows something.
     parts = {company_key(part) for part in _PARTY_SPLIT.split(company)}
     return {p for p in parts if p and p not in _COMPANY_SUFFIXES}
+
+
+def same_operator(a: str | None, b: str | None) -> bool:
+    """True when two company strings name one operator, possibly at two lengths.
+
+    Equal keys, or one key a whole-word prefix of the other: "AMP Z" and "AMP Z
+    Champion Data Center Holdings LLC" — a site's holding company filed under the
+    operator's name plus the project's. On 2026-10-19 that pair was judged one
+    campus at 0.93, on the same parcel, and refused for want of evidence, because
+    the two keys shared nothing a pass could see.
+
+    Evidence for the duplicate passes only, never a key: a prefix is not an
+    identity ("prime" would read "Prime Group and Capri Investment" as Prime Data
+    Centers), so it may raise a pair for a judge to read and never route an article.
+    """
+    ka, kb = company_key(a), company_key(b)
+    if not ka or not kb:
+        return False
+    if ka == kb:
+        return True
+    short, long_ = sorted((ka, kb), key=len)
+    return long_.startswith(short + " ") and len(short) >= 3
 
 
 def shares_a_party(a: str | None, b: str | None) -> bool:

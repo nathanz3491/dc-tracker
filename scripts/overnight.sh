@@ -32,7 +32,9 @@
 #             first looks a night); the crawl then reads `--discover` queued
 #             articles, the news first, then what the watch and the newsrooms found,
 #             then campuses the database has not heard of, through its identity
-#             check. Then one duplicate attempt per row it created.
+#             check. Then the Census lookup places the new rows (county,
+#             town centre), and one duplicate attempt is made per row created in
+#             the last `TWIN_DAYS` days, `TWINS` at most.
 #             600 a night since 2026-10-19: the watch's first look and the first
 #             walk of the builders' archives left about 6,600 articles queued, a
 #             read costs about ¥0.0075 (10-18: 156 for ¥1.17) and 40 took 48
@@ -176,6 +178,14 @@ SEARCH_CAP=2000
 DATES=150
 REREAD=60
 RECHECK=60
+# The twin pass: rows created in the last TWIN_DAYS days, at most TWINS of them a
+# night. A lookback rather than tonight alone, because a night whose pass was capped,
+# crashed or blind (it ran before the rows had a county until 2026-10-20) was never
+# revisited: the 10-19 night left about 16 twins standing. A pair already asked on
+# the same evidence is held back (`declines`), so the lookback re-asks only what
+# changed. The cap is what keeps a 100-row night from spending the budget here.
+TWINS=60
+TWIN_DAYS=3
 MIN_CONF=0.85
 DO_MERGE=1
 DO_ENRICH=1
@@ -464,6 +474,10 @@ over_ceiling() {
 STARTED=$(date +%s)
 # The moment rows count as new tonight, in the database's own clock (naive UTC).
 STARTED_UTC=$(date -u '+%Y-%m-%d %H:%M:%S')
+# The start of the twin pass's lookback, in the same clock. Python rather than
+# `date -v`/`date -d`, which BSD and GNU spell differently.
+TWIN_SINCE=$("$PY" -c 'import datetime as d, sys
+print((d.datetime.now(d.UTC) - d.timedelta(days=int(sys.argv[1]))).strftime("%Y-%m-%d %H:%M:%S"))' "$TWIN_DAYS")
 DEADLINE=$((STARTED + HOURS * 3600))
 SPENT=0
 CNY=0.00
@@ -532,18 +546,27 @@ for round in $(seq 1 "$ROUNDS"); do
     if capped news; then break; fi
     tracker ingest crawl --from-queue --new-first --limit "$DISCOVER" < /dev/null || true
 
-    # One attempt to fold per row tonight added, each against its likeliest twin
+    # Where the new rows are, before asking what they duplicate. The twin pass
+    # pairs a row with an existing one through a shared town or county, or a
+    # distance — and a row fresh from an article usually has a town and nothing
+    # else: on 2026-10-19, 74 of 185 recent rows had no county and none had
+    # coordinates, because `ingest geo` ran in the free phase, after the pass. So a
+    # campus filed under its county met its own twin filed under the town and saw
+    # nothing in common. The Census lookup is free and takes seconds.
+    tracker ingest geo < /dev/null || true
+
+    # One attempt to fold per row recently added, each against its likeliest twin
     # wherever that twin is filed (`duplicates resolve --created-since`). The
     # regular pass only sees pairs within one town or one company, and on
     # 2026-10-05 a new 10 GW PORTS campus row sat unpaired beside its duplicate
     # because one row named the town and a different company, the other the county.
     if capped duplicates; then break; fi
-    phase "duplicates — one attempt per row created tonight"
+    phase "duplicates — one attempt per row created in the last $TWIN_DAYS day(s), $TWINS at most"
     if [ "$DO_MERGE" -eq 1 ]; then
       tracker duplicates resolve --merge --min-confidence "$MIN_CONF" \
-        --created-since "$STARTED_UTC" < /dev/null || true
+        --created-since "$TWIN_SINCE" --limit "$TWINS" < /dev/null || true
     else
-      tracker duplicates resolve --created-since "$STARTED_UTC" < /dev/null || true
+      tracker duplicates resolve --created-since "$TWIN_SINCE" --limit "$TWINS" < /dev/null || true
     fi
   fi
 

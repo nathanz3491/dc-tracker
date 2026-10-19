@@ -375,7 +375,14 @@ def duplicates_resolve(
         bool,
         typer.Option("--weak", help="Also ask about pairs raised only by a shared name word."),
     ] = False,
-    limit: Annotated[int, typer.Option("--limit", help="Pairs to work through.")] = 20,
+    limit: Annotated[
+        int | None,
+        typer.Option(
+            "--limit",
+            help="Pairs to work through (default 20; with --created-since, all of them).",
+            show_default=False,
+        ),
+    ] = None,
     again: Annotated[
         bool,
         typer.Option(
@@ -414,10 +421,11 @@ def duplicates_resolve(
     (`capex.twin_pairs`), wherever that twin is filed. The suspected pairs only
     compare rows in one locality or one company, so a campus filed under its town by
     one name and under its county by another is never among them — on 2026-10-05 a
-    new 10 GW PORTS campus row sat unpaired beside the row it duplicated. `--limit`
-    does not apply: the number of attempts is the number of new rows with a
-    candidate. The agent and every merge rail are the same as for the suspected
-    pairs.
+    new 10 GW PORTS campus row sat unpaired beside the row it duplicated. Without
+    `--limit` the number of attempts is the number of new rows with a candidate;
+    with it, that many, strongest evidence first — the nightly loop caps the pass,
+    because a 100-row night would otherwise spend its budget here. The agent and
+    every merge rail are the same as for the suspected pairs.
 
     `tracker duplicates` proposes and never disposes, which is right — a wrong
     merge destroys two rows and no re-crawl recovers them. The cost of that caution
@@ -522,12 +530,18 @@ def duplicates_resolve(
 
             new_ids = list(session.scalars(_select(Project.id).where(Project.created_at >= since)))
             twins = capex_mod.twin_pairs(session, new_ids)
-            limit = len(twins)
+            # Strongest evidence first, so a cap keeps the pairs a merge can act on.
+            twins.sort(key=lambda p: (p.rank, -len(p.kinds), p.a_id, p.b_id))
+            limit = len(twins) if limit is None else min(limit, len(twins))
             if not json_mode():
                 console.print(
                     f"[dim]{len(new_ids)} row(s) created since {since}; "
-                    f"{len(twins)} with a candidate twin to ask about[/dim]"
+                    f"{len(twins)} with a candidate twin to ask about"
+                    + (f", the strongest {limit} tonight" if limit < len(twins) else "")
+                    + "[/dim]"
                 )
+        if limit is None:
+            limit = 20
         if use_agent:
             from tracker import triage as triage_mod
 

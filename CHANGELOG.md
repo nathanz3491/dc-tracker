@@ -427,6 +427,71 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **A campus already held no longer comes back as a new row because its company was
+  spelled another way** (`tracker/dedup.py`, `tracker/seed/operators.toml`,
+  `docs/workflows/duplicates.md`). The 2026-10-19 night created 96 rows and about 16
+  were campuses the database already held — 21% of the capacity it added. Five were
+  a known company under a new spelling ("Novva Data Centers", "Crusoe Energy",
+  "EdgeCore Digital Infrastructure"), and 29 real companies sat under 69 keys, NTT
+  alone under nine. The company key now strips the industry's own trailing words,
+  parentheticals ("Amazon (AWS)") and dotted initialisms ("Prologis, L.P."), and reads
+  the operator roster's renames and acquisitions (RagingWire is NTT, DuPont Fabros is
+  Digital Realty), which until now only the coverage report used. On a copy of
+  production 286 spellings fold to 232 keys instead of 260. The roster's "Related
+  Digital" alias for PowerHouse was wrong — it is the Related Companies' arm,
+  Stargate Michigan's developer — and is removed before it could route anything.
+
+- **Every campus stays reachable by the key it would be filed under today**
+  (new `tracker/keys.py`; `tracker/upsert.py`, `tracker/merge.py`,
+  `tracker/derive.py`, `tracker/cli/quality.py`). A row's key is written once, so a
+  row that later learned its town — Hyperion keyed by its parish while its town is
+  Rayville; 21 such rows — or a spelling the company rules have since learned no
+  longer matched what an arriving article computed, which paid for an identity check
+  or created a twin. Each row's current key is now recorded as an alias on every
+  write, on `tracker init` and on every `backfill derive` (134 rows on the 10-19
+  copy); a merge records the folded row's current key too; and a routing the
+  identity check makes is remembered, so the next article spelled that way goes
+  straight to the row — on 10-19 the same key was routed at insert and then refused
+  by a re-read two hours later.
+
+- **The twin check sees the new rows' places, looks back three days and is capped**
+  (`scripts/overnight.sh`, `tracker/capex.py`, `tracker/cli/duplicates.py`,
+  `docs/workflows/duplicates.md`). It ran before the Census lookup that gives a new
+  row its county and coordinates, so a campus filed under its town met its twin
+  filed under the county and saw nothing in common; it looked at tonight's rows only,
+  so a night it missed was never revisited; it had no cap; and a pair of two new
+  rows was asked twice. The place lookup now runs first, the pass covers the last
+  three days (a pair asked on the same evidence is still held back), takes at most 60
+  pairs strongest-first, and asks each pair once. It also now considers one
+  operator's rows within reach, and, where neither row could be placed, one
+  operator's same project name. On the 10-19 copy it raises 23 pairs instead of 13,
+  among them Novva, EdgeCore SV01, Edged Columbus, AMP Z, Galaxy Helios and
+  TeraWulf's Muskie and Chesapeake.
+
+- **A town's centre is no longer read as a site, so true twins between two towns can
+  merge** (`tracker/dupresolve.py`, `scripts/render_workflow_diagrams.py`). Most
+  stored coordinates are a town's Census centre, and the 25 km rule refused four
+  pairs the agent had judged one campus at 0.88-0.95 — Crusoe's campus under Amarillo
+  and under Claude is 44 km of centroid from itself. The rule now allows 20 km more
+  for each row whose coordinates are a town centre, and the judge is told what the
+  number measures instead of that it is decisive.
+
+- **One operator naming one project is enough for a judge that read the articles**
+  (`tracker/dupresolve.py`, `tracker/dedup.py`). "Muskie" on two TeraWulf rows in
+  Kentucky, "AMP Z" and "AMP Z Champion Data Center Holdings LLC" on one parcel in
+  Lufkin: judged the same at 0.85-0.93 and refused as "only a shared name word".
+  Between two companies a shared word still carries nothing.
+
+- **A shared utility or contractor no longer counts as evidence of one campus**
+  (`tracker/parties.py`). Party evidence is trusted to carry a merge, and a utility
+  serves every site in its territory — Dominion is on ten rows, Oncor on seven. The
+  twin check offered AWS's Project Rainier and Microsoft's La Porte campus, 50 km
+  apart, on that alone. A shared tenant still counts.
+
+- **Census place names with accents match again** (`tracker/ingest/geo.py`). The
+  reference files are UTF-8 and were read as Latin-1, so "Doña Ana County" became
+  "DoÃ±a Ana County" and matched nothing.
+
 - **The article client's shared connection pool goes through the proxy too**
   (`tracker/ingest/fetch.py`). A run shares one connection pool across its
   requests, and httpx looks the proxy up only for a pool it builds itself, so every

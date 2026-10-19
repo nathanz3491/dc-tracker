@@ -483,6 +483,15 @@ and the arbiter almost never fires there — but `force=True` means that path *c
 still create a row, and a duplicate born in refresh would be no cheaper than one
 born in extract.
 
+**A route it makes is remembered.** The arriving key is recorded in
+`project_alias` against the row it was routed to, exactly as a merge records a
+folded key, so the next article spelled that way finds the row by key and nothing is
+asked twice. Until 2026-10-20 a route was only a note: on 10-19 the arbiter routed
+`poolside ai` to its row at insert, and two hours later enrich refused an article
+about the same campus because that key still matched nothing. See
+[duplicates](duplicates.md#every-name-a-campus-goes-by) for the other keys a row is
+kept reachable by.
+
 See [duplicates](duplicates.md) for what the same judgement costs once the row
 exists: 47 stored groups took a ten-hour agent run.
 
@@ -532,7 +541,10 @@ Two recomputations, both pure functions of what the rows now cite, and both wron
 to skip after a phase that added sources:
 
 * `derive` reapplies every derived value — county, coordinates, capacity rollups —
-  because those are only recomputed when something writes to the row.
+  because those are only recomputed when something writes to the row. A whole-table
+  run first records every row's current natural key (`tracker.keys.sync`), so a row
+  whose identity has moved since its birth, or a spelling the company rules have
+  learned since, still reaches it.
 * `recompute_confidence` runs because confidence is a cache of a function of the
   citations, so it is stale the moment a citation lands. It runs even when
   `--skip-derive` declined the first half.
@@ -611,9 +623,9 @@ Touching any of these means the poster is in scope. Re-render with
 | Prospect | `tracker/prospect.py`; `tracker/roster.py` — `hunt_order`, `measure` |
 | Extract and refresh | `tracker/ingest/crawl.py` — `run` (`origins=`), `stale_sources`, `unchanged_reads`, `record_url` (`origin=`), `_origin`, `failure_reason`, `MAX_REFRESH_BACKOFF` |
 | The party gate | `tracker/ingest/crawl.py` — `_parties`, `_ROLE_MARKERS`, `_role_is_licensed` |
-| Identity arbiter | `tracker/cli/ingest.py` — `_identity_arbiter`, `_report_arbiter`; `tracker/gatekeeper.py` — `same_site_arbiter`, `_warm_verdict`, `_cold_verdict`, `_rejection`, `_suspicion`, `_verdict_tools`, `RULES`, `MIN_CONFIDENCE`; `tracker/triage.py` — `CONTRADICTIONS`; `tracker/ingest/crawl.py` — `ExtractionContext` |
+| Identity arbiter | `tracker/upsert.py` — `upsert_record` (a route is remembered through `tracker/keys.py` — `remember`); `tracker/cli/ingest.py` — `_identity_arbiter`, `_report_arbiter`; `tracker/gatekeeper.py` — `same_site_arbiter`, `_warm_verdict`, `_cold_verdict`, `_rejection`, `_suspicion`, `_verdict_tools`, `RULES`, `MIN_CONFIDENCE`; `tracker/triage.py` — `CONTRADICTIONS`; `tracker/ingest/crawl.py` — `ExtractionContext` |
 | Enrich phase | `tracker/ingest/enrich.py` — `select_projects`, `run_many`; `tracker/cli/enrich.py` — `_gapfill_batch`; and [enrich](enrich.md) |
-| Settle | `tracker/derive.py` — `run`; `tracker/upsert.py` — `recompute_confidence`, `recompute_parties`, `apply_mw_basis` |
+| Settle | `tracker/derive.py` — `run`; `tracker/keys.py` — `sync`; `tracker/upsert.py` — `recompute_confidence`, `recompute_parties`, `apply_mw_basis` |
 | Parties, and what fills them without a crawl | `tracker/parties.py` — `rebuild`, `reconcile`, `parties_by_key`, `_inferred_parties` |
 | Which kind of megawatt a figure is | `tracker/ingest/crawl.py` — `axis_gate`, `_BASIS_MARKERS`; `tracker/vocab.py` — `basis_from_quote`, `BASIS_WINDOW`; `tracker/backfill.py` — `derive_basis`; `tracker/gapfill.py` — `_fact_axes` |
 | Whether a figure is one building's | `tracker/ingest/crawl.py` — `axis_gate`; `tracker/vocab.py` — `part_from_quote`, `PART_FIELDS`, `PART_WINDOW`, `INITIAL_WINDOW`; `tracker/backfill.py` — `regate_scope`; `tracker/upsert.py` — `contenders`; `tracker/gapfill.py` — `_fact_axes` |

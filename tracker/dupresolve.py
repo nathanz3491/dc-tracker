@@ -63,7 +63,7 @@ from typing import Any, Final
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from tracker.dedup import is_market_sequence, sibling_ordinals
+from tracker.dedup import is_market_sequence, same_operator, sibling_ordinals
 from tracker.models import Project
 from tracker.vocab import TRACKED_FIELDS
 
@@ -102,6 +102,19 @@ HARD_EVIDENCE: Final = frozenset({"exact", "tranche", "party"})
 #: sites 50 km apart and this is what stops one merging into another.
 FAR_APART_KM: Final = 25.0
 
+#: How far a site may sit from the Census internal point of the town it is filed
+#: under, added to :data:`FAR_APART_KM` once for each row whose coordinates are that
+#: point rather than the site's (`ingest geo` fills `lat`/`lon` that way and says so).
+#:
+#: **A town's centre is not a site, and two towns' centres are not two sites.** On
+#: 2026-10-19 the rule refused four pairs the agent had judged the same campus at
+#: 0.88-0.95, each as "32-51 km apart", and in every one both coordinates were town
+#: centres: Crusoe's campus filed under Amarillo and under Claude is one site between
+#: the two, 44 km of centroid apart. Twenty kilometres is the reach of a rural campus
+#: from the town it is reported under; with both rows on centroids a pair may be 65 km
+#: apart before geography refuses it, which still separates one metro from the next.
+TOWN_CENTRE_KM: Final = 20.0
+
 #: Tokens per call, matching `audit.MAX_TOKENS`. Large because the budget covers
 #: the model's *reasoning*, not its answer — the answer is three fields. Set to 700
 #: on the first cut, which read like a broken model on the live database: five of
@@ -136,6 +149,44 @@ def km_apart(a: Project, b: Project) -> float | None:
     dlat, dlon = lat2 - lat1, lon2 - lon1
     h = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
     return 2 * 6371.0 * math.asin(math.sqrt(h))
+
+
+def on_town_centre(project: Project, centroids: set[int] | None = None) -> bool:
+    """True when the row's coordinates are its town's Census internal point.
+
+    `ingest geo` fills `lat`/`lon` only when they are empty, from a citation of its
+    own, so a Census citation that claims `lat` means the stored point is the town's
+    and not the site's. `centroids` is the set `centroid_ids` returns, for a caller
+    comparing many rows; without it the row's own citations are read.
+    """
+    if centroids is not None:
+        return project.id in centroids
+    from tracker.ingest.geo import EXTRACTOR
+
+    return any(
+        s.extractor == EXTRACTOR and '"lat"' in (s.claims or "")
+        for s in (getattr(project, "sources", None) or ())
+    )
+
+
+def centroid_ids(session: Any) -> set[int]:
+    """Every row whose coordinates came from a Census place, in one query."""
+    from tracker.ingest.geo import EXTRACTOR
+    from tracker.models import Source
+
+    return {
+        pid
+        for pid, claims in session.execute(
+            select(Source.project_id, Source.claims).where(Source.extractor == EXTRACTOR)
+        )
+        if '"lat"' in (claims or "")
+    }
+
+
+def distance_limit(a: Project, b: Project, centroids: set[int] | None = None) -> float:
+    """How far apart two rows' stored coordinates may be and still be one campus."""
+    town_centres = on_town_centre(a, centroids) + on_town_centre(b, centroids)
+    return FAR_APART_KM + TOWN_CENTRE_KM * town_centres
 
 
 @dataclass(frozen=True)
@@ -294,10 +345,16 @@ def evidence_block(a: Project, b: Project, pair: Any) -> str:
         # rows in one town read 0.0 km apart whether they are one building or two
         # miles apart, and 245 pairs on the live database sit within 3 km of each
         # other for that reason alone. The figure can refute and cannot confirm.
+        # And the other half: a large number between two *towns'* centres is not
+        # decisive either. One campus between Amarillo and Claude is 44 km of
+        # centroid from itself; the judge was told "decisive" and still answered
+        # "same" at 0.95, correctly, and the rail then refused it.
+        limit = distance_limit(a, b)
         lines.append(
             f"  DISTANCE: {distance:.1f} km between the stored coordinates — these are "
-            "place centroids, not site locations, so a small number means one town "
-            "and says nothing about one building. A large one is still decisive."
+            "town centres, not site locations, so a small number means one town and says "
+            "nothing about one building, and a site may lie between two towns. Only a "
+            f"distance beyond {limit:.0f} km rules out one campus."
         )
     lines.append("")
     lines.extend(_row_block("A", a))
@@ -440,9 +497,15 @@ def evidence_blocks_merge(
     hard = kinds & HARD_EVIDENCE
     if market_only:
         hard.discard("tranche")
+    # A shared name word is a word — unless both rows are one operator's. "Muskie"
+    # on two TeraWulf rows in Kentucky, "Helios" on two Galaxy rows in Dickens
+    # County: the same company naming the same project is not a resemblance, and
+    # on 2026-10-19 three such twins stood because the word was all a pass could
+    # see. Still only for a judge that read the articles, like granularity below.
+    named_by_one_operator = "name" in kinds and same_operator(a.company, b.company)
     if not hard:
-        if "identity" in kinds and judge_read_the_sources:
-            pass  # the one refusal a judge that read the articles may pass
+        if ("identity" in kinds or named_by_one_operator) and judge_read_the_sources:
+            pass  # the refusals a judge that read the articles may pass
         elif market_only:
             return (
                 f"the only shared tranche is {', '.join(pair.shared_blocks)}, which names a "
@@ -469,8 +532,12 @@ def evidence_blocks_merge(
             "phases of one development, not one site stored twice"
         )
     distance = km_apart(a, b)
-    if distance is not None and distance > FAR_APART_KM:
-        return f"the stored coordinates are {distance:.0f} km apart, further than one campus spans"
+    limit = distance_limit(a, b)
+    if distance is not None and distance > limit:
+        return (
+            f"the stored coordinates are {distance:.0f} km apart, further than one campus "
+            f"spans ({limit:.0f} km allowed for these coordinates)"
+        )
     return None
 
 
@@ -699,13 +766,17 @@ __all__ = [
     "HARD_EVIDENCE",
     "MERGE_CONFIDENCE",
     "MIN_CONFIDENCE",
+    "TOWN_CENTRE_KM",
     "Decision",
     "Judgement",
     "ask_model",
+    "centroid_ids",
+    "distance_limit",
     "evidence_block",
     "evidence_blocks_merge",
     "km_apart",
     "merge_blocked",
+    "on_town_centre",
     "pair_label",
     "resolve",
     "resolve_one",
