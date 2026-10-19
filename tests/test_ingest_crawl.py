@@ -977,6 +977,132 @@ def test_a_real_quote_under_the_wrong_category_does_not_evidence_it(prompt):
     assert risk.quote is None
 
 
+# --- the category check reads words, in the sentence they were written in ------
+#
+# On 2026-10-19 the nightly obstacle check confirmed 2 of 26: twenty times the model
+# found the sentence and this check refused it. It compared raw substrings, so
+# "approval" was not in "approved" and "power constraint" was not in "the binding
+# constraint is firm power" — while "sue" was in "issue" and "epa" in "ratepayers",
+# which is how unrelated sentences had passed as confirmed obstacles.
+
+
+@pytest.mark.parametrize(
+    ("category", "sentence"),
+    [
+        ("permitting", "The October application has been filed, not approved."),
+        ("permitting", "The county board voted 5-0 to deny the rezoning."),
+        ("permitting", "But local officials rejected that application earlier this year."),
+        ("permitting", "It ran 27 unpermitted methane gas turbines."),
+        (
+            "grid_capacity",
+            "For this campus, the binding constraint is firm power on a schedule the grid "
+            "alone could not meet.",
+        ),
+        ("grid_capacity", "It would be a further strain on the state's electrical grid."),
+        ("community_opposition", "She is part of a fast-growing group opposing the data centers."),
+        ("community_opposition", "A landowners' group is suing the county."),
+        ("equipment_supply", "NiSource is competing for scarce grid equipment and labor."),
+        ("water", "Facilities relying on evaporative cooling are not permitted here."),
+        ("environmental", "The gas plant has drawn a federal Clean Air Act suit."),
+        ("financing", "Conversion may not be achieved on financially advantageous terms."),
+    ],
+)
+def test_any_form_of_a_category_word_states_the_category(category, sentence):
+    assert crawl._risk_quote_supports(category, sentence)
+
+
+@pytest.mark.parametrize(
+    ("category", "sentence"),
+    [
+        # A table word buried inside another word. Every one of these passed before.
+        ("community_opposition", "Monroeville has another issue, too: a second property."),
+        ("community_opposition", "said Marcy Kauffman, president of the town council."),
+        ("community_opposition", "The market is in a new phase of growth and competition."),
+        ("community_opposition", "The plant sits on the opposite bank of the river."),
+        ("environmental", "There are insufficient protections for the local ratepayers."),
+        ("environmental", "A separate analysis was prepared for the hearing."),
+        ("offtake", "Meta allowed its name to be released after the vote."),
+        ("offtake", "The site covers at least 40 acres."),
+        ("financing", "Microsoft told Mayor Sloan Spalding it was evaluating sites."),
+        # A generic verb is not the category's wording on its own.
+        ("permitting", "Today, Judge Moore denied the City's Motion for summary judgment."),
+        ("financing", "Residents raised concerns about noise at the hearing."),
+    ],
+)
+def test_a_word_that_merely_contains_a_category_word_is_not_evidence(category, sentence):
+    assert not crawl._risk_quote_supports(category, sentence)
+
+
+def test_the_category_check_reads_the_sentence_the_clause_was_copied_from():
+    """#1483: the model copied the clause, and the word that names the obstacle sat
+    in the same sentence. The sentence is what is judged, and what is stored."""
+    text = (
+        "Utah's tracking system lists a protest letter.\n"
+        "The water-rights change application has only been filed, not approved by the "
+        "state engineer.\nNo protest period has been advertised yet.\n"
+    )
+    kept, _ = crawl._risks(
+        {
+            "risks": [
+                {
+                    "category": "permitting",
+                    "severity": "watch",
+                    "summary": "The application is not yet approved.",
+                    "quote": "has only been filed, not approved",
+                }
+            ]
+        },
+        text,
+        URL,
+    )
+    assert kept[0].unconfirmed is None
+    assert kept[0].quote == (
+        "The water-rights change application has only been filed, not approved by the "
+        "state engineer."
+    )
+
+
+def test_the_sentence_read_is_the_quote_s_own_not_its_neighbour_s():
+    """Widening stops at the sentence the quote is in. A real sentence about
+    something else stays refused even though the next one would have passed."""
+    text = (
+        "The developer said it remains confident in the schedule. Residents plan to sue "
+        "over the noise.\n"
+    )
+    kept, _ = crawl._risks(
+        {
+            "risks": [
+                {
+                    "category": "community_opposition",
+                    "severity": "watch",
+                    "summary": "Residents object.",
+                    "quote": "The developer said it remains confident in the schedule.",
+                }
+            ]
+        },
+        text,
+        URL,
+    )
+    assert kept[0].unconfirmed == "quote_off_target"
+
+
+def test_a_quote_that_ends_a_sentence_is_not_given_the_next_one():
+    text = (
+        "Intro here. The county approved the rezoning for the campus. Residents plan to "
+        "sue over the noise. The end."
+    )
+    run = crawl._verbatim_run("The county approved the rezoning for the campus.", text)
+    assert run.text == "The county approved the rezoning for the campus."
+
+
+def test_widening_a_quote_stops_at_a_paragraph_break():
+    """A directory's status line has no full stop; widening used to run on into the
+    paragraph below it and find one there."""
+    text = "Canceled · first reported Oct 7, 2026\n\nCapacity Not disclosed. The source is on file."
+    run = crawl._verbatim_run("first reported Oct 7, 2026", text)
+    assert run.text == "first reported Oct 7, 2026"
+
+
 def test_unconfirmed_risks_are_disclosed(prompt):
     record = build("llm_response_ungrounded.json", prompt=prompt)[0]
     assert any("risk(s) kept as 待确认" in n for n in record.notes)

@@ -360,6 +360,15 @@ the category it is filed under. A paraphrase is refused. A real sentence about t
 wrong thing is refused. The obstacle then stays exactly as it was — so the worst
 case of running this is that it cost a call and changed nothing.
 
+That wording is read the way a person reads it: any form of the word ("approved"
+is permitting wording because "approve" is), in the whole sentence the quote came
+from, and never inside another word ("issue" is not "sue"). Until 2026-10-19 it was
+a raw substring of the copied fragment, and the night that changed the check
+confirmed 2 of 26 obstacles — twenty times the model had found the sentence and the
+check refused it. An obstacle the check refused that way is offered again once after
+the check changes, however recently it was read
+(`riskcheck.CATEGORY_CHECK_REVISED_AT`); one the model itself found unclear is not.
+
 Three outcomes: **confirmed** attaches the quote and clears the 待确认 mark;
 **refuted** marks the obstacle `superseded`, dropping it out of the open counts
 without deleting the record of having believed it; **unclear** changes nothing on

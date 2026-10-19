@@ -263,6 +263,11 @@ the number is worthless — one observed run ended at "…the offering was $", t
 article having wrapped the line inside the figure, so the quote was real but no
 longer evidenced the value and `_stated_in` discarded it anyway. Widening only
 ever adds the article's own text, so it cannot introduce a word nobody published.
+It stops at the sentence the span is in: a span that already ends a sentence is
+left there, and neither edge crosses a paragraph break. Both used to happen — a
+quote copied whole, full stop and all, came back with the next sentence attached,
+and a status line with no full stop ran on into the paragraph below — and the
+obstacle and milestone checks read that sentence for what it says.
 
 This is why the anti-fabrication guarantee survives the change: `_stated_in` runs
 against the *stored* text, so a value still has to be asserted by a sentence
@@ -709,6 +714,18 @@ wording for the *category it is filed under*, checked against `_RISK_EVIDENCE` t
 same way `phase` is checked against `_PHASE_EVIDENCE`. That is strictly stronger than
 the label carve-out it replaces, so `blocker` came out of `_SUMMARY_FIELDS`: obstacles
 became storable by tightening the check, not by loosening it.
+
+The wording is matched as words, not substrings, and in the article's whole sentence
+around the quote rather than the clause the model copied. Each table entry is a
+dictionary form whose inflections are generated (`crawl._word_forms`: "approve" gives
+"approved", "approval", "unapproved"; "deny" gives "denied", "denial"), and a phrase's
+words may sit a couple of words apart in either order. The substring version refused
+correct obstacles — on 2026-10-19 it overruled the model on 20 of the 26 it read —
+and passed wrong ones: measured on a copy of production, 19 of 701 confirmed
+obstacles had passed only on a table word buried inside another word ("sue" in
+"issue", "epa" in "ratepayers", "loan" in "Sloan"). Generating forms rather than
+trimming article words is deliberate: a stemmer that trims "opposite" to "oppos"
+would make it opposition wording; a list of what "oppose" can become never contains it.
 
 Severity is `watch` / `material` / `blocking`, ordered, and that order is
 load-bearing: it decides which risk becomes `project.blocker`. A source that names an

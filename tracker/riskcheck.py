@@ -37,6 +37,7 @@ Three verdicts, and all three are useful:
 
 from __future__ import annotations
 
+import datetime as dt
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -64,6 +65,21 @@ MIN_CONFIDENCE: Final = 0.65
 #: was read this way once, and the next crawl of the same article would otherwise
 #: recreate it with nothing to say it had already been rejected.
 REFUTED_STATUS: Final = "superseded"
+
+#: How a refusal by the category check begins, in a judgement's reason and so in the
+#: decline it is remembered by. `fresh` looks for it; one constant, so the two
+#: cannot drift apart.
+OFF_CATEGORY: Final = "the sentence does not state"
+
+#: When the category check (`crawl._risk_quote_supports`) last changed what it
+#: accepts, in UTC. Move it forward with the next change to that check.
+#:
+#: An obstacle the model found a sentence for, which the check then refused, was not
+#: left undecided by the model — it was decided, and overruled. Once the check has
+#: changed that is a question worth paying for again, so `fresh` stops holding it
+#: back. On 2026-10-19, 131 of the 159 obstacles held back were exactly these: the
+#: check matched raw substrings, and "approved" was not "approval".
+CATEGORY_CHECK_REVISED_AT: Final = dt.datetime(2026, 10, 20, 10, 0)
 
 
 @dataclass
@@ -213,15 +229,33 @@ def fresh(
     `--limit` obstacles were read every round: 141 open unquoted obstacles on the
     snapshot this was written against, 2 ever refuted, and nothing recording the
     `unclear` answers in between.
+
+    A decline the category check made rather than the model — the model quoted a
+    sentence and the check refused it — is not held back once the check has changed
+    since (`CATEGORY_CHECK_REVISED_AT`).
     """
     from tracker import declines
 
     sources = {s.id: s for s in session.scalars(select(Source)).all()}
+    known = {
+        subject: row
+        for subject, row in declines.load(session, "risk").items()
+        if not _overruled_by_old_check(row)
+    }
     return declines.split(
         risks,
-        declines.load(session, "risk"),
+        known,
         key=lambda r: (str(r.id), evidence(r, sources.get(r.source_id), cache_dir=cache_dir)),
         again=again,
+    )
+
+
+def _overruled_by_old_check(row) -> bool:
+    """A decline that is the category check's refusal, made before the check last changed."""
+    return (
+        f"refused: {OFF_CATEGORY}" in (row.reason or "")
+        and row.decided_at is not None
+        and row.decided_at < CATEGORY_CHECK_REVISED_AT
     )
 
 
@@ -309,7 +343,10 @@ def verify_quote(quote: str, article: str, category: str) -> tuple[str, str]:
 
     The same two gates the extraction path applies, in the same order and with the
     same helpers — a confirmation that used a looser test than the gate it is
-    overturning would be a way to launder a paraphrase into a citation.
+    overturning would be a way to launder a paraphrase into a citation. Both read
+    the article's whole sentence around the quote (`_verbatim_run` returns it), so a
+    model that copies the clause naming the obstacle is judged on what the sentence
+    says, exactly as the extraction is.
     """
     from tracker.ingest.crawl import _risk_quote_supports, _verbatim_run
 
@@ -319,7 +356,7 @@ def verify_quote(quote: str, article: str, category: str) -> tuple[str, str]:
     if not run.text:
         return "", "that sentence is not in the article"
     if not _risk_quote_supports(category, run.text):
-        return "", f"the sentence does not state a `{category}` obstacle"
+        return "", f"{OFF_CATEGORY} a `{category}` obstacle"
     return run.text, ""
 
 
@@ -452,7 +489,9 @@ class _Detached:
 
 __all__ = [
     "ARTICLE_BUDGET",
+    "CATEGORY_CHECK_REVISED_AT",
     "MIN_CONFIDENCE",
+    "OFF_CATEGORY",
     "REFUTED_STATUS",
     "Judgement",
     "Outcome",

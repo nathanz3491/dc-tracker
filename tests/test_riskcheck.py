@@ -139,6 +139,64 @@ def test_a_real_sentence_about_the_wrong_thing_is_refused(session):
     assert "does not state a `water` obstacle" in outcome.judgement.reason
 
 
+def test_any_form_of_the_category_s_wording_confirms_it(session):
+    """#1483 on 2026-10-19: "filed, not approved" was refused as a permitting obstacle
+    because the check looked for the substring "approval". The sentence is stored as
+    the article wrote it, and without the sentence after it."""
+    article = (
+        "The October application has been filed, not approved. The state has not yet "
+        "advertised a protest period."
+    )
+    _, risk, _ = _seed(session, category="permitting", excerpt=article)
+    model = _Model(
+        '{"verdict": "confirmed", "confidence": 0.9, "reason": "states it", '
+        '"quote": "The October application has been filed, not approved."}'
+    )
+    (outcome,) = riskcheck.confirm(session, [risk], extractor=model)
+
+    assert outcome.result == "confirmed"
+    assert risk.quote == "The October application has been filed, not approved."
+
+
+def _declined(session, risk, source, *, reason: str, days_ago: float):
+    """An `unclear` decline on this obstacle, recorded `days_ago`."""
+    from tracker import declines
+    from tracker.models import ModelDecline, utcnow
+
+    declines.record(
+        session,
+        "risk",
+        str(risk.id),
+        riskcheck.evidence(risk, source),
+        outcome="unclear",
+        reason=reason,
+        by="model",
+    )
+    row = session.query(ModelDecline).filter_by(kind="risk", subject=str(risk.id)).one()
+    row.decided_at = utcnow() - dt.timedelta(days=days_ago)
+    session.flush()
+
+
+def test_an_obstacle_the_old_category_check_refused_is_read_again(session, monkeypatch):
+    """131 of the 159 obstacles held back on 2026-10-19 were the model's answer
+    overruled by the check, not the model's indecision. Once the check changes,
+    those are worth one more call; the model's own "unclear" is not."""
+    from tracker.models import utcnow
+
+    monkeypatch.setattr(riskcheck, "CATEGORY_CHECK_REVISED_AT", utcnow() - dt.timedelta(days=1))
+    _, risk, source = _seed(session)
+    refused = "it says so — refused: the sentence does not state a `transmission` obstacle"
+
+    _declined(session, risk, source, reason=refused, days_ago=2)
+    assert riskcheck.fresh(session, [risk]) == ([risk], 0), "refused before the change"
+
+    _declined(session, risk, source, reason=refused, days_ago=0)
+    assert riskcheck.fresh(session, [risk]) == ([], 1), "refused by the current check"
+
+    _declined(session, risk, source, reason="the article does not say", days_ago=2)
+    assert riskcheck.fresh(session, [risk]) == ([], 1), "the model's own unclear holds"
+
+
 def test_refuting_retires_the_obstacle_without_deleting_it(session):
     """The row records that a source was read this way once; the next crawl of the
     same article would otherwise recreate it with nothing to say it was rejected."""

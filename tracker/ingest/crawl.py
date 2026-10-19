@@ -635,25 +635,42 @@ def _widen_to_sentence(article: str, start: int, end: int) -> tuple[int, int]:
 
     Safe because everything added is the article's own text; widening cannot
     introduce a word nobody published.
+
+    **It stops at the sentence the span is in.** A span that already ends a sentence
+    is left there, and neither edge crosses a paragraph break. Both used to happen:
+    a quote copied whole, full stop included, came back with the *next* sentence
+    appended, and a heading with no full stop ran on into the paragraph below it.
+    The obstacle and milestone checks read this sentence for what it says, so a
+    neighbour's words were evidence the quote never gave — "Residents plan to sue"
+    after a sentence about a rezoning vote made that sentence an objection.
     """
     # `[.!?]` followed by *any* whitespace, not ". " — fetched articles are hard
     # wrapped, so most sentences end at ".\n" and a literal ". " misses them.
     before = article[max(0, start - _WIDEN_BY) : start]
     ends = list(_SENTENCE_END.finditer(before))
-    if ends:
-        start -= len(before) - ends[-1].end()
-    else:
-        paragraph = before.rfind("\n\n")
-        start -= len(before) - (paragraph + 2) if paragraph != -1 else 0
+    edge = max(ends[-1].end() if ends else -1, before.rfind("\n\n") + 2 if "\n\n" in before else -1)
+    if edge != -1:
+        start -= len(before) - edge
 
-    after = article[end : end + _WIDEN_BY]
-    found = _SENTENCE_END.search(after)
-    if found:
-        end += found.start() + 1  # keep the full stop, drop the whitespace
-    else:
+    if not _ends_sentence(article, end):
+        after = article[end : end + _WIDEN_BY]
+        found = _SENTENCE_END.search(after)
         paragraph = after.find("\n\n")
-        end += paragraph if paragraph != -1 else 0
+        if found and (paragraph == -1 or found.start() < paragraph):
+            end += found.start() + 1  # keep the full stop, drop the whitespace
+        elif paragraph != -1:
+            end += paragraph
     return start, end
+
+
+#: Closing quotation marks and brackets that may follow a sentence's full stop.
+_CLOSERS: Final = "\"'”’)]"
+
+
+def _ends_sentence(article: str, end: int) -> bool:
+    """Whether `article[:end]` stops exactly at the end of a sentence."""
+    head = article[max(0, end - 8) : end].rstrip(_CLOSERS)
+    return bool(head) and head[-1] in ".!?" and (end == len(article) or article[end].isspace())
 
 
 #: Article wording that evidences each phase.
@@ -709,55 +726,80 @@ _PHASE_EVIDENCE: dict[str, tuple[str, ...]] = {
 #: What is gated is the pairing: the quote must be real (verified against the
 #: fetched article) AND must contain wording for the category claimed. A model that
 #: labels an unrelated sentence `water` gets nothing through.
+#:
+#: **Each entry is words in their dictionary form**, matched by
+#: `_risk_quote_supports` against every inflection of each word (`_word_forms`). An
+#: entry of several words needs all of them within a few words of each other, in
+#: either order; `a|b` is either word in that place. Until 2026-10-19 these were raw
+#: substrings, and a substring knows nothing about English. "approval" never matched
+#: "approved", so "The water-rights change application has only been filed, not
+#: approved" was refused as a permitting obstacle; "power constraint" never matched
+#: "the binding constraint is firm power on a schedule the grid alone could not
+#: meet". That night the nightly check confirmed 2 of 26 obstacles, and 131 of the
+#: 159 obstacles it had ever left undecided had been decided by the model and then
+#: refused here. A substring also matched inside other words — "sue" in "issue",
+#: "epa" in "ratepayers", "lease" in "released", "loan" in "Sloan" — and 19 of the
+#: 701 confirmed obstacles on that night's copy of production had passed only so.
+#:
+#: The grid entries are the widest, and the reason is measured: three in four grid
+#: obstacles on 2026-10-19 were 待确认, because a grid "under strain", "constrained",
+#: or with "a seven-year wait" for power matched none of the fixed phrases.
 _RISK_EVIDENCE: dict[str, tuple[str, ...]] = {
     "grid_capacity": (
         "grid capacity",
-        "not enough power",
-        "insufficient power",
-        "capacity constraint",
-        "power constraint",
-        "curtail",
+        "grid|power|electricity|energy|capacity "
+        "constraint|constrain|strain|shortage|shortfall|scarce|lack",
+        "insufficient power|capacity",
+        "not enough power|capacity",
+        "grid|utility|power|electricity|energy|interconnect|connection queue|wait|backlog",
+        "power|electricity available|availability|unavailable",
+        "queue position",
         "load growth",
         "cannot supply",
-        "energy shortfall",
-        "queue position",
-        "interconnection",
+        "curtail",
+        "outage",
+        "interconnect",
     ),
     "transmission": (
         "transmission",
         "substation",
-        "transmission line",
         "power line",
         "kilovolt",
         "kv line",
         "upgrade the grid",
-        "grid upgrade",
-        "interconnection",
-        "energiz",
+        "interconnect",
+        "energize|energise",
     ),
     "permitting": (
         "permit",
         "zoning",
-        "rezon",
+        "rezone",
         "entitlement",
-        "approval",
+        "approve",
+        # Denied or rejected only when what was refused is something that needs
+        # approval: a judge denying a motion, or a tenant rejecting a lease, is not.
+        "deny|reject application|request|permit|rezone|zoning|variance|proposal|plan|"
+        "project|exemption|development|campus|facility|center|site|appeal",
         "variance",
         "moratorium",
         "special use",
+        "land use",
         "planning commission",
         "board of supervisors",
-        "council",
+        "army corps",
+        "council|councilman|councilwoman|councilmember|councilmen|councilwomen",
     ),
     "environmental": (
         "environmental",
         "air quality",
         "air permit",
-        "emissions",
+        "clean air",
+        "emission",
         "wetland",
         "endangered",
         "impact statement",
         "epa",
-        "pollution",
+        "pollute|pollutant",
     ),
     "equipment_supply": (
         "transformer",
@@ -771,9 +813,10 @@ _RISK_EVIDENCE: dict[str, tuple[str, ...]] = {
         "shortage",
         "backlog",
         "delivery",
+        "equipment scarce|scarcity|shortage|delay",
     ),
     "chip_supply": (
-        "chip",
+        "chip|chipmaker|microchip",
         "gpu",
         "accelerator",
         "semiconductor",
@@ -782,59 +825,143 @@ _RISK_EVIDENCE: dict[str, tuple[str, ...]] = {
         "silicon",
     ),
     "financing": (
-        "financ",
-        "funding",
+        "finance",
+        "fund|fundraise",
         "capital",
+        "equity",
         "investor",
+        "lender",
         "debt",
         "loan",
-        "raise",
+        "bankrupt|bankruptcy",
         "cost overrun",
         "budget",
     ),
     "offtake": (
         "tenant",
         "customer",
+        "buyer",
         "lease",
-        "leasing",
         "offtake",
-        "pre-leas",
-        "preleas",
+        "pre-lease",
+        "prelease",
         "commitment",
         "speculative",
-        "unleased",
     ),
     "community_opposition": (
-        "opposition",
         "oppose",
         "resident",
-        "neighbor",
-        "neighbour",
+        "neighbor|neighbour|neighborhood|neighbourhood",
         "lawsuit",
-        "sued",
         "sue",
-        "litigation",
+        "litigate",
+        "legal action|challenge",
         "referendum",
         "petition",
         "protest",
         "noise",
         "backlash",
-        "objection",
+        "object",
     ),
     "water": (
-        "water",
+        "water|groundwater|wastewater|stormwater|freshwater|waterway|watershed",
         "aquifer",
-        "groundwater",
-        "gallons",
-        "cooling water",
+        "gallon",
         "drought",
-        "wastewater",
         "discharge",
+        "evaporate|evaporative",
     ),
     # `unclassified` is deliberately absent: it exists for a human assertion via
     # `ingest manual` and for the 0004 backfill. The extractor must classify, or the
     # row cannot be aggregated and the table has no purpose.
 }
+
+#: Endings English builds on a word the obstacle vocabulary names: the inflections
+#: ("approved", "approving") and the nouns, adjectives and adverbs on the same stem
+#: ("approval", "opposition", "rejection", "curtailment", "residential", "noisy",
+#: "financially"). Generated rather than reduced: every spelling a table word
+#: accepts is listed by `_word_forms`, so a word in the article either is one of
+#: them or is not — nothing is trimmed until two unrelated words meet. "lease"
+#: never reaches "least", and "oppose" never reaches "opposite".
+_WORD_ENDINGS: Final = (
+    "s", "es", "ed", "ing", "ings",
+    "al", "als", "ial", "ials", "ly", "ially",
+    "ion", "ions", "ition", "itions", "ation", "ations",
+    "ment", "ments",
+    "er", "ers", "or", "ors",
+    "y",
+)  # fmt: skip
+
+#: Small words a phrase may be written with and an article may put between its
+#: words — "upgrade the grid", "strain on our grid", "the state's grid" — counted
+#: as nothing.
+_FILLER: Final = frozenset(
+    {
+        "a", "an", "the", "of", "to", "for", "in", "on", "at", "by", "with", "and", "or",
+        "is", "are", "was", "were", "be", "been", "this", "that", "from", "as",
+        "its", "it", "their", "our", "his", "her", "s",
+    }
+)  # fmt: skip
+
+#: How many other words may sit between the words of an entry. Two lets "the binding
+#: constraint is firm power" state a power constraint and "a further strain on the
+#: electrical grid" state grid strain; words further apart than that are two thoughts.
+_PHRASE_GAP: Final = 2
+
+
+@lru_cache(maxsize=1024)
+def _word_forms(word: str) -> frozenset[str]:
+    """Every spelling `word` may take in an article, for the evidence tables.
+
+    A final silent e is dropped before an ending ("approve" -> "approval"), a final
+    consonant after one vowel may double ("permit" -> "permitted"), a final y after
+    a consonant becomes i or ie ("deny" -> "denies", "denied", "denial"), and any of
+    them may carry "un" ("unpermitted", "unfunded").
+    """
+    forms = {word, word + "s", word + "d"}
+    if len(word) > 2 and word.endswith("y") and word[-2] not in "aeiou":
+        root = word[:-1]
+        forms |= {root + "ies", root + "ied", word + "ing", root + "ial", root + "ials"}
+    else:
+        root = word[:-1] if word.endswith("e") and len(word) > 2 else word
+        roots = {root}
+        if re.search(r"(?:^|[^aeiou])[aeiou][bdgklmnprt]$", root):
+            roots.add(root + root[-1])
+        forms |= {stem + ending for stem in roots for ending in _WORD_ENDINGS}
+    return frozenset(forms | {"un" + form for form in forms})
+
+
+@lru_cache(maxsize=32)
+def _risk_terms(category: str) -> tuple[tuple[frozenset[str], ...], ...]:
+    """`_RISK_EVIDENCE[category]`: per entry, per place, every spelling that fills it."""
+    return tuple(
+        tuple(
+            frozenset().union(*(_word_forms(word) for word in place.split("|")))
+            for place in re.findall(r"[a-z0-9|]+", entry)
+            if place not in _FILLER
+        )
+        for entry in _RISK_EVIDENCE.get(category, ())
+    )
+
+
+def _words(text: str) -> list[str]:
+    """The words of `text` that carry meaning, lower-cased, in order."""
+    return [w for w in re.findall(r"[a-z0-9]+", _normalize_for_match(text)) if w not in _FILLER]
+
+
+def _states_term(words: list[str], term: tuple[frozenset[str], ...]) -> bool:
+    """Whether `words` fill every place of `term`, close together, in any order."""
+    if len(term) == 1:
+        return any(word in term[0] for word in words)
+    hits = sorted(
+        (at, place) for place, forms in enumerate(term) for at, w in enumerate(words) if w in forms
+    )
+    reach = len(term) + _PHRASE_GAP
+    for index, (at, _) in enumerate(hits):
+        if len({place for later, place in hits[index:] if later < at + reach}) == len(term):
+            return True
+    return False
+
 
 #: Quantity expressions to hunt for inside a verified quote, per field.
 #:
@@ -1598,9 +1725,29 @@ def _events(raw: dict[str, Any], article_text: str, url: str) -> list[EventRecor
 
 
 def _risk_quote_supports(category: str, quote: str) -> bool:
-    """Does this quote contain wording for the category it is filed under?"""
-    normalized = _normalize_for_match(quote)
-    return any(token in normalized for token in _RISK_EVIDENCE.get(category, ()))
+    """Does this sentence contain wording for the category it is filed under?
+
+    Word by word, in any inflection of a `_RISK_EVIDENCE` entry: "approved" is
+    permitting wording because "approve" is, and "issue" is not litigation wording
+    although it ends in "sue". Pass the sentence (`_risk_sentence`), not the clause
+    the model copied out of it.
+    """
+    words = _words(quote)
+    return any(_states_term(words, term) for term in _risk_terms(category))
+
+
+def _risk_sentence(quote: str, article: str) -> str:
+    """The article's own sentence around a quote it contains: what the category check reads.
+
+    A model quotes the clause that names the obstacle and leaves the rest behind —
+    "has only been filed, not approved" out of a sentence that begins "The
+    water-rights change application". Judging the clause alone refused correct
+    obstacles whose subject sat a few words earlier; judging the sentence is still
+    judging only words the article published, in the sentence the quote is from
+    (`_verbatim_run`, which stops at that sentence's edges). A quote too short to
+    place (`MIN_EXACT_CHARS`) is judged as it stands.
+    """
+    return _verbatim_run(quote, article).text or quote
 
 
 #: Wording that makes a sentence a PLAN rather than a record of something done.
@@ -2231,7 +2378,10 @@ def _risks(raw: dict[str, Any], article_text: str, url: str) -> tuple[list[RiskR
         if not isinstance(quote, str) or not quote.strip():
             unconfirmed, quote = "no_quote", None
         elif _normalize_for_match(quote) in haystack:
-            quote = quote.strip()
+            # Judged, and stored, as the whole sentence it was copied from — the
+            # clause alone refused obstacles whose subject sat a few words earlier.
+            # See `_risk_sentence`; the recovered quote below is already one.
+            quote = _risk_sentence(quote.strip(), article_text)
         else:
             # Same reference-resolution problem as `evidence_gate`, same remedy:
             # fall back to the article's own words for the stretch the model really
@@ -2250,9 +2400,14 @@ def _risks(raw: dict[str, Any], article_text: str, url: str) -> tuple[list[RiskR
             else:
                 quote = recovered.text
         if quote is not None and not _risk_quote_supports(category, quote):
+            # The sentence is named: without it a night's 45 refusals could be
+            # counted but not read, and whether the check was right could not be
+            # told from the log at all.
             log.warning(
-                "risk quote for %s does not state that category; keeping the risk as 待确认",
+                "risk quote for %s does not state that category; keeping the risk as "
+                "待确认; sentence: %r",
                 category,
+                _for_log(quote),
             )
             unconfirmed, quote = "quote_off_target", None
         if unconfirmed:
