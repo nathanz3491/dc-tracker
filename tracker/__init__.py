@@ -5,6 +5,6 @@ starts fast and so tests can import submodules without pulling in SQLAlchemy,
 httpx or crawl4ai.
 """
 
-__version__ = "4.1.3"
+__version__ = "4.1.5"
 
 __all__ = ["__version__"]
