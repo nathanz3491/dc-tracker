@@ -406,3 +406,66 @@ def test_a_twin_pair_is_asked_once_when_both_rows_are_new(session):
         lon=-115.1,
     )
     assert len(twin_pairs(session, [a.id, b.id])) == 1
+
+
+# --- a read about one row lands on it, spelling aside ------------------------------
+
+
+@pytest.mark.parametrize(
+    ("found", "lands"),
+    [
+        ({"company": "Microsoft", "city": "LaPorte", "state": "IN"}, True),
+        ({"company": "Microsoft Corporation", "county": "La Porte County", "state": "IN"}, True),
+        ({"company": "Microsoft", "state": "IN"}, True),
+        ({"company": "Microsoft", "city": "New Albany", "state": "IN"}, False),
+        ({"company": "Microsoft", "city": "La Porte", "state": "TX"}, False),
+        ({"company": "Meta", "city": "La Porte", "state": "IN"}, False),
+    ],
+)
+def test_a_record_names_this_row_spelling_aside(session, found, lands):
+    row = _row(session, "Microsoft", city="La Porte", county="LaPorte County", state="IN")
+    assert keys.names_this_row(found, row) is lands
+
+
+def test_a_focused_read_lands_on_its_row_under_the_articles_spelling(session):
+    """Nine reads enrich fetched for their own rows were thrown away on 10-19."""
+    from tracker.ingest.enrich import focus_route
+
+    row = _row(session, "Boxminer", city="La Pine", state="OR")
+    route = focus_route(row)
+    same = IngestRecord(
+        project={"company": "Boxminer.io", "city": "La Pine", "state": "OR"}, sources=[]
+    )
+    other = IngestRecord(
+        project={"company": "Boxminer.io", "city": "Bend", "state": "OR"}, sources=[]
+    )
+    assert route(same) == row.id
+    assert route(other) is None
+
+
+def test_a_reread_returns_to_the_row_that_cites_the_article(session):
+    row = _row(session, "SB Energy", county="Pike County", state="OH", name="PORTS")
+    _cite(session, row, "https://news.test/ports")
+    route = keys.citing_route(session)
+    found = IngestRecord(
+        project={"company": "SoftBank", "county": "Pike", "state": "OH"},
+        sources=[
+            SourceRecord(
+                url="https://news.test/ports",
+                source_type="trade_press",
+                fetched_at=dt.datetime(2026, 1, 1),
+            )
+        ],
+    )
+    assert route(found) == row.id
+    stranger = IngestRecord(
+        project={"company": "SoftBank", "county": "Pike", "state": "OH"},
+        sources=[
+            SourceRecord(
+                url="https://news.test/other",
+                source_type="trade_press",
+                fetched_at=dt.datetime(2026, 1, 1),
+            )
+        ],
+    )
+    assert route(stranger) is None

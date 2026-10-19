@@ -257,6 +257,30 @@ def search_queries(
     return queries[:limit]
 
 
+def focus_route(project: Project):
+    """Send a focused read's record to the row it was read for, when it names that row.
+
+    A read focused on one row is told to write that row only, and `existing_only`
+    refuses anything that does not land on an existing one — the guard against a
+    second "Skybox Austin" beside #552. But landing was decided by an exact key, so
+    the article's own spelling of the row lost it: on 2026-10-19 nine reads fetched
+    for their own rows were thrown away as "laporte" against "La Porte", "boxminer
+    io" three times, "poolside ai" (the identity check had routed that very key two
+    hours earlier), and reread and recheck refused ten more the same way.
+
+    So a record that names this row (`keys.names_this_row`: the same operator, in
+    the same state, at a matching place or none) is routed to it. Anything else is
+    refused exactly as before: an article listing one operator's three Indiana
+    campuses still cannot attach the other two to this one.
+    """
+    from tracker.keys import names_this_row
+
+    def route(record) -> int | None:
+        return project.id if names_this_row(record.project, project) else None
+
+    return route
+
+
 def project_urls(session: Session, project_id: int) -> set[str]:
     """URLs already cited by this project — the set a harvest must beat."""
     return set(session.scalars(select(Source.url).where(Source.project_id == project_id)))
@@ -841,6 +865,7 @@ def run(
                 # #552 on 2026-09-30, both counted twice in the totals until merged.
                 # The reading still lands wherever it routes to an existing row.
                 existing_only=focus,
+                route=focus_route(project) if focus else None,
                 origins=_origins(current.harvests),
             )
         # A page skipped as unchanged cost nothing and is not counted against the

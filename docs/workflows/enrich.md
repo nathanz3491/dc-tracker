@@ -156,6 +156,11 @@ it; the last keeps the article budget for pages that can be read at all.
   second row beside #1299 and #552, counted twice in the totals until merged. A
   focused read now runs `existing_only`: its reading lands on whatever existing row it
   routes to, and a campus that matches none is logged by name and not created.
+  **And a record that names this row lands on it whatever its spelling**
+  (`focus_route`, `keys.names_this_row`): the same operator, the same state, and a
+  town or county that matches once spaces are ignored, or none. On 2026-10-19 nine
+  reads fetched for their own rows were thrown away as "laporte" against "La Porte"
+  and "boxminer io" against "Boxminer" — an exact key decided where they landed.
 * **A page nothing can read is read last.** A publisher marked `closed` in
   `tracker/seed/feeds.toml` answers every client with a challenge, its articles
   included, so unless a body was cached before the block a fetch of one can only
@@ -308,7 +313,7 @@ Touching any of these means the poster is in scope. Re-render with
 | Row selection order | `tracker/ingest/enrich.py` — `select_projects`, `pursuable`, `t2_gaps`, `DEFAULT_TARGET_FIELDS`; `tracker/gaps.py` — `t2_gaps`, `unpublished`, `_NOT_BUILT_PHASES` |
 | Harvesters | `tracker/ingest/enrich.py` — `harvest_queue`, `harvest_retry`, `harvest_archive`, `harvest_search`, `harvest_refresh`, `_derive`; `tracker/ingest/search.py` — `CachedProvider`, `cached` |
 | Ignore-list filtering | `tracker/ingest/enrich.py` — `Round.urls`; `tracker/policy.py` |
-| Reading, and not re-reading | `tracker/ingest/enrich.py` — `run(reread=, focus=)`, `Round.refused_new`, `_origins`; `tracker/ingest/crawl.py` — `run(existing_only=, origins=)`, `record_url(origin=)`, `_origin`, `unchanged_reads`, `focus_note`, `extract_one`; `tracker/llm.py` — `without_thinking` |
+| Reading, and not re-reading | `tracker/ingest/enrich.py` — `run(reread=, focus=)`, `focus_route`, `Round.refused_new`, `_origins`; `tracker/keys.py` — `names_this_row`; `tracker/ingest/crawl.py` — `run(existing_only=, origins=)`, `record_url(origin=)`, `_origin`, `unchanged_reads`, `focus_note`, `extract_one`; `tracker/llm.py` — `without_thinking` |
 | Pages nothing can read go last | `tracker/ingest/enrich.py` — `run`; `tracker/ingest/discover.py` — `unreadable_test`, `readable_first`, `closed_domains` |
 | Settle stage | `tracker/ingest/enrich.py` — `_settle`, `settle_key`; `tracker/conflicts.py` — `disputes`, `solve`, `apply_outcome`; `tracker/declines.py` |
 | Agent pass | `tracker/cli/enrich.py` — `_gapfill_batch(t2_only=)`, and its landed/unlanded check; `tracker/gapfill.py` — `apply_facts`, `_fact_axes`, `Filled.missed`; `tracker/agent.py` — `run`, `TOOL_LIMITS`, `WRAP_UP_TURNS` |

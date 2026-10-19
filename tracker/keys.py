@@ -171,10 +171,63 @@ def remember(
     return True
 
 
+def names_this_row(found: dict, project: Project) -> bool:
+    """Does an extracted record name this row, spelling aside?
+
+    The same operator (`dedup.same_operator`, so "Boxminer.io" is Boxminer), the same
+    state, and a town or county that matches the row's once spaces are ignored
+    ("LaPorte" is La Porte) — or no place at all. For a caller that already knows
+    which row the article is about and needs only to rule out that it names another
+    one: a read focused on one row, or a re-read of an article a row already cites.
+    """
+    from tracker.dedup import _slug, county_key, same_operator
+
+    def loose(value: str | None) -> str:
+        return _slug(value or "").replace(" ", "")
+
+    if (found.get("state") or "").upper() != (project.state or "").upper():
+        return False
+    if not same_operator(found.get("company"), project.company):
+        return False
+    ours = {loose(project.city), loose(county_key(project.county))} - {""}
+    theirs = {loose(found.get("city")), loose(county_key(found.get("county")))} - {""}
+    return not (theirs and ours and not theirs & ours)
+
+
+def citing_route(session: Session):
+    """A `crawl.run` route for re-reading articles rows already cite.
+
+    `reread` and `recheck` re-extract cached articles with `existing_only`, which
+    refuses a record whose key matches no row — and on 2026-10-19 they refused ten,
+    each an article a row *already cites*, under a spelling of that row ("corscale",
+    "sb energy|city:piketon"). The article's own citing rows are the candidates: a
+    record is routed to the one it names (`names_this_row`), and refused as before
+    when it names none, or more than one.
+    """
+    citing: dict[str, list[int]] = defaultdict(list)
+    for url, project_id in session.execute(select(Source.url, Source.project_id)):
+        citing[url].append(project_id)
+
+    def route(record) -> int | None:
+        urls = [s.url for s in getattr(record, "sources", ()) or ()]
+        rows = {pid for url in urls for pid in citing.get(url, ())}
+        named = [
+            pid
+            for pid in sorted(rows)
+            if (row := session.get(Project, pid)) is not None
+            and names_this_row(record.project, row)
+        ]
+        return named[0] if len(named) == 1 else None
+
+    return route
+
+
 __all__ = [
     "ARBITER",
     "DECIDED_BY",
     "KeyReport",
+    "citing_route",
+    "names_this_row",
     "natural_key",
     "remember",
     "renormalise",

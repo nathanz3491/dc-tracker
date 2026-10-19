@@ -208,6 +208,16 @@ initial build of the v1 PRD.
 
 ### Changed
 
+- **A read about one campus lands on it, however the article spells it**
+  (`tracker/ingest/enrich.py`, `tracker/keys.py`, `tracker/cli/ingest.py`,
+  `docs/workflows/enrich.md`). Enrich reads for one row at a time and refuses to
+  create rows, and where a reading landed was decided by an exact key — so on 10-19
+  nine reads fetched for their own rows were thrown away ("laporte" against "La
+  Porte", "boxminer io" three times, "poolside ai"), and the nightly re-reads refused
+  ten more articles their own rows already cite. A record naming the same operator in
+  the same state, at a matching town or county once spaces are ignored or at none,
+  now goes to that row; a record naming any other campus is still refused.
+
 - **A question is paid for once a night** (`tracker/declines.py`,
   `tracker/riskcheck.py`, `docs/workflows/duplicates.md`, `docs/workflows/logic.md`).
   An undecided pair, finding or obstacle is held back while the evidence it was

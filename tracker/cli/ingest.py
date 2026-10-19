@@ -415,6 +415,8 @@ def ingest_crawl(
         return
     console.print(f"[dim]crawling {len(url_list)} URL(s) from {source_label}[/dim]")
 
+    from tracker import keys as keys_mod
+
     started = time.monotonic()
     with session_scope(engine) as session:
         report = crawl.run(
@@ -429,6 +431,9 @@ def ingest_crawl(
             cache_dir=cache_dir,
             cached_only=cached_only,
             existing_only=existing_only,
+            # A re-read of an article rows already cite goes back to the row it names,
+            # spelling aside — see `keys.citing_route`.
+            route=keys_mod.citing_route(session) if existing_only else None,
             arbiter=_identity_arbiter(verify_identity, label="ingest crawl"),
         )
     _report_arbiter("ingest crawl")
