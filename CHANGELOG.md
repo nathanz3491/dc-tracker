@@ -371,6 +371,15 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **A campus looked at after midnight is followed up that evening**
+  (`tracker/ingest/watch.py`, `docs/workflows/sync.md`). The first look at all 634
+  campuses ran by hand from 00:11 on 2026-10-19, and a daily campus was due again
+  only 18 hours later, at 18:11: seven minutes after that night's watch started, so
+  every follow-up would have waited a night. A daily look is now due 16 hours after
+  the last, not 18: one taken in the small hours is followed up that evening, a
+  second run the same day still repeats nothing, and from one night to the next
+  nothing changes.
+
 - **An archive page listed late is a catch-up, not news**
   (`tracker/ingest/discover.py`, `docs/workflows/sync.md`). On the first nightly walk
   in production, Utility Dive's archive answered six of its monthly sitemaps with a

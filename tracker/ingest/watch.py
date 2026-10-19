@@ -107,11 +107,17 @@ NEXT_WORDS: Final[dict[str, tuple[str, ...]]] = {
 #: Google dates a story by its last update as often as by its first appearance.
 SLACK: Final = dt.timedelta(days=2)
 
-#: A look counts as due this much before its cadence is up. Each run stamps every
-#: look with its own start, and the loop starts the watch after discovery, whose
-#: length varies: with an exact 24 hours, a night that began a few seconds earlier
-#: than the last skipped every "daily" campus.
-EARLY: Final = dt.timedelta(hours=6)
+#: A look counts as due this much before its cadence is up. The watch runs once a
+#: night, so any value under a day changes nothing from one night to the next; what
+#: it decides is a look taken off the nightly rhythm. Each run stamps every look
+#: with its own start, and the loop starts the watch after discovery, whose length
+#: varies: with an exact 24 hours, a night that began a few seconds earlier than the
+#: last skipped every "daily" campus. And at 6 hours, the first look at all 634
+#: campuses, run by hand at 00:11 on 2026-10-19, made every daily campus due at
+#: 18:11 -- seven minutes after that night's watch started -- and so a whole night
+#: later. At 8, a look taken in the small hours is due that evening (16 hours on),
+#: and a second run later the same day does not repeat it.
+EARLY: Final = dt.timedelta(hours=8)
 
 #: Words that describe a campus without naming it. A name made only of these is not
 #: searched for: "Technology" or "Joint Venture" in the OR group would turn the query

@@ -127,9 +127,11 @@ halves of "Amazon (AWS)"; Meta for a row filed as Facebook), and its town, count
 distinctive name — limited to the dates since its last look and sorted newest first
 (a page of ten ranked by relevance could be filled by the week's older stories),
 daily for a campus being decided or built, every three days once it operates, daily
-for any campus of a company a reader watches. "Daily" allows six hours' slack: the
-watch starts after discovery, whose length varies, and an exact 24 hours skipped
-every daily campus on a night that began a few seconds early. A look whose search
+for any campus of a company a reader watches. "Daily" allows eight hours' slack
+(`EARLY`): the watch starts after discovery, whose length varies, and an exact 24
+hours skipped every daily campus on a night that began a few seconds early; at six
+hours, the first look at every campus, run by hand at 00:11 on 10-19, made them all
+due at 18:11, seven minutes after that night's watch began. A look whose search
 fails leaves the clock where it was, so the next one reaches back past it. A campus's **first** look reaches back a year,
 with a second search for the words its stage is waiting on ("online", "energized",
 "delayed" for one under construction); up to `--baselines` campuses get one a

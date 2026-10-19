@@ -592,6 +592,18 @@ def test_a_date_given_in_weeks_is_not_stored_as_a_day(session):
     assert kuna.id
 
 
+def test_a_look_taken_after_midnight_is_due_at_that_evenings_run(session):
+    """The first look at every campus ran by hand from 00:11 on 2026-10-19; at six
+    hours' slack every daily campus fell due at 18:11, after that night's watch."""
+    campus = _campus(session, 2, phase="construction")
+    took = dt.datetime(2026, 10, 18, 16, 11)  # 00:11 in Beijing
+    session.add(NewsWatch(project_id=campus.id, baseline_at=took, checked_at=took))
+    session.flush()
+    evening = dt.datetime(2026, 10, 19, 10, 4)  # 18:04: the loop's watch
+    assert [p.id for p, _ in watch.due(session, now=evening)[0]] == [campus.id]
+    assert watch.due(session, now=took + dt.timedelta(hours=5))[0] == [], "not twice a day"
+
+
 def test_a_watched_companys_operating_campus_is_looked_at_daily(session):
     from tracker import accounts
 
