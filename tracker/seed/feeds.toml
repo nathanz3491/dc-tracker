@@ -1244,14 +1244,34 @@ company = "Compass Datacenters"
 topic_implied = true
 max_urls = 20000
 
+# Applied Digital's press releases, from its investor-relations site's own feed:
+# ten newest, dated, robots.txt allowing it, and every release on that host reads with
+# the plain client. A feed read as an archive (`parse_feed` takes RSS too), so what it
+# adds each night is news and the company is implied on its host, which is also what
+# types ir.applieddigital.com as the company's own filing (`crawl.operator_hosts`).
+#
+# It replaces `applied-digital-newsroom`, the main site's sitemap, which looked the
+# densest of any operator archive (45 of 94 entries passed the filter) and whose news
+# produced nothing: its /insights/ pages are cards -- a headline, two sentences in an
+# <aside> the text reduction drops as furniture, and "Read the article" linking to
+# the outlet that wrote it, DatacenterDynamics more often than not, which is closed to
+# us. Of the 52 such pages ever read, 47 were refused as "not an article" (153
+# characters of prose in a 635-character page) and none produced a citation; on
+# 2026-10-19 the crawl read 27 of them and refused all 27. The browser rung reads only
+# a cookie banner there. The sitemap's 14 other pages are the site's own -- about,
+# careers, contact; the one of them it queued, /behind-the-build, was cited on 10-19,
+# and the source refresh re-reads a cited page whatever found it.
+# Removed rather than marked `closed`: closing would take ir.applieddigital.com's
+# queued releases out of the queue with it (one registrable domain), and the weekly
+# check would reopen it, since the sitemap answers. The 32 /insights/ pages still
+# queued from it read as before, thin and with no model call; `tracker queue --drop
+# --feed applied-digital-newsroom` takes them out.
 [[sitemap]]
-name = "applied-digital-newsroom"  # 45 of 94 — the densest of any operator site
-url = "https://www.applieddigital.com/sitemap.xml"
+name = "applied-digital-ir"
+url = "https://ir.applieddigital.com/news-events/press-releases/rss"
 source_type = "company_filing"
 company = "Applied Digital"
 topic_implied = true
-max_children = 8
-max_urls = 20000
 
 [[sitemap]]
 name = "fermi-america-newsroom"  # 33 of 61
