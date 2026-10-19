@@ -457,6 +457,82 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **An obstacle keeps its wording with its sentence** (`tracker/upsert.py`). A
+  quoted obstacle that a later, unquoted reading of the same kind reached kept its
+  quote but took the new reading's summary, severity and citation, so it paired one
+  article's event with another's sentence under the second's address: on 10-19 #5
+  read "A recent fire at the property…" over a sentence about cooling-fan noise.
+  A quoted reading is now kept whole against an unquoted one; a quoted one still
+  replaces it.
+
+- **The morning report traces each changed value to what set it**
+  (`tracker/changes.py`, `tracker/blocks.py`, `docs/data-quality.md`). The line under
+  each change looked for the new value among the citations' claims and nowhere else,
+  but a blocker is never a citation's claim: it is the summary of an open obstacle,
+  and the obstacle carries the sentence. On 2026-10-19 the report printed NOTHING
+  against the blockers of #5, #183 and #1328 and "no quote" against seventeen more,
+  when sixteen of those twenty obstacles had a sentence — #183's was confirmed that
+  same night — and NOTHING against #1608's 3 MW built, which the row took from its
+  one quoted tranche. A blocker is now traced to its open obstacle, a capacity or
+  customer filled from tranches to the tranche (or every tranche of a sum), a customer
+  named by a party to the party, a phase lifted by named tranches to their status, and
+  a county or coordinate to the Census lookup, shown as a derivation rather than as a
+  missing quote. "no quote" now carries the gate's reason, NOTHING is printed only
+  when nothing states the value, and a quote stays on one line.
+
+- **The settle step shows where a re-derived value changed** (`tracker/derive.py`). It
+  listed each moved value with both sides cut at their first 47 characters, and a
+  row's notes change far from their start, so twenty of the twenty-two lines on
+  2026-10-19 read the same text on both sides of the arrow. Notes are now reported by
+  the lines they gained and lost — one line replaced by one other is shown side by
+  side, cut where the two differ — and any other text is cut around its first
+  difference.
+
+- **How the news came in counts the reads that failed and the ones set aside**
+  (`tracker/ingest/desk.py`, `tracker/cli/sync.py`, `docs/workflows/sync.md`). The
+  table counted only reads that reached the model, so a source whose articles mostly
+  would not load looked whole: on 2026-10-19 the news watch showed 146 reads and 62
+  finds, and nothing of the 115 more that failed (66 refused with HTTP 403, 32 whose
+  robots.txt did not answer) or the 410 taken out of the queue unread, as second
+  copies of a story or pages on publishers closed to us. Each source now has "failed"
+  and "aside" columns, and one line totals the three.
+
+- **A ruling that left the value as it was is no longer counted as a ruling**
+  (`tracker/audit.py`, `tracker/cli/logic.py`, `tracker/cli/quality.py`,
+  `tracker/changes.py`, `docs/workflows/logic.md`). A ruling can strike the citation
+  stating a row's value while another citation states it too, so the re-derivation
+  puts the same value back. On 2026-10-19 three of the night's nine logic rulings were
+  that shape — "mw_built 750 -> 750", "phase construction -> construction" twice —
+  and each was counted as a fix of a row a reader would find unchanged. `logic
+  resolve` now reports them as "struck a citation and left the value as it was",
+  `audit resolve` leaves them out of what it settled and says which settlements
+  changed the row and which judged the figure right, and the morning report marks such
+  a decision "(value unchanged)". The findings stay open, as they already did.
+
+- **The night closes on both bills** (`tracker/spend.py`, `tracker/ingest/desk.py`,
+  `scripts/overnight.sh`, `README.md`, `docs/workflows/sync.md`). Searches are prepaid
+  Serper credit and stay outside the night's money ceiling by design, but nothing
+  priced them, so 2026-10-19 closed on "¥9.89" while its 780 searches had spent about
+  ¥5.54 more — over a third of the night's money. The closing line, the spend report
+  and the news report now price them at about ¥0.007 each (Serper's $50 for 50,000)
+  and DeepSeek's fetched pages at ¥5 per 1,000; the ceiling still reads the model bill
+  alone.
+
+- **Enrich's batch table counts what the agent pass found** (`tracker/ingest/enrich.py`,
+  `tracker/cli/enrich.py`, `docs/workflows/enrich.md`). The table and its "projects at
+  >=9 of 12" line were measured when the harvest ended, before the agent pass ran: on
+  2026-10-19 the table listed 13 rows gaining 15 fields while the agent pass had
+  filled six more on six rows, none of which the table showed. Rows are now measured
+  again after the agent pass, the harvest's gains and the agent's have separate
+  columns, and the closing line says how many fields the agent filled.
+
+- **The dates step counts undated citations apart from undated queued articles**
+  (`tracker/dates.py`, `docs/data-quality.md`). Its single "undated at start" added
+  URLs behind a stored citation to articles still queued to be read, and the queue
+  swings with what discovery finds: the news watch's first look took the figure from
+  1,596 to 5,611 overnight, which read as the database losing dates, while the undated
+  citations went from 924 to 951. The two now have rows of their own.
+
 - **A year-only date no longer erases a precise one in the same year**
   (`tracker/upsert.py`). "2023" is stored as 2023-01-01 at year precision, so the
   earliest-date rule read it as earlier than Fairwater's announcement on 2023-03-30,
