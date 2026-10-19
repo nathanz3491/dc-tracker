@@ -45,6 +45,24 @@ from tracker.models import ModelDecline, Project, utcnow
 #: enough that a figure first published after the look is still found.
 COOLDOWN_DAYS: Final = 30
 
+#: How long any look holds, whatever changed since: the rest of one night.
+#:
+#: The fingerprint is right across nights and wrong within one. A row gains
+#: citations all evening — the Census lookup, a re-read, an article the crawl
+#: attached — so a pair the agent left undecided at 18:25 hashed differently by
+#: 18:54 and was paid for again, and again in round 2: on 2026-10-19 Stargate
+#: Abilene's pair with "Crusoe Abilene Stargate Phase 2" was asked three times
+#: (0.80, 0.70, 0.82, never mergeable), and four other pairs twice. Nothing that
+#: arrives within one night is likely to turn the same model's answer, and the
+#: next night still sees the changed evidence.
+TONIGHT_HOURS: Final = 20
+
+#: `outcome` for a look that never produced an answer — an empty or unusable reply.
+#: It holds for the night only (:data:`TONIGHT_HOURS`): the call failed rather than
+#: the question, so tomorrow it is worth asking again. On 10-19 one obstacle's check
+#: came back empty four times in one night, each a 10,000-token prompt.
+ERROR: Final = "error"
+
 #: `settle` is enrich's settle step (`enrich._settle`): a contested field the
 #: judgement tier refused to pick between, on the claims it was shown.
 KINDS: Final = ("pair", "logic", "audit", "risk", "settle")
@@ -103,9 +121,14 @@ def holds(
     filtering hundreds of candidates reads the table once.
     """
     row = known.get(subject)
-    if row is None or row.fingerprint != print_:
+    if row is None or row.decided_at is None:
         return False
-    return _fresh(row, now=now or utcnow(), cooldown_days=cooldown_days)
+    now = now or utcnow()
+    if now - row.decided_at < dt.timedelta(hours=TONIGHT_HOURS):
+        return True
+    if row.fingerprint != print_ or row.outcome == ERROR:
+        return False
+    return _fresh(row, now=now, cooldown_days=cooldown_days)
 
 
 def record(
@@ -177,7 +200,9 @@ def split(
 
 __all__ = [
     "COOLDOWN_DAYS",
+    "ERROR",
     "KINDS",
+    "TONIGHT_HOURS",
     "citations",
     "fingerprint",
     "forget",

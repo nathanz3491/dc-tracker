@@ -30,13 +30,29 @@ def _project(session, **kw) -> Project:
 # --- the store -----------------------------------------------------------------
 
 
+def _age(session, hours):
+    """Move every decline back in time, as if the look happened `hours` ago."""
+    for row in session.query(ModelDecline).all():
+        row.decided_at = utcnow() - dt.timedelta(hours=hours)
+    session.flush()
+
+
 def test_a_decline_holds_on_the_same_evidence_and_only_on_it(session):
     declines.record(session, "risk", "7", "abc", outcome="unclear", reason="no sentence says so")
+    _age(session, declines.TONIGHT_HOURS + 1)
     known = declines.load(session, "risk")
 
     assert declines.holds(known, "7", "abc")
     assert not declines.holds(known, "7", "abd"), "new evidence is a new question"
     assert not declines.holds(known, "8", "abc"), "another subject was never asked"
+
+
+def test_within_one_night_a_look_holds_whatever_arrived_since(session):
+    """Rows gain citations all evening, so the fingerprint moved between rounds and
+    the same pair was paid for three times on 2026-10-19."""
+    declines.record(session, "pair", "3-1749", "before", outcome="left alone")
+    known = declines.load(session, "pair")
+    assert declines.holds(known, "3-1749", "after the census citation")
 
 
 def test_a_decline_lapses_after_the_cooldown(session):
@@ -219,7 +235,11 @@ def test_a_new_citation_reopens_a_declined_pair(session, pair_rows, monkeypatch)
     session.flush()
     session.refresh(b)
     triage.resolve_pairs(session, extractor=judge, allow_search=False)
-    assert judge.asked == 2
+    assert judge.asked == 1, "the same night holds it, new citation or not"
+
+    _age(session, declines.TONIGHT_HOURS + 1)
+    triage.resolve_pairs(session, extractor=judge, allow_search=False)
+    assert judge.asked == 2, "the next night, new evidence is a new question"
 
 
 # --- logic ----------------------------------------------------------------------
@@ -321,14 +341,16 @@ def test_an_unclear_obstacle_is_not_read_again_on_the_same_article(session, tmp_
     unread, held = riskcheck.fresh(session, [risk], cache_dir=tmp_path)
     assert (unread, held) == ([], 1)
 
-    # A changed article is a new question.
+    # A changed article is a new question — from the next night.
     source.excerpt = _RISK_ARTICLE + " Residents raised concerns about noise."
-    session.flush()
+    _age(session, declines.TONIGHT_HOURS + 1)
     unread, held = riskcheck.fresh(session, [risk], cache_dir=tmp_path)
     assert (unread, held) == ([risk], 0)
 
 
-def test_a_failed_obstacle_call_is_not_remembered(session, tmp_path):
+def test_a_failed_obstacle_call_is_held_for_the_night_only(session, tmp_path):
+    """One obstacle's check came back empty four times on 10-19, each a 10,000-token
+    prompt. The call failed rather than the question, so tomorrow it is asked again."""
     from tracker import riskcheck
 
     risk, _source = _risk_row(session)
@@ -336,7 +358,11 @@ def test_a_failed_obstacle_call_is_not_remembered(session, tmp_path):
         session, [risk], extractor=_Reads("not json"), cache_dir=tmp_path
     )
     assert outcome.result == "error"
-    assert session.query(ModelDecline).count() == 0
+    assert session.query(ModelDecline).one().outcome == declines.ERROR
+    assert riskcheck.fresh(session, [risk], cache_dir=tmp_path) == ([], 1)
+
+    _age(session, declines.TONIGHT_HOURS + 1)
+    assert riskcheck.fresh(session, [risk], cache_dir=tmp_path) == ([risk], 0)
 
 
 # --- audit -----------------------------------------------------------------------

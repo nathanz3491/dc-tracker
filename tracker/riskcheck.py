@@ -398,6 +398,20 @@ def confirm(
             outcome.result = "no_article"
         elif apply:
             outcome.result = apply_judgement(risk, judgement, article)
+            if outcome.result == "error":
+                # A failed call, not an answer: held for the rest of the night only
+                # (`declines.ERROR`), so the next round does not pay for it again.
+                from tracker import declines
+
+                declines.record(
+                    session,
+                    "risk",
+                    str(risk.id),
+                    shown,
+                    outcome=declines.ERROR,
+                    reason=judgement.reason,
+                    by="model",
+                )
             if outcome.result == "unclear":
                 # The model's own answer on this article, not a failed call — so
                 # the next run holds it back until the article or the obstacle

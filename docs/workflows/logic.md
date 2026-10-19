@@ -333,7 +333,10 @@ phase of three overnight rounds out of five after a single bad finding.
 
 A ruling the rails refuse (`unusable`) is recorded in `model_decline` with a hash of
 the finding and the row's citations, and held back until one of them changes or the
-cooldown lapses; `--again` asks anyway. `left alone` has always been recorded, in the
+cooldown lapses — but never asked twice in one night (`declines.TONIGHT_HOURS`),
+however the citations moved in between; `--again` asks anyway. An obstacle check
+whose call failed outright is held for the night too (`declines.ERROR`), and asked
+again the next: on 10-19 one came back empty four times in one night. `left alone` has always been recorded, in the
 row's notes; `unusable` was not, and on the first overnight run it was 8 and then 12
 of each round's 40 findings, re-paid every round at the full agent price.
 

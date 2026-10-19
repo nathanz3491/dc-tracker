@@ -208,6 +208,17 @@ initial build of the v1 PRD.
 
 ### Changed
 
+- **A question is paid for once a night** (`tracker/declines.py`,
+  `tracker/riskcheck.py`, `docs/workflows/duplicates.md`, `docs/workflows/logic.md`).
+  An undecided pair, finding or obstacle is held back while the evidence it was
+  judged on is unchanged — but rows gain citations all evening, so the evidence hash
+  moved between rounds and the same question was asked again: Stargate Abilene's pair
+  with its "Phase 2" twin three times on 10-19, four other pairs twice. Any look now
+  holds for the rest of the night; changed evidence reopens it the next night as
+  before. An obstacle check whose call failed outright (one came back empty four
+  times, each a 10,000-token prompt) is held for the night instead of retried every
+  round.
+
 - **The night measures its progress from after the news, and folds duplicates before
   paying to read rows** (`scripts/overnight.sh`). The news adds rows and findings by
   design, so measured against the counts from before it the second round looked like
