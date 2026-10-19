@@ -614,3 +614,44 @@ def test_a_passage_is_kept_only_when_it_carries_a_figure_and_names_the_site(sess
 
     assert "11.25 MW" in kept
     assert "Analysts expect" not in kept
+
+
+# --- what a settlement changed ----------------------------------------------------
+
+
+def test_an_edit_that_put_the_value_back_is_recognised_however_it_is_spelled():
+    assert audit.left_as_it_was("mw_built 750 -> 750 (1 claim(s) superseded on citation(s) [1597])")
+    assert audit.left_as_it_was("phase construction -> construction (1 claim(s) superseded)")
+    assert audit.left_as_it_was("investment_usd 1,200,000,000 -> 1200000000 (kept)")
+    assert not audit.left_as_it_was("investment_usd 4,000,000,000 -> empty (1 claim(s) superseded)")
+    assert not audit.left_as_it_was("left as it stands — the figure was judged correct")
+
+
+def test_the_summary_counts_a_settlement_by_what_it_did(monkeypatch):
+    """A figure replaced, a figure judged right, and a citation struck while another
+    states the same figure are three different outcomes. The third settles nothing —
+    the finding stays open — and used to be counted as settled."""
+    import io
+
+    from rich.console import Console
+
+    from tracker.cli import quality as cli_quality
+
+    finding = audit.UnitFinding(1, "Campus", "investment_below_build_cost", "x", "y")
+    resolutions = [
+        audit.Resolution(finding, "model", "r", "investment_usd 4,000,000,000 -> empty (…)"),
+        audit.Resolution(
+            finding, "model", "d", "left as it stands — the figure was judged correct"
+        ),
+        audit.Resolution(finding, "model-after-search", "r", "investment_usd 1,000 -> 1,000 (…)"),
+        audit.Resolution(finding),
+    ]
+    shown = io.StringIO()
+    monkeypatch.setattr(cli_quality, "console", Console(file=shown, width=200))
+    cli_quality._print_resolution_summary(resolutions, 0)
+
+    text = shown.getvalue()
+    assert "2 of 4 settled" in text
+    assert "1 changed the row, 1 judged the figure right as it stands" in text
+    assert "struck a citation and left the value as it was" in text
+    assert "nobody could decide" in text

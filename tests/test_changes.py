@@ -537,3 +537,30 @@ def test_the_morning_report_traces_an_obstacle_and_a_tranche_end_to_end(db, tmp_
     assert '"Residents told the council the fans run all night."' in out
     assert '"Phase I brings 3MW of power capacity."' in out and "(tranche 'Phase I')" in out
     assert "NOTHING" not in out and "no quote" not in out
+
+
+def test_a_noted_ruling_that_left_the_value_as_it_was_is_marked():
+    """A ruling that struck the citation stating a value while another states it too
+    is still a decision, and is listed — marked, so it is not read as a change."""
+    from tracker.changes import Changes, render
+
+    found = Changes(
+        decisions=[
+            (
+                143,
+                "IREN",
+                "2026-10-19 agent (0.83) resolved `built_exceeds_planned`: "
+                "mw_built 750 -> 750 (1 claim(s) superseded on citation(s) [1597])",
+            ),
+            (
+                81,
+                "Meta",
+                "2026-10-19 agent (0.78) resolved `built_exceeds_planned`: "
+                "mw_planned 33.185 -> 200 (1 claim(s) superseded on citation(s) [3139])",
+            ),
+        ]
+    )
+    lines = render(found)
+    assert lines[0].endswith("2 decision(s) noted, 1 of them leaving the value as it was")
+    assert "#143 IREN: (value unchanged) 2026-10-19" in lines[1]
+    assert "(value unchanged)" not in lines[2]

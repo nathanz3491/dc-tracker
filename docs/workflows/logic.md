@@ -311,6 +311,18 @@ a contradiction about this one. The agent's instructions say so in one line. And
 `settled_codes` no longer counts a recorded `X -> X` as an answer, which re-opens the
 ones written before the rail existed.
 
+**A ruling can still leave the value where it was.** The citation it strikes states
+the value, but another one does too, and the re-derivation picks that one: on
+2026-10-19 #143's `mw_built 750 -> 750` and `phase construction -> construction` on
+#1449 and #1722. A claim did leave the merge, so the ruling is not refused, and the
+finding stays open for the next run. But each was counted as a ruling — three of the
+night's nine — so the run said it had fixed rows a reader would find unchanged. They
+are now counted apart: `logic resolve` reports them as "struck a citation and left
+the value as it was", `audit resolve` leaves them out of what it settled, and
+`tracker changes` marks such a decision "(value unchanged)". All three ask one
+question, `audit.left_as_it_was`, which reads the sentence the way `settled_codes`
+does.
+
 ### Two things a model may never do
 
 * It cannot mark a row **verified**. That means "an operator says this is right",
@@ -376,7 +388,7 @@ Touching any of these means the poster is in scope. Re-render with
 | What one agent run may spend | `tracker/agent.py` — `run`, `TOOL_LIMITS`, `WRAP_UP_TURNS`, `MAX_STEPS`; `tracker/llm.py` — `without_thinking`; `tracker/ingest/search.py` — `CachedProvider` |
 | What a ruling cannot reach | `tracker/triage.py` — `can_rule_on`, `UNANSWERABLE_BY_RULING`, `has_live_claim`; `tracker/agent.py` — `_list_sources`, `_claims_line` |
 | The fixed menu and the keyboard walk | `tracker/logic.py` — `decide`, `TRIAGE_MIN_CONFIDENCE`; `tracker/cli/logic.py` — `_triage_by_agent`, `_triage_by_model`, `_triage` |
-| Settled-finding bookkeeping | `tracker/audit.py` — `settled_codes`, `_no_change`, `free_answer`, `fmt_value` |
+| Settled-finding bookkeeping | `tracker/audit.py` — `settled_codes`, `_no_change`, `left_as_it_was`, `free_answer`, `fmt_value`; `tracker/cli/quality.py` — `_print_resolution_summary`; `tracker/changes.py` — `render` |
 | CLI | `tracker/cli/logic.py` — `logic_check`, `logic_conflicts`, `logic_resolve`, `logic_rule_out` |
 
 See also: [enrich](enrich.md), whose settle stage is `logic conflicts` with

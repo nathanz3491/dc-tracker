@@ -386,11 +386,13 @@ def render(changes: Changes, *, since: str = "") -> list[str]:
     head = f"what changed{f' since {since}' if since else ''}"
     if not changes:
         return [f"{head}: nothing"]
+    unchanged = sum(1 for _, _, line in changes.decisions if _left_as_it_was(line))
     lines = [
         f"{head}: {len(changes.values)} value(s) on "
         f"{len({c.project_id for c in changes.values})} row(s), "
         f"{len(changes.added)} row(s) created, {len(changes.removed)} removed, "
         f"{len(changes.decisions)} decision(s) noted"
+        + (f", {unchanged} of them leaving the value as it was" if unchanged else "")
     ]
     for c in changes.values:
         lines.append(
@@ -404,8 +406,22 @@ def render(changes: Changes, *, since: str = "") -> list[str]:
     for pid, label in changes.removed:
         lines.append(f"  removed  #{pid} {label[:80]}")
     for pid, label, line in changes.decisions:
-        lines.append(f"  decided  #{pid} {label[:40]}: {line[:240]}")
+        mark = "(value unchanged) " if _left_as_it_was(line) else ""
+        lines.append(f"  decided  #{pid} {label[:40]}: {mark}{line[:240]}")
     return lines
+
+
+def _left_as_it_was(decision: str) -> bool:
+    """A noted ruling whose edit put back the value it started from — `750 -> 750`.
+
+    It struck a citation while another states the same value, so the row reads as it
+    did. Marked rather than dropped: a claim did leave the merge, and the finding it
+    answered is still open.
+    """
+    from tracker.audit import left_as_it_was
+
+    _, _, edit = decision.partition("`: ")
+    return left_as_it_was(edit)
 
 
 __all__ = ["FIELDS", "Backing", "Changes", "ValueChange", "backing", "diff", "render"]

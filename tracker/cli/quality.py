@@ -1068,11 +1068,26 @@ _STAGE_STYLE: dict[str, str] = {
 }
 
 
+def _stood(got) -> bool:
+    """A resolution that struck a citation and left the value where it was.
+
+    `investment_usd 1,200,000,000 -> 1,200,000,000`: another citation states the same
+    figure, so the re-derivation put it back. Not a dismissal — that is a judgement the
+    figure is right, recorded as one — and not a settlement either: `settled_codes`
+    leaves the finding open, so it is not counted as one here.
+    """
+    from tracker.audit import DISMISS, left_as_it_was
+
+    return got.acted and got.key != DISMISS.key and left_as_it_was(got.changed)
+
+
 def _print_resolution(got) -> None:
     if got.acted:
         style = _STAGE_STYLE.get(got.stage, "white")
         confidence = f" [dim]({got.confidence:.2f})[/dim]" if got.confidence < 1.0 else ""
         console.print(f"  [{style}]{got.stage}[/{style}]{confidence} {escape(got.changed)}")
+        if _stood(got):
+            console.print("    [yellow]value unchanged: another citation still states it[/yellow]")
         if got.reason:
             console.print(f"    [dim]{escape(got.reason[:150])}[/dim]")
         if got.searched and got.searched.urls:
@@ -1085,19 +1100,36 @@ def _print_resolution(got) -> None:
 
 
 def _print_resolution_summary(resolutions: list, rescored: int) -> None:
+    from tracker.audit import DISMISS
+
     if not resolutions:
         return
     acted = [r for r in resolutions if r.acted]
+    stood = [r for r in acted if _stood(r)]
+    settled = [r for r in acted if not _stood(r)]
     by_stage: dict[str, int] = {}
-    for got in acted:
+    for got in settled:
         by_stage[got.stage] = by_stage.get(got.stage, 0) + 1
     console.print(
-        f"\n[bold]{len(acted)}[/bold] of {len(resolutions)} settled"
+        f"\n[bold]{len(settled)}[/bold] of {len(resolutions)} settled"
         + (f", {rescored} row(s) rescored" if rescored else "")
     )
+    # What settling meant, because a figure judged right and a figure replaced are
+    # different news for a reader of the row.
+    judged = sum(1 for r in settled if r.key == DISMISS.key)
+    if judged:
+        console.print(
+            f"  [dim]{len(settled) - judged} changed the row, {judged} judged the figure "
+            "right as it stands[/dim]"
+        )
     for stage, count in sorted(by_stage.items(), key=lambda kv: -kv[1]):
         style = _STAGE_STYLE.get(stage, "white")
         console.print(f"  [{style}]{count:>3}[/{style}]  [dim]{stage}[/dim]")
+    if stood:
+        console.print(
+            f"  [yellow]{len(stood):>3}[/yellow]  [dim]struck a citation and left the value as "
+            "it was — another still states it, so the finding stays open[/dim]"
+        )
     left = len(resolutions) - len(acted)
     if left:
         console.print(f"  [dim]{left:>3}  nobody could decide — they stay in `tracker audit`[/dim]")

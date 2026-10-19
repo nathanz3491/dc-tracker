@@ -626,6 +626,23 @@ def _no_change(was: str, now: str) -> bool:
     return spelled(was) == spelled(now)
 
 
+def left_as_it_was(sentence: str) -> bool:
+    """Whether an edit sentence put back the value it started from: `mw_built 750 -> 750`.
+
+    A ruling can strike the citation that states the row's value and still leave the
+    value where it was, because another citation states it too and the re-derivation
+    picks that one. Something real happened — a claim left the merge — but nothing a
+    reader of the row would see, and the finding is still open (`settled_codes` does
+    not count it). The runs that print these counted them as rulings: on 2026-10-19,
+    "construction -> construction" twice and "750 -> 750" among nine.
+
+    Read with the same pattern and the same comparison `settled_codes` uses, so the
+    two can never disagree about which sentences changed nothing.
+    """
+    edit = _EDIT.match(sentence.strip())
+    return bool(edit) and _no_change(edit.group(2), edit.group(3))
+
+
 def settled_codes(project: Project) -> set[str]:
     """Finding codes already answered on this row *and still standing*.
 
@@ -1225,6 +1242,7 @@ __all__ = [
     "find_online",
     "fmt_value",
     "free_answer",
+    "left_as_it_was",
     "record",
     "relevant_passage",
     "resolve_one",
