@@ -27,6 +27,7 @@ import hashlib
 import logging
 import re
 import sys
+import threading
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -1091,15 +1092,24 @@ class DeepSeekFetcher:
     us stays refused however the page is reached. One attempt a page: the service
     retries on its own side, and its timeouts run to 30 seconds.
 
-    Free until 2026-11-01, then 5 yuan per 1,000 pages it returns; a failure is not
-    billed. Each page it returns is a line in the night's spend ledger
-    (`spend.FETCH_MODEL`), counted apart from the model's money.
+    Billed to the DeepSeek account at 5 yuan per 1,000 pages it returns; a failure is
+    not billed. (DeepSeek's own agent tools use it free until 2026-11-01; a direct API
+    call like this one is billed now, and an empty balance answers 402.) Each page it
+    returns is a line in the night's spend ledger (`spend.FETCH_MODEL`), counted apart
+    from the model's money.
     `TRACKER_DEEPSEEK_FETCH=0` takes the rung out.
     """
 
     VIA = "deepseek-fetch"
     PATH = "/v1/tools/fetch"
     TIMEOUT_S = 60.0
+
+    #: Set by the first "insufficient balance" (HTTP 402) a process meets; the rung
+    #: then stands down for the rest of the process rather than ask again for every
+    #: blocked page. The tool is billed to the DeepSeek account, which the nightly
+    #: loop otherwise leaves empty (its model calls go to OpenCode Go): on 2026-10-19
+    #: the first page it fetched took the last of the balance.
+    _EMPTY = threading.Event()
 
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or get_settings()
@@ -1110,6 +1120,14 @@ class DeepSeekFetcher:
         return bool(settings.deepseek_fetch and settings.has_api_key())
 
     async def fetch(self, url: str) -> FetchResult:
+        if self._EMPTY.is_set():
+            return FetchResult(
+                url,
+                False,
+                error="DeepSeek fetch skipped: the DeepSeek account has no balance",
+                fetched_at=utcnow(),
+                via=self.VIA,
+            )
         if not await permitted(url, self.settings, lambda u: _get_text(u, self.settings)):
             return refused(url)
         key = (
@@ -1136,6 +1154,12 @@ class DeepSeekFetcher:
         except ValueError:
             body = {}
         data = body.get("data", body) if isinstance(body, dict) else {}
+        if response.status_code == 402 and not self._EMPTY.is_set():
+            self._EMPTY.set()
+            log.warning(
+                "DeepSeek's fetch tool refused for an empty balance; not asked again this "
+                "run. Top up the DeepSeek account to read pages every other client was refused."
+            )
         if response.status_code != 200 or not isinstance(data, dict):
             error = body.get("error") if isinstance(body, dict) else None
             message = (

@@ -40,9 +40,11 @@ initial build of the v1 PRD.
   that is not a person's browser; of four such pages about Google's Chesterfield
   campus, DeepSeek returned WRIC's whole. It is never asked about a page
   `robots.txt` refuses us, a site marked closed never reaches it, and it is tried
-  once a page. Free until 2026-11-01, then 5 yuan per 1,000 pages; each page is a
-  line in the night's spend ledger, apart from the model's money.
-  `TRACKER_DEEPSEEK_FETCH=0` turns it off.
+  once a page. It is billed to the DeepSeek account, 5 yuan per 1,000 pages, so that
+  account needs a balance even while the model calls go to OpenCode Go: the first
+  "insufficient balance" stands the rung down for the rest of the run, with one line
+  saying why. Each page is a line in the night's spend ledger, apart from the model's
+  money. `TRACKER_DEEPSEEK_FETCH=0` turns it off.
 
 - **The queue reads one copy of a story** (`tracker/ingest/discover.py`,
   `tracker/cli/ingest.py`, `tracker/cli/sync.py`, `docs/workflows/sync.md`). An

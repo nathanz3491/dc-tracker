@@ -415,8 +415,10 @@ clients were refused or got only a shell of, DeepSeek requests it from its own
 servers and returns its text. It is never asked about a page `robots.txt` refuses
 us, and a site marked closed never reaches it. On 2026-10-19 it read one of four
 local-news pages Cloudflare, CloudFront and Varnish refused every client of ours.
-Free until 2026-11-01, then 5 yuan per 1,000 pages it returns; each is a line in
-the night's spend ledger, apart from the model's money.
+It is billed to the DeepSeek account, 5 yuan per 1,000 pages it returns, so that
+account needs a balance even while the model calls go to OpenCode Go; with none, the
+first refusal stands the rung down for the run. Each page is a line in the night's
+spend ledger, apart from the model's money.
 
 Nothing here defeats an access control, and the distinction is the whole
 justification: those sites' `robots.txt` files permit crawling —

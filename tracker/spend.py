@@ -70,7 +70,7 @@ PRICES: Final[dict[str, tuple[float, float, float]]] = {
 SEARCH_MODEL: Final = "serper"
 
 #: The model a page DeepSeek's Fetch tool returned is recorded under. DeepSeek's
-#: money, not the model ceiling's: free until 2026-11-01, then 5 yuan per 1,000.
+#: money, not the model ceiling's: 5 yuan per 1,000 pages, from the DeepSeek account.
 FETCH_MODEL: Final = "deepseek-fetch"
 
 #: Lines that are a paid tool, not a model call: counted, never priced as tokens.

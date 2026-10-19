@@ -95,6 +95,23 @@ def test_a_blocked_page_climbs_to_it(status):
     assert fetch.should_escalate(blocked) is True
 
 
+def test_an_empty_balance_stands_the_rung_down_for_the_run(tmp_path):
+    """The tool bills the DeepSeek account; on 2026-10-19 the first page took the
+    last of it, and every later blocked page would have asked again."""
+    fetch.DeepSeekFetcher._EMPTY.clear()
+    try:
+        with respx.mock:
+            route = respx.post(ENDPOINT).respond(
+                402, json={"error": {"message": "Insufficient Balance"}}
+            )
+            first = asyncio.run(DeepSeekFetcher(_settings(tmp_path)).fetch("https://x.test/a"))
+            second = asyncio.run(DeepSeekFetcher(_settings(tmp_path)).fetch("https://x.test/b"))
+            assert route.call_count == 1, "asked once, not once a page"
+        assert "Insufficient Balance" in first.error and not second.ok
+    finally:
+        fetch.DeepSeekFetcher._EMPTY.clear()
+
+
 def test_a_network_error_is_reported_not_raised(tmp_path):
     with respx.mock:
         respx.post(ENDPOINT).mock(side_effect=httpx.ConnectError("refused"))
