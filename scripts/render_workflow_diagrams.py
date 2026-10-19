@@ -349,7 +349,7 @@ def enrich() -> Canvas:
     for title, subs, role in [
         ("2 · queue", ["candidates already naming this row"], "teal"),
         ("3 · retry", ["its URLs that failed to fetch"], "teal"),
-        ("4 · archive", ["sitemap sweep, filtered to this row", "round 1 · key-free · swept once a batch"], "cool"),
+        ("4 · archive", ["sitemap sweep, filtered to this row", "round 1 · reads discovery's walk that night"], "cool"),
         ("5 · search", ["queries built from this row's own gaps", "needs a key · at most twelve"], "orange"),
         ("6 · refresh", ["its own citations, re-read", "round 1 only"], "cool"),
     ]:

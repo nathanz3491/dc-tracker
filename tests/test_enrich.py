@@ -1851,3 +1851,33 @@ def test_a_round_reads_the_pages_it_can_before_a_closed_publishers(session, monk
     run(session, add_project(session).id, max_articles=2, max_rounds=1, skip_settle=True)
 
     assert batches == [["https://open.test/3", "https://refused.test/1"]]
+
+
+def test_the_archive_sweep_reads_the_walk_discovery_made_that_night(monkeypatch):
+    """On 2026-10-19 the loop's enrich walked all 28 archives an hour after discovery
+    had: 101 requests for the same bytes. Run alone in the daytime, with no walk that
+    recent, it walks them itself (`test_a_walk_older_than_the_night_is_walked_again`)."""
+    from tracker.config import get_settings
+    from tracker.ingest import discover
+    from tracker.ingest.fetch import cache_path
+
+    sitemap = discover.SitemapSpec(
+        "op", "https://op.test/sitemap.xml", "company_filing", True, company="Op"
+    )
+    monkeypatch.setattr(discover, "load_sitemaps", lambda path=None: [sitemap])
+    cache_path(sitemap.url, discover.walk_cache()).write_text(
+        '<?xml version="1.0"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+        "<url><loc>https://op.test/news/op-opens-new-data-center-campus/</loc></url></urlset>",
+        encoding="utf-8",
+    )
+
+    class NoRequests:
+        async def fetch(self, url):
+            raise AssertionError(f"asked the site again for {url}")
+
+    sweep = enrich.sweep_archives(get_settings(), NoRequests())
+    assert [c.url for c in sweep.candidates] == [
+        "https://op.test/news/op-opens-new-data-center-campus/"
+    ]
+    assert (sweep.from_walk, sweep.fetched) == (1, 0)
+    assert "1 sitemap(s) read from tonight's discovery walk" in sweep.note

@@ -62,7 +62,7 @@
 <rect x="514.0" y="318.0" width="270.0" height="56.0" rx="7" fill="#EDF1F2" stroke="#B9C6CC" stroke-width="1.3"/>
 <text x="649.0" y="336.9" font-size="11.5" fill="#16242E" text-anchor="middle" font-weight="700">4 · archive</text>
 <text x="649.0" y="353.9" font-size="10" fill="#5C6B73" text-anchor="middle">sitemap sweep, filtered to this row</text>
-<text x="649.0" y="367.5" font-size="10" fill="#5C6B73" text-anchor="middle">round 1 · key-free · swept once a batch</text>
+<text x="649.0" y="367.5" font-size="10" fill="#5C6B73" text-anchor="middle">round 1 · reads discovery's walk that night</text>
 <rect x="514.0" y="384.0" width="270.0" height="56.0" rx="7" fill="#FBF2E4" stroke="#D9891F" stroke-width="1.3"/>
 <text x="649.0" y="402.9" font-size="11.5" fill="#16242E" text-anchor="middle" font-weight="700">5 · search</text>
 <text x="649.0" y="419.9" font-size="10" fill="#5C6B73" text-anchor="middle">queries built from this row's own gaps</text>

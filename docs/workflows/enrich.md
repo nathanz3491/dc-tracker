@@ -107,13 +107,26 @@ debug log.
 | derive | free, no network | once, before round 1 | Census reference data |
 | queue | free | every round | `ingest_url` rows still `discovered` |
 | retry | one fetch each | every round | this project's URLs in `RETRYABLE_STATUSES`, less any that failed the same way three times running (`discover.retryable`) |
-| archive | ~30 requests, once per batch | round 1 only | configured `[[sitemap]]` entries |
+| archive | none when discovery walked the archives in the last 12 hours, else ~100 requests; once per batch | round 1 only | configured `[[sitemap]]` entries, read from discovery's walk when it is that recent |
 | search | one query each, sent once a run, capped at `MAX_QUERIES` = 12 | every round | Serper / Google / Brave / Bocha |
 | refresh | one fetch each | round 1 only | the project's own citations |
 
 The archive is why this works without a search API: it reaches back years, needs no
 key, and `matches_known_project` reduces thousands of URLs to the handful about one
 project.
+
+**It does not walk an archive discovery walked the same night.** `tracker discover`
+walks every archive at the start of the nightly loop and keeps each sitemap it
+fetched (`discover.RememberingFetcher`, in the `sitemaps` cache); a sweep within
+twelve hours of that walk reads the copy (`discover.RecentWalkFetcher`,
+`WALK_FRESH`). On 2026-10-19 the loop's enrich walked all 28 archives an hour after
+discovery had: 101 requests, 69 of them sitemaps and 32 robots.txt files, for the
+same bytes. Twelve hours covers the whole night, which starts at 18:01 with discovery
+and stops within ten; enrich run by hand the next working day, 14 hours or more on,
+walks the archives itself as it always did, and so does a sitemap discovery could
+not fetch that night. A post an archive adds between discovery's walk and enrich's is
+queued by the next night's discovery, where the queue harvester finds it. The sweep's
+note says how many sitemaps came from the walk.
 
 A search result is also kept on disk for `TRACKER_SEARCH_CACHE_DAYS` (default 7):
 each overnight round is a new process, so the per-run memo forgot every query, and
@@ -304,7 +317,7 @@ Touching any of these means the poster is in scope. Re-render with
 | --- | --- |
 | Options, defaults, target defaulting, lock | `tracker/cli/enrich.py` — `enrich` |
 | Round loop and stop reasons | `tracker/ingest/enrich.py` — `run` |
-| Batch budget, one-time sweep | `tracker/ingest/enrich.py` — `run_many`, `sweep_archives`, `will_harvest` |
+| Batch budget, one-time sweep | `tracker/ingest/enrich.py` — `run_many`, `sweep_archives`, `ArchiveSweep`, `will_harvest`; `tracker/ingest/discover.py` — `RecentWalkFetcher`, `RememberingFetcher`, `walk_cache`, `WALK_FRESH`, `run` (the walk it keeps) |
 | Row selection order | `tracker/ingest/enrich.py` — `select_projects`, `pursuable`, `t2_gaps`, `DEFAULT_TARGET_FIELDS`; `tracker/gaps.py` — `t2_gaps`, `unpublished`, `_NOT_BUILT_PHASES` |
 | Harvesters | `tracker/ingest/enrich.py` — `harvest_queue`, `harvest_retry`, `harvest_archive`, `harvest_search`, `harvest_refresh`, `_derive`; `tracker/ingest/search.py` — `CachedProvider`, `cached` |
 | Ignore-list filtering | `tracker/ingest/enrich.py` — `Round.urls`; `tracker/policy.py` |
