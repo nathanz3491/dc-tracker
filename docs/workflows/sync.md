@@ -139,6 +139,18 @@ night, largest first, so switching the watch on catches the whole database up in
 two nights. A result is queued as `watch:#<id>` when its headline and snippet pass
 the filter or name the campus, and its date is in the window. No model is called.
 
+**A result no campus story can be in is never queued** (`screen.not_news`, asked in
+`watch._screened`): a PDF, a stock-quote or stock-chatter page (Stocktwits, Simply
+Wall St, Seeking Alpha and the like; not stocktitan or investing.com's news, which
+read and cite), a job posting, a directory's ZIP-code page, a page on a site that has
+refused every read (datacenters.com, 0 of 192). By 10-19 the watch had queued 125
+such pages, and the 42 tried produced one citation. **Nor is local news about
+something else**: a result kept only because it names the campus is dropped when it
+reads as a game, an obituary, a killing or a restaurant and carries no data-center
+term (`screen.off_topic`). A campus's town and company were in a New Albany football
+recap, a taqueria near MIT and a Tesla diner in Palo Alto, and the first look queued
+all three.
+
 **Then each company is searched as a company** (`watch.run_companies`), because a
 campus search can only find a campus the database already holds: Microsoft buying
 land in a county with no Microsoft row is invisible to it. Every company with three

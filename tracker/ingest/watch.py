@@ -483,13 +483,21 @@ def _naive_utc(when: dt.datetime | None) -> dt.datetime | None:
 
 def _screened(hits: list[Any], query: Query, *, now: dt.datetime):
     """(result, its headline and snippet, the date to store) for each result worth
-    judging: a page on a usable host, in English, dated inside the window."""
+    judging: a page on a usable host, in English, dated inside the window.
+
+    **Not a page no campus story can be in** (`screen.not_news`): a PDF, a stock-quote
+    or stock-chatter page, a job posting, a directory's ZIP-code page, a site that has
+    refused every read. The watch had queued 125 such pages by 2026-10-19 -- 45
+    stock-chatter pages, 34 PDFs, 16 ZIP-code pages, 15 on sites that refuse every
+    read -- and of the 42 tried, one produced a citation. The queue sets the waiting
+    ones aside (`discover.set_aside_not_news`); these are never queued at all."""
+    from tracker.ingest import screen
     from tracker.ingest.discover import _news_date
     from tracker.ingest.search import is_useful_host
     from tracker.normalize import looks_english
 
     for hit in hits:
-        if not hit.url or not is_useful_host(hit.url):
+        if not hit.url or not is_useful_host(hit.url) or screen.not_news(hit.url):
             continue
         text = f"{hit.title} {hit.snippet}"
         if not looks_english(text):
@@ -516,14 +524,29 @@ def judge(
     implied: dict[str, str],
     now: dt.datetime,
 ) -> list[Any]:
-    """The results worth reading, as discovery candidates labelled `watch:#<id>`."""
-    from tracker.ingest.discover import Candidate, matches_known_project
+    """The results worth reading, as discovery candidates labelled `watch:#<id>`.
+
+    A result is kept when it passes the filter, or names this campus. **A result kept
+    only for naming the campus is dropped when it is local news about something else**
+    (`screen.off_topic`) and carries no data-center term: a campus's town and company
+    are in a football recap, a taqueria's closing and a Subaru's trim level too, and
+    the first look queued all three."""
+    from tracker.ingest import screen
+    from tracker.ingest.discover import (
+        Candidate,
+        first_term,
+        matches_known_project,
+        normalize_haystack,
+    )
 
     kept: list[Candidate] = []
     for hit, text, stored in _screened(hits, query, now=now):
         haystack = f"{text} {urlsplit(hit.url).path}"
         keep = spec.matches(haystack)[0]
-        if not keep:
+        if not keep and not (
+            screen.off_topic(haystack)
+            and first_term(spec.topic, normalize_haystack(haystack)) is None
+        ):
             keep = (
                 matches_known_project(hit.url, text, [identity], implied_companies=implied)
                 == project.id
