@@ -661,8 +661,12 @@ def record_spend(settings: Settings, data: dict[str, Any], model: str) -> None:
         log.warning("could not append to the spend ledger %s: %s", path, exc)
 
 
-def record_search(settings: Settings, kind: str) -> None:
+def record_search(settings: Settings, kind: str, *, model: str | None = None) -> None:
     """Append one web search to :data:`Settings.spend_ledger`: model `serper`, no tokens.
+
+    `model` names another paid tool the same way -- `spend.FETCH_MODEL` for a page
+    DeepSeek's Fetch tool returned -- so it is counted, and kept out of the search
+    cap and the model's money.
 
     Same format as :func:`record_spend`, so one file says what a night asked as well
     as what it paid for; `tracker.spend` counts these apart from the model bill. The
@@ -677,7 +681,7 @@ def record_search(settings: Settings, kind: str) -> None:
         time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         os.getpid(),
         _command(),
-        SEARCH_MODEL,
+        model or SEARCH_MODEL,
         0,
         0,
         0,

@@ -71,8 +71,14 @@ night, mostly between 18:00 and 08:00 China Standard Time (UTC+8).
   attempts with exponential backoff. It never retries 401, 402, 404, 410 or 451.
 - **On a 403, 429 or 503**, it may try the same page once more with a client
   that presents a browser's TLS handshake. It still sends the User-Agent above.
-  If a headless browser is enabled, that is tried last. Neither is tried for a
+  If a headless browser is enabled, that is tried next. Neither is tried for a
   page `robots.txt` disallows.
+- **When none of its own clients can read a page**, and that page's `robots.txt`
+  does not refuse dc-tracker, it may ask DeepSeek's Fetch service for the page.
+  DeepSeek requests it from its own servers, under its own identity and its own
+  access policy; dc-tracker sends the site nothing more. A page `robots.txt`
+  refuses dc-tracker is never asked about, and neither is a page on a site marked
+  closed, which never leaves the queue to be read.
 - **A site that challenges every request is left alone.** If a site puts every
   page, its feed and its `robots.txt` behind a challenge, it is marked closed in
   `feeds.toml`. The crawler does not try to get past a challenge. A closed site

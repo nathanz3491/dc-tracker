@@ -730,6 +730,12 @@ class Settings(BaseSettings):
             return without_links(self.user_agent)
         return self.user_agent
 
+    #: Whether the fetch ladder may end at DeepSeek's Fetch tool, which reads a page
+    #: on DeepSeek's servers when every client of ours was refused it -- and never one
+    #: `robots.txt` refuses (`fetch.DeepSeekFetcher`). On by default; it needs the
+    #: DeepSeek key, and is free until 2026-11-01, 5 yuan per 1,000 pages after.
+    deepseek_fetch: bool = True
+
     def has_api_key(self) -> bool:
         return bool(self.deepseek_api_key and self.deepseek_api_key.get_secret_value().strip())
 

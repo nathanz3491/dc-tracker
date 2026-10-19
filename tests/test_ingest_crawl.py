@@ -2142,7 +2142,8 @@ def test_html_to_text_strips_markup_and_keeps_paragraphs():
         (FetchResult("u", True, markdown="x" * 50, via="httpx"), True),
         (FetchResult("u", True, markdown="x" * 5000, via="httpx"), False),
         (FetchResult("u", False, status=404, via="httpx"), False),
-        (FetchResult("u", False, status=403, via="crawl4ai"), False),
+        (FetchResult("u", False, status=403, via="crawl4ai"), True),  # on to DeepSeek
+        (FetchResult("u", False, status=403, via="deepseek-fetch"), False),
     ],
 )
 def test_should_escalate(result, expected):
@@ -3112,12 +3113,14 @@ def test_the_ladder_puts_the_cheap_rung_below_the_browser():
 
 
 def test_should_escalate_stops_at_the_top_rung():
-    """A browser result has nowhere left to climb to."""
+    """DeepSeek's Fetch tool is the top rung since 2026-10-19; a browser result
+    climbs to it, and its own result has nowhere left to go."""
     from tracker.ingest.fetch import should_escalate
 
     assert should_escalate(FetchResult("u", False, status=403, via="httpx")) is True
     assert should_escalate(FetchResult("u", False, status=403, via="curl_cffi")) is True
-    assert should_escalate(FetchResult("u", False, status=403, via="crawl4ai")) is False
+    assert should_escalate(FetchResult("u", False, status=403, via="crawl4ai")) is True
+    assert should_escalate(FetchResult("u", False, status=403, via="deepseek-fetch")) is False
     assert should_escalate(FetchResult("u", True, markdown="x" * 5000, via="curl_cffi")) is False
 
 

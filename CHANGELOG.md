@@ -12,6 +12,20 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **DeepSeek's Fetch tool reads a page our own clients were refused**
+  (`tracker/ingest/fetch.py`, `tracker/config.py`, `tracker/spend.py`,
+  `tracker/llm.py`, `docs/crawler.md`, `README.md`, `docs/design-decisions.md`,
+  `.env.example`). The fetch ladder now runs: direct request, the browser-like
+  client, the headless browser, then DeepSeek, which requests the page from its own
+  servers and returns its text. Local TV and business sites put Cloudflare,
+  CloudFront or Varnish in front of their articles and answer 403 to any client
+  that is not a person's browser; of four such pages about Google's Chesterfield
+  campus, DeepSeek returned WRIC's whole. It is never asked about a page
+  `robots.txt` refuses us, a site marked closed never reaches it, and it is tried
+  once a page. Free until 2026-11-01, then 5 yuan per 1,000 pages; each page is a
+  line in the night's spend ledger, apart from the model's money.
+  `TRACKER_DEEPSEEK_FETCH=0` turns it off.
+
 - **The queue reads one copy of a story** (`tracker/ingest/discover.py`,
   `tracker/cli/ingest.py`, `tracker/cli/sync.py`, `docs/workflows/sync.md`). An
   article can be queued more than once under different addresses -- CyrusOne files

@@ -496,6 +496,15 @@ not read" in `ingesting.md`). A `robots.txt` that cannot be read counts as a
 refusal, because a firewall that refuses even that file is the case the line is
 about. It is on the ladder whenever it is installed — the flag is the install.
 
+**DeepSeek's Fetch tool is the rung after the browser** (2026-10-19). It reads a
+page on DeepSeek's servers, under DeepSeek's identity and access policy, and it is
+inside the same line: it is asked only about a page whose `robots.txt` permits this
+crawler, after our own clients met a firewall rule rather than a policy, and a site
+that challenges every request is marked closed and never reaches the ladder. Its
+yield is modest: one of four pages refused to us came back. What it buys is the
+local-news article a TV station's CDN refuses to any client that is not a person's
+browser — exactly the article that names a county's decision first.
+
 ## Project fields are recomputed from claims, not merged incrementally
 
 Each `source` row records what *it* asserts in `source.claims`. After the sources

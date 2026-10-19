@@ -31,13 +31,17 @@ def run(coro):
 # --- the ladder ------------------------------------------------------------------
 
 
-def test_nothing_escalates_past_the_browser():
+def test_the_browser_escalates_to_deepseeks_fetch_and_nothing_past_that():
+    """Since 2026-10-19 DeepSeek's Fetch tool is the rung after the browser, for a page
+    the browser was refused or got only a shell of."""
     shell = FetchResult("https://x.example/a", True, markdown="short", status=200, via="playwright")
-    assert should_escalate(shell) is False
-    assert (
-        should_escalate(FetchResult("https://x.example/a", False, status=403, via="playwright"))
-        is False
+    assert should_escalate(shell) is True
+    blocked = FetchResult("https://x.example/a", False, status=403, via="playwright")
+    assert should_escalate(blocked) is True
+    fetched = FetchResult(
+        "https://x.example/a", True, markdown="short", status=200, via="deepseek-fetch"
     )
+    assert should_escalate(fetched) is False
 
 
 def test_the_browser_is_on_the_ladder_whenever_it_is_installed(monkeypatch):

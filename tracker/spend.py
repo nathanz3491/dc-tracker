@@ -69,6 +69,13 @@ PRICES: Final[dict[str, tuple[float, float, float]]] = {
 #: The model a web search is recorded under. Not a model; never priced here.
 SEARCH_MODEL: Final = "serper"
 
+#: The model a page DeepSeek's Fetch tool returned is recorded under. DeepSeek's
+#: money, not the model ceiling's: free until 2026-11-01, then 5 yuan per 1,000.
+FETCH_MODEL: Final = "deepseek-fetch"
+
+#: Lines that are a paid tool, not a model call: counted, never priced as tokens.
+_TOOLS: Final = frozenset({SEARCH_MODEL, FETCH_MODEL})
+
 #: What a line naming a model outside :data:`PRICES` is charged, before the peak
 #: multiplier: flash's rates, doubled. See the module docstring for why doubled.
 UNKNOWN_MODEL: Final = (2 * _FLASH[0], 2 * _FLASH[1], 2 * _FLASH[2])
@@ -182,12 +189,17 @@ def read(path: Path | str | None) -> list[Call]:
 
 def total(calls: Iterable[Call]) -> float:
     """What the model calls cost, in yuan. Searches are another bill; see the module."""
-    return sum(call.cost() for call in calls if call.model != SEARCH_MODEL)
+    return sum(call.cost() for call in calls if call.model not in _TOOLS)
 
 
 def searches(calls: Iterable[Call]) -> int:
     """How many web searches were sent."""
     return sum(1 for call in calls if call.model == SEARCH_MODEL)
+
+
+def fetches(calls: Iterable[Call]) -> int:
+    """How many pages DeepSeek's Fetch tool returned."""
+    return sum(1 for call in calls if call.model == FETCH_MODEL)
 
 
 @dataclass
@@ -209,7 +221,7 @@ def by_phase(calls: Iterable[Call]) -> list[PhaseSpend]:
     """Spend per command and stage, dearest first."""
     rows: dict[str, PhaseSpend] = {}
     for call in calls:
-        if call.model == SEARCH_MODEL:
+        if call.model in _TOOLS:
             continue
         row = rows.setdefault(call.phase, PhaseSpend(call.phase))
         row.calls += 1
@@ -223,8 +235,11 @@ def by_phase(calls: Iterable[Call]) -> list[PhaseSpend]:
 def report(calls: Sequence[Call]) -> list[str]:
     """The morning report's lines: one per phase, then the night's peak-hour share."""
     found = [c for c in calls if c.model == SEARCH_MODEL]
-    calls = [c for c in calls if c.model != SEARCH_MODEL]
+    fetched = sum(1 for c in calls if c.model == FETCH_MODEL)
+    calls = [c for c in calls if c.model not in _TOOLS]
     lines = []
+    if fetched:
+        lines.append(f"    {fetched} page(s) read through DeepSeek's fetch")
     if found:
         by_command: dict[str, int] = {}
         for call in found:
@@ -274,6 +289,7 @@ if __name__ == "__main__":
 __all__ = [
     "BEIJING",
     "CNY_PER_USD",
+    "FETCH_MODEL",
     "PEAK_WINDOWS",
     "PRICES",
     "SEARCH_MODEL",
@@ -281,6 +297,7 @@ __all__ = [
     "Call",
     "PhaseSpend",
     "by_phase",
+    "fetches",
     "is_peak",
     "next_off_peak",
     "parse",

@@ -409,6 +409,15 @@ whose WAF refuses `httpx` anyway:
 | `lailluminator.com` brief | 403 | **2,844** | not needed |
 | Meta/Blue Owl IR release | 403 | 200, but 106 chars | **8,638** |
 
+**The last rung is DeepSeek's Fetch tool**, whenever a DeepSeek key is set
+(`TRACKER_DEEPSEEK_FETCH=0` turns it off). After the browser, for a page our own
+clients were refused or got only a shell of, DeepSeek requests it from its own
+servers and returns its text. It is never asked about a page `robots.txt` refuses
+us, and a site marked closed never reaches it. On 2026-10-19 it read one of four
+local-news pages Cloudflare, CloudFront and Varnish refused every client of ours.
+Free until 2026-11-01, then 5 yuan per 1,000 pages it returns; each is a line in
+the night's spend ledger, apart from the model's money.
+
 Nothing here defeats an access control, and the distinction is the whole
 justification: those sites' `robots.txt` files permit crawling —
 `investor.atmeta.com` says `Allow: /` with `Crawl-delay: 10` — so an over-broad

@@ -1039,6 +1039,9 @@ async def fetch_with_retry(
         if last.via == robots.VIA:
             # No request was made, and asking again gets the same file's answer.
             return last
+        if last.via == DeepSeekFetcher.VIA:
+            # A service that retries on its own side, with 30-second timeouts.
+            return FetchResult(**{**last.__dict__, "attempts": made})
         if last.status in HARD_FAIL_STATUS or last.status in BROWSER_WORTHY_STATUS:
             break  # retrying the same tool will not help; escalate instead
         if last.status is not None and last.status not in RETRYABLE_STATUS:
@@ -1055,6 +1058,109 @@ async def fetch_with_retry(
     return FetchResult(**{**last.__dict__, "attempts": made})
 
 
+class DeepSeekFetcher:
+    """The last rung: DeepSeek's Fetch tool reads the page on DeepSeek's servers.
+
+    For a page every client of ours was refused, by a firewall rather than by the
+    site's `robots.txt`: Cloudflare, CloudFront and Varnish answer 403 to anything
+    that is not a person's browser. DeepSeek requests the page under its own identity
+    and its own access policy, and returns its text as Markdown
+    (https://api-docs.deepseek.com/zh-cn/guides/search/). Tried on 2026-10-19 on four
+    such pages: WRIC's article came back whole, 5,193 characters; WTVR's failed on
+    DeepSeek's side too, and Virginia Business and Axios timed out there.
+
+    **It is asked only about a page `robots.txt` lets dc-tracker read.** The ladder
+    never climbs past a refusal, and this asks again itself, so a site that refuses
+    us stays refused however the page is reached. One attempt a page: the service
+    retries on its own side, and its timeouts run to 30 seconds.
+
+    Free until 2026-11-01, then 5 yuan per 1,000 pages it returns; a failure is not
+    billed. Each page it returns is a line in the night's spend ledger
+    (`spend.FETCH_MODEL`), counted apart from the model's money.
+    `TRACKER_DEEPSEEK_FETCH=0` takes the rung out.
+    """
+
+    VIA = "deepseek-fetch"
+    PATH = "/v1/tools/fetch"
+    TIMEOUT_S = 60.0
+
+    def __init__(self, settings: Settings | None = None) -> None:
+        self.settings = settings or get_settings()
+
+    @staticmethod
+    def available(settings: Settings) -> bool:
+        """Whether this install may use it: switched on, and a DeepSeek key to pay with."""
+        return bool(settings.deepseek_fetch and settings.has_api_key())
+
+    async def fetch(self, url: str) -> FetchResult:
+        if not await permitted(url, self.settings, lambda u: _get_text(u, self.settings)):
+            return refused(url)
+        key = (
+            self.settings.deepseek_api_key.get_secret_value()
+            if self.settings.deepseek_api_key
+            else ""
+        )
+        endpoint = self.settings.deepseek_base_url.rstrip("/") + self.PATH
+        try:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(self.TIMEOUT_S, connect=10.0)
+            ) as client:
+                response = await client.post(
+                    endpoint,
+                    headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                    json={"url": url},
+                )
+        except httpx.HTTPError as exc:
+            return FetchResult(
+                url, False, error=f"DeepSeek fetch: {exc}", fetched_at=utcnow(), via=self.VIA
+            )
+        try:
+            body = response.json()
+        except ValueError:
+            body = {}
+        data = body.get("data", body) if isinstance(body, dict) else {}
+        if response.status_code != 200 or not isinstance(data, dict):
+            error = body.get("error") if isinstance(body, dict) else None
+            message = (
+                (error or {}).get("message", "") if isinstance(error, dict) else str(error or "")
+            )
+            return FetchResult(
+                url,
+                False,
+                error=f"DeepSeek fetch answered {response.status_code}: {message}"[:500],
+                fetched_at=utcnow(),
+                via=self.VIA,
+            )
+        text = _markdown_text(str(data.get("content") or ""))
+        title = str(data.get("title") or "").strip()
+        if title and title not in text[:2000]:
+            text = f"# {title}\n\n{text}"
+        if text.strip():
+            from tracker.llm import record_search
+            from tracker.spend import FETCH_MODEL
+
+            record_search(self.settings, "fetch", model=FETCH_MODEL)
+        return FetchResult(
+            url, bool(text.strip()), markdown=text, status=200, fetched_at=utcnow(), via=self.VIA
+        )
+
+
+#: Markdown's backslash escapes and link syntax, which DeepSeek's text carries and
+#: an article's does not: "\\# Google advances\\: ..." would never match the quote the
+#: evidence gate checks against it.
+_MD_ESCAPE = re.compile(r"\\([!-/:-@\[-`{-~])")
+_MD_IMAGE = re.compile(r"!\[([^\]]*)\]\([^)]*\)")
+_MD_LINK = re.compile(r"\[([^\]]+)\]\([^)]*\)")
+
+
+def _markdown_text(markdown: str) -> str:
+    """DeepSeek's Markdown as the plain text the rest of the crawl reads: links reduced
+    to their words, images to their caption, and every backslash escape undone."""
+    text = _MD_IMAGE.sub(r"\1", markdown)
+    text = _MD_LINK.sub(r"\1", text)
+    return _MD_ESCAPE.sub(r"\1", text)
+
+
 def should_escalate(result: FetchResult) -> bool:
     """Whether a stronger fetcher is worth trying after this attempt.
 
@@ -1064,8 +1170,8 @@ def should_escalate(result: FetchResult) -> bool:
     httpx": the Blue Owl press release returns 200 and 106 characters through
     `curl_cffi` and needs the browser above it.
     """
-    if result.via in ("playwright", "crawl4ai"):
-        return False  # a browser is the top rung; nothing left to escalate to
+    if result.via == DeepSeekFetcher.VIA:
+        return False  # the top rung; nothing left to escalate to
     if result.via == robots.VIA:
         return False  # the site said no; a stronger client is not a different answer
     if result.status in BROWSER_WORTHY_STATUS:
@@ -1086,6 +1192,11 @@ def escalation_ladder(settings: Settings | None = None, *, browser: bool = False
     `robots.txt` before it opens one — so installing it is the decision, and no
     command has to remember a flag. `browser=True` (`--browser`) still asks for a
     browser rung, and falls back to Crawl4AI where that is the one installed.
+
+    **DeepSeek's Fetch tool is the last rung** when there is a DeepSeek key and
+    `TRACKER_DEEPSEEK_FETCH` is not off: after the browser, for a page our own clients
+    were refused or got only a shell of, and never for one `robots.txt` refuses. See
+    :class:`DeepSeekFetcher`.
     """
     settings = settings or get_settings()
     rungs: list[Fetcher] = []
@@ -1095,6 +1206,8 @@ def escalation_ladder(settings: Settings | None = None, *, browser: bool = False
         rungs.append(PlaywrightFetcher(settings))
     elif browser:
         rungs.append(Crawl4AIFetcher(settings))
+    if DeepSeekFetcher.available(settings):
+        rungs.append(DeepSeekFetcher(settings))
     return rungs
 
 
@@ -1263,6 +1376,7 @@ __all__ = [
     "RETRYABLE_STATUS",
     "Crawl4AIFetcher",
     "CurlCffiFetcher",
+    "DeepSeekFetcher",
     "FetchResult",
     "Fetcher",
     "HttpxFetcher",
