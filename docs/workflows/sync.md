@@ -153,9 +153,15 @@ the spend ledger records each one (model `serper`) and `TRACKER_SEARCH_CAP` — 
 a night from the loop, of which the watch, running first, may use all but 500 —
 stops every command at it, the research's searches included. A search the cap
 refuses is not a search that found nothing: the research records no attempt for it. `tracker news report` prints, in the morning, what each source showed,
-kept, read and changed, how late the news arrived, and warns when no discovery ran,
-when a feed's newest entry is over 45 days old, and when search credit will not
-last a fortnight.
+kept, read, failed to read, set aside unread and changed, how late the news arrived,
+and warns when no discovery ran, when a feed's newest entry is over 45 days old, and
+when search credit will not last a fortnight.
+
+The failures and the set-asides are counted because the reads alone made a source
+look whole. On 2026-10-19 the news watch showed 146 reads and 62 finds and nothing
+else, while 115 more of its articles would not load (66 refused with HTTP 403, 32
+whose robots.txt did not answer) and 410 left the queue unread — copies of a story
+already read or queued, and pages on publishers closed to us.
 
 ## What search looks for, and why it is not a model's idea
 
@@ -598,7 +604,7 @@ Touching any of these means the poster is in scope. Re-render with
 | Archives every night | `tracker/ingest/discover.py` — `watch_newsrooms`, `NEWSROOM_SURGE`, `LATE_LISTING_DAYS`, `NEWSROOM_NEW`, `_month_from_path`, `_absolute`, `run(sitemaps=)`; `tracker/ingest/fetch.py` — `date_from_url`; `tracker/normalize.py` — `url_variants`; `tracker/cli/sync.py` — `discover --archives` |
 | The news watch | `tracker/ingest/watch.py` — `run`, `due`, `cadence`, `EARLY`, `plan_queries`, `anchor`, `_company_term`, `_places`, `_names`, `_VAGUE`, `window_for`, `_screened`, `judge`, `CADENCE`, `NEXT_WORDS`, `BASELINE_PER_RUN`; the company watch — `run_companies`, `companies_due`, `company_query`, `judge_company`, `COMPANY_MIN_CAMPUSES`, `COMPANY_CADENCE`; migrations `0039_news_watch` (`news_watch`), `0040_company_watch`; `tracker/cli/sync.py` — `news`; `tracker/ingest/crawl.py` — `record_url` (a watch row's date gives way to the page's) |
 | A search the cap refused | `tracker/agent.py` — `SEARCH_REFUSED`, `_search_web`; `tracker/gapfill.py` — `fill` |
-| Searches counted and capped; the morning report | `tracker/ingest/search.py` — `SerperProvider._spend_one`, `_post`; `tracker/llm.py` — `record_search`; `tracker/spend.py` — `searches`, `SEARCH_MODEL`; `tracker/config.py` — `search_cap`; `tracker/ingest/desk.py` — `build`, `serper_credit`; `tracker/cli/sync.py` — `news report`; `scripts/overnight.sh` — the news phase |
+| Searches counted and capped; the morning report | `tracker/ingest/search.py` — `SerperProvider._spend_one`, `_post`; `tracker/llm.py` — `record_search`; `tracker/spend.py` — `searches`, `SEARCH_MODEL`; `tracker/config.py` — `search_cap`; `tracker/ingest/desk.py` — `build`, `Desk.lines`, `FAILED`, `SET_ASIDE`, `serper_credit`; `tracker/cli/sync.py` — `news report`; `scripts/overnight.sh` — the news phase |
 | Closed feeds, and naming a challenge | `tracker/seed/feeds.toml` — `closed`; `tracker/ingest/discover.py` — `FeedSpec.closed`, `SitemapSpec.closed`, `_closed_reason`, `DiscoverReport.closed`, `_RawFetcher`, `CHALLENGE_NOTE`; `tracker/ingest/probe.py` — `configured_hosts` |
 | The weekly check of closed entries | `tracker/ingest/discover.py` — `probe_closed`, `record_probe`, `reopened_names`, `without_reopened`, `PROBE_EVERY`; migration `0034_feed_probe`; `tracker/cli/sync.py` — `discover --probe-closed` |
 | Asking robots.txt before every request | `tracker/robots.py` — `allowed`, `allowed_async`, `interpret`, `crawl_delay`; `tracker/ingest/fetch.py` — `permitted`, `refused`, `fetch_with_retry`, `should_escalate`, `fetch_all`; `tracker/ingest/discover.py` — `_RawFetcher`; `tracker/config.py` — `respect_robots` |

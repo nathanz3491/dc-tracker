@@ -748,6 +748,45 @@ def test_the_desk_says_when_search_credit_is_gone_and_counts_only_real_reads(ses
     session.flush()
     report = desk.build(session, since=NOW, now=NOW + dt.timedelta(hours=10))
     assert all(row.read == 0 for row in report.sources), "a failed re-read is not a read"
+    assert [(row.source, row.failed) for row in report.sources] == [("lead", 1)], "it failed"
+
+
+def test_the_desk_counts_what_would_not_load_and_what_was_set_aside(session):
+    """The reads alone made a source look whole. On 2026-10-19 the news watch showed
+    146 reads and nothing else, while 115 more of its articles would not load and 410
+    left the queue unread, as copies of a story or on a closed publisher."""
+
+    def tried(url, status, error=None, *, feed="watch:#7", when=NOW + dt.timedelta(hours=1)):
+        session.add(
+            IngestUrl(
+                url=url,
+                run_id="t",
+                status=status,
+                feed=feed,
+                error=error,
+                attempts=1,
+                first_seen_at=NOW - dt.timedelta(days=1),
+                last_tried_at=when,
+            )
+        )
+
+    tried("https://a.test/read", "ok")
+    tried("https://a.test/403", "fetch_error", "HTTP 403")
+    tried("https://a.test/robots", "fetch_error", "robots.txt could not be read")
+    tried("https://a.test/reply", "parse_error", "model did not return a JSON object")
+    tried("https://a.test/copy", "skipped", f"{discover.SAME_STORY}https://a.test/read")
+    tried("https://a.test/closed", "skipped", discover.DISCARDED_UNREADABLE)
+    tried("https://a.test/last-week", "fetch_error", "HTTP 403", when=NOW - dt.timedelta(days=7))
+    tried("https://b.test/other", "fetch_error", "HTTP 429", feed="enrich:search")
+    session.flush()
+
+    report = desk.build(session, since=NOW, now=NOW + dt.timedelta(hours=10))
+    rows = {row.source: (row.read, row.failed, row.aside, row.found) for row in report.sources}
+    assert rows == {"news watch": (1, 3, 2, 1), "enrich:search": (0, 1, 0, 0)}
+
+    text = "\n".join(report.lines())
+    assert "read failed  aside  found" in text
+    assert "1 read; 4 failed" in text and "2 set aside unread" in text
 
 
 def test_a_companys_other_name_is_not_a_campus_name(session):

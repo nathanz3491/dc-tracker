@@ -7,8 +7,9 @@ Meta's own site for six weeks without a single number moving. This module answer
 one night:
 
 * **per source** — feed, archive, news watch, the research's harvesters — how many
-  entries it showed, how many the filter kept, how many were read, and how many of
-  those changed something (`ingest_url.status = 'ok'`);
+  entries it showed, how many the filter kept, how many were read, how many could
+  not be read, how many were taken out of the queue unread, and how many of the reads
+  changed something (`ingest_url.status = 'ok'`);
 * **how late** the news was: from publication to the database, against a day;
 * **what is wrong with the intake itself**: no discovery tonight, a feed whose newest
   entry is weeks old, fresh news still waiting in the queue, search credit running low.
@@ -39,6 +40,16 @@ CREDIT_NIGHTS: Final = 14
 #: What a read that reached the model can end as.
 READ: Final = ("ok", "no_project", "thin_content")
 
+#: What a try that read nothing ends as: the page would not load, or — far more
+#: rarely — the model's reply was unusable. A failed re-read of a page read before
+#: keeps its old status and carries the error instead (`crawl.record_url`).
+FAILED: Final = ("fetch_error", "parse_error", "llm_error")
+
+#: What a queued article taken out of the queue unread ends as: another copy of a
+#: story already read or queued, a page on a publisher closed to us, a headline with
+#: no article behind it, a page not in English. Each carries its reason in `error`.
+SET_ASIDE: Final = "skipped"
+
 
 @dataclass
 class SourceLine:
@@ -46,6 +57,12 @@ class SourceLine:
     seen: int = 0
     kept: int = 0
     read: int = 0
+    #: Tried tonight and not read — counted because the reads alone hid them: on
+    #: 2026-10-19 the news watch showed 146 reads and nothing else, while 115 more of
+    #: its articles would not load and 410 were set aside.
+    failed: int = 0
+    #: Taken out of the queue tonight without being read. See `SET_ASIDE`.
+    aside: int = 0
     found: int = 0
 
 
@@ -66,10 +83,23 @@ class Desk:
         out = []
         if not self.discovery_ran:
             out.append("    NO DISCOVERY RAN: no feed, archive or watch result was seen tonight")
-        out.append(f"    {'source':34} {'seen':>6} {'kept':>6} {'read':>6} {'found':>6}")
+        out.append(
+            f"    {'source':34} {'seen':>6} {'kept':>6} {'read':>6} {'failed':>6} "
+            f"{'aside':>6} {'found':>6}"
+        )
         for row in self.sources:
             out.append(
-                f"    {row.source[:34]:34} {row.seen:6d} {row.kept:6d} {row.read:6d} {row.found:6d}"
+                f"    {row.source[:34]:34} {row.seen:6d} {row.kept:6d} {row.read:6d} "
+                f"{row.failed:6d} {row.aside:6d} {row.found:6d}"
+            )
+        read = sum(row.read for row in self.sources)
+        failed = sum(row.failed for row in self.sources)
+        aside = sum(row.aside for row in self.sources)
+        if failed or aside:
+            out.append(
+                f"    {read:,} read; {failed:,} failed — the page would not load, or rarely "
+                f"the model's reply was unusable; {aside:,} set aside unread — a second "
+                "copy of a story, a publisher closed to us, a headline with no article"
             )
         if self.delays:
             ordered = sorted(self.delays)
@@ -175,6 +205,26 @@ def build(
         ):
             desk.delays.append((tried - published).total_seconds() / 86400)
 
+    # What was tried tonight and not read, and what left the queue unread. Counted
+    # beside the reads because the reads alone made a source look whole: the news
+    # watch read 146 articles on 2026-10-19 and the table said nothing of the 115
+    # that would not load (66 refused with HTTP 403, 32 whose robots.txt did not
+    # answer) or the 410 set aside before reading.
+    for feed, status in session.execute(
+        select(IngestUrl.feed, IngestUrl.status).where(
+            IngestUrl.last_tried_at >= since,
+            or_(
+                IngestUrl.status.in_((*FAILED, SET_ASIDE)),
+                IngestUrl.status.in_(("ok", "no_project")) & IngestUrl.error.is_not(None),
+            ),
+        )
+    ):
+        row = rows[_origin(feed)]
+        if status == SET_ASIDE:
+            row.aside += 1
+        else:
+            row.failed += 1
+
     # The news watch keeps no `seen_url` rows (its results are counted by `tracker
     # news` itself); what it queued tonight is its "kept".
     watched = len(
@@ -190,7 +240,9 @@ def build(
 
     for name, line in rows.items():
         line.source = name
-    desk.sources = sorted(rows.values(), key=lambda r: (-r.found, -r.read, -r.kept, r.source))
+    desk.sources = sorted(
+        rows.values(), key=lambda r: (-r.found, -r.read, -r.kept, -r.failed, -r.aside, r.source)
+    )
 
     desk.held_fresh = len(
         session.execute(
