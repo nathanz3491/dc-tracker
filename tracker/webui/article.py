@@ -224,7 +224,15 @@ def _get(url: str) -> tuple[str, str]:
     try:
         from curl_cffi import requests as creq
 
-        response = creq.get(url, impersonate="chrome", timeout=25, headers=headers)
+        from tracker.ingest.fetch import machine_proxies
+
+        response = creq.get(
+            url,
+            impersonate="chrome",
+            timeout=25,
+            headers=headers,
+            proxies=machine_proxies() or None,
+        )
         if response.status_code >= 400:
             return "", f"the publisher answered {response.status_code}"
         return _decode(response.content, response.headers.get("content-type", "")), ""

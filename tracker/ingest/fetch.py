@@ -31,6 +31,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
+from functools import lru_cache
 from html import unescape
 from pathlib import Path
 from typing import Final, Protocol
@@ -440,6 +441,27 @@ _MISSING_CURL_CFFI = (
 )
 
 
+@lru_cache(maxsize=1)
+def machine_proxies() -> dict[str, str]:
+    """The HTTP proxies this machine is set to use, for a client that would not find
+    them on its own.
+
+    httpx reads the environment and, on macOS, the system's network settings
+    (`urllib.request.getproxies`); libcurl, under curl_cffi, reads only the
+    environment. The production host names its proxy in the macOS settings alone,
+    and its own DNS answers are poisoned (www.google.com resolved to a Facebook
+    address on 2026-10-19). So the browser-like rung connected directly and timed
+    out on google.com, axios.com and wric.com while httpx read them in a second --
+    and a robots.txt it could not read closed the whole site to every client for 30
+    minutes, which is what "robots.txt could not be read" meant all evening.
+    Read once a process: the setting does not move under a night's run.
+    """
+    import urllib.request
+
+    found = urllib.request.getproxies()
+    return {scheme: found[scheme] for scheme in ("http", "https") if found.get(scheme)}
+
+
 class CurlCffiFetcher:
     """HTTP presenting a real browser's TLS fingerprint.
 
@@ -515,7 +537,9 @@ class CurlCffiFetcher:
             "Accept-Language": "en-US,en;q=0.9",
         }
         try:
-            async with AsyncSession(impersonate=self.IMPERSONATE) as session:
+            async with AsyncSession(
+                impersonate=self.IMPERSONATE, proxies=machine_proxies() or None
+            ) as session:
                 response = await session.get(
                     url,
                     headers=headers,
@@ -930,7 +954,9 @@ async def _get_text(url: str, settings: Settings) -> tuple[int | None, str]:
         if CurlCffiFetcher.available():
             from curl_cffi.requests import AsyncSession
 
-            async with AsyncSession(impersonate=CurlCffiFetcher.IMPERSONATE) as session:
+            async with AsyncSession(
+                impersonate=CurlCffiFetcher.IMPERSONATE, proxies=machine_proxies() or None
+            ) as session:
                 response = await session.get(url, headers=headers, timeout=15)
                 return response.status_code, _decode(response)
         async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:

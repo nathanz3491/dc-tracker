@@ -385,6 +385,17 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **The browser-like client goes through the machine's proxy**
+  (`tracker/ingest/fetch.py`, `tracker/webui/article.py`). The production host reaches
+  the web through a proxy named only in its macOS network settings, and its own DNS
+  answers are poisoned. httpx reads those settings; curl_cffi does not, so the rung
+  meant to get past firewalls that check a client's TLS fingerprint connected
+  directly and timed out on google.com, axios.com and wric.com. It last read a page
+  on 10-17, 12 since October against httpx's 1,322. It also read robots.txt for the
+  headless browser, so a timeout there closed the site to every client for 30
+  minutes: "robots.txt could not be read" all evening, and 753 "the browser was not
+  used" in the nightly log. It now gets the same proxy httpx finds.
+
 - **A campus looked at after midnight is followed up that evening**
   (`tracker/ingest/watch.py`, `docs/workflows/sync.md`). The first look at all 634
   campuses ran by hand from 00:11 on 2026-10-19, and a daily campus was due again

@@ -207,3 +207,41 @@ def test_the_reader_view_asks_before_it_fetches(monkeypatch):
     body, error = article._get("https://a.example/news/1")
     assert body == "" and error == robots.REFUSED
     assert asked == ["https://a.example/robots.txt"]
+
+
+def test_the_browser_like_client_uses_the_machines_proxy(monkeypatch):
+    """libcurl reads no macOS proxy setting, and the host's proxy is set only there:
+    on 2026-10-19 this rung timed out on every site its poisoned DNS hid."""
+    import urllib.request
+
+    curl = pytest.importorskip("curl_cffi.requests")
+    asked: dict = {}
+
+    class Session:
+        def __init__(self, **kwargs):
+            asked.update(kwargs)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def get(self, url, **kwargs):
+            raise RuntimeError("no network in tests")
+
+    monkeypatch.setattr(
+        urllib.request, "getproxies", lambda: {"https": "http://127.0.0.1:9", "ftp": "x"}
+    )
+    monkeypatch.setattr(curl, "AsyncSession", Session)
+    monkeypatch.setattr(fetch_mod, "permitted", lambda *a, **k: _true())
+    fetch_mod.machine_proxies.cache_clear()
+    try:
+        asyncio.run(fetch_mod.CurlCffiFetcher(get_settings()).fetch("https://a.example/x"))
+    finally:
+        fetch_mod.machine_proxies.cache_clear()
+    assert asked["proxies"] == {"https": "http://127.0.0.1:9"}
+
+
+async def _true():
+    return True
