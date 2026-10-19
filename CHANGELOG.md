@@ -160,6 +160,13 @@ initial build of the v1 PRD.
 
 ### Changed
 
+- **The night reads 600 queued articles, not 150** (`scripts/overnight.sh`). The
+  news watch's first look and the first walk of the builders' archives left about
+  6,600 articles in the queue on 2026-10-19. A read costs about ¥0.0075 and 40 took
+  48 seconds on 10-18, so at 150 a night the backlog would have taken two months to
+  clear, and at 600 it costs about ¥4.5 a night and takes about two weeks, inside
+  the ¥15 ceiling.
+
 - **A builder's post about a campus the database does not hold is read alongside
   the news watch's finds** (`tracker/ingest/discover.py`, `docs/workflows/sync.md`).
   The watch's first look at every campus queued about 5,000 results on 2026-10-19,

@@ -33,6 +33,11 @@
 #             articles, the news first, then what the watch and the newsrooms found,
 #             then campuses the database has not heard of, through its identity
 #             check. Then one duplicate attempt per row it created.
+#             600 a night since 2026-10-19: the watch's first look and the first
+#             walk of the builders' archives left about 6,600 articles queued, a
+#             read costs about ¥0.0075 (10-18: 156 for ¥1.17) and 40 took 48
+#             seconds. At 150 the backlog would have taken two months to clear; at
+#             600 it is about ¥4.5 a night and about two weeks.
 #   free      dates, geo, scope, derive, logic --auto. No model, no cost. `scope`
 #             re-gates stored labels against their own quotes; `derive` re-applies
 #             every derived value, and both are pure functions of what is stored.
@@ -165,7 +170,7 @@ RISKS=40
 ENRICH=40
 ENRICH_BUDGET=160
 ENRICH_ROUNDS=1
-DISCOVER=150
+DISCOVER=600
 BASELINES=300
 SEARCH_CAP=2000
 DATES=150
@@ -203,7 +208,7 @@ started in tmux and left.
   --enrich N         projects to enrich (default 40); 0 to skip
   --enrich-budget N  articles the enrich phase may read (default 160)
   --enrich-rounds N  enrich in the first N rounds only (default 1)
-  --discover N       queued articles to read, the news first (default 150); 0 to skip
+  --discover N       queued articles to read, the news first (default 600); 0 to skip
                      discovery, the news watch and the read altogether
   --baselines N      campuses the news watch gives their first, year-long look each
                      night (default 300); 0 for follow-ups only

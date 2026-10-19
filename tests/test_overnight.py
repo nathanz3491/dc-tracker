@@ -257,7 +257,7 @@ def test_the_loop_adds_campuses_through_the_identity_check():
     First round only, capped, and through the ordinary crawl — whose identity check
     is what keeps a campus held under another name from gaining a twin."""
     text = SCRIPT.read_text(encoding="utf-8")
-    assert "DISCOVER=150\n" in text
+    assert "DISCOVER=600\n" in text
     assert 'if [ "$DO_DISCOVER" -eq 1 ] && [ "$round" -eq 1 ]; then' in text
     assert "tracker discover --no-show < /dev/null || true" in text
     assert 'tracker news --baselines "$BASELINES"' in text
