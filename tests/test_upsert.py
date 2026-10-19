@@ -1352,7 +1352,9 @@ def test_an_unconfirmed_reread_does_not_demote_an_evidenced_risk(session):
     row = session.scalar(select(Risk))
     assert row.quote == "two 345-kilovolt upgrades"
     assert row.unconfirmed is None
-    assert row.summary == "Still waiting.", "the wording still refreshes"
+    # Kept whole: wording refreshed from an unquoted reading paired a new summary with
+    # the old sentence (#5's fire over a sentence about fan noise, on 2026-10-19).
+    assert row.summary == "Upgrades pending.", "the wording stays with its sentence"
 
 
 def test_a_confirmed_reread_promotes_an_unconfirmed_risk(session):

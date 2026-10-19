@@ -1939,19 +1939,24 @@ def _upsert_risks(session: Session, project: Project, rec: IngestRecord) -> int:
             # Re-reading an edited article updates the wording and the severity, but
             # never revives a risk an operator resolved: `status` is theirs, not the
             # extractor's.
-            found.severity = risk.severity
-            found.summary = risk.summary
-            # A confirmed reading never loses to a later unconfirmed one. Two
-            # sources report the same obstacle and only one quotes it usably; the
-            # citation is the thing worth keeping, so an unconfirmed re-read
-            # refreshes the wording without demoting an obstacle already evidenced.
+            #
+            # A confirmed reading never loses to a later unconfirmed one — and it is
+            # kept *whole*. Two sources report the same kind of obstacle and only one
+            # quotes it usably; the wording, the severity, the sentence and the
+            # citation are one reading and move together. Keeping only the quote
+            # paired a new summary with an old article's sentence under the new
+            # article's address: on 2026-10-19 #5 read "A recent fire at the
+            # property…" over a sentence about cooling-fan noise, and #1328 "A
+            # November 3 ballot initiative…" over one about a $5 billion figure.
             if risk.unconfirmed is None or found.unconfirmed is not None:
+                found.severity = risk.severity
+                found.summary = risk.summary
                 found.quote = risk.quote
                 found.unconfirmed = risk.unconfirmed
+                if source_id is not None:
+                    found.source_id = source_id
             if risk.delay_days is not None:
                 found.delay_days = risk.delay_days
-            if source_id is not None:
-                found.source_id = source_id
     session.flush()
     return inserted
 
