@@ -550,6 +550,30 @@ def check_rules(project: Project) -> list[Finding]:
             subjects=tuple(f"event:{name}:{when}" for name, when in ahead),
         )
 
+    # A delay derived on a campus that is running. `upsert._record_slippage` writes a
+    # sourceless `delayed` milestone whenever the stored forecast moves later; on an
+    # operating campus that is a forecast changing hands, not lateness — 54 of the
+    # 113 derived delays by 2026-10-19 sat on operating rows, Council Bluffs among
+    # them at "+1827 days". The writer no longer does this; these are the ones from
+    # before it learned.
+    derived_delays = sorted(
+        {
+            e.event_date
+            for e in events
+            if e.event_type == "delayed" and getattr(e, "source_id", None) is None and e.event_date
+        }
+    )
+    if phase in _LIVE_PHASES and derived_delays:
+        add(
+            "delay_on_an_operating_campus",
+            WARNING,
+            f"{len(derived_delays)} derived delay(s) recorded although the campus is operating",
+            ("expected_online",),
+            "an operating campus is not late; the delay was derived from two sources "
+            "disagreeing about a forecast, and no source reported it",
+            subjects=tuple(f"event:delayed:{when}" for when in derived_delays),
+        )
+
     if phase in _LIVE_PHASES and project.mw_built is None and project.mw_planned:
         if live_blocks:
             # Not a contradiction. Something *does* say part of it is running — the
@@ -1540,6 +1564,21 @@ def _drop_future_milestones(session: Session, project: Project, _f: Finding) -> 
     return f"removed {len(doomed)} milestone(s) dated in the future"
 
 
+def _drop_derived_delays(session: Session, project: Project, _f: Finding) -> str:
+    """Remove `delayed` milestones nothing cited, from a row that is operating."""
+    if (project.phase or "") not in _LIVE_PHASES:
+        return "removed 0 derived delay(s): the campus is no longer recorded as operating"
+    doomed = [
+        e
+        for e in list(project.events)
+        if e.event_type == "delayed" and getattr(e, "source_id", None) is None
+    ]
+    for event in doomed:
+        project.events.remove(event)
+        session.delete(event)
+    return f"removed {len(doomed)} derived delay(s) from an operating campus"
+
+
 def _move_city_to_county(_s: Session, project: Project, _f: Finding) -> str:
     """Put a parish name where it belongs, without moving the dedup key.
 
@@ -1715,7 +1754,12 @@ def _resolve_finished_obstacles(session: Session, project: Project, _f: Finding)
 #: Measured on a production copy: 39 findings hidden that way, 36 of them open
 #: obstacles on finished tracks.
 FREE_CODES: Final[frozenset[str]] = frozenset(
-    {"obstacle_on_a_finished_track", "milestone_in_the_future", "city_holds_a_county_name"}
+    {
+        "obstacle_on_a_finished_track",
+        "milestone_in_the_future",
+        "city_holds_a_county_name",
+        "delay_on_an_operating_campus",
+    }
 )
 
 
@@ -1728,9 +1772,10 @@ def free_answer(project: Project, finding: Finding) -> tuple[str, str] | None:
     manufacturing facts, which is the failure the whole evidence model exists to
     prevent.
 
-    Three codes clear it, and between them they are most of the resolvable findings
+    Four codes clear it, and between them they are most of the resolvable findings
     in the database — which is what makes a whole-corpus pass affordable rather
-    than a model call per finding.
+    than a model call per finding. The fourth, `delay_on_an_operating_campus`,
+    removes milestones no source wrote: it overrules nobody.
 
     Deliberately not extended further. Every other resolvable code asks which
     source to trust, and `audit.free_answer`'s own comment makes the same point
@@ -1749,6 +1794,13 @@ def free_answer(project: Project, finding: Finding) -> tuple[str, str] | None:
         return "d", (
             "an event dated after today has not happened yet, which is a comparison "
             "rather than an opinion about the source"
+        )
+    if finding.code == "delay_on_an_operating_campus":
+        # A phase read and an event's provenance read: the milestone has no source,
+        # so no report is being overruled, and the row says the campus runs.
+        return "d", (
+            "a delay no source reported, derived on a campus the row says is operating, "
+            "is a forecast changing hands rather than lateness"
         )
     if finding.code == "city_holds_a_county_name":
         # A string test — does the name end in County, Parish, Borough — and a
@@ -1800,6 +1852,9 @@ ACTIONS: Final[dict[str, tuple[Action, ...]]] = {
     ),
     "milestone_in_the_future": (
         Action("d", "those are plans, not milestones — remove them", _drop_future_milestones),
+    ),
+    "delay_on_an_operating_campus": (
+        Action("d", "no source reported them — remove the derived delays", _drop_derived_delays),
     ),
     "phase_without_construction": (),  # nothing to edit; accept or skip
     # The block rules are all report-only, and stay that way. Each names something

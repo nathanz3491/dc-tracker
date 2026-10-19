@@ -436,6 +436,39 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **A year-only date no longer erases a precise one in the same year**
+  (`tracker/upsert.py`). "2023" is stored as 2023-01-01 at year precision, so the
+  earliest-date rule read it as earlier than Fairwater's announcement on 2023-03-30,
+  and a heavier source's "2025" replaced Stargate Abilene's "September 2025": eight
+  rows lost their day or month on 10-19 as old archive posts and re-reads arrived.
+  The two claims do not disagree — one says when within the year — so the chosen
+  date is now narrowed to the finest claim inside its own span, and never moved
+  outside it. On a copy of production 13 dates regain their precision.
+
+- **A forecast changing hands is no longer reported as a delay** (`tracker/upsert.py`,
+  `tracker/logic.py`, `docs/workflows/logic.md`). Every time the stored expected
+  date moved later — a heavier source winning, a re-read dropping a claim, a 2021
+  post read tonight — a sourceless `delayed` milestone was written: 113 of them, 54
+  on campuses already operating (Council Bluffs "delayed +1827 days"). A delay is
+  now recorded only when a report at least as new as every earlier-dated one states
+  the later date, and never on an operating campus; a new free rule,
+  `delay_on_an_operating_campus`, clears the ones already standing.
+
+- **Thirteen more directories are second-hand, and a citation that only named the
+  campus no longer corroborates it** (`tracker/confidence.py`). datacenterindex.ai,
+  kadoa.com, savrn.com, usdatacenterprojects.com and others reached by the news
+  watch and the archive walks counted as first-hand reports, so a list page that
+  tags a whole planned figure "operational" won the largest-value rule for built
+  capacity — Polaris Forge 1 went from 175 to 400 MW. And 818 of 4,782 citations
+  confirmed only identity fields, which the evidence gate never checks, yet counted
+  as an independent second source. On a copy of production the re-derive restores
+  Polaris Forge 1 to 175 MW and AWS Mesa to construction, and 22 confidence scores
+  move — mostly 2 to 1, rows that turn out to rest on one real report.
+
+- **Hedged tenants stop counting as named ones** (`tracker/dedup.py`). "Fortune 50",
+  "AA-rated hyperscaler" and "a leading global tech company" each counted as a
+  distinct buyer.
+
 - **A campus already held no longer comes back as a new row because its company was
   spelled another way** (`tracker/dedup.py`, `tracker/seed/operators.toml`,
   `docs/workflows/duplicates.md`). The 2026-10-19 night created 96 rows and about 16

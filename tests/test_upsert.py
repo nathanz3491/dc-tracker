@@ -1464,7 +1464,26 @@ def _with_date(value, url="https://news.microsoft.com/fairwater/", **kw):
     return rec(sources=[manual_source(url=url, expected_online=value, **kw)])
 
 
-def test_a_slip_into_a_later_year_is_recorded_as_an_event(session):
+@pytest.fixture
+def dated(session):
+    """The two pages a slip test reads, published a year apart, earlier first.
+
+    A delay is recorded only when the report stating the later date is at least as
+    new as every report still stating an earlier one (`_record_slippage`), and a
+    page's publication date is read from the discovery queue — so each test page
+    has a queue row saying when it was published.
+    """
+    from tracker.models import IngestUrl
+
+    for url, when in (
+        ("https://news.microsoft.com/fairwater/", dt.datetime(2025, 3, 1)),
+        ("https://www.dcd.com/a", dt.datetime(2026, 3, 1)),
+    ):
+        session.add(IngestUrl(url=url, run_id="test", status="ok", published_at=when))
+    session.flush()
+
+
+def test_a_slip_into_a_later_year_is_recorded_as_an_event(session, dated):
     upsert_record(session, _with_date("2027-07-01"))
     upsert_record(session, _with_date("2028-07-01", url="https://www.dcd.com/a"))
 
@@ -1474,7 +1493,7 @@ def test_a_slip_into_a_later_year_is_recorded_as_an_event(session):
     assert "+366 days" in event.description
 
 
-def test_a_slip_sets_delay_days_on_the_worst_open_risk(session):
+def test_a_slip_sets_delay_days_on_the_worst_open_risk(session, dated):
     upsert_record(session, _with_date("2027-07-01", risks=None))
     upsert_record(
         session,
@@ -1496,7 +1515,7 @@ def test_a_slip_sets_delay_days_on_the_worst_open_risk(session):
     assert rows["water"] is None
 
 
-def test_a_move_within_one_year_is_logged_but_not_counted(session):
+def test_a_move_within_one_year_is_logged_but_not_counted(session, dated):
     """`norm_date_detail` coarsens hedged dates, so a bare "2027" lands on
     2027-01-01 and "late 2027" on 2027-10-01. A source restating the same year more
     precisely is indistinguishable from a 273-day delay, and the column stores no
@@ -1517,6 +1536,30 @@ def test_a_move_within_one_year_is_logged_but_not_counted(session):
     assert event is not None, "the tracked value did move, and that is worth logging"
     assert "may be a more precise restatement" in event.description
     assert session.scalar(select(Risk)).delay_days is None, "no number on an ambiguous move"
+
+
+def test_an_older_report_winning_the_merge_is_not_a_delay(session, dated):
+    """The archive walk reads 2021 posts tonight. A later date from an *older*
+    report is the merge choosing between sources, not the campus slipping."""
+    upsert_record(session, _with_date("2027-07-01", url="https://www.dcd.com/a"))
+    # Published a year earlier, and a filing: it outweighs the trade story and wins.
+    import dataclasses
+
+    filing = dataclasses.replace(
+        manual_source(expected_online="2029-01-01"), source_type="company_filing"
+    )
+    upsert_record(session, rec(sources=[filing]))
+    assert session.scalar(select(Project)).expected_online == dt.date(2029, 1, 1)
+    assert session.scalar(select(func.count()).select_from(Event)) == 0
+
+
+def test_an_operating_campus_is_never_late(session, dated):
+    """Council Bluffs, operating for years, was 'delayed +1827 days' by a blog."""
+    upsert_record(session, _with_date("2027-07-01", phase="operational"))
+    upsert_record(
+        session, _with_date("2032-07-01", url="https://www.dcd.com/a", phase="operational")
+    )
+    assert session.scalar(select(func.count()).select_from(Event)) == 0
 
 
 def test_a_date_moving_earlier_is_not_a_delay(session):
@@ -1540,7 +1583,7 @@ def test_no_risk_is_invented_from_a_date_change(session):
     assert session.scalar(select(Project)).blocker is None
 
 
-def test_recording_a_slip_stays_idempotent(session):
+def test_recording_a_slip_stays_idempotent(session, dated):
     upsert_record(session, _with_date("2027-07-01"))
     upsert_record(session, _with_date("2029-01-01", url="https://www.dcd.com/a"))
     again = upsert_record(session, _with_date("2029-01-01", url="https://www.dcd.com/a"))

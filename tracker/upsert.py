@@ -368,6 +368,10 @@ class _Claim:
     #: one building or phase (`claim_meta` scope `building`, `vocab.PART_FIELDS`).
     #: It fills the campus column only when nothing describes the whole site.
     part: bool = False
+    #: How precisely a date claim was stated ("month", "quarter", "half", "year"),
+    #: from the source's `claim_meta`; None for day precision or not a date. Read
+    #: by `_refine_date`, so a coarse date never displaces a finer one inside it.
+    precision: str | None = None
 
     def recency(self, *, by_publication: bool) -> Any:
         """The timestamp this claim is ranked by.
@@ -458,6 +462,9 @@ def claims_by_field(sources: list[Source], *, settings: Any = None) -> dict[str,
                     decided_against=name in decided,
                     tertiary=tertiary,
                     part=name in parts,
+                    precision=(
+                        _recorded_precision(s, name) if name in _DATE_PRECISION_FIELDS else None
+                    ),
                 )
             )
     # Confirmed first, then first-hand, then strongest source, then most recent.
@@ -697,7 +704,14 @@ def resolve(
         values = [str(c.value) for c in claims]
         if ratchet and existing is not None:
             values.append(existing.isoformat() if hasattr(existing, "isoformat") else str(existing))
-        return min(values) if values else existing
+        if not values:
+            return existing
+        earliest = min(values)
+        held = [c for c in claims if str(c.value) == earliest]
+        if not held:
+            return earliest  # the row's own date, under the ratchet
+        winner = min(held, key=lambda c: _PRECISION_ORDER.get(c.precision or "day", 0))
+        return _refine_date(winner, claims, earliest=True).value
 
     if policy is Policy.PHASE:
         return _resolve_ladder(
@@ -710,7 +724,63 @@ def resolve(
         )
 
     # PREFER_WEIGHT: claims are pre-sorted by (weight, recency).
-    return claims[0].value
+    return _refine_date(claims[0], claims, earliest=False).value
+
+
+#: Date precision, finest first. A coarse claim is a span of days: "2025" is all of
+#: 2025, "Q3 2025" July to September.
+_PRECISION_ORDER: dict[str, int] = {"day": 0, "month": 1, "quarter": 2, "half": 3, "year": 4}
+_PRECISION_MONTHS: dict[str, int] = {"month": 1, "quarter": 3, "half": 6, "year": 12}
+
+
+def _date_span(claim: _Claim) -> tuple[_dt.date, _dt.date] | None:
+    """The days a date claim covers at the precision it was stated, or None."""
+    try:
+        start = _dt.date.fromisoformat(str(claim.value)[:10])
+    except ValueError:
+        return None
+    precision = claim.precision or "day"
+    if precision == "year":
+        return _dt.date(start.year, 1, 1), _dt.date(start.year, 12, 31)
+    months = _PRECISION_MONTHS.get(precision)
+    if months is None:
+        return start, start
+    month = start.month - 1 + months
+    after = _dt.date(start.year + month // 12, month % 12 + 1, 1)
+    return start, after - _dt.timedelta(days=1)
+
+
+def _refine_date(winner: _Claim, claims: list[_Claim], *, earliest: bool) -> _Claim:
+    """A finer date the winner's own span contains, if any claim states one.
+
+    **A coarse date must never displace a finer one that falls inside it.** "2023"
+    is stored as 2023-01-01 at year precision, so the MIN policy read it as earlier
+    than Fairwater's announcement on 2023-03-30 and the row lost its day; on
+    2026-10-19, re-reads and the archive walk did that to at least eight rows —
+    Stargate Abilene's expected-online "September 2025" became "2025". The two claims
+    do not disagree: one says when within the year. So the winner is narrowed, as
+    long as some claim is finer and inside its span: the earliest such claim for
+    MIN, the strongest for the other policies (claims arrive strongest first).
+    Nothing outside the winner's span is consulted, so a refinement can never move
+    a date to another year. A claim with no recorded precision is a day.
+    """
+    current = winner
+    for _ in range(len(_PRECISION_ORDER)):
+        span = _date_span(current)
+        if span is None:
+            return current
+        rank = _PRECISION_ORDER.get(current.precision or "day", 0)
+        inside = []
+        for claim in claims:
+            if _PRECISION_ORDER.get(claim.precision or "day", 0) >= rank:
+                continue
+            got = _date_span(claim)
+            if got is not None and span[0] <= got[0] and got[1] <= span[1]:
+                inside.append((got[0], claim))
+        if not inside:
+            return current
+        current = min(inside, key=lambda pair: pair[0])[1] if earliest else inside[0][1]
+    return current
 
 
 def _resolve_ladder(
@@ -1906,9 +1976,24 @@ def _record_slippage(session: Session, project: Project, previous: _dt.date | No
     No risk is invented when none is open. A date moving is not a report of *why*,
     and manufacturing an obstacle from it would put an uncited guess into the field
     an operator acts on.
+
+    **A move is a delay only when the news is newer than the date it replaces.** The
+    stored date moves for many reasons that are not a slip: a heavier source winning
+    the merge, a re-read dropping the claim that held the earlier date, an archive
+    post from 2021 being read tonight. Each wrote a `delayed` event with no source —
+    113 in the database by 2026-10-19, 54 of them on campuses already operating:
+    Google's Council Bluffs, running for years, "delayed +1827 days" because a
+    shuttle company's blog said 2030. So an event is written only when some claim
+    stating the new date was published no earlier than every claim still stating an
+    earlier one — the newer report says later — and never on an operating campus,
+    whose forecast moving is not lateness.
     """
     current = project.expected_online
     if previous is None or current is None or current <= previous:
+        return 0
+    if (project.phase or "") in _OPERATING_PHASES:
+        return 0
+    if not _later_date_is_newer_news(project, current):
         return 0
 
     slipped_days = (current - previous).days
@@ -1963,6 +2048,31 @@ def _record_slippage(session: Session, project: Project, previous: _dt.date | No
 
     session.flush()
     return written
+
+
+#: Phases in which a moving forecast is not lateness. `logic` removes any derived
+#: `delayed` milestone already standing on such a row (`delay_on_an_operating_campus`).
+_OPERATING_PHASES: frozenset[str] = frozenset({"operational"})
+
+
+def _later_date_is_newer_news(project: Project, current: _dt.date) -> bool:
+    """Did a report at least as new as every earlier-dated one state `current`?
+
+    Publication dates only: an undated claim cannot show it is the newer report, so
+    it moves the stored date (that is the merge policy's business) without being
+    called a delay.
+    """
+    claims = contenders(claims_by_field(list(project.sources)).get("expected_online", []))
+    target = current.isoformat()
+    movers = [c.published_at for c in claims if str(c.value)[:10] == target and c.published_at]
+    if not movers:
+        return False
+    newest = max(movers)
+    return not any(
+        c.published_at is not None and c.published_at > newest
+        for c in claims
+        if str(c.value)[:10] < target
+    )
 
 
 def choose_blocker(open_risks: list[Risk]) -> Risk | None:

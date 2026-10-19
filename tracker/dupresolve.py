@@ -352,7 +352,7 @@ def evidence_block(a: Project, b: Project, pair: Any) -> str:
         limit = distance_limit(a, b)
         lines.append(
             f"  DISTANCE: {distance:.1f} km between the stored coordinates — these are "
-            "town centres, not site locations, so a small number means one town and says "
+            "town centroids, not site locations, so a small number means one town and says "
             "nothing about one building, and a site may lie between two towns. Only a "
             f"distance beyond {limit:.0f} km rules out one campus."
         )

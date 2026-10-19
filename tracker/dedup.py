@@ -110,8 +110,9 @@ _COUNTY_SUFFIXES = ("county", "parish", "borough", "census area", "municipality"
 #: Matched as substrings of the folded value, because the phrasing varies
 #: endlessly and only the hedge is stable.
 _UNDISCLOSED_MARKERS = (
+    # "fortune 50" also reads "fortune 500"; both are hedges, so that is right.
+    "fortune 50",
     "fortune 100",
-    "fortune 500",
     "undisclosed",
     "unnamed",
     "not disclosed",
@@ -130,6 +131,13 @@ _UNDISCLOSED_MARKERS = (
     "single tenant",
     "us-based technology",
     "a technology company",
+    # Measured 2026-10-19: twelve stored customers hedged in words this list did
+    # not hold, each counted as a named tenant in the buyer table — "Fortune 50"
+    # (#177, #47), "AA-rated hyperscaler" (#129), "a leading global tech company"
+    # (#780). Matched on the slug, so the hyphen in "AA-rated" is a space here.
+    "aa rated",
+    "leading global",
+    "hyperscaler",
 )
 
 

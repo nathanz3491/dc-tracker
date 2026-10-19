@@ -140,6 +140,25 @@ TERTIARY_DOMAINS = frozenset(
         "cloudscene.com",
         "colocationscout.com",
         "compute-atlas.com",
+        # Added 2026-10-20: directories and project lists the news watch and the
+        # archive walks began reaching at 600 reads a night. Each one was counted as
+        # a first-hand report, so its listing could win a merge outright — two
+        # datacenterindex.ai list pages tag a campus's whole planned figure
+        # "operational", which the largest-value rule for built capacity then
+        # took (Polaris Forge 1, 175 -> 400 MW; STACK Avondale), and one directory
+        # line made Galaxy's Helios a 1.6 GW operating campus its own filings put
+        # at 133 MW.
+        "aigridwatch.com",
+        "americanbuildout.com",
+        "arizonaai.com",
+        "datacenterindex.ai",
+        "datacentersatlas.com",
+        "datacentersexposed.com",
+        "kadoa.com",
+        "megawattlas.com",
+        "savrn.com",
+        "trackdatacenters.com",
+        "usdatacenterprojects.com",
         "datacenter.fyi",
         "datacenterhawk.com",
         "datacentermap.com",
@@ -177,7 +196,9 @@ TERTIARY_DOMAINS = frozenset(
         "itkservices3.com",
         "networkenvironments.com",
         "realclear.ai",
+        "credenceresearch.com",
         "researchandmarkets.com",
+        "technicalsource.com",
         "thejobwalk.com",
         "thewayofward.com",
     }
@@ -285,6 +306,19 @@ def registrable_domain(url: str) -> str:
 def independent_domains(sources: Iterable[SourceView]) -> set[str]:
     """Distinct registrable domains among the citations."""
     return {d for d in (registrable_domain(s.url) for s in sources) if d}
+
+
+#: Fields the evidence gate never checks: a row cannot exist without them, so a
+#: citation listing only these has confirmed nothing about the campus.
+_IDENTITY_FIELDS: frozenset[str] = frozenset(
+    {"company", "name", "city", "county", "state", "country"}
+)
+
+
+def _testifies(source: SourceView) -> bool:
+    """True when the citation confirms at least one fact beyond the campus's identity."""
+    listed = {part.strip() for part in (source.fields or "").split(",") if part.strip()}
+    return bool(listed - _IDENTITY_FIELDS)
 
 
 def cited_fields(sources: Iterable[SourceView]) -> set[str]:
@@ -406,7 +440,14 @@ def compute(
     # guesses. That is a guess buying the trust of a quote, which the tier exists to
     # prevent. Such a source is still a citation, so the floor rule below still
     # grants it 1: it just cannot corroborate anything.
-    domains = independent_domains(s for s in testimony if (s.fields or "").strip())
+    #
+    # **And a citation whose confirmed fields are all identity confirms nothing.**
+    # The identity fields — company, name, city, county, state — skip the evidence
+    # gate by design (a row cannot exist without them) and are still written into
+    # `source.fields`, so a page that only *named* the campus read as one that
+    # quoted a fact about it: 818 of 4,782 citations on 2026-10-19, enough to lift a
+    # row from 2 to 3 on a second URL that confirmed only where the campus is.
+    domains = independent_domains(s for s in testimony if _testifies(s))
     conflicts = find_conflicts(testimony)
     agreements = find_agreements(testimony)
 

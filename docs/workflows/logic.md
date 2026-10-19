@@ -184,6 +184,14 @@ Three stages before anything is put to a model:
    clear it, and between them they were **448 of 536** resolvable findings — which
    is most of what makes a whole-database pass affordable.
 
+   A fourth since 2026-10-20, `delay_on_an_operating_campus`: a `delayed` milestone
+   no source wrote — `upsert._record_slippage` derives one when the stored forecast
+   moves later — on a row the phase says is running. It overrules nobody, because
+   no report stands behind it, and on 10-19 there were 54 of them, Google's Council
+   Bluffs "delayed +1827 days" by a shuttle company's blog. The writer no longer
+   derives a delay on an operating campus, or from a report older than the one it
+   replaces; this clears the ones from before it learned.
+
    A past free answer never settles its code (`logic.FREE_CODES`). The condition it
    repairs comes back on its own — a new article adds another obstacle, a re-crawl
    restores a milestone dated next year — and an old `closed 3 obstacle(s)` line
@@ -369,7 +377,7 @@ Touching any of these means the poster is in scope. Re-render with
 | Rules | `tracker/logic.py` — `check_rules`, `_check_stored_against_evidence`, `dedupe`, `ERROR`, `WARNING` |
 | Collisions and the per-field policy | `tracker/logic.py` — `check_collisions`, `why_decided`, `decision`; `tracker/upsert.py` — `FIELD_POLICY`, `Policy`, `resolve_field` |
 | Judgement and the evidence audit | `tracker/logic.py` — `examine`, `audit_evidence`, `parse_contradictions`, `parse_evidence_findings`, `AUDIT_VERDICTS`, `auditable_fields` |
-| Actions, and which codes have none | `tracker/logic.py` — `ACTIONS`, `_stating`, `resolvable`, `free_answer`, `FREE_CODES`, `_resolve_finished_obstacles`, `_reported_after_finish`, `record_decision`; `tracker/audit.py` — `_rule_against` |
+| Actions, and which codes have none | `tracker/logic.py` — `ACTIONS`, `_stating`, `resolvable`, `free_answer`, `FREE_CODES`, `_resolve_finished_obstacles`, `_reported_after_finish`, `_drop_derived_delays`, `record_decision`; `tracker/audit.py` — `_rule_against`; `tracker/upsert.py` — `_record_slippage`, `_later_date_is_newer_news` |
 | Drift repair | `tracker/logic.py` — `resolve_drift`, `check_collisions`; `tracker/upsert.py` — `recompute_from_sources`; `tracker/blocks.py` — `phase_after_blocks`, `raise_phase` |
 | Contested fields, the two calls, the write | `tracker/conflicts.py` — `disputes`, `solve`, `_challenge`, `supersede`, `apply_outcome`, `MAX_CALLS_PER_FIELD`, `MIN_CONFIDENCE`, `SUPERSEDED`, `MISREAD` |
 | The agent path | `tracker/triage.py` — `triage`, `apply_rule_out`, `_claims_value`, `rule_out_tool`, `leave_alone_tool`, `RULEABLE_FIELDS`, `SYSTEM` |
