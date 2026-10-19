@@ -118,6 +118,12 @@ with what it listed before:
 * **Media sitemaps are not walked.** Meta's index names its children `sitemap-1`,
   `image-sitemap-1` and `video-sitemap-1`, none of them a "post" or "news" name, so
   all three were walked and logo attachment pages were queued (`_MEDIA_SITEMAP`).
+* **The walk is kept for the rest of the night.** Each sitemap that answered is saved
+  in the `sitemaps` cache (`discover.RememberingFetcher`), and a later walk within
+  twelve hours (`WALK_FRESH`) — enrich's archive harvest, prospect's sweep — reads
+  that copy instead of asking the site again: on 10-19 enrich re-walked all 28
+  archives an hour later, 101 requests for the same bytes. A dry run keeps nothing.
+  See [enrich](enrich.md#the-six-harvesters).
 
 **Every campus is searched for news, on a schedule.** `tracker news`
 (`tracker/ingest/watch.py`) is the per-campus question the research never asked:
@@ -138,6 +144,18 @@ with a second search for the words its stage is waiting on ("online", "energized
 night, largest first, so switching the watch on catches the whole database up in
 two nights. A result is queued as `watch:#<id>` when its headline and snippet pass
 the filter or name the campus, and its date is in the window. No model is called.
+
+**A result no campus story can be in is never queued** (`screen.not_news`, asked in
+`watch._screened`): a PDF, a stock-quote or stock-chatter page (Stocktwits, Simply
+Wall St, Seeking Alpha and the like; not stocktitan or investing.com's news, which
+read and cite), a job posting, a directory's ZIP-code page, a page on a site that has
+refused every read (datacenters.com, 0 of 192). By 10-19 the watch had queued 125
+such pages, and the 42 tried produced one citation. **Nor is local news about
+something else**: a result kept only because it names the campus is dropped when it
+reads as a game, an obituary, a killing or a restaurant and carries no data-center
+term (`screen.off_topic`). A campus's town and company were in a New Albany football
+recap, a taqueria near MIT and a Tesla diner in Palo Alto, and the first look queued
+all three.
 
 **Then each company is searched as a company** (`watch.run_companies`), because a
 campus search can only find a campus the database already holds: Microsoft buying
@@ -319,11 +337,16 @@ nine newest stories across every market.
 
 The feed client, the article clients and the browser all ask the site's
 `robots.txt` before they request a page (`tracker/robots.py`). It is read the RFC 9309
-way: a 4xx means no file and nothing disallowed, and a 5xx or no answer means nothing
-is fetched for half an hour. A file that was read is kept for a day per process. A
-disallowed page comes back as a failed fetch with `via = "robots"`, and no request is
-made. It is not retried and not escalated, because a stronger client would get the
-same answer. `Crawl-delay` stretches the gap between two requests to one host, up to
+way: a 4xx means no file and nothing disallowed, and a 5xx, a 429 or no answer means
+nothing is fetched for half an hour (a 429 the way Google reads it: the site is asking
+for fewer requests). A file that was read is kept for a day per process, and **one
+reading serves every rung**: the browser kept a stricter one of its own until
+2026-10-20, refusing pages on 58 sites whose file answered 403 or 429 on 10-19 that
+every other rung, DeepSeek's fetch included, read as allowed. A disallowed page comes
+back as a failed fetch with `via = "robots"`, from any rung, and no request is made.
+It is not retried and not escalated, because a stronger client would get the same
+answer; the browser's refusals used to come back untagged and were retried after a
+backoff. `Crawl-delay` stretches the gap between two requests to one host, up to
 60 seconds. On 2026-10-11, 43 of the 45 open feeds and sitemaps were permitted; the
 two refused were the Google News headline feeds above, which now come from a news
 API instead.
@@ -362,7 +385,30 @@ prioritising after would reorder a batch that was already chosen:
    publisher open again (feed and archive both), its discarded pages go back in the
    queue (`discover.requeue_reopened`), and a page skipped for any other reason
    stays skipped.
-5. **One copy of a story is read.** An article can be queued more than once under
+5. **A page no campus story can be in is set aside before it is read**
+   (`discover.set_aside_not_news`, the rules in `tracker/ingest/screen.py`). By its
+   address: a PDF, which nothing here takes text from — the plain client handed the
+   model its compressed bytes, and of 384 PDFs read since August none produced a
+   citation; since 2026-10-20 a fetch that gets a file back, by whatever address,
+   fails as one (`fetch.file_type`) rather than becoming text for the model; a
+   translated copy (Google's campus pages in twelve translations, 114 of
+   its 166 queued); a stock-quote or stock-chatter page; a job posting; a
+   directory's ZIP-code page; a site that has refused every read. From a builder's
+   own archive, also by its headline: a post naming a place abroad and none here
+   (CyrusOne's Frankfurt, Cologix's Toronto, Google's Hamina — a campus abroad cannot
+   become a row), and a post from before 2024 that names no place and no campus
+   event (an award, an Earth Day post). On 2026-10-19 that is 284 of the 5,924
+   queued pages; run against that night's 594 reads it would have set aside 76, of
+   which one had produced a citation. **Each rule is narrower than first asked for,
+   because the wider one cost campuses**: old builder posts naming a town brought in
+   Henrico, Los Lunas and Umatilla, so they are read; a directory's county and state
+   pages produced a citation as often as the night's average, so only its ZIP-code
+   pages go. Set aside is `skipped` with `screen.SET_ASIDE` and the reason, and every
+   such page is asked again on each run: one no rule names any more — reading PDFs
+   one day, a campus newly held — goes back in the queue. It runs before the next
+   rule, so a page that will never be read is not kept as a story's one copy.
+   `tracker queue aside` shows what would go.
+6. **One copy of a story is read.** An article can be queued more than once under
    different addresses: CyrusOne files every release under two paths, a story is
    syndicated to three sites, a search engine cuts a headline short, a page was
    already read through another outlet's copy. On 2026-10-19, after the news watch's
@@ -437,6 +483,14 @@ comes back wrong. Of 70 stored citations from Chinese-language pages, 68 carried
 rested on nothing else, each a garbled duplicate of a campus held under its
 English name. `crawl.extract_one` marks such a page `skipped` before the call, the
 run summary counts it as "not in English", and it is not retried.
+
+**A project the reading names without a company, a US state or a place is dropped,
+and counted.** Each is logged ("dropping a project from …: needs company, state and
+a locality"), and since 2026-10-20 the run summary also counts them as "dropped: no
+company, state or place" (`IngestReport.incomplete`): 73 on the night of 10-19, 61
+in its main crawl — a county debating a moratorium with no company named, a
+company's plans with no town, a campus abroad (Odense, Luleå, Frankfurt, Toronto). It
+is the measure of what the model was asked to read that could not become a row.
 
 ## The identity arbiter
 
@@ -617,21 +671,22 @@ Touching any of these means the poster is in scope. Re-render with
 | Phase order, plan numbering, `--full`, the lock | `tracker/cli/sync.py` — `sync`, its `plan` list and `step` |
 | Discover, archives, search | `tracker/ingest/discover.py` — `run`, `load_config`, `load_sitemaps`, `sweep_sitemaps`, `walk_sitemap`, `index_children`, `_MEDIA_SITEMAP`, `parse_feed` (newest `lastmod` first), `queue_candidates`; `tracker/ingest/search.py`; `tracker/normalize.py` — `canonical_url`, `url_identity`, `url_variants`; `tracker/backfill.py` — `repair_urls` |
 | The keyword filter, and what it dropped | `tracker/seed/feeds.toml` — `[filter]`; `tests/fixtures/keyword_cases.json`; `tracker/ingest/discover.py` — `normalize_haystack`, `_SEPARATORS`, `_term_pattern`, `_term_regex`, `_tier`, `_TERM_START`, `term_in`, `first_term`, `_terms`, `FilterSpec.matches`, `judge_candidates`, `known_project_test`, `_GENERIC_NAME_TOKENS`, `_company_words`, `record_seen`, `rejudge`, `TOO_OLD`; `tracker/dedup.py` — `company_aliases`; `tracker/ingest/wiki.py` — `_keyword_pass`, `_substantive`; migration `0039_news_watch` (`seen_url`); `tracker/cli/sync.py` — `discover --rejudge` |
-| Archives every night | `tracker/ingest/discover.py` — `watch_newsrooms`, `NEWSROOM_SURGE`, `LATE_LISTING_DAYS`, `NEWSROOM_NEW`, `_month_from_path`, `_absolute`, `run(sitemaps=)`; `tracker/ingest/fetch.py` — `date_from_url`; `tracker/normalize.py` — `url_variants`; `tracker/cli/sync.py` — `discover --archives` |
+| Archives every night | `tracker/ingest/discover.py` — `watch_newsrooms`, `NEWSROOM_SURGE`, `LATE_LISTING_DAYS`, `NEWSROOM_NEW`, `_month_from_path`, `_absolute`, `run(sitemaps=)`, `RememberingFetcher`, `RecentWalkFetcher`, `walk_cache`, `WALK_FRESH`; `tracker/ingest/enrich.py` — `sweep_archives`; `tracker/ingest/fetch.py` — `date_from_url`; `tracker/normalize.py` — `url_variants`; `tracker/cli/sync.py` — `discover --archives` |
 | The news watch | `tracker/ingest/watch.py` — `run`, `due`, `cadence`, `EARLY`, `plan_queries`, `anchor`, `_company_term`, `_places`, `_names`, `_VAGUE`, `window_for`, `_screened`, `judge`, `CADENCE`, `NEXT_WORDS`, `BASELINE_PER_RUN`; the company watch — `run_companies`, `companies_due`, `company_query`, `judge_company`, `COMPANY_MIN_CAMPUSES`, `COMPANY_CADENCE`; migrations `0039_news_watch` (`news_watch`), `0040_company_watch`; `tracker/cli/sync.py` — `news`; `tracker/ingest/crawl.py` — `record_url` (a watch row's date gives way to the page's) |
 | A search the cap refused | `tracker/agent.py` — `SEARCH_REFUSED`, `_search_web`; `tracker/gapfill.py` — `fill` |
 | Searches counted and capped; the morning report | `tracker/ingest/search.py` — `SerperProvider._spend_one`, `_post`; `tracker/llm.py` — `record_search`; `tracker/spend.py` — `searches`, `SEARCH_MODEL`, `SEARCH_CNY`, `FETCH_CNY`, `report`, `summary`; `tracker/config.py` — `search_cap`; `tracker/ingest/desk.py` — `build`, `Desk.lines`, `FAILED`, `SET_ASIDE`, `serper_credit`; `tracker/cli/sync.py` — `news report`; `scripts/overnight.sh` — the news phase |
 | Closed feeds, and naming a challenge | `tracker/seed/feeds.toml` — `closed`; `tracker/ingest/discover.py` — `FeedSpec.closed`, `SitemapSpec.closed`, `_closed_reason`, `DiscoverReport.closed`, `_RawFetcher`, `CHALLENGE_NOTE`; `tracker/ingest/probe.py` — `configured_hosts` |
 | The weekly check of closed entries | `tracker/ingest/discover.py` — `probe_closed`, `record_probe`, `reopened_names`, `without_reopened`, `PROBE_EVERY`; migration `0034_feed_probe`; `tracker/cli/sync.py` — `discover --probe-closed` |
-| Asking robots.txt before every request | `tracker/robots.py` — `allowed`, `allowed_async`, `interpret`, `crawl_delay`; `tracker/ingest/fetch.py` — `permitted`, `refused`, `fetch_with_retry`, `should_escalate`, `fetch_all`; `tracker/ingest/discover.py` — `_RawFetcher`; `tracker/config.py` — `respect_robots` |
+| Asking robots.txt before every request | `tracker/robots.py` — `allowed`, `allowed_async`, `interpret`, `crawl_delay`; `tracker/ingest/fetch.py` — `permitted`, `refused`, `PlaywrightFetcher.permitted`, `fetch_with_retry`, `should_escalate`, `fetch_all`; `tracker/ingest/discover.py` — `_RawFetcher`; `tracker/config.py` — `respect_robots` |
 | Headlines-only feeds | `tracker/seed/feeds.toml` — `headlines_of`, `news_search`, `news_pages`; `tracker/ingest/search.py` — `SerperProvider.news`; `tracker/ingest/discover.py` — `news_headlines`, `search_news`, `_poll_news`, `_news_date`, `parse_headlines`, `follow_headlines`, `same_story`, `copies_headline`, `MAX_HEADLINE_LOOKUPS` |
+| A page no campus story can be in is set aside | `tracker/ingest/screen.py` — `not_news`, `file_kind`, `translation`, `site_kind`, `_NOT_NEWS_HOSTS`, `_QUOTE_PAGES`, `_LISTINGS`, `builder_aside`, `abroad`, `us_places`, `post_year`, `_CAMPUS_EVENT`, `off_topic`, `SET_ASIDE`, `summary`; `tracker/ingest/discover.py` — `set_aside_not_news`; `tracker/ingest/watch.py` — `_screened`, `judge`; `tracker/cli/ingest.py` — `crawl --from-queue`; `tracker/cli/sync.py` — `sync` (extract), `queue aside` |
 | A story's second copy is set aside | `tracker/ingest/discover.py` — `drop_same_story`, `SAME_STORY`, `SAME_STORY_WORDS`, `SAME_STORY_WORDS_ACROSS_SITES`, `_headline`, `_page_key`; `tracker/cli/ingest.py` — `crawl --from-queue`; `tracker/cli/sync.py` — `sync` (extract), `queue duplicates` |
 | Pages nothing can read leave the queue, or go last | `tracker/ingest/discover.py` — `closed_domains`, `unreadable_test`, `discard_unreadable`, `requeue_reopened`, `DISCARDED_UNREADABLE`, `readable_first`, `pending(unreadable=)`, `retryable(unreadable=)`; `tracker/ingest/crawl.py` — `stale_sources(unreadable=)`; `tracker/cli/sync.py` — `sync` (extract, retry fill, refresh); `tracker/cli/ingest.py` — `crawl --from-queue`; `tracker/ingest/enrich.py` — `run` |
 | What search looks for | `tracker/ingest/search.py` — `_PLACE_TEMPLATES`, `rank_places`, `plan_queries`, `PlannedQuery.label`, `templates`; `tracker/normalize.py` — `state_name` |
 | Judging a template | `tracker/funnel.py` — `feed_group`, `survey`, `verdicts`; `tracker/ingest/search.py` — `LabelStat` |
 | Queue ordering and counts | `tracker/ingest/discover.py` — `pending` (`known_first`, `new_first`; news first by `feed.REPORT_WINDOW_DAYS`, read in turn across sources by `in_turn` and `_source_of`, then the watch's finds in turn with builders' posts, a future date as none), `pending_split`, `pending_risk_count`, `failed`, `retryable`, `given_up`, `MAX_SAME_FAILURES`, `failure_summary` |
 | Prospect | `tracker/prospect.py`; `tracker/roster.py` — `hunt_order`, `measure` |
-| Extract and refresh | `tracker/ingest/crawl.py` — `run` (`origins=`), `stale_sources`, `unchanged_reads`, `record_url` (`origin=`), `_origin`, `failure_reason`, `MAX_REFRESH_BACKOFF` |
+| Extract and refresh | `tracker/ingest/crawl.py` — `run` (`origins=`), `stale_sources`, `unchanged_reads`, `record_url` (`origin=`), `_origin`, `failure_reason`, `MAX_REFRESH_BACKOFF`, `build_records(placeless=)`; `tracker/ingest/records.py` — `IngestReport.incomplete` |
 | The party gate | `tracker/ingest/crawl.py` — `_parties`, `_ROLE_MARKERS`, `_role_is_licensed` |
 | Identity arbiter | `tracker/upsert.py` — `upsert_record` (a route is remembered through `tracker/keys.py` — `remember`); `tracker/cli/ingest.py` — `_identity_arbiter`, `_report_arbiter`; `tracker/gatekeeper.py` — `same_site_arbiter`, `_warm_verdict`, `_cold_verdict`, `_rejection`, `_suspicion`, `_verdict_tools`, `RULES`, `MIN_CONFIDENCE`; `tracker/triage.py` — `CONTRADICTIONS`; `tracker/ingest/crawl.py` — `ExtractionContext` |
 | Enrich phase | `tracker/ingest/enrich.py` — `select_projects`, `run_many`; `tracker/cli/enrich.py` — `_gapfill_batch`; and [enrich](enrich.md) |

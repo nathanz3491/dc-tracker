@@ -20,9 +20,9 @@ import datetime as dt
 
 import pytest
 
-from tracker.ingest import discover
+from tracker.ingest import discover, screen
 from tracker.ingest.fetch import FetchResult
-from tracker.models import IngestUrl
+from tracker.models import IngestUrl, Project
 from tracker.vocab import PENDING_URL_STATUS
 
 NOW = dt.datetime(2026, 7, 25, 12, 0, 0)
@@ -333,3 +333,107 @@ def test_a_report_writes_nothing(session):
     _story(session, "https://two.test/a", title, minute=1)
     copies, _ = discover.drop_same_story(session, apply=False)
     assert len(copies) == 1 and copies[0][0].status == PENDING_URL_STATUS
+
+
+# --- pages no campus story can be in ---------------------------------------------------
+
+
+def _builder_config(tmp_path):
+    """A feeds.toml with one builder's own archive (`company` set)."""
+    path = tmp_path / "feeds.toml"
+    path.write_text(
+        """
+[[feed]]
+name = "wire"
+url = "https://x.test/rss"
+
+[filter]
+topic = ["data cent*"]
+signal = ["campus*"]
+
+[[sitemap]]
+name = "op-newsroom"
+url = "https://op.test/sitemap.xml"
+company = "Op"
+topic_implied = true
+""",
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_a_page_no_campus_story_can_be_in_is_set_aside_with_its_reason(session, tmp_path):
+    pdf = _queued(session, "https://county.test/findings-report.pdf", title="Findings report")
+    copy = _queued(session, "https://datacenters.google/intl/ja_ALL/locations/", title="locations")
+    quote = _queued(session, "https://finance.yahoo.com/quote/CIFR/", title="CIFR")
+    story = _queued(session, "https://news.test/campus-approved", title="County approves campus")
+
+    aside, back = discover.set_aside_not_news(session, path=_builder_config(tmp_path))
+
+    assert {row.id for row, _ in aside} == {pdf.id, copy.id, quote.id}
+    assert pdf.status == "skipped"
+    assert pdf.error == screen.SET_ASIDE + "a PDF, which the reader takes no text from"
+    assert story.status == PENDING_URL_STATUS and back == 0
+
+
+def test_a_builders_post_about_a_campus_abroad_is_set_aside_and_one_here_is_read(session, tmp_path):
+    session.add(
+        Project(
+            name="Op Kuna",
+            company="Op",
+            city="Kuna",
+            county="Ada County",
+            state="ID",
+            dedup_key="op|city:kuna|ID",
+        )
+    )
+    session.flush()
+    abroad = _queued(
+        session, "https://op.test/news/op-opens-third-data-center-in-frankfurt/", feed="op-newsroom"
+    )
+    here = _queued(session, "https://op.test/news/op-breaks-ground-in-kuna/", feed="op-newsroom")
+    # The same words from anything but a builder's own archive are left to the crawl.
+    wire = _queued(session, "https://news.test/op-frankfurt", title="Op opens in Frankfurt")
+
+    aside, _ = discover.set_aside_not_news(session, path=_builder_config(tmp_path))
+
+    assert [(row.id, why) for row, why in aside] == [(abroad.id, "about Frankfurt, outside the US")]
+    assert here.status == PENDING_URL_STATUS and wire.status == PENDING_URL_STATUS
+
+
+def test_a_page_set_aside_comes_back_when_no_rule_names_it_any_more(session, tmp_path):
+    """What makes a rule safe to narrow or drop: reading PDFs one day, say."""
+    row = _queued(session, "https://news.test/story", title="A campus story")
+    row.status, row.error = "skipped", screen.SET_ASIDE + "a rule since dropped"
+    copy = IngestUrl(
+        url="https://news.test/copy",
+        run_id="r",
+        status="skipped",
+        error=discover.SAME_STORY + "https://news.test/story",
+    )
+    session.add(copy)
+    session.flush()
+
+    aside, back = discover.set_aside_not_news(session, path=_builder_config(tmp_path))
+
+    assert back == 1 and aside == []
+    assert row.status == PENDING_URL_STATUS and row.error is None
+    assert copy.status == "skipped", "only what this step set aside is its to put back"
+
+
+def test_a_report_of_what_would_be_set_aside_writes_nothing(session, tmp_path):
+    pdf = _queued(session, "https://county.test/x.pdf")
+    aside, _ = discover.set_aside_not_news(session, apply=False, path=_builder_config(tmp_path))
+    assert [row.id for row, _ in aside] == [pdf.id]
+    assert pdf.status == PENDING_URL_STATUS and pdf.error is None
+
+
+def test_a_page_that_will_never_be_read_is_not_kept_as_a_storys_one_copy(session, tmp_path):
+    """Set aside first, then copies: queued first, the PDF would have been the copy
+    kept, and the readable page set aside behind it."""
+    title = "Developer files plans for a 300 MW data center campus in Ohio"
+    pdf = _story(session, "https://county.test/plans.pdf", title)
+    page = _story(session, "https://news.test/plans", title, minute=1)
+    discover.set_aside_not_news(session, path=_builder_config(tmp_path))
+    discover.drop_same_story(session)
+    assert pdf.status == "skipped" and page.status == PENDING_URL_STATUS

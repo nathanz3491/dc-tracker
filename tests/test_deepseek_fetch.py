@@ -91,10 +91,17 @@ def test_it_is_the_last_rung_and_can_be_switched_off():
     ), "no key, no rung"
 
 
-@pytest.mark.parametrize("status", [403, 429, 503])
+@pytest.mark.parametrize("status", [403, 503])
 def test_a_blocked_page_climbs_to_it(status):
     blocked = FetchResult("https://x.test/a", False, status=status, via="httpx")
     assert fetch.should_escalate(blocked) is True
+
+
+def test_a_rate_limited_page_does_not_climb_to_it():
+    """A 429 is the site asking for fewer requests; asking through DeepSeek is one
+    more request to it, from DeepSeek's servers, and billed if it answers."""
+    limited = FetchResult("https://x.test/a", False, status=429, via="httpx")
+    assert fetch.should_escalate(limited) is False
 
 
 def test_an_empty_balance_stands_the_rung_down_for_the_run(tmp_path):

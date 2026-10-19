@@ -637,6 +637,24 @@ def test_queue_drop_removes_a_candidate(initialized: Path):
     assert "queue is empty" in invoke(initialized, "queue").output
 
 
+def test_queue_aside_names_pages_no_campus_story_can_be_in_and_sets_them_aside(
+    initialized: Path,
+):
+    queue_one(initialized, url="https://county.test/findings-report.pdf")
+    queue_one(initialized, url="https://a.test/campus-approved/")
+    report = invoke(initialized, "queue", "aside")
+    assert report.exit_code == 0, report.output
+    assert "1 queued page(s) no campus story can be in" in " ".join(report.output.split())
+    assert "PDFs" in report.output and "findings-report.pdf" in report.output
+    assert "queue aside --drop" in report.output, "a report writes nothing and says how"
+
+    result = invoke(initialized, "queue", "aside", "--drop")
+    assert result.exit_code == 0, result.output
+    assert "set aside 1 page(s)" in result.output
+    listing = invoke(initialized, "queue").output
+    assert "campus-approved" in listing and "findings-report" not in listing
+
+
 @pytest.mark.parametrize(
     "extra",
     [

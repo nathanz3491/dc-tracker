@@ -1418,6 +1418,36 @@ def test_a_project_without_identity_is_dropped(prompt):
     )
 
 
+def test_a_project_dropped_for_its_identity_is_counted_in_the_run(session, prompt):
+    """Logged one by one and never counted: 73 on the night of 2026-10-19, most of
+    them campuses abroad, which the morning report could not show."""
+    from tracker.ingest.crawl import parse_json_object
+
+    payload = parse_json_object(canned("llm_response_microsoft_wi.json"))
+    payload["projects"].append(
+        {"name": "Odense data center", "company": "Microsoft", "city": "Odense", "evidence": []}
+    )
+    report = crawl.run(
+        session,
+        [URL],
+        fetcher=FakeFetcher({URL: fetched()}),
+        extractor=FakeLLM([json.dumps(payload)]),
+        run_id="placeless",
+    )
+    assert report.written == 1 and report.incomplete == 1
+    assert ("dropped: no company, state or place", 1) in report.as_rows()
+    quiet = crawl.run(
+        session,
+        [URL],
+        fetcher=FakeFetcher({URL: fetched()}),
+        extractor=FakeLLM([canned("llm_response_microsoft_wi.json")]),
+        run_id="placed",
+        force=True,
+    )
+    assert quiet.incomplete == 0
+    assert not any(label.startswith("dropped") for label, _ in quiet.as_rows())
+
+
 def test_too_many_projects_are_capped(prompt, caplog):
     payload = {
         "projects": [
@@ -2510,6 +2540,7 @@ def test_html_to_text_strips_markup_and_keeps_paragraphs():
         (FetchResult("u", True, markdown="x" * 50, via="httpx"), True),
         (FetchResult("u", True, markdown="x" * 5000, via="httpx"), False),
         (FetchResult("u", False, status=404, via="httpx"), False),
+        (FetchResult("u", False, status=429, via="httpx"), False),  # a rate limit
         (FetchResult("u", False, status=403, via="crawl4ai"), True),  # on to DeepSeek
         (FetchResult("u", False, status=403, via="deepseek-fetch"), False),
     ],
@@ -2697,6 +2728,21 @@ async def test_an_escalated_read_counts_the_requests_that_led_to_it():
     assert result.attempts == 2, "one refused request, one that worked"
 
 
+async def test_a_rate_limit_is_left_for_a_later_night_not_climbed_or_retried():
+    """The 429s on record came on a site's first request of the night, and of 116
+    pages the nightly log shows climbing on one, the ladder read one: each rung was
+    one more request to a site that asked for fewer. The page fails as a fetch error,
+    which the automatic retries take up on a later night."""
+    from tracker.ingest.fetch import fetch_all
+
+    limited = _Answers(FetchResult(URL, False, status=429, error="HTTP 429", fetched_at=NOW))
+    rung = _Answers(fetched())
+    (result,) = await fetch_all([URL], fetcher=limited, escalate=rung)
+    assert not result.ok and result.status == 429
+    assert limited.calls == 1 and rung.calls == 0
+    assert result.attempts == 1
+
+
 # --- how fetches share the concurrency --------------------------------------------
 #
 # In real queue order 115 of the first 200 URLs are one host. The global slot was
@@ -2857,6 +2903,46 @@ def test_the_article_fetcher_reports_an_unparseable_url_rather_than_raising():
     result = asyncio.run(HttpxFetcher(get_settings()).fetch("http://[::1/article"))
     assert not result.ok
     assert "invalid" in (result.error or "").lower()
+
+
+@pytest.mark.parametrize(
+    ("content_type", "body", "kind"),
+    [
+        ("application/pdf", b"%PDF-1.6\n%\xe2\xe3\xcf\xd3\n68 0 obj", "a PDF"),
+        ("application/octet-stream", b"%PDF-1.7\nstream", "a PDF"),
+        ("image/jpeg", b"\xff\xd8\xff\xe0", "a file (image/jpeg)"),
+    ],
+)
+def test_a_file_is_a_failed_fetch_and_never_text_for_the_model(content_type, body, kind):
+    """The plain client decoded a PDF's compressed streams as text: 107,617 characters
+    for one, which the prose check took for 51,678 of English. None of 384 PDFs read
+    since August produced a citation, and 352 were model calls on that."""
+    import asyncio
+
+    import httpx
+
+    from tracker.ingest.fetch import HttpxFetcher, fetch_with_retry
+
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url)
+        return httpx.Response(200, content=body, headers={"content-type": content_type})
+
+    fetcher = HttpxFetcher(get_settings(), transport=httpx.MockTransport(handler))
+    result = asyncio.run(fetch_with_retry(fetcher, "https://county.test/report"))
+    assert not result.ok and result.status == 200 and result.markdown == ""
+    assert result.error.startswith(f"{kind}, not a web page")
+    assert len(calls) == 1 and result.attempts == 1, "not retried"
+    assert should_escalate(result) is False, "and no rung is asked to read it either"
+
+
+def test_a_page_is_still_a_page():
+    from tracker.ingest.fetch import file_type
+
+    assert file_type("text/html; charset=utf-8", b"<!doctype") is None
+    assert file_type(None, b"<html>") is None
+    assert file_type("application/xhtml+xml", b"<?xml") is None
 
 
 async def test_a_fetcher_that_raises_costs_only_its_own_url():

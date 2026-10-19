@@ -297,9 +297,27 @@ def ingest_crawl(
         with session_scope(engine, commit=not dry_run) as session:
             requeued = disc.requeue_reopened(session, reopened)
             discarded = disc.discard_unreadable(session, unreadable)
+            # A page no campus story can be in -- a PDF, a translated copy, a quote
+            # page, a builder's post about Frankfurt -- is set aside first, so it is
+            # never kept as the one copy of a story below.
+            not_news, unset = disc.set_aside_not_news(session)
             # One copy of a story is read: the others are set aside before the limit
             # is cut, and put back if the copy kept cannot be read.
             copies, back = disc.drop_same_story(session, unreadable)
+        if not_news:
+            from tracker.ingest import screen
+
+            console.print(
+                f"[dim]{len(not_news)} queued page(s) {'would be' if dry_run else 'were'} "
+                "set aside before reading, as no campus story can be in them: "
+                f"{escape(screen.summary(reason for _, reason in not_news))} "
+                "(`tracker queue aside` lists them)[/dim]"
+            )
+        if unset:
+            console.print(
+                f"[dim]{unset} page(s) set aside earlier are back in the queue: no rule "
+                "names them any more[/dim]"
+            )
         if back:
             console.print(
                 f"[dim]{back} article(s) set aside as another copy are back in the queue: "

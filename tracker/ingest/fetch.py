@@ -50,10 +50,23 @@ log = logging.getLogger(__name__)
 #: consent wall rather than an article, and escalate to a real browser.
 MIN_USEFUL_CHARS = 400
 
-RETRYABLE_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504})
+RETRYABLE_STATUS = frozenset({408, 425, 500, 502, 503, 504})
 #: Statuses no amount of retrying will fix, but a browser sometimes will.
-BROWSER_WORTHY_STATUS = frozenset({403, 429, 503})
+BROWSER_WORTHY_STATUS = frozenset({403, 503})
 HARD_FAIL_STATUS = frozenset({401, 402, 404, 410, 451})
+
+#: "Too many requests": the site is limiting how often we ask, so the page is left
+#: for a later night -- `fetch_error`, which the automatic retries take up -- rather
+#: than asked again now or handed up the ladder. The 429s on record came on a site's
+#: first request of the night (Lee Enterprises' BLOX papers among them: madison.com,
+#: richmond.com, azdailysun.com, fredericknewspost.com), and climbing almost never
+#: got past one: of 116 pages the nightly log shows climbing on a 429, the
+#: browser-like client read one (tdtnews.com, 2026-10-08), and 261 pages in the queue
+#: ended on a 429 after every rung had been tried, while several of the same papers'
+#: pages read on a later night with the plain client. A browser is not a different
+#: answer to a rate limit, and each rung was one more request to a site that had
+#: asked for fewer.
+RATE_LIMITED_STATUS = frozenset({429})
 
 
 class MissingDependency(RuntimeError):
@@ -268,6 +281,46 @@ def published_date(html: str, url: str | None = None) -> datetime | None:
     return date_from_url(url) if url else None
 
 
+# --- A file is not a page ----------------------------------------------------------
+#
+# The plain clients decode whatever comes back as text. For a PDF that is the file's
+# compressed streams: 107,617 characters for one Nevada tax-abatement PDF, which the
+# prose check counted as 51,678 characters of English, so the crawl sent it to the
+# model. Of 384 PDFs read since August none produced a citation, and 352 were model
+# calls on that. A file is now a failed fetch that says what it was, before any text
+# is made of it, and no rung is asked to do better. The queue sets PDFs aside before
+# reading (`screen.file_kind`); this is for the ones that reach a fetch another way,
+# by a search result, a harvest or an address that does not end in ".pdf".
+
+#: Content types that are files, not pages.
+_FILE_TYPES: Final = re.compile(
+    r"^(?:application/(?:pdf|zip|x-zip|msword|vnd\.ms-|vnd\.openxmlformats|x-7z|x-rar|gzip)"
+    r"|image/|video/|audio/|font/)",
+    re.I,
+)
+
+
+def file_type(content_type: str | None, head: bytes) -> str | None:
+    """What a response is when it is a file rather than a page, or None. `head` is the
+    body's first bytes: a PDF is often served as `application/octet-stream`."""
+    kind = (content_type or "").split(";", 1)[0].strip().lower()
+    if head.startswith(b"%PDF-") or kind == "application/pdf":
+        return "a PDF"
+    return f"a file ({kind})" if _FILE_TYPES.match(kind) else None
+
+
+def _a_file(url: str, status: int, kind: str, via: str) -> FetchResult:
+    """The result for a file: a failure, and not one a stronger client could improve."""
+    return FetchResult(
+        url,
+        False,
+        status=status,
+        error=f"{kind}, not a web page: no text is taken from one",
+        fetched_at=utcnow(),
+        via=via,
+    )
+
+
 # --- HTML -> text -----------------------------------------------------------
 
 _DROP_TAGS = re.compile(
@@ -436,6 +489,9 @@ class HttpxFetcher:
                 fetched_at=utcnow(),
                 via="httpx",
             )
+        kind = file_type(response.headers.get("content-type"), response.content[:8])
+        if kind:
+            return _a_file(url, response.status_code, kind, "httpx")
 
         # The date is read from the raw HTML, before `html_to_text` discards it.
         published = published_date(response.text, url)
@@ -577,6 +633,13 @@ class CurlCffiFetcher:
                 fetched_at=utcnow(),
                 via=self.VIA,
             )
+
+        body = getattr(response, "content", b"")
+        kind = file_type(
+            response.headers.get("content-type"), body[:8] if isinstance(body, bytes) else b""
+        )
+        if kind:
+            return _a_file(url, status, kind, self.VIA)
 
         # Decode once: `_decode` is not free, and reading the date from a
         # differently-decoded copy could disagree with the text the gate checks.
@@ -778,13 +841,21 @@ class PlaywrightFetcher:
     nothing patches away the signs of automation. A site that refuses a browser it
     can see is a crawler has made a decision, and this does not argue with it.
 
-    **It asks `robots.txt` first.** The line this project draws — rendering a page
-    a site permits but an over-broad firewall refuses is fine, getting past a site
-    that refuses crawlers is not (`docs/ingesting.md`, the DataCenterDynamics
-    section) — is written down in `robots.txt`, so the browser opens a page only
-    if that file permits this crawler to. A `robots.txt` that cannot be read counts
-    as not permitting it: a site whose firewall refuses even that file is the case
-    the line is about, and guessing "allowed" would cross it by default.
+    **It asks `robots.txt` first, and gets the answer every other rung gets.** The
+    line this project draws — rendering a page a site permits but an over-broad
+    firewall refuses is fine, getting past a site that refuses crawlers is not
+    (`docs/ingesting.md`, the DataCenterDynamics section) — is written down in
+    `robots.txt`, so the browser opens a page only if that file permits this
+    crawler to. Since 2026-10-20 the file is read once per site per run, for every
+    rung, by `tracker.robots` and the RFC 9309 rules the crawler's public page
+    states: a 4xx is no file and nothing disallowed, a 5xx, a 429 or no answer is
+    "cannot say" and nothing is fetched for half an hour. The browser used to read
+    the file again on its own and count any answer but a 200 as a refusal, so the
+    same page was refused to our own named browser and then sent to DeepSeek's fetch,
+    which asks the shared rules. On 2026-10-19 that stricter reading refused pages on
+    58 sites whose `robots.txt` answered 403 or 429, and each refusal was retried
+    after a backoff as though it were a network failure. A refusal is now tagged
+    `via = "robots"` (`refused`), which is never retried and never escalated.
 
     Each article gets a fresh browser context, so no cookie or storage carries from
     one publisher's page to the next; images, media and fonts are not downloaded,
@@ -801,9 +872,6 @@ class PlaywrightFetcher:
         self.settings = settings or get_settings()
         self._playwright = None
         self._browser = None
-        self._robots: dict[str, object | None] = {}
-        self._robots_lock: asyncio.Lock | None = None
-        self._robots_loop: asyncio.AbstractEventLoop | None = None
 
     @staticmethod
     def available() -> bool:
@@ -857,14 +925,7 @@ class PlaywrightFetcher:
         if self._browser is None:
             raise RuntimeError("PlaywrightFetcher must be used as an async context manager")
         if not await self.permitted(url):
-            return FetchResult(
-                url,
-                False,
-                error="robots.txt does not permit this crawler, or could not be read; "
-                "the browser was not used",
-                fetched_at=utcnow(),
-                via=self.VIA,
-            )
+            return refused(url)
 
         context = await self._browser.new_context(
             user_agent=self.settings.user_agent_for(url), locale="en-US"
@@ -921,48 +982,10 @@ class PlaywrightFetcher:
         )
 
     async def permitted(self, url: str) -> bool:
-        """Whether `robots.txt` lets this crawler read `url`. Read once per origin."""
-        parts = urlsplit(url)
-        origin = f"{parts.scheme}://{parts.netloc}"
-        # One lock per event loop, not per instance. `enrich` builds the ladder
-        # once and runs every row's crawl in its own `asyncio.run`, and a lock
-        # belongs to the first loop that waits on it: the next row's concurrent
-        # pages failed with "bound to a different event loop", unread.
-        loop = asyncio.get_running_loop()
-        if self._robots_loop is not loop or self._robots_lock is None:
-            self._robots_lock = asyncio.Lock()
-            self._robots_loop = loop
-        async with self._robots_lock:
-            if origin not in self._robots:
-                self._robots[origin] = await self._read_robots(origin)
-        parser = self._robots[origin]
-        if parser is None:
-            return False
-        return bool(parser.can_fetch(self.settings.user_agent_for(url), url))
-
-    async def _read_robots(self, origin: str):
-        """A parser for `origin/robots.txt`, or None if it could not be read.
-
-        A 404 or 410 means there is no file and so no restriction, which is how
-        the convention reads it. Anything else that is not a 200 — a 403, a 429,
-        a timeout — is an answer this cannot read, and the caller treats it as a
-        refusal. Fetched through the same browser-fingerprint client as the rung
-        below, so a TLS-fingerprinting firewall does not hide a permissive file.
-        """
-        from urllib.robotparser import RobotFileParser
-
-        status, body = await _get_text(f"{origin}/robots.txt", self.settings)
-        parser = RobotFileParser()
-        if status in (404, 410):
-            parser.parse([])
-            return parser
-        if status != 200:
-            log.info(
-                "robots.txt at %s answered %s; not opening its pages in a browser", origin, status
-            )
-            return None
-        parser.parse(body.splitlines())
-        return parser
+        """Whether `robots.txt` lets this crawler read `url`: the run's one reading of
+        the site's file (`tracker.robots`), read here only if no rung has asked yet,
+        through the browser-fingerprint client the rung below uses."""
+        return await permitted(url, self.settings, lambda u: _get_text(u, self.settings))
 
 
 async def _get_text(url: str, settings: Settings) -> tuple[int | None, str]:
@@ -1062,6 +1085,8 @@ async def fetch_with_retry(
             return FetchResult(**{**last.__dict__, "attempts": made})
         if last.status in HARD_FAIL_STATUS or last.status in BROWSER_WORTHY_STATUS:
             break  # retrying the same tool will not help; escalate instead
+        if last.status in RATE_LIMITED_STATUS:
+            break  # the site asked for fewer requests: a later night, not a backoff
         if last.status is not None and last.status not in RETRYABLE_STATUS:
             break
         if attempt < attempts:
@@ -1215,6 +1240,8 @@ def should_escalate(result: FetchResult) -> bool:
         return False  # the top rung; nothing left to escalate to
     if result.via == robots.VIA:
         return False  # the site said no; a stronger client is not a different answer
+    if result.status in RATE_LIMITED_STATUS:
+        return False  # nor to "too many requests"; see RATE_LIMITED_STATUS
     if result.status in BROWSER_WORTHY_STATUS:
         return True
     return result.ok and result.looks_thin
@@ -1414,6 +1441,7 @@ __all__ = [
     "BROWSER_WORTHY_STATUS",
     "HARD_FAIL_STATUS",
     "MIN_USEFUL_CHARS",
+    "RATE_LIMITED_STATUS",
     "RETRYABLE_STATUS",
     "Crawl4AIFetcher",
     "CurlCffiFetcher",

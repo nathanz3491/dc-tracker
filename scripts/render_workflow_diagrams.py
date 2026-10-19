@@ -349,7 +349,7 @@ def enrich() -> Canvas:
     for title, subs, role in [
         ("2 · queue", ["candidates already naming this row"], "teal"),
         ("3 · retry", ["its URLs that failed to fetch"], "teal"),
-        ("4 · archive", ["sitemap sweep, filtered to this row", "round 1 · key-free · swept once a batch"], "cool"),
+        ("4 · archive", ["sitemap sweep, filtered to this row", "round 1 · reads discovery's walk that night"], "cool"),
         ("5 · search", ["queries built from this row's own gaps", "needs a key · at most twelve"], "orange"),
         ("6 · refresh", ["its own citations, re-read", "round 1 only"], "cool"),
     ]:
@@ -521,7 +521,7 @@ def sync() -> Canvas:
 
     queue = c.box(
         280, 500, 190, 338, "The queue",
-        ["ingest_url rows,", "status = discovered", "", "sync: tracked rows first,", "  obstacles first; prospect", "  finds jump it", "", "the nightly loop:", "· the feeds' recent news", "· the watch's finds in turn", "  with builders' posts", "· then unheard-of campuses", "· a story's second copy and", "  an unreadable page are", "  set aside, not read"],
+        ["ingest_url rows,", "status = discovered", "", "sync: tracked rows first,", "  obstacles first; prospect", "  finds jump it", "", "the nightly loop:", "· the feeds' recent news", "· the watch's finds in turn", "  with builders' posts", "· then unheard-of campuses", "", "set aside, not read: a PDF,", "a quote page, a post abroad,", "an unreadable page, and a", "story's second copy"],
         role="panel",
     )
     for b in (feeds, watch, search, roster, archives):

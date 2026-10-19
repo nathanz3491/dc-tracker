@@ -59,17 +59,21 @@ night, mostly between 18:00 and 08:00 China Standard Time (UTC+8).
   reader view and a company's site icon. A `User-agent: dc-tracker` group applies
   to it, and so does `User-agent: *`. The file is read the way RFC 9309 says. A
   4xx means there is no file, so nothing is disallowed. A 5xx or no answer means
-  the site cannot say, so nothing is fetched for half an hour, then it asks again.
-  A file that was read is kept for a day.
+  the site cannot say, so nothing is fetched for half an hour, then it asks again;
+  a 429 is read the same way, as the site asking for fewer requests. A file that
+  was read is kept for a day, and one reading serves every client below,
+  the headless browser included.
 - **`Crawl-delay` is honoured**, up to 60 seconds between two requests to the same
   site. A longer delay is treated as 60, and on the few pages a night it reads from
   any one site that is the same thing.
 - **One request at a time per site**, at least one second apart (or the site's
   `Crawl-delay`), and no more than four in flight across all sites. Requests time
   out after 30 seconds.
-- **Retries** happen only on transient errors (408, 425, 429, 5xx), at most three
+- **Retries** happen only on transient errors (408, 425, 5xx), at most three
   attempts with exponential backoff. It never retries 401, 402, 404, 410 or 451.
-- **On a 403, 429 or 503**, it may try the same page once more with a client
+- **On a 429 it stops.** The page is left for another night: it is not asked for
+  again that night, by this client or any other below.
+- **On a 403 or 503**, it may try the same page once more with a client
   that presents a browser's TLS handshake. It still sends the User-Agent above.
   If a headless browser is enabled, that is tried next. Neither is tried for a
   page `robots.txt` disallows.

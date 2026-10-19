@@ -742,6 +742,84 @@ async def walk_sitemap(spec: SitemapSpec, fetcher: Fetcher) -> tuple[list[Candid
     return entries, problems
 
 
+# --- One walk a night --------------------------------------------------------------
+#
+# `tracker discover` walks every archive at the start of the night (18:05 on
+# 2026-10-19), and enrich's archive harvest walked every one of them again an hour
+# later (19:14: 28 archives, 101 requests -- 69 sitemaps, Utility Dive's 26 monthly
+# files among them, and 32 robots.txt files -- for the bytes discovery had fetched).
+# So discovery keeps each sitemap it fetched, and a later walk within
+# :data:`WALK_FRESH` reads that copy instead of asking the site again.
+
+#: How long a sitemap discovery fetched is read from its copy rather than fetched
+#: again. Twelve hours: the nightly loop starts at 18:01 with discovery and stops
+#: within ten hours (`scripts/overnight.sh`, `HOURS`), so every walk in the night
+#: after discovery's is inside it, while enrich run by hand the next working day, 14
+#: hours or more after the loop began, walks the archives itself as it always did.
+#: Nothing is lost in between: a post an archive adds after discovery's walk is queued
+#: by the next night's, and enrich's queue harvester reads it from there.
+WALK_FRESH: Final = dt.timedelta(hours=12)
+
+
+def walk_cache() -> Path:
+    """Where discovery keeps the sitemaps it walked: the `sitemaps` cache."""
+    from tracker.config import cache_dir
+
+    return cache_dir("sitemaps")
+
+
+class RememberingFetcher:
+    """Fetches as `fetcher` does, and keeps each sitemap that answered in `root`, for
+    a later walk the same night (:class:`RecentWalkFetcher`). Discovery's walk."""
+
+    def __init__(self, fetcher: Fetcher, root: Path) -> None:
+        self._fetcher = fetcher
+        self._root = root
+
+    async def fetch(self, url: str) -> FetchResult:
+        result = await self._fetcher.fetch(url)
+        if result.ok and result.markdown:
+            self._root.mkdir(parents=True, exist_ok=True)
+            cache_path(url, self._root).write_text(result.markdown, encoding="utf-8")
+        return result
+
+
+class RecentWalkFetcher:
+    """A later walk: a sitemap discovery fetched within `fresh` is read from its copy;
+    anything else -- older, failed that night, or never walked -- is fetched by
+    `fetcher` as before. Counts both, for the run's report."""
+
+    VIA = "walked"
+
+    def __init__(self, fetcher: Fetcher, root: Path, *, fresh: dt.timedelta = WALK_FRESH) -> None:
+        self._fetcher = fetcher
+        self._root = root
+        self._fresh = fresh
+        self.read: int = 0
+        self.fetched: int = 0
+
+    async def fetch(self, url: str) -> FetchResult:
+        import time
+
+        path = cache_path(url, self._root)
+        try:
+            walked = path.stat().st_mtime
+        except OSError:
+            walked = None
+        if walked is not None and time.time() - walked <= self._fresh.total_seconds():
+            self.read += 1
+            return FetchResult(
+                url,
+                True,
+                markdown=path.read_text(encoding="utf-8"),
+                status=200,
+                fetched_at=dt.datetime.fromtimestamp(walked, dt.UTC).replace(tzinfo=None),
+                via=self.VIA,
+            )
+        self.fetched += 1
+        return await self._fetcher.fetch(url)
+
+
 async def crawl_sitemap(
     spec: SitemapSpec, fetcher: Fetcher, filter_spec: FilterSpec
 ) -> tuple[list[Candidate], list[str]]:
@@ -1781,6 +1859,85 @@ def drop_same_story(
             row.error = f"{SAME_STORY}{kept}"[:1000]
             row.last_tried_at = utcnow()
     return dropped, restored
+
+
+# --- What cannot be news of a US campus --------------------------------------------
+#
+# A PDF, a translated copy, a stock-quote page, a job posting, a builder's post about
+# Frankfurt: the address or the headline already says no campus row can come of it.
+# `screen` names the kinds and says why each rule is no wider than it is.
+
+
+def set_aside_not_news(
+    session: Session, *, apply: bool = True, path: Path | None = None
+) -> tuple[list[tuple[IngestUrl, str]], int]:
+    """Set aside every queued page that cannot be news of a US campus. Returns
+    ([(the page set aside, why)], how many set aside on an earlier run were put back).
+
+    Every queued page is asked :func:`screen.not_news` (its address); a page a
+    builder's own archive queued (a [[sitemap]] with `company`) is also asked
+    :func:`screen.builder_aside`, which needs the campuses held, to tell a post about
+    a campus abroad, or an old post naming nothing, from one about a campus here.
+
+    A page set aside is `skipped` with :data:`screen.SET_ASIDE` and the reason, not
+    deleted, and **every one is asked again on each run**: a page no rule names any
+    more goes back in the queue. That is what makes a rule safe to narrow or drop --
+    reading PDFs, say -- and what returns a builder's post the night a campus it names
+    becomes one the database holds.
+
+    Runs before :func:`drop_same_story`, so a page that will never be read is not kept
+    as the one copy of a story whose other copies are then set aside. `apply=False`
+    reports without writing, for `tracker queue aside`.
+    """
+    from tracker.ingest import screen
+    from tracker.models import Project
+
+    try:
+        builders = {s.name for s in load_sitemaps(path) if s.company}
+        implied = newsroom_companies(path)
+    except (DiscoverError, tomllib.TOMLDecodeError):
+        builders, implied = set(), {}
+    identities = project_identities(session) if builders else []
+    places = screen.us_places(
+        place for row in session.execute(select(Project.city, Project.county)) for place in row
+    )
+
+    def held(url: str, title: str | None) -> bool:
+        return matches_known_project(url, title, identities, implied_companies=implied) is not None
+
+    def why(row: IngestUrl) -> str | None:
+        reason = screen.not_news(row.url)
+        if reason is None and row.feed in builders:
+            reason = screen.builder_aside(
+                row.url, row.title, row.published_at, places=places, held=held
+            )
+        return reason
+
+    restored = 0
+    for row in session.scalars(
+        select(IngestUrl).where(
+            IngestUrl.status == "skipped", IngestUrl.error.like(f"{screen.SET_ASIDE}%")
+        )
+    ):
+        reason = why(row)
+        if reason is None:
+            restored += 1
+            if apply:
+                row.status, row.error = PENDING_URL_STATUS, None
+        elif apply and row.error != f"{screen.SET_ASIDE}{reason}"[:1000]:
+            row.error = f"{screen.SET_ASIDE}{reason}"[:1000]
+
+    aside: list[tuple[IngestUrl, str]] = []
+    for row in session.scalars(select(IngestUrl).where(IngestUrl.status == PENDING_URL_STATUS)):
+        reason = why(row)
+        if reason is None:
+            continue
+        aside.append((row, reason))
+        if apply:
+            row.status = "skipped"
+            row.error = f"{screen.SET_ASIDE}{reason}"[:1000]
+            row.last_tried_at = utcnow()
+    return aside, restored
 
 
 def requeue_reopened(session: Session, reopened: frozenset[str], path: Path | None = None) -> int:
@@ -2942,8 +3099,13 @@ def run(
 
     if sitemaps:
         specs = without_reopened(load_sitemaps(feeds_path), reopened)
+        walker: Fetcher = fetcher or _RawFetcher(settings)
+        if not dry_run:
+            # Kept for the night's later walks (enrich's archive harvest), which read
+            # this copy rather than walk every archive again; see `WALK_FRESH`.
+            walker = RememberingFetcher(walker, walk_cache())
         new_posts, walked = watch_newsrooms(
-            session, specs, fetcher or _RawFetcher(settings), spec, report=report, known=known
+            session, specs, walker, spec, report=report, known=known
         )
         all_kept.extend(new_posts)
         seen_rows.extend(walked)
@@ -3134,6 +3296,7 @@ __all__ = [
     "SAME_STORY_WORDS_ACROSS_SITES",
     "TOO_OLD",
     "UNEXPLAINED_CLOSURE",
+    "WALK_FRESH",
     "Candidate",
     "DiscoverError",
     "DiscoverReport",
@@ -3142,6 +3305,8 @@ __all__ = [
     "ProbeResult",
     "ProjectIdentity",
     "PruneCandidate",
+    "RecentWalkFetcher",
+    "RememberingFetcher",
     "SitemapSpec",
     "UrlVerdict",
     "classify_status",
@@ -3182,10 +3347,12 @@ __all__ = [
     "run",
     "same_story",
     "select_candidates",
+    "set_aside_not_news",
     "sweep_sitemaps",
     "term_in",
     "unreadable_test",
     "verify_urls",
+    "walk_cache",
     "watch_newsrooms",
     "without_reopened",
 ]

@@ -501,7 +501,10 @@ extra used only for fetching**, and `httpx` is the default:
   Chromium is real cost for no benefit on those.
 
 It stays for the case where it earns its weight: `should_escalate()` sends a
-403/429/503, or an ok-but-suspiciously-thin body, to a real browser.
+403/503, or an ok-but-suspiciously-thin body, to a real browser. Not a 429 since
+2026-10-20: a rate limit is not a different answer for a different client, and of
+116 pages the nightly log shows climbing on one, the ladder read one
+(`fetch.RATE_LIMITED_STATUS`).
 
 **The browser rung is now plain Playwright, and Crawl4AI only a fallback.** Crawl4AI
 0.9 installs Patchright — a Playwright fork built to hide that a browser is

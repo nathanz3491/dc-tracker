@@ -808,3 +808,52 @@ def test_a_companys_other_name_is_not_a_campus_name(session):
     assert discover.matches_known_project(local, "", identities, implied_companies=implied) == (
         prineville.id
     )
+
+
+# --- what the watch never queues -----------------------------------------------------------
+
+
+def test_the_watch_never_queues_a_page_no_campus_story_can_be_in(session):
+    """By 2026-10-19 the watch had queued 125 of these; of the 42 tried, one produced
+    a citation."""
+    _campus(session, 30)
+    provider = FakeNews(
+        news=[
+            _hit("https://stocktwits.com/news-articles/meta-kuna", "Meta Kuna data center online"),
+            _hit("https://county.test/kuna-data-center-findings.pdf", "Kuna data center plans"),
+            _hit("https://jobs.example.test/kuna-data-center-technician", "Kuna data center jobs"),
+            _hit("https://www.datacenters.com/meta-kuna", "Meta Kuna data center campus"),
+            _hit("https://news.test/kuna-online", "Meta's Kuna data center is now online"),
+        ]
+    )
+    watch.run(session, provider=provider, now=NOW, feeds_path=_feeds(session))
+    assert set(session.scalars(select(IngestUrl.url))) == {"https://news.test/kuna-online"}
+
+
+def test_a_campus_towns_football_recap_is_not_news_of_the_campus(session):
+    """The New Albany Co.'s corridor is named for its town, and so is the school team."""
+    _campus(
+        session,
+        31,
+        name="North Beech Corridor",
+        company="New Albany Co.",
+        city="New Albany",
+        county="Licking County",
+        state="OH",
+    )
+    provider = FakeNews(
+        news=[
+            _hit(
+                "https://sports.test/recap",
+                "Football Recap: New Albany Extends Home Winning Streak",
+                "New Albany Co. stadium night",
+            ),
+            _hit(
+                "https://news.test/beech",
+                "New Albany Co. buys more land near North Beech",
+                "the data center corridor keeps growing",
+            ),
+        ]
+    )
+    watch.run(session, provider=provider, now=NOW, feeds_path=_feeds(session))
+    assert set(session.scalars(select(IngestUrl.url))) == {"https://news.test/beech"}

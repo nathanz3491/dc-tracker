@@ -29,7 +29,7 @@ from tracker.ingest.discover import (
     queue_candidates,
     select_candidates,
 )
-from tracker.ingest.fetch import FetchResult
+from tracker.ingest.fetch import FetchResult, cache_path
 from tracker.models import IngestUrl, utcnow
 from tracker.vocab import PENDING_URL_STATUS
 
@@ -2042,3 +2042,90 @@ def test_the_shipped_bank_judges_each_measured_case_as_measured(spec, case):
     """A change to `[filter]` that flips one of these is a decision, not an accident."""
     keep, reason = spec.matches(case["text"], topic_implied=case["implied"])
     assert keep is case["keep"], f"{reason} ({case['source']})"
+
+
+# --- one walk a night ----------------------------------------------------------------
+
+_OP_SITEMAP = "https://op.test/sitemap.xml"
+_OP_URLSET = (
+    '<?xml version="1.0" encoding="UTF-8"?>'
+    '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+    "<url><loc>https://op.test/news/op-breaks-ground-on-new-data-center-campus/</loc></url>"
+    "</urlset>"
+)
+
+
+def _walk_config(tmp_path: Path) -> Path:
+    config = tmp_path / "feeds.toml"
+    config.write_text(
+        '[[feed]]\nname = "f"\nurl = "https://f.test/rss"\n\n'
+        '[filter]\ntopic = ["data cent*"]\nsignal = ["campus*"]\n\n'
+        f'[[sitemap]]\nname = "op"\nurl = "{_OP_SITEMAP}"\ncompany = "Op"\n'
+        "topic_implied = true\n",
+        encoding="utf-8",
+    )
+    return config
+
+
+def test_discoverys_walk_is_kept_and_a_later_walk_that_night_reads_it(session, tmp_path):
+    """On 2026-10-19 enrich walked all 28 archives an hour after discovery had: 101
+    requests for the bytes discovery had just fetched."""
+    import asyncio
+
+    fetcher = FakeFeedFetcher({_OP_SITEMAP: _OP_URLSET})
+    discover.run(
+        session, feeds_path=_walk_config(tmp_path), fetcher=fetcher, probe=False, since_days=None
+    )
+    assert _OP_SITEMAP in fetcher.calls
+
+    later = FakeFeedFetcher({})
+    walker = discover.RecentWalkFetcher(later, discover.walk_cache())
+    result = asyncio.run(walker.fetch(_OP_SITEMAP))
+    assert result.ok and "new-data-center-campus" in result.markdown
+    assert later.calls == [] and (walker.read, walker.fetched) == (1, 0)
+    assert result.via == discover.RecentWalkFetcher.VIA
+
+
+def test_a_dry_run_keeps_no_walk(session, tmp_path):
+    fetcher = FakeFeedFetcher({_OP_SITEMAP: _OP_URLSET})
+    discover.run(
+        session,
+        feeds_path=_walk_config(tmp_path),
+        fetcher=fetcher,
+        probe=False,
+        since_days=None,
+        dry_run=True,
+    )
+    assert not cache_path(_OP_SITEMAP, discover.walk_cache()).exists()
+
+
+def test_a_walk_older_than_the_night_is_walked_again(tmp_path):
+    """Enrich run by hand the next working day walks the archives itself."""
+    import asyncio
+    import os
+    import time
+
+    root = tmp_path / "walks"
+    asyncio.run(
+        discover.RememberingFetcher(FakeFeedFetcher({_OP_SITEMAP: _OP_URLSET}), root).fetch(
+            _OP_SITEMAP
+        )
+    )
+    old = time.time() - discover.WALK_FRESH.total_seconds() - 60
+    os.utime(cache_path(_OP_SITEMAP, root), (old, old))
+
+    fetcher = FakeFeedFetcher({_OP_SITEMAP: _OP_URLSET})
+    walker = discover.RecentWalkFetcher(fetcher, root)
+    assert asyncio.run(walker.fetch(_OP_SITEMAP)).ok
+    assert fetcher.calls == [_OP_SITEMAP] and (walker.read, walker.fetched) == (0, 1)
+    never = discover.RecentWalkFetcher(FakeFeedFetcher({}), root)
+    assert not asyncio.run(never.fetch("https://other.test/sitemap.xml")).ok
+    assert never.fetched == 1, "a sitemap discovery did not walk is fetched as before"
+
+
+def test_a_failed_fetch_is_not_kept_as_a_walk(tmp_path):
+    import asyncio
+
+    root = tmp_path / "walks"
+    asyncio.run(discover.RememberingFetcher(FakeFeedFetcher({}), root).fetch(_OP_SITEMAP))
+    assert not cache_path(_OP_SITEMAP, root).exists()

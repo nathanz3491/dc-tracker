@@ -3,8 +3,11 @@
 Only the headless-browser rung used to ask. The plain clients, which make almost
 every request, relied on the hand-kept list of sites in `seed/feeds.toml`, and the
 crawler's public page (`docs/crawler.md`) had to say so. Now every fetcher asks
-here first: the article clients, the feed and sitemap client, the console's reader
-view and the company-logo fetch. The browser rung keeps its own stricter reading.
+here first: the article clients, the feed and sitemap client, the browser, the
+console's reader view and the company-logo fetch. **One reading per site serves
+every rung.** The browser kept a stricter reading of its own until 2026-10-20 and
+refused pages whose file answered 403, which every other rung, DeepSeek's fetch
+included, reads as no file; it now asks here like the rest.
 
 **How an answer is read follows RFC 9309**, which is how the major crawlers read it:
 
@@ -14,9 +17,12 @@ view and the company-logo fetch. The browser rung keeps its own stricter reading
 - **4xx** — there is no usable file, so nothing is disallowed. A 403 here is a
   firewall answering, not a policy written for crawlers; the page request that
   follows meets the same firewall and fails on its own terms.
-- **5xx, a timeout, or no answer** — the site cannot say, so everything is
+- **429, 5xx, a timeout, or no answer** — the site cannot say, so everything is
   disallowed until it can. Remembered for `UNREACHABLE_TTL_S`, so one bad minute
-  does not close a site for a day.
+  does not close a site for a day. A 429 is a 4xx and RFC 9309 would read it as no
+  file; it is read the way Google's crawler reads it instead, as the site asking for
+  fewer requests: reading its pages the next moment is the one thing it asked us
+  not to do.
 
 A file that was read is kept for `TTL_S`, per origin and per process, so a night
 asks each site once rather than once per page. `Crawl-delay` is honoured too, up to
@@ -59,8 +65,8 @@ VIA: Final[str] = "robots"
 #: a source, an unanswered request is a reason to wait a night. One wording for both
 #: nearly closed OpenAI's feed on 2026-10-18 over a timeout; its file allows all.
 UNREACHABLE: Final[str] = (
-    "robots.txt could not be read (no answer, a timeout or a server error), so the "
-    f"site is left alone for {UNREACHABLE_TTL_S / 60:.0f} minutes"
+    "robots.txt could not be read (no answer, a timeout, a server error or a 429), so "
+    f"the site is left alone for {UNREACHABLE_TTL_S / 60:.0f} minutes"
 )
 
 #: `(status, body)` for one GET; status None when nothing answered.
@@ -95,7 +101,7 @@ def interpret(status: int | None, body: str) -> _Rules:
         parser = RobotFileParser()
         parser.parse(body.splitlines())
         return _Rules(parser, now + TTL_S)
-    if status is not None and 400 <= status < 500:
+    if status is not None and 400 <= status < 500 and status != 429:
         parser = RobotFileParser()
         parser.parse([])
         return _Rules(parser, now + TTL_S)

@@ -389,24 +389,38 @@ class ArchiveSweep:
     candidates: list = dc_field(default_factory=list)
     problems: list[str] = dc_field(default_factory=list)
     skipped: str | None = None
+    #: Sitemaps read from discovery's walk earlier the same night, and fetched.
+    from_walk: int = 0
+    fetched: int = 0
 
     @property
     def note(self) -> str:
         note = f"{len(self.candidates)} archived URL(s) swept"
+        if self.from_walk:
+            note += f"; {self.from_walk} sitemap(s) read from tonight's discovery walk"
         if self.problems:
             note += f"; {len(self.problems)} sitemap problem(s)"
         return note
 
 
 def sweep_archives(settings: Settings, fetcher: Fetcher | None = None) -> ArchiveSweep:
-    """Walk every configured sitemap once."""
+    """Walk every configured sitemap once.
+
+    **Not again when discovery just did.** A sitemap `tracker discover` fetched within
+    `discover.WALK_FRESH` (twelve hours) is read from the copy it kept: on 2026-10-19
+    the nightly loop's enrich walked all 28 archives an hour after discovery had, 101
+    requests (69 sitemaps, 32 robots.txt files) for the same bytes. Run by hand in the
+    daytime, with no walk that recent, it fetches every one as it always did.
+    """
     import asyncio
 
     from tracker.ingest.discover import (
+        RecentWalkFetcher,
         _RawFetcher,
         load_config,
         load_sitemaps,
         sweep_sitemaps,
+        walk_cache,
     )
 
     specs = load_sitemaps()
@@ -414,10 +428,11 @@ def sweep_archives(settings: Settings, fetcher: Fetcher | None = None) -> Archiv
         return ArchiveSweep(skipped="no [[sitemap]] entries configured")
 
     _, spec = load_config()
-    candidates, problems = asyncio.run(
-        sweep_sitemaps(specs, fetcher or _RawFetcher(settings), spec)
+    walker = RecentWalkFetcher(fetcher or _RawFetcher(settings), walk_cache())
+    candidates, problems = asyncio.run(sweep_sitemaps(specs, walker, spec))
+    return ArchiveSweep(
+        candidates=candidates, problems=problems, from_walk=walker.read, fetched=walker.fetched
     )
-    return ArchiveSweep(candidates=candidates, problems=problems)
 
 
 def harvest_archive(

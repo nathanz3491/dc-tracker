@@ -142,7 +142,10 @@ datacenterknowledge            34    23    16    70%     11     34
 ```
 
 Per feed it becomes actionable. `applied-digital-newsroom` is 17 calls and 17
-misses — the site-wide banner card that `MIN_PROSE_CHARS` was measured against.
+misses — the site-wide banner card that `MIN_PROSE_CHARS` was measured against. (It
+was replaced on 2026-10-20 by the company's investor-relations press-release feed,
+`applied-digital-ir`: its news pages are cards linking to other outlets' articles,
+and 52 reads of them produced nothing. `tracker/seed/feeds.toml` says why.)
 A `topic_implied` newsroom that covers a wider beat than the flag assumes shows up
 as a column of `none`.
 
