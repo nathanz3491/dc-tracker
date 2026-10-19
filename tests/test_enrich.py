@@ -1736,9 +1736,14 @@ def test_a_refused_dispute_is_not_asked_again_on_the_same_claims(session):
     assert second.calls == 0
     assert report.settle_held == 1
 
-    # New evidence is a new question.
+    # New evidence is a new question — from the next night (`declines.TONIGHT_HOURS`).
+    import datetime as _dt
+
+    from tracker.models import utcnow
+
     row = declines.load(session, "settle")[f"{project.id}:mw_planned"]
     row.fingerprint = "something-else"
+    row.decided_at = utcnow() - _dt.timedelta(hours=declines.TONIGHT_HOURS + 1)
     session.commit()
     third = SettleLLM(refuse)
     run(session, project.id, settle_extractor=third, target_fields=0)
