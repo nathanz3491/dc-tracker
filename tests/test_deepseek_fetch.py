@@ -50,7 +50,9 @@ def test_a_page_comes_back_as_text_and_is_counted(tmp_path):
     assert result.markdown.startswith("# Google advances") and "(WRIC)" in result.markdown
     calls = spend.read(settings.spend_ledger)
     assert spend.fetches(calls) == 1 and spend.total(calls) == 0 and spend.searches(calls) == 0
-    assert spend.report(calls)[0] == "    1 page(s) read through DeepSeek's fetch"
+    assert spend.report(calls)[0] == (
+        "    1 page(s) read through DeepSeek's fetch, about ¥0.01 from the DeepSeek account"
+    )
 
 
 def test_a_page_it_cannot_fetch_is_a_failure_tried_once(tmp_path):

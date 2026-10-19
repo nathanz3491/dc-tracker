@@ -343,10 +343,21 @@ sentence held at 74.4% and rows at T2 rose, while the night's models:
 Every one passed the evidence gate, because every sentence was really in its article.
 What was wrong was what the sentence was *about*, which only a reader catches. So the
 overnight loop's morning report ends with `tracker changes`: each value that moved,
-old and new, the sentence now standing behind it (or a loud *NOTHING* when no claim
-does), the rows created and removed, and every decision noted on a row. It compares
-against the `VACUUM INTO` snapshot the loop takes before round 1, and an id reused
-after a merge is reported as a new row, not as an edit of the old one.
+old and new, the sentence now standing behind it, the rows created and removed, and
+every decision noted on a row. It compares against the `VACUUM INTO` snapshot the
+loop takes before round 1, and an id reused after a merge is reported as a new row,
+not as an edit of the old one.
+
+The sentence is looked for where the value came from, not only among the citations'
+claims. A blocker is the summary of an open obstacle, so its sentence is the
+obstacle's; a capacity or customer filled from the tranches is shown with the
+tranche's sentence (and, for a sum, every tranche it adds up); a customer named by a
+party with the party's; a county or coordinate with the Census lookup that derived it.
+"no quote" is printed only when what states the value genuinely carries no sentence,
+with the gate's reason when one was recorded, and a loud *NOTHING* only when nothing
+states it at all. The report used to look among citations alone, and on 2026-10-19
+said *NOTHING* or "no quote" against twenty blockers, sixteen of whose obstacles
+carried a sentence.
 
 `tracker logic rule-out` is the repair for what a reader finds. It does what the
 audit's own repair does — marks the citation's claim decided-against (`misread` by
@@ -750,6 +761,12 @@ It only considers URLs where a date changes something. Two things read the colum
 for one still queued — and of 5,552 undated rows only **1,778** are either. The
 other 3,774 are `no_project`, `fetch_error` and orphans, so the default scope cuts
 the crawl by 68%; `--all` widens it.
+
+The report counts those two apart — undated citations, and undated articles still
+queued — because only the first is comparable from one night to the next. The queue
+swings with whatever discovery found: the news watch's first look took the single
+"undated at start" figure from 1,596 to 5,611 overnight on 2026-10-19, which read as
+the database losing dates, while the undated citations went from 924 to 951.
 
 Report-only until `--apply`. It deliberately does **not** go through `crawl.run`:
 that path consults `_split_cached` first, so a backfill routed through it would

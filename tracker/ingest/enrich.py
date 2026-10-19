@@ -163,6 +163,10 @@ class EnrichReport:
     #: Disputes not asked because the same question, on the same claims, was
     #: refused before. See `_settle`.
     settle_held: int = 0
+    #: Fields the agent pass filled after the harvest (`cli.enrich._gapfill_batch`),
+    #: kept apart from what the harvest found so a report can say which rung found
+    #: what: the query templates at a few hundred tokens, or the agent at ~77,000 a row.
+    agent_gained: tuple[str, ...] = ()
 
     @property
     def articles_read(self) -> int:
@@ -181,6 +185,25 @@ class EnrichReport:
         """Fields that were empty before and hold a value now."""
         was = {s.field for s in self.before if s.status != FILLED}
         return tuple(s.field for s in self.after if s.field in was and s.status == FILLED)
+
+    @property
+    def harvested(self) -> tuple[str, ...]:
+        """The gains the harvest made, without the agent pass's."""
+        return tuple(f for f in self.gained if f not in self.agent_gained)
+
+    def remeasure(self, session: Session, project: Project, agent_gained=()) -> None:
+        """Measure the row again after the agent pass, noting what that pass filled.
+
+        `after` is taken when the harvest ends, and the agent pass runs after it, so the
+        batch table showed nothing the agent found: on 2026-10-19 it listed 13 rows
+        gaining 15 fields while the agent pass, printed just above it, had filled six
+        more on six rows (#780's built megawatts, #879's investment among them) — and
+        the night's "projects at 9 of 12" line was measured without them.
+        """
+        self.after = for_project(project)
+        self.sources_after = len(project_urls(session, project.id))
+        self.confidence_after = project.confidence or 0
+        self.agent_gained = tuple(agent_gained)
 
     def tracked_score(self) -> tuple[int, int]:
         """(filled, attemptable) over the 12 PRD fields, after the run."""
@@ -940,6 +963,12 @@ class BatchReport:
 
     def reached_before(self, target: int) -> int:
         return sum(1 for r in self.reports if r.score_before()[0] >= target)
+
+    @property
+    def agent_filled(self) -> tuple[int, int]:
+        """(fields, rows) the agent pass filled across the batch."""
+        rows = [r for r in self.reports if r.agent_gained]
+        return sum(len(r.agent_gained) for r in rows), len(rows)
 
 
 def select_projects(

@@ -884,3 +884,53 @@ def test_a_finding_with_nothing_left_to_rule_out_never_reaches_a_model(session, 
     )
     assert not triage.has_live_claim(project, finding)
     cli_logic._triage_by_agent(session, [finding], extractor=None, limit=30)
+
+
+def test_a_ruling_that_leaves_the_value_as_it_was_is_not_counted_as_one(session, row, monkeypatch):
+    """2026-10-19 printed "mw_built 750 -> 750" and "phase construction ->
+    construction" twice among nine rulings, and counted all three: each struck the
+    citation stating the value while another citation states it too, so the row read
+    the same afterwards and the finding is still open."""
+    import io
+
+    from rich.console import Console
+
+    from tracker.cli import logic as cli_logic
+    from tracker.logic import Finding
+
+    project, _campus, _building = row
+    answers = iter(
+        [
+            triage.Outcome(
+                verdict="ruled",
+                changes=["mw_built 230 -> 230 (1 claim(s) superseded on citation(s) [7])"],
+                confidence=0.83,
+                note="750 MW is the campus's power, not what is built",
+            ),
+            triage.Outcome(
+                verdict="ruled",
+                changes=["mw_built 230 -> 19.2 (1 claim(s) superseded on citation(s) [8])"],
+                confidence=0.9,
+                note="the campus total, filed against one building",
+            ),
+        ]
+    )
+    monkeypatch.setattr("tracker.triage.triage", lambda *a, **k: next(answers))
+    shown = io.StringIO()
+    monkeypatch.setattr(cli_logic, "console", Console(file=shown, width=200))
+
+    findings = [
+        Finding(
+            project_id=project.id,
+            code=code,
+            severity="error",
+            summary="230 MW built against 19.2 MW planned",
+            fields=("mw_built",),
+        )
+        for code in ("built_exceeds_planned", "operational_without_built_capacity")
+    ]
+    cli_logic._triage_by_agent(session, findings, extractor=None, limit=30)
+
+    text = shown.getvalue()
+    assert "value unchanged: another citation still states it" in text
+    assert "1 ruled, 1 struck a citation and left the value as it was, 0 left alone" in text

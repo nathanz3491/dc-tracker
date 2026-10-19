@@ -421,7 +421,7 @@ def enrich(
         # then billed the agent for all 403 — about 85% of ~31M tokens spent on
         # rows the harvest never opened.
         with _explain_db_locks(), session_scope(engine) as session:
-            _gapfill_batch(
+            landed = _gapfill_batch(
                 session,
                 [report.project_id for report in batch.reports],
                 only_fields=agent_fields,
@@ -429,6 +429,13 @@ def enrich(
                 max_attempts=max_attempts,
                 t2_only=t2,
             )
+            # Measured again, so the table below counts what the agent found as well
+            # as what the harvest did. It was measured when the harvest ended, and
+            # showed none of the agent's facts.
+            for report in batch.reports:
+                project = session.get(Project, report.project_id)
+                if project is not None:
+                    report.remeasure(session, project, landed.get(report.project_id, ()))
 
     if len(batch.reports) == 1:
         _render_enrich(batch.reports[0], dry_run=dry_run)
@@ -452,8 +459,10 @@ def _gapfill_batch(
     token_budget: int = 0,
     max_attempts: int = attempts_mod.DEFAULT_MAX_ATTEMPTS,
     t2_only: bool = False,
-) -> None:
+) -> dict[int, tuple[str, ...]]:
     """Let a model find and cite what the harvest rounds left empty.
+
+    Returns the fields that reached each row, by project id, for the batch table.
 
     `t2_only` (`enrich --t2`) asks each row only about the gaps that hold it below
     T2. The rows were chosen for those gaps, and asking about every empty field too
@@ -482,13 +491,14 @@ def _gapfill_batch(
         extractor = agent_extractor(get_settings())
     except LLMUnavailable as exc:
         err.print(f"[yellow]--agent skipped: {exc}[/yellow]")
-        return
+        return {}
 
     console.print("\n[bold]agent pass[/bold] — what the harvest could not find")
     filled = nothing = errored = 0
     settled_already = 0
     spent = cache_hit = cache_miss = called = 0
     unreached: list[int] = []
+    landed_by_row: dict[int, tuple[str, ...]] = {}
 
     for index, project_id in enumerate(project_ids):
         project = session.get(Project, project_id)
@@ -549,6 +559,7 @@ def _gapfill_batch(
         if out.verdict == "filled" and landed:
             session.commit()
             filled += 1
+            landed_by_row[project.id] = tuple(sorted(landed))
             for line in out.stored:
                 if line.split(" = ", 1)[0].strip() in landed:
                     console.print(f"  {head}  [green]{escape(line)}[/green]")
@@ -605,6 +616,7 @@ def _gapfill_batch(
                 else ""
             )
         )
+    return landed_by_row
 
 
 def _render_batch(batch, *, target: int, dry_run: bool) -> None:
@@ -614,12 +626,15 @@ def _render_batch(batch, *, target: int, dry_run: bool) -> None:
     if batch.sweep_note:
         console.print(f"[dim]archive: {batch.sweep_note} (swept once for the batch)[/dim]")
 
+    agent_fields, agent_rows = batch.agent_filled
     table = Table(header_style="bold", box=TABLE_BOX, title_justify="left")
     table.add_column("id", justify="right")
     table.add_column("project")
     table.add_column("fields", justify="right")
     table.add_column("read", justify="right")
     table.add_column("gained")
+    if agent_rows:
+        table.add_column("agent found")
     for report in batch.reports:
         before, _ = report.score_before()
         after, attemptable = report.tracked_score()
@@ -630,7 +645,8 @@ def _render_batch(batch, *, target: int, dry_run: bool) -> None:
             report.label[:46],
             f"[{style}]{moved}[/{style}]",
             str(report.articles_read),
-            ", ".join(report.gained)[:44] or NA,
+            ", ".join(report.harvested)[:44] or NA,
+            *([", ".join(report.agent_gained)[:30] or NA] if agent_rows else []),
         )
     console.print(table)
 
@@ -638,7 +654,13 @@ def _render_batch(batch, *, target: int, dry_run: bool) -> None:
     hit_after = batch.reached(target)
     console.print(
         f"projects at >={target} of 12: [bold]{hit_before} -> {hit_after}[/bold] "
-        f"of {len(batch.reports)}   ({batch.articles_read} article(s) read)"
+        f"of {len(batch.reports)}   ({batch.articles_read} article(s) read"
+        + (
+            f"; the agent pass filled {agent_fields} field(s) on {agent_rows} row(s)"
+            if agent_rows
+            else ""
+        )
+        + ")"
     )
     unchanged = sum(report.articles_unchanged for report in batch.reports)
     held = sum(report.settle_held for report in batch.reports)
@@ -757,8 +779,10 @@ def _render_enrich(report, *, dry_run: bool) -> None:
     )
     if report.derived:
         console.print(f"derived from Census: {', '.join(report.derived)}")
-    if report.gained:
-        console.print(f"[green]gained[/green]: {', '.join(report.gained)}")
+    if report.harvested:
+        console.print(f"[green]gained[/green]: {', '.join(report.harvested)}")
+    if report.agent_gained:
+        console.print(f"[green]the agent pass found[/green]: {', '.join(report.agent_gained)}")
     console.print(
         f"citations {report.sources_before} -> {report.sources_after}, "
         f"confidence {report.confidence_before} -> {report.confidence_after}, "

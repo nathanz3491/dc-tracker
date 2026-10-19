@@ -1768,9 +1768,12 @@ def news_report(
         typer.Option("--credit/--no-credit", help="Ask Serper how much search credit is left."),
     ] = True,
 ) -> None:
-    """How the news came in: per source seen, kept, read and found; how late; what broke.
+    """How the news came in: per source seen, kept, read, failed, set aside and found.
 
-    "found" is a read that changed something (`ok`). The delay is from publication to
+    "found" is a read that changed something (`ok`). "failed" was tried and not read —
+    the page would not load, or the model's reply was unusable — and "aside" left the
+    queue unread: a second copy of a story, a publisher closed to us, a headline with
+    no article. The delay is from publication to
     the database, for what was read with a date. A line warns when no discovery ran,
     when a feed's newest entry is over 45 days old, when fresh news is still waiting
     in the queue, and when search credit will not last a fortnight at tonight's rate.

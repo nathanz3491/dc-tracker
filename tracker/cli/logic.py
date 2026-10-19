@@ -798,7 +798,13 @@ def _triage_by_agent(
     over_budget = max(0, len(findings) - limit)
     findings = findings[:limit]
 
-    ruled = left = unusable = errored = 0
+    from tracker.audit import left_as_it_was
+
+    # `stood` is a ruling that struck the citation stating the row's value while
+    # another citation states it too, so the value did not move: "construction ->
+    # construction". Counted apart from the rulings, which it was not: on 2026-10-19
+    # three of the night's nine "ruled" changed nothing a reader of the row could see.
+    ruled = stood = left = unusable = errored = 0
     spent = 0
     cache_hit = cache_miss = 0
 
@@ -868,8 +874,15 @@ def _triage_by_agent(
                 detail=outcome.note,
             )
             session.commit()
-            ruled += 1
-            console.print(f"{head}  [green]{escape(outcome.changes[0])}[/green]")
+            if all(left_as_it_was(change) for change in outcome.changes):
+                stood += 1
+                console.print(
+                    f"{head}  [yellow]{escape(outcome.changes[0])}[/yellow]"
+                    "[dim] — value unchanged: another citation still states it[/dim]"
+                )
+            else:
+                ruled += 1
+                console.print(f"{head}  [green]{escape(outcome.changes[0])}[/green]")
             console.print(f"      [dim]{escape(outcome.note[:150])}[/dim]")
         elif outcome.verdict == "left":
             # Recorded, so the next run does not pay to be told the same thing.
@@ -899,12 +912,23 @@ def _triage_by_agent(
         console.print(f"      [dim]looked at: {escape(trail)}[/dim]")
 
     console.print(
-        f"\n[bold]{ruled}[/bold] ruled, [bold]{left}[/bold] left alone"
+        f"\n[bold]{ruled}[/bold] ruled"
+        + (
+            f", [yellow]{stood}[/yellow] struck a citation and left the value as it was"
+            if stood
+            else ""
+        )
+        + f", [bold]{left}[/bold] left alone"
         + (f", [yellow]{unusable}[/yellow] unusable" if unusable else "")
         + (f", [red]{errored}[/red] errored" if errored else "")
         + (f", {over_budget} beyond --limit" if over_budget else "")
         + f"  [dim]~{spent:,} tokens[/dim]"
     )
+    if stood:
+        console.print(
+            "  [dim]A citation struck while another states the same value leaves the row "
+            "as it was, so those findings stay open and are asked again.[/dim]"
+        )
     if cache_hit or cache_miss:
         # The number that decides what a night costs. DeepSeek bills a cached
         # prompt token at a fraction of an uncached one, and an agent loop is the

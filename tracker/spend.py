@@ -25,7 +25,11 @@ uses, so an unknown line can make a ceiling fire early but never late.
 **Searches are not money from the same pot.** A web search (Serper, prepaid credits)
 is a ledger line too (`tracker.llm.record_search`), with the model `serper`
 and no tokens. :func:`total` leaves it out — the model ceiling is the model bill —
-and :func:`searches` counts it, for the loop's separate search cap.
+and :func:`searches` counts it, for the loop's separate search cap. Left out of the
+ceiling is not left out of the report, though: the morning's lines price searches
+and DeepSeek's fetched pages beside the model spend (:data:`SEARCH_CNY`,
+:data:`FETCH_CNY`). On 2026-10-19 the night closed on "¥9.89" while its 780 searches
+had spent about ¥5.54 more, over a third of the night's money, and no line said so.
 
 **Peak hours are Beijing time, Monday to Friday, 09:00-12:00 and 14:00-18:00**
 (OpenCode Go states them in UTC: 01:00-04:00 and 06:00-10:00), and a call made in
@@ -38,6 +42,7 @@ Run as a module for the shell script that reads it::
     python -m tracker.spend total    <ledger>  # CNY, two decimals; 0.00 when empty
     python -m tracker.spend report   <ledger>  # the morning report, by phase
     python -m tracker.spend searches <ledger>  # web searches sent; 0 when none
+    python -m tracker.spend summary  <ledger>  # the closing line: models, then searches
 """
 
 from __future__ import annotations
@@ -66,12 +71,21 @@ PRICES: Final[dict[str, tuple[float, float, float]]] = {
     "deepseek-v4-pro": (0.022 * CNY_PER_USD, 0.66 * CNY_PER_USD, 1.98 * CNY_PER_USD),
 }
 
-#: The model a web search is recorded under. Not a model; never priced here.
+#: The model a web search is recorded under. Not a model, and never priced as one.
 SEARCH_MODEL: Final = "serper"
+
+#: What one web search costs, in yuan: Serper's prepaid credit at $50 for 50,000
+#: searches, $0.001 each — about ¥0.007, the figure `scripts/overnight.sh` budgets
+#: with. Prepaid, so it is reported beside the model spend and never counted against
+#: the night's money ceiling; `--search-cap` bounds it instead.
+SEARCH_CNY: Final = 0.001 * CNY_PER_USD
 
 #: The model a page DeepSeek's Fetch tool returned is recorded under. DeepSeek's
 #: money, not the model ceiling's: 5 yuan per 1,000 pages, from the DeepSeek account.
 FETCH_MODEL: Final = "deepseek-fetch"
+
+#: What one page DeepSeek's Fetch tool returned costs, in yuan. See `FETCH_MODEL`.
+FETCH_CNY: Final = 5 / 1000
 
 #: Lines that are a paid tool, not a model call: counted, never priced as tokens.
 _TOOLS: Final = frozenset({SEARCH_MODEL, FETCH_MODEL})
@@ -232,6 +246,24 @@ def by_phase(calls: Iterable[Call]) -> list[PhaseSpend]:
     return sorted(rows.values(), key=lambda r: (-r.cny, r.phase))
 
 
+def summary(calls: Sequence[Call]) -> str:
+    """The night's money in one line, for the loop's closing line.
+
+    The model bill first, because it is the one the ceiling counts, then each paid tool
+    at its own price. "about": a search is priced at the plan's list rate, not read
+    off Serper's invoice.
+    """
+    models = [c for c in calls if c.model not in _TOOLS]
+    parts = [f"¥{total(models):.2f} on models, ~{sum(c.tokens for c in models):,} tokens"]
+    sent = searches(calls)
+    if sent:
+        parts.append(f"{sent:,} web search(es), about ¥{sent * SEARCH_CNY:.2f} of prepaid credit")
+    pages = fetches(calls)
+    if pages:
+        parts.append(f"{pages:,} page(s) through DeepSeek's fetch, about ¥{pages * FETCH_CNY:.2f}")
+    return "; ".join(parts)
+
+
 def report(calls: Sequence[Call]) -> list[str]:
     """The morning report's lines: one per phase, then the night's peak-hour share."""
     found = [c for c in calls if c.model == SEARCH_MODEL]
@@ -239,13 +271,19 @@ def report(calls: Sequence[Call]) -> list[str]:
     calls = [c for c in calls if c.model not in _TOOLS]
     lines = []
     if fetched:
-        lines.append(f"    {fetched} page(s) read through DeepSeek's fetch")
+        lines.append(
+            f"    {fetched} page(s) read through DeepSeek's fetch, "
+            f"about ¥{fetched * FETCH_CNY:.2f} from the DeepSeek account"
+        )
     if found:
         by_command: dict[str, int] = {}
         for call in found:
             by_command[call.phase] = by_command.get(call.phase, 0) + 1
         split = ", ".join(f"{n} {phase}" for phase, n in sorted(by_command.items()))
-        lines.append(f"    {len(found)} web search(es): {split}")
+        lines.append(
+            f"    {len(found)} web search(es), about ¥{len(found) * SEARCH_CNY:.2f} of prepaid "
+            f"credit outside the ¥ ceiling: {split}"
+        )
     if not calls:
         return [*lines, "    no paid model calls"]
     for row in by_phase(calls):
@@ -264,10 +302,16 @@ def report(calls: Sequence[Call]) -> list[str]:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """`total`, `report` or `searches` of a ledger. Never fails: a shell under `set -e` reads it."""
+    """`total`, `report`, `searches` or `summary` of a ledger.
+
+    Never fails: a shell under `set -e` reads it.
+    """
     args = list(sys.argv[1:] if argv is None else argv)
-    if len(args) != 2 or args[0] not in {"total", "report", "searches"}:
-        print("usage: python -m tracker.spend {total|report|searches} <ledger>", file=sys.stderr)
+    if len(args) != 2 or args[0] not in {"total", "report", "searches", "summary"}:
+        print(
+            "usage: python -m tracker.spend {total|report|searches|summary} <ledger>",
+            file=sys.stderr,
+        )
         return 2
     calls = read(args[1])
     if args[0] == "total":
@@ -277,7 +321,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     else:
         # The ledger is UTF-8 and so is the ¥; a console that is not must not end
         # the morning report.
-        out = "\n".join(report(calls)) + "\n"
+        out = (summary(calls) if args[0] == "summary" else "\n".join(report(calls))) + "\n"
         sys.stdout.buffer.write(out.encode("utf-8"))
     return 0
 
@@ -289,9 +333,11 @@ if __name__ == "__main__":
 __all__ = [
     "BEIJING",
     "CNY_PER_USD",
+    "FETCH_CNY",
     "FETCH_MODEL",
     "PEAK_WINDOWS",
     "PRICES",
+    "SEARCH_CNY",
     "SEARCH_MODEL",
     "UNKNOWN_MODEL",
     "Call",
@@ -304,5 +350,6 @@ __all__ = [
     "read",
     "report",
     "searches",
+    "summary",
     "total",
 ]
