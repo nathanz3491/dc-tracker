@@ -2142,6 +2142,7 @@ def test_html_to_text_strips_markup_and_keeps_paragraphs():
         (FetchResult("u", True, markdown="x" * 50, via="httpx"), True),
         (FetchResult("u", True, markdown="x" * 5000, via="httpx"), False),
         (FetchResult("u", False, status=404, via="httpx"), False),
+        (FetchResult("u", False, status=429, via="httpx"), False),  # a rate limit
         (FetchResult("u", False, status=403, via="crawl4ai"), True),  # on to DeepSeek
         (FetchResult("u", False, status=403, via="deepseek-fetch"), False),
     ],
@@ -2327,6 +2328,21 @@ async def test_an_escalated_read_counts_the_requests_that_led_to_it():
     (result,) = await fetch_all([URL], fetcher=blocked, escalate=rung)
     assert result.ok
     assert result.attempts == 2, "one refused request, one that worked"
+
+
+async def test_a_rate_limit_is_left_for_a_later_night_not_climbed_or_retried():
+    """The 429s on record came on a site's first request of the night, and of 116
+    pages the nightly log shows climbing on one, the ladder read one: each rung was
+    one more request to a site that asked for fewer. The page fails as a fetch error,
+    which the automatic retries take up on a later night."""
+    from tracker.ingest.fetch import fetch_all
+
+    limited = _Answers(FetchResult(URL, False, status=429, error="HTTP 429", fetched_at=NOW))
+    rung = _Answers(fetched())
+    (result,) = await fetch_all([URL], fetcher=limited, escalate=rung)
+    assert not result.ok and result.status == 429
+    assert limited.calls == 1 and rung.calls == 0
+    assert result.attempts == 1
 
 
 # --- how fetches share the concurrency --------------------------------------------

@@ -50,10 +50,23 @@ log = logging.getLogger(__name__)
 #: consent wall rather than an article, and escalate to a real browser.
 MIN_USEFUL_CHARS = 400
 
-RETRYABLE_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504})
+RETRYABLE_STATUS = frozenset({408, 425, 500, 502, 503, 504})
 #: Statuses no amount of retrying will fix, but a browser sometimes will.
-BROWSER_WORTHY_STATUS = frozenset({403, 429, 503})
+BROWSER_WORTHY_STATUS = frozenset({403, 503})
 HARD_FAIL_STATUS = frozenset({401, 402, 404, 410, 451})
+
+#: "Too many requests": the site is limiting how often we ask, so the page is left
+#: for a later night -- `fetch_error`, which the automatic retries take up -- rather
+#: than asked again now or handed up the ladder. The 429s on record came on a site's
+#: first request of the night (Lee Enterprises' BLOX papers among them: madison.com,
+#: richmond.com, azdailysun.com, fredericknewspost.com), and climbing almost never
+#: got past one: of 116 pages the nightly log shows climbing on a 429, the
+#: browser-like client read one (tdtnews.com, 2026-10-08), and 261 pages in the queue
+#: ended on a 429 after every rung had been tried, while several of the same papers'
+#: pages read on a later night with the plain client. A browser is not a different
+#: answer to a rate limit, and each rung was one more request to a site that had
+#: asked for fewer.
+RATE_LIMITED_STATUS = frozenset({429})
 
 
 class MissingDependency(RuntimeError):
@@ -1022,6 +1035,8 @@ async def fetch_with_retry(
             return FetchResult(**{**last.__dict__, "attempts": made})
         if last.status in HARD_FAIL_STATUS or last.status in BROWSER_WORTHY_STATUS:
             break  # retrying the same tool will not help; escalate instead
+        if last.status in RATE_LIMITED_STATUS:
+            break  # the site asked for fewer requests: a later night, not a backoff
         if last.status is not None and last.status not in RETRYABLE_STATUS:
             break
         if attempt < attempts:
@@ -1175,6 +1190,8 @@ def should_escalate(result: FetchResult) -> bool:
         return False  # the top rung; nothing left to escalate to
     if result.via == robots.VIA:
         return False  # the site said no; a stronger client is not a different answer
+    if result.status in RATE_LIMITED_STATUS:
+        return False  # nor to "too many requests"; see RATE_LIMITED_STATUS
     if result.status in BROWSER_WORTHY_STATUS:
         return True
     return result.ok and result.looks_thin
@@ -1374,6 +1391,7 @@ __all__ = [
     "BROWSER_WORTHY_STATUS",
     "HARD_FAIL_STATUS",
     "MIN_USEFUL_CHARS",
+    "RATE_LIMITED_STATUS",
     "RETRYABLE_STATUS",
     "Crawl4AIFetcher",
     "CurlCffiFetcher",
