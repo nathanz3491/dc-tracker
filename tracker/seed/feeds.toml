@@ -261,7 +261,14 @@ source_type = "trade_press"
 name = "semianalysis"
 # Low volume, high value on capacity figures. Not topic_implied: it covers
 # silicon as much as buildings.
-url = "https://semianalysis.com/feed/"
+#
+# The newsletter moved to Substack. semianalysis.com/feed/ still answers, with ten
+# posts and none after 2025-09-16; newsletter.semianalysis.com/feed (checked
+# 2026-10-20: 200, RSS, robots.txt allowing /feed) carries the twenty newest, to
+# "Datacenters 2027: The Year of Acceleration" of 10-19, each with its text up to the
+# paywall in `content:encoded` (10,000 to 184,000 characters), which
+# `cache_feed_text` keeps so the crawl need not fetch the page.
+url = "https://newsletter.semianalysis.com/feed"
 source_type = "trade_press"
 
 [[feed]]
