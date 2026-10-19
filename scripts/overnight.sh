@@ -34,7 +34,8 @@
 #             then campuses the database has not heard of, through its identity
 #             check. Then the Census lookup places the new rows (county,
 #             town centre), and one duplicate attempt is made per row created in
-#             the last `TWIN_DAYS` days, `TWINS` at most.
+#             the last `TWIN_DAYS` days, `TWINS` at most; the night's progress
+#             counts are re-taken after that, since the news adds work by design.
 #             600 a night since 2026-10-19: the watch's first look and the first
 #             walk of the builders' archives left about 6,600 articles queued, a
 #             read costs about ¥0.0075 (10-18: 156 for ¥1.17) and 40 took 48
@@ -45,13 +46,16 @@
 #             every derived value, and both are pure functions of what is stored.
 #             In the first round the dates step also asks publishers (`--dates`,
 #             one plain request a page, each page once per 90 days, newest first).
+#   duplicates the agent: reads both rows, folds or parks. The only step that
+#             deletes anything, so it goes behind a snapshot — and ahead of every
+#             phase that pays to read one row, since a row it folds is a row they
+#             would have read for nothing (10-19: 12 of 14 logic findings were on
+#             rows created that evening, two of them merged away minutes later).
 #   audit     THE biggest tier lever and the one this script used to miss entirely:
 #             `audit_clear` is a T1 gate failing 68 rows and the SOLE blocker on 54.
 #             One call per finding on the fixed-menu path, so it is also cheap.
 #   risks     reads the article behind each unquoted obstacle. Also T3, also cheap.
 #   logic     the agent: reads sources, rules wrong claims out of the merge.
-#   duplicates the agent: reads both rows, folds or parks. The only step that
-#             deletes anything, so it goes behind a snapshot.
 #   enrich    the agent, last and separately budgeted, because it is the most
 #             expensive rung (~77,000 tokens a row) AND the largest tier lever
 #             there is: every one of the 283 rows sitting at T1 is held there by
@@ -568,6 +572,16 @@ for round in $(seq 1 "$ROUNDS"); do
     else
       tracker duplicates resolve --created-since "$TWIN_SINCE" --limit "$TWINS" < /dev/null || true
     fi
+
+    # The night's yardstick, re-taken now. The news adds rows and findings by design,
+    # so measured against the counts from before it every later round looked like no
+    # progress: on 2026-10-19 round 2 lowered all three counts, was still above the
+    # pre-news minimums, and the night declared a fixed point with 7.4 hours and ¥5
+    # unused. Progress is measured from here.
+    read -r F0 D0 B0 <<<"$(counts)"
+    printf '    after news %s finding(s), %s duplicate group(s), %s row(s) below T2\n' \
+      "$F0" "$D0" "$B0"
+    MIN_F=$F0; MIN_D=$D0; MIN_B=$B0
   fi
 
   # --- free: no model, no cost --------------------------------------------
@@ -590,6 +604,20 @@ for round in $(seq 1 "$ROUNDS"); do
   tracker backfill derive < /dev/null || true
   tracker logic resolve --auto --apply < /dev/null || true
 
+  # --- duplicates: before anything reads a row it may fold ----------------
+  # Ahead of audit, risks and logic, because each of those pays to read one row's
+  # sources: on 2026-10-19, 12 of the 14 first-round logic findings were on rows
+  # created that evening, and #1732 was worked twice and #1742 for 15 tool steps
+  # before the duplicate pass that ran after them merged both away.
+  if capped duplicates; then break; fi
+  phase "duplicates — $PAIRS pair(s)"
+  if [ "$DO_MERGE" -eq 1 ]; then
+    tracker duplicates resolve --merge --limit "$PAIRS" \
+      --min-confidence "$MIN_CONF" < /dev/null || true
+  else
+    tracker duplicates resolve --limit "$PAIRS" < /dev/null || true
+  fi
+
   # --- audit: a T1 gate, and cheap ----------------------------------------
   if capped audit; then break; fi
   phase "audit — implausible figures, $AUDIT at a time"
@@ -603,15 +631,6 @@ for round in $(seq 1 "$ROUNDS"); do
   if capped logic; then break; fi
   phase "logic — a model reads the sources, $FINDINGS at a time"
   tracker logic resolve --limit "$FINDINGS" < /dev/null || true
-
-  if capped duplicates; then break; fi
-  phase "duplicates — $PAIRS pair(s)"
-  if [ "$DO_MERGE" -eq 1 ]; then
-    tracker duplicates resolve --merge --limit "$PAIRS" \
-      --min-confidence "$MIN_CONF" < /dev/null || true
-  else
-    tracker duplicates resolve --limit "$PAIRS" < /dev/null || true
-  fi
 
   # --- enrich: last, and the largest lever --------------------------------
   # Every row sitting at T1 is held there by `fields_present` alone. Nothing above

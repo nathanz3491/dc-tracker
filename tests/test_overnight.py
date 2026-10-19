@@ -509,6 +509,27 @@ def test_the_twin_lookback_is_days_before_now_in_utc(tmp_path):
     assert abs((since - expected).total_seconds()) < 120
 
 
+def test_progress_is_measured_from_after_the_news():
+    """On 2026-10-19 round 2 lowered all three counts and still read as no progress,
+    because the minimums were taken before the news added rows by design."""
+    text = SCRIPT.read_text(encoding="utf-8")
+    loop = text[text.index('for round in $(seq 1 "$ROUNDS"); do') :]
+    twins = loop.index('--created-since "$TWIN_SINCE"')
+    retaken = loop.index('read -r F0 D0 B0 <<<"$(counts)"')
+    assert twins < retaken < loop.index("phase 'free")
+    assert "MIN_F=$F0; MIN_D=$D0; MIN_B=$B0" in loop[retaken:]
+
+
+def test_duplicates_run_before_the_phases_that_read_one_row():
+    """12 of 14 logic findings on 10-19 were on rows created that evening, two of
+    them merged away minutes later by the duplicate pass that ran after logic."""
+    text = SCRIPT.read_text(encoding="utf-8")
+    loop = text[text.index('for round in $(seq 1 "$ROUNDS"); do') :]
+    dupes = loop.index('phase "duplicates — $PAIRS pair(s)"')
+    for later in ('phase "audit', 'phase "risks', 'phase "logic'):
+        assert dupes < loop.index(later), later
+
+
 def test_the_first_round_asks_publishers_for_dates_and_rereads_old_prompts():
     """The two gaps the 2026-10-10 night showed: 1,836 citations undated because the
     loop never asked a publisher, and 2,320 last read by a superseded prompt

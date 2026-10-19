@@ -208,6 +208,15 @@ initial build of the v1 PRD.
 
 ### Changed
 
+- **The night measures its progress from after the news, and folds duplicates before
+  paying to read rows** (`scripts/overnight.sh`). The news adds rows and findings by
+  design, so measured against the counts from before it the second round looked like
+  no progress although it lowered all three: 10-19 declared a fixed point after two
+  rounds with 7.4 hours and ¥5 unused. The counts are re-taken after the news and its
+  twin check. And the per-round duplicate pass now runs before audit, risks and
+  logic, which each pay to read one row: 12 of the 14 first-round logic findings were
+  on rows created that evening, two of them merged away minutes later.
+
 - **Every model call goes to OpenCode Go; DeepSeek's own key pays only for page
   fetches** (`tracker/config.py`, `tracker/llm.py`, `.env.example`,
   `docs/ingesting.md`, `README.md`, `tracker/spend.py`). DeepSeek's Fetch tool, the last rung of the fetch ladder, is
