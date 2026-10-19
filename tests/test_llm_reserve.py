@@ -3,7 +3,8 @@
 An empty balance used to end a night where it happened — every later call failed
 the same way, and a loop that had spent half its budget stopped with half its work
 undone. The properties, in the order a mistake would cost (the first group under the
-old `reserve_when=empty` rule, which conftest sets; the balance check at the end):
+old `reserve_when=empty` rule, which conftest sets; then the default since
+2026-10-19, every call to the reserve, and the balance check at the end):
 
 * nothing goes to the reserve until DeepSeek answers 402 — no other error moves it;
 * with no reserve configured, a 402 fails as before, and says what to do;
@@ -256,6 +257,38 @@ def test_always_sends_every_call_to_the_reserve_without_asking(settings, monkeyp
         reserve = respx.post(RESERVE).respond(200, json=_reply("deepseek-v4.1-flash"))
         llm.DeepSeekExtractor(get_settings()).complete(system="s", user="u")
     assert reserve.call_count == 1, "no balance request and no DeepSeek request were mocked"
+
+
+def test_every_model_call_goes_to_opencode_go_by_default():
+    """Since 2026-10-19 DeepSeek's own balance pays for its Fetch tool only."""
+    from tracker.config import Settings
+
+    # The field's own default: conftest sets the old rule in the environment.
+    assert Settings.model_fields["reserve_when"].default == "always"
+
+
+def test_with_no_go_key_a_model_call_refuses_rather_than_spend_deepseeks_balance():
+    from tracker import llm
+    from tracker.config import Settings
+
+    settings = Settings(_env_file=None, deepseek_api_key="k", reserve_when="always")
+    extractor = llm.DeepSeekExtractor(settings)
+    with respx.mock(assert_all_called=False) as router:
+        route = router.post(url__regex=r".*").respond(200, json={})
+        with pytest.raises(llm.LLMUnavailable, match="OpenCode Go only"):
+            extractor._route({"model": "deepseek-v4-flash"})
+        assert route.call_count == 0
+
+
+def test_a_go_key_alone_is_enough_for_model_calls():
+    from tracker import llm
+    from tracker.config import Settings
+
+    settings = Settings(_env_file=None, opencode_go_api_key="g", reserve_when="always")
+    url, headers, body = llm.DeepSeekExtractor(settings)._route({"model": "deepseek-v4-flash"})
+    assert url == RESERVE
+    assert headers["Authorization"] == "Bearer g"
+    assert body["model"] == settings.opencode_go_model
 
 
 def test_a_run_on_the_reserve_is_held_at_peak_too(low_balance_rule):

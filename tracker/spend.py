@@ -12,10 +12,10 @@ set in tokens never fired on a night that cost ¥34.
 This module prices each line instead, from the provider's published table and the
 hour the call was made, so a ceiling can be written in the currency the bill is in.
 
-**The table is OpenCode Go's, converted to yuan, and will go stale.** The nightly
-loop's calls go to OpenCode Go whenever DeepSeek's own balance is low (`tracker.llm`),
-which since October has been every night, and the plan's limit is in dollars of
-OpenCode Go's metering. So the ledger prices at OpenCode Go's rates, which run about
+**The table is OpenCode Go's, converted to yuan, and will go stale.** Every model
+call goes to OpenCode Go (`Settings.reserve_when`, `always` since 2026-10-19; before
+that whenever DeepSeek's own balance was low, every night since October), and the
+plan's limit is in dollars of OpenCode Go's metering. So the ledger prices at OpenCode Go's rates, which run about
 6% above DeepSeek's own: a ceiling read off this module is then a slight overcount
 of either bill, never an undercount. When a page changes, change :data:`PRICES`;
 nothing else here knows a number. A model the table does not name is priced as the

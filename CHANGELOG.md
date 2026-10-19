@@ -208,6 +208,14 @@ initial build of the v1 PRD.
 
 ### Changed
 
+- **Every model call goes to OpenCode Go; DeepSeek's own key pays only for page
+  fetches** (`tracker/config.py`, `tracker/llm.py`, `.env.example`,
+  `docs/ingesting.md`, `README.md`, `tracker/spend.py`). DeepSeek's Fetch tool, the last rung of the fetch ladder, is
+  billed to the DeepSeek account, so that balance is kept for it: the default for
+  `TRACKER_RESERVE_WHEN` is now `always`, a Go key alone is enough to run model
+  calls, and with no Go key a model call refuses rather than spend DeepSeek's
+  balance. `low_balance` restores asking DeepSeek's balance first.
+
 - **The night reads 600 queued articles, not 150** (`scripts/overnight.sh`). The
   news watch's first look and the first walk of the builders' archives left about
   6,600 articles in the queue on 2026-10-19. A read costs about ¥0.0075 and 40 took

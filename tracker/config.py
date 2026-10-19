@@ -312,15 +312,17 @@ class Settings(BaseSettings):
     #: rather than 4: same price, and twice the monthly ceiling on Go.
     opencode_go_model: str = "deepseek-v4.1-flash"
 
-    #: When a run goes to the reserve, given one is configured.
+    #: When a run goes to the reserve.
     #:
-    #: `low_balance` (the default): each command asks DeepSeek's balance endpoint
-    #: once — it is free — and starts on the reserve when the balance is below
-    #: :data:`deepseek_min_balance` or DeepSeek says the account cannot be used. A 402
-    #: part-way through still moves it. `empty` is the old rule, DeepSeek until it
-    #: answers 402, which meant every command of a night on an empty balance began
-    #: with a refused request. `always` sends every call to the reserve.
-    reserve_when: Literal["low_balance", "empty", "always"] = "low_balance"
+    #: `always` (the default since 2026-10-19): every model call goes to OpenCode Go,
+    #: and DeepSeek's own key pays only for DeepSeek's Fetch tool
+    #: (`fetch.DeepSeekFetcher`), whose balance a model call must not spend. Without a
+    #: Go key a model call then refuses, rather than spend it.
+    #: `low_balance`: each command asks DeepSeek's balance endpoint once and starts on
+    #: the reserve when the balance is below :data:`deepseek_min_balance`; a 402
+    #: part-way through still moves it. `empty` is the oldest rule, DeepSeek until it
+    #: answers 402.
+    reserve_when: Literal["low_balance", "empty", "always"] = "always"
 
     #: The DeepSeek balance, in the account's currency (CNY), below which a command
     #: starts on the reserve. ¥1 is a handful of calls; a night of the overnight loop

@@ -40,7 +40,11 @@ TRACKER_OPENCODE_GO_API_KEY=your-opencode-go-key
 ```
 
 [OpenCode Go](https://opencode.ai/docs/go/) serves the same DeepSeek models through
-the same kind of API. **Each command asks DeepSeek's balance endpoint once** — it is
+the same kind of API. **Since 2026-10-19 every model call goes to it**
+(`TRACKER_RESERVE_WHEN=always`, the default): DeepSeek's own account pays only for
+DeepSeek's Fetch tool, the last rung of the fetch ladder, so a model call must not
+spend its balance, and without a Go key one refuses rather than fall back. The rules
+below apply with `TRACKER_RESERVE_WHEN=low_balance`. **Each command asks DeepSeek's balance endpoint once** — it is
 free — and starts on Go when the balance is below `TRACKER_DEEPSEEK_MIN_BALANCE`
 (default ¥1) or DeepSeek says the account cannot be used. It used to go there only
 after DeepSeek refused a call with HTTP 402, so on an empty balance every command of
@@ -48,8 +52,8 @@ a night opened with a failed request, and a balance of ¥0.73 is not empty: it
 answers until it runs out part-way through. A 402 still moves a command that runs
 out mid-way, for the rest of that command; a rate limit or a server error is retried
 on DeepSeek as before. Each new command asks again, so topping up takes effect by
-itself, with no setting to flip back. `TRACKER_RESERVE_WHEN=empty` restores the old
-rule, and `always` sends every call to Go.
+itself, with no setting to flip back. `TRACKER_RESERVE_WHEN=empty` restores the
+oldest rule, DeepSeek until a 402.
 
 The peak-hours guard below holds a run on the reserve as well: OpenCode Go doubles
 its price in the same hours (its pricing page, checked 2026-10-18). Until then a run

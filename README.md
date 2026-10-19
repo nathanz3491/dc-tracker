@@ -416,8 +416,9 @@ servers and returns its text. It is never asked about a page `robots.txt` refuse
 us, and a site marked closed never reaches it. On 2026-10-19 it read one of four
 local-news pages Cloudflare, CloudFront and Varnish refused every client of ours.
 It is billed to the DeepSeek account, 5 yuan per 1,000 pages it returns, so that
-account needs a balance even while the model calls go to OpenCode Go; with none, the
-first refusal stands the rung down for the run. Each page is a line in the night's
+account needs a balance; model calls never spend it, since every one goes to OpenCode
+Go (`TRACKER_RESERVE_WHEN=always`). With no balance, the first refusal stands the rung
+down for the run. Each page is a line in the night's
 spend ledger, apart from the model's money.
 
 Nothing here defeats an access control, and the distinction is the whole

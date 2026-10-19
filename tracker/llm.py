@@ -95,6 +95,14 @@ INSUFFICIENT_BALANCE = 402
 #: asks DeepSeek once, so the first command after a top-up is back on it.
 _ON_RESERVE = threading.Event()
 
+#: Why a model call refused with no OpenCode Go key, under `reserve_when = always`.
+GO_ONLY_HELP = (
+    "Model calls go to OpenCode Go only (TRACKER_RESERVE_WHEN=always, the default), "
+    "and no TRACKER_OPENCODE_GO_API_KEY is set. DeepSeek's own key is kept for its "
+    "Fetch tool, so its balance is not spent on a model call. Set the Go key, or "
+    "TRACKER_RESERVE_WHEN=low_balance to let model calls use DeepSeek directly."
+)
+
 #: Set once this process has asked DeepSeek's balance endpoint whether it can pay
 #: (`Settings.reserve_when = "low_balance"`), so the question is asked once per
 #: `tracker` command, not once per call. See `choose_route`.
@@ -973,7 +981,10 @@ class DeepSeekExtractor:
         effort: str | None = None,
     ) -> None:
         self.settings = settings or get_settings()
-        if not self.settings.has_api_key():
+        # With every call going to OpenCode Go, its key alone is enough: DeepSeek's is
+        # then wanted only by the fetch tool.
+        go_only = self.settings.reserve_when == "always" and self.settings.has_reserve_key()
+        if not (self.settings.has_api_key() or go_only):
             raise MissingApiKey(KEY_HELP)
         # Here, where a missing key is refused, so every path that already copes with
         # "no key" copes with "not now" — before it has fetched or spent anything.
@@ -1069,6 +1080,9 @@ class DeepSeekExtractor:
 
     def _route(self, payload: dict[str, Any]) -> tuple[str, dict[str, str], dict[str, Any]]:
         """`(endpoint, headers, body)` for whichever provider answers now."""
+        if self.settings.reserve_when == "always" and not self.settings.has_reserve_key():
+            # Since 2026-10-19 DeepSeek's own balance pays for its Fetch tool only.
+            raise LLMUnavailable(GO_ONLY_HELP)
         choose_route(self.settings)
         if self.on_reserve:
             from tracker import __version__
