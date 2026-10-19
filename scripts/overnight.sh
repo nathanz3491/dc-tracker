@@ -89,7 +89,8 @@
 # Serper credit, about ¥0.007 each): the ledger records them and `--search-cap`
 # (default 2000 a night, `TRACKER_SEARCH_CAP`) stops every command at it; the news
 # watch, which runs first, may use all but 500 of them, so the research that runs
-# later still has searches to send. The money ceiling does not count them.
+# later still has searches to send. The money ceiling does not count them, and the
+# closing line and the spend report price them beside the model spend.
 #
 # A ceiling in tokens (`--tokens`, still honoured) mostly counted cached prompt,
 # which is billed at a fiftieth of the rate; about 93% of the money is the reply,
@@ -451,6 +452,15 @@ spend_by_command() {
   "$PY" -m tracker.spend report "$TRACKER_SPEND_LEDGER" 2>/dev/null || echo "    (no report)"
 }
 
+# The closing line's money: the model bill the ceiling counts, then what the web
+# searches cost beside it — prepaid credit, outside the ceiling by design, and on
+# 2026-10-19 780 of them, about ¥5.54 against ¥9.89 on models, which this line used
+# to leave out. Falls back to the old figures rather than failing the report.
+spent_summary() {
+  "$PY" -m tracker.spend summary "$TRACKER_SPEND_LEDGER" 2>/dev/null \
+    || echo "¥$(spent_cny), ~$(spent_so_far) tokens"
+}
+
 # True when any of the three counts — findings, groups, rows below T2 — fell below the
 # lowest it has been tonight, and lowers that minimum. Against the minimum rather than
 # last round's value, so a count that wobbles up and back down is not progress; see
@@ -716,12 +726,13 @@ echo
 tracker duplicates < /dev/null 2>&1 | sed -n '1,2p' || true
 
 ELAPSED=$(( ($(date +%s) - STARTED) / 60 ))
-say "overnight complete — ${ELAPSED}m, ¥$(spent_cny), ~$(spent_so_far) tokens"
+say "overnight complete — ${ELAPSED}m, $(spent_summary)"
 spend_by_command
 
-# How the news came in: per source, what was seen, kept, read and found; how late it
-# was; and whatever is wrong with the intake itself — no discovery tonight, a feed
-# gone quiet, fresh news left waiting, search credit running low.
+# How the news came in: per source, what was seen, kept, read, failed to load, set
+# aside unread and found; how late it was; and whatever is wrong with the intake
+# itself — no discovery tonight, a feed gone quiet, fresh news left waiting, search
+# credit running low.
 say 'how the news came in'
 tracker news report --since "$STARTED_UTC" < /dev/null || true
 
