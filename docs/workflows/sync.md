@@ -343,6 +343,22 @@ prioritising after would reorder a batch that was already chosen:
    publisher open again (feed and archive both), its discarded pages go back in the
    queue (`discover.requeue_reopened`), and a page skipped for any other reason
    stays skipped.
+5. **One copy of a story is read.** An article can be queued more than once under
+   different addresses: CyrusOne files every release under two paths, a story is
+   syndicated to three sites, a search engine cuts a headline short, a page was
+   already read through another outlet's copy. On 2026-10-19, after the news watch's
+   first look, 159 of 6,646 queued articles were such copies (2.4%): 53 the same
+   headline on another site, 45 a headline cut short, 42 the same headline twice on
+   one site, 19 the same page under another address. Before the queue is read, each
+   becomes `skipped` with `discover.SAME_STORY` and the address of the copy kept
+   (`discover.drop_same_story`). Two headlines are one story when they are equal —
+   six words or more on one site, eight across two, since short ones collide by
+   accident — or when one cut short ("...") is how the other begins; a headline only
+   longer than another is not taken for a copy. The copy kept is one already read,
+   else a readable one, with its full headline, queued first. If the copy kept fails
+   or comes back thin, the others go back in the queue the next night: a paywall on
+   the first site is not a reason to lose the story. `tracker queue duplicates`
+   shows what would go.
 
 `ingest crawl --from-queue --new-first` asks a different question, and is what the
 nightly loop's discovery step runs. **The news goes first:** every article the
@@ -578,6 +594,7 @@ Touching any of these means the poster is in scope. Re-render with
 | The weekly check of closed entries | `tracker/ingest/discover.py` — `probe_closed`, `record_probe`, `reopened_names`, `without_reopened`, `PROBE_EVERY`; migration `0034_feed_probe`; `tracker/cli/sync.py` — `discover --probe-closed` |
 | Asking robots.txt before every request | `tracker/robots.py` — `allowed`, `allowed_async`, `interpret`, `crawl_delay`; `tracker/ingest/fetch.py` — `permitted`, `refused`, `fetch_with_retry`, `should_escalate`, `fetch_all`; `tracker/ingest/discover.py` — `_RawFetcher`; `tracker/config.py` — `respect_robots` |
 | Headlines-only feeds | `tracker/seed/feeds.toml` — `headlines_of`, `news_search`, `news_pages`; `tracker/ingest/search.py` — `SerperProvider.news`; `tracker/ingest/discover.py` — `news_headlines`, `search_news`, `_poll_news`, `_news_date`, `parse_headlines`, `follow_headlines`, `same_story`, `copies_headline`, `MAX_HEADLINE_LOOKUPS` |
+| A story's second copy is set aside | `tracker/ingest/discover.py` — `drop_same_story`, `SAME_STORY`, `SAME_STORY_WORDS`, `SAME_STORY_WORDS_ACROSS_SITES`, `_headline`, `_page_key`; `tracker/cli/ingest.py` — `crawl --from-queue`; `tracker/cli/sync.py` — `sync` (extract), `queue duplicates` |
 | Pages nothing can read leave the queue, or go last | `tracker/ingest/discover.py` — `closed_domains`, `unreadable_test`, `discard_unreadable`, `requeue_reopened`, `DISCARDED_UNREADABLE`, `readable_first`, `pending(unreadable=)`, `retryable(unreadable=)`; `tracker/ingest/crawl.py` — `stale_sources(unreadable=)`; `tracker/cli/sync.py` — `sync` (extract, retry fill, refresh); `tracker/cli/ingest.py` — `crawl --from-queue`; `tracker/ingest/enrich.py` — `run` |
 | What search looks for | `tracker/ingest/search.py` — `_PLACE_TEMPLATES`, `rank_places`, `plan_queries`, `PlannedQuery.label`, `templates`; `tracker/normalize.py` — `state_name` |
 | Judging a template | `tracker/funnel.py` — `feed_group`, `survey`, `verdicts`; `tracker/ingest/search.py` — `LabelStat` |

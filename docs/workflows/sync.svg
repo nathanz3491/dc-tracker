@@ -85,18 +85,18 @@
 <text x="375.0" y="588.5" font-size="10" fill="#5C6B73" text-anchor="middle">ingest_url rows,</text>
 <text x="375.0" y="602.1" font-size="10" fill="#5C6B73" text-anchor="middle">status = discovered</text>
 <text x="375.0" y="615.7" font-size="10" fill="#5C6B73" text-anchor="middle"></text>
-<text x="375.0" y="629.3" font-size="10" fill="#5C6B73" text-anchor="middle">sync, before the limit bites:</text>
-<text x="375.0" y="642.9" font-size="10" fill="#5C6B73" text-anchor="middle">· rows on a tracked project</text>
-<text x="375.0" y="656.5" font-size="10" fill="#5C6B73" text-anchor="middle">  first, obstacles first</text>
-<text x="375.0" y="670.1" font-size="10" fill="#5C6B73" text-anchor="middle">· prospect finds jump it</text>
-<text x="375.0" y="683.7" font-size="10" fill="#5C6B73" text-anchor="middle"></text>
-<text x="375.0" y="697.3" font-size="10" fill="#5C6B73" text-anchor="middle">the nightly loop:</text>
-<text x="375.0" y="710.9" font-size="10" fill="#5C6B73" text-anchor="middle">· the last two months' news</text>
-<text x="375.0" y="724.5" font-size="10" fill="#5C6B73" text-anchor="middle">· then what the watch and</text>
-<text x="375.0" y="738.1" font-size="10" fill="#5C6B73" text-anchor="middle">  the newsrooms found</text>
-<text x="375.0" y="751.7" font-size="10" fill="#5C6B73" text-anchor="middle">· then unheard-of campuses</text>
-<text x="375.0" y="765.3" font-size="10" fill="#5C6B73" text-anchor="middle">· an unreadable page leaves</text>
-<text x="375.0" y="778.9" font-size="10" fill="#5C6B73" text-anchor="middle">  until its publisher reopens</text>
+<text x="375.0" y="629.3" font-size="10" fill="#5C6B73" text-anchor="middle">sync: tracked rows first,</text>
+<text x="375.0" y="642.9" font-size="10" fill="#5C6B73" text-anchor="middle">  obstacles first; prospect</text>
+<text x="375.0" y="656.5" font-size="10" fill="#5C6B73" text-anchor="middle">  finds jump it</text>
+<text x="375.0" y="670.1" font-size="10" fill="#5C6B73" text-anchor="middle"></text>
+<text x="375.0" y="683.7" font-size="10" fill="#5C6B73" text-anchor="middle">the nightly loop:</text>
+<text x="375.0" y="697.3" font-size="10" fill="#5C6B73" text-anchor="middle">· the feeds' recent news</text>
+<text x="375.0" y="710.9" font-size="10" fill="#5C6B73" text-anchor="middle">· the watch's finds in turn</text>
+<text x="375.0" y="724.5" font-size="10" fill="#5C6B73" text-anchor="middle">  with builders' posts</text>
+<text x="375.0" y="738.1" font-size="10" fill="#5C6B73" text-anchor="middle">· then unheard-of campuses</text>
+<text x="375.0" y="751.7" font-size="10" fill="#5C6B73" text-anchor="middle">· a story's second copy and</text>
+<text x="375.0" y="765.3" font-size="10" fill="#5C6B73" text-anchor="middle">  an unreadable page are</text>
+<text x="375.0" y="778.9" font-size="10" fill="#5C6B73" text-anchor="middle">  set aside, not read</text>
 <polyline points="224.0,529.0 280.0,529.0" fill="none" stroke="#5C6B73" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#a5C6B73)"/>
 <polyline points="224.0,599.0 280.0,599.0" fill="none" stroke="#5C6B73" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#a5C6B73)"/>
 <polyline points="224.0,669.0 280.0,669.0" fill="none" stroke="#5C6B73" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#a5C6B73)"/>

@@ -295,6 +295,19 @@ def ingest_crawl(
         with session_scope(engine, commit=not dry_run) as session:
             requeued = disc.requeue_reopened(session, reopened)
             discarded = disc.discard_unreadable(session, unreadable)
+            # One copy of a story is read: the others are set aside before the limit
+            # is cut, and put back if the copy kept cannot be read.
+            copies, back = disc.drop_same_story(session, unreadable)
+        if back:
+            console.print(
+                f"[dim]{back} article(s) set aside as another copy are back in the queue: "
+                "the copy kept could not be read[/dim]"
+            )
+        if copies:
+            console.print(
+                f"[dim]{len(copies)} queued article(s) {'would be' if dry_run else 'were'} "
+                "set aside as another copy of a story already read or queued[/dim]"
+            )
         if requeued:
             console.print(
                 f"[dim]{requeued} discarded article(s) are back in the queue: their "

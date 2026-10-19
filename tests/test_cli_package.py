@@ -80,6 +80,7 @@ COMMANDS = {
     "queue check",
     "queue prune",
     "queue stats",
+    "queue duplicates",
     "queue unreadable",
     "review",
     "risks",

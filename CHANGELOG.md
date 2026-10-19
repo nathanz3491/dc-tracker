@@ -12,6 +12,20 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **The queue reads one copy of a story** (`tracker/ingest/discover.py`,
+  `tracker/cli/ingest.py`, `tracker/cli/sync.py`, `docs/workflows/sync.md`). An
+  article can be queued more than once under different addresses -- CyrusOne files
+  every release under two paths, a story is syndicated to three sites, a search
+  engine cuts a headline short, a page was already read through another outlet's
+  copy -- and each copy was a model call for facts already in hand. After the news
+  watch's first look, 159 of 6,646 queued articles were such copies (2.4%). Before
+  the queue is read, a copy is now set aside with the address of the one kept:
+  equal headlines (six words on one site, eight across two), a headline cut short
+  that begins another, or the same page under another address. The copy kept is
+  one already read, else a readable one with its full headline; if it fails or
+  comes back thin, the others go back in the queue. `tracker queue duplicates`
+  shows what would go.
+
 - **The news watch: every campus is searched for news, on a schedule set by its
   stage** (`tracker/ingest/watch.py`, `tracker/migrations/0039_news_watch.sql`,
   `tracker/models.py`, `tracker/cli/sync.py`, `tracker/cli/_shared.py`,

@@ -1611,6 +1611,178 @@ def discard_unreadable(session: Session, unreadable: Callable[[str], bool]) -> i
     return len(rows)
 
 
+# --- One copy of a story ---------------------------------------------------------
+#
+# The queue holds articles, and an article can be queued more than once under
+# different addresses: a builder's site that files every press release twice
+# (CyrusOne, /resources/press-releases/ and /media-coverage-press-releases/), a
+# story syndicated to three sites, a headline a search engine cut short, a page
+# already read through another outlet's copy. Measured on 2026-10-19 after the news
+# watch's first look: about 190 of 6,646 queued articles, 2.9%, each a model call
+# for facts already in hand.
+
+#: The `error` a queued article carries once it is set aside as another copy of a
+#: story already read or queued; the address of the copy kept follows it. A constant
+#: prefix, not prose: :func:`drop_same_story` reads it to put a copy back.
+SAME_STORY: Final = "set aside: the same story as "
+
+#: Words two equal headlines must run to on one site, and across two sites, before
+#: they count as one story. Short headlines collide by accident, and across sites
+#: more so ("Third Quarter 2026 Earnings Conference Call"); on 2026-10-19 requiring
+#: eight across sites lost 4 of 49 cross-site copies.
+SAME_STORY_WORDS: Final = 6
+SAME_STORY_WORDS_ACROSS_SITES: Final = 8
+
+#: What a copy kept has to have become for the copies set aside to stay aside:
+#: still queued, or read for real. A kept copy that failed or came back thin (a
+#: paywall) gives its turn back to the others.
+_KEPT_HOLDS: Final = frozenset({PENDING_URL_STATUS, "ok", "no_project"})
+
+_CUT_SHORT = re.compile(r"\s*(?:\.\.\.|\u2026)\s*$")
+_SITE_SUFFIX = re.compile(r"\s+[-|\u2013\u2014]\s+([^-|\u2013\u2014\d]{2,40})$")
+_PAGE_SUFFIX = re.compile(r"(?:/amp|/print|\.amp)$")
+
+
+def _headline(title: str | None) -> tuple[tuple[str, ...], bool]:
+    """(a headline's words, whether a search engine cut it short).
+
+    Cut at a trailing "..." and less a " - Site Name" suffix, so a search result's
+    title and the article's own compare equal. A suffix with a digit is kept: " -
+    Phase 2" tells two stories apart.
+    """
+    text = title or ""
+    cut = bool(_CUT_SHORT.search(text))
+    text = _CUT_SHORT.sub("", text)
+    suffix = _SITE_SUFFIX.search(text)
+    if suffix and len(suffix.group(1).split()) <= 5:
+        text = text[: suffix.start()]
+    return tuple(_WORD.findall(text.lower())), cut
+
+
+def _page_key(url: str) -> str:
+    """The page an address shows, whichever copy: its identity less a mobile or AMP
+    host and an AMP or print ending."""
+    key = url_identity(url)
+    host, _, rest = key.partition("/")
+    host = host.removeprefix("m.").removeprefix("amp.")
+    return host + _PAGE_SUFFIX.sub("", "/" + rest if rest else "")
+
+
+def drop_same_story(
+    session: Session,
+    unreadable: Callable[[str], bool] | None = None,
+    *,
+    apply: bool = True,
+) -> tuple[list[tuple[IngestUrl, str]], int]:
+    """Set aside every queued article that is another copy of a story already read or
+    queued. Returns ([(the copy set aside, the address of the copy kept)], how many
+    copies set aside on an earlier night were put back).
+
+    Two addresses are one story when they show one page (another spelling, a mobile,
+    AMP or print copy), when their headlines are equal -- at least
+    :data:`SAME_STORY_WORDS` words on one site, :data:`SAME_STORY_WORDS_ACROSS_SITES`
+    across two -- or when a headline a search engine cut short ("...") is how the
+    other begins. A headline only one word longer is not taken for a copy: "CyrusOne
+    raises $9.7B" and "CyrusOne raises $9.7B to grow its portfolio" may be two days'
+    news.
+
+    The copy kept is the one already read (`ok` or `no_project`: the model saw its
+    text), else the best queued copy: a readable one, with its full headline, queued
+    first. A set-aside copy is `skipped` with :data:`SAME_STORY` and the kept
+    address, not deleted, and it is put back when the copy kept failed or came back
+    thin: a paywall on the first site is not a reason to lose the story.
+
+    `apply=False` reports without writing, for `tracker queue duplicates`.
+    """
+    from collections import defaultdict
+
+    restored = 0
+    aside = list(
+        session.scalars(
+            select(IngestUrl).where(
+                IngestUrl.status == "skipped", IngestUrl.error.like(f"{SAME_STORY}%")
+            )
+        )
+    )
+    if aside:
+        kept_urls = list({row.error[len(SAME_STORY) :] for row in aside})
+        status_of: dict[str, str] = {}
+        for start in range(0, len(kept_urls), 500):  # SQLite caps bound parameters
+            for url, status in session.execute(
+                select(IngestUrl.url, IngestUrl.status).where(
+                    IngestUrl.url.in_(kept_urls[start : start + 500])
+                )
+            ):
+                status_of[url] = status
+        for row in aside:
+            if status_of.get(row.error[len(SAME_STORY) :]) not in _KEPT_HOLDS:
+                restored += 1
+                if apply:
+                    row.status, row.error = PENDING_URL_STATUS, None
+
+    def site(url: str) -> str:
+        return urlsplit(url).netloc.lower().removeprefix("www.")
+
+    pages: dict[str, str] = {}
+    headlines: dict[tuple[str, ...], list[tuple[str, str]]] = defaultdict(list)
+    starts: dict[tuple[str, ...], list[tuple[tuple[str, ...], bool, str, str]]] = defaultdict(list)
+
+    def enough(words: tuple[str, ...], same_site: bool) -> bool:
+        need = SAME_STORY_WORDS if same_site else SAME_STORY_WORDS_ACROSS_SITES
+        return len(words) >= need
+
+    def copy_of(row: IngestUrl) -> str | None:
+        kept = pages.get(_page_key(row.url))
+        if kept is not None:
+            return kept
+        words, cut = _headline(row.title)
+        if len(words) < SAME_STORY_WORDS:
+            return None
+        here = site(row.url)
+        for there, url in headlines.get(words, ()):
+            if enough(words, there == here):
+                return url
+        for other, other_cut, there, url in starts.get(words[:SAME_STORY_WORDS], ()):
+            shorter, longer, short_cut = (
+                (words, other, cut) if len(words) <= len(other) else (other, words, other_cut)
+            )
+            if short_cut and longer[: len(shorter)] == shorter and enough(shorter, there == here):
+                return url
+        return None
+
+    def note(row: IngestUrl) -> None:
+        pages.setdefault(_page_key(row.url), row.url)
+        words, cut = _headline(row.title)
+        if len(words) >= SAME_STORY_WORDS:
+            headlines[words].append((site(row.url), row.url))
+            starts[words[:SAME_STORY_WORDS]].append((words, cut, site(row.url), row.url))
+
+    for row in session.scalars(select(IngestUrl).where(IngestUrl.status.in_(("ok", "no_project")))):
+        note(row)
+
+    def best_first(row: IngestUrl) -> tuple:
+        return (
+            bool(unreadable and unreadable(row.url)),
+            _headline(row.title)[1],
+            row.first_seen_at or dt.datetime.max,
+            row.id,
+        )
+
+    queued = session.scalars(select(IngestUrl).where(IngestUrl.status == PENDING_URL_STATUS))
+    dropped: list[tuple[IngestUrl, str]] = []
+    for row in sorted(queued, key=best_first):
+        kept = copy_of(row)
+        if kept is None:
+            note(row)
+            continue
+        dropped.append((row, kept))
+        if apply:
+            row.status = "skipped"
+            row.error = f"{SAME_STORY}{kept}"[:1000]
+            row.last_tried_at = utcnow()
+    return dropped, restored
+
+
 def requeue_reopened(session: Session, reopened: frozenset[str], path: Path | None = None) -> int:
     """Put back in the queue the discarded pages of every publisher found open again.
 
@@ -2957,6 +3129,9 @@ __all__ = [
     "PROBE_EVERY",
     "QUEUED",
     "RETRYABLE_STATUSES",
+    "SAME_STORY",
+    "SAME_STORY_WORDS",
+    "SAME_STORY_WORDS_ACROSS_SITES",
     "TOO_OLD",
     "UNEXPLAINED_CLOSURE",
     "Candidate",
@@ -2977,6 +3152,7 @@ __all__ = [
     "discard_unreadable",
     "drop_ids",
     "drop_pending",
+    "drop_same_story",
     "failed",
     "failure_summary",
     "first_term",

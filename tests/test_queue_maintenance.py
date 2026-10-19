@@ -231,3 +231,105 @@ def test_dropping_never_reaches_a_url_that_was_already_crawled(session):
 
     assert discover.drop_pending(session, ids=[done.id]) == 0
     assert session.get(IngestUrl, done.id) is not None
+
+
+# --- one copy of a story -------------------------------------------------------------
+
+
+def _story(session, url, title, *, status=PENDING_URL_STATUS, minute=0):
+    row = IngestUrl(
+        url=url,
+        run_id="t",
+        status=status,
+        title=title,
+        feed="f",
+        first_seen_at=NOW + dt.timedelta(minutes=minute),
+    )
+    session.add(row)
+    session.flush()
+    return row
+
+
+def test_a_press_release_filed_twice_on_one_site_is_read_once(session):
+    """CyrusOne files every release under two paths, and both were queued on 2026-10-19."""
+    title = "cyrusone closes 1 175 billion abs issuance"
+    first = _story(session, "https://www.cyrusone.com/resources/press-releases/abs", title)
+    second = _story(session, "https://www.cyrusone.com/media-coverage/abs", title, minute=1)
+    copies, back = discover.drop_same_story(session)
+    assert [(row.url, kept) for row, kept in copies] == [(second.url, first.url)]
+    assert second.status == "skipped" and second.error == discover.SAME_STORY + first.url
+    assert first.status == PENDING_URL_STATUS and back == 0
+
+
+def test_a_story_already_read_on_another_site_is_not_read_again(session):
+    title = "Quantum Loophole plans 2100-acre data center campus in Maryland"
+    read = _story(session, "https://www.datacenterfrontier.com/x/ql", title, status="ok")
+    queued = _story(session, "https://quantumloophole.com/2021/06/28/ql/", title)
+    copies, _ = discover.drop_same_story(session)
+    assert [(row.url, kept) for row, kept in copies] == [(queued.url, read.url)]
+
+
+def test_a_headline_cut_short_is_the_story_it_begins(session):
+    full = _story(
+        session,
+        "https://a.test/news/layoffs",
+        "Prineville data center with connection to Meta will lay off 66 workers",
+        minute=5,
+    )
+    cut = _story(
+        session,
+        "https://b.test/s/1",
+        "Prineville data center with connection to Meta will lay off ...",
+    )
+    copies, _ = discover.drop_same_story(session)
+    assert [(row.url, kept) for row, kept in copies] == [(cut.url, full.url)], "the full one kept"
+
+
+def test_a_short_headline_or_a_longer_one_is_another_story(session):
+    """Short headlines collide by accident across sites; a longer headline that merely
+    begins like another may be the next day's news."""
+    _story(session, "https://a.test/1", "Third quarter 2026 earnings conference call")
+    _story(session, "https://b.test/2", "Third quarter 2026 earnings conference call")
+    _story(session, "https://c.test/3", "CyrusOne raises 9.7 billion for its campuses")
+    _story(
+        session,
+        "https://c.test/4",
+        "CyrusOne raises 9.7 billion for its campuses in Texas and Ohio",
+    )
+    assert discover.drop_same_story(session)[0] == []
+
+
+def test_a_mobile_or_amp_copy_is_the_same_page(session):
+    page = _story(session, "https://www.news.test/story/data-center", "a")
+    amp = _story(session, "https://m.news.test/story/data-center/amp", "b", minute=1)
+    copies, _ = discover.drop_same_story(session)
+    assert [(row.url, kept) for row, kept in copies] == [(amp.url, page.url)]
+
+
+def test_the_readable_copy_is_kept(session):
+    title = "Developer files plans for a 300 MW data center campus in Ohio"
+    closed = _story(session, "https://closed.test/a", title)
+    open_ = _story(session, "https://open.test/a", title, minute=1)
+    copies, _ = discover.drop_same_story(session, unreadable=lambda url: "closed.test" in url)
+    assert [(row.url, kept) for row, kept in copies] == [(closed.url, open_.url)]
+
+
+def test_a_copy_set_aside_comes_back_when_the_one_kept_cannot_be_read(session):
+    """A paywall on the first site is not a reason to lose the story."""
+    title = "Developer files plans for a 300 MW data center campus in Ohio"
+    first = _story(session, "https://paywall.test/a", title)
+    second = _story(session, "https://free.test/a", title, minute=1)
+    discover.drop_same_story(session)
+    assert second.status == "skipped"
+    first.status = "thin_content"
+    session.flush()
+    copies, back = discover.drop_same_story(session)
+    assert back == 1 and copies == [] and second.status == PENDING_URL_STATUS
+
+
+def test_a_report_writes_nothing(session):
+    title = "Developer files plans for a 300 MW data center campus in Ohio"
+    _story(session, "https://one.test/a", title)
+    _story(session, "https://two.test/a", title, minute=1)
+    copies, _ = discover.drop_same_story(session, apply=False)
+    assert len(copies) == 1 and copies[0][0].status == PENDING_URL_STATUS

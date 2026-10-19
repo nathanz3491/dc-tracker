@@ -744,9 +744,10 @@ def sync(
     with session_scope(engine, commit=not dry_run) as session:
         reopened = disc.reopened_names(session)
         disc.requeue_reopened(session, reopened)
-        discarded = disc.discard_unreadable(
-            session, disc.unreadable_test(cache_dir, reopened=reopened)
-        )
+        unreadable = disc.unreadable_test(cache_dir, reopened=reopened)
+        discarded = disc.discard_unreadable(session, unreadable)
+        # One copy of a story is read; see `discover.drop_same_story`.
+        disc.drop_same_story(session, unreadable)
     with session_scope(engine, commit=False) as session:
         # known_first spends each LLM call on depth: a queued article covering a
         # project we already track becomes a SECOND source, which fills fields one
@@ -2202,6 +2203,48 @@ def queue_prune(
         console.print(f"\n[green]dropped {removed} candidate(s)[/green]")
     else:
         console.print("\n[dim]remove them with:[/dim] tracker queue prune --drop")
+
+
+@queue_app.command("duplicates")
+def queue_duplicates(
+    drop: Annotated[
+        bool,
+        typer.Option("--drop", help="Set them aside. Without this it only reports."),
+    ] = False,
+    limit: Annotated[int, typer.Option("--limit", help="Examples to print.")] = 10,
+) -> None:
+    """Queued articles that are another copy of a story already read or queued.
+
+    The same page under another address, the same headline on two sites, a headline
+    a search engine cut short. `ingest crawl --from-queue` and `sync` set them aside
+    before reading the queue anyway; this does it on demand and shows what goes. Set
+    aside is `skipped` with the address of the copy kept, not deleted, and a copy is
+    put back when the one kept could not be read.
+    """
+    from tracker.ingest import discover as disc
+
+    engine = _writable("queue duplicates") if drop else _read_engine()
+    with session_scope(engine, commit=drop) as session:
+        reopened = disc.reopened_names(session)
+        unreadable = disc.unreadable_test(article_cache("articles"), reopened=reopened)
+        found, back = disc.drop_same_story(session, unreadable, apply=drop)
+        pairs = [(row.url, kept) for row, kept in found]
+
+    if json_mode():
+        emit({"copies": [{"url": u, "kept": k} for u, k in pairs], "put_back": back})
+        return
+    if back:
+        console.print(f"{back} copy/copies set aside earlier {'are' if drop else 'would be'} back")
+    if not pairs:
+        console.print("[green]nothing queued is another copy of a story[/green]")
+        return
+    console.print(f"[yellow]{len(pairs)}[/yellow] queued article(s) are another copy of a story\n")
+    for url, kept in pairs[:limit]:
+        console.print(f"  {escape(url)}\n    [dim]same story as[/dim] {escape(kept)}")
+    if drop:
+        console.print(f"\n[green]set aside {len(pairs)} article(s)[/green]")
+    else:
+        console.print("\n[dim]set them aside with:[/dim] tracker queue duplicates --drop")
 
 
 @queue_app.command("unreadable")
