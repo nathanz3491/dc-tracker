@@ -205,6 +205,11 @@ def test_the_no_reasoning_sibling_is_a_copy_with_only_the_effort_changed():
 
 
 def test_the_judgement_tier_alone_can_go_to_the_local_model():
+    """The local extractor asks its server for a version when built; mocked, so the
+    test does not depend on one running on this machine (it failed on 2026-10-19
+    after the machine woke with no Ollama up)."""
+    import respx
+
     from tracker.llm import (
         DeepSeekExtractor,
         OllamaExtractor,
@@ -213,7 +218,9 @@ def test_the_judgement_tier_alone_can_go_to_the_local_model():
     )
 
     settings = Settings(deepseek_api_key="k", judgement_provider="ollama")
-    assert isinstance(judgement_extractor(settings), OllamaExtractor)
+    with respx.mock(assert_all_called=False) as router:
+        router.get(f"{settings.ollama_base_url}/api/version").respond(200, json={"version": "0"})
+        assert isinstance(judgement_extractor(settings), OllamaExtractor)
     assert isinstance(agent_extractor(settings), DeepSeekExtractor), "everything else stays"
     assert isinstance(judgement_extractor(Settings(deepseek_api_key="k")), DeepSeekExtractor)
 
