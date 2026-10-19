@@ -1851,3 +1851,57 @@ def test_a_round_reads_the_pages_it_can_before_a_closed_publishers(session, monk
     run(session, add_project(session).id, max_articles=2, max_rounds=1, skip_settle=True)
 
     assert batches == [["https://open.test/3", "https://refused.test/1"]]
+
+
+# --- the batch table counts what the agent pass found -----------------------------
+
+
+class FillingGapfill:
+    """Stands in for `gapfill.fill`, finding one fact for one row and nothing else."""
+
+    def __init__(self, project_id: int, field: str, value):
+        self.project_id, self.field, self.value = project_id, field, value
+
+    def __call__(self, session, project, *, extractor, gaps=None, **kwargs):
+        from tracker.gapfill import Filled
+
+        if project.id != self.project_id or self.field not in (gaps or ()):
+            return Filled(verdict="nothing", note="nobody published it", missed=tuple(gaps or ()))
+        setattr(project, self.field, self.value)
+        return Filled(verdict="filled", stored=[f"{self.field} = {self.value} (https://x.test)"])
+
+
+def test_the_batch_table_counts_what_the_agent_pass_found(session, monkeypatch):
+    """The table was measured when the harvest ended and the agent pass runs after it.
+    On 2026-10-19 the table listed 13 rows gaining 15 fields while the agent pass,
+    printed just above it, had filled six more on six rows, none of them in it."""
+    import io
+
+    from rich.console import Console
+
+    from tracker.gaps import for_project
+
+    found = add_project(session, city="Lordstown", company="SoftBank", state="OH")
+    empty = add_project(session, city="Mesa", company="Op Mesa")
+    cli_enrich = _agent_ready(monkeypatch, FillingGapfill(found.id, "investment_usd", 3e9))
+
+    reports = [
+        enrich.EnrichReport(p.id, label=p.name, before=for_project(p), after=for_project(p))
+        for p in (found, empty)
+    ]
+    landed = cli_enrich._gapfill_batch(session, [found.id, empty.id], max_attempts=0)
+    assert landed == {found.id: ("investment_usd",)}
+
+    for report in reports:
+        project = session.get(Project, report.project_id)
+        report.remeasure(session, project, landed.get(report.project_id, ()))
+    assert reports[0].agent_gained == ("investment_usd",)
+    assert "investment_usd" in reports[0].gained
+    assert reports[0].harvested == (), "the harvest found nothing; the agent did"
+
+    shown = io.StringIO()
+    monkeypatch.setattr(cli_enrich, "console", Console(file=shown, width=220))
+    cli_enrich._render_batch(enrich.BatchReport(reports=reports), target=9, dry_run=False)
+    text = shown.getvalue()
+    assert "agent found" in text and "investment_usd" in text
+    assert "the agent pass filled 1 field(s) on 1 row(s)" in text
