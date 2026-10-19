@@ -1866,7 +1866,17 @@ def _event_quote_supports(event_type: str, quote: str) -> bool:
     as an unverifiable one: an article that mentions a milestone in a forward-looking
     sentence may still be reporting a real milestone somewhere else, and deletion
     is the one repair this codebase has learned is not durable.
+
+    **Only for `COMPLETION_EVENTS`**, as that set says and as
+    `description_is_forecast` always did. An announcement is a statement of intent,
+    so its own sentence says "will build" or "plans to" — that is what announcing
+    is. This ran on every type, and announcements were the commonest casualty: 25
+    of the 29 non-completion milestones it demoted on 2026-10-19, and 46 in the
+    database that night (31 announced, 7 expanded, 6 permit_filed, 2 delayed),
+    each recorded as a plan and dropped from the project's track.
     """
+    if event_type not in COMPLETION_EVENTS:
+        return True
     normalized = _normalize_for_match(quote)
     return not any(token in normalized for token in _PLANNED_WORDING)
 
@@ -3367,6 +3377,16 @@ GATE_REVISED_AT: Final = dt.datetime(2026, 10, 17, 6, 24)
 #: and reading the same article again offers nothing new.
 _REVERSIBLE: Final = ("quote_off_target", "quote_unverified")
 
+#: When the milestone tense check stopped reading announcements, in UTC (see
+#: `_event_quote_supports`). Until then an announcement, expansion, filing or delay
+#: whose sentence said "will build" was filed as a forecast and its quote thrown
+#: away, so only a second reading of the article can confirm it — 46 such milestones
+#: on 2026-10-19. `refused_before_gate` offers those articles once more, however
+#: recently they were re-read. A constant of its own, not `GATE_REVISED_AT` moved
+#: forward, which would put every refusal re-read since 10-17 back in line for one
+#: rule's sake.
+TENSE_CHECK_REVISED_AT: Final = dt.datetime(2026, 10, 20, 10, 0)
+
 
 def refused_before_gate(
     session: Session,
@@ -3378,9 +3398,17 @@ def refused_before_gate(
     """Source URLs carrying a refusal from before `GATE_REVISED_AT`, not tried since.
 
     A refusal is a field value, a milestone or a party the gate marked off-target or
-    unverified. Most refusals first, so a limited run reaches the articles with the
-    most to gain; then oldest first. Every re-read moves `ingest_url.last_tried_at`
-    past the revision, whatever it finds, so each article is taken once.
+    unverified — or a milestone the tense check filed as a forecast although it is
+    not a kind that check reads, which counts until `TENSE_CHECK_REVISED_AT`. Most
+    refusals first, so a limited run reaches the articles with the most to gain;
+    then oldest first. Every re-read moves `ingest_url.last_tried_at` past the
+    revision, whatever it finds, so each article is taken once.
+
+    The articles behind those milestones go before everything else. Each was read
+    once already and the model quoted a sentence the gate accepted as real; only the
+    misapplied check refused it, so a re-read is as near a certain gain as this
+    queue holds. Ordered with the rest they were spread across a 620-article line —
+    eleven nights at the nightly 60 — where first they all fit in one.
     """
     from tracker.models import Event, ProjectParty, Source
 
@@ -3392,12 +3420,16 @@ def refused_before_gate(
     counts: dict[str, int] = {}
     oldest: dict[str, dt.datetime] = {}
 
-    def note(url: str, refusals: int, fetched: dt.datetime | None) -> None:
-        if refusals <= 0 or (tried.get(url) and tried[url] >= GATE_REVISED_AT):
-            return
+    def note(
+        url: str, refusals: int, fetched: dt.datetime | None, revised: dt.datetime = GATE_REVISED_AT
+    ) -> bool:
+        """Count `refusals` against `url` unless it was tried since `revised`."""
+        if refusals <= 0 or (tried.get(url) and tried[url] >= revised):
+            return False
         counts[url] = counts.get(url, 0) + refusals
         if fetched is not None and (url not in oldest or fetched < oldest[url]):
             oldest[url] = fetched
+        return True
 
     sources = session.execute(
         select(Source.id, Source.url, Source.unconfirmed_reasons, Source.fetched_at).where(
@@ -3419,9 +3451,25 @@ def refused_before_gate(
             row = by_id.get(source_id)
             if row is not None:
                 note(row.url, 1, row.fetched_at)
+    # Only the tense check ever files these as forecasts — `description_is_forecast`
+    # and `backfill events` read completion milestones alone — and it dropped the
+    # quote when it did, so the milestone is confirmed by the re-read or not at all.
+    misapplied: set[str] = set()
+    for (source_id,) in session.execute(
+        select(Event.source_id).where(
+            Event.unconfirmed == "forecast",
+            Event.event_type.not_in(sorted(COMPLETION_EVENTS)),
+        )
+    ):
+        row = by_id.get(source_id)
+        if row is not None and note(row.url, 1, row.fetched_at, TENSE_CHECK_REVISED_AT):
+            misapplied.add(row.url)
 
     floor = dt.datetime.min
-    urls = sorted(counts, key=lambda url: (-counts[url], oldest.get(url, floor), url))
+    urls = sorted(
+        counts,
+        key=lambda url: (url not in misapplied, -counts[url], oldest.get(url, floor), url),
+    )
     return _rereadable(urls, limit, readable_in, policy)
 
 

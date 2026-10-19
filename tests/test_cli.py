@@ -1297,6 +1297,77 @@ def test_refused_before_gate_takes_each_reversible_refusal_once(initialized: Pat
         assert refused_before_gate(session, limit=1) == ["https://news.example.com/two/"]
 
 
+def test_refused_before_gate_rereads_announcements_filed_as_forecasts_first(initialized: Path):
+    """The tense check ran on announcements and threw their quotes away, so only a
+    second reading confirms them. Those articles go first, even if re-read since
+    `GATE_REVISED_AT`; a completion milestone's forecast is the check working."""
+    from tracker.db import init_db, session_scope
+    from tracker.ingest.crawl import GATE_REVISED_AT, TENSE_CHECK_REVISED_AT, refused_before_gate
+    from tracker.models import Event, IngestUrl, Source
+
+    pid = with_real_source(initialized)
+    engine, _ = init_db(initialized)
+    with session_scope(engine) as session:
+
+        def source(url, when, *, reasons=None, tried=None, event=None):
+            row = Source(
+                project_id=pid,
+                url=url,
+                source_type="trade_press",
+                extractor="crawl:extract-v1@x:m:httpx",
+                fetched_at=when,
+                unconfirmed_reasons=json.dumps(reasons) if reasons else None,
+            )
+            session.add(row)
+            session.flush()
+            if tried is not None:
+                session.add(
+                    IngestUrl(
+                        url=url,
+                        run_id="r",
+                        status="ok",
+                        attempts=1,
+                        failures=0,
+                        first_seen_at=when,
+                        last_tried_at=tried,
+                    )
+                )
+            if event is not None:
+                session.add(
+                    Event(
+                        project_id=pid,
+                        # One milestone per (project, type, date): dated by the article.
+                        event_date=when.date(),
+                        event_type=event,
+                        description="Plans were announced.",
+                        source_id=row.id,
+                        unconfirmed="forecast",
+                    )
+                )
+
+        two = {"mw_planned": "quote_off_target", "phase": "quote_off_target"}
+        source("https://news.example.com/two/", dt.datetime(2019, 1, 1), reasons=two)
+        source(
+            "https://news.example.com/announced/",
+            dt.datetime(2025, 1, 1),
+            tried=GATE_REVISED_AT + dt.timedelta(hours=1),
+            event="announced",
+        )
+        source(
+            "https://news.example.com/reread-since/",
+            dt.datetime(2024, 1, 1),
+            tried=TENSE_CHECK_REVISED_AT + dt.timedelta(hours=1),
+            event="announced",
+        )
+        source("https://news.example.com/energized/", dt.datetime(2018, 1, 1), event="energized")
+
+    with session_scope(engine, commit=False) as session:
+        assert refused_before_gate(session) == [
+            "https://news.example.com/announced/",
+            "https://news.example.com/two/",
+        ]
+
+
 def test_a_reread_that_wrote_nothing_is_not_read_again(initialized: Path):
     """A re-read that writes no citation re-stamps nothing, and the URL used to stay
     at the head of the line: 45 of the nightly 60 on 2026-10-17 had been read the

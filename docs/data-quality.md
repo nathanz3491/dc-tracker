@@ -147,6 +147,14 @@ events` applies the same rule to milestones read before it existed (free; a prev
 until `--apply`). `milestone_in_the_future` still reports future-dated milestones,
 since a row that holds one is worth a look.
 
+The rule reads **completion milestones only** — energised, broke ground, permit
+granted and the rest of `crawl.COMPLETION_EVENTS`. An announcement, an expansion, a
+filing or a delay is a statement of intent by nature, so its own sentence says "will
+build" or "plans to". Until 2026-10-20 the quote check read every type anyway and
+filed 46 of them as forecasts, 31 announcements among them, throwing their quotes
+away; `--refused-before-gate` re-reads those articles first (below), and the re-read
+confirms each milestone through the same path that confirms any re-read one.
+
 Two of them ask a narrower question than the rest: not whether the row's fields
 agree with each other, but whether a stored **number** agrees with the citations
 under it.
@@ -432,6 +440,14 @@ it since — so it is a backlog that empties, not a nightly rotation. `no_quote`
 out: nothing was offered, and the same article offers nothing new. The nightly loop
 runs it at 60 a night (`--recheck`). When a later gate change should reach old rows,
 move `GATE_REVISED_AT` forward with it.
+
+One refusal has a clock of its own: a non-completion milestone filed as a
+`forecast`, which only the misapplied tense check ever did, counts until
+`crawl.TENSE_CHECK_REVISED_AT`, and its article goes to the front of the line — the
+model already quoted a sentence the gate accepted as real, so a re-read is as near a
+certain gain as the queue holds. On the 2026-10-19 copy that is 46 milestones on 46
+cached articles, 29 of them re-read since `GATE_REVISED_AT` and so out of reach
+before; first in line, one night's 60 takes them all.
 
 **A URL the current prompt has read is not read again**, whatever the read produced.
 A re-read that wrote no citation used to re-stamp nothing and so stayed first in

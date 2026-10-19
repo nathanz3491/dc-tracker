@@ -771,6 +771,56 @@ def test_an_event_offered_without_a_quote_is_kept_as_uncited():
     assert got.quote is None
 
 
+_ANNOUNCEMENT = (
+    "Microsoft announced on Tuesday that it plans to build a 900 megawatt data center "
+    "campus in Mount Pleasant, where construction will begin next year.\n"
+)
+
+
+@pytest.mark.parametrize("event_type", ["announced", "expanded", "permit_filed", "delayed"])
+def test_an_announcement_is_not_a_forecast_for_saying_what_is_planned(event_type):
+    """An announcement says "plans to build" — that is what announcing is. The tense
+    check ran on every type and filed 46 of these as forecasts, 31 announcements
+    among them, dropping each from its project's track."""
+    (got,) = crawl._events(
+        {
+            "events": [
+                {
+                    "event_date": "2023-03-14",
+                    "event_type": event_type,
+                    "description": "Microsoft announced the campus.",
+                    "quote": "Microsoft announced on Tuesday that it plans to build a 900 "
+                    "megawatt data center campus in Mount Pleasant",
+                }
+            ]
+        },
+        _ANNOUNCEMENT,
+        URL,
+    )
+    assert got.unconfirmed is None
+    assert got.quote and "plans to build" in got.quote
+
+
+def test_a_completion_milestone_in_the_same_words_is_still_a_forecast():
+    (got,) = crawl._events(
+        {
+            "events": [
+                {
+                    "event_date": "2023-03-14",
+                    "event_type": "groundbreaking",
+                    "description": "Construction of the campus.",
+                    "quote": "Microsoft announced on Tuesday that it plans to build a 900 "
+                    "megawatt data center campus in Mount Pleasant",
+                }
+            ]
+        },
+        _ANNOUNCEMENT,
+        URL,
+    )
+    assert got.unconfirmed == "forecast"
+    assert got.quote is None
+
+
 def test_the_dropped_note_lists_only_what_was_really_dropped(prompt):
     """Identity fields are restored after the gate, so they are not "dropped".
 

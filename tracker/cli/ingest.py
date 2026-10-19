@@ -208,7 +208,9 @@ def ingest_crawl(
     `--refused-before-gate` is the same re-read for a change to the gate rather than
     to the prompt, which does not move the prompt's stamp and so is invisible to
     `--stale-prompt`: articles holding a refusal from before `crawl.GATE_REVISED_AT`
-    that no crawl has tried since. Each is taken once.
+    that no crawl has tried since. Each is taken once. Articles behind an
+    announcement, expansion, filing or delay the tense check filed as a forecast
+    before `crawl.TENSE_CHECK_REVISED_AT` go first.
 
     **Pair a re-read with `--existing-only`.** An article this database already
     cites also names other things — re-reading Hyperion's coverage yields "Project
