@@ -457,6 +457,64 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **An obstacle's wording is read as words, in the whole sentence it was quoted
+  from** (`tracker/ingest/crawl.py`, `tracker/riskcheck.py`, `docs/analysis.md`,
+  `docs/design-decisions.md`). The check that a quote states the kind of obstacle it is
+  filed under compared raw substrings against the fragment the model copied, so
+  "approval" never matched "approved" and "power constraint" never matched "the
+  binding constraint is firm power". On 2026-10-19 the nightly check confirmed 2 of 26
+  obstacles: twenty times the model had found the sentence and the check refused it,
+  and 131 of the 159 obstacles it was holding back as undecided were such refusals. It
+  also matched inside other words — "sue" in "issue", "epa" in "ratepayers", "loan"
+  in "Sloan" — and 19 of 701 confirmed obstacles on a copy of production had passed
+  only that way. Each wording entry is now a dictionary form whose inflections are
+  generated, a phrase's words may sit a couple of words apart in either order, and the
+  check reads the article's own sentence around the quote. Of the twenty refused that
+  night, nine now pass; the rest do not say that kind of obstacle. Obstacles the old
+  check overruled are offered to the nightly check once more (about 118 calls, under
+  ¥1); the model's own "unclear" answers still hold.
+
+- **A quote widened to its sentence no longer takes the next sentence with it**
+  (`tracker/ingest/crawl.py`, `docs/design-decisions.md`). A quote copied whole, full
+  stop included, came back with the following sentence attached, and a status line
+  with no full stop ran on into the paragraph below — and the obstacle and milestone
+  checks read that sentence for what it says. Widening now stops at the quote's own
+  sentence and never crosses a paragraph break.
+
+- **An announcement is no longer filed as a forecast for saying "will build"**
+  (`tracker/ingest/crawl.py`, `tracker/cli/ingest.py`, `docs/data-quality.md`). The
+  tense check is meant for completion milestones but ran on every type, and an
+  announcement's own sentence says "plans to" because that is what announcing is. On
+  2026-10-19 it filed 29 announcements, expansions, filings and delays as forecasts;
+  46 sat in the database, 31 of them announcements, each dropped from its project's
+  track with its quote thrown away. The check now reads completion milestones only,
+  and the nightly recheck re-reads those 46 articles first — one night's 60 takes them
+  all — so each milestone the model quotes again is confirmed.
+
+- **A directory's listing date is no longer an announcement date**
+  (`tracker/ingest/crawl.py`, `tracker/vocab.py`, `tracker/backfill.py`,
+  `tracker/cli/quality.py`, `tracker/webui/dataset.py`, `tracker/webui/static/app.js`,
+  `docs/data-quality.md`, `docs/design-decisions.md`). Tracker pages print dates of
+  their own — "Canceled · first reported Oct 7, 2026", "Data updated Oct 2026" — and
+  the model read them as the day a project was announced: 17 new rows on 2026-10-19,
+  8 of them projects already cancelled or paused, so a dead project read as fresh
+  news, and 9 announcement milestones. Such a date is now kept as 待确认 with a new
+  reason, `listing_date`, which the console explains; a newspaper's "was first
+  reported on", a byline and a dated "Announced" line are unaffected. `tracker backfill
+  events` also files the 15 listing-dated announcements already stored; stored
+  announcement dates change when their article is next read. The matching prompt
+  wording was written and held back: it would move the prompt's version stamp and put
+  every stored reading back in the re-read queue (about 3,400 articles), and the code
+  gate already refuses these dates.
+
+- **A reply cut off inside its JSON is retried as a different request**
+  (`tracker/llm.py`, `tracker/ingest/crawl.py`, `docs/workflows/enrich.md`). On
+  2026-10-19 four long replies about several projects began `{"projects": [` and
+  stopped short with the provider reporting nothing wrong; each was retried with the
+  identical request, and one article failed twice and ended as a parse error. An
+  answer that begins as JSON and does not parse is now called cut off, and the retry
+  switches reasoning off (or raises the budget) and says why.
+
 - **An obstacle keeps its wording with its sentence** (`tracker/upsert.py`). A
   quoted obstacle that a later, unquoted reading of the same kind reached kept its
   quote but took the new reading's summary, severity and citation, so it paired one
