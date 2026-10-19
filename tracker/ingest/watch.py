@@ -40,7 +40,7 @@ from urllib.parse import urlsplit
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from tracker.models import NewsWatch, Project, Watch, utcnow
+from tracker.models import CompanyWatch, NewsWatch, Project, Watch, utcnow
 
 log = logging.getLogger(__name__)
 
@@ -102,6 +102,20 @@ NEXT_WORDS: Final[dict[str, tuple[str, ...]]] = {
     "paused": ("resumes", "restart", "cancelled", "sold", "revived"),
     "cancelled": ("revived", "resumes", "new developer", "sold"),
 }
+
+#: A company with at least this many campuses here is searched as a company too: its
+#: next campus is likely somewhere the database holds nothing, which no campus search
+#: can find. A company a reader watches is searched whatever it holds.
+COMPANY_MIN_CAMPUSES: Final = 3
+
+#: How often a company is searched as a company, and a watched one.
+COMPANY_CADENCE: Final = dt.timedelta(days=7)
+WATCHED_COMPANY_CADENCE: Final = dt.timedelta(days=1)
+
+#: How far back a company's first search reaches. A month, not a year: the campus
+#: watch's first look already read a year of news about every campus held, and what
+#: this is for is the next one.
+COMPANY_FIRST_DAYS: Final = 30
 
 #: Results whose date is this much older than the window's start are still taken:
 #: Google dates a story by its last update as often as by its first appearance.
@@ -467,22 +481,13 @@ def _naive_utc(when: dt.datetime | None) -> dt.datetime | None:
     return when
 
 
-def judge(
-    hits: list[Any],
-    query: Query,
-    project: Project,
-    *,
-    spec: Any,
-    identity: Any,
-    implied: dict[str, str],
-    now: dt.datetime,
-) -> list[Any]:
-    """The results worth reading, as discovery candidates labelled `watch:#<id>`."""
-    from tracker.ingest.discover import Candidate, _news_date, matches_known_project
+def _screened(hits: list[Any], query: Query, *, now: dt.datetime):
+    """(result, its headline and snippet, the date to store) for each result worth
+    judging: a page on a usable host, in English, dated inside the window."""
+    from tracker.ingest.discover import _news_date
     from tracker.ingest.search import is_useful_host
     from tracker.normalize import looks_english
 
-    kept: list[Candidate] = []
     for hit in hits:
         if not hit.url or not is_useful_host(hit.url):
             continue
@@ -498,7 +503,24 @@ def judge(
         # "3 weeks ago" is good enough to judge the window and not to store: the
         # model resolves "next month" against the stored date. The page's own date
         # fills it when the article is read.
-        stored = None if _COARSE.search(raw) else when
+        yield hit, text, (None if _COARSE.search(raw) else when)
+
+
+def judge(
+    hits: list[Any],
+    query: Query,
+    project: Project,
+    *,
+    spec: Any,
+    identity: Any,
+    implied: dict[str, str],
+    now: dt.datetime,
+) -> list[Any]:
+    """The results worth reading, as discovery candidates labelled `watch:#<id>`."""
+    from tracker.ingest.discover import Candidate, matches_known_project
+
+    kept: list[Candidate] = []
+    for hit, text, stored in _screened(hits, query, now=now):
         haystack = f"{text} {urlsplit(hit.url).path}"
         keep = spec.matches(haystack)[0]
         if not keep:
@@ -517,6 +539,199 @@ def judge(
                 )
             )
     return kept
+
+
+# --- Companies -------------------------------------------------------------------------
+
+
+@dataclass
+class CompanyLook:
+    """What one company's search found."""
+
+    company_key: str
+    label: str
+    baseline: bool
+    queries: int = 0
+    results: int = 0
+    kept: int = 0
+    queued: int = 0
+
+
+@dataclass
+class CompanyReport:
+    looks: list[CompanyLook] = field(default_factory=list)
+    due: int = 0
+    queries: int = 0
+    failures: int = 0
+    stopped: str | None = None
+
+    @property
+    def queued(self) -> int:
+        return sum(look.queued for look in self.looks)
+
+    def as_rows(self) -> list[tuple[str, int]]:
+        return [
+            ("companies due", self.due),
+            ("companies looked at", len(self.looks)),
+            ("of them first looks", sum(1 for look in self.looks if look.baseline)),
+            ("searches", self.queries),
+            ("results", sum(look.results for look in self.looks)),
+            ("kept by the filter", sum(look.kept for look in self.looks)),
+            ("queued", self.queued),
+            ("searches failed", self.failures),
+        ]
+
+
+def companies_due(
+    session: Session, *, now: dt.datetime
+) -> list[tuple[str, str, CompanyWatch | None]]:
+    """[(company key, the name to search, its last look)] for every company due a
+    search: watched ones first, then by how many campuses each holds.
+
+    The name is the spelling most of its rows carry ("Meta", not "Facebook"), or the
+    reader's own entry for a watched company that holds none.
+    """
+    from collections import Counter, defaultdict
+
+    from tracker.dedup import company_key
+
+    counts: Counter[str] = Counter()
+    spellings: dict[str, Counter[str]] = defaultdict(Counter)
+    for company in session.scalars(select(Project.company)):
+        key = company_key(company)
+        if key:
+            counts[key] += 1
+            spellings[key][(company or "").strip()] += 1
+    watched = {
+        key: entry for key, entry in session.execute(select(Watch.company_key, Watch.entry)) if key
+    }
+    looks = {look.company_key: look for look in session.scalars(select(CompanyWatch))}
+    keys = {key for key, n in counts.items() if n >= COMPANY_MIN_CAMPUSES} | set(watched)
+    out: list[tuple[int, int, str, str, CompanyWatch | None]] = []
+    for key in keys:
+        look = looks.get(key)
+        every = WATCHED_COMPANY_CADENCE if key in watched else COMPANY_CADENCE
+        if (
+            look is not None
+            and look.baseline_at is not None
+            and now - look.checked_at < every - EARLY
+        ):
+            continue
+        label = spellings[key].most_common(1)[0][0] if spellings.get(key) else watched[key]
+        out.append((0 if key in watched else 1, -counts.get(key, 0), key, label, look))
+    out.sort()
+    return [(key, label, look) for _, _, key, label, look in out]
+
+
+def company_query(label: str, look: CompanyWatch | None, *, now: dt.datetime) -> Query | None:
+    """`"Company" "data center"`, since the last look; a month back on the first."""
+    term = _company_term(Project(company=label))
+    if term is None:
+        return None
+    first = look is None or look.baseline_at is None
+    if first:
+        since = now - dt.timedelta(days=COMPANY_FIRST_DAYS)
+        window = "qdr:m"
+    else:
+        since = look.checked_at
+        window = window_for(since, now)
+    return Query(0, f'{term} "data center"', "news", window, since, first)
+
+
+def judge_company(
+    hits: list[Any], query: Query, key: str, *, spec: Any, now: dt.datetime
+) -> list[Any]:
+    """The results worth reading, labelled `watch:company:<key>`. Only the filter
+    decides: no campus of the company's is named, which is the point."""
+    from tracker.ingest.discover import Candidate
+
+    kept = []
+    for hit, text, stored in _screened(hits, query, now=now):
+        if spec.matches(f"{text} {urlsplit(hit.url).path}")[0]:
+            kept.append(
+                Candidate(
+                    url=hit.url,
+                    title=hit.title or hit.url,
+                    feed=f"watch:company:{key}",
+                    published_at=stored,
+                    source_type="general_media",
+                )
+            )
+    return kept
+
+
+def run_companies(
+    session: Session,
+    *,
+    provider: Any = None,
+    max_queries: int | None = None,
+    now: dt.datetime | None = None,
+    run_id: str | None = None,
+    feeds_path: Any = None,
+) -> CompanyReport:
+    """Search every company that is due, as a company. Commits after each."""
+    from tracker.ingest.discover import DiscoverReport, load_config, queue_candidates
+    from tracker.ingest.search import QuotaExhausted, SearchError, SerperProvider
+
+    now = now or utcnow()
+    report = CompanyReport()
+    run_id = run_id or now.strftime("watch-companies-%Y%m%dT%H%M%S")
+    plan = companies_due(session, now=now)
+    report.due = len(plan)
+    if not plan:
+        return report
+    if provider is None:
+        try:
+            provider = SerperProvider()
+        except SearchError as exc:
+            report.stopped = f"no news search: {exc}"
+            return report
+    _, spec = load_config(feeds_path)
+    queue_report = DiscoverReport()
+    failures_running = 0
+    for key, label, look in plan:
+        query = company_query(label, look, now=now)
+        if query is None:
+            continue
+        if max_queries is not None and report.queries + 1 > max_queries:
+            report.stopped = f"the run's search allowance is spent ({report.queries} sent)"
+            break
+        result = CompanyLook(key, label, baseline=query.baseline)
+        try:
+            hits = provider.news(query.text, window=query.window)
+        except QuotaExhausted as exc:
+            report.stopped = str(exc)
+            break
+        except SearchError as exc:
+            report.failures += 1
+            failures_running += 1
+            log.warning("company watch search failed for %s: %s", key, exc)
+            if failures_running >= 5:
+                report.stopped = f"five searches failed in a row; the last: {exc}"
+                break
+            continue
+        failures_running = 0
+        report.queries += 1
+        result.queries, result.results = 1, len(hits)
+        candidates = judge_company(hits, query, key, spec=spec, now=now)
+        result.kept = len(candidates)
+        result.queued = len(
+            queue_candidates(session, candidates, run_id=run_id, report=queue_report)
+        )
+        if look is None:
+            look = CompanyWatch(company_key=key, checked_at=now, queries=0, results=0, queued=0)
+            session.add(look)
+        if query.baseline:
+            look.baseline_at = now
+        look.checked_at = now
+        look.queries = (look.queries or 0) + 1
+        look.results = (look.results or 0) + result.results
+        look.queued = (look.queued or 0) + result.queued
+        if result.queued:
+            look.last_queued_at = now
+        session.commit()
+        report.looks.append(result)
+    return report
 
 
 # --- The run ------------------------------------------------------------------------
@@ -653,15 +868,25 @@ __all__ = [
     "BASELINE_DAYS",
     "BASELINE_PER_RUN",
     "CADENCE",
+    "COMPANY_CADENCE",
+    "COMPANY_FIRST_DAYS",
+    "COMPANY_MIN_CAMPUSES",
     "NEXT_WORDS",
+    "WATCHED_COMPANY_CADENCE",
     "CampusLook",
+    "CompanyLook",
+    "CompanyReport",
     "Query",
     "WatchReport",
     "anchor",
     "cadence",
+    "companies_due",
+    "company_query",
     "due",
     "judge",
+    "judge_company",
     "plan_queries",
     "run",
+    "run_companies",
     "window_for",
 ]

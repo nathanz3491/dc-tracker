@@ -123,7 +123,7 @@ Then the real loop, which needs one API key — or a local Ollama model instead,
 ```bash
 tracker tui           # all of the below, on screen, in six panes
 tracker discover      # poll news feeds, queue candidates
-tracker news          # search the news for every campus that is due (`news report`: how it came in)
+tracker news          # search the news for every campus and builder that is due (`news report`: how it came in)
 tracker ingest crawl  # extract the tracked fields, gated on quoted evidence
 tracker gaps          # see what is thin
 tracker coverage      # which operators we hold no rows for at all

@@ -31,7 +31,7 @@ from tracker.ingest.discover import (
 )
 from tracker.ingest.fetch import FetchResult
 from tracker.ingest.search import QuotaExhausted, SearchHit
-from tracker.models import IngestUrl, NewsWatch, Project, SeenUrl, Watch
+from tracker.models import CompanyWatch, IngestUrl, NewsWatch, Project, SeenUrl, Watch
 from tracker.vocab import PENDING_URL_STATUS
 
 NOW = dt.datetime(2026, 10, 18, 10, 0)
@@ -639,6 +639,54 @@ def _feeds(session) -> Path:
         encoding="utf-8",
     )
     return path
+
+
+# --- the company watch ------------------------------------------------------------------
+
+
+def test_a_company_with_three_campuses_or_a_watched_one_is_searched_as_a_company(session):
+    """The campus watch asks only about campuses held; a company's next one is
+    likely somewhere the database holds nothing."""
+    from tracker import accounts
+
+    for n in range(3):
+        _campus(session, 100 + n, name=f"Meta site {n}", city=f"Town{n}")
+    _campus(session, 110, company="Foo Corp", name="Foo One", city="Elsewhere")
+    account = accounts.create(session, "reader@example.com", "a long enough password 1")
+    session.add(Watch(account_id=account.id, entry="xAI", company_key="xai"))
+    session.flush()
+    due = watch.companies_due(session, now=NOW)
+    assert [(key, label) for key, label, _ in due] == [("xai", "xAI"), ("meta", "Meta")]
+
+
+def test_a_company_search_reaches_back_a_month_then_to_its_last_look():
+    first = watch.company_query("Meta", None, now=NOW)
+    assert first.text == '"Meta" "data center"' and first.window == "qdr:m"
+    look = CompanyWatch(company_key="meta", baseline_at=NOW, checked_at=NOW)
+    later = watch.company_query("Meta", look, now=NOW + dt.timedelta(days=7))
+    assert later.window.startswith("cdr:1,") and later.window.endswith(",sbd:1")
+
+
+def test_a_companys_news_is_queued_and_its_next_search_waits_a_week(session):
+    for n in range(3):
+        _campus(session, 120 + n, name=f"Meta site {n}", city=f"Town{n}")
+    provider = FakeNews(
+        news=[
+            _hit(
+                "https://news.test/meta-lea-county",
+                "Meta plans $10 billion data center campus in Lea County",
+            ),
+            _hit("https://news.test/meta-earnings", "Meta earnings beat on ad revenue"),
+        ]
+    )
+    report = watch.run_companies(session, provider=provider, now=NOW, feeds_path=_feeds(session))
+    assert provider.calls == [("news", '"Meta" "data center"', "qdr:m")]
+    queued = {row.url: row.feed for row in session.scalars(select(IngestUrl))}
+    assert queued == {"https://news.test/meta-lea-county": "watch:company:meta"}
+    assert report.queued == 1
+    assert watch.companies_due(session, now=NOW + dt.timedelta(days=1)) == []
+    later = watch.companies_due(session, now=NOW + dt.timedelta(days=7))
+    assert [key for key, _, _ in later] == ["meta"]
 
 
 # --- the morning's account --------------------------------------------------------------

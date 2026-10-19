@@ -1678,6 +1678,14 @@ def news(
     show: Annotated[
         bool, typer.Option("--show/--no-show", help="List each campus looked at.")
     ] = False,
+    companies: Annotated[
+        bool,
+        typer.Option(
+            "--companies/--no-companies",
+            help="Also search each company with three or more campuses, and each watched one, "
+            "as a company: for a campus somewhere the database holds nothing.",
+        ),
+    ] = True,
 ) -> None:
     """Search the news for every campus that is due, and queue what is new.
 
@@ -1696,6 +1704,11 @@ def news(
     A result is queued (`watch:#<id>`) when its headline and snippet pass the
     discovery filter or name the campus, and its date is in the window. The crawl
     reads them ahead of the backlog. No model is called; a search is about ¥0.007.
+
+    **Then each company is searched as a company** (`--no-companies` to skip): every
+    one with three or more campuses here weekly, a watched one daily, for news since
+    its last search -- the route to a campus the database holds nothing about, which
+    no campus search can find. Its results are queued as `watch:company:<key>`.
     """
     if ctx.invoked_subcommand:
         return
@@ -1713,6 +1726,15 @@ def news(
     _print_report_rows(report.as_rows(), title="news watch", warn={"searches failed"})
     if report.stopped:
         err.print(f"[yellow]stopped early:[/yellow] {report.stopped}")
+    if companies and not project and not report.stopped:
+        left = None if max_queries is None else max(0, max_queries - report.queries)
+        with session_scope(engine) as session:
+            company_report = watch_mod.run_companies(session, max_queries=left)
+        _print_report_rows(
+            company_report.as_rows(), title="company watch", warn={"searches failed"}
+        )
+        if company_report.stopped:
+            err.print(f"[yellow]stopped early:[/yellow] {company_report.stopped}")
     if show and report.looks:
         table = Table(title="campuses", header_style="bold", title_justify="left", box=TABLE_BOX)
         for column in ("id", "campus", "look", "searches", "results", "kept", "queued"):

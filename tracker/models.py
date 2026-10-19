@@ -1021,6 +1021,27 @@ class NewsWatch(Base):
     )
 
 
+class CompanyWatch(Base):
+    """When the news watch last searched for one company as a company. See migration
+    0040 and `tracker.ingest.watch.run_companies`."""
+
+    __tablename__ = "company_watch"
+
+    company_key: Mapped[str] = mapped_column(Text, primary_key=True)
+    baseline_at: Mapped[dt.datetime | None] = mapped_column(DateTime)
+    checked_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False)
+    queries: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    results: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    queued: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    last_queued_at: Mapped[dt.datetime | None] = mapped_column(DateTime)
+
+    __table_args__ = (
+        CheckConstraint(
+            "queries >= 0 AND results >= 0 AND queued >= 0", name="ck_company_watch_counts"
+        ),
+    )
+
+
 class ApiKey(Base):
     """One key for the read-only public API. See migration 0036 and `tracker.apikeys`.
 

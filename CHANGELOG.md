@@ -12,6 +12,16 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **Each builder is searched for news as a company, for campuses we do not hold**
+  (`tracker/ingest/watch.py`, `tracker/migrations/0040_company_watch.sql`,
+  `tracker/models.py`, `tracker/cli/sync.py`, `docs/workflows/sync.md`). The campus
+  watch asks about the campuses the database holds, so it cannot hear of Microsoft
+  buying land in a county with no Microsoft row. `tracker news` now also searches
+  `"Company" "data center"` since the last search for every company with three or
+  more campuses here, weekly, and for each one a reader watches, daily; the first
+  search reaches back a month. Results pass the keyword filter and are read in the
+  news watch's turn. About 20 searches a night. `--no-companies` skips it.
+
 - **DC Pulse is walked every night** (`tracker/seed/feeds.toml`,
   `tracker/confidence.py`). A global project database -- 1,619 campus pages -- and
   208 dated articles that rewrite company announcements with links to them. It

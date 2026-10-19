@@ -7,7 +7,7 @@ The tracker updates itself every evening, China time, and the morning email at 8
 **It looks for news first**, before anything else, so that nothing later in the night can cost the day's news:
 
 - it reads the news feeds, and the builders' own data-center sites for anything they have posted since the night before;
-- it searches the news for every campus it tracks, for what has been said since it last looked — daily for a campus still being decided or built, every three days once it operates, and daily for every campus of a company on a reader's watchlist;
+- it searches the news for every campus it tracks, for what has been said since it last looked — daily for a campus still being decided or built, every three days once it operates, and daily for every campus of a company on a reader's watchlist — and it searches the news for each major builder too, weekly or daily for a watched one, for campuses it does not hold yet;
 - then it reads what it found: the last two months' news first, then what those searches and the builders' sites turned up, then articles about campuses it has never heard of, which is where new campuses come from.
 
 Then it runs in rounds and stops when a round no longer improves anything. Each round:
