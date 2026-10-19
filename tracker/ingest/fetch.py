@@ -281,6 +281,46 @@ def published_date(html: str, url: str | None = None) -> datetime | None:
     return date_from_url(url) if url else None
 
 
+# --- A file is not a page ----------------------------------------------------------
+#
+# The plain clients decode whatever comes back as text. For a PDF that is the file's
+# compressed streams: 107,617 characters for one Nevada tax-abatement PDF, which the
+# prose check counted as 51,678 characters of English, so the crawl sent it to the
+# model. Of 384 PDFs read since August none produced a citation, and 352 were model
+# calls on that. A file is now a failed fetch that says what it was, before any text
+# is made of it, and no rung is asked to do better. The queue sets PDFs aside before
+# reading (`screen.file_kind`); this is for the ones that reach a fetch another way,
+# by a search result, a harvest or an address that does not end in ".pdf".
+
+#: Content types that are files, not pages.
+_FILE_TYPES: Final = re.compile(
+    r"^(?:application/(?:pdf|zip|x-zip|msword|vnd\.ms-|vnd\.openxmlformats|x-7z|x-rar|gzip)"
+    r"|image/|video/|audio/|font/)",
+    re.I,
+)
+
+
+def file_type(content_type: str | None, head: bytes) -> str | None:
+    """What a response is when it is a file rather than a page, or None. `head` is the
+    body's first bytes: a PDF is often served as `application/octet-stream`."""
+    kind = (content_type or "").split(";", 1)[0].strip().lower()
+    if head.startswith(b"%PDF-") or kind == "application/pdf":
+        return "a PDF"
+    return f"a file ({kind})" if _FILE_TYPES.match(kind) else None
+
+
+def _a_file(url: str, status: int, kind: str, via: str) -> FetchResult:
+    """The result for a file: a failure, and not one a stronger client could improve."""
+    return FetchResult(
+        url,
+        False,
+        status=status,
+        error=f"{kind}, not a web page: no text is taken from one",
+        fetched_at=utcnow(),
+        via=via,
+    )
+
+
 # --- HTML -> text -----------------------------------------------------------
 
 _DROP_TAGS = re.compile(
@@ -449,6 +489,9 @@ class HttpxFetcher:
                 fetched_at=utcnow(),
                 via="httpx",
             )
+        kind = file_type(response.headers.get("content-type"), response.content[:8])
+        if kind:
+            return _a_file(url, response.status_code, kind, "httpx")
 
         # The date is read from the raw HTML, before `html_to_text` discards it.
         published = published_date(response.text, url)
@@ -590,6 +633,13 @@ class CurlCffiFetcher:
                 fetched_at=utcnow(),
                 via=self.VIA,
             )
+
+        body = getattr(response, "content", b"")
+        kind = file_type(
+            response.headers.get("content-type"), body[:8] if isinstance(body, bytes) else b""
+        )
+        if kind:
+            return _a_file(url, status, kind, self.VIA)
 
         # Decode once: `_decode` is not free, and reading the date from a
         # differently-decoded copy could disagree with the text the gate checks.

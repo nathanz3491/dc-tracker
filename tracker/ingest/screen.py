@@ -78,9 +78,10 @@ _MEDIA: Final = frozenset(
 #: Documents in a binary format. **A PDF is set aside although many are filings
 #: worth reading** — a county's findings report, a fiscal-impact study, comments on
 #: a campus — because nothing in this pipeline takes text from one: the plain client
-#: passes the file's bytes to the model as if they were prose (107,617 characters of
+#: passed the file's bytes to the model as if they were prose (107,617 characters of
 #: compressed streams for one 2025 Nevada tax-abatement PDF, all of it "English" to
-#: the language check). Of 384 PDFs read since August, none produced a citation and
+#: the language check), and since 2026-10-20 refuses one as a file
+#: (`fetch.file_type`). Of 384 PDFs read since August, none produced a citation and
 #: 352 were paid model calls on that garbage. When something does read them, delete
 #: "pdf" here and the next run puts every one set aside back in the queue.
 _DOCUMENTS: Final = frozenset({"pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt"})

@@ -371,9 +371,11 @@ prioritising after would reorder a batch that was already chosen:
    stays skipped.
 5. **A page no campus story can be in is set aside before it is read**
    (`discover.set_aside_not_news`, the rules in `tracker/ingest/screen.py`). By its
-   address: a PDF, which nothing here takes text from — the plain client hands the
+   address: a PDF, which nothing here takes text from — the plain client handed the
    model its compressed bytes, and of 384 PDFs read since August none produced a
-   citation; a translated copy (Google's campus pages in twelve translations, 114 of
+   citation; since 2026-10-20 a fetch that gets a file back, by whatever address,
+   fails as one (`fetch.file_type`) rather than becoming text for the model; a
+   translated copy (Google's campus pages in twelve translations, 114 of
    its 166 queued); a stock-quote or stock-chatter page; a job posting; a
    directory's ZIP-code page; a site that has refused every read. From a builder's
    own archive, also by its headline: a post naming a place abroad and none here

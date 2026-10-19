@@ -2507,6 +2507,46 @@ def test_the_article_fetcher_reports_an_unparseable_url_rather_than_raising():
     assert "invalid" in (result.error or "").lower()
 
 
+@pytest.mark.parametrize(
+    ("content_type", "body", "kind"),
+    [
+        ("application/pdf", b"%PDF-1.6\n%\xe2\xe3\xcf\xd3\n68 0 obj", "a PDF"),
+        ("application/octet-stream", b"%PDF-1.7\nstream", "a PDF"),
+        ("image/jpeg", b"\xff\xd8\xff\xe0", "a file (image/jpeg)"),
+    ],
+)
+def test_a_file_is_a_failed_fetch_and_never_text_for_the_model(content_type, body, kind):
+    """The plain client decoded a PDF's compressed streams as text: 107,617 characters
+    for one, which the prose check took for 51,678 of English. None of 384 PDFs read
+    since August produced a citation, and 352 were model calls on that."""
+    import asyncio
+
+    import httpx
+
+    from tracker.ingest.fetch import HttpxFetcher, fetch_with_retry
+
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url)
+        return httpx.Response(200, content=body, headers={"content-type": content_type})
+
+    fetcher = HttpxFetcher(get_settings(), transport=httpx.MockTransport(handler))
+    result = asyncio.run(fetch_with_retry(fetcher, "https://county.test/report"))
+    assert not result.ok and result.status == 200 and result.markdown == ""
+    assert result.error.startswith(f"{kind}, not a web page")
+    assert len(calls) == 1 and result.attempts == 1, "not retried"
+    assert should_escalate(result) is False, "and no rung is asked to read it either"
+
+
+def test_a_page_is_still_a_page():
+    from tracker.ingest.fetch import file_type
+
+    assert file_type("text/html; charset=utf-8", b"<!doctype") is None
+    assert file_type(None, b"<html>") is None
+    assert file_type("application/xhtml+xml", b"<?xml") is None
+
+
 async def test_a_fetcher_that_raises_costs_only_its_own_url():
     from tracker.ingest.fetch import fetch_all
 
