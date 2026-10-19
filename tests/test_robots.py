@@ -64,8 +64,10 @@ def test_a_4xx_means_no_file_and_nothing_disallowed(status):
     assert robots.interpret(status, "").parser.can_fetch(UA, "https://a.example/x")
 
 
-@pytest.mark.parametrize("status", [500, 503, None])
+@pytest.mark.parametrize("status", [429, 500, 503, None])
 def test_a_site_that_cannot_answer_is_disallowed_for_now(status):
+    """A 429 too, as Google's crawler reads it: the site is asking for fewer requests,
+    and reading its pages the next moment is what it asked us not to do."""
     rules = robots.interpret(status, "")
     assert rules.parser is None
     assert rules.expires - robots.TTL_S < rules.expires - robots.UNREACHABLE_TTL_S

@@ -59,8 +59,10 @@ night, mostly between 18:00 and 08:00 China Standard Time (UTC+8).
   reader view and a company's site icon. A `User-agent: dc-tracker` group applies
   to it, and so does `User-agent: *`. The file is read the way RFC 9309 says. A
   4xx means there is no file, so nothing is disallowed. A 5xx or no answer means
-  the site cannot say, so nothing is fetched for half an hour, then it asks again.
-  A file that was read is kept for a day.
+  the site cannot say, so nothing is fetched for half an hour, then it asks again;
+  a 429 is read the same way, as the site asking for fewer requests. A file that
+  was read is kept for a day, and one reading serves every client below,
+  the headless browser included.
 - **`Crawl-delay` is honoured**, up to 60 seconds between two requests to the same
   site. A longer delay is treated as 60, and on the few pages a night it reads from
   any one site that is the same thing.

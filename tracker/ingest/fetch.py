@@ -778,13 +778,21 @@ class PlaywrightFetcher:
     nothing patches away the signs of automation. A site that refuses a browser it
     can see is a crawler has made a decision, and this does not argue with it.
 
-    **It asks `robots.txt` first.** The line this project draws — rendering a page
-    a site permits but an over-broad firewall refuses is fine, getting past a site
-    that refuses crawlers is not (`docs/ingesting.md`, the DataCenterDynamics
-    section) — is written down in `robots.txt`, so the browser opens a page only
-    if that file permits this crawler to. A `robots.txt` that cannot be read counts
-    as not permitting it: a site whose firewall refuses even that file is the case
-    the line is about, and guessing "allowed" would cross it by default.
+    **It asks `robots.txt` first, and gets the answer every other rung gets.** The
+    line this project draws — rendering a page a site permits but an over-broad
+    firewall refuses is fine, getting past a site that refuses crawlers is not
+    (`docs/ingesting.md`, the DataCenterDynamics section) — is written down in
+    `robots.txt`, so the browser opens a page only if that file permits this
+    crawler to. Since 2026-10-20 the file is read once per site per run, for every
+    rung, by `tracker.robots` and the RFC 9309 rules the crawler's public page
+    states: a 4xx is no file and nothing disallowed, a 5xx, a 429 or no answer is
+    "cannot say" and nothing is fetched for half an hour. The browser used to read
+    the file again on its own and count any answer but a 200 as a refusal, so the
+    same page was refused to our own named browser and then sent to DeepSeek's fetch,
+    which asks the shared rules. On 2026-10-19 that stricter reading refused pages on
+    58 sites whose `robots.txt` answered 403 or 429, and each refusal was retried
+    after a backoff as though it were a network failure. A refusal is now tagged
+    `via = "robots"` (`refused`), which is never retried and never escalated.
 
     Each article gets a fresh browser context, so no cookie or storage carries from
     one publisher's page to the next; images, media and fonts are not downloaded,
@@ -801,9 +809,6 @@ class PlaywrightFetcher:
         self.settings = settings or get_settings()
         self._playwright = None
         self._browser = None
-        self._robots: dict[str, object | None] = {}
-        self._robots_lock: asyncio.Lock | None = None
-        self._robots_loop: asyncio.AbstractEventLoop | None = None
 
     @staticmethod
     def available() -> bool:
@@ -857,14 +862,7 @@ class PlaywrightFetcher:
         if self._browser is None:
             raise RuntimeError("PlaywrightFetcher must be used as an async context manager")
         if not await self.permitted(url):
-            return FetchResult(
-                url,
-                False,
-                error="robots.txt does not permit this crawler, or could not be read; "
-                "the browser was not used",
-                fetched_at=utcnow(),
-                via=self.VIA,
-            )
+            return refused(url)
 
         context = await self._browser.new_context(
             user_agent=self.settings.user_agent_for(url), locale="en-US"
@@ -921,48 +919,10 @@ class PlaywrightFetcher:
         )
 
     async def permitted(self, url: str) -> bool:
-        """Whether `robots.txt` lets this crawler read `url`. Read once per origin."""
-        parts = urlsplit(url)
-        origin = f"{parts.scheme}://{parts.netloc}"
-        # One lock per event loop, not per instance. `enrich` builds the ladder
-        # once and runs every row's crawl in its own `asyncio.run`, and a lock
-        # belongs to the first loop that waits on it: the next row's concurrent
-        # pages failed with "bound to a different event loop", unread.
-        loop = asyncio.get_running_loop()
-        if self._robots_loop is not loop or self._robots_lock is None:
-            self._robots_lock = asyncio.Lock()
-            self._robots_loop = loop
-        async with self._robots_lock:
-            if origin not in self._robots:
-                self._robots[origin] = await self._read_robots(origin)
-        parser = self._robots[origin]
-        if parser is None:
-            return False
-        return bool(parser.can_fetch(self.settings.user_agent_for(url), url))
-
-    async def _read_robots(self, origin: str):
-        """A parser for `origin/robots.txt`, or None if it could not be read.
-
-        A 404 or 410 means there is no file and so no restriction, which is how
-        the convention reads it. Anything else that is not a 200 — a 403, a 429,
-        a timeout — is an answer this cannot read, and the caller treats it as a
-        refusal. Fetched through the same browser-fingerprint client as the rung
-        below, so a TLS-fingerprinting firewall does not hide a permissive file.
-        """
-        from urllib.robotparser import RobotFileParser
-
-        status, body = await _get_text(f"{origin}/robots.txt", self.settings)
-        parser = RobotFileParser()
-        if status in (404, 410):
-            parser.parse([])
-            return parser
-        if status != 200:
-            log.info(
-                "robots.txt at %s answered %s; not opening its pages in a browser", origin, status
-            )
-            return None
-        parser.parse(body.splitlines())
-        return parser
+        """Whether `robots.txt` lets this crawler read `url`: the run's one reading of
+        the site's file (`tracker.robots`), read here only if no rung has asked yet,
+        through the browser-fingerprint client the rung below uses."""
+        return await permitted(url, self.settings, lambda u: _get_text(u, self.settings))
 
 
 async def _get_text(url: str, settings: Settings) -> tuple[int | None, str]:

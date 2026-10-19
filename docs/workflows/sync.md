@@ -321,11 +321,16 @@ nine newest stories across every market.
 
 The feed client, the article clients and the browser all ask the site's
 `robots.txt` before they request a page (`tracker/robots.py`). It is read the RFC 9309
-way: a 4xx means no file and nothing disallowed, and a 5xx or no answer means nothing
-is fetched for half an hour. A file that was read is kept for a day per process. A
-disallowed page comes back as a failed fetch with `via = "robots"`, and no request is
-made. It is not retried and not escalated, because a stronger client would get the
-same answer. `Crawl-delay` stretches the gap between two requests to one host, up to
+way: a 4xx means no file and nothing disallowed, and a 5xx, a 429 or no answer means
+nothing is fetched for half an hour (a 429 the way Google reads it: the site is asking
+for fewer requests). A file that was read is kept for a day per process, and **one
+reading serves every rung**: the browser kept a stricter one of its own until
+2026-10-20, refusing pages on 58 sites whose file answered 403 or 429 on 10-19 that
+every other rung, DeepSeek's fetch included, read as allowed. A disallowed page comes
+back as a failed fetch with `via = "robots"`, from any rung, and no request is made.
+It is not retried and not escalated, because a stronger client would get the same
+answer; the browser's refusals used to come back untagged and were retried after a
+backoff. `Crawl-delay` stretches the gap between two requests to one host, up to
 60 seconds. On 2026-10-11, 43 of the 45 open feeds and sitemaps were permitted; the
 two refused were the Google News headline feeds above, which now come from a news
 API instead.
@@ -634,7 +639,7 @@ Touching any of these means the poster is in scope. Re-render with
 | Searches counted and capped; the morning report | `tracker/ingest/search.py` — `SerperProvider._spend_one`, `_post`; `tracker/llm.py` — `record_search`; `tracker/spend.py` — `searches`, `SEARCH_MODEL`; `tracker/config.py` — `search_cap`; `tracker/ingest/desk.py` — `build`, `serper_credit`; `tracker/cli/sync.py` — `news report`; `scripts/overnight.sh` — the news phase |
 | Closed feeds, and naming a challenge | `tracker/seed/feeds.toml` — `closed`; `tracker/ingest/discover.py` — `FeedSpec.closed`, `SitemapSpec.closed`, `_closed_reason`, `DiscoverReport.closed`, `_RawFetcher`, `CHALLENGE_NOTE`; `tracker/ingest/probe.py` — `configured_hosts` |
 | The weekly check of closed entries | `tracker/ingest/discover.py` — `probe_closed`, `record_probe`, `reopened_names`, `without_reopened`, `PROBE_EVERY`; migration `0034_feed_probe`; `tracker/cli/sync.py` — `discover --probe-closed` |
-| Asking robots.txt before every request | `tracker/robots.py` — `allowed`, `allowed_async`, `interpret`, `crawl_delay`; `tracker/ingest/fetch.py` — `permitted`, `refused`, `fetch_with_retry`, `should_escalate`, `fetch_all`; `tracker/ingest/discover.py` — `_RawFetcher`; `tracker/config.py` — `respect_robots` |
+| Asking robots.txt before every request | `tracker/robots.py` — `allowed`, `allowed_async`, `interpret`, `crawl_delay`; `tracker/ingest/fetch.py` — `permitted`, `refused`, `PlaywrightFetcher.permitted`, `fetch_with_retry`, `should_escalate`, `fetch_all`; `tracker/ingest/discover.py` — `_RawFetcher`; `tracker/config.py` — `respect_robots` |
 | Headlines-only feeds | `tracker/seed/feeds.toml` — `headlines_of`, `news_search`, `news_pages`; `tracker/ingest/search.py` — `SerperProvider.news`; `tracker/ingest/discover.py` — `news_headlines`, `search_news`, `_poll_news`, `_news_date`, `parse_headlines`, `follow_headlines`, `same_story`, `copies_headline`, `MAX_HEADLINE_LOOKUPS` |
 | A page no campus story can be in is set aside | `tracker/ingest/screen.py` — `not_news`, `file_kind`, `translation`, `site_kind`, `_NOT_NEWS_HOSTS`, `_QUOTE_PAGES`, `_LISTINGS`, `builder_aside`, `abroad`, `us_places`, `post_year`, `_CAMPUS_EVENT`, `off_topic`, `SET_ASIDE`, `summary`; `tracker/ingest/discover.py` — `set_aside_not_news`; `tracker/ingest/watch.py` — `_screened`, `judge`; `tracker/cli/ingest.py` — `crawl --from-queue`; `tracker/cli/sync.py` — `sync` (extract), `queue aside` |
 | A story's second copy is set aside | `tracker/ingest/discover.py` — `drop_same_story`, `SAME_STORY`, `SAME_STORY_WORDS`, `SAME_STORY_WORDS_ACROSS_SITES`, `_headline`, `_page_key`; `tracker/cli/ingest.py` — `crawl --from-queue`; `tracker/cli/sync.py` — `sync` (extract), `queue duplicates` |
