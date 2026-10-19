@@ -12,6 +12,14 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **DC Pulse is walked every night** (`tracker/seed/feeds.toml`,
+  `tracker/confidence.py`). A global project database -- 1,619 campus pages -- and
+  208 dated articles that rewrite company announcements with links to them. It
+  has no feed and its sitemap no dates, so it joins the nightly archive walk: its
+  first walk queues only pages naming a campus we track, and after that the pages
+  it adds are judged by the keyword filter. It is read as a directory, so it fills
+  a field only nothing first-hand states, and never counts as a second source.
+
 - **DeepSeek's Fetch tool reads a page our own clients were refused**
   (`tracker/ingest/fetch.py`, `tracker/config.py`, `tracker/spend.py`,
   `tracker/llm.py`, `docs/crawler.md`, `README.md`, `docs/design-decisions.md`,

@@ -147,6 +147,7 @@ TERTIARY_DOMAINS = frozenset(
         "datacenterslist.com",
         "dchub.cloud",
         "dcmap.us",
+        "dcpulse.com",
         "doyenco.com",
         "epoch.ai",
         "gridglasses.com",

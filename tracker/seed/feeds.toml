@@ -1412,6 +1412,19 @@ source_type = "general_media"
 max_urls = 5000
 
 [[sitemap]]
+name = "dcpulse-archive"
+# A global project database (1,619 campus pages, about a fifth of them in the US)
+# and 208 dated articles that rewrite company announcements with links to them --
+# "Duos Edge AI Signs Agreement for an Additional 2 MW Deployment", Columbus GA,
+# 2026-10-13. No feed and no lastmod, so it is walked whole each night: the first
+# walk queues only pages naming a tracked campus, and after that what it adds is
+# judged by the filter. Read as a directory (`confidence.TERTIARY_DOMAINS`): it
+# fills a field only nothing first-hand states. Added 2026-10-19.
+url = "https://dcpulse.com/sitemap.xml"
+source_type = "general_media"
+max_urls = 5000
+
+[[sitemap]]
 name = "americanrepartners-archive"
 # 11 value(s) decided from 17 citation(s). 259 URLs, 30 matching, and the only
 # one here carrying real lastmod dates (newest 2026-08-25).
