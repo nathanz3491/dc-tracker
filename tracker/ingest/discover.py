@@ -1657,8 +1657,9 @@ def pending(
     spends each LLM call on depth rather than on another single-source row.
 
     ``new_first`` is the nightly loop's order, and it starts with the **news**:
-    every article published within the email's window (`feed.REPORT_WINDOW_DAYS`),
-    newest first, whatever campus it names. Then the articles that name **no**
+    every article the feeds and archives offered that was published within the
+    email's window (`feed.REPORT_WINDOW_DAYS`), newest first, whatever campus it
+    names. Then the articles that name **no**
     tracked campus, newest published first, then the rest in the usual order —
     those are where a campus the database has never heard of can turn up. Each is
     read by the normal crawl, whose identity check decides whether a record is a new
@@ -1675,23 +1676,26 @@ def pending(
     adversarial second source is the only way that fact is ever recorded.
 
     **Second come what was looked for on purpose**: the news watch's results
-    (`watch:#<id>`, :mod:`tracker.ingest.watch`), and a builder's own posts -- those
-    its newsroom added since the last walk (:func:`watch_newsrooms`), and those about
-    a campus the database does not hold, which is how a campus Meta announced and the
-    database never had comes in. The two take turns, each newest first: the watch's
-    first look at every campus queued about 5,000 results on 2026-10-19, and read
-    one after the other they would have kept the 703 builder posts about unknown
-    campuses -- the misses this whole order exists for -- waiting two weeks. Both
-    are about a campus by construction, so the "names no tracked campus" rule would
-    put the watch's results last of all, behind a backlog of a thousand.
+    (`watch:#<id>`, :mod:`tracker.ingest.watch`), whatever their date, and a
+    builder's own posts -- those its newsroom added since the last walk
+    (:func:`watch_newsrooms`), and those about a campus the database does not hold,
+    which is how a campus Meta announced and the database never had comes in. The
+    two take turns, each newest first, so last night's follow-ups lead the watch's
+    share. The watch's first look at every campus queued about 5,000 results on
+    2026-10-19, about 350 of them inside the email's window: counted as news, those
+    filled the first 400 reads after the feeds' 124, and read one after the other the
+    rest would have kept the 703 builder posts about unknown campuses -- the misses
+    this whole order exists for -- waiting two weeks. Both are about a campus by
+    construction, so the "names no tracked campus" rule would put the watch's
+    results last of all, behind a backlog of a thousand.
 
     **A date in the future is no date.** An event page dated 2026-12-01 led the
     news-first order on 2026-10-17; such a row sorts as undated.
 
     **The news is read in turn across its sources**, newest first within each
-    (:func:`in_turn`): a directory that re-dates 60 pages in one site-wide edit, or
-    the watch's first look at 300 campuses, would otherwise fill the night's reads
-    before another source's story from yesterday was reached.
+    (:func:`in_turn`): a directory that re-dates 60 pages in one site-wide edit would
+    otherwise fill the night's reads before another source's story from yesterday was
+    reached.
 
     ``unreadable`` (:func:`unreadable_test`) flags the pages no fetch will read,
     which then go after every other row, whichever order was asked for, before the
@@ -1718,7 +1722,12 @@ def pending(
             dated = sorted((r for r in group if when(r)), key=lambda r: (when(r), r.id))
             return dated[::-1] + [r for r in group if not when(r)]
 
-        news = [row for row in rows if (w := when(row)) is not None and w >= cutoff]
+        def watched(row: IngestUrl) -> bool:
+            return (row.feed or "").startswith("watch:")
+
+        news = [
+            row for row in rows if not watched(row) and (w := when(row)) is not None and w >= cutoff
+        ]
         news.sort(key=lambda row: (when(row), row.id), reverse=True)
         news = in_turn(news, key=lambda row: _source_of(row.feed))
         taken = {row.id for row in news}
@@ -1740,9 +1749,6 @@ def pending(
 
         def builders(row: IngestUrl) -> bool:
             return urlsplit(row.url).netloc.lower().removeprefix("www.") in implied
-
-        def watched(row: IngestUrl) -> bool:
-            return (row.feed or "").startswith("watch:")
 
         sought = [
             row

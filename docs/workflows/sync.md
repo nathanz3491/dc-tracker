@@ -343,20 +343,24 @@ prioritising after would reorder a batch that was already chosen:
    stays skipped.
 
 `ingest crawl --from-queue --new-first` asks a different question, and is what the
-nightly loop's discovery step runs. **The news goes first:** every article published
-within the email's window (`feed.REPORT_WINDOW_DAYS`, 60 days), newest first,
+nightly loop's discovery step runs. **The news goes first:** every article the
+feeds and archives offered that was published within the email's window
+(`feed.REPORT_WINDOW_DAYS`, 60 days), newest first,
 whatever campus it names, because what the crawl reads tonight is mailed tomorrow. A
 2026-09-21 report of a lawsuit against a *tracked* campus used to sort behind 1,600
 backlog articles; it was read on 10-03 and mailed on 10-04 as news. **Then what was
 looked for on purpose**, the two taking turns, each newest first: the news watch's
-results, and a builder's own posts — those its newsroom added since the night before
+results, whatever their date (last night's follow-ups lead its share), and a
+builder's own posts — those its newsroom added since the night before
 (`seen_url.reason` = `NEWSROOM_NEW`) and those about a campus the database does not
 hold, which is how a campus Meta announced and the database never had comes in. An
 old `--deep` sweep's builder rows about tracked campuses stay in the backlog. The
 watch's results are about a campus by construction, so the next rule would put them
 last, and its first look finds news older than the window; the turns are because that
-first look queued about 5,000 results on 2026-10-19, which read one after the other
-would have kept the 703 builder posts about unknown campuses waiting two weeks. Then
+first look queued about 5,000 results on 2026-10-19, about 350 inside the window.
+Counted as news, those took every one of the first 400 reads after the feeds' 124,
+and read one after the other the rest would have kept the 703 builder posts about
+unknown campuses waiting two weeks. Then
 the articles naming **no** tracked campus, newest published first, then
 the rest — rule 4 applying throughout. A date more than a day in the future is no
 date: an event page dated 2026-12-01 led the order on 2026-10-17. **The news group

@@ -408,13 +408,19 @@ def test_a_builders_post_about_an_unknown_campus_takes_turns_with_the_watch(sess
     _queue(session, f"{meta}/2026/04/hello-tulsa/", "meta-datacenters", dt.datetime(2026, 4, 1))
     _queue(session, f"{meta}/2024/05/hello-x/", "meta-datacenters", dt.datetime(2024, 5, 1))
     _queue(session, "https://dir.test/a-campus", "servercountry-archive", NOW - 100 * days)
+    # Recent, but the watch's: on 2026-10-19 about 350 of its first-look results fell
+    # inside the email's window, and counted as news they took every slot.
+    _queue(session, "https://a.test/w3", "watch:#1", NOW - 3 * days)
+    _queue(session, "https://a.test/w5", "watch:#1", NOW - 5 * days)
     session.flush()
     order = [row.url for row in discover.pending(session, new_first=True)]
     assert order == [
         "https://a.test/news",
+        "https://a.test/w3",
         f"{meta}/2026/04/hello-tulsa/",
-        "https://a.test/w210",
+        "https://a.test/w5",
         f"{meta}/2024/05/hello-x/",
+        "https://a.test/w210",
         "https://a.test/w220",
         "https://a.test/w230",
         "https://a.test/w-undated",
