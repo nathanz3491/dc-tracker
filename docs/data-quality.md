@@ -762,6 +762,12 @@ for one still queued — and of 5,552 undated rows only **1,778** are either. Th
 other 3,774 are `no_project`, `fetch_error` and orphans, so the default scope cuts
 the crawl by 68%; `--all` widens it.
 
+The report counts those two apart — undated citations, and undated articles still
+queued — because only the first is comparable from one night to the next. The queue
+swings with whatever discovery found: the news watch's first look took the single
+"undated at start" figure from 1,596 to 5,611 overnight on 2026-10-19, which read as
+the database losing dates, while the undated citations went from 924 to 951.
+
 Report-only until `--apply`. It deliberately does **not** go through `crawl.run`:
 that path consults `_split_cached` first, so a backfill routed through it would
 read the local text file, find no metadata in it, and conclude the publisher states

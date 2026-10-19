@@ -67,8 +67,17 @@ FAILED_RETRY_DAYS = 14
 class DateReport:
     """What a backfill found, and what it wrote."""
 
-    #: Rows with no `published_at` when the run started.
+    #: Rows with no `published_at` when the run started: every one this run considers.
     undated: int = 0
+    #: Of those, the ones behind a stored citation — the number to compare from one
+    #: night to the next. The rest are articles still queued to be read, and they swing
+    #: with what discovery queued: the news watch's first look took the total from
+    #: 1,596 at the start of 2026-10-18 to 5,611 at the start of 10-19 (5,231 by the
+    #: time the loop's dates step ran), while the citations went from 924 to 951.
+    undated_cited: int = 0
+    #: Of those, the articles still queued to be read and not yet behind a citation.
+    #: With `everything`, the rest of `undated` is neither.
+    undated_queued: int = 0
     #: Dated by the free offline pass over the URL path.
     from_url: int = 0
     #: Pages actually requested.
@@ -97,8 +106,11 @@ class DateReport:
         return self.from_url + self.from_page
 
     def as_rows(self) -> list[tuple[str, int]]:
+        neither = self.undated - self.undated_cited - self.undated_queued
         return [
-            ("undated at start", self.undated),
+            ("undated citations at start", self.undated_cited),
+            ("undated queued articles", self.undated_queued),
+            *([("undated, neither (--all)", neither)] if neither else []),
             ("dated from the URL", self.from_url),
             ("pages fetched", self.fetched),
             ("dated from the page", self.from_page),
@@ -135,9 +147,26 @@ def undated_urls(session: Session, *, everything: bool = False) -> list[str]:
     """
     stmt = select(IngestUrl.url).where(IngestUrl.published_at.is_(None))
     if not everything:
-        backs_a_citation = select(Source.id).where(Source.url == IngestUrl.url).exists()
-        stmt = stmt.where(backs_a_citation | (IngestUrl.status == PENDING_URL_STATUS))
+        stmt = stmt.where(_backs_a_citation() | (IngestUrl.status == PENDING_URL_STATUS))
     return list(session.scalars(stmt.order_by(IngestUrl.first_seen_at.asc(), IngestUrl.id.asc())))
+
+
+def _backs_a_citation():
+    return select(Source.id).where(Source.url == IngestUrl.url).exists()
+
+
+def _undated_where(*conditions):
+    return select(IngestUrl.url).where(IngestUrl.published_at.is_(None), *conditions)
+
+
+def _split(session: Session, pending: list[str]) -> tuple[int, int]:
+    """(behind a citation, queued and not) among `pending`. See `DateReport.undated_cited`."""
+    cited = set(session.scalars(_undated_where(_backs_a_citation())))
+    queued = set(session.scalars(_undated_where(IngestUrl.status == PENDING_URL_STATUS)))
+    return (
+        sum(1 for url in pending if url in cited),
+        sum(1 for url in pending if url in queued and url not in cited),
+    )
 
 
 def _worth_asking(session: Session, urls: list[str], report: DateReport) -> list[str]:
@@ -270,6 +299,7 @@ def run(
 
     pending = undated_urls(session, everything=everything)
     report.undated = len(pending)
+    report.undated_cited, report.undated_queued = _split(session, pending)
     #: What this run resolved, so `_propagate` can report honestly under --dry-run.
     found: dict[str, dt.datetime] = {}
 

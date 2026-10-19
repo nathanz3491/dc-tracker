@@ -255,6 +255,29 @@ def test_the_report_adds_up(session, apply):
     assert report.written == (2 if apply else 0)
 
 
+def test_undated_citations_are_counted_apart_from_undated_queued_articles(session):
+    """The total mixes two populations with different lives. On 2026-10-19 it went
+    from 1,596 to 5,611 in a day — the news watch's first look had queued thousands
+    of articles with no date — while the citations moved from 924 to 951. Only the
+    citations are comparable night to night."""
+    cited(session, "https://x.test/cited-a")
+    cited(session, "https://x.test/cited-b", status="discovered")  # cited, and queued again
+    queued(session, "https://x.test/queued-a")
+    queued(session, "https://x.test/queued-b")
+    queued(session, "https://x.test/queued-c")
+    queued(session, "https://x.test/dead-end", status="no_project")
+
+    report = dates.run(session)
+    assert (report.undated, report.undated_cited, report.undated_queued) == (5, 2, 3)
+    rows = dict(report.as_rows())
+    assert rows["undated citations at start"] == 2
+    assert rows["undated queued articles"] == 3
+    assert "undated, neither (--all)" not in rows
+
+    everything = dates.run(session, everything=True)
+    assert dict(everything.as_rows())["undated, neither (--all)"] == 1
+
+
 # --- the date has to reach where the merge reads it -------------------------
 
 
