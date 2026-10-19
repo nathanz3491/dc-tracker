@@ -245,6 +245,9 @@ class ExtractionOutcome:
     #: The stamp of the prompt that read the page, set by `extract_one` and for an
     #: unchanged page; None when nothing read it. Becomes `ingest_url.read_by`.
     prompt: str | None = None
+    #: Projects the reading named that `build_records` dropped for want of a company,
+    #: a state or a place. Counted into `IngestReport.incomplete`.
+    incomplete: int = 0
 
 
 def classify_source_type(url: str, *, operator_hosts: frozenset[str] | None = None) -> str:
@@ -2315,8 +2318,12 @@ def build_records(
     prompt: Prompt,
     reply: LLMReply,
     max_projects: int = MAX_PROJECTS_PER_ARTICLE,
+    placeless: list[str] | None = None,
 ) -> list[IngestRecord]:
-    """Turn a validated LLM payload into IngestRecords. Pure, no I/O."""
+    """Turn a validated LLM payload into IngestRecords. Pure, no I/O.
+
+    `placeless`, when given, receives the name of each project left out for want of a
+    company, a state or a place, for the run's count."""
     projects = payload.get("projects")
     if not isinstance(projects, list):
         raise LLMJsonError(f"payload has no `projects` list: {payload!r}")
@@ -2363,6 +2370,8 @@ def build_records(
                 city,
                 county,
             )
+            if placeless is not None:
+                placeless.append(str(values.get("name") or company or "?"))
             continue
 
         claims = dict(kept)
@@ -2845,11 +2854,15 @@ def extract_one(
             log.warning("%s: %s (attempt %d)", result.url, last_error, attempt)
             continue
 
+        placeless: list[str] = []
         try:
-            outcome.records = build_records(result, payload, prompt=prompt, reply=reply)
+            outcome.records = build_records(
+                result, payload, prompt=prompt, reply=reply, placeless=placeless
+            )
         except LLMJsonError as exc:
             last_error = str(exc)
             continue
+        outcome.incomplete = len(placeless)
 
         outcome.status = "ok" if outcome.records else "no_project"
         if outcome.records:
@@ -3562,6 +3575,7 @@ def run(
             report.thin_content += 1
         elif outcome.status == "skipped":
             report.not_english += 1
+        report.incomplete += outcome.incomplete
 
         # Counted for every outcome, including the failures: a reply that ran out
         # of budget mid-reasoning is the most expensive kind there is, and leaving

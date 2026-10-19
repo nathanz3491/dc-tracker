@@ -1108,6 +1108,36 @@ def test_a_project_without_identity_is_dropped(prompt):
     )
 
 
+def test_a_project_dropped_for_its_identity_is_counted_in_the_run(session, prompt):
+    """Logged one by one and never counted: 73 on the night of 2026-10-19, most of
+    them campuses abroad, which the morning report could not show."""
+    from tracker.ingest.crawl import parse_json_object
+
+    payload = parse_json_object(canned("llm_response_microsoft_wi.json"))
+    payload["projects"].append(
+        {"name": "Odense data center", "company": "Microsoft", "city": "Odense", "evidence": []}
+    )
+    report = crawl.run(
+        session,
+        [URL],
+        fetcher=FakeFetcher({URL: fetched()}),
+        extractor=FakeLLM([json.dumps(payload)]),
+        run_id="placeless",
+    )
+    assert report.written == 1 and report.incomplete == 1
+    assert ("dropped: no company, state or place", 1) in report.as_rows()
+    quiet = crawl.run(
+        session,
+        [URL],
+        fetcher=FakeFetcher({URL: fetched()}),
+        extractor=FakeLLM([canned("llm_response_microsoft_wi.json")]),
+        run_id="placed",
+        force=True,
+    )
+    assert quiet.incomplete == 0
+    assert not any(label.startswith("dropped") for label, _ in quiet.as_rows())
+
+
 def test_too_many_projects_are_capped(prompt, caplog):
     payload = {
         "projects": [

@@ -289,6 +289,13 @@ class IngestReport:
     #: A saving, reported like the others so a refresh that re-read nothing still
     #: says how much it checked.
     skipped_unchanged: int = 0
+    #: Projects a reading named and that were dropped for want of a company, a US
+    #: state or a town or county: a campus abroad, a passing mention. Logged one by
+    #: one ("dropping a project from ...") and never counted until 2026-10-20, though
+    #: the night of 10-19 dropped 73 of them, 61 in its main crawl -- the measure of
+    #: what the model is asked to read that cannot become a row. Shown only when
+    #: there are some.
+    incomplete: int = 0
     events: int = 0
     risks: int = 0
     #: What the run actually spent. `ExtractionOutcome` has carried these per URL
@@ -330,6 +337,9 @@ class IngestReport:
             else []
         )
         foreign = [("not in English", self.not_english)] if self.not_english else []
+        placeless = (
+            [("dropped: no company, state or place", self.incomplete)] if self.incomplete else []
+        )
         return [
             ("read", self.read),
             ("filtered out", self.filtered),
@@ -345,6 +355,7 @@ class IngestReport:
             ("parse errors", self.parse_error),
             ("not an article", self.thin_content),
             ("not cached", self.skipped_uncached),
+            *placeless,
             *foreign,
             *same,
             *ignored,

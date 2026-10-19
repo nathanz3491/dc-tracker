@@ -468,6 +468,14 @@ rested on nothing else, each a garbled duplicate of a campus held under its
 English name. `crawl.extract_one` marks such a page `skipped` before the call, the
 run summary counts it as "not in English", and it is not retried.
 
+**A project the reading names without a company, a US state or a place is dropped,
+and counted.** Each is logged ("dropping a project from …: needs company, state and
+a locality"), and since 2026-10-20 the run summary also counts them as "dropped: no
+company, state or place" (`IngestReport.incomplete`): 73 on the night of 10-19, 61
+in its main crawl — a county debating a moratorium with no company named, a
+company's plans with no town, a campus abroad (Odense, Luleå, Frankfurt, Toronto). It
+is the measure of what the model was asked to read that could not become a row.
+
 ## The identity arbiter
 
 `--verify-identity` is on by default. Before a phase creates a row that has a
@@ -650,7 +658,7 @@ Touching any of these means the poster is in scope. Re-render with
 | Judging a template | `tracker/funnel.py` — `feed_group`, `survey`, `verdicts`; `tracker/ingest/search.py` — `LabelStat` |
 | Queue ordering and counts | `tracker/ingest/discover.py` — `pending` (`known_first`, `new_first`; news first by `feed.REPORT_WINDOW_DAYS`, read in turn across sources by `in_turn` and `_source_of`, then the watch's finds in turn with builders' posts, a future date as none), `pending_split`, `pending_risk_count`, `failed`, `retryable`, `given_up`, `MAX_SAME_FAILURES`, `failure_summary` |
 | Prospect | `tracker/prospect.py`; `tracker/roster.py` — `hunt_order`, `measure` |
-| Extract and refresh | `tracker/ingest/crawl.py` — `run` (`origins=`), `stale_sources`, `unchanged_reads`, `record_url` (`origin=`), `_origin`, `failure_reason`, `MAX_REFRESH_BACKOFF` |
+| Extract and refresh | `tracker/ingest/crawl.py` — `run` (`origins=`), `stale_sources`, `unchanged_reads`, `record_url` (`origin=`), `_origin`, `failure_reason`, `MAX_REFRESH_BACKOFF`, `build_records(placeless=)`; `tracker/ingest/records.py` — `IngestReport.incomplete` |
 | The party gate | `tracker/ingest/crawl.py` — `_parties`, `_ROLE_MARKERS`, `_role_is_licensed` |
 | Identity arbiter | `tracker/cli/ingest.py` — `_identity_arbiter`, `_report_arbiter`; `tracker/gatekeeper.py` — `same_site_arbiter`, `_warm_verdict`, `_cold_verdict`, `_rejection`, `_suspicion`, `_verdict_tools`, `RULES`, `MIN_CONFIDENCE`; `tracker/triage.py` — `CONTRADICTIONS`; `tracker/ingest/crawl.py` — `ExtractionContext` |
 | Enrich phase | `tracker/ingest/enrich.py` — `select_projects`, `run_many`; `tracker/cli/enrich.py` — `_gapfill_batch`; and [enrich](enrich.md) |
