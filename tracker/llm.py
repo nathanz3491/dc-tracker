@@ -349,19 +349,46 @@ class LLMJsonError(ValueError):
     Retrying that verbatim reproduces it; the fix is a bigger budget or a shorter
     prompt. Every path that parses JSON raises this, so naming the cause here
     names it in all of them.
+
+    `cut_off` is the third case and wants the same response: the answer had begun
+    — after any reasoning and code fence its first character opens an object or a
+    list — and is not one valid object, which in a long reply means it stopped
+    short. Four replies on 2026-10-19 began `{"projects": [{"name": ...` and did
+    not parse, the provider reporting no truncation; each was retried with the
+    identical request, and one article ended as a parse error that way.
     """
 
     def __init__(self, head: str) -> None:
         self.ran_out_thinking = "<think>" in head.lower() and "</think>" not in head.lower()
+        self.cut_off = not self.ran_out_thinking and began_json(head)
         if self.ran_out_thinking:
             message = (
                 "model never finished thinking, so it never answered — its reasoning "
                 f"used the whole completion budget; reply began: {head[:200]!r}"
             )
+        elif self.cut_off:
+            message = (
+                "model began a JSON answer and did not finish a valid one — cut off, "
+                f"most likely; reply began: {head[:300]!r}"
+            )
         else:
             message = f"model did not return a JSON object; reply began: {head[:300]!r}"
         super().__init__(message)
         self.head = head
+
+
+#: The start of an answer that is JSON: an object or a list, after optional
+#: whitespace and an opening code fence.
+_JSON_START = re.compile(r"\s*(?:```(?:json|JSON)?\s*)?[{\[]")
+
+
+def began_json(text: str) -> bool:
+    """Whether a reply's answer opens a JSON object or list.
+
+    Read after any complete `<think>` block, so a reasoning model's answer is judged
+    and not its deliberation.
+    """
+    return bool(_JSON_START.match(_THINK.sub("", text)))
 
 
 class ResponseTruncated(LLMError):
@@ -1819,6 +1846,7 @@ __all__ = [
     "PeakHours",
     "ResponseTruncated",
     "arm_peak_guard",
+    "began_json",
     "build_extractor",
     "check_peak",
     "choose_route",

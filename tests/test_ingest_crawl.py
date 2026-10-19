@@ -1579,6 +1579,64 @@ def test_a_starved_reply_is_retried_with_reasoning_off_not_a_bigger_budget(promp
     assert llm.effort == "high", "the caller's extractor is untouched"
 
 
+#: A long multi-project reply stopping short of its end, as four did on 2026-10-19
+#: with the provider reporting no truncation.
+_CUT_OFF = (
+    '{"projects": [{"name": "Project Bauxite", "company": "Rowan Digital Infrastructure", '
+    '"customer": "Amazon Web Services", "city": "Adamstown", "county": "Frederick County", '
+    '"state": "MD", "country": "US", "mw_planned": null, "investment_usd": nu'
+)
+
+
+@pytest.mark.parametrize(
+    ("reply", "cut_off"),
+    [
+        (_CUT_OFF, True),
+        ("```json\n" + _CUT_OFF, True),
+        ("<think>Two campuses here.</think>\n" + _CUT_OFF, True),
+        ('[{"name": "Project Bauxite", "state": "MD"', True),
+        ("I could not find a data center in this article.", False),
+        ("<think>The article names two campuses and", False),
+    ],
+)
+def test_a_reply_that_began_its_json_and_stopped_is_called_cut_off(reply, cut_off):
+    with pytest.raises(LLMJsonError) as caught:
+        parse_json_object(reply)
+    assert caught.value.cut_off is cut_off
+    assert ("cut off" in str(caught.value)) is cut_off
+
+
+def test_a_cut_off_answer_is_retried_as_a_different_request(prompt):
+    """The provider said "stop", so the retry was the identical request with a line
+    asking for valid JSON, and it was cut off again. A reply that began as JSON and
+    did not parse now takes the starved-reply retry: reasoning off, told why."""
+    llm = ThinkingLLM([_CUT_OFF, canned("llm_response_microsoft_wi.json")])
+    llm.finish_reason = "stop"
+    outcome = crawl.extract_one(fetched(), prompt=prompt, extractor=llm)
+
+    assert outcome.status == "ok"
+    assert llm.efforts == ["high", None], "the retry is not the identical request"
+    assert "cut off" in llm.seen[1][1]
+    assert "reasoning" not in llm.seen[1][1].split("ARTICLE:")[-1], "and is not told a false cause"
+
+
+def test_a_cut_off_answer_without_reasoning_to_switch_off_gets_more_room(prompt):
+    llm = BudgetLLM([_CUT_OFF, _CUT_OFF])
+    outcome = crawl.extract_one(fetched(), prompt=prompt, extractor=llm)
+
+    assert outcome.status == "parse_error"
+    assert "cut off" in (outcome.error or "")
+    assert llm.budgets[0] is None and llm.budgets[1] is not None
+
+
+def test_an_answer_that_is_not_json_keeps_the_ordinary_retry(prompt):
+    llm = ThinkingLLM(["Sorry, I cannot help with that.", canned("llm_response_microsoft_wi.json")])
+    llm.finish_reason = "stop"
+    crawl.extract_one(fetched(), prompt=prompt, extractor=llm)
+    assert llm.efforts == ["high", "high"]
+    assert "not a single valid JSON object" in llm.seen[1][1]
+
+
 def test_an_article_read_for_one_project_asks_about_that_project_only(prompt):
     """Appended to the message, never written into the prompt file: the file's hash is
     the version stamp on every citation, and editing it would mark the corpus stale."""

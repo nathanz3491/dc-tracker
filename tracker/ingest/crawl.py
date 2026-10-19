@@ -51,6 +51,7 @@ from tracker.llm import (
     LLMError,
     LLMJsonError,
     LLMReply,
+    began_json,
     parse_json_object,
     without_thinking,
 )
@@ -3070,6 +3071,10 @@ def extract_one(
     #: — measured on one Chinese-language article: two identical attempts, two
     #: identical failures, two calls paid for and nothing extracted.
     starved = False
+    #: Set with `starved` when the reply had begun its JSON answer and stopped short.
+    #: Same different request, but told what really happened: "spent its whole
+    #: budget reasoning" would be false of a reply that was mostly answer.
+    cut_off = False
     #: The same model with reasoning off, for the retry after a starved reply. A
     #: bigger budget with reasoning still on was measured to starve again as often
     #: as not — see `llm.without_thinking`. None for an extractor with no reasoning
@@ -3080,8 +3085,12 @@ def extract_one(
         budget: int | None = None
         ask = extractor
         if starved:
-            message = (
-                user + "\n\nYour previous reply spent its whole budget reasoning and never "
+            message = user + (
+                "\n\nYour previous reply was cut off before its JSON object was complete. "
+                "Do not deliberate. Emit the complete JSON object immediately, with no "
+                "prose and no code fences, and keep each quote to the one sentence it needs."
+                if cut_off
+                else "\n\nYour previous reply spent its whole budget reasoning and never "
                 "produced an answer. Do not deliberate. Emit the JSON object immediately, "
                 "with no prose and no code fences."
             )
@@ -3107,7 +3116,7 @@ def extract_one(
 
         if reply.finish_reason == "length":
             last_error = "reply truncated at the token limit"
-            starved = True
+            starved, cut_off = True, began_json(reply.text)
             log.warning("%s: %s (attempt %d)", result.url, last_error, attempt)
             continue
 
@@ -3117,8 +3126,12 @@ def extract_one(
             last_error = str(exc)
             # `finish_reason` is not reliable here: a provider has reported "stop" on
             # a reply that plainly stops mid-sentence inside `<think>`. An unclosed
-            # block is the observable fact, so trust that over the label.
-            starved = exc.ran_out_thinking
+            # block is the observable fact, so trust that over the label. The same
+            # goes for an answer: four replies on 2026-10-19 began `{"projects": [`
+            # and did not parse with the provider reporting no truncation, and the
+            # identical retry failed one article the same way twice. An answer that
+            # began as JSON and did not parse is taken to be cut off.
+            starved, cut_off = exc.ran_out_thinking or exc.cut_off, exc.cut_off
             log.warning("%s: %s (attempt %d)", result.url, last_error, attempt)
             continue
 

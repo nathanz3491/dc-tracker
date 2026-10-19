@@ -172,7 +172,12 @@ it; the last keeps the article budget for pages that can be read at all.
 A reply that runs out of room inside its own reasoning is retried with reasoning off
 (`llm.without_thinking`), not at a bigger budget: with reasoning on, a model told
 not to deliberate deliberates anyway, and 31 calls hit the 32,768-token ceiling in
-four nights, most of them twice.
+four nights, most of them twice. So is an answer that began as JSON and did not
+parse (`LLMJsonError.cut_off`), whatever the provider said about truncation: four
+long multi-project replies on 2026-10-19 stopped short with the provider reporting
+"stop", the retry repeated the identical request, and one article ended as a parse
+error that way. The retry is told the answer was cut off, not that it reasoned too
+long.
 
 ## Why a round stops
 
