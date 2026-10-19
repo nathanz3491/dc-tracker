@@ -171,12 +171,16 @@ queue that drains — ruling a claim out re-derives a row and can raise a findin
 the old value hid, and merging changes the survivor's claim set and can match a
 third row. Ceilings on hours, rounds, **yuan** and tokens, a `VACUUM INTO` snapshot
 before the first merge, and one run at a time. The money ceiling (`--cny`, default
-¥12) is checked before every paid phase and counts every paid call: each one appends
-a line to the night's spend ledger (`TRACKER_SPEND_LEDGER`, which the script sets),
-`tracker/spend.py` prices it at DeepSeek's published rate for the hour it was made,
+¥15) is checked before every paid phase and counts every paid model call: each one
+appends a line to the night's spend ledger (`TRACKER_SPEND_LEDGER`, which the script
+sets), `tracker/spend.py` prices it at the published rate for the hour it was made,
 and the morning report breaks the total down by command and stage. A token ceiling
 could not do this job: nine tokens in ten are cached prompt at a fiftieth of the
 price, and 93% of the money is the reply, so 25M tokens was anything from ¥20 to ¥31.
+Web searches are another bill — prepaid Serper credit, about ¥0.007 each — bounded by
+`--search-cap` rather than the money ceiling, and the morning report prices them
+beside the model spend: on 2026-10-19, 780 searches came to about ¥5.54 against
+¥9.89 on models (`python -m tracker.spend summary <ledger>` puts both on one line).
 
 A command that spends refuses to start in DeepSeek's peak hours (09–12 and 14–18
 Beijing time, Monday to Friday), when every call costs double —
@@ -419,7 +423,8 @@ It is billed to the DeepSeek account, 5 yuan per 1,000 pages it returns, so that
 account needs a balance; model calls never spend it, since every one goes to OpenCode
 Go (`TRACKER_RESERVE_WHEN=always`). With no balance, the first refusal stands the rung
 down for the run. Each page is a line in the night's
-spend ledger, apart from the model's money.
+spend ledger, apart from the model's money, and the morning report prices the pages
+beside it.
 
 Nothing here defeats an access control, and the distinction is the whole
 justification: those sites' `robots.txt` files permit crawling —

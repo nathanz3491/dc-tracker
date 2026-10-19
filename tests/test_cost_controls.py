@@ -78,7 +78,34 @@ def test_a_search_is_counted_and_never_priced_as_a_model_call(tmp_path):
     calls = spend.read(ledger)
     assert spend.total(calls) == pytest.approx(OUT)
     assert spend.searches(calls) == 2
-    assert spend.report(calls)[0] == "    2 web search(es): 2 enrich"
+    assert spend.report(calls)[0] == (
+        "    2 web search(es), about ¥0.01 of prepaid credit outside the ¥ ceiling: 2 enrich"
+    )
+
+
+def test_the_closing_line_prices_searches_beside_the_model_bill(tmp_path, capsys):
+    """2026-10-19 closed on "¥9.89" while its 780 searches had spent about ¥5.54 more,
+    over a third of the night's money. The ceiling still reads the model bill alone."""
+    ledger = tmp_path / "night.spend"
+    ledger.write_text(
+        _line(p=500_000, c=1_000_000) + _line(model=spend.SEARCH_MODEL) * 780,
+        encoding="utf-8",
+    )
+    calls = spend.read(ledger)
+    assert pytest.approx(0.0071) == spend.SEARCH_CNY
+    assert spend.summary(calls) == (
+        f"¥{spend.total(calls):.2f} on models, ~1,500,000 tokens; "
+        "780 web search(es), about ¥5.54 of prepaid credit"
+    )
+    assert spend.main(["total", str(ledger)]) == 0
+    assert capsys.readouterr().out.strip() == f"{OUT + 0.5 * MISS:.2f}", "the ceiling's figure"
+
+    assert spend.main(["summary", str(ledger)]) == 0
+    assert "780 web search(es)" in capsys.readouterr().out
+
+    quiet = tmp_path / "quiet.spend"
+    quiet.write_text(_line(c=1_000_000), encoding="utf-8")
+    assert spend.summary(spend.read(quiet)) == f"¥{OUT:.2f} on models, ~1,000,000 tokens"
 
 
 def test_the_nights_search_cap_counts_the_ledger_and_refuses_past_it(tmp_path, monkeypatch):

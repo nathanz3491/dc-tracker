@@ -118,7 +118,12 @@ class Desk:
             when = newest.date().isoformat() if newest else "never"
             out.append(f"    quiet feed: {name} (newest entry {when})")
         if self.searches:
-            out.append(f"    {self.searches} web search(es) tonight")
+            from tracker.spend import SEARCH_CNY
+
+            out.append(
+                f"    {self.searches} web search(es) tonight, about "
+                f"¥{self.searches * SEARCH_CNY:.2f} of prepaid credit"
+            )
         if self.credit is not None:
             out.append(f"    search credit left: {self.credit:,}")
         out.extend(f"    {w}" for w in self.warnings)
