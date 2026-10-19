@@ -33,6 +33,7 @@ than emptied: the row may have been entered by hand, and reading "no claims" as
 from __future__ import annotations
 
 import logging
+from collections import Counter
 from dataclasses import dataclass
 from dataclasses import field as dc_field
 from typing import Any
@@ -62,7 +63,24 @@ class Change:
     after: Any
 
     def render(self) -> str:
-        return f"#{self.project_id} {self.field}: {_short(self.before)} → {_short(self.after)}"
+        """One line: what the field was and is, shown where the two differ.
+
+        Both sides used to be cut at their first 47 characters, and `notes` — the
+        field that moves most, on 20 of 22 changes in the 2026-10-19 settle — almost
+        always differs further in, so the line read "2026-08-12 rule resolved
+        `obstacle_on_a_finishe… → 2026-08-12 rule resolved `obstacle_on_a_finishe…"
+        and said nothing. A text that runs over several lines is now reported by the
+        lines it gained and lost, and any other text is cut around its first
+        difference.
+        """
+        if _lines(self.before) > 1 or _lines(self.after) > 1:
+            return f"#{self.project_id} {self.field}: {_lines_moved(self.before, self.after)}"
+        was, now = _contrast(self.before, self.after)
+        return f"#{self.project_id} {self.field}: {was} → {now}"
+
+
+#: Characters of a value one side of a change line may take.
+_WIDTH = 48
 
 
 def _short(value: Any) -> str:
@@ -70,7 +88,75 @@ def _short(value: Any) -> str:
     if value is None:
         return "—"
     text = str(value).replace("\n", " ")
-    return text if len(text) <= 48 else text[:47] + "…"
+    return text if len(text) <= _WIDTH else text[: _WIDTH - 1] + "…"
+
+
+def _lines(value: Any) -> int:
+    return len(str(value).splitlines()) if isinstance(value, str) else 0
+
+
+def _contrast(before: Any, after: Any) -> tuple[str, str]:
+    """Both sides in one line each, cut where they differ rather than where they start.
+
+    A plain cut is kept whenever it already shows the difference. Otherwise each side
+    starts a few characters before the first one that differs, marked with "…".
+    """
+    if not (isinstance(before, str) and isinstance(after, str)):
+        return _short(before), _short(after)
+    was, now = before.replace("\n", " "), after.replace("\n", " ")
+    same = next((i for i, (a, b) in enumerate(zip(was, now, strict=False)) if a != b), None)
+    if same is None:
+        same = min(len(was), len(now))
+    if max(len(was), len(now)) <= _WIDTH or same + 8 < _WIDTH:
+        return _short(was), _short(now)
+    # A dozen characters of what both share, from the start of a word when one
+    # begins close enough, so the eye lands on the difference with its context.
+    start = same - 12
+    space = was.find(" ", start, same - 4)
+    if space != -1:
+        start = space + 1
+    return "…" + _short(was[start:]), "…" + _short(now[start:])
+
+
+def _lines_moved(before: Any, after: Any) -> str:
+    """A multi-line text's change as the lines it gained and lost.
+
+    Counted line for line, so a repeated line dropped is a line lost. One line replaced
+    by one other is shown side by side, cut where they differ; more than that is
+    counted, with the first line gained (or, failing that, lost) shown. With nothing
+    gained or lost the lines moved, as #1622's four "agent found nothing" lines did
+    from the foot of its notes to the top on 2026-10-19, or only their spacing changed.
+    """
+    was = [line.strip() for line in str(before or "").splitlines() if line.strip()]
+    now = [line.strip() for line in str(after or "").splitlines() if line.strip()]
+    gone, new = _minus(was, now), _minus(now, was)
+    if not gone and not new:
+        return "the same lines in another order" if was != now else "only the spacing changed"
+    if len(gone) == 1 and len(new) == 1:
+        a, b = _contrast(gone[0], new[0])
+        return f"1 line changed: {a} → {b}"
+    counted = ", ".join(
+        part
+        for part in (
+            f"+{len(new)} line(s)" if new else "",
+            f"-{len(gone)} line(s)" if gone else "",
+        )
+        if part
+    )
+    shown, sign = (new[0], "+") if new else (gone[0], "-")
+    return f"{counted}: {sign} {_short(shown)}"
+
+
+def _minus(lines: list[str], other: list[str]) -> list[str]:
+    """`lines` less one of each line `other` holds, in order: what `other` lacks."""
+    spare = Counter(other)
+    out = []
+    for line in lines:
+        if spare[line]:
+            spare[line] -= 1
+        else:
+            out.append(line)
+    return out
 
 
 @dataclass

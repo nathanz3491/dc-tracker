@@ -222,3 +222,50 @@ def test_clearing_a_blocker_settles_the_confidence_in_the_same_pass(session):
     assert project.blocker is None
     assert first.changed == 1
     assert second.changed == 0, [c.render() for c in second.changes]
+
+
+# --- the change list ----------------------------------------------------------
+#
+# The 2026-10-19 settle moved 22 values, 20 of them `notes`, and printed every one as
+# two identical 47-character prefixes: a row's notes change far from their start, so
+# a cut at the start showed nothing of what changed.
+
+DECISION = "2026-08-12 rule resolved `obstacle_on_a_finished_track`: closed {} obstacle(s)"
+
+
+def test_a_change_far_into_a_text_is_shown_where_it_differs():
+    line = derive.Change(48, "notes", DECISION.format(3), DECISION.format(0)).render()
+    assert line == "#48 notes: …closed 3 obstacle(s) → …closed 0 obstacle(s)"
+
+
+def test_notes_are_reported_by_the_lines_they_gained_and_lost():
+    kept = "[tracker] 1 block(s) name a phase without saying of which facility"
+    one = derive.Change(
+        1592,
+        "notes",
+        f"{kept}\n2026-10-09 agent found nothing for `investment_usd`: attempt 2",
+        f"{kept}\n2026-10-19 agent found nothing for `investment_usd`: attempt 3",
+    ).render()
+    assert one.startswith("#1592 notes: 1 line changed: 2026-10-09 agent found")
+    assert "→ 2026-10-19 agent found" in one
+
+    many = derive.Change(
+        48, "notes", f"{kept}\nold line", f"{kept}\nmerged project(s) #1747\nfolded #1747"
+    ).render()
+    assert many == "#48 notes: +2 line(s), -1 line(s): + merged project(s) #1747"
+
+    shuffled = derive.Change(48, "notes", "a\nb", "b\na").render()
+    assert shuffled == "#48 notes: the same lines in another order"
+    spaced = derive.Change(48, "notes", "a\n\n  b", "a\nb").render()
+    assert spaced == "#48 notes: only the spacing changed"
+    repeated = derive.Change(48, "notes", "a\nb\nb", "a\nb").render()
+    assert repeated == "#48 notes: -1 line(s): - b", "a repeated line dropped is a line lost"
+
+
+def test_short_values_and_numbers_are_shown_whole():
+    assert derive.Change(81, "mw_planned", 33.185, 200.0).render() == (
+        "#81 mw_planned: 33.185 → 200.0"
+    )
+    assert derive.Change(1642, "blocker", "No customer yet.", None).render() == (
+        "#1642 blocker: No customer yet. → —"
+    )
