@@ -12,6 +12,31 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **A queued page no campus story can be in is set aside before it is read**
+  (`tracker/ingest/screen.py`, `tracker/ingest/discover.py`, `tracker/cli/ingest.py`,
+  `tracker/cli/sync.py`, `tracker/webui/catalog.py`, `docs/workflows/sync.md`). The
+  night reads 600 queued pages, and some could never produce a campus: a PDF, which
+  nothing here takes text from (of 384 read since August none produced a citation);
+  Google's campus pages again in twelve translations; a stock-quote or stock-chatter
+  page; a job posting; a directory's ZIP-code page; a page on a site that has refused
+  every read; and, from a builder's own archive, a post about a place abroad or a post
+  from before 2024 naming no place and no campus event. Each is now skipped with its
+  reason, and asked again on every run, so a rule that is narrowed or removed gives its
+  pages back. On the 2026-10-19 copy that is 284 of 5,924 queued pages; against that
+  night's 594 reads it would have set aside 76, one of which had produced a citation.
+  Each rule is narrower than the obvious one because the wider version cost campuses:
+  old builder posts naming a town created the rows for Henrico, Los Lunas and
+  Umatilla, and a directory's county and state pages cite about as often as the
+  night's average. `tracker queue aside` shows what would go; `--drop` sets it aside
+  now.
+
+- **The crawl's summary counts the projects it drops for want of a company, a state or
+  a place** (`tracker/ingest/crawl.py`, `tracker/ingest/records.py`,
+  `docs/workflows/sync.md`). Each was only a log line, so the morning report could not
+  say how much of what the model read could not become a row: 73 on the night of
+  2026-10-19, 61 of them in the main crawl. The outcome table now shows "dropped: no
+  company, state or place" when there are some.
+
 - **Each builder is searched for news as a company, for campuses we do not hold**
   (`tracker/ingest/watch.py`, `tracker/migrations/0040_company_watch.sql`,
   `tracker/models.py`, `tracker/cli/sync.py`, `docs/workflows/sync.md`). The campus
@@ -228,6 +253,43 @@ initial build of the v1 PRD.
   before. An obstacle check whose call failed outright (one came back empty four
   times, each a 10,000-token prompt) is held for the night instead of retried every
   round.
+
+- **The news watch no longer queues a page no campus story can be in, nor local news
+  about something else** (`tracker/ingest/watch.py`, `tracker/ingest/screen.py`,
+  `docs/workflows/sync.md`). By 2026-10-19 the watch's first look had queued 125 such
+  pages — 45 stock-chatter pages, 34 PDFs, 16 directory ZIP-code pages, 15 on sites
+  that refuse every read — and the 42 tried produced one citation; the queue's address
+  rules now refuse them before a result is judged. A result kept only because it names
+  the campus is dropped when it reads as a game, an obituary, a killing or a restaurant
+  and carries no data-center term: a New Albany football recap, a taqueria near MIT's
+  Cambridge lab and a Tesla diner in Palo Alto had all been queued.
+
+- **A page answered with a 429 waits for a later night instead of climbing the fetch
+  ladder** (`tracker/ingest/fetch.py`, `docs/crawler.md`, `docs/design-decisions.md`).
+  A 429 sent the page to the browser-like client, the headless browser and DeepSeek's
+  paid fetch in turn, each one more request to a site that had asked for fewer: of 116
+  pages that climbed on a 429, one was read. It is now a fetch error with no backoff
+  and no climb, which the automatic retries take up on a later night.
+
+- **Enrich reads the archives discovery walked that night instead of walking them
+  again** (`tracker/ingest/discover.py`, `tracker/ingest/enrich.py`,
+  `scripts/render_workflow_diagrams.py`, `docs/workflows/enrich.md`,
+  `docs/workflows/sync.md`). The nightly loop's enrich walked all 28 archives an hour
+  after discovery had: 101 requests on 2026-10-19 for the same bytes. Discovery now
+  keeps each sitemap it fetched, and an archive sweep within twelve hours reads that
+  copy, fetching only what discovery could not.
+
+- **Applied Digital is read from its investor-relations press releases, not its
+  newsroom's summary cards** (`tracker/seed/feeds.toml`, `docs/sources-and-feeds.md`).
+  Its /insights/ pages are a headline, two sentences and a link to another outlet: of
+  52 ever read none produced a citation, and on 2026-10-19 all 27 read were refused as
+  "not an article". The press-release feed is dated, allowed by robots.txt, and every
+  release on that host has read with the plain client.
+
+- **SemiAnalysis is followed to its newsletter's feed** (`tracker/seed/feeds.toml`).
+  The old feed has said nothing new since 2025-09-16, when the newsletter moved;
+  newsletter.semianalysis.com/feed carries the twenty newest posts with their text up
+  to the paywall. The feed keeps its name, so what discovery remembers of it carries on.
 
 - **The night measures its progress from after the news, and folds duplicates before
   paying to read rows** (`scripts/overnight.sh`). The news adds rows and findings by
@@ -456,6 +518,22 @@ initial build of the v1 PRD.
   a claim "directory".
 
 ### Fixed
+
+- **The headless browser reads robots.txt the way every other client does, once per
+  site per run** (`tracker/ingest/fetch.py`, `tracker/robots.py`, `docs/crawler.md`,
+  `docs/workflows/sync.md`). It kept a stricter reading of its own, counting any answer
+  but a 200 as a refusal, while every other rung reads a 4xx as no file (RFC 9309): on
+  2026-10-19 it refused pages on 58 sites whose robots.txt answered 403 or 429. Its
+  refusal also came back looking like an ordinary failure, so it was retried after a
+  backoff about 81 times that night. It now uses the shared reading and returns the
+  same robots refusal as every rung, never retried and never escalated.
+
+- **A fetch that gets a file back fails instead of handing the model the file's
+  bytes** (`tracker/ingest/fetch.py`, `docs/workflows/sync.md`). The plain clients
+  decoded whatever came back as text: one Nevada tax-abatement PDF became 107,617
+  characters and went to the model as an article. Of 384 PDFs read since August none
+  produced a citation, at 352 model calls. A PDF, image, video, audio, archive or
+  office document is now a failed fetch that says what it was.
 
 - **An obstacle's wording is read as words, in the whole sentence it was quoted
   from** (`tracker/ingest/crawl.py`, `tracker/riskcheck.py`, `docs/analysis.md`,
