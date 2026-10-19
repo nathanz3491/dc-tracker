@@ -245,3 +245,22 @@ def test_the_browser_like_client_uses_the_machines_proxy(monkeypatch):
 
 async def _true():
     return True
+
+
+def test_the_runs_shared_pool_uses_the_machines_proxy_too(monkeypatch):
+    """httpx skips its own proxy lookup for a transport it is handed, so the pool a
+    run shares connected directly: robots.txt "could not be read" for Reuters and the
+    BBC all night on 2026-10-19."""
+    import urllib.request
+
+    import httpcore
+
+    monkeypatch.setattr(urllib.request, "getproxies", lambda: {"https": "http://127.0.0.1:9"})
+    fetch_mod.machine_proxies.cache_clear()
+    try:
+        fetcher = fetch_mod.HttpxFetcher(get_settings())
+        asyncio.run(fetcher.__aenter__())
+        assert isinstance(fetcher._pool._pool, httpcore.AsyncHTTPProxy)
+        asyncio.run(fetcher.__aexit__(None, None, None))
+    finally:
+        fetch_mod.machine_proxies.cache_clear()

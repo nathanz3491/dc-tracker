@@ -399,6 +399,15 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **The article client's shared connection pool goes through the proxy too**
+  (`tracker/ingest/fetch.py`). A run shares one connection pool across its
+  requests, and httpx looks the proxy up only for a pool it builds itself, so every
+  article request on the production host connected directly -- around the proxy its
+  poisoned DNS makes necessary. On 2026-10-19 robots.txt "could not be read" for
+  Reuters, the BBC, Business Wire and MassLive, 44 times in one night, each a site
+  left alone for 30 minutes; the same requests through the proxy answered in a
+  fifth of a second.
+
 - **The browser-like client goes through the machine's proxy**
   (`tracker/ingest/fetch.py`, `tracker/webui/article.py`). The production host reaches
   the web through a proxy named only in its macOS network settings, and its own DNS

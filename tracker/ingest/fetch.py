@@ -338,6 +338,23 @@ class _LentPool(httpx.AsyncBaseTransport):
         """The run closes the pool, not the request that borrowed it."""
 
 
+def _run_pool() -> httpx.AsyncHTTPTransport:
+    """The connection pool a run's requests share, going the way httpx's own default
+    would: through the machine's proxy when it names one.
+
+    httpx looks the proxy up only for a client it builds the transport for; handed a
+    transport of its own, it connects directly. So from the day the run's pool was
+    shared, every article request on the production host -- whose DNS is poisoned and
+    whose proxy is named only in its macOS settings -- went around the proxy: on
+    2026-10-19 robots.txt "could not be read" for Reuters, the BBC, Business Wire and
+    MassLive, each in ten seconds or none, while the same requests through the
+    proxy answered in a fifth of a second.
+    """
+    proxies = machine_proxies()
+    proxy = proxies.get("https") or proxies.get("http")
+    return httpx.AsyncHTTPTransport(proxy=proxy) if proxy else httpx.AsyncHTTPTransport()
+
+
 class HttpxFetcher:
     """Plain HTTP. The default: fast, free, no browser.
 
@@ -378,7 +395,7 @@ class HttpxFetcher:
         )
 
     async def __aenter__(self) -> HttpxFetcher:
-        self._pool = self._transport or httpx.AsyncHTTPTransport()
+        self._pool = self._transport or _run_pool()
         return self
 
     async def __aexit__(self, *exc_info: object) -> None:
