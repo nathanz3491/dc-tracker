@@ -656,6 +656,12 @@ class Rollup:
     #: are a utility's megawatts and not the data center's. Kept so `account` can
     #: name them on screen rather than dropping them silently.
     generation: tuple[str, ...] = ()
+    #: The blocks each sum was taken over, by key. A campus figure `reconcile` filled
+    #: from them has no citation of its own, and without these the morning report
+    #: (`changes.backing`) could only say nothing stood behind it — which it said of
+    #: #1608's 3 MW on 2026-10-19, a figure one quoted tranche states.
+    planned_from: tuple[str, ...] = ()
+    built_from: tuple[str, ...] = ()
 
 
 def placeable(blocks: list[Any], *, families: int | None = None) -> list[Any]:
@@ -713,8 +719,10 @@ def rollup(blocks: list[Any]) -> Rollup:
     uncited = tuple(b.block_key for b in usable if not mw_is_confirmed(b) and b.mw)
     live = [b for b in counted if b.status in BLOCK_LIVE]
 
-    sized = [b.mw for b in counted if b.mw and b.status not in BLOCK_TERMINAL]
-    built = [b.mw for b in live if b.mw]
+    sized_blocks = [b for b in counted if b.mw and b.status not in BLOCK_TERMINAL]
+    built_blocks = [b for b in live if b.mw]
+    sized = [b.mw for b in sized_blocks]
+    built = [b.mw for b in built_blocks]
 
     by_customer: dict[str, float] = {}
     for block in counted:
@@ -750,6 +758,8 @@ def rollup(blocks: list[Any]) -> Rollup:
         uncited=uncited,
         customers=ranked,
         generation=generation,
+        planned_from=tuple(b.block_key for b in sized_blocks),
+        built_from=tuple(b.block_key for b in built_blocks),
     )
 
 
