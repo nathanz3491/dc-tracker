@@ -746,7 +746,9 @@ def sync(
         disc.requeue_reopened(session, reopened)
         unreadable = disc.unreadable_test(cache_dir, reopened=reopened)
         discarded = disc.discard_unreadable(session, unreadable)
-        # One copy of a story is read; see `discover.drop_same_story`.
+        # A page no campus story can be in, then one copy of a story; see
+        # `discover.set_aside_not_news` and `discover.drop_same_story`.
+        disc.set_aside_not_news(session)
         disc.drop_same_story(session, unreadable)
     with session_scope(engine, commit=False) as session:
         # known_first spends each LLM call on depth: a queued article covering a
@@ -2267,6 +2269,59 @@ def queue_duplicates(
         console.print(f"\n[green]set aside {len(pairs)} article(s)[/green]")
     else:
         console.print("\n[dim]set them aside with:[/dim] tracker queue duplicates --drop")
+
+
+@queue_app.command("aside")
+def queue_aside(
+    drop: Annotated[
+        bool,
+        typer.Option("--drop", help="Set them aside. Without this it only reports."),
+    ] = False,
+    limit: Annotated[int, typer.Option("--limit", help="Examples to print.")] = 10,
+) -> None:
+    """Queued pages no campus story can be in, and why each.
+
+    A PDF (the reader takes no text from one), a translated copy, a stock-quote or
+    stock-chatter page, a job posting, a directory's ZIP-code page, a site that has
+    refused every read; and from a builder's own archive, a post about a place abroad
+    or an old post naming nothing. `ingest crawl --from-queue` and `sync` set them
+    aside before reading the queue anyway; this does it on demand and shows what goes.
+    Set aside is `skipped` with the reason, not deleted, and a page no rule names any
+    more is put back on the next run.
+    """
+    from collections import Counter
+
+    from tracker.ingest import discover as disc
+    from tracker.ingest import screen
+
+    engine = _writable("queue aside") if drop else _read_engine()
+    with session_scope(engine, commit=drop) as session:
+        found, back = disc.set_aside_not_news(session, apply=drop)
+        rows = [(row.id, row.url, reason) for row, reason in found]
+
+    if json_mode():
+        emit(
+            {
+                "aside": [{"id": i, "url": u, "reason": r} for i, u, r in rows],
+                "put_back": back,
+            }
+        )
+        return
+    if back:
+        console.print(f"{back} page(s) set aside earlier {'are' if drop else 'would be'} back")
+    if not rows:
+        console.print("[green]nothing queued is a page no campus story can be in[/green]")
+        return
+    console.print(f"[yellow]{len(rows)}[/yellow] queued page(s) no campus story can be in\n")
+    for label, count in Counter(screen.kind(r) for _, _, r in rows).most_common():
+        console.print(f"  {count:>5}  {escape(label)}")
+    console.print("\n[bold]examples[/bold]")
+    for row_id, url, reason in rows[:limit]:
+        console.print(f"  #{row_id} {escape(url)}\n        [dim]{escape(reason)}[/dim]")
+    if drop:
+        console.print(f"\n[green]set aside {len(rows)} page(s)[/green]")
+    else:
+        console.print("\n[dim]set them aside with:[/dim] tracker queue aside --drop")
 
 
 @queue_app.command("unreadable")

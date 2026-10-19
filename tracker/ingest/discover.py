@@ -1783,6 +1783,85 @@ def drop_same_story(
     return dropped, restored
 
 
+# --- What cannot be news of a US campus --------------------------------------------
+#
+# A PDF, a translated copy, a stock-quote page, a job posting, a builder's post about
+# Frankfurt: the address or the headline already says no campus row can come of it.
+# `screen` names the kinds and says why each rule is no wider than it is.
+
+
+def set_aside_not_news(
+    session: Session, *, apply: bool = True, path: Path | None = None
+) -> tuple[list[tuple[IngestUrl, str]], int]:
+    """Set aside every queued page that cannot be news of a US campus. Returns
+    ([(the page set aside, why)], how many set aside on an earlier run were put back).
+
+    Every queued page is asked :func:`screen.not_news` (its address); a page a
+    builder's own archive queued (a [[sitemap]] with `company`) is also asked
+    :func:`screen.builder_aside`, which needs the campuses held, to tell a post about
+    a campus abroad, or an old post naming nothing, from one about a campus here.
+
+    A page set aside is `skipped` with :data:`screen.SET_ASIDE` and the reason, not
+    deleted, and **every one is asked again on each run**: a page no rule names any
+    more goes back in the queue. That is what makes a rule safe to narrow or drop --
+    reading PDFs, say -- and what returns a builder's post the night a campus it names
+    becomes one the database holds.
+
+    Runs before :func:`drop_same_story`, so a page that will never be read is not kept
+    as the one copy of a story whose other copies are then set aside. `apply=False`
+    reports without writing, for `tracker queue aside`.
+    """
+    from tracker.ingest import screen
+    from tracker.models import Project
+
+    try:
+        builders = {s.name for s in load_sitemaps(path) if s.company}
+        implied = newsroom_companies(path)
+    except (DiscoverError, tomllib.TOMLDecodeError):
+        builders, implied = set(), {}
+    identities = project_identities(session) if builders else []
+    places = screen.us_places(
+        place for row in session.execute(select(Project.city, Project.county)) for place in row
+    )
+
+    def held(url: str, title: str | None) -> bool:
+        return matches_known_project(url, title, identities, implied_companies=implied) is not None
+
+    def why(row: IngestUrl) -> str | None:
+        reason = screen.not_news(row.url)
+        if reason is None and row.feed in builders:
+            reason = screen.builder_aside(
+                row.url, row.title, row.published_at, places=places, held=held
+            )
+        return reason
+
+    restored = 0
+    for row in session.scalars(
+        select(IngestUrl).where(
+            IngestUrl.status == "skipped", IngestUrl.error.like(f"{screen.SET_ASIDE}%")
+        )
+    ):
+        reason = why(row)
+        if reason is None:
+            restored += 1
+            if apply:
+                row.status, row.error = PENDING_URL_STATUS, None
+        elif apply and row.error != f"{screen.SET_ASIDE}{reason}"[:1000]:
+            row.error = f"{screen.SET_ASIDE}{reason}"[:1000]
+
+    aside: list[tuple[IngestUrl, str]] = []
+    for row in session.scalars(select(IngestUrl).where(IngestUrl.status == PENDING_URL_STATUS)):
+        reason = why(row)
+        if reason is None:
+            continue
+        aside.append((row, reason))
+        if apply:
+            row.status = "skipped"
+            row.error = f"{screen.SET_ASIDE}{reason}"[:1000]
+            row.last_tried_at = utcnow()
+    return aside, restored
+
+
 def requeue_reopened(session: Session, reopened: frozenset[str], path: Path | None = None) -> int:
     """Put back in the queue the discarded pages of every publisher found open again.
 
@@ -3182,6 +3261,7 @@ __all__ = [
     "run",
     "same_story",
     "select_candidates",
+    "set_aside_not_news",
     "sweep_sitemaps",
     "term_in",
     "unreadable_test",

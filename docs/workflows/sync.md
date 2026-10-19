@@ -352,7 +352,28 @@ prioritising after would reorder a batch that was already chosen:
    publisher open again (feed and archive both), its discarded pages go back in the
    queue (`discover.requeue_reopened`), and a page skipped for any other reason
    stays skipped.
-5. **One copy of a story is read.** An article can be queued more than once under
+5. **A page no campus story can be in is set aside before it is read**
+   (`discover.set_aside_not_news`, the rules in `tracker/ingest/screen.py`). By its
+   address: a PDF, which nothing here takes text from — the plain client hands the
+   model its compressed bytes, and of 384 PDFs read since August none produced a
+   citation; a translated copy (Google's campus pages in twelve translations, 114 of
+   its 166 queued); a stock-quote or stock-chatter page; a job posting; a
+   directory's ZIP-code page; a site that has refused every read. From a builder's
+   own archive, also by its headline: a post naming a place abroad and none here
+   (CyrusOne's Frankfurt, Cologix's Toronto, Google's Hamina — a campus abroad cannot
+   become a row), and a post from before 2024 that names no place and no campus
+   event (an award, an Earth Day post). On 2026-10-19 that is 284 of the 5,924
+   queued pages; run against that night's 594 reads it would have set aside 76, of
+   which one had produced a citation. **Each rule is narrower than first asked for,
+   because the wider one cost campuses**: old builder posts naming a town brought in
+   Henrico, Los Lunas and Umatilla, so they are read; a directory's county and state
+   pages produced a citation as often as the night's average, so only its ZIP-code
+   pages go. Set aside is `skipped` with `screen.SET_ASIDE` and the reason, and every
+   such page is asked again on each run: one no rule names any more — reading PDFs
+   one day, a campus newly held — goes back in the queue. It runs before the next
+   rule, so a page that will never be read is not kept as a story's one copy.
+   `tracker queue aside` shows what would go.
+6. **One copy of a story is read.** An article can be queued more than once under
    different addresses: CyrusOne files every release under two paths, a story is
    syndicated to three sites, a search engine cuts a headline short, a page was
    already read through another outlet's copy. On 2026-10-19, after the news watch's
@@ -603,6 +624,7 @@ Touching any of these means the poster is in scope. Re-render with
 | The weekly check of closed entries | `tracker/ingest/discover.py` — `probe_closed`, `record_probe`, `reopened_names`, `without_reopened`, `PROBE_EVERY`; migration `0034_feed_probe`; `tracker/cli/sync.py` — `discover --probe-closed` |
 | Asking robots.txt before every request | `tracker/robots.py` — `allowed`, `allowed_async`, `interpret`, `crawl_delay`; `tracker/ingest/fetch.py` — `permitted`, `refused`, `fetch_with_retry`, `should_escalate`, `fetch_all`; `tracker/ingest/discover.py` — `_RawFetcher`; `tracker/config.py` — `respect_robots` |
 | Headlines-only feeds | `tracker/seed/feeds.toml` — `headlines_of`, `news_search`, `news_pages`; `tracker/ingest/search.py` — `SerperProvider.news`; `tracker/ingest/discover.py` — `news_headlines`, `search_news`, `_poll_news`, `_news_date`, `parse_headlines`, `follow_headlines`, `same_story`, `copies_headline`, `MAX_HEADLINE_LOOKUPS` |
+| A page no campus story can be in is set aside | `tracker/ingest/screen.py` — `not_news`, `file_kind`, `translation`, `site_kind`, `_NOT_NEWS_HOSTS`, `_QUOTE_PAGES`, `_LISTINGS`, `builder_aside`, `abroad`, `us_places`, `post_year`, `_CAMPUS_EVENT`, `off_topic`, `SET_ASIDE`, `summary`; `tracker/ingest/discover.py` — `set_aside_not_news`; `tracker/ingest/watch.py` — `_screened`, `judge`; `tracker/cli/ingest.py` — `crawl --from-queue`; `tracker/cli/sync.py` — `sync` (extract), `queue aside` |
 | A story's second copy is set aside | `tracker/ingest/discover.py` — `drop_same_story`, `SAME_STORY`, `SAME_STORY_WORDS`, `SAME_STORY_WORDS_ACROSS_SITES`, `_headline`, `_page_key`; `tracker/cli/ingest.py` — `crawl --from-queue`; `tracker/cli/sync.py` — `sync` (extract), `queue duplicates` |
 | Pages nothing can read leave the queue, or go last | `tracker/ingest/discover.py` — `closed_domains`, `unreadable_test`, `discard_unreadable`, `requeue_reopened`, `DISCARDED_UNREADABLE`, `readable_first`, `pending(unreadable=)`, `retryable(unreadable=)`; `tracker/ingest/crawl.py` — `stale_sources(unreadable=)`; `tracker/cli/sync.py` — `sync` (extract, retry fill, refresh); `tracker/cli/ingest.py` — `crawl --from-queue`; `tracker/ingest/enrich.py` — `run` |
 | What search looks for | `tracker/ingest/search.py` — `_PLACE_TEMPLATES`, `rank_places`, `plan_queries`, `PlannedQuery.label`, `templates`; `tracker/normalize.py` — `state_name` |
