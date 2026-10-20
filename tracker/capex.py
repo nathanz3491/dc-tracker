@@ -610,6 +610,17 @@ def rollup(
         if project.id in slipped_ids:
             bucket.slipped += 1
 
+    # Each buyer under the one name every other page prints for it. A row used to be
+    # named by whichever spelling reached it first, so on a copy of production Amazon
+    # read "Amazon Web Services", Google "Alphabet" and CyrusOne "CyrusOne
+    # (leaseback)" here and something else on the company page.
+    from tracker.company import display_names
+
+    names = display_names(session)
+    for position in positions.values():
+        if position.key:
+            position.name = names.of_key(position.key, position.name) or position.name
+
     ordered = sorted(
         positions.values(),
         # Unattributed last regardless of size: it is a residual, not a buyer, and
@@ -1842,9 +1853,11 @@ def programme_figures(session: Session) -> list[ProgrammeFigure]:
     That is exactly the discipline that caught `scope` before it was built on, and
     the reason that failure cost a measurement instead of a published number.
     """
+    from tracker.company import display_names
+
     projects = session.scalars(select(Project)).all()
     by_figure: dict[tuple[str, int], set[int]] = {}
-    names: dict[str, str] = {}
+    names = display_names(session)
     for project in projects:
         # The operator, not the buyer: a programme is announced by whoever is
         # spending, and `attribute` would fold several operators' campuses onto
@@ -1852,7 +1865,6 @@ def programme_figures(session: Session) -> list[ProgrammeFigure]:
         key = company_key(project.company)
         if not key:
             continue
-        names.setdefault(key, project.company)
         money = int(project.investment_usd or 0)
         if money < PROGRAMME_FIGURE_MIN_USD:
             continue
@@ -1860,7 +1872,7 @@ def programme_figures(session: Session) -> list[ProgrammeFigure]:
 
     out = [
         ProgrammeFigure(
-            operator=names.get(key, key),
+            operator=names.of_key(key, key) or key,
             investment_usd=money,
             project_ids=tuple(sorted(ids)),
         )

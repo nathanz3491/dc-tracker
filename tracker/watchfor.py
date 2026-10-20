@@ -281,11 +281,15 @@ def project_watch(
     *,
     entry: str | None = None,
     today: dt.date | None = None,
+    company: str | None = None,
 ) -> ProjectWatch:
     """One project's watch entry, from its rows.
 
     Only obstacles reported inside the window are listed, or block a track here;
     the rest are counted in `older`. See the module docstring.
+
+    `company` is the operator as the console prints it (`company.display_names`);
+    without it the row's own spelling is used.
     """
     today = today or dt.date.today()
     stand = standing(project.id, project.events, project.risks)
@@ -342,7 +346,7 @@ def project_watch(
 
     return ProjectWatch(
         project_id=project.id,
-        company=project.company,
+        company=company or project.company,
         project=project.name,
         location=_location(project),
         entry=entry,
@@ -406,7 +410,15 @@ def report(
         if source_ids
         else {}
     )
-    rows = [project_watch(p, sources, entry=wanted.get(p.id), today=today) for p in projects]
+    from tracker.company import display_names
+
+    names = display_names(session)
+    rows = [
+        project_watch(
+            p, sources, entry=wanted.get(p.id), today=today, company=names.company(p.company)
+        )
+        for p in projects
+    ]
     return WatchReport(projects=tuple(sorted(rows, key=ProjectWatch.sort_key)))
 
 

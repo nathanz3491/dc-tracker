@@ -466,17 +466,23 @@ def signals_for(
     as_of: dt.date | None = None,
     entry: str | None = None,
     via: str | None = None,
+    company: str | None = None,
 ) -> list[Signal]:
     """Every signal one project produced that was reported on or after `since`.
 
     `as_of` decides which milestones have actually happened, defaulting to today
     and matching `tracks.standing`'s parameter of the same name. Background — a
     milestone its own article was only recalling — is never returned.
+
+    `company` is the operator as the console prints it (`company.display_names`),
+    so a card says "Amazon" where the row stores "Amazon Web Services"; without it
+    the row's own spelling is used.
     """
     out: list[Signal] = []
     as_of = as_of or dt.date.today()
     start = since.date()
     awaited = _awaited(project, since)
+    company = company or project.company
 
     def keep(signal: Signal) -> None:
         if signal.background or signal.reported is None or signal.reported < start:
@@ -491,11 +497,11 @@ def signals_for(
                 kind="new_project",
                 sign="neutral",
                 project_id=project.id,
-                company=project.company,
+                company=company,
                 project=project.name,
                 label="new to the tracker",
                 detail=(
-                    f"{project.company} — {project.name} entered the database"
+                    f"{company} — {project.name} entered the database"
                     + (f", {project.mw_planned:,.0f} MW planned" if project.mw_planned else "")
                 ),
                 at=created,
@@ -532,7 +538,7 @@ def signals_for(
                 kind="milestone",
                 sign="neutral" if expected else EVENT_SIGN.get(event.event_type, "neutral"),
                 project_id=project.id,
-                company=project.company,
+                company=company,
                 project=project.name,
                 label=event.event_type,
                 detail=event.description,
@@ -573,7 +579,7 @@ def signals_for(
                     kind="obstacle_cleared",
                     sign="good",
                     project_id=project.id,
-                    company=project.company,
+                    company=company,
                     project=project.name,
                     label=risk.category,
                     detail=risk.summary,
@@ -607,7 +613,7 @@ def signals_for(
                     kind="obstacle_opened",
                     sign="bad",
                     project_id=project.id,
-                    company=project.company,
+                    company=company,
                     project=project.name,
                     label=risk.category,
                     detail=risk.summary,
@@ -886,6 +892,10 @@ def digest(
     collected: list[Signal] = []
     digests: list[EntityDigest] = []
     watched_ids: set[int] = set()
+    # Each card names the operator the way every other page does.
+    from tracker.company import display_names
+
+    names = display_names(session)
 
     # **An empty list means nothing is watched.** It used to mean *everything*,
     # which made "watching" depend on a row count nobody could see: two accounts
@@ -902,7 +912,15 @@ def digest(
 
     if everything:
         for project in projects:
-            collected.extend(signals_for(project, since=since, sources=sources, as_of=today))
+            collected.extend(
+                signals_for(
+                    project,
+                    since=since,
+                    sources=sources,
+                    as_of=today,
+                    company=names.company(project.company),
+                )
+            )
         watched_ids = set(by_id)
     else:
         for entity in entities:
@@ -918,6 +936,7 @@ def digest(
                         as_of=today,
                         entry=entity.entry,
                         via=via,
+                        company=names.company(project.company),
                     )
                 )
             watched_ids |= set(entity.matches)

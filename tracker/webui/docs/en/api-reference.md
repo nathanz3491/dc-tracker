@@ -113,13 +113,15 @@ Every citation: `url`, `type` (`company_filing`, `government_doc`, `trade_press`
 
 A company's page as data: `name`, `website`, `totals` (campuses, as operator and as tenant, planned and running MW, open obstacles), `states`, `phases`, its `projects` (each with its role, phase, capacity and obstacles), and `updates` reported in the last two months. The slug is the company's name in lowercase with hyphens, as in the console's address for it: `compass-datacenters`.
 
+`name` is the company's one name, the same on every page; each project also carries `company_name` and `customer_name` beside the source's own `company` and `customer`.
+
 ## GET /v1/capex
 
 [Capex](capex) as data. `buyers` holds one row per buyer, including `(no named customer)`:
 
 | Key | Meaning |
 | --- | --- |
-| `customer`, `projects` | The buyer, and how many campuses. |
+| `customer`, `projects` | The buyer, under its one name, and how many campuses. |
 | `self_built`, `undisclosed` | Campuses attributed from ownership, and tenants described without a name. |
 | `mw_planned`, `mw_built` | Planned and running megawatts. |
 | `investment_usd` | Confirmed investment. `investment_unquoted_usd`, `investment_excluded_usd` and `investment_out_of_scope_usd` are the money reported but treated differently, each disclosed apart. |
@@ -138,7 +140,7 @@ What was reported recently about your watchlist — the same as your [Updates](u
 | --- | --- |
 | `days` | How far back, 1–60. Default 7. |
 
-`data` holds the confirmed updates, most material first; `unconfirmed` those nobody could quote. Each has `kind`, `sign` (`good`, `bad`, `neutral`), `project_id`, `company`, `project`, `headline`, `detail`, `happened`, `reported`, `expected`, `quote`, `source_url` and `publisher`. `last_crawl` says when articles were last fetched. With an empty watchlist, `data` is empty.
+`data` holds the confirmed updates, most material first; `unconfirmed` those nobody could quote. Each has `kind`, `sign` (`good`, `bad`, `neutral`), `project_id`, `company` (the operator's one name), `project`, `headline`, `detail`, `happened`, `reported`, `expected`, `quote`, `source_url` and `publisher`. `last_crawl` says when articles were last fetched. With an empty watchlist, `data` is empty.
 
 ## GET /v1/me
 

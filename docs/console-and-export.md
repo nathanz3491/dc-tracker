@@ -123,6 +123,16 @@ here. The slug is restricted to lowercase letters, digits and hyphens, because
 the server writes it into the page shell, and that restriction is the defence
 against script injection there.
 
+**One name per company, everywhere.** NTT is stored under eight spellings and
+Amazon under six, and every list printed the stored string. `company.display_names`
+gives each company key one name — the roster's (`seed/operators.toml`) when the
+company is on it, else the spelling most rows use, ties to the shorter — and the
+light index, table rows, project payload, Capex rows, Updates and Monitor cards all
+carry it (`company_name`, `customer_name`). The source's own spelling stays in
+`company` and `customer`, and a project's header shows it in small type where it
+differs. The watch picker groups by the key (`company_slug`) instead of the stored
+string, and the table's search matches the printed name as well as the stored one.
+
 The company's mark is its own site icon, fetched by the console's server, because
 the page's content policy loads images only from itself (`tracker/company_logo.py`,
 `GET /api/company-logo`). The website is the cited domain that carries the

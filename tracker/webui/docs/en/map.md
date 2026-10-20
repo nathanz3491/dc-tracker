@@ -36,7 +36,7 @@ A campus whose size nobody has published counts as zero, so both capacities are 
 
 You can also zoom with the wheel or by pinching, and drag to move. Dots keep their size as you zoom, so a crowded area such as Northern Virginia comes apart.
 
-**Hover a dot** to see the campus, its company and place, its stage and planned capacity, and whether an obstacle is blocking it. **Click it** to open [its page](project-page). **Hover a state** to see how many campuses it has and the capacity planned there.
+**Hover a dot** to see the campus, its company (under the one name every page uses) and place, its stage and planned capacity, and whether an obstacle is blocking it. **Click it** to open [its page](project-page). **Hover a state** to see how many campuses it has and the capacity planned there.
 
 ## By state
 

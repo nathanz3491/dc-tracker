@@ -156,6 +156,11 @@ function h200FromMw(mw, kwEach) {
 let H200_KW = 1.3;  // replaced from the dataset on load
 
 const place = (p) => (p.city || (p.county ? p.county + " Co." : "")) + (p.state ? ", " + p.state : "");
+/* A company as every page prints it: the one name the server gives each company
+ * (`company.display_names` — the roster's, else the spelling most rows use), not
+ * whichever of NTT's eight spellings this row's source happened to use. */
+const companyName = (p) => p.company_name || p.company;
+const customerName = (p) => p.customer_name || p.customer;
 /*: A risk category in a reader's words, and its severity separately.
  *
  * The table printed the stored pair verbatim — `grid_capacity/blocking`,
@@ -869,9 +874,9 @@ function ProjectCard({ p, data, onOpen, onQuote }) {
   return html`
     <button type="button" class="dc-pcard"
             onClick=${() => onOpen(p.id)}
-            aria-label=${`${p.company} ${p.name}, ${place(p)}, confidence ${p.confidence}`}>
+            aria-label=${`${companyName(p)} ${p.name}, ${place(p)}, confidence ${p.confidence}`}>
       <div class="dc-pcard-top">
-        <span class="dc-pcard-name">${p.company} — ${p.name}</span>
+        <span class="dc-pcard-name">${companyName(p)} — ${p.name}</span>
         <span style=${chip(p.confidence >= 3 ? "--success" : p.confidence === 2 ? "--chart-1" : "--warning")}>
           ${p.confidence}</span>
       </div>
@@ -1269,7 +1274,7 @@ function ProjectsView({ data, onOpen, watch, onGoto }) {
                 <tr key=${p.id} class=${`dc-row${i < 12 ? " dc-enter" : ""}`}
                     style=${i < 12 ? { "--i": i } : undefined}
                     role="button" tabindex="0"
-                    aria-label=${`${p.company} ${p.name}, ${place(p)}, confidence ${p.confidence}`}
+                    aria-label=${`${companyName(p)} ${p.name}, ${place(p)}, confidence ${p.confidence}`}
                     onClick=${() => onOpen(p.id)}
                     onKeyDown=${(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpen(p.id); } }}>
                   <td class="dc-sticky" style=${{ left: 0, whiteSpace: "nowrap", width: ID_COL_W, minWidth: ID_COL_W }}>
@@ -1282,6 +1287,7 @@ function ProjectsView({ data, onOpen, watch, onGoto }) {
                         class=${`dc-cell${["name", "company", "blocker"].includes(key) ? " dc-cell--wide" : ""}${i === 0 ? " dc-sticky" : ""}`}
                         style=${i === 0 ? { left: ID_COL_W } : undefined}>
                       <${Value} project=${p} field=${key} onQuote=${showQuote}
+                        text=${key === "company" ? companyName(p) : key === "customer" ? customerName(p) : undefined}
                         extra=${{
                           ...(RIGHT.has(key) ? { fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums" } : {}),
                           ...(key === "name" || key === "company" ? { fontWeight: 600 } : {}),
@@ -1384,6 +1390,16 @@ function Section({ id, title, count, blurb, children }) {
     </section>`;
 }
 
+/* The source's own spelling, small, beside a company's name where the two differ.
+ *
+ * Every page prints one name per company, and the header should too — but the
+ * citations below say "Amazon Web Services", and a reader checking a sentence
+ * against the header needs to see that the two are the same company. */
+const filedAs = (raw, shown) => raw && shown && raw.trim() !== shown
+  ? html`<span style=${{ fontSize: 11.5, color: "var(--muted-foreground)" }}
+               title="How this campus's sources write the name">filed as “${raw.trim()}”</span>`
+  : null;
+
 function ProjectPage({ id, data, onBack, watch, onGoto, onOpenCompany, onAllSources }) {
   /* Fetched per visit, not read out of the list payload the console already has.
    *
@@ -1469,14 +1485,16 @@ function ProjectPage({ id, data, onBack, watch, onGoto, onOpenCompany, onAllSour
         <div style=${{ display: "flex", alignItems: "center", gap: 9, flexWrap: "wrap" }}>
           ${p.company_slug && onOpenCompany
             ? html`<button type="button" class="dc-linkish" style=${{ fontSize: 14, fontWeight: 500 }}
-                           title=${`Every campus of ${p.company}`}
-                           onClick=${() => onOpenCompany(p.company_slug)}>${p.company}</button>`
-            : html`<span style=${{ fontSize: 14, fontWeight: 500 }}>${p.company}</span>`}
+                           title=${`Every campus of ${companyName(p)}`}
+                           onClick=${() => onOpenCompany(p.company_slug)}>${companyName(p)}</button>`
+            : html`<span style=${{ fontSize: 14, fontWeight: 500 }}>${companyName(p)}</span>`}
+          ${filedAs(p.company, companyName(p))}
           ${p.customer && p.customer_slug && p.customer_slug !== p.company_slug && onOpenCompany && html`
             <span style=${{ fontSize: 13, color: "var(--muted-foreground)" }}>for</span>
             <button type="button" class="dc-linkish" style=${{ fontSize: 14 }}
-                    title=${`Every campus of ${p.customer}`}
-                    onClick=${() => onOpenCompany(p.customer_slug)}>${p.customer}</button>`}
+                    title=${`Every campus of ${customerName(p)}`}
+                    onClick=${() => onOpenCompany(p.customer_slug)}>${customerName(p)}</button>
+            ${filedAs(p.customer, customerName(p))}`}
           <span style=${{ color: "var(--border)" }}>·</span>
           <span class="dc-num" style=${{ fontSize: 12.5, color: "var(--muted-foreground)" }}>
             ${place(p)}${p.iso ? " · " + p.iso : ""}</span>
@@ -3587,7 +3605,7 @@ function CompanyPage({ slug, data, onOpen, onGoto, onListChanged }) {
                       <div style=${{ fontWeight: 600 }}>${r.name}</div>
                       <div style=${{ fontSize: 12, color: "var(--muted-foreground)" }}>
                         ${[r.city || r.county, r.state].filter(Boolean).join(", ")}
-                        <span class="dc-co-role">${role(r.via)}${r.via !== "operator" && r.company ? ` · built by ${r.company}` : ""}</span>
+                        <span class="dc-co-role">${role(r.via)}${r.via !== "operator" && r.company ? ` · built by ${companyName(r)}` : ""}</span>
                       </div>
                     </td>
                     <td><span style=${chip(PHASE_TOKEN[r.phase] || "--muted-foreground")}>${r.phase}</span></td>
@@ -3803,7 +3821,7 @@ function DuplicateGroup({ ids, byId, evidence, label }) {
           <div key=${p.id} class="dc-dupe-row">
             <span class="dc-num" style=${{ fontSize: 12, color: "var(--muted-foreground)" }}>#${p.id}</span>
             <span style=${{ minWidth: 0 }}>
-              <span style=${{ fontSize: 13, fontWeight: 500 }}>${p.company}</span>
+              <span style=${{ fontSize: 13, fontWeight: 500 }} title=${p.company}>${companyName(p)}</span>
               <span style=${{ fontSize: 13, color: "var(--muted-foreground)" }}> — ${p.name}</span>
             </span>
             <span class="dc-num" style=${{ fontSize: 12, textAlign: "right", whiteSpace: "nowrap" }}>
@@ -3944,7 +3962,7 @@ function CapexBreakdown({ position, col, byId, bucket, grain, onOpenProject }) {
          onClick=${() => onOpenProject && onOpenProject(s)}
          title="open this project's citations">
       <span class="dc-num" style=${idTag}>#${s.id}</span>
-      <span style=${{ fontWeight: 600 }}>${s.company} — ${s.name}</span>
+      <span style=${{ fontWeight: 600 }}>${companyName(s)} — ${s.name}</span>
       <span style=${{ color: "var(--muted-foreground)" }}>${where(s)}</span>
       ${extra}
     </div>`;
@@ -4057,7 +4075,7 @@ function CapexBreakdown({ position, col, byId, bucket, grain, onOpenProject }) {
           ${skipped.map((s) => html`
             <div key=${s.id} style=${row}>
               <span class="dc-num" style=${{ fontSize: 11 }}>#${s.id}</span>
-              <span>${s.company} — ${s.name}</span>
+              <span>${companyName(s)} — ${s.name}</span>
               <span class="dc-num">${mw(s.mw_planned) || "unsized"}</span>
             </div>`)}
         </div>`}
@@ -4616,32 +4634,40 @@ function shortDate(iso) {
  * "xAI | Colossus" are different subscriptions and the difference is not visible
  * from the text alone.
  *
- * **Already-watched is computed from the server's own answer, never re-derived
- * here.** Each watchlist entry ships the `project_ids` it resolved to, so a
- * candidate is covered when its projects are already in that set. The alternative
- * was reimplementing `dedup.company_key` — legal-suffix stripping, the alias table
- * — in JavaScript, where it would drift from the Python that actually decides. */
+ * **Grouped by the company, never by how a row spells it.** Each row arrives with
+ * its company's key (as `company_slug`, the key written for a URL) and its one
+ * name (`company_name`), both from the server: grouping the stored strings
+ * offered NTT eight times, each "operator" covering a fraction of its campuses.
+ * Already-watched is likewise the server's own answer — each watchlist entry
+ * ships the `project_ids` it resolved to, and a candidate is covered when its
+ * projects are in that set. Reimplementing `dedup.company_key` here, with its
+ * suffix stripping and alias table, would drift from the Python that decides. */
 function watchCandidates(projects) {
   const companies = new Map();
   const tenants = new Map();
   for (const p of projects) {
-    const company = (p.company || "").trim();
-    if (company) {
-      const row = companies.get(company.toLowerCase()) || { kind: "company", label: company, entry: company, ids: [], mw: 0 };
+    const company = companyName(p);
+    const companyId = p.company_slug || (p.company || "").trim().toLowerCase();
+    if (company && companyId) {
+      const row = companies.get(companyId) || { kind: "company", label: company, entry: company, ids: [], mw: 0, spellings: new Set() };
       row.ids.push(p.id);
       row.mw += p.mw_planned || 0;
-      companies.set(company.toLowerCase(), row);
+      // Every spelling stays searchable: "aws" still finds Amazon.
+      if (p.company) row.spellings.add(p.company);
+      companies.set(companyId, row);
     }
     /* Tenants only where somebody else is building: a company that is its own
        customer is already offered above, and listing it twice would suggest the
-       two entries do different things. `is_undisclosed` cases ("undisclosed
-       hyperscaler") name nobody, so they are not a subscription anybody wants. */
-    const tenant = (p.customer || "").trim();
-    if (tenant && tenant.toLowerCase() !== company.toLowerCase() && !/undisclosed|unnamed|confidential|not disclosed/i.test(tenant)) {
-      const row = tenants.get(tenant.toLowerCase()) || { kind: "tenant", label: tenant, entry: tenant, ids: [], mw: 0 };
+       two entries do different things. A tenant described without a name ("an
+       undisclosed hyperscaler") has no key, so it is not offered: it names nobody
+       a watch could follow. */
+    const tenant = customerName(p);
+    if (tenant && p.customer_slug && p.customer_slug !== p.company_slug) {
+      const row = tenants.get(p.customer_slug) || { kind: "tenant", label: tenant, entry: tenant, ids: [], mw: 0, spellings: new Set() };
       row.ids.push(p.id);
       row.mw += p.mw_planned || 0;
-      tenants.set(tenant.toLowerCase(), row);
+      if (p.customer) row.spellings.add(p.customer);
+      tenants.set(p.customer_slug, row);
     }
   }
   const byCount = (a, b) => b.ids.length - a.ids.length || b.mw - a.mw || a.label.localeCompare(b.label);
@@ -4651,8 +4677,8 @@ function watchCandidates(projects) {
     ...projects
       .map((p) => ({
         kind: "project",
-        label: `${p.company} — ${p.name}`,
-        entry: `${p.company} | ${p.name}`,
+        label: `${companyName(p)} — ${p.name}`,
+        entry: `${companyName(p)} | ${p.name}`,
         where: place(p),
         ids: [p.id],
         mw: p.mw_planned || 0,
@@ -4686,9 +4712,10 @@ function rankWatchCandidates(candidates, query, coveredIds) {
       continue;
     }
     const hay = c.kind === "project"
-      ? [c.project.name, c.project.company, c.project.customer, c.project.city, c.project.county, c.project.state]
+      ? [c.project.name, companyName(c.project), c.project.company, customerName(c.project), c.project.customer,
+         c.project.city, c.project.county, c.project.state]
           .filter(Boolean).join(" ").toLowerCase()
-      : c.label.toLowerCase();
+      : [c.label, ...(c.spellings || [])].join(" ").toLowerCase();
     const words = q.split(/\s+/);
     if (!words.every((w) => hay.includes(w))) continue;
     const primary = c.label.toLowerCase();

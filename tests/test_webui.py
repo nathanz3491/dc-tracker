@@ -157,6 +157,9 @@ def test_dataset_carries_the_shape_the_page_expects(server):
     listed = data["projects"][0]
     assert listed["name"] and listed["state"]
     assert "prov" not in listed and "sources" not in listed
+    # The company's one name and its key, which the map, the cards and the watch
+    # picker print and group by (`company.display_names`).
+    assert (listed["company_name"], listed["company_slug"]) == ("Microsoft", "microsoft")
 
 
 def test_the_shell_payload_ships_nothing_the_page_does_not_read(server, seeded_db):

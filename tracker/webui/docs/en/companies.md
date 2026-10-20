@@ -29,4 +29,8 @@ Beside it, **Where** shows the states the campuses are in and **Stage** shows ho
 
 ## How names are matched
 
-The page gathers campuses by the company's name across all the roles a source can give it. Spelling variants of large companies are folded together (Meta and Facebook, AWS and Amazon), but two genuinely different companies with similar names stay apart. If a campus you expect is missing, its source may have named a subsidiary or a joint venture instead.
+The page gathers campuses by the company's name across all the roles a source can give it. Spelling variants are folded together (Meta and Facebook, AWS and Amazon, RagingWire and NTT), and two genuinely different companies with similar names stay apart.
+
+The company is shown under **one name**, here and on every other page of the console: the name on the tracker's list of operators when it is on it, otherwise the spelling most campuses use. A campus's own page also shows the spelling its sources use when that differs.
+
+If a campus you expect is missing, its source may have named a subsidiary or a joint venture instead.

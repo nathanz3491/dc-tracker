@@ -268,6 +268,22 @@ initial build of the v1 PRD.
 
 ### Changed
 
+- **A company reads as one company on every page** (`tracker/company.py`,
+  `tracker/capex.py`, `tracker/feed.py`, `tracker/watchfor.py`,
+  `tracker/webui/dataset.py`, `tracker/webui/query.py`, `tracker/webui/static/app.js`,
+  `tracker/webui/static/views-map.js`, `tracker/webui/docs/`,
+  `docs/console-and-export.md`). Every list printed a company the way its row's source
+  spelled it, so one company read as several: on the 2026-10-21 copy 31 operators sat
+  under 78 spellings — NTT under eight, Amazon under six — Capex named Amazon's row
+  "Amazon Web Services" and Google's "Alphabet", and the watch picker offered NTT eight
+  times, each entry covering a fraction of its campuses. Each company now has one name,
+  the roster's when it is on it (`seed/operators.toml`), else the spelling most rows
+  use, and the Projects table and cards, a project's header (with the source's own
+  spelling beside it where that differs), the company page, the map, Capex, Updates
+  and Monitor all print it. The watch picker offers each company once and still finds
+  it by any of its spellings, and the table's search finds a campus by the name it
+  shows: "amazon" finds the rows filed as "AWS".
+
 - **A read about one campus lands on it, however the article spells it**
   (`tracker/ingest/enrich.py`, `tracker/keys.py`, `tracker/cli/ingest.py`,
   `docs/workflows/enrich.md`). Enrich reads for one row at a time and refuses to
