@@ -689,6 +689,17 @@ def _ends_sentence(article: str, end: int) -> bool:
 #: Consulted only from `_stated_in`, and therefore only reachable because `phase` is
 #: *not* in `_SUMMARY_FIELDS`. While it was, any quote the model labelled `phase`
 #: skipped this table entirely — see that set's docstring.
+#:
+#: **A missing word moves a row backwards.** Every night re-reads articles a
+#: superseded prompt read, and a re-read replaces the citation's claims: a sentence
+#: this table cannot read turns a confirmed phase into a 待确认 one, and since quoted
+#: claims outrank unquoted ones an older quoted phase takes the row back. On the
+#: 2026-10-21 copy of production, 73 of 312 confirmed `operational` claims and 44
+#: of 729 `construction` ones would have been refused by a fresh read — "has been
+#: operating since April 2023", "is now online", "announced the completion of
+#: COL4", "has broken ground", "breaks ground on third building", "is currently
+#: building". Those wordings are entries now; all are past or present tense, so a
+#: forecast ("is expected to be online") still reads nothing.
 _PHASE_EVIDENCE: dict[str, tuple[str, ...]] = {
     "announced": ("announce", "plans to", "proposed", "propose", "unveil", "will build"),
     "permitting": ("permit", "zoning", "rezon", "entitlement", "application", "approval"),
@@ -698,9 +709,21 @@ _PHASE_EVIDENCE: dict[str, tuple[str, ...]] = {
         "broke ground",
         "break ground",
         "breaking ground",
+        "breaks ground",
+        "broken ground",
         "groundbreaking",
         "being built",
         "underway",
+        # Spaced: matched as text, "this building is full" holds "is building".
+        " is building",
+        " are building",
+        "currently building",
+        "building out",
+        "site work",
+        "work began",
+        "work has begun",
+        "began work",
+        "started work",
     ),
     "operational": (
         "operational",
@@ -708,14 +731,70 @@ _PHASE_EVIDENCE: dict[str, tuple[str, ...]] = {
         "comes online",
         "went live",
         "is live",
+        "now live",
+        "is online",
+        "are online",
+        "now online",
+        "online since",
         "energiz",
         "in service",
         "opened",
         "now serving",
+        "been serving",
+        "in operation",
+        "operating since",
+        "has been operating",
+        "now operates",
+        "now operating",
+        "operating data cent",
+        "currently houses",
+        # Not "been commissioned": "has not yet been commissioned" holds it.
+        "has been commissioned",
+        # Completion only of the building. "completion of" alone read "an estimated
+        # completion of Mar 2027" and "a customary completion guarantee" as done;
+        # "were completed" read a county's "approval steps were completed", and
+        # "construction is complete" is nearly always "once construction is complete".
+        "completed construction",
+        "construction was completed",
+        "construction has been completed",
+        "phase was completed",
+        "announced the completion of",
     ),
     "paused": ("paused", "on hold", "halted", "suspend", "shelved"),
     "cancelled": ("cancel", "scrapped", "abandon", "withdrew", "withdrawn", "terminated"),
 }
+
+#: The phases a sentence about growing something that already exists cannot put a
+#: site at. "Cyxtera announced 1.6-megawatt and 2-megawatt capacity expansions in its
+#: existing Silicon Valley (SFO1) and Chicago facilities" names the verb `announced`
+#: — and says, in the same breath, that the facilities exist. Read as the campus's
+#: phase, it outranked a directory's "Operating" once quoted claims came first, and
+#: Cyxtera's SFO4 (#49) went from operational to announced, then to construction on
+#: a 2021 tranche (2026-10-20). An expansion is announced; the site it expands is not.
+_EARLY_PHASES: Final = frozenset({"announced", "permitting"})
+
+#: Growing something: the first half of the test.
+_EXPANSION_WORDING: Final = re.compile(
+    r"\b(?:expan(?:d|ds|ded|ding|sion|sions)|extension|additional|upgrad(?:e|es|ed|ing))\b"
+)
+
+#: That the *site* already exists: the second half. Both must be in the sentence —
+#: "proposed next to an existing substation" names nothing being grown, and stays
+#: `announced`. And "existing" only counts within a few words of a facility: on the
+#: 2026-10-21 copy of production, "upgrade existing transmission infrastructure" was
+#: the one sentence of five that a bare "existing" refused wrongly — the grid exists,
+#: the campus is announced.
+_EXISTING_WORDING: Final = re.compile(
+    r"\bexisting(?:\W+\w+){0,6}?\W+(?:data\W?cent(?:er|re)s?|campus(?:es)?|facilit(?:y|ies)"
+    r"|sites?|buildings?|operations|footprint|presence)\b"
+    r"|\b(?:operational|in operation|currently operat\w*|already operat\w*)\b"
+)
+
+
+def _grows_an_existing_site(low: str) -> bool:
+    """Whether a lower-cased sentence is about expanding something already built."""
+    return bool(_EXPANSION_WORDING.search(low) and _EXISTING_WORDING.search(low))
+
 
 #: Article wording that evidences each risk category.
 #:
@@ -1161,6 +1240,8 @@ def _stated_in(field: str, value: Any, quote: str) -> bool:
         if not looks_english(quote):
             return False
         low = quote.lower()
+        if str(value) in _EARLY_PHASES and _grows_an_existing_site(low):
+            return False
         return any(token in low for token in _PHASE_EVIDENCE.get(str(value), ()))
 
     # `mw` and `energized_on` are the capacity-block field names. Listed here

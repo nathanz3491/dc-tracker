@@ -468,3 +468,94 @@ def test_deriving_the_basis_leaves_the_other_axes_alone(session):
     assert entry["scope"] == "this_site"
     assert entry["bound"] == "at_least"
     assert entry["basis"] == "it_load"
+
+
+# --- phase: an expansion of a site that exists is not its announcement ---------
+
+
+def _phase_source(session, project, url: str, phase: str, quote: str, source_type="trade_press"):
+    import datetime as dt
+    import json
+
+    from tracker.models import Source
+
+    source = Source(
+        project_id=project.id,
+        url=url,
+        source_type=source_type,
+        fetched_at=dt.datetime(2026, 1, 1),
+        claims=json.dumps({"phase": phase}),
+        fields="phase",
+        quotes=json.dumps({"phase": quote}),
+    )
+    session.add(source)
+    session.flush()
+    return source
+
+
+def _campus(session):
+    from tracker.models import Project
+
+    project = Project(
+        name="SFO4",
+        company="Cyxtera",
+        city="Santa Clara",
+        state="CA",
+        dedup_key="cyxtera|city:santa clara|CA",
+        phase="announced",
+        confidence=1,
+    )
+    session.add(project)
+    session.flush()
+    return project
+
+
+def test_an_expansion_of_an_existing_site_is_refiled_and_the_row_moves(session):
+    """#49: the quoted `announced` outranked a directory's `operational`, so refiling
+    it lets the operating campus read as operating again."""
+    import json
+
+    project = _campus(session)
+    misread = _phase_source(
+        session,
+        project,
+        "https://example.test/cyxtera-q2",
+        "announced",
+        "Cyxtera announced capacity expansions in its existing Silicon Valley facilities.",
+    )
+    _phase_source(
+        session,
+        project,
+        "https://example.test/listing",
+        "operational",
+        "Our Santa Clara site has been operating since 2018.",
+    )
+    session.refresh(project)
+
+    preview = backfill.regate_phases(session)
+    assert (preview.claims, preview.refiled) == (1, 1)
+    assert misread.fields == "phase"
+
+    report = backfill.regate_phases(session, apply=True)
+
+    assert misread.fields is None
+    assert misread.unconfirmed_fields == "phase"
+    assert json.loads(misread.unconfirmed_reasons) == {"phase": "quote_off_target"}
+    assert project.phase == "operational"
+    assert report.moved == [(project.id, "announced", "operational")]
+
+
+def test_only_the_expansion_rule_is_applied_to_what_is_stored(session):
+    """Re-gating every stored phase against the whole wording table would have
+    demoted correct claims it has never held the words for, moving rows back."""
+    project = _campus(session)
+    kept = _phase_source(
+        session,
+        project,
+        "https://example.test/old",
+        "operational",
+        "The building houses servers for many companies.",
+    )
+    report = backfill.regate_phases(session, apply=True)
+    assert report.refiled == 0
+    assert kept.fields == "phase"

@@ -717,9 +717,14 @@ def bound_from_quote(quote: str | None, value: object) -> str:
     billion" where the column holds 1200.0 or 50000000000. Every plausible spelling
     of the leading digits is tried, and a figure the sentence does not contain
     yields `exact` rather than a guess.
+
+    **A figure, never a word.** Asked about a phase, the word itself was searched
+    for and the hedge read off whatever preceded it: "currently under construction"
+    has "under " before "construction", and Cyxtera's SFO4 (#49) printed as
+    `≤construction`, "at most under construction". Only a number can be hedged.
     """
     text = (quote or "").lower()
-    if not text:
+    if not text or isinstance(value, bool) or not isinstance(value, int | float):
         return "exact"
 
     positions = [index for token in _value_spellings(value) for index in _find_all(text, token)]

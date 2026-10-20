@@ -1331,6 +1331,46 @@ def _backfill_events(*, apply: bool, dry_run: bool) -> None:
         )
 
 
+def _backfill_phase(*, apply: bool, dry_run: bool) -> None:
+    """Refile stored phase claims their own sentence no longer states. Reports first.
+
+    The rows touched are re-derived in the same transaction, so the report says
+    which phases actually moved, not only which claims were refiled.
+    """
+    from tracker.backfill import regate_phases
+
+    writing = apply and not dry_run
+    engine = _writable("backfill phase") if writing else _read_engine()
+    with _explain_db_locks(), session_scope(engine, commit=writing) as session:
+        report = regate_phases(session, apply=writing)
+
+    if json_mode():
+        emit(
+            {
+                "claims": report.claims,
+                "refiled": report.refiled,
+                "projects": sorted(report.projects),
+                "moved": [
+                    {"project_id": pid, "from": before, "to": after}
+                    for pid, before, after in report.moved
+                ],
+                "applied": writing,
+            }
+        )
+        return
+
+    title = "backfill phase" + ("" if writing else " (preview)")
+    _print_report_rows(report.as_rows(), title=title)
+    for pid, value, quote in report.examples:
+        console.print(f"  [dim]#{pid} {value}: {escape(quote)}[/dim]")
+    for pid, before, after in report.moved:
+        console.print(f"  #{pid} phase {before} -> {after}")
+    if not writing:
+        console.print(
+            "\n[dim]Nothing written. `--apply` refiles them and re-derives the rows.[/dim]"
+        )
+
+
 def _backfill_urls(*, apply: bool, dry_run: bool) -> None:
     """Fold a row's second citation of one article, and unqueue articles already read.
 
@@ -1515,7 +1555,7 @@ def backfill(
     what: Annotated[
         str,
         typer.Argument(
-            help="`blocks`, `dates`, `derive`, `scope`, `basis`, `precision`, `urls` or `events`."
+            help="`blocks`, `dates`, `derive`, `scope`, `basis`, `precision`, `urls`, `events` or `phase`."
         ),
     ] = "blocks",
     limit: Annotated[
@@ -1578,6 +1618,9 @@ def backfill(
       as reached, and as `listing_date` the announcements whose only date is a
       directory's own ("first reported Oct 7, 2026"). The rules a fresh ingest
       applies. Free.
+    * `phase` — hold every stored phase claim to the phase wording a fresh read
+      applies, and re-derive the rows that move: a sentence about expanding a site
+      that already exists no longer puts it at `announced`. Free.
     * `blocks` — re-read stored articles to fill in capacity blocks. The default,
       and the only one that spends anything.
 
@@ -1661,10 +1704,17 @@ def backfill(
                 _fail(f"{name} applies to `backfill blocks` or `dates`, not to `events`.")
         _backfill_events(apply=apply, dry_run=dry_run)
         return
+    if what == "phase":
+        # Free, like `events`: a pure function of each stored phase claim's sentence.
+        for flag, name in ((refetch, "--refetch"), (force, "--force"), (all_urls, "--all")):
+            if flag:
+                _fail(f"{name} applies to `backfill blocks` or `dates`, not to `phase`.")
+        _backfill_phase(apply=apply, dry_run=dry_run)
+        return
     if what != "blocks":
         _fail(
             f"nothing to backfill called {what!r}. Expected `blocks`, `dates`, "
-            "`derive`, `scope`, `basis`, `precision`, `urls` or `events`."
+            "`derive`, `scope`, `basis`, `precision`, `urls`, `events` or `phase`."
         )
 
     settings = get_settings()

@@ -348,6 +348,13 @@ class TestBoundFromQuote:
         far = "roughly a decade of planning went into the site before the 350 MW campus"
         assert bound_from_quote(far, 350.0) == "exact"
 
+    def test_only_a_figure_is_hedged_never_a_word(self):
+        """Cyxtera's SFO4 (#49) printed `≤construction`: asked about a phase, the
+        word was found and "under " before it read as "at most"."""
+        quote = "The new building in Santa Clara is currently under construction."
+        assert bound_from_quote(quote, "construction") == "exact"
+        assert bound_from_quote("expected in up to 2027", dt.date(2027, 1, 1)) == "exact"
+
     def test_the_gate_and_the_display_share_one_marker_list(self):
         """Two copies of this rule is how `find_conflicts` became a third copy of
         the 待确认 rule and started disagreeing with the other two on screen."""

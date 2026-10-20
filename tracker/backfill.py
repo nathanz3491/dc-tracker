@@ -458,9 +458,11 @@ __all__ = [
     "Candidate",
     "ForecastReport",
     "ListingReport",
+    "PhaseReport",
     "candidates",
     "demote_forecast_events",
     "file_listing_dates",
+    "regate_phases",
     "run",
 ]
 
@@ -1055,5 +1057,104 @@ def file_listing_dates(session: Session, *, apply: bool = False) -> ListingRepor
         if apply:
             event.unconfirmed = "listing_date"
     if apply:
+        session.flush()
+    return report
+
+
+@dataclass
+class PhaseReport:
+    """What refiling early-phase claims about an existing site's growth found."""
+
+    #: Confirmed `announced`/`permitting` claims with a stored sentence, read.
+    claims: int = 0
+    #: Of those, sentences about growing a site that already exists, refiled.
+    refiled: int = 0
+    #: Projects holding one.
+    projects: set[int] = field(default_factory=set)
+    #: (project id, the phase claimed, the sentence), a few for the report.
+    examples: list[tuple[int, str, str]] = field(default_factory=list)
+    #: (project id, phase before, phase after), once re-derived.
+    moved: list[tuple[int, str, str]] = field(default_factory=list)
+
+    def as_rows(self) -> list[tuple[str, int]]:
+        return [
+            ("announced or permitting claims read", self.claims),
+            ("about growing a site that exists", self.refiled),
+            ("rows whose phase moved", len(self.moved)),
+        ]
+
+
+def regate_phases(session: Session, *, apply: bool = False) -> PhaseReport:
+    """Refile the stored early-phase claims whose sentence grows a site that exists.
+
+    Since 2026-10-21 a sentence about expanding a site that already exists —
+    "announced capacity expansions in its existing Silicon Valley facilities" — no
+    longer puts that site at `announced` or `permitting` (`crawl._grows_an_existing_site`).
+    Claims read before keep the shape they were given until their article is read
+    again, and some never are; this applies that one rule to what is stored.
+
+    **That rule only, never the whole wording table.** Re-gating every stored phase
+    claim against `_PHASE_EVIDENCE` was tried on the 2026-10-21 copy and would have
+    demoted correct ones the table has never held the words for — "Our 750MW
+    Childress site has been operating since April 2023" — moving rows backwards,
+    which is the fault this exists to prevent.
+
+    A claim that fails is filed exactly as the ingest gate files one —
+    `quote_off_target`, out of `fields` and into `unconfirmed_fields` — so it stops
+    deciding the merge and stays on the row as 待确认; nothing is deleted. Each
+    project touched is re-derived. No LLM, no network.
+    """
+    import json
+
+    from tracker.ingest.crawl import _EARLY_PHASES, _grows_an_existing_site
+    from tracker.upsert import WRITABLE_FIELDS, recompute_from_sources
+
+    def _names(text: str | None) -> set[str]:
+        return {name.strip() for name in (text or "").split(",") if name.strip()}
+
+    def _canonical(names: set[str]) -> str | None:
+        return ",".join(name for name in WRITABLE_FIELDS if name in names) or None
+
+    report = PhaseReport()
+    for source in session.scalars(select(Source).order_by(Source.id)).all():
+        try:
+            value = json.loads(source.claims or "{}").get("phase")
+            quotes = json.loads(source.quotes or "{}") if source.quotes else {}
+        except (TypeError, ValueError, AttributeError):
+            continue
+        fields, unconfirmed = _names(source.fields), _names(source.unconfirmed_fields)
+        quote = quotes.get("phase") if isinstance(quotes, dict) else None
+        if not value or not quote or "phase" not in fields or "phase" in unconfirmed:
+            continue
+        if value not in _EARLY_PHASES:
+            continue
+        report.claims += 1
+        if not _grows_an_existing_site(quote.lower()):
+            continue
+        report.refiled += 1
+        report.projects.add(source.project_id)
+        if len(report.examples) < 12:
+            report.examples.append((source.project_id, str(value), quote[:100]))
+        if apply:
+            source.fields = _canonical(fields - {"phase"})
+            source.unconfirmed_fields = _canonical(unconfirmed | {"phase"})
+            try:
+                reasons = json.loads(source.unconfirmed_reasons or "{}")
+            except (TypeError, ValueError):
+                reasons = {}
+            if not isinstance(reasons, dict):
+                reasons = {}
+            reasons["phase"] = "quote_off_target"
+            source.unconfirmed_reasons = json.dumps(reasons, sort_keys=True, ensure_ascii=False)
+    if apply and report.projects:
+        session.flush()
+        for project_id in sorted(report.projects):
+            project = session.get(Project, project_id)
+            if project is None:
+                continue
+            before = project.phase
+            recompute_from_sources(session, project)
+            if project.phase != before:
+                report.moved.append((project_id, str(before), str(project.phase)))
         session.flush()
     return report

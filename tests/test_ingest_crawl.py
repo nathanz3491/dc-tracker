@@ -4730,3 +4730,87 @@ def test_a_role_the_sentence_never_states_is_refused_even_with_one_company():
         "Turner Construction",
     )
     assert got[0].unconfirmed == "quote_off_target"
+
+
+# --- a phase is not a verb in the sentence ---------------------------------------
+#
+# 2026-10-20: Cyxtera's SFO4 (#49) went from operational to construction. The first
+# step was "Cyxtera announced 1.6-megawatt and 2-megawatt capacity expansions in its
+# existing Silicon Valley (SFO1) and Chicago facilities", stored as the campus being
+# `announced` — the verb, in a sentence saying the facilities exist.
+
+CYXTERA = (
+    "Additionally, Cyxtera announced 1.6-megawatt and 2-megwatt capacity expansions in "
+    "its existing Silicon Valley (SFO1) and Chicago facilities (ORD2), respectively."
+)
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        CYXTERA,
+        "The latest announcement includes a planned $11 billion expansion of the "
+        "company's existing data center operations in Madison County.",
+        "Evoque will offer capacity at an existing data center on the plot, and is "
+        "planning to expand the site further.",
+    ],
+)
+def test_growing_a_site_that_exists_does_not_announce_it(sentence):
+    assert not crawl._stated_in("phase", "announced", sentence)
+    assert not crawl._stated_in("phase", "permitting", sentence + " A permit was filed.")
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        # Something existing that is not the site.
+        "Prime proposed a data center next to an existing substation.",
+        "NextEra Energy plans to develop two gigawatts of new generation, upgrade existing "
+        "transmission infrastructure, and deploy up to 2.6 GW of battery energy storage.",
+        # An expansion that is itself the project, with nothing said to exist.
+        "Crusoe announced a 1.2 GW expansion in Abilene.",
+    ],
+)
+def test_an_announcement_that_grows_nothing_existing_still_announces(sentence):
+    assert crawl._stated_in("phase", "announced", sentence)
+
+
+@pytest.mark.parametrize(
+    ("phase", "sentence"),
+    [
+        ("operational", "Our 750MW Childress site has been operating since April 2023."),
+        ("operational", "Facebook's newest data center in Altoona, Iowa, is now online."),
+        ("operational", "Currently, the xAI facility is online and using temporary turbines."),
+        ("operational", "Its Core Campus includes eleven operating data centers."),
+        ("operational", "This facility has been commissioned."),
+        ("operational", "The company this week announced the completion of COL4."),
+        ("operational", "While initial construction was completed late last year, more follows."),
+        ("operational", "These facilities have been serving Atlanta businesses for years."),
+        ("construction", "Meta has officially broken ground on a new campus in Lebanon, Indiana."),
+        ("construction", "Sabey breaks ground on third building at Ashburn, Virginia, campus"),
+        ("construction", "Meta is building a data center in rural Louisiana."),
+        ("construction", "phoenixNAP is currently building a new data center campus."),
+        ("construction", "Site work is starting this month."),
+    ],
+)
+def test_past_and_present_wording_states_the_phase(phase, sentence):
+    """A fresh read refused each of these (2026-10-21 copy: 73 of 312 confirmed
+    `operational` claims, 44 of 729 `construction`), and a re-read that refuses a
+    stored claim moves its row backwards."""
+    assert crawl._stated_in("phase", phase, sentence)
+
+
+@pytest.mark.parametrize(
+    ("phase", "sentence"),
+    [
+        ("operational", "This facility has not yet been commissioned or leased."),
+        ("operational", "DFW02A is under construction, with an estimated completion of Mar 2027."),
+        ("operational", "Core Scientific will provide a customary completion guarantee."),
+        ("operational", "Oracle will occupy the campus once construction is complete."),
+        ("operational", "The county's approval steps were completed on 9 October 2026."),
+        ("operational", "Phase 1 is expected to be online in 2027."),
+        ("construction", "This building is predominantly full today."),
+    ],
+)
+def test_a_forecast_or_a_lookalike_does_not_state_the_phase(phase, sentence):
+    assert not crawl._stated_in("phase", phase, sentence)
