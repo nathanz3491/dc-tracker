@@ -173,9 +173,13 @@ def test_a_parked_pair_stays_parked(session):
 # On 2026-10-05 the night's new row "SoftBank / SB Energy — PORTS Technology Campus"
 # in Piketon sat beside "SB Energy — PORTS-Pike Technology Campus" in Pike County,
 # the same 10 GW site. Neither pass compares a town with another company's county.
+#
+# Since 2026-10-21 "SoftBank / SB Energy" is an alias of SB Energy's company, so that
+# exact pair is one company and the regular passes catch it. The twin pass is still
+# what pairs a joint name with one of its parties, so the fixture keeps one.
 
 
-def _ports(session) -> tuple[Project, Project]:
+def _ports(session, *, joint="Mitsui / SB Energy") -> tuple[Project, Project]:
     old = _row(
         session,
         name="PORTS-Pike Technology Campus",
@@ -187,11 +191,11 @@ def _ports(session) -> tuple[Project, Project]:
     new = _row(
         session,
         name="PORTS Technology Campus (Piketon)",
-        company="SoftBank / SB Energy",
+        company=joint,
         city="Piketon",
         county="Pike County",
         state="OH",
-        dedup_key="softbank sb energy|city:piketon|OH",
+        dedup_key=f"{joint.lower().replace(' / ', ' ')}|city:piketon|OH",
     )
     return old, new
 
@@ -205,6 +209,11 @@ def test_a_new_row_is_paired_with_its_twin_under_another_town_and_company(sessio
     (pair,) = twin_pairs(session, [new.id])
     assert (pair.a_id, pair.b_id) == (old.id, new.id)
     assert "party" in pair.kinds, "a shared operator is evidence a merge may rest on"
+
+
+def test_the_original_ports_pair_is_now_one_company_to_the_regular_passes(session):
+    old, new = _ports(session, joint="SoftBank / SB Energy")
+    assert (old.id, new.id) in _ids(session)
 
 
 def test_a_shared_place_alone_pairs_nothing(session):
