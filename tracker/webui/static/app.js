@@ -3176,17 +3176,6 @@ function BlocksTab({ p }) {
   const barLabel = (key) =>
     key.startsWith("_") ? RESIDUAL_LABEL[key.slice(1)] : blockState(key).label;
 
-  // A date in the past on a tranche that is not running is not a plan, it is news we
-  // have missed. Project 39 showed "Under construction" beside "Oct 2021" with no
-  // acknowledgement that the date had passed four years ago — a contradiction in one
-  // row, which is the whole complaint at the scale of a single line.
-  const today = new Date().toISOString().slice(0, 10);
-  const isOverdue = (b) =>
-    !b.energized_on &&
-    b.expected_online &&
-    b.expected_online < today &&
-    !["serving", "energized", "cancelled", "paused"].includes(b.status);
-
   return html`
     <div style=${{ display: "grid", gap: 16 }}>
       <!-- The headline: what is running, out of what. Replaces a paragraph of prose
@@ -3240,9 +3229,14 @@ function BlocksTab({ p }) {
           const when = sec.energized_on || sec.expected_online;
           const cap = sec.capacity;
           const live = sec.delivering || 0;
-          const overdue = !sec.energized_on && sec.expected_online
-            && new Date(sec.expected_online) < new Date()
-            && !["energized", "serving"].includes(sec.status);
+          /* A date in the past on a tranche that is not running is not a plan, it is
+           * news we have missed: project 39 showed "Under construction" beside "Oct
+           * 2021" with nothing saying the date had gone. Decided by the server with
+           * the rule tracker logic check reads tranches with (delays.tranche_state):
+           * the period a date names has to be over, so "2026" is not due in March
+           * 2026, and a paused or cancelled tranche is not late. The browser used to
+           * compare the stored day itself and flagged both. */
+          const overdue = !!sec.overdue;
           /* Only the two verdicts that mean something is *wrong* take a hue.
            * "Four sources named this building" is not a defect, so it is said in
            * words. Colour in this product means how much to believe a value, or

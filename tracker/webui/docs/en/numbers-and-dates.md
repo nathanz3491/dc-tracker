@@ -81,3 +81,5 @@ A campus is flagged **Suspected delay** when all four of these hold:
 - no building or phase is still due later. When the campus date was the first phase's and the next phase has its own later date, the campus is not late.
 
 It is a suspicion, not a finding. The usual causes are a slip nobody reported and a campus that opened without news we read, and either is worth a search. The flag gives the date as the source stated it and how many days ago its period ended, and it is worked out again every day. One rule is behind the chip on a [project's page](project-page), the **Late** column and the **Suspected delays only** filter in [Projects](projects), the list on a [company page](companies), the [API](api-reference) and the contradiction check the maintainers run, so they always agree.
+
+A building or phase is marked **was due** on the same terms: its date's period is over, it is not running, no energisation date is recorded for it, and it is not paused or cancelled. A building or phase records no precision of its own, so its date is read the way an unrecorded one is above.

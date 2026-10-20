@@ -89,8 +89,8 @@ CSV_COLUMNS: tuple[str, ...] = (
 #: 9 adds `claims_by_field[].claims[].part` — true for a capacity or investment
 #: figure its own sentence gives to one building or phase. Additive.
 #: 10 adds `suspected_delay` — null, or why a campus whose online date has passed
-#: reads as late. Additive, and relative to the day the file was written, which its
-#: `as_of` states.
+#: reads as late — and `sections[].overdue`. Additive. Both are relative to the day
+#: the file was written, which `suspected_delay.as_of` states.
 JSON_SCHEMA_TAG = "tracker/10"
 
 FORMATS = ("md", "csv", "json", "html")
@@ -785,6 +785,7 @@ def _sections_json(project: Project) -> list[dict[str, Any]]:
     """Sections in identity order, each carrying what it delivers of what it holds."""
     from tracker.blockcheck import sections
 
+    today = delays.as_of()
     return [
         {
             "key": s.key,
@@ -803,6 +804,10 @@ def _sections_json(project: Project) -> list[dict[str, Any]]:
             "customer": s.customer,
             "energized_on": iso(s.energized_on),
             "expected_online": iso(s.expected_online),
+            # Whether the section's own date has passed with nothing running, read
+            # by the rule `tracker logic check` reads tranches with: the period has
+            # to be over, and a paused or cancelled section is not late.
+            "overdue": delays.tranche_state(s, today) == delays.LATE,
             "source_ids": list(s.source_ids),
         }
         for s in sections(project.id, list(project.blocks))

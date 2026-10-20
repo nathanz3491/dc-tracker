@@ -1176,6 +1176,23 @@ def test_a_slipped_tranche_beside_a_running_one_leaves_the_campus_on_time(sessio
     assert "past_its_own_date" not in codes
 
 
+@pytest.mark.parametrize("status", ["paused", "cancelled"])
+def test_a_stopped_tranche_is_not_late(session, status):
+    """A paused or cancelled tranche has a status of its own, not an overdue date."""
+    project = _project(session, phase="construction")
+    _blk(session, project, label="Phase 1", status=status, expected_online=dt.date(2024, 1, 1))
+    session.refresh(project)
+    assert "block_past_its_own_date" not in _codes(project)
+
+
+def test_a_tranche_dated_by_year_is_not_late_until_the_year_ends(session):
+    """The stored day was compared, so "2026" was late on 2 January 2026."""
+    project = _project(session, phase="construction")
+    _blk(session, project, label="Phase 1", expected_online=dt.date(2026, 1, 1))
+    session.refresh(project)
+    assert "block_past_its_own_date" not in _codes(project)
+
+
 def test_a_still_future_tranche_explains_a_campus_date_that_passed(session):
     """Phase 1's date is on the row; phase 2 has not happened yet."""
     project = _project(session, phase="construction", expected_online=dt.date(2024, 1, 1))

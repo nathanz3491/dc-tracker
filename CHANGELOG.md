@@ -580,6 +580,15 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **A tranche is "was due" only once its whole stated period is over, and never when
+  paused or cancelled** (`tracker/export.py`, `tracker/logic.py`,
+  `tracker/webui/static/app.js`, the reader docs). The page compared the stored day
+  itself, so a tranche dated "2026" was overdue on 2 January 2026, and a paused or
+  cancelled one stayed amber forever; `logic check` compared the day too, by a rule of
+  its own. Both now ask one function, `delays.tranche_state`, which also counts a
+  tranche with an energisation date as not late. On a production copy on 2026-10-20
+  the tranche findings went from 116 to 93.
+
 - **A campus is no longer moved backwards by a sentence about growing it, or by
   wording the phase check could not read** (`tracker/ingest/crawl.py`,
   `tracker/backfill.py`, `tracker backfill phase`, `tracker/vocab.py`,

@@ -704,17 +704,14 @@ def check_rules(project: Project) -> list[Finding]:
 
     today = _today()
 
-    # Each tranche against its own date. A campus whose phase-1 date passed while
-    # phase 2 runs to a later schedule is not late — it is a campus — so the tranche
-    # that slipped is named on its own, beside the campus question below.
-    late_blocks = [
-        b
-        for b in blocks
-        if b.expected_online
-        and b.expected_online < today
-        and b.status not in BLOCK_LIVE
-        and b.status not in BLOCK_TERMINAL
-    ]
+    # Each tranche against its own date, read the way the console's "was due" label
+    # reads it (`delays.tranche_state`): the period a date names has to be over, and
+    # a tranche that is running, has an energisation date, or was paused or
+    # cancelled is not late. This used to compare the stored day, so a tranche dated
+    # "2026" was late on 2 January, and the page kept its own copy of the test that
+    # disagreed both ways: it flagged paused and cancelled tranches, this flagged
+    # ones with an energisation date.
+    late_blocks = [b for b in blocks if delays.tranche_state(b, today) == delays.LATE]
     if late_blocks:
         listed = ", ".join(f"{b.label} ({b.expected_online})" for b in late_blocks[:3])
         add(

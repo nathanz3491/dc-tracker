@@ -390,3 +390,41 @@ def test_a_company_page_counts_its_late_campuses(session, fleet):
     assert profile["suspected_delays"]["mw_planned"] == 400.0
     flagged = {r["id"] for r in profile["projects"] if r["suspected_delay"]}
     assert flagged == fleet["late"]
+
+
+def test_a_section_is_overdue_only_when_its_period_is_over(session, monkeypatch):
+    """The tranche "was due" label, computed where the CLI computes it.
+
+    The page used to work it out in the browser from the stored day, so "2026" was
+    overdue on 2 January, and a paused or cancelled tranche was "due" forever.
+    """
+    from tracker.export import _sections_json
+
+    monkeypatch.setattr(delays, "as_of", lambda: TODAY)
+    project = _row(session, "Sections")
+    for number, status, expected in (
+        (1, "under_construction", dt.date(2024, 3, 1)),
+        (2, "planned", dt.date(2026, 1, 1)),
+        (3, "cancelled", dt.date(2024, 3, 1)),
+        (4, "paused", dt.date(2024, 3, 1)),
+        (5, "serving", dt.date(2024, 3, 1)),
+    ):
+        session.add(
+            CapacityBlock(
+                project_id=project.id,
+                block_key=f"building-{number}",
+                label=f"Building {number}",
+                status=status,
+                expected_online=expected,
+            )
+        )
+    session.flush()
+    session.refresh(project)
+    overdue = {s["label"]: s["overdue"] for s in _sections_json(project)}
+    assert overdue == {
+        "Building 1": True,
+        "Building 2": False,
+        "Building 3": False,
+        "Building 4": False,
+        "Building 5": False,
+    }

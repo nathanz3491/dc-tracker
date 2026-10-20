@@ -55,7 +55,7 @@ Many campuses are built in pieces: buildings, phases, halls. Each is a **tranche
 
 - The headline says how many megawatts are delivering out of the campus total, across how many tranches. Only cited capacity counts as delivering, so the headline can read 0 even when buildings are running.
 - A bar shows the tranches by state.
-- The table lists each tranche: its name, megawatts, state, customer and online date, with notes such as *also called…*, *was due* (amber when overdue) or *two sources confirm A and B — two figures, not one*.
+- The table lists each tranche: its name, megawatts, state, customer and online date, with notes such as *also called…*, *was due* or *two sources confirm A and B — two figures, not one*. *Was due*, in amber, marks a tranche whose whole stated period is over with nothing saying it runs; a paused or cancelled tranche is never marked, and neither is one dated "2026" before 2026 has ended.
 - The reconciliation rows account for every megawatt of the campus: cited per tranche, not yet itemised, stated but unconfirmed, not tied to a named building, out of scale, counted twice over. Capacity that is not counted in the total gets its own line rather than vanishing.
 - **Power serving this campus** lists the utility's plant — substations, gas or solar generation — which is never added to the campus's own figures.
 

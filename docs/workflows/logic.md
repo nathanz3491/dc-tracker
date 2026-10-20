@@ -77,6 +77,16 @@ campus. Three things changed in what it asks:
 
 On that copy the campus findings went from 11 to 22, the same 22 the console flags.
 
+`block_past_its_own_date` reads each tranche with the same rule
+(`delays.tranche_state`) as the console's amber "was due": the period has to be
+over, and a tranche that is running, has an energisation date, or was paused or
+cancelled is not late. A tranche records no precision, so its date is read the way
+an unrecorded project date is. It used to compare the stored day, so a tranche dated
+"2026" was late on 2 January, and the page kept its own copy of the test that
+disagreed with it both ways — the page flagged paused and cancelled tranches, this
+flagged ones with an energisation date. On that copy the change took the tranche
+findings from 116 to 93.
+
 ### Collisions report the policy's answer; they do not re-decide it
 
 The winner is read back from `upsert.resolve_field` — the same function the write
