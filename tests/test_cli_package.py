@@ -84,6 +84,7 @@ COMMANDS = {
     "queue duplicates",
     "queue aside",
     "queue unreadable",
+    "rename",
     "review",
     "risks",
     "risks confirm",

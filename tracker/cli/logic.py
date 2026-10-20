@@ -1164,6 +1164,11 @@ def logic_rule_out(
 
     `logic resolve` does the same from a keyboard menu; this is for a person who has
     already read the sources and knows which sentence is wrong.
+
+    **`blocks` takes a citation's tranches out instead** — for an article about a
+    different site that named its buildings, such as NTT's 2025 land purchase for a
+    216 MW second Hillsboro campus, read onto the existing campus as two planned
+    tranches. The ruling outlives a re-read of the same article.
     """
     import json
 
@@ -1175,8 +1180,8 @@ def logic_rule_out(
     if reason not in DECIDED_REASONS:
         _fail(f"--reason must be one of {', '.join(sorted(DECIDED_REASONS))} (got {reason!r})")
         return
-    if field not in Project.__table__.columns:
-        _fail(f"{field!r} is not a project field")
+    if field not in Project.__table__.columns and field != "blocks":
+        _fail(f"{field!r} is not a project field (or `blocks`, for a citation's tranches)")
         return
 
     def claims(source) -> dict:
@@ -1202,13 +1207,20 @@ def logic_rule_out(
         wanted = set(citation)
         chosen = [s for s in project.sources if s.url in wanted or str(s.id) in wanted]
         missing = wanted - {s.url for s in chosen} - {str(s.id) for s in chosen}
-        claiming = [s for s in project.sources if field in claims(s)]
+        claiming = [
+            s
+            for s in project.sources
+            if (field in claims(s) if field != "blocks" else bool(s.blocks))
+        ]
         if missing or not chosen:
             offered = "\n".join(f"  [{s.id}] {s.url}" for s in claiming) or "  (none)"
             _fail(
                 f"not a citation on #{project_id}: {', '.join(sorted(missing)) or '(none given)'}\n"
                 f"the citations on this row that claim {field}:\n{offered}"
             )
+            return
+        if field == "blocks":
+            _rule_out_blocks(session, project, chosen, reason=reason, why=why, dry_run=dry_run)
             return
         silent = [s for s in chosen if field not in claims(s)]
         if silent:
@@ -1219,8 +1231,12 @@ def logic_rule_out(
 
         was = getattr(project, field)
         marked = sum(1 for s in chosen if supersede(s, field, reason=reason))
-        setattr(project, field, None)
-        session.flush()
+        # Emptied first only where the column may be empty. `phase` is NOT NULL, and
+        # blanking it made the flush fail, so a phase claim could never be ruled out
+        # by hand; the recompute below sets it from what is left standing either way.
+        if Project.__table__.columns[field].nullable:
+            setattr(project, field, None)
+            session.flush()
         recompute_from_sources(session, project)
         now = getattr(project, field)
         what = f"{field} {fmt_value(was)} -> {fmt_value(now)} ({marked} claim(s) ruled out as {reason})"
@@ -1240,6 +1256,41 @@ def logic_rule_out(
         if dry_run:
             session.rollback()
             console.print("[yellow]dry run[/yellow] — nothing written")
+
+
+def _rule_out_blocks(
+    session, project, chosen: list, *, reason: str, why: str, dry_run: bool
+) -> None:
+    """`logic rule-out ID blocks`: take the chosen citations' tranches off the row."""
+    from tracker import blocks as blocks_mod
+    from tracker import logic as logic_mod
+    from tracker.upsert import recompute_confidence, recompute_from_sources
+
+    silent = [s for s in chosen if not s.blocks]
+    if silent:
+        _fail(f"these citations name no tranche: {', '.join(s.url for s in silent)}")
+        return
+    before = {b.block_key: b.label for b in project.blocks}
+    marked = sum(1 for s in chosen if blocks_mod.rule_out(s, reason=reason))
+    session.flush()
+    blocks_mod.rebuild(session, project)
+    recompute_from_sources(session, project)
+    session.refresh(project)
+    after = {b.block_key for b in project.blocks}
+    gone = sorted(label for key, label in before.items() if key not in after)
+    what = (
+        f"blocks: {len(gone)} tranche(s) taken off ({', '.join(gone) or 'none'}); "
+        f"{marked} citation(s) ruled out as {reason}"
+    )
+    logic_mod.record_decision(project, "operator_ruled_out", what, by="operator", detail=why)
+    session.flush()
+    recompute_confidence(session)
+
+    console.print(f"#{project.id} {escape(project.company)} — {escape(project.name)}")
+    console.print(f"  {escape(what)}")
+    if dry_run:
+        session.rollback()
+        console.print("[yellow]dry run[/yellow] — nothing written")
 
 
 def _one_quote(project, field: str) -> str | None:

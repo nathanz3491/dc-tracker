@@ -12,6 +12,19 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **Operator tools for untangling two sites read as one** (`tracker rename`,
+  `tracker logic rule-out ID blocks`, `tracker/cli/duplicates.py`,
+  `tracker/cli/logic.py`, `tracker/blocks.py`, `tracker/upsert.py`,
+  `docs/workflows/logic.md`, `README.md`). Found fixing three rows by hand on
+  2026-10-21. A row keeps the first name a source gave it, and Prime's #6 was "1231
+  Comstock" — a building still only proposed — while holding the 9 MW already built at
+  1111 Comstock; `rename` changes the display name with the reason in the notes, and
+  re-keys nothing. And an article about another site that names its buildings left
+  its tranches on the row: NTT's 2025 land purchase for a 216 MW second Hillsboro
+  campus sat on the existing 126 MW one as planned tranches, with no way to take them
+  off. `logic rule-out ID blocks --citation …` does, and the ruling survives a re-read
+  of the article.
+
 - **Rows that are not data centers are taken out, and kept out** (`tracker exclude`,
   `tracker/exclude.py`, `tracker/upsert.py`, `tracker/ingest/crawl.py`,
   `tracker/ingest/records.py`, migration 0041, `docs/workflows/sync.md`, `README.md`).
@@ -540,6 +553,30 @@ initial build of the v1 PRD.
   a claim "directory".
 
 ### Fixed
+
+- **A campus is no longer moved backwards by a sentence about growing it, or by
+  wording the phase check could not read** (`tracker/ingest/crawl.py`,
+  `tracker/backfill.py`, `tracker backfill phase`, `tracker/vocab.py`,
+  `tracker/cli/logic.py`). Cyxtera's Santa Clara campus (#49) went from operational to
+  construction on 2026-10-20 in three steps: "Cyxtera announced 1.6-megawatt and
+  2-megawatt capacity expansions in its existing Silicon Valley (SFO1) and Chicago
+  facilities" was stored as the campus being `announced`; quoted claims outrank a
+  directory's, so that beat the listing's "Operating"; and a 2021 tranche of Prime's
+  building lifted it to construction. A sentence about expanding a facility it says
+  already exists no longer puts that facility at `announced` or `permitting`, and
+  `backfill phase` refiles the three stored claims of that shape (one row moved,
+  Evoque/Archer Nashville, to construction). The same night showed the phase wording
+  missing plain past and present tense — 73 of 312 confirmed `operational` claims and
+  44 of 729 `construction` ones would be refused by a fresh read, and each nightly
+  re-read that refuses one can move its row back: "has been operating since April
+  2023", "is now online", "announced the completion of", "has broken ground",
+  "breaks ground", "is currently building" are entries now, forecasts still read
+  nothing ("once construction is complete", "an estimated completion of Mar 2027"),
+  and five sentences newly pass a second phase, all real completions. Two display and
+  tool faults on the same row: a phase printed as `≤construction`, because the hedge
+  reader for figures read "under construction" as "under", now only reads numbers;
+  and `logic rule-out ID phase` crashed, because `phase` is NOT NULL and the command
+  emptied it first.
 
 - **An obstacle stated in plain words is confirmed** (`tracker/ingest/crawl.py`,
   `tracker/riskcheck.py`, `docs/analysis.md`, `docs/design-decisions.md`). With word

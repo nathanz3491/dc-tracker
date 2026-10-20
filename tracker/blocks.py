@@ -806,6 +806,49 @@ def aliases_for(session: Any, project_id: int) -> dict[str, str]:
     return resolved
 
 
+#: The key in `source.unconfirmed_reasons` under which an operator rules a
+#: citation's tranches out of a row (`tracker logic rule-out ID blocks`). Not a
+#: claim field, so it never enters `unconfirmed_fields`; `upsert` carries it across a
+#: re-read of the same article, as it carries any decision.
+RULED_OUT: Final = "blocks"
+
+
+def ruled_out(source: Any) -> bool:
+    """Whether an operator has ruled this citation's tranches out of its row."""
+    import json
+
+    from tracker.upsert import DECIDED_REASONS
+
+    try:
+        reasons = json.loads(getattr(source, "unconfirmed_reasons", None) or "{}")
+    except (TypeError, ValueError):
+        return False
+    return isinstance(reasons, dict) and reasons.get(RULED_OUT) in DECIDED_REASONS
+
+
+def rule_out(source: Any, *, reason: str) -> bool:
+    """Rule this citation's tranches out of its row. Idempotent; True if it changed.
+
+    For an article about another site that names its buildings — NTT's 2025 land
+    purchase for a 216 MW second Hillsboro campus, read onto the existing campus
+    (#29) as two planned tranches. The article stays a citation; its tranches stop
+    describing this row. `reason` is one of `upsert.DECIDED_REASONS`.
+    """
+    import json
+
+    try:
+        reasons = json.loads(source.unconfirmed_reasons or "{}")
+    except (TypeError, ValueError):
+        reasons = {}
+    if not isinstance(reasons, dict):
+        reasons = {}
+    if reasons.get(RULED_OUT) == reason:
+        return False
+    reasons[RULED_OUT] = reason
+    source.unconfirmed_reasons = json.dumps(reasons, sort_keys=True, ensure_ascii=False)
+    return True
+
+
 def blocks_by_key(sources: list[Any], aliases: dict[str, str] | None = None) -> dict[str, dict]:
     """Every source's assertions about every block, grouped by identity.
 
@@ -835,7 +878,7 @@ def blocks_by_key(sources: list[Any], aliases: dict[str, str] | None = None) -> 
     # figures `resolve` took from a report.
     ordered = sorted(sources, key=lambda s: (conf.is_tertiary(s), -_weight_of(s), -(s.id or 0)))
     for source in ordered:
-        if not source.blocks:
+        if not source.blocks or ruled_out(source):
             continue
         placeholder = is_placeholder(source)
         try:

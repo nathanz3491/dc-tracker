@@ -381,6 +381,22 @@ never types a value in: a surviving claim decides the field, or it stays empty. 
 citations that make no claim about the field are refused, and an unknown one is
 answered with the list of citations that do.
 
+`phase` works like any other field. Until 2026-10-21 it could not be ruled out at all:
+the field was emptied before the re-derive, `phase` is NOT NULL, and the write failed.
+Now only a column that may be empty is emptied first.
+
+```bash
+tracker logic rule-out 29 blocks --citation 3755 --citation 3760 --reason misread \
+    --why "the 216 MW is the 2025 land purchase, now its own row"
+```
+
+`blocks` takes a citation's **tranches** off the row instead of one field's claim —
+for an article about another site that named its buildings, such as NTT's 2025 land
+purchase for a second Hillsboro campus, read onto the existing one as two planned
+216 MW tranches. The ruling is kept on the citation (`blocks.RULED_OUT` in
+`unconfirmed_reasons`), the tranches are rebuilt without it, and a re-read of the same
+article does not bring them back.
+
 ## Source map
 
 Touching any of these means the poster is in scope. Re-render with
@@ -400,7 +416,7 @@ Touching any of these means the poster is in scope. Re-render with
 | What a ruling cannot reach | `tracker/triage.py` — `can_rule_on`, `UNANSWERABLE_BY_RULING`, `has_live_claim`; `tracker/agent.py` — `_list_sources`, `_claims_line` |
 | The fixed menu and the keyboard walk | `tracker/logic.py` — `decide`, `TRIAGE_MIN_CONFIDENCE`; `tracker/cli/logic.py` — `_triage_by_agent`, `_triage_by_model`, `_triage` |
 | Settled-finding bookkeeping | `tracker/audit.py` — `settled_codes`, `_no_change`, `left_as_it_was`, `free_answer`, `fmt_value`; `tracker/cli/quality.py` — `_print_resolution_summary`; `tracker/changes.py` — `render` |
-| CLI | `tracker/cli/logic.py` — `logic_check`, `logic_conflicts`, `logic_resolve`, `logic_rule_out` |
+| CLI | `tracker/cli/logic.py` — `logic_check`, `logic_conflicts`, `logic_resolve`, `logic_rule_out`, `_rule_out_blocks`; `tracker/blocks.py` — `RULED_OUT`, `rule_out`, `ruled_out`, `blocks_by_key`; `tracker/upsert.py` — `_carried_reasons` |
 
 See also: [enrich](enrich.md), whose settle stage is `logic conflicts` with
 `--apply` already implied and run automatically after every harvest.

@@ -807,6 +807,60 @@ def exclude(
         console.print("[yellow]dry run[/yellow] — nothing written")
 
 
+@app.command()
+def rename(
+    project_id: Annotated[int, typer.Argument(help="The row.")],
+    name: Annotated[str, typer.Argument(help="The name its campus actually goes by.")],
+    why: Annotated[str, typer.Option("--why", help="Why, kept in the row's notes.")],
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="Show it; write nothing.")] = False,
+) -> None:
+    """Give a row the name its campus actually goes by.
+
+    A row keeps the first name a source gave it: identity fields are fill-only, so
+    no later article renames it. That is right for a model, which would rename a
+    campus after whichever building an article was about, and wrong when the first
+    name was itself one building's — Prime's #6 is "1231 Comstock", a building still
+    only proposed, and holds the 9 MW already built at 1111 Comstock beside it.
+
+    The name is display text. Identity is the company, the place and the state, so
+    nothing is re-keyed and no alias moves. The old name and `--why` go into the
+    row's notes as the operator's decision.
+    """
+    from tracker import logic as logic_mod
+    from tracker.models import utcnow
+
+    new = " ".join(name.split())
+    if not new:
+        _fail("the new name is empty")
+    if not why.strip():
+        _fail("--why is required: it is what the row's notes will say")
+    engine, _ = init_db(_db_path())
+    if not dry_run:
+        try:
+            release_lock = acquire_write_lock(_db_path(), command="rename")
+        except AlreadyRunning as exc:
+            _fail(str(exc))
+            raise
+        atexit.register(release_lock)
+    with _explain_db_locks(), session_scope(engine, commit=not dry_run) as session:
+        project = session.get(Project, project_id)
+        if project is None:
+            _fail(f"no project with id {project_id}", 1)
+        old = project.name
+        if old == new:
+            console.print(f"#{project_id} is already called {escape(new)}")
+            return
+        project.name = new
+        project.updated_at = utcnow()
+        logic_mod.record_decision(
+            project, "operator_renamed", f"name {old!r} -> {new!r}", by="operator", detail=why
+        )
+        session.flush()
+    console.print(f"#{project_id} {escape(old)} -> [bold]{escape(new)}[/bold]")
+    if dry_run:
+        console.print("[yellow]dry run[/yellow] — nothing written")
+
+
 def _print_excluded(rows) -> None:
     if json_mode():
         emit(

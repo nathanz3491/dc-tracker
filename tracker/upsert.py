@@ -309,14 +309,25 @@ def _part_fields(row: Source) -> frozenset[str]:
 
 
 def _carried_reasons(row: Source, claims: dict[str, Any]) -> dict[str, str]:
-    """Decisions already recorded on this source row, for fields it still claims."""
+    """Decisions already recorded on this source row, for fields it still claims.
+
+    And an operator's ruling on the citation's tranches (`blocks.RULED_OUT`), which
+    is about the article rather than one claimed field: a re-read of NTT's land
+    purchase would otherwise put the second campus's tranches straight back.
+    """
+    from tracker.blocks import RULED_OUT
+
     try:
         existing = json.loads(row.unconfirmed_reasons or "{}")
     except (TypeError, ValueError):
         return {}
     if not isinstance(existing, dict):
         return {}
-    return {k: v for k, v in existing.items() if v in DECIDED_REASONS and k in claims}
+    return {
+        k: v
+        for k, v in existing.items()
+        if v in DECIDED_REASONS and (k in claims or k == RULED_OUT)
+    }
 
 
 def _weight(source_type: str) -> int:
