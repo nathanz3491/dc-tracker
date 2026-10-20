@@ -47,9 +47,14 @@ PAGE = 30
 #: download this module exists to remove.
 MAX_PAGE = 200
 
+#: Sort keys that are not a column. `days_late` is how long a suspected delay has
+#: been late (`delays.assess`), which is decided from a row's tranches and
+#: milestones as well as its date, so it is computed for the fleet and ordered in
+#: Python. The rest of `SORTABLE` is a real column and sorts as `ORDER BY`.
+COMPUTED_SORTS: frozenset[str] = frozenset({"days_late"})
+
 #: Columns the table may sort by: its twelve tracked fields, the audit columns
-#: behind the "all fields" switch, and the id. Every one is a real column on
-#: `projects`, so sorting is `ORDER BY` and not a Python pass over everything.
+#: behind the "all fields" switch, the id, and the computed keys above.
 #:
 #: A whitelist rather than a `getattr`, because `?sort=` arrives from a URL. An
 #: unknown key is a 400 and not a silent fallback to a default ordering: a table
@@ -67,6 +72,7 @@ SORTABLE: frozenset[str] = frozenset(
         "last_verified_at",
         "updated_at",
         "created_at",
+        *COMPUTED_SORTS,
     }
 )
 
@@ -101,12 +107,18 @@ class Filters:
     risk: str = ""
     severity: str = ""
     quoted: bool = False
+    #: Only campuses that are a suspected delay (`delays.assess`).
+    delayed: bool = False
     sort: str = "confidence"
     direction: str = "desc"
 
     @property
     def needs_provenance(self) -> bool:
         return self.quoted
+
+    @property
+    def needs_delays(self) -> bool:
+        return self.delayed or self.sort == "days_late"
 
 
 class BadQuery(ValueError):
@@ -165,6 +177,7 @@ def parse(query: dict[str, list[str]]) -> tuple[Filters, int, int]:
         risk=one("risk"),
         severity=one("severity"),
         quoted=one("quoted").lower() in {"1", "true", "yes"},
+        delayed=one("delayed").lower() in {"1", "true", "yes"},
         sort=sort,
         direction=direction,
     )
@@ -253,10 +266,31 @@ def _order(stmt: Select[Any], filters: Filters) -> Select[Any]:
     The id tiebreak is not cosmetic — it is what makes paging safe. Two rows with
     equal confidence in an unspecified order can both appear on page one and page
     two, or neither.
+
+    A computed key is left in id order here and sorted by `_by_days_late`.
     """
+    if filters.sort in COMPUTED_SORTS:
+        return stmt.order_by(Project.id.asc())
     column = getattr(Project, filters.sort)
     primary = column.desc() if filters.direction == "desc" else column.asc()
     return stmt.order_by(column.is_(None), primary, Project.id.asc())
+
+
+def _by_days_late(found: list[int], late: dict[int, Any], direction: str) -> list[int]:
+    """Most overdue first (or least), the campuses that are not late after them.
+
+    The same rule as a column: a row with nothing to sort on goes last in both
+    directions, and the id breaks ties so a page boundary cannot split a tie twice.
+    """
+    sign = -1 if direction == "desc" else 1
+
+    def key(pid: int) -> tuple[int, int, int]:
+        found_delay = late.get(pid)
+        if found_delay is None:
+            return (1, 0, pid)
+        return (0, sign * found_delay.days_late, pid)
+
+    return sorted(found, key=key)
 
 
 def ids(session: Session, filters: Filters) -> list[int]:
@@ -266,6 +300,17 @@ def ids(session: Session, filters: Filters) -> list[int]:
     if filters.needs_provenance:
         allowed = _quoted_ids(session)
         found = [pid for pid in found if pid in allowed]
+    if filters.needs_delays:
+        # The one definition every surface reads, for the fleet in three queries.
+        # Not memoised like the quoted set: it is milliseconds, and it changes at
+        # midnight as well as on a commit, which a data fingerprint cannot see.
+        from tracker import delays
+
+        late = delays.suspected(session)
+        if filters.delayed:
+            found = [pid for pid in found if pid in late]
+        if filters.sort == "days_late":
+            found = _by_days_late(found, late, filters.direction)
     return found
 
 

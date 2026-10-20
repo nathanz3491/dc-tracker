@@ -4795,6 +4795,37 @@ def test_quoted_only_keeps_the_rows_whose_figures_are_quoted(server, seeded_db):
     assert quoted["total"] == len(expected)
 
 
+def test_a_suspected_delay_reaches_the_table_the_index_and_the_page(server, seeded_db):
+    """One answer, three routes: the filter, the light index and the project page.
+
+    The index is cached until the database changes, and against the day, so the
+    commit below is also what makes the next read recompute it.
+    """
+    from sqlalchemy import select
+
+    from tracker.db import open_db
+    from tracker.models import Project
+
+    with session_scope(open_db(seeded_db, readonly=False)) as session:
+        project = session.scalars(select(Project)).one()
+        project.expected_online = dt.date(2020, 1, 1)
+        project.expected_online_precision = "year"
+
+    address, _ = server
+    _status, page = request(address, "/api/projects?delayed=1")
+    assert page["total"] == 1
+    delay = page["rows"][0]["suspected_delay"]
+    assert delay["stated"] == "2020" and delay["due"] == "2020-12-31"
+
+    _status, data = request(address, "/api/dataset")
+    assert data["projects"][0]["suspected_delay"] == delay
+    _status, payload = request(address, f"/api/project?id={page['rows'][0]['id']}")
+    assert payload["project"]["suspected_delay"] == delay
+
+    status, ordered = request(address, "/api/projects?sort=days_late&dir=desc")
+    assert status == 200 and ordered["sort"] == "days_late"
+
+
 def test_the_shell_payload_carries_no_per_project_detail(server):
     """What made the console slower with every ingest.
 

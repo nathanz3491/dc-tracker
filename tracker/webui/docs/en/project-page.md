@@ -10,6 +10,7 @@ Every campus has its own page at `/projects/<number>`, opened from any row of [P
 - The operator, linked to its [company page](companies), and **for** the buyer when that is a different company.
 - Where it is, and the regional grid operator area where known.
 - Its phase, its **confidence** (0–3; see [Confidence](confidence)) and how many obstacles are open — click that to jump to them.
+- **Suspected delay**, in amber, when the campus's own online date has passed and nothing reported since says it is running — for example *Suspected delay — expected online Q3 2025, passed 385 days ago, no news of going live*. The date is shown as the source stated it, and the days count from the end of the period it names. Hover it for the reason in one sentence; [Numbers and dates](numbers-and-dates) gives the full rule.
 
 ## The figures
 

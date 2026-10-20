@@ -70,3 +70,14 @@ Two dates have their own rules:
 - **Online** takes the best source's date. When it moves later, a *delayed* milestone is recorded; the number of days is attached only when the date crosses into a later year, so a vague date being made precise is not mistaken for a slip.
 
 [Capex](capex) groups arrivals by year or quarter. Because so many sources give only a year, read its quarter view as a shape, not a schedule.
+
+## Suspected delays
+
+A campus is flagged **Suspected delay** when all four of these hold:
+
+- it has an expected online date, and the whole period that date names is over — "Q3 2025" became late on 1 October 2025, "2025" on 1 January 2026. A date stored on the first of a month with no precision recorded is read as that month, or as the whole year when it is 1 January, so a vague date is never called late early;
+- its phase is not operational, and it has not been paused or cancelled — a stopped campus has a status of its own, which says more than "late";
+- nothing says it has gone live: no capacity is recorded as running, no building or phase is running, and no energisation was reported on or after the expected date (one that was only *expected* does not count);
+- no building or phase is still due later. When the campus date was the first phase's and the next phase has its own later date, the campus is not late.
+
+It is a suspicion, not a finding. The usual causes are a slip nobody reported and a campus that opened without news we read, and either is worth a search. The flag gives the date as the source stated it and how many days ago its period ended, and it is worked out again every day. One rule is behind the chip on a [project's page](project-page), the **Late** column and the **Suspected delays only** filter in [Projects](projects), the list on a [company page](companies), the [API](api-reference) and the contradiction check the maintainers run, so they always agree.

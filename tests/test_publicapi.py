@@ -244,6 +244,20 @@ def test_a_project_says_where_each_value_came_from(api, key):
     assert status == 200 and body["data"][0]["url"] == "https://news.example.com/north/"
 
 
+def test_a_campus_says_whether_it_is_a_suspected_delay(api, key):
+    """Added to v1 rather than changed: a new key, a new filter, a new sort."""
+    address, _ = api
+    status, _, body = call(address, "/v1/projects?suspected_delay=true", key=key, host=API_HOST)
+    assert status == 200 and body["total"] == 0, "the seeded campus has no date to miss"
+    status, _, body = call(address, "/v1/projects?sort=days_late", key=key, host=API_HOST)
+    assert status == 200 and body["data"][0]["suspected_delay"] is None
+    pid = body["data"][0]["id"]
+    status, _, body = call(address, f"/v1/projects/{pid}", key=key, host=API_HOST)
+    assert status == 200 and body["data"]["suspected_delay"] is None
+    status, _, body = call(address, "/v1/companies/acme", key=key, host=API_HOST)
+    assert body["data"]["suspected_delays"] == {"count": 0, "mw_planned": 0, "project_ids": []}
+
+
 def test_a_missing_project_says_it_may_have_been_merged(api, key):
     address, _ = api
     status, _, body = call(address, "/v1/projects/99999", key=key, host=API_HOST)

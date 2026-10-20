@@ -30,6 +30,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from tracker import blocks as blocks_mod
+from tracker import delays
 from tracker.models import Project
 from tracker.upsert import NOTE_PREFIX, SOURCE_NOTE_PREFIX
 from tracker.vocab import bound_from_quote
@@ -87,7 +88,10 @@ CSV_COLUMNS: tuple[str, ...] = (
 #: digest, whose claim only fills a field nothing first-hand states. Additive.
 #: 9 adds `claims_by_field[].claims[].part` — true for a capacity or investment
 #: figure its own sentence gives to one building or phase. Additive.
-JSON_SCHEMA_TAG = "tracker/9"
+#: 10 adds `suspected_delay` — null, or why a campus whose online date has passed
+#: reads as late. Additive, and relative to the day the file was written, which its
+#: `as_of` states.
+JSON_SCHEMA_TAG = "tracker/10"
 
 FORMATS = ("md", "csv", "json", "html")
 
@@ -625,6 +629,12 @@ def to_json_object(project: Project, *, claims: bool = True) -> dict[str, Any]:
         "phase": project.phase,
         "first_announced": iso(project.first_announced),
         "expected_online": iso(project.expected_online),
+        # Null, or why the campus reads as late: its own online date has passed —
+        # the whole period it names, not merely the day it is stored as — and
+        # nothing recorded since says it is running. Decided by `delays.assess`, the
+        # same function behind `tracker logic check`'s `past_its_own_date`, so the
+        # file and the command cannot disagree. Relative to `as_of` inside it.
+        "suspected_delay": _delay_json(project),
         "blocker": project.blocker,
         "notes": project.notes,
         "confidence": project.confidence,
@@ -764,6 +774,11 @@ def to_json_object(project: Project, *, claims: bool = True) -> dict[str, Any]:
         # making them.
         "sections": _sections_json(project),
     }
+
+
+def _delay_json(project: Project) -> dict[str, Any] | None:
+    found = delays.suspected_delay(project)
+    return found.as_json() if found is not None else None
 
 
 def _sections_json(project: Project) -> list[dict[str, Any]]:

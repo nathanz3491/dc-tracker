@@ -2491,14 +2491,19 @@ class Handler(BaseHTTPRequestHandler):
         **Cached until the database changes**, and only the part that is the same
         for everybody. The reader's own four keys are added to a copy per request,
         so one account's name can never reach another's page from the cache.
+
+        Keyed on the day as well, like the capex rollup: each row says whether its
+        campus is a suspected delay and by how many days, and a quiet night with no
+        commit would otherwise serve yesterday's count all of today.
         """
+        from tracker import delays
         from tracker.webui import dataset
 
         def fresh() -> dict[str, Any]:
             with self.console.read_session() as session:
                 return dataset.light(session, schema_version=self.console.schema_version)
 
-        shared = self.console.cached(("dataset",), fresh)
+        shared = self.console.cached(("dataset", delays.as_of()), fresh)
         with self.console.read_session() as session:
             # Who is reading, so the header can say so and the watchlist knows
             # whether it has an owner. None on an open console with no accounts,

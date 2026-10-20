@@ -52,6 +52,7 @@ from typing import Any, Final
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from tracker import delays
 from tracker.dedup import looks_like_county
 from tracker.models import Project, utcnow
 from tracker.normalize import is_blank
@@ -703,9 +704,9 @@ def check_rules(project: Project) -> list[Finding]:
 
     today = _today()
 
-    # Asked per block wherever there are blocks, because a campus whose phase-1 date
-    # passed while phase 2 runs to a later schedule is not late — it is a campus. The
-    # project-level question is only meaningful when there is nothing finer to ask.
+    # Each tranche against its own date. A campus whose phase-1 date passed while
+    # phase 2 runs to a later schedule is not late — it is a campus — so the tranche
+    # that slipped is named on its own, beside the campus question below.
     late_blocks = [
         b
         for b in blocks
@@ -724,27 +725,28 @@ def check_rules(project: Project) -> list[Finding]:
             "that tranche specifically slipped or is running; the campus around it "
             "may be perfectly on schedule",
         )
-    elif (
-        project.expected_online
-        and (
-            due := _period_end(
-                project.expected_online, getattr(project, "expected_online_precision", None)
-            )
-        )
-        < today
-        and phase not in _LIVE_PHASES
-        and phase not in PHASE_TERMINAL
-        # A dated tranche still to come explains a campus date that has passed: the
-        # date on the row is the first phase's, and the campus is not done.
-        and not any(b.expected_online and b.expected_online >= today for b in blocks)
-    ):
-        overdue = (today - due).days
-        span = "" if due == project.expected_online else f" (a period ending {due})"
+
+    # The campus against its own date: a *suspected delay*, decided by the one
+    # function the console, the export and the API also read (`delays.assess`), so
+    # the command line and the page cannot disagree about which campus is late.
+    #
+    # Asked whether or not a tranche is late too. It used to be skipped whenever one
+    # was, on the reasoning that the tranche finding was the finer question — but a
+    # campus whose only dated tranche slipped, with nothing running and nothing still
+    # to come, is late as a campus, and the console says so. The tranche finding
+    # still names which tranche.
+    #
+    # No day count in the sentence. A finding the agent could not settle is held
+    # back on a hash of the question it was shown (`declines.fingerprint`), and a
+    # sentence that changes every midnight was a new question every night.
+    late = delays.suspected_delay(project, today=today)
+    if late is not None:
+        span = "" if late.due == late.expected_online else f" (a period ending {late.due})"
         add(
             "past_its_own_date",
             WARNING,
-            f"expected online {project.expected_online}{span}, {overdue} days ago, and "
-            f"the phase is still {phase or 'unset'}",
+            f"expected online {late.expected_online}{span} and the phase is still "
+            f"{phase or 'unset'}, with nothing recorded since saying it is running",
             ("expected_online", "phase"),
             "either it slipped and we missed the news, or it is running and we "
             "missed that — both are worth one crawl",
@@ -895,34 +897,6 @@ def _today() -> dt.date:
     from tracker.models import utcnow
 
     return utcnow().date()
-
-
-#: Months a date stated at each precision spans, from the day it is stored as.
-_PRECISION_MONTHS: Final[dict[str, int]] = {"month": 1, "quarter": 3, "half": 6, "year": 12}
-
-
-def _period_end(value: dt.date, precision: str | None) -> dt.date:
-    """The last day a date stated at `precision` still covers.
-
-    "The second half of 2026" is stored as 2026-07-01 and "2026" as 2026-01-01, so
-    comparing the stored day with today calls both overdue the morning they start.
-    On 2026-10-13 that is what `past_its_own_date` did to Vantage Frontier and Novva
-    Mesa, and the resolver then cleared two correct dates. A source promising a
-    period has not missed it until the period is over.
-
-    NULL precision means "day, or nothing recorded" (`upsert.apply_date_precision`),
-    and most of the unrecorded ones are a model writing a bare year as `YYYY-01-01`
-    or a month as `YYYY-MM-01`. On the first of a month this reads the wider period,
-    because the cost is asymmetric: the wider reading delays a warning, the narrower
-    one deletes a value.
-    """
-    if precision is None and value.day == 1:
-        precision = "year" if value.month == 1 else "month"
-    months = _PRECISION_MONTHS.get(precision or "")
-    if not months:
-        return value
-    after = value.month - 1 + months
-    return dt.date(value.year + after // 12, after % 12 + 1, 1) - dt.timedelta(days=1)
 
 
 # --- Layer 2: source collisions ------------------------------------------------

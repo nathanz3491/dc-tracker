@@ -100,6 +100,15 @@ server cannot express in SQL, because a value's tier is derived from its sources
 rather than stored; it is computed once and memoised against a fingerprint of the
 data. See `tracker/webui/query.py`.
 
+**Suspected delays** are the other answer the table cannot read off a column.
+Whether a campus is late depends on its tranches, its running capacity and its
+milestones as well as its date (`tracker/delays.py`, the function `logic check`
+reads too), so the `delayed` filter and the `days_late` sort are worked out for the
+fleet in three queries and applied to the id list, never row by row. The answer
+changes at midnight as well as on a commit, so the shell payload, which carries it
+on every row of the light index, is cached against the day as well as the database
+— as the capex rollup already was.
+
 Its timeline is five lanes on one time axis rather than a list, because the five
 tracks run in parallel and **the gap between two dates is the signal** — a list
 draws every gap the same height. Colour there carries state (reached, implied,

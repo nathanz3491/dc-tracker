@@ -29,7 +29,8 @@ API 第 1 版的全部接口。所有接口都是 `GET`，以 JSON 返回，地�
 | `obstacle` | 存在这一类未解决障碍的园区，例如 `grid_capacity`。 |
 | `severity` | 存在至少达到这一严重程度的未解决障碍的园区：`watch`、`material`、`blocking`。 |
 | `quoted_only` | 为 `true` 时，只保留没有任何待确认、推断或默认值的园区。 |
-| `sort` | 排序字段：`confidence`（默认）、`mw_planned`、`investment_usd`、`expected_online`、`updated_at`、`id`，或任何其他追踪字段。 |
+| `suspected_delay` | 为 `true` 时，只保留疑似延期的园区（见下文）。 |
+| `sort` | 排序字段：`confidence`（默认）、`mw_planned`、`investment_usd`、`expected_online`、`updated_at`、`id`，或任何其他追踪字段。`days_late` 按疑似延期的逾期天数排序，配合 `desc` 时逾期最久的排在最前，其他园区排在它们之后。 |
 | `order` | `desc`（默认）或 `asc`。空值总是排在最后。 |
 | `limit` | 每页行数，1–200。默认 30。 |
 | `offset` | 跳过的行数。默认 0。 |
@@ -63,6 +64,7 @@ API 第 1 版的全部接口。所有接口都是 `GET`，以 JSON 返回，地�
       "lat": 32.45,
       "lon": -99.73,
       "updated_at": "2026-10-14T12:31:07",
+      "suspected_delay": null,
       "links": {"self": "/v1/projects/42"}
     }
   ]
@@ -70,6 +72,34 @@ API 第 1 版的全部接口。所有接口都是 `GET`，以 JSON 返回，地�
 ```
 
 以上数值均为虚构，仅作示例。
+
+### suspected_delay
+
+除非该园区属于疑似延期，否则为 `null`。疑似延期是指：园区自己的预计上线日期已过 —— 是该日期所指的整个时段都已结束 —— 之后也没有任何报道表明它已投入运行。规则与控制台使用的相同，完整说明见[数字与日期](numbers-and-dates)。属于疑似延期时，它是一个对象：
+
+| 键 | 含义 |
+| --- | --- |
+| `expected_online` | 存储的日期，例如 `2025-07-01`。 |
+| `precision` | 来源记录的精度：`month`、`quarter`、`half`、`year`；精确到日或没有记录时为 `null`。 |
+| `read_as` | 规则理解该日期时采用的精度：有记录时即 `precision`；否则为 `day`，每月 1 日为 `month`，1 月 1 日为 `year`。 |
+| `stated` | 读者习惯的写法：`Q3 2025`、`H2 2026`、`2026`、`Jul 2026`、`15 Jul 2026`。 |
+| `due` | 该时段的最后一天。园区从第二天起算逾期。 |
+| `days_late` | 从 `due` 到 `as_of` 的天数。 |
+| `as_of` | 计算这一结果的日期。它每天都在变，所以 `days_late` 只有和它放在一起才有意义。 |
+| `reason` | 用一句平实的话说明原因。 |
+
+```json
+"suspected_delay": {
+  "expected_online": "2025-07-01",
+  "precision": "quarter",
+  "read_as": "quarter",
+  "stated": "Q3 2025",
+  "due": "2025-09-30",
+  "days_late": 385,
+  "as_of": "2026-10-20",
+  "reason": "Expected online Q3 2025, a quarter that ended 385 days ago; the phase is still construction and nothing reported since says it is running."
+}
+```
 
 ## GET /v1/projects/{id}
 
@@ -111,7 +141,7 @@ API 第 1 版的全部接口。所有接口都是 `GET`，以 JSON 返回，地�
 
 ## GET /v1/companies/{slug}
 
-以数据形式提供的公司页面：`name`、`website`、`totals`（园区数，分别按运营商和租户身份统计，规划和运行的兆瓦数，未解决的障碍）、`states`、`phases`、它的 `projects`（每个都附有其角色、阶段、容量和障碍），以及最近两个月报道的 `updates`。slug 是公司名称的小写连字符形式，与控制台中该公司页面地址里的一样：`compass-datacenters`。
+以数据形式提供的公司页面：`name`、`website`、`totals`（园区数，分别按运营商和租户身份统计，规划和运行的兆瓦数，未解决的障碍）、`states`、`phases`、它的 `projects`（每个都附有其角色、阶段、容量、障碍和 `suspected_delay`）、最近两个月报道的 `updates`，以及 `suspected_delays` —— 疑似延期园区的数量 `count`、它们合计的规划容量 `mw_planned`，以及按逾期从久到短排列的 `project_ids`。slug 是公司名称的小写连字符形式，与控制台中该公司页面地址里的一样：`compass-datacenters`。
 
 ## GET /v1/capex
 

@@ -23,6 +23,10 @@ A table of every campus, with the company's role on each — **builds**, **tenan
 
 Beside it, **Where** shows the states the campuses are in and **Stage** shows how many are at each phase.
 
+## Suspected delays
+
+When any of the company's campuses is a suspected delay — its own online date has passed and nothing reported since says it is running — a **Suspected delays** section lists them, most overdue first: the campus, its expected online date as the source stated it, how many days late it is, and its phase. The heading counts them and says how much planned capacity they hold between them. Hover a row for the reason; click it to open the campus. The section is left out when there are none. [Numbers and dates](numbers-and-dates) gives the rule.
+
 ## Recent news
 
 **Reported in the last two months** lists the updates about these campuses, the same cards as on [Updates](updates).

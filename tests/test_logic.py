@@ -1135,7 +1135,14 @@ def test_a_campus_with_no_blocks_keeps_the_old_behaviour(session):
     assert "energized_but_not_operational" in _codes(project)
 
 
-def test_a_slipped_tranche_is_named_rather_than_the_whole_campus(session):
+def test_a_slipped_tranche_is_named_and_so_is_the_campus_it_leaves_late(session):
+    """The tranche finding says which tranche; the campus finding says the campus.
+
+    The campus question used to be skipped whenever a tranche was late. With its only
+    dated tranche slipped, nothing running and nothing still to come, the campus is
+    late as a campus — the console flags it as a suspected delay, and the command
+    line has to say the same thing, because one function decides both.
+    """
     project = _project(session, phase="construction", expected_online=dt.date(2024, 1, 1))
     _blk(
         session,
@@ -1145,6 +1152,24 @@ def test_a_slipped_tranche_is_named_rather_than_the_whole_campus(session):
         status="under_construction",
         expected_online=dt.date(2024, 1, 1),
     )
+    session.refresh(project)
+    codes = _codes(project)
+    assert "block_past_its_own_date" in codes
+    assert "past_its_own_date" in codes
+
+
+def test_a_slipped_tranche_beside_a_running_one_leaves_the_campus_on_time(session):
+    """Phase 1 slipped while phase 2 serves: the tranche is late, the campus is live."""
+    project = _project(session, phase="construction", expected_online=dt.date(2024, 1, 1))
+    _blk(
+        session,
+        project,
+        label="Phase 1",
+        mw=50.0,
+        status="under_construction",
+        expected_online=dt.date(2024, 1, 1),
+    )
+    _blk(session, project, label="Phase 2", mw=50.0, status="serving")
     session.refresh(project)
     codes = _codes(project)
     assert "block_past_its_own_date" in codes

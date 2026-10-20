@@ -29,7 +29,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from tracker import company_logo, feed, watchlist
+from tracker import company_logo, delays, feed, watchlist
 from tracker.dedup import company_slug as slug
 from tracker.models import Project, Source
 from tracker.vocab import OPEN_RISK_STATUS
@@ -86,8 +86,10 @@ def profile(session: Session, wanted: str) -> dict[str, Any] | None:
         if s.confirmed
     ]
     rows = []
+    today = delays.as_of()
     for project, via in matched:
         open_risks = [r for r in project.risks if r.status == OPEN_RISK_STATUS]
+        late = delays.suspected_delay(project, today=today)
         rows.append(
             {
                 "id": project.id,
@@ -107,9 +109,15 @@ def profile(session: Session, wanted: str) -> dict[str, Any] | None:
                 "confidence": project.confidence,
                 "via": via,
                 "open_obstacles": len(open_risks),
+                # Null, or why this campus reads as late (`delays.assess`).
+                "suspected_delay": late.as_json() if late is not None else None,
             }
         )
     rows.sort(key=lambda r: (-(r["mw_planned"] or 0), r["name"].lower()))
+    overdue = sorted(
+        (r for r in rows if r["suspected_delay"]),
+        key=lambda r: (-r["suspected_delay"]["days_late"], r["id"]),
+    )
     # Its own website comes from the campuses it builds, where its newsroom is
     # likeliest to be cited; a tenant's page cites the landlord's site instead.
     own = {p.id for p, via in matched if via == watchlist.VIA_OPERATOR}
@@ -133,6 +141,14 @@ def profile(session: Session, wanted: str) -> dict[str, Any] | None:
             "open_obstacles": sum(r["open_obstacles"] for r in rows),
         },
         "updates": [s.as_json() for s in feed.rank(feed.fold(signals))][:20],
+        # The campuses whose own online date has passed with nothing saying they
+        # run, most overdue first, and the capacity they hold. Ids only: every one
+        # is already a row of `projects` above, with its `suspected_delay`.
+        "suspected_delays": {
+            "count": len(overdue),
+            "mw_planned": sum(r["mw_planned"] or 0 for r in overdue),
+            "project_ids": [r["id"] for r in overdue],
+        },
     }
 
 
