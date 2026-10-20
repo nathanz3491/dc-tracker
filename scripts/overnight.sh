@@ -155,8 +155,13 @@
 #   * one run at a time, enforced here rather than discovered as a lock timeout
 #   * every phase is `|| true`: a provider failure at 3am loses that phase, not the
 #     night, and every command commits as it goes
-#   * do not push to main while this runs — the deploy poller runs `tracker init`,
-#     which wants the same single write lock
+#   * the night runs on one version of the code. A deploy resets the checkout under
+#     the commands not yet started and runs `tracker init`, which wants the same
+#     single write lock: on 2026-10-19 two deploys landed mid-run, so the night's
+#     later phases ran different code from its first. The deployer now holds any
+#     commit while this run's lock is live, and this run waits for a deployer that is
+#     already running when it starts (`wait_for_deploy`). Still, do not push to main
+#     while it runs: the held commit goes live unwatched when the night ends.
 
 set -euo pipefail
 
@@ -304,6 +309,9 @@ export TRACKER_SEARCH_CAP="$SEARCH_CAP"
 [ "$LOCAL_JUDGEMENT" -eq 0 ] || export TRACKER_JUDGEMENT_PROVIDER=ollama
 
 LOCK="$REPO/data/runs/overnight.lock"
+# The deploy poller, which sits beside the checkout in `ops/`, never inside it.
+DEPLOYER="$(cd "$REPO/.." && pwd)/ops/poll.sh"
+DEPLOY_WAIT=1800
 
 if [ "$STATUS_ONLY" -eq 1 ]; then
   if [ -d "$LOCK" ] && [ "$(cat "$LOCK/pid" 2>/dev/null)" != "" ] \
@@ -369,6 +377,40 @@ take_lock() {
 
 take_lock || exit 1
 trap 'rm -rf "$LOCK"' EXIT
+
+# A deploy already under way when the night starts is let finish first. The deployer
+# holds any commit while the lock above is live, but one that passed that check a
+# moment before the lock was taken still resets the checkout and runs `tracker init`
+# under the first phases — and a push made just before 18:01 to catch the night lands
+# in exactly that minute. Each side raises its own flag before it looks at the
+# other's: this run takes its lock, then looks for the deployer; the deployer is
+# running, then looks for the lock. One of the two always sees the other, so they
+# never both go ahead. Bounded, because a night that never starts is worse than one
+# that starts beside a deployer that has hung.
+#
+# Only a shell running the script counts: matched loosely, any process whose command
+# line merely names the file — an editor on it, an ssh command quoting its path —
+# read as a deploy under way.
+deploy_running() {
+  pgrep -f "^[^ ]*(zsh|bash|sh) $DEPLOYER( |\$)" >/dev/null 2>&1
+}
+
+wait_for_deploy() {
+  local waited=0
+  deploy_running || return 0
+  echo "the deployer is running; the night starts when it has finished"
+  while deploy_running; do
+    if [ "$waited" -ge "$DEPLOY_WAIT" ]; then
+      echo "the deployer is still running after ${waited}s; starting anyway"
+      return 0
+    fi
+    sleep 5
+    waited=$((waited + 5))
+  done
+  echo "the deployer finished after ${waited}s"
+}
+
+wait_for_deploy
 
 say()   { printf '\n[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
 phase() { printf '\n--- %s  %s\n' "$(date '+%H:%M:%S')" "$*"; }

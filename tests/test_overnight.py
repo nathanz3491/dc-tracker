@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -242,6 +243,104 @@ def test_a_live_run_keeps_its_lock(tmp_path):
     )
     assert done.returncode == 1
     assert "another overnight run holds" in done.stdout
+
+
+def _deploy_wait(
+    tmp_path: Path,
+    busy: int,
+    wait: int = 30,
+    procs: tuple[str, ...] = ("/bin/zsh /srv/tracker/ops/poll.sh",),
+) -> subprocess.CompletedProcess:
+    """`wait_for_deploy` against a stand-in `pgrep -f` and a made-up process table.
+
+    For its first `busy` questions the stand-in matches the pattern it is given, as an
+    extended regex the way `pgrep -f` does, against the command lines in `procs`; after
+    that the table is empty, as when the deployer has exited. `sleep` does nothing, so
+    the bound is counted rather than waited out.
+    """
+    script = (
+        "set -euo pipefail\n"
+        f"DEPLOYER=/srv/tracker/ops/poll.sh\nDEPLOY_WAIT={wait}\nBUSY={busy}\n"
+        f"PROCS=({' '.join(shlex.quote(p) for p in procs)})\n"
+        "sleep() { :; }\n"
+        "pgrep() {\n"
+        '  [ "$1" = "-f" ] || return 2\n'
+        '  [ "$BUSY" -gt 0 ] || return 1\n'
+        "  BUSY=$((BUSY - 1))\n"
+        "  local p\n"
+        '  for p in "${PROCS[@]}"; do [[ $p =~ $2 ]] && return 0; done\n'
+        "  return 1\n"
+        "}\n"
+        + _function("deploy_running")
+        + _function("wait_for_deploy")
+        + "wait_for_deploy\necho started\n"
+    )
+    return subprocess.run(
+        [BASH, "-c", script], cwd=tmp_path, capture_output=True, text=True, timeout=60, check=False
+    )
+
+
+@needs_bash
+def test_a_night_that_starts_beside_a_deploy_waits_for_it_to_finish(tmp_path):
+    """2026-10-19: two deploys landed while the night ran, so its later phases ran
+    different code from its first. The deployer now holds a commit while the lock is
+    live; a deploy that got past that check just before 18:01 is waited out here."""
+    done = _deploy_wait(tmp_path, busy=3)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.splitlines() == [
+        "the deployer is running; the night starts when it has finished",
+        "the deployer finished after 10s",
+        "started",
+    ]
+
+
+@needs_bash
+def test_a_deployer_that_never_finishes_does_not_cost_the_night(tmp_path):
+    done = _deploy_wait(tmp_path, busy=10**6, wait=30)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.splitlines()[-2:] == [
+        "the deployer is still running after 30s; starting anyway",
+        "started",
+    ]
+
+
+@needs_bash
+def test_with_no_deploy_under_way_the_night_starts_at_once(tmp_path):
+    done = _deploy_wait(tmp_path, busy=0)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.splitlines() == ["started"]
+
+
+@needs_bash
+@pytest.mark.parametrize(
+    ("command", "deploying"),
+    [
+        ("/bin/zsh /srv/tracker/ops/poll.sh", True),
+        ("zsh /srv/tracker/ops/poll.sh", True),
+        ("/bin/bash /srv/tracker/ops/poll.sh --verbose", True),
+        # Found on the host: matched loosely, an ssh command that only quoted the
+        # path read as a deploy, and so would an editor open on the file.
+        ('zsh -c for i in 1 2; do pgrep -fl "/srv/tracker/ops/poll.sh"; done', False),
+        ("vim /srv/tracker/ops/poll.sh", False),
+        ("/bin/zsh /srv/tracker/ops/poll.sh.bak-preloopguard", False),
+        ("/bin/bash /srv/tracker/repo/scripts/overnight.sh --hours 10", False),
+    ],
+)
+def test_only_a_shell_running_the_poll_script_is_a_deploy(tmp_path, command, deploying):
+    done = _deploy_wait(tmp_path, busy=1, procs=(command,))
+    assert done.returncode == 0, done.stderr
+    assert ("the deployer is running" in done.stdout) is deploying
+
+
+def test_the_night_waits_for_a_deploy_before_it_runs_any_tracker_code():
+    """After its own lock, so the deployer's check can see it, and before the first
+    count, which imports the code a deploy would be swapping."""
+    text = SCRIPT.read_text(encoding="utf-8")
+    lock = text.index("\ntake_lock || exit 1\n")
+    wait = text.index("\nwait_for_deploy\n")
+    first_count = text.index('<<<"$(counts)"')
+    assert lock < wait < first_count
+    assert re.search(r'^DEPLOYER="\$\(cd "\$REPO/\.\." && pwd\)/ops/poll\.sh"$', text, re.M)
 
 
 def test_every_paid_phase_is_preceded_by_a_ceiling_check():

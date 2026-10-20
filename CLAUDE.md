@@ -21,7 +21,29 @@ Push to `main` and the host takes it within two minutes. Nothing else is needed
 and nothing else is correct: an `scp` of a source file produces a host whose code
 matches no commit, and the next poll silently reverts it (`git reset --hard`).
 
-To skip the wait: `ssh $PROD '~/dev/tracker/ops/poll.sh'`
+To skip the wait, run the poll yourself and keep its output in the deploy log —
+run bare, its `deployed …` line goes to your terminal and the log loses the record
+of what went live:
+
+```bash
+ssh $PROD '~/dev/tracker/ops/poll.sh >>~/dev/tracker/ops/logs/deploy.log 2>&1; tail -3 ~/dev/tracker/ops/logs/deploy.log'
+```
+
+**Never push while the nightly loop runs.** The loop (`scripts/overnight.sh`) starts
+at 18:01 and can run ten hours. A deploy in the middle of it swaps the code under
+the phases it has not reached and runs `tracker init` beside it: on 2026-10-19 two
+deploys landed mid-run, and the night's later phases ran different code from its
+first. Check before every push:
+
+```bash
+ssh $PROD '~/dev/tracker/repo/scripts/overnight.sh --status | head -1'   # "not running"
+```
+
+Both sides enforce it as well, so a push that slips through does no harm: the
+deployer holds any commit while the loop's lock is live and takes it at the first
+poll after the loop ends (`deploy.log` says `waits until it finishes`), and a loop
+that starts while a deploy is under way waits for it. The rule stands anyway,
+because a held commit goes live in the small hours with nobody checking it.
 
 **A commit that does not import is refused** and the checkout rolled back, so the
 console keeps serving the previous code. That is the point of noticing a push

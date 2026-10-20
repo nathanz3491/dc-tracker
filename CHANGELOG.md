@@ -519,6 +519,19 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **The night runs on one version of the code** (`scripts/overnight.sh`, `CLAUDE.md`).
+  A deploy resets the host's checkout and runs `tracker init`; one that lands while
+  the nightly loop runs swaps the code under the phases it has not reached yet, and on
+  2026-10-19 two did (v4.0.9 and v4.1.1), so the night's later phases ran different code
+  from its first. The host's deployer, which lives outside the repo, now holds any
+  commit while the loop's lock is live and takes it at the first poll after the loop
+  ends. The remaining gap was a deploy already under way when the loop starts — a push
+  made just before 18:01 to catch the night lands in exactly that minute — so the loop
+  now waits, up to 30 minutes, for a running deployer to finish before it runs any
+  tracker code. Each side raises its own flag before it looks at the other's, so the
+  two can never both go ahead. Only a shell running the poll script counts as a
+  deploy: matched loosely, an ssh command that merely quoted its path read as one.
+
 - **The headless browser reads robots.txt the way every other client does, once per
   site per run** (`tracker/ingest/fetch.py`, `tracker/robots.py`, `docs/crawler.md`,
   `docs/workflows/sync.md`). It kept a stricter reading of its own, counting any answer
