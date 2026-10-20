@@ -567,6 +567,46 @@ def test_a_project_with_no_blocks_is_attributed_exactly_as_before(session):
     assert (position.mw_planned, position.mw_built, position.projects) == (120.0, 40.0, 1)
 
 
+def test_credits_divide_a_campus_the_way_the_rollup_does(session):
+    """Another page reads a buyer's megawatts from `credits`, campus by campus.
+
+    It has to be the rollup's own division, not a second one free to drift from it:
+    two figures for one buyer on two pages is the complaint this exists to answer.
+    """
+    campus = _project(session, company="TeraWulf", customer=None, mw_planned=750.0, mw_built=100.0)
+    _block(
+        session, campus, label="Akela", mw=378.0, customer="Fluidstack", status="under_construction"
+    )
+    _block(session, campus, label="La Lupa", mw=60.0, customer="Core42", status="serving")
+    session.refresh(campus)
+
+    split = capex.credits(campus)
+    positions = {p.key: p for p in capex.rollup(session)}
+    assert set(split) == set(positions)
+    for key, (planned, built) in split.items():
+        assert (planned, built) == (positions[key].mw_planned, positions[key].mw_built), key
+    assert split["fluidstack"] == (378.0, 0.0)
+    assert split["core42"] == (60.0, 60.0)
+
+
+def test_a_tally_says_which_row_stands_for_a_set_aside_twin(session):
+    """Read back from the rollup, so a page counting by it sets aside the same rows."""
+    kept = _project(session, name="Stargate", company="Crusoe", city="Abilene", mw_planned=1200)
+    twin = _project(session, name="Stargate", company="Oracle", city="Abilene", mw_planned=1000)
+    stopped = _project(
+        session, name="Dead", company="Meta", city="Austin", phase="cancelled", mw_planned=900
+    )
+
+    counted = capex.counting(session)
+    assert counted.set_aside == {twin.id: kept.id}
+    assert kept.id in counted.counted and twin.id not in counted.counted
+    assert stopped.id not in counted.counted and stopped.id not in counted.set_aside
+    # The same answer from a rollup somebody already holds.
+    pairs = capex.suspected_duplicates(session)
+    again = capex.tally(capex.rollup(session, pairs=pairs), capex.duplicate_groups(pairs))
+    assert (again.counted, again.set_aside) == (counted.counted, counted.set_aside)
+
+
 def test_two_rows_holding_one_tranche_are_flagged_even_if_named_differently(session):
     """Three rows in Andrews, TX each held the same 70 MW AWS tranche.
 
