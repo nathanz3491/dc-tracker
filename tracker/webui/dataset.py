@@ -339,6 +339,13 @@ def _capex_payload(session: Session, pairs: list[Any], positions: list[Any]) -> 
             {"id": pid, "operator": names.company(operator), "customer": names.customer(customer)}
             for pid, operator, customer in capex_mod.suspect_attributions(session)
         ],
+        # Campuses whose sources name several buyers and divide them nothing: none
+        # is credited with the whole campus (`capex.attribute`), so each is listed
+        # with the buyers it names rather than vanishing into "(no named customer)".
+        "shared": [
+            {"id": pid, "buyers": [names.customer(name) or name for _key, name in buyers]}
+            for pid, buyers in capex_mod.shared_campuses(session)
+        ],
         "duplicates": {
             "groups": capex_mod.duplicate_groups(pairs),
             "double_counted_mw": capex_mod.double_counted_mw(pairs),

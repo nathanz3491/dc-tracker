@@ -28,6 +28,8 @@ For each campus, in this order:
 
 A tenant described only as "a Fortune 100 company" or "a leading hyperscaler" is not a buyer anyone can follow, so its capacity lands in *(no named customer)*.
 
+**A campus whose sources name several buyers is credited to none of them.** Sources often name more than one company as the tenant of one campus — a lease chain such as Oracle leasing a Stargate site that OpenAI uses, or several tenants in talks — and say nothing about how the campus divides between them. Crediting the whole campus to one of them would be choosing a winner, and splitting it evenly would invent a ratio no source states. So a tranche that names its buyer still counts for that buyer, the rest of the campus sits in *(no named customer)*, and the campus is listed below the table with the buyers its sources name.
+
 When a campus is split into buildings or phases with different tenants, each tenant gets the megawatts of its own tranches. Investment is not split this way: dividing it would mean inventing a ratio.
 
 A buyer worked out from who owns the campus, rather than named by a source, is marked with an asterisk (`*`).
@@ -68,5 +70,6 @@ Hovering a buyer's name opens a card with its facts — sites, how many were att
 ## Below the table
 
 - **How much of the data this page covers** — what share of campuses have each figure.
+- **N campuses name several buyers** — campuses credited to none of the buyers their sources name, each with those names. See *Who counts as the buyer* above.
 - **N project(s) list a builder as the customer** — rows where the tenant named is really a construction or development company, which is usually a mistake in the source.
 - **One campus, several rows** — the suspected duplicate groups, with the reason each pair was raised.

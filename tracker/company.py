@@ -205,7 +205,16 @@ def _counted(
     others = [k for k in split if k != key and not (builds and k == "")]
     planned = row[0] + unnamed[0]
     built = row[1] + unnamed[1]
-    if not ours:
+    shared = capex.shared_buyers(project)
+    if not ours and any(k == key for k, _ in shared):
+        # One of several buyers the campus names, none credited with the whole of
+        # it (`capex.attribute`), so the page says so rather than "counted for" its
+        # builder, which would read as if the builder were the buyer.
+        entry = {
+            "status": "shared",
+            "with": sorted({names.customer(n) or n for k, n in shared if k != key}),
+        }
+    elif not ours:
         entry = {"status": "elsewhere", "for": sorted({who(k) for k in others})}
     elif any(split[k][0] > 0 for k in others):
         entry = {"status": "part", "for": sorted({who(k) for k in others if split[k][0] > 0})}

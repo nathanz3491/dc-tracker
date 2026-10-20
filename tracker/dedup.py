@@ -91,6 +91,20 @@ _COMPANY_ALIASES: dict[str, str] = {
     # labelled tranches; a renamed operator with none would have sat there.
     "iris energy": "iren",
     "iren limited": "iren",
+    # Measured 2026-10-21, after every page began printing one name per company:
+    # these spellings still split one company into two, so its totals did not add
+    # up — "Facebook/Meta" was a separate 250 MW buyer beside Meta on Capex, the
+    # client's own example. Renames (Riot Blockchain became Riot Platforms in
+    # 2023), a brand joined to its owner, and a lease vehicle named for its parent.
+    "facebook meta": "meta",
+    "meta facebook": "meta",
+    "advanced micro devices": "amd",
+    "tensorwave tex1": "tensorwave",
+    "ntt global": "ntt",
+    "ragingwire data centers ntt": "ntt",
+    "riot blockchain": "riot",
+    "soluna computing": "soluna",
+    "softbank sb energy": "softbank",
 }
 
 #: County-equivalent suffixes to strip, so "Racine County" and "Racine" agree.
@@ -138,6 +152,10 @@ _UNDISCLOSED_MARKERS = (
     "aa rated",
     "leading global",
     "hyperscaler",
+    # 2026-10-21: two more that sat in the buyer table as if they named somebody,
+    # "hyperscale cloud providers" (200 MW) and "leading frontier AI lab".
+    "hyperscale cloud provider",
+    "frontier ai lab",
 )
 
 

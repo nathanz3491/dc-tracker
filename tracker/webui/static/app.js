@@ -3746,6 +3746,7 @@ function CompanyPage({ slug, data, onOpen, onGoto, onListChanged }) {
     const others = (k.for || []).join(", ") || "another buyer";
     if (k.status === "stopped") return ` · not counted: ${r.phase}`;
     if (k.status === "duplicate") return k.of ? ` · not counted: #${k.of} is the same campus` : " · not counted: a suspected duplicate";
+    if (k.status === "shared") return ` · not counted: one of several buyers named${(k.with || []).length ? ` with ${k.with.join(", ")}` : ""}, and nothing divides the campus between them`;
     if (k.status === "elsewhere") return ` · counted for ${others}`;
     if (k.status === "part") return ` · ${fmtMw(k.mw_planned)} MW counted here, the rest for ${others}`;
     return "";
@@ -4791,6 +4792,32 @@ function CapexBody({ data, capex, allowAi, aiOff, onOpen }) {
             </div>`)}
         </div>
       <//>
+
+      ${(capex.shared || []).length > 0 && html`
+        <${Card}>
+          <${CardHeader}>
+            <${CardTitle}>${capex.shared.length} campus${capex.shared.length === 1 ? "" : "es"} name several buyers<//>
+            <${CardDescription}>Their sources name more than one company as the tenant and say
+              nothing about how the campus divides between them — a lease chain like Oracle and
+              OpenAI, or tenants still in talks. None is credited with the whole campus: a tranche
+              that names its buyer still counts for that buyer, and the rest is in "${capex.unattributed}"
+              above. Splitting it evenly would invent a ratio no source states.<//>
+          <//>
+          <div style=${{ display: "grid", gap: 0 }}>
+            ${capex.shared.map((s) => {
+              const p = byId[s.id];
+              return html`
+                <div key=${s.id} style=${{ display: "flex", flexWrap: "wrap", gap: "2px 10px", alignItems: "baseline",
+                     padding: "9px 20px", borderTop: "1px solid var(--border)", fontSize: 13 }}>
+                  <span class="dc-num" style=${{ color: "var(--muted-foreground)", fontSize: 12 }}>#${s.id}</span>
+                  <span style=${{ fontWeight: 600 }}>${p ? `${companyName(p)} — ${p.name}` : `project ${s.id}`}</span>
+                  ${p && p.mw_planned != null && html`<span class="dc-num">${fmtMw(p.mw_planned)} MW</span>`}
+                  <span style=${{ color: "var(--muted-foreground)" }}>buyers named:</span>
+                  <span>${s.buyers.join(", ")}</span>
+                </div>`;
+            })}
+          </div>
+        <//>`}
 
       ${capex.suspect.length > 0 && html`
         <${Card}>

@@ -234,14 +234,24 @@ def attribute(project: Project) -> tuple[str, str, bool]:
 
     `PARTY_ROLES_BUYING` keeps the utility and the contractor out. Entergy
     Louisiana is a party on Meta's Richland Parish campus and buys none of it.
+
+    **Several named buyers are credited with none of the campus** (2026-10-21). The
+    rule took the first confirmed customer party, and the parties are sorted by
+    name — so Fermi America's 11 GW Amarillo campus, whose sources name TensorWave
+    (a signed 222 MW first-phase lease), AMD (credit support for it) and Amazon (in
+    talks), was Amazon's because "amazon" sorts first: 11 of Amazon's 29.6 GW. Nothing
+    divides such a campus between its buyers, and dividing it evenly would be the
+    invented ratio `block_shares` refuses for money. So the tranches that name a buyer
+    still credit it, and the rest of the campus is filed with no named customer,
+    listed on the Capex page with the buyers its sources name (`shared_buyers`).
     """
     from tracker import parties as parties_mod
 
-    tenant = parties_mod.customer_party(list(getattr(project, "parties", ()) or ()))
-    if tenant is not None and tenant.unconfirmed is None:
-        key = customer_key(tenant.name)
-        if key:
-            return tenant.name, key, False
+    named = parties_mod.named_buyers(list(getattr(project, "parties", ()) or ()))
+    if len(named) > 1:
+        return UNATTRIBUTED, "", False
+    if named:
+        return named[0].name, customer_key(named[0].name), False
 
     key = customer_key(project.customer)
     if key:
@@ -261,6 +271,34 @@ def attribute(project: Project) -> tuple[str, str, bool]:
         return end_users[operator], operator, True
 
     return UNATTRIBUTED, "", False
+
+
+def shared_buyers(project: Project) -> list[tuple[str, str]]:
+    """`(key, name)` of every buyer a campus names, when it names more than one.
+
+    Empty for a campus with one buyer or none. See `attribute`: such a campus is
+    credited to none of them, and the Capex page lists it with these names.
+    """
+    from tracker import parties as parties_mod
+
+    named = parties_mod.named_buyers(list(getattr(project, "parties", ()) or ()))
+    if len(named) < 2:
+        return []
+    return [(customer_key(p.name), p.name) for p in named]
+
+
+def shared_campuses(session: Session) -> list[tuple[int, list[tuple[str, str]]]]:
+    """Every live campus that names several buyers: `(project_id, shared_buyers)`."""
+    out: list[tuple[int, list[tuple[str, str]]]] = []
+    for project in session.scalars(
+        select(Project).options(selectinload(Project.parties)).order_by(Project.id)
+    ):
+        if project.phase in PHASE_TERMINAL:
+            continue
+        buyers = shared_buyers(project)
+        if buyers:
+            out.append((project.id, buyers))
+    return out
 
 
 @dataclass(frozen=True)
@@ -1911,6 +1949,8 @@ __all__ = [
     "quarter_columns",
     "quarters",
     "rollup",
+    "shared_buyers",
+    "shared_campuses",
     "suspect_attributions",
     "suspected_duplicates",
     "tally",

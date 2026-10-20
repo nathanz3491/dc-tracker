@@ -36,6 +36,7 @@
 | *not counted: cancelled*（或 *paused*） | 未计入（已取消或暂停），与 Capex 一致。 |
 | *not counted: #12 is the same campus* | 疑似是 #12 号园区的第二条记录，改为计入 #12。 |
 | *counted for …* | Capex 把这个园区计入另一个买方，通常是该公司为之建设的租户。 |
+| *not counted: one of several buyers named …* | 该园区的来源点名了多个买方，却没有说明园区如何在它们之间划分，因此不计入其中任何一家。参见 [Capex](capex)。 |
 | *200 MW counted here, the rest for …* | 该公司只计入园区的一部分——它自己的楼栋，或扣除其他租户楼栋后剩下的部分。 |
 
 表格旁的 **Where**（地点）显示这些园区所在的州，**Stage**（阶段）显示处于各阶段的园区数量。

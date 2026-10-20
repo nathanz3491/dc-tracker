@@ -347,3 +347,37 @@ def test_a_buyer_only_a_party_names_still_has_a_page(session):
         "mw_planned": 0.0,
         "mw_built": 0.0,
     }
+
+
+def test_a_campus_shared_by_several_buyers_counts_for_none_and_says_why(session):
+    """Fermi's sources name TensorWave, AMD and Amazon, and divide the campus between
+    none of them, so no buyer's page is credited with its 11 GW."""
+    from tracker.models import ProjectParty
+
+    site = _project(
+        session,
+        name="Matador",
+        company="Fermi America",
+        customer="AMD",
+        city="Amarillo",
+        mw_planned=11000,
+    )
+    for name in ("TensorWave", "AMD", "Amazon"):
+        session.add(
+            ProjectParty(project_id=site.id, name=name, party_key=name.lower(), role="customer")
+        )
+    session.flush()
+    session.expire_all()
+
+    amd = company.profile(session, company_slug("amd"))
+    assert amd is not None
+    (row,) = amd["projects"]
+    assert row["counted"] == {
+        "status": "shared",
+        "with": ["Amazon", "TensorWave"],
+        "mw_planned": 0.0,
+        "mw_built": 0.0,
+    }
+    assert amd["totals"]["mw_planned"] == 0.0
+    # The builder holds it, as it holds any campus no named buyer is credited with.
+    assert company.profile(session, "fermi-america")["totals"]["mw_planned"] == 11000.0

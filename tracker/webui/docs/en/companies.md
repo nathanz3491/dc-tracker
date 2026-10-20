@@ -36,6 +36,7 @@ When a campus does not count in full towards the figures above, a short note bes
 | *not counted: cancelled* (or *paused*) | Left out, as on Capex. |
 | *not counted: #12 is the same campus* | Suspected to be a second row for campus #12, which is counted instead. |
 | *counted for …* | Capex credits this campus to another buyer, usually the tenant the company builds it for. |
+| *not counted: one of several buyers named …* | The campus's sources name several buyers and say nothing about how it divides between them, so none is credited with it. See [Capex](capex). |
 | *200 MW counted here, the rest for …* | The company is credited with part of the campus — its own buildings, or what is left after other tenants' buildings. |
 
 Beside the table, **Where** shows the states the campuses are in and **Stage** shows how many are at each phase.

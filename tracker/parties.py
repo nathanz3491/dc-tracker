@@ -353,6 +353,26 @@ def customer_party(parties: list[Any]) -> Any | None:
     return found[0] if found else None
 
 
+def named_buyers(parties: list[Any]) -> list[Any]:
+    """The confirmed customer parties, one per company, in `of_role` order.
+
+    One per company by `dedup.customer_key`, so "TensorWave" and its lease vehicle
+    "TensorWave TEX1" are one buyer, and a hedge ("a leading frontier AI lab")
+    names nobody and is left out. More than one means the site names several
+    buyers, which `capex.attribute` will not settle by the order of their names.
+    """
+    from tracker.dedup import customer_key
+
+    seen: dict[str, Any] = {}
+    for party in of_role(parties, "customer"):
+        if party.unconfirmed is not None:
+            continue
+        key = customer_key(party.name)
+        if key and key not in seen:
+            seen[key] = party
+    return list(seen.values())
+
+
 def reconcile(project: Any) -> list[str]:
     """Fill `customer` from the parties where it is empty. Returns disclosures.
 

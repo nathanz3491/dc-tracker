@@ -630,6 +630,29 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **A campus whose sources name several buyers is no longer credited to whichever
+  name sorts first, and the spellings that still split one company fold**
+  (`tracker/capex.py`, `tracker/parties.py`, `tracker/dedup.py`, `tracker/company.py`,
+  `tracker/webui/dataset.py`, `tracker/webui/static/app.js`, reader docs *Capex* and
+  *Companies*). Found checking company totals for the client on 2026-10-21. Capex
+  credited a campus to its first confirmed customer party, and the parties are sorted
+  by name: Fermi America's 11 GW Amarillo campus — a signed 222 MW first-phase lease
+  with TensorWave, credit support from AMD, Amazon reported in talks — was Amazon's,
+  11 of its 29.6 GW, because "amazon" sorts before "amd". Thirteen campuses name
+  several buyers and divide them nothing (Stargate sites name both Oracle and OpenAI;
+  colocation halls name several tenants). None is now credited with the whole campus:
+  a tranche that names its buyer still counts for it, the rest is filed with no named
+  customer, and the Capex page lists each such campus with the buyers its sources name.
+  On a production copy: Amazon 29,614 → 18,614 MW, AMD 3,432 → 1,270, OpenAI
+  20,030 → 18,630. And nine spellings that kept one company as two now fold — Facebook/
+  Meta and Meta/Facebook (a separate 250 MW buyer, the client's own example), Advanced
+  Micro Devices, TensorWave's lease vehicle, NTT Global, "RagingWire Data Centers -
+  NTT", Riot Blockchain (renamed Riot Platforms), Soluna Computing, SoftBank / SB
+  Energy — and "hyperscale cloud providers" and "a leading frontier AI lab" name
+  nobody. The folding raised two twins nobody had seen: Riot's Corsicana campus stored
+  as #139 and #1228, and Soluna's Project Dorothy as #1384 and #1385; until they are
+  merged the duplicate rule counts each once.
+
 - **Planned and running capacity now agree with each other on every page**
   (`tracker/upsert.py`, `tracker/logic.py`, `tracker/blocks.py`, `tracker/export.py`,
   `tracker/webui/static/app.js`, `docs/workflows/logic.md`, reader docs *Numbers and

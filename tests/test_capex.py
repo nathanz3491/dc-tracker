@@ -11,8 +11,8 @@ import datetime as dt
 import pytest
 
 from tracker import capex
-from tracker.dedup import customer_key, is_undisclosed
-from tracker.models import Event, Project, Risk
+from tracker.dedup import company_key, customer_key, is_undisclosed
+from tracker.models import CapacityBlock, Event, Project, ProjectParty, Risk
 
 # --- Customer identity -------------------------------------------------------
 
@@ -1626,3 +1626,86 @@ def test_the_capex_payload_costs_the_same_statements_at_any_size(engine, session
     _estate(session, 12, tag="b")  # the same shapes again, and twice as many of them
     assert statements() == small, "the statement count grew with the number of projects"
     assert small < 40
+
+
+# --- several named buyers (2026-10-21) ------------------------------------------
+
+
+def _buyer(session, project, name, *, unconfirmed=None):
+    # Keyed as each spelling was stored before it folded, which is what a database
+    # written before the aliases holds until its parties are rebuilt.
+    session.add(
+        ProjectParty(
+            project_id=project.id,
+            name=name,
+            party_key=name.lower(),
+            role="customer",
+            unconfirmed=unconfirmed,
+        )
+    )
+    session.flush()
+    session.refresh(project)
+
+
+def test_a_campus_naming_several_buyers_is_credited_to_none_of_them(session):
+    """Fermi's 11 GW went to Amazon because "amazon" sorts before "amd"."""
+    project = _project(
+        session, name="Project Matador", company="Fermi America", customer="AMD", mw_planned=11000.0
+    )
+    for name in ("TensorWave", "AMD", "TensorWave TEX1", "Amazon"):
+        _buyer(session, project, name)
+
+    assert capex.attribute(project) == (capex.UNATTRIBUTED, "", False)
+    assert [name for _key, name in capex.shared_buyers(project)] == ["Amazon", "AMD", "TensorWave"]
+    assert capex.credits(project) == {"": (11000.0, 0.0)}
+
+
+def test_one_buyer_under_several_spellings_is_still_one_buyer(session):
+    """Hillsboro's tenant arrived as "Meta", "Meta/Facebook" and "Facebook/Meta"."""
+    project = _project(session, name="Hillsboro", company="QTS", mw_planned=250.0)
+    for name in ("Meta", "Meta/Facebook", "Facebook/Meta"):
+        _buyer(session, project, name)
+    _buyer(session, project, "Oracle", unconfirmed="quote_off_target")  # no sentence
+
+    assert capex.attribute(project)[1] == "meta"
+    assert capex.shared_buyers(project) == []
+
+
+def test_a_tranche_that_names_its_buyer_still_counts_for_it(session):
+    project = _project(session, name="Lake Mariner", company="TeraWulf", mw_planned=600.0)
+    for name in ("Core42", "Fluidstack"):
+        _buyer(session, project, name)
+    session.add(
+        CapacityBlock(
+            project_id=project.id,
+            block_key="core42",
+            label="Core42 hall",
+            mw=60.0,
+            status="serving",
+            customer="Core42",
+        )
+    )
+    session.flush()
+    session.refresh(project)
+
+    got = capex.credits(project)
+    assert got["core42"][0] == 60.0
+    assert got[""][0] == 540.0  # the rest is nobody's until a source divides it
+
+
+def test_the_spellings_that_split_one_company_now_fold():
+    for spelling, key in (
+        ("Facebook/Meta", "meta"),
+        ("Meta/Facebook", "meta"),
+        ("Advanced Micro Devices", "amd"),
+        ("TensorWave TEX1", "tensorwave"),
+        ("NTT Global", "ntt"),
+        ("RagingWire Data Centers - NTT", "ntt"),
+        ("Riot Blockchain, Inc.", "riot"),
+        ("Soluna Computing", "soluna"),
+        ("SoftBank / SB Energy", "softbank"),
+    ):
+        assert company_key(spelling) == key, spelling
+    assert company_key("Compass Mining") != company_key("Compass Datacenters")
+    for hedge in ("hyperscale cloud providers", "a leading frontier AI lab"):
+        assert customer_key(hedge) == "", hedge
