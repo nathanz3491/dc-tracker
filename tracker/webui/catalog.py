@@ -66,6 +66,9 @@ LLM_COMMANDS: frozenset[str] = frozenset(
 #: said is lost — but the row numbers are gone and there is no undo.
 DESTRUCTIVE: dict[str, str] = {
     "merge": "deletes the rows it folds in. There is no undo.",
+    # Unlike `merge`, nothing moves to a survivor: the row's citations, milestones and
+    # obstacles go with it. `--lift` only lets a later reading create it afresh.
+    "exclude": "deletes rows that are not data centers, with their citations. There is no undo.",
     # Named, not flag-read: it only deletes with `--merge`, and a gate that reads
     # arguments is a gate with a bypass in it. What it deletes is what `merge`
     # deletes, decided by a model against the rails in `dupresolve.merge_blocked`.
@@ -270,6 +273,7 @@ GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "duplicates unpark",
             "duplicates parked",
             "merge",
+            "exclude",
             "logic resolve",
             # The same ruling `logic resolve` offers from its menu, by hand, for one
             # claim a person has already read and found wrong.

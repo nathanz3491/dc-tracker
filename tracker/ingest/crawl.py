@@ -3963,6 +3963,17 @@ def run(
                     "refused a new project from %s: %s", result.url, record.project.get("name")
                 )
                 continue
+            if upsert.action == "excluded":
+                # A fab, a factory, a plant — or a row `tracker exclude` removed — that
+                # the article named beside the campuses it is about. Not a candidate:
+                # counted apart from `refused_new` so that number stays a worklist.
+                report.not_a_data_center += 1
+                log.info(
+                    "not a data center, not created, from %s: %s",
+                    result.url,
+                    record.project.get("name"),
+                )
+                continue
             report.bump(upsert.action)
             report.events += upsert.events_written
             report.risks += upsert.risks_written

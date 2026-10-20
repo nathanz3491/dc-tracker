@@ -33,7 +33,9 @@ Then query: `tracker list`, `tracker show ID`, `tracker stats`, `tracker capex`,
 `tracker coverage`, `tracker duplicates`, `tracker blocks`, `tracker review`,
 `tracker verify`,
 `tracker export {md,csv,json}`. `tracker merge` folds rows that turned out to be
-one campus; it is the only command here that deletes anything. `tracker point
+one campus, and `tracker exclude` takes out a row that is not a data center — a chip
+fab, a battery plant — and keeps any later reading from creating it again; they are
+the only commands here that delete anything. `tracker point
 "<name>"` goes and gets one named data center on demand — matching it to an
 existing row (then `enrich`ing it) or building a fresh profile — instead of
 waiting for the batch; add `--url` (repeatable) to read a link you already have

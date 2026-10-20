@@ -722,3 +722,132 @@ def merge(
         )
     if dry_run:
         console.print("[yellow]dry run[/yellow] — nothing written")
+
+
+@app.command()
+def exclude(
+    project_ids: Annotated[
+        list[int] | None, typer.Argument(help="Project ids to take out.", show_default=False)
+    ] = None,
+    reason: Annotated[
+        str, typer.Option("--reason", help="Why, in the words the listing will show.")
+    ] = "not a data center",
+    lift: Annotated[
+        int | None,
+        typer.Option("--lift", help="Forget the keys taken from the row that had this id."),
+    ] = None,
+    show: Annotated[bool, typer.Option("--list", help="List everything excluded.")] = False,
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="Report without writing.")] = False,
+) -> None:
+    """Take out rows that are not data centers, and keep them out.
+
+    A reading sometimes names a chip fab, a battery plant or a cable factory beside
+    the campuses it is about, and it becomes a row. This deletes the row — its
+    citations, milestones and obstacles with it — and records every key it could
+    come back under, so neither a re-read of the same article nor a new one about
+    the same plant creates it again. A new row whose name says fab, factory or plant
+    with no data-center word beside it is refused the same way without this command.
+    A row that exists is never refused.
+
+    Irreversible for the rows. `--lift <id>` forgets the keys taken from one, so a
+    later reading may create it afresh; `--list` shows everything excluded.
+    """
+    from tracker import exclude as exclude_mod
+
+    if sum([bool(project_ids), lift is not None, show]) != 1:
+        _fail("give project ids to exclude, or --lift <id>, or --list — one of the three")
+
+    if show:
+        with session_scope(_read_engine(), commit=False) as session:
+            rows = exclude_mod.listing(session)
+            _print_excluded(rows)
+        return
+
+    engine, _ = init_db(_db_path())
+    try:
+        release_lock = acquire_write_lock(_db_path(), command="exclude")
+    except AlreadyRunning as exc:
+        _fail(str(exc))
+        raise
+    atexit.register(release_lock)
+
+    if lift is not None:
+        with _explain_db_locks(), session_scope(engine, commit=not dry_run) as session:
+            keys = exclude_mod.lift(session, lift)
+        if not keys:
+            _fail(f"nothing is excluded from #{lift} — `tracker exclude --list` shows what is", 1)
+        for key in keys:
+            console.print(f"  [green]lifted[/green] {escape(key)}")
+        console.print(
+            f"\n{len(keys)} key(s) forgotten; a later reading may create #{lift}'s campus afresh"
+            + (" [yellow](dry run — nothing written)[/yellow]" if dry_run else "")
+        )
+        return
+
+    try:
+        with _explain_db_locks(), session_scope(engine, commit=not dry_run) as session:
+            result = exclude_mod.exclude(session, list(project_ids or []), reason=reason)
+    except exclude_mod.ExcludeError as exc:
+        _fail(str(exc), 1)
+
+    for project_id, label in result.removed:
+        console.print(f"  [red]remove[/red] #{project_id:<5} {escape(label[:78])}")
+    console.print()
+    _print_report_rows(
+        [
+            ("rows removed", len(result.removed)),
+            ("keys it may not come back under", len(result.keys)),
+            ("keys left to another row", len(result.left)),
+        ],
+        title="exclude (dry run)" if dry_run else "exclude",
+    )
+    for key, other in result.left:
+        console.print(f"  [dim]{escape(key)} reaches #{other}, so it is left to that row[/dim]")
+    if dry_run:
+        console.print("[yellow]dry run[/yellow] — nothing written")
+
+
+def _print_excluded(rows) -> None:
+    if json_mode():
+        emit(
+            {
+                "excluded": [
+                    {
+                        "key": r.dedup_key,
+                        "project_id": r.project_id,
+                        "company": r.company,
+                        "name": r.name,
+                        "reason": r.reason,
+                        "decided_by": r.decided_by,
+                        "decided_at": r.decided_at.isoformat() if r.decided_at else None,
+                    }
+                    for r in rows
+                ]
+            }
+        )
+        return
+    if not rows:
+        console.print(
+            "[dim]nothing excluded yet[/dim] — `tracker exclude ID…` takes out a row that "
+            "is not a data center"
+        )
+        return
+    table = Table(
+        title=f"{len(rows)} key(s) excluded",
+        header_style="bold",
+        title_justify="left",
+        box=TABLE_BOX,
+    )
+    table.add_column("was")
+    table.add_column("row", max_width=48)
+    table.add_column("key it may not come back under", max_width=48)
+    table.add_column("why", max_width=28, style="dim")
+    for row in rows:
+        table.add_row(
+            f"#{row.project_id}",
+            escape(f"{row.company} — {row.name}"[:60]),
+            escape(row.dedup_key),
+            escape(row.reason),
+        )
+    console.print(table)
+    console.print("\n[dim]let one back in with:[/dim] tracker exclude --lift ID")

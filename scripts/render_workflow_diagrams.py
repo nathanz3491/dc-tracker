@@ -538,6 +538,12 @@ def sync() -> Canvas:
     routed = c.box(776, 656, 190, 68, "Routed instead", ["citations land on the row", "we already had"], role="teal")
     c.arrow([gate.right(-34), (776, 598)])
     c.arrow([gate.right(56), (776, 690)], colour=TEAL)
+    c.box(
+        776, 748, 190, 76, "Not created",
+        ["not a data center: a fab, a factory", "or a plant by its name, or a row", "removed by tracker exclude"],
+        role="red", title_size=11.5,
+    )
+    c.arrow([gate.right(72), (751, gate.right(72)[1]), (751, 786), (776, 786)], colour=RED)
 
     c.box(
         1016, 560, 200, 164, "6 · settle",

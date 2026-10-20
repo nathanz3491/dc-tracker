@@ -653,6 +653,41 @@ class NotDuplicate(Base):
         return f"<NotDuplicate #{self.a_id} != #{self.b_id}>"
 
 
+class ExcludedKey(Base):
+    """An identity a row was taken out under, so no later reading creates it again.
+
+    The counterpart to `ProjectAlias` for a row that should not exist at all: a chip
+    fab, a battery plant, a factory a round-up named beside the campuses it was
+    about. `tracker exclude` deletes the row and writes one of these per key it could
+    come back under; `upsert_record` refuses an insert under any of them and never
+    touches a row that exists. See `tracker.exclude`.
+
+    No foreign key, on purpose: the row is deleted in the same transaction and this
+    has to outlive it. `project_id` still names it, because `project` ids are
+    AUTOINCREMENT and never reused.
+    """
+
+    __tablename__ = "excluded_key"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    dedup_key: Mapped[str] = mapped_column(Text, nullable=False)
+    project_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    company: Mapped[str] = mapped_column(Text, nullable=False)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    decided_by: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'operator'"))
+    decided_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False, server_default=_NOW)
+
+    __table_args__ = (
+        UniqueConstraint("dedup_key", name="uq_excluded_key"),
+        CheckConstraint("length(dedup_key) > 0", name="ck_excluded_key"),
+        Index("ix_excluded_key_project_id", "project_id"),
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return f"<ExcludedKey {self.dedup_key} (was #{self.project_id})>"
+
+
 class ModelDecline(Base):
     """A question a model was paid to answer and could not, and what it was shown.
 

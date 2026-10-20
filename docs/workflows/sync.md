@@ -492,6 +492,23 @@ in its main crawl — a county debating a moratorium with no company named, a
 company's plans with no town, a campus abroad (Odense, Luleå, Frankfurt, Toronto). It
 is the measure of what the model was asked to read that could not become a row.
 
+**A new project that is not a data center is not created, and counted.** A reading
+sometimes names a facility of another kind beside the campuses it is about: one
+round-up of "products for data centers" gave the database a Ford battery plant, a
+Corning cable plant and a Siemens switchgear plant, and SpaceX's chip fab and Crusoe's
+factory for modular data centers came the same way — about $19.5 billion of the
+investment total and no megawatts, until they were removed on 2026-10-20. Since then
+the write step creates no row whose name says fab, foundry, factory, manufacturing or
+plant with no data-center word beside it ("Nebius AI Factory", a "data campus" at a
+generating station and "Imperial Valley Computer Manufacturing" are created as
+before), and none under an identity `tracker exclude` removed — the key the row was
+born with, the one it would be born with today, its aliases, and its county's key
+when it also had a town. The summary counts both as "dropped: not a data center".
+Only an insert is ever refused: a row that exists keeps receiving its news. Checked
+against all 721 production rows, the name rule named those five and nothing else. A
+real campus the same company later builds in the same town would be refused too,
+which is what `tracker exclude --lift <id>` is for; `--list` shows every excluded key.
+
 ## The identity arbiter
 
 `--verify-identity` is on by default. Before a phase creates a row that has a
@@ -686,7 +703,8 @@ Touching any of these means the poster is in scope. Re-render with
 | Judging a template | `tracker/funnel.py` — `feed_group`, `survey`, `verdicts`; `tracker/ingest/search.py` — `LabelStat` |
 | Queue ordering and counts | `tracker/ingest/discover.py` — `pending` (`known_first`, `new_first`; news first by `feed.REPORT_WINDOW_DAYS`, read in turn across sources by `in_turn` and `_source_of`, then the watch's finds in turn with builders' posts, a future date as none), `pending_split`, `pending_risk_count`, `failed`, `retryable`, `given_up`, `MAX_SAME_FAILURES`, `failure_summary` |
 | Prospect | `tracker/prospect.py`; `tracker/roster.py` — `hunt_order`, `measure` |
-| Extract and refresh | `tracker/ingest/crawl.py` — `run` (`origins=`), `stale_sources`, `unchanged_reads`, `record_url` (`origin=`), `_origin`, `failure_reason`, `MAX_REFRESH_BACKOFF`, `build_records(placeless=)`; `tracker/ingest/records.py` — `IngestReport.incomplete` |
+| Extract and refresh | `tracker/ingest/crawl.py` — `run` (`origins=`), `stale_sources`, `unchanged_reads`, `record_url` (`origin=`), `_origin`, `failure_reason`, `MAX_REFRESH_BACKOFF`, `build_records(placeless=)`; `tracker/ingest/records.py` — `IngestReport.incomplete`, `IngestReport.not_a_data_center` |
+| Not a data center | `tracker/upsert.py` — `upsert_record` (`action="excluded"`); `tracker/exclude.py` — `barred`, `not_a_data_center`, `excluded`, `exclude`, `keys_of`, `lift`; `tracker/cli/duplicates.py` — `exclude`; `tracker/migrations/0041_excluded_key.sql` |
 | The party gate | `tracker/ingest/crawl.py` — `_parties`, `_ROLE_MARKERS`, `_role_is_licensed` |
 | Identity arbiter | `tracker/upsert.py` — `upsert_record` (a route is remembered through `tracker/keys.py` — `remember`); `tracker/cli/ingest.py` — `_identity_arbiter`, `_report_arbiter`; `tracker/gatekeeper.py` — `same_site_arbiter`, `_warm_verdict`, `_cold_verdict`, `_rejection`, `_suspicion`, `_verdict_tools`, `RULES`, `MIN_CONFIDENCE`; `tracker/triage.py` — `CONTRADICTIONS`; `tracker/ingest/crawl.py` — `ExtractionContext` |
 | Enrich phase | `tracker/ingest/enrich.py` — `select_projects`, `run_many`; `tracker/cli/enrich.py` — `_gapfill_batch`; and [enrich](enrich.md) |

@@ -48,6 +48,7 @@ COMMANDS = {
     "duplicates resolve",
     "duplicates unpark",
     "enrich",
+    "exclude",
     "export",
     "exposure",
     "feeds",

@@ -12,6 +12,28 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **Rows that are not data centers are taken out, and kept out** (`tracker exclude`,
+  `tracker/exclude.py`, `tracker/upsert.py`, `tracker/ingest/crawl.py`,
+  `tracker/ingest/records.py`, migration 0041, `docs/workflows/sync.md`, `README.md`).
+  A reading sometimes names a facility of another kind beside the campuses it is about:
+  Industrial Info's round-up of "products for data centers" gave the database a Ford
+  battery plant, a Corning cable plant and a Siemens switchgear plant, and SpaceX's chip
+  fab and Crusoe's factory for modular data centers came the same way — five rows,
+  about $19.5 billion of the investment total and no megawatts. `tracker exclude ID…`
+  deletes such a row with everything hanging off it and records every key it could
+  come back under (the key it was born with, the one it would be born with today, its
+  aliases, its county's key when it also had a town), so neither a re-read of the same
+  article nor a new story about the same plant creates it again; `--list` shows what is
+  excluded and `--lift ID` lets one back. A new row whose name says fab, foundry,
+  factory, manufacturing or plant with no data-center word beside it is refused the same
+  way, so "Nebius AI Factory", a "data campus" at a generating station and "Imperial
+  Valley Computer Manufacturing" are still created. Checked against all 721 production
+  rows, that rule named those five and nothing else. Only an insert is ever refused —
+  a row that exists keeps receiving its news — and the crawl summary counts what it did
+  not create as "dropped: not a data center". Rehearsed on a copy of production: 721
+  rows to 716, the investment total $2,049.0B to $2,029.6B, megawatts unchanged, nothing
+  left behind in any table that hangs off a row.
+
 - **A queued page no campus story can be in is set aside before it is read**
   (`tracker/ingest/screen.py`, `tracker/ingest/discover.py`, `tracker/cli/ingest.py`,
   `tracker/cli/sync.py`, `tracker/webui/catalog.py`, `docs/workflows/sync.md`). The

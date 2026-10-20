@@ -36,6 +36,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from tracker import confidence as conf
+from tracker import exclude as exclude_mod
 from tracker import keys as keys_mod
 from tracker.dedup import (
     all_keys,
@@ -229,7 +230,7 @@ _PHASE_RANK = {name: i for i, name in enumerate(PHASE_PROGRESSION)}
 @dataclass
 class UpsertResult:
     project_id: int
-    action: str  # "insert" | "update" | "unchanged"
+    action: str  # "insert" | "update" | "unchanged" | "refused" | "excluded"
     conflicts: list[str] = dc_field(default_factory=list)
     duplicate_of: int | None = None
     events_written: int = 0
@@ -1427,6 +1428,17 @@ def upsert_record(
                 routed_from = key
                 routed_by = "alias"
                 log.info("routing %s to project #%d per project_alias", key, project.id)
+
+    if project is None:
+        # Not a data center: an identity `tracker exclude` removed, or a name that
+        # says fab, factory or plant with nothing beside it saying data center. Only
+        # ever an insert: a row that exists is reached above and never refused here.
+        # Like `existing_only`, nothing is written, so no citation is left behind
+        # for a project that does not exist. See `tracker.exclude`.
+        why = exclude_mod.barred(session, key, payload.get("name"))
+        if why is not None:
+            log.info("not creating %r (%s): %s", payload.get("name"), key, why)
+            return UpsertResult(project_id=0, action="excluded")
 
     if project is None and existing_only:
         # Nothing written at all — not a source row, not an event, not a risk.

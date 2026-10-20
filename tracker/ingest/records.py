@@ -296,6 +296,11 @@ class IngestReport:
     #: what the model is asked to read that cannot become a row. Shown only when
     #: there are some.
     incomplete: int = 0
+    #: New projects not created because they are not data centers: an identity
+    #: `tracker exclude` removed, or a name that says fab, factory or plant with no
+    #: data-center word beside it. See `tracker.exclude`. Shown only when there are
+    #: some.
+    not_a_data_center: int = 0
     events: int = 0
     risks: int = 0
     #: What the run actually spent. `ExtractionOutcome` has carried these per URL
@@ -340,6 +345,11 @@ class IngestReport:
         placeless = (
             [("dropped: no company, state or place", self.incomplete)] if self.incomplete else []
         )
+        other_kind = (
+            [("dropped: not a data center", self.not_a_data_center)]
+            if self.not_a_data_center
+            else []
+        )
         return [
             ("read", self.read),
             ("filtered out", self.filtered),
@@ -356,6 +366,7 @@ class IngestReport:
             ("not an article", self.thin_content),
             ("not cached", self.skipped_uncached),
             *placeless,
+            *other_kind,
             *foreign,
             *same,
             *ignored,
