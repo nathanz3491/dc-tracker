@@ -16,7 +16,7 @@ Under the map, the page says how many campuses have a location and are drawn. A 
 | **Capacity operating** | The part of it already built and running. |
 | **States** | How many states those campuses are in. |
 
-A campus whose size nobody has published counts as zero, so both capacities are floors. The Capex page's buyer rows can add up to slightly more: where a campus's buildings are listed by buyer, the buildings on a few campuses sum past the campus's own figure, and the map takes the campus's.
+A campus whose size nobody has published counts as zero, so both capacities are floors. The Capex page's buyer rows can add up to slightly more, and so can the [company pages](companies), which divide those rows among companies: where a campus's buildings are listed by buyer, the buildings on a few campuses sum past the campus's own figure, and the map takes the campus's. Otherwise the three count the same campuses the same way.
 
 ## Reading the map
 
@@ -36,7 +36,7 @@ A campus whose size nobody has published counts as zero, so both capacities are 
 
 You can also zoom with the wheel or by pinching, and drag to move. Dots keep their size as you zoom, so a crowded area such as Northern Virginia comes apart.
 
-**Hover a dot** to see the campus, its company and place, its stage and planned capacity, and whether an obstacle is blocking it. **Click it** to open [its page](project-page). **Hover a state** to see how many campuses it has and the capacity planned there.
+**Hover a dot** to see the campus, its company (under the one name every page uses) and place, its stage and planned capacity, and whether an obstacle is blocking it. **Click it** to open [its page](project-page). **Hover a state** to see how many campuses it has and the capacity planned there.
 
 ## By state
 

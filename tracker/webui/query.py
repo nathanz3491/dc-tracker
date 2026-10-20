@@ -182,13 +182,20 @@ def _like(word: str) -> str:
     return f"%{escaped}%"
 
 
-def _search(stmt: Select[Any], q: str) -> Select[Any]:
+def _search(
+    stmt: Select[Any], q: str, shown: tuple[dict[str, str], dict[str, str]] | None = None
+) -> Select[Any]:
     """`matchesProject`, in SQL.
 
     Two behaviours worth naming because they are not accidents: `#42` is an exact
     id and nothing else, so a reader who knows the id can reach it past a name
     that happens to contain the digits; and every word must appear *somewhere* in
     the row, so "meta ohio" narrows rather than widens.
+
+    "In the row" includes the company's name as the table prints it (`shown`:
+    every stored operator and tenant spelling, mapped to that name). A row stored
+    as "AWS" reads "Amazon" on the screen, and a search for what is on the screen
+    has to find it.
     """
     if q.startswith("#"):
         wanted = q[1:].strip()
@@ -198,18 +205,44 @@ def _search(stmt: Select[Any], q: str) -> Select[Any]:
             return stmt.where(Project.id.is_(None))
         return stmt.where(Project.id == int(wanted))
 
+    companies, customers = shown or ({}, {})
     haystack = [cast(Project.id, String), *(getattr(Project, f) for f in SEARCH_FIELDS)]
     for word in q.lower().split():
         pattern = _like(word)
-        stmt = stmt.where(
-            or_(*(func.lower(column).like(pattern, escape="\\") for column in haystack))
-        )
+        anywhere = [func.lower(column).like(pattern, escape="\\") for column in haystack]
+        named = [raw for raw, name in companies.items() if word in name.lower()]
+        if named:
+            anywhere.append(Project.company.in_(named))
+        tenants = [raw for raw, name in customers.items() if word in name.lower()]
+        if tenants:
+            anywhere.append(Project.customer.in_(tenants))
+        stmt = stmt.where(or_(*anywhere))
     return stmt
 
 
-def _where(stmt: Select[Any], filters: Filters) -> Select[Any]:
+def _shown_names(session: Session) -> tuple[dict[str, str], dict[str, str]]:
+    """Every stored operator and tenant spelling, and the name the table prints for it."""
+    from tracker.company import display_names
+
+    names = display_names(session)
+    companies = {
+        raw: names.company(raw) or raw
+        for raw in session.scalars(select(Project.company).distinct())
+        if raw
+    }
+    customers = {
+        raw: names.customer(raw) or raw
+        for raw in session.scalars(select(Project.customer).distinct())
+        if raw
+    }
+    return companies, customers
+
+
+def _where(
+    stmt: Select[Any], filters: Filters, shown: tuple[dict[str, str], dict[str, str]] | None = None
+) -> Select[Any]:
     if filters.q:
-        stmt = _search(stmt, filters.q)
+        stmt = _search(stmt, filters.q, shown)
     if filters.state:
         stmt = stmt.where(Project.state == filters.state)
     if filters.phase:
@@ -261,7 +294,8 @@ def _order(stmt: Select[Any], filters: Filters) -> Select[Any]:
 
 def ids(session: Session, filters: Filters) -> list[int]:
     """Every project matching `filters`, in the requested order."""
-    stmt = _order(_where(select(Project.id), filters), filters)
+    shown = _shown_names(session) if filters.q and not filters.q.startswith("#") else None
+    stmt = _order(_where(select(Project.id), filters, shown), filters)
     found = list(session.scalars(stmt))
     if filters.needs_provenance:
         allowed = _quoted_ids(session)
@@ -273,6 +307,7 @@ def page(
     session: Session, filters: Filters, *, offset: int = 0, limit: int = PAGE
 ) -> tuple[int, list[dict[str, Any]]]:
     """`(total, rows)` — the count for the whole filter, and one page of it."""
+    from tracker.company import display_names
     from tracker.export import fetch_projects
     from tracker.webui.dataset import table_row
 
@@ -286,7 +321,9 @@ def page(
     # and a page sorted by investment must arrive sorted by investment.
     order = {pid: i for i, pid in enumerate(wanted)}
     rows = sorted(fetch_projects(session, only=wanted), key=lambda p: order[p.id])
-    return len(matching), [table_row(project) for project in rows]
+    # Counted once for the page rather than once per row.
+    names = display_names(session)
+    return len(matching), [table_row(project, names=names) for project in rows]
 
 
 # --- "Quoted only" ----------------------------------------------------------

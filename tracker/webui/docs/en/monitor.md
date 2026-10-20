@@ -21,11 +21,12 @@ Each row shows its kind, the name (a link to the campus, or to the [company's pa
 Type into **watch a company, a tenant, or one project…**. With the box empty, the list suggests the operators and tenants with the most projects.
 
 - Each suggestion says what it is (**operator**, **tenant** or **project**) and how many projects or megawatts it covers. What you already watch is dimmed and cannot be picked twice.
+- Each company is offered once, under its one name, however its campuses spell it — *NTT* covers the campuses filed as NTT DATA, RagingWire and the rest. Typing any of those spellings finds it.
 - Every word you type must match. Projects are matched on name, company, tenant, city, county and state.
 - If nothing matches, **Enter** watches the name anyway. It starts reporting as soon as a matching project appears.
 - Keys: **↑ / ↓** move through the list, **Enter** picks, **Esc** closes it.
 
-Tenants listed only as "undisclosed", "unnamed" or "confidential" are not offered: they are not a company you can follow.
+Tenants described without a name — "undisclosed", "confidential", "a Fortune 100 company", "a leading hyperscaler" — are not offered: they are not a company you can follow.
 
 ### Watching one project: ☆
 

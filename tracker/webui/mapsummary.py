@@ -7,11 +7,17 @@ is decided here, and the rows not to draw are sent as ids.
 
 **The Capex page's campuses, each counted once.** The totals and each state's
 figures count the campuses `capex.rollup` counts — paused and cancelled ones left
-out, one row per suspected duplicate — and each at its own planned capacity. The
-Capex page's buyer rows can add up to more: a campus whose buildings are listed by
-buyer credits each buyer with its buildings, and on a few campuses those buildings
-sum past the campus's own figure (Stargate Abilene: 3,672 MW of buildings, 1,200 MW
-for the campus). The map takes the campus's word, the lower of the two.
+out, one row per suspected duplicate — read off the same rollup (`capex.tally`), so
+the two pages cannot disagree about which rows exist.
+
+**Each at its own planned capacity, and that is the one difference.** The Capex
+page credits a buyer with the buildings listed for it, and the company pages
+divide the Capex page's figures among companies, so those two add up to the same
+total. On a few campuses the buildings listed by buyer sum past the campus's own
+figure (Stargate Abilene: 3,672 MW of buildings, 1,200 MW for the campus), and
+there the Capex and company totals are higher than the map's by exactly that
+excess. The map takes the campus's word, the lower of the two: a state's shading
+is a statement about the campus, not about who has leased its halls.
 
 A suspected duplicate's second row is not drawn either (`skipped`): two dots for one
 campus would be the double count again, in a picture. Every capacity is a floor: a
@@ -20,12 +26,15 @@ campus whose size nobody published counts as zero, and the page says so.
 
 from __future__ import annotations
 
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from tracker.models import Project
+
+if TYPE_CHECKING:
+    from tracker.capex import Tally
 
 #: The stages, in the order the page lists them.
 STAGES: Final = ("announced", "permitting", "construction", "operational", "paused", "cancelled")
@@ -35,17 +44,20 @@ def counted_ids(session: Session) -> tuple[set[int], set[int]]:
     """(the ids the Capex page counts, the ids it sets aside as duplicates)."""
     from tracker import capex as capex_mod
 
-    with capex_mod.working_set(session):
-        pairs = capex_mod.suspected_duplicates(session)
-        positions = capex_mod.rollup(session, pairs=pairs)
-    counted = {pid for position in positions for pid in position.project_ids}
-    skipped = {pid for position in positions for pid in position.duplicate_skipped_ids}
-    return counted, skipped
+    tally = capex_mod.counting(session)
+    return set(tally.counted), set(tally.set_aside)
 
 
-def build(session: Session) -> dict[str, Any]:
-    """Totals, stage counts and per-state figures, and the rows not to draw."""
-    counted, skipped = counted_ids(session)
+def build(session: Session, *, tally: Tally | None = None) -> dict[str, Any]:
+    """Totals, stage counts and per-state figures, and the rows not to draw.
+
+    `tally` is the Capex page's rollup read back as rows (`capex.tally`), which the
+    console holds cached; without one the rollup is run here.
+    """
+    if tally is None:
+        counted, skipped = counted_ids(session)
+    else:
+        counted, skipped = set(tally.counted), set(tally.set_aside)
     projects = session.scalars(select(Project).order_by(Project.id)).all()
 
     states: dict[str, dict[str, Any]] = {}

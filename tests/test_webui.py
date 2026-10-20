@@ -157,6 +157,9 @@ def test_dataset_carries_the_shape_the_page_expects(server):
     listed = data["projects"][0]
     assert listed["name"] and listed["state"]
     assert "prov" not in listed and "sources" not in listed
+    # The company's one name and its key, which the map, the cards and the watch
+    # picker print and group by (`company.display_names`).
+    assert (listed["company_name"], listed["company_slug"]) == ("Microsoft", "microsoft")
 
 
 def test_the_shell_payload_ships_nothing_the_page_does_not_read(server, seeded_db):
@@ -5209,6 +5212,12 @@ def test_the_company_route_answers_with_its_campuses(server):
     assert company["totals"]["projects"] == 1
     assert company["states"] == [["WI", 1]]
     assert company["domain"] == "microsoft.com"
+    # Counted from the console's cached capex rollup, so it is Microsoft's Capex row.
+    _status, capex = request(address, "/api/capex")
+    row = next(p for p in capex["positions"] if p["key"] == "microsoft")
+    assert company["totals"]["mw_planned"] == row["mw_planned"] == 900.0
+    assert company["totals"]["counting"]["capex_row"]["mw_planned"] == 900.0
+    assert company["projects"][0]["counted"]["status"] == "counted"
     # Nobody is signed in on this console, so there is no watch to offer.
     assert company["watching"] is False
 

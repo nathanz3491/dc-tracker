@@ -32,6 +32,8 @@ When a campus is split into buildings or phases with different tenants, each ten
 
 A buyer worked out from who owns the campus, rather than named by a source, is marked with an asterisk (`*`).
 
+Each buyer is shown under one name, the same as on every other page: the name on the tracker's list of operators when it is there, otherwise the spelling most campuses use. A buyer's row here is the same figure as the **planned** and **running** cards on its [company page](companies), which lists the campuses behind it. A company that builds campuses with no named buyer has those added on its company page too; here they sit in *(no named customer)*.
+
 ## Duplicates are counted once
 
 The banner **N campuses are stored more than once** appears when the tracker suspects one campus is held in more than one row — usually because different articles named it differently. Each suspected group is counted **once**; the other rows are set aside and their megawatts shown as *skipped*, never added twice.

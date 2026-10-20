@@ -7,7 +7,7 @@ Every campus has its own page at `/projects/<number>`, opened from any row of [P
 ## The header
 
 - The campus's number, name and the **☆ Watch** button (see [Monitor](monitor)).
-- The operator, linked to its [company page](companies), and **for** the buyer when that is a different company.
+- The operator, linked to its [company page](companies), and **for** the buyer when that is a different company. Each is shown under the company's one name, the same on every page; when the campus's sources spell it differently, their spelling follows in small type — *filed as “Amazon Web Services”* — so the header can be matched against the citations.
 - Where it is, and the regional grid operator area where known.
 - Its phase, its **confidence** (0–3; see [Confidence](confidence)) and how many obstacles are open — click that to jump to them.
 

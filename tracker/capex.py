@@ -336,6 +336,87 @@ def block_shares(project: Project) -> tuple[list[BlockShare], float]:
     return shares, max(0.0, float(project.mw_planned or 0.0) - claimed)
 
 
+def campus_split(project: Project) -> tuple[list[BlockShare], float, float]:
+    """One campus's megawatts as `rollup` divides them: `(shares, planned, built)`.
+
+    The tranches named buyers hold, and the planned and running capacity left with
+    the campus's own buyer (`attribute`). Running megawatts move to a tranche's
+    buyer only when the tranche accounts for them; otherwise the campus's running
+    figure would drop below what is built for reasons that have nothing to do with
+    what is built.
+    """
+    shares, planned = block_shares(project)
+    claimed_built = sum(s.mw_built for s in shares)
+    return shares, planned, max(0.0, float(project.mw_built or 0.0) - claimed_built)
+
+
+def credits(project: Project) -> dict[str, tuple[float, float]]:
+    """Buyer key -> `(planned, running)` megawatts `rollup` credits on one campus.
+
+    The campus's own buyer gets what its tranches leave, and each tranche's buyer
+    its tranches; `""` is the `(no named customer)` row. Only meaningful for a
+    campus the rollup counts — not paused or cancelled, and not a suspected
+    duplicate's second row (`Tally`).
+
+    For a page that shows one company's figures: read from here, they are the
+    Capex page's figures campus by campus, rather than a second sum of the same
+    rows that could disagree with it.
+    """
+    _name, key, _self_built = attribute(project)
+    shares, planned, built = campus_split(project)
+    out: dict[str, tuple[float, float]] = {key: (planned, built)}
+    for share in shares:
+        held = out.get(share.key, (0.0, 0.0))
+        out[share.key] = (held[0] + share.mw_planned, held[1] + share.mw_built)
+    return out
+
+
+@dataclass(frozen=True)
+class Tally:
+    """What one rollup counted, by row: which campuses, in which positions.
+
+    `set_aside` maps each suspected duplicate's set-aside row to the row counted
+    in its place (None only if the group's representative is itself not counted,
+    which `rollup` never produces). Built from the positions and the duplicate
+    groups rather than by running the rollup again, so a caller holding the
+    console's cached rollup pays nothing for it.
+    """
+
+    positions: dict[str, Position]
+    counted: frozenset[int]
+    set_aside: dict[int, int | None]
+
+
+def counting(session: Session) -> Tally:
+    """Run the rollup the Capex page runs, and read it back as rows (`tally`).
+
+    For a caller with no cached rollup to hand; the console passes its own.
+    """
+    with working_set(session):
+        pairs = suspected_duplicates(session)
+        positions = rollup(session, pairs=pairs)
+    return tally(positions, duplicate_groups(pairs))
+
+
+def tally(positions: list[Position], groups: list[list[int]]) -> Tally:
+    """Read a `rollup` result back as rows: what it counted and what it set aside."""
+    counted = frozenset(pid for p in positions for pid in p.project_ids)
+    skipped = {pid for p in positions for pid in p.duplicate_skipped_ids}
+    set_aside: dict[int, int | None] = {}
+    for group in groups:
+        kept = [pid for pid in group if pid in counted and pid not in skipped]
+        for pid in group:
+            if pid in skipped:
+                set_aside[pid] = kept[0] if kept else None
+    for pid in skipped - set(set_aside):  # pragma: no cover - a skip always has a group
+        set_aside[pid] = None
+    return Tally(
+        positions={p.key: p for p in positions},
+        counted=counted,
+        set_aside=set_aside,
+    )
+
+
 @contextmanager
 def working_set(session: Session) -> Iterator[list[Project]]:
     """Hold every project, with what the rollup reads, for a block of work.
@@ -468,14 +549,12 @@ def rollup(
 
         # Capacity a tranche assigns to a named buyer goes to that buyer; the rest of
         # the campus stays here. A project with no blocks has no shares, so `planned`
-        # is its whole capacity and this is exactly the previous behaviour.
-        shares, planned = block_shares(project)
+        # is its whole capacity and this is exactly the previous behaviour. Built
+        # megawatts are only reassigned when a tranche accounts for them — see
+        # `campus_split`, which `credits` divides by too.
+        shares, planned, built = campus_split(project)
         bucket.mw_planned += planned
-        # Built megawatts are only reassigned when a tranche accounts for them.
-        # Otherwise `mw_built` would drop below `mw_planned` for reasons that have
-        # nothing to do with what is built.
-        claimed_built = sum(s.mw_built for s in shares)
-        bucket.mw_built += max(0.0, float(project.mw_built or 0.0) - claimed_built)
+        bucket.mw_built += built
         money = int(project.investment_usd or 0)
         if money and project.id in demoted_investment:
             # Asserted by a source, confirmed by none — read back from what the
@@ -530,6 +609,17 @@ def rollup(
                 bucket.at_risk_unconfirmed += 1
         if project.id in slipped_ids:
             bucket.slipped += 1
+
+    # Each buyer under the one name every other page prints for it. A row used to be
+    # named by whichever spelling reached it first, so on a copy of production Amazon
+    # read "Amazon Web Services", Google "Alphabet" and CyrusOne "CyrusOne
+    # (leaseback)" here and something else on the company page.
+    from tracker.company import display_names
+
+    names = display_names(session)
+    for position in positions.values():
+        if position.key:
+            position.name = names.of_key(position.key, position.name) or position.name
 
     ordered = sorted(
         positions.values(),
@@ -1763,9 +1853,11 @@ def programme_figures(session: Session) -> list[ProgrammeFigure]:
     That is exactly the discipline that caught `scope` before it was built on, and
     the reason that failure cost a measurement instead of a published number.
     """
+    from tracker.company import display_names
+
     projects = session.scalars(select(Project)).all()
     by_figure: dict[tuple[str, int], set[int]] = {}
-    names: dict[str, str] = {}
+    names = display_names(session)
     for project in projects:
         # The operator, not the buyer: a programme is announced by whoever is
         # spending, and `attribute` would fold several operators' campuses onto
@@ -1773,7 +1865,6 @@ def programme_figures(session: Session) -> list[ProgrammeFigure]:
         key = company_key(project.company)
         if not key:
             continue
-        names.setdefault(key, project.company)
         money = int(project.investment_usd or 0)
         if money < PROGRAMME_FIGURE_MIN_USD:
             continue
@@ -1781,7 +1872,7 @@ def programme_figures(session: Session) -> list[ProgrammeFigure]:
 
     out = [
         ProgrammeFigure(
-            operator=names.get(key, key),
+            operator=names.of_key(key, key) or key,
             investment_usd=money,
             project_ids=tuple(sorted(ids)),
         )
@@ -1800,12 +1891,16 @@ __all__ = [
     "UNATTRIBUTED",
     "Position",
     "ProgrammeFigure",
+    "Tally",
     "as_of",
     "attribute",
     "basis_census",
     "blocking_risk",
     "blocking_risks",
+    "campus_split",
+    "counting",
     "coverage",
+    "credits",
     "date_precision",
     "double_counted_mw",
     "duplicate_groups",
@@ -1818,6 +1913,7 @@ __all__ = [
     "rollup",
     "suspect_attributions",
     "suspected_duplicates",
+    "tally",
     "unconfirmed_investment_ids",
     "unquoted_investment_ids",
     "working_set",

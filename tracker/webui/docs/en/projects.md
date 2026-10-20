@@ -4,7 +4,7 @@
 
 ## Searching
 
-Type into **name, city, operator…**. Every word must appear somewhere in the row: its number, name, company, tenant, city, county, state or biggest obstacle. To go straight to one campus, type its number with a hash, for example `#42`.
+Type into **name, city, operator…**. Every word must appear somewhere in the row: its number, name, company, tenant, city, county, state or biggest obstacle. A company is found both by the name the table shows and by the spelling its source used, so `amazon` finds a campus filed as "AWS". To go straight to one campus, type its number with a hash, for example `#42`.
 
 ## Filters
 
@@ -38,6 +38,8 @@ The table always starts with **#** — the campus's number, with its ☆ watch b
 | **Announced** | When it was first announced. |
 | **Online** | When it is expected to come online. |
 | **Biggest obstacle** | The most serious open obstacle, in one sentence. |
+
+**Operator** and **Buyer** show each company under one name, however a campus's source spelled it: AWS, Amazon Web Services and Amazon Data Services all read *Amazon*, and RagingWire reads *NTT*. The name is the one on the tracker's list of operators, otherwise the spelling most campuses use, and every page of the console uses the same one. A campus's own page shows its source's spelling beside the name when the two differ. A tenant described without a name, such as "a Fortune 100 company", is shown as written.
 
 With **All fields** on you also get **Compute (H200-eq)**, **County**, **Lat**, **Lon**, **Confidence (0-3)** and **Verified**. Every field is defined in the [Field dictionary](fields).
 

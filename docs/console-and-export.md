@@ -118,10 +118,33 @@ rents, with stage, capacity and open obstacles, plus the states and phases they
 fall in and what was reported about them in the last two months. Campuses are
 matched the way a watchlist entry on the same name matches (`tracker/company.py`
 calls the watchlist's own matcher), so the page and a watch cannot cover
-different campuses. Names on the Monitor tab and in a project's header link
-here. The slug is restricted to lowercase letters, digits and hyphens, because
-the server writes it into the page shell, and that restriction is the defence
-against script injection there.
+different campuses — plus any campus the Capex page credits to the company
+through a party the watch does not read, because its megawatts are in the total.
+Names on the Monitor tab and in a project's header link here. The slug is
+restricted to lowercase letters, digits and hyphens, because the server writes it
+into the page shell, and that restriction is the defence against script injection
+there.
+
+**Its planned and running figures are the Capex page's.** They were a raw sum over
+the matched campuses, so a campus stored twice counted twice, cancelled campuses
+counted, and the tenant of one building was credited with the whole campus — one
+company, three totals, on the company page, Capex and the map. Now each campus is
+divided by `capex.credits`, the same division `capex.rollup` makes, over the rollup
+the console already caches (`capex.tally`): a company gets its Capex row, plus the
+campuses it builds that name no buyer (Capex's "(no named customer)"), so every
+megawatt is on exactly one company's page and the pages add up to the Capex
+total. The table still lists every campus, and says beside each one that does not
+count in full why not.
+
+**One name per company, everywhere.** NTT is stored under eight spellings and
+Amazon under six, and every list printed the stored string. `company.display_names`
+gives each company key one name — the roster's (`seed/operators.toml`) when the
+company is on it, else the spelling most rows use, ties to the shorter — and the
+light index, table rows, project payload, Capex rows, Updates and Monitor cards all
+carry it (`company_name`, `customer_name`). The source's own spelling stays in
+`company` and `customer`, and a project's header shows it in small type where it
+differs. The watch picker groups by the key (`company_slug`) instead of the stored
+string, and the table's search matches the printed name as well as the stored one.
 
 The company's mark is its own site icon, fetched by the console's server, because
 the page's content policy loads images only from itself (`tracker/company_logo.py`,
@@ -604,11 +627,14 @@ The figures beside it come from the server, at `GET /api/map`
 (`webui/mapsummary.py`, behind the sign-in like every console route, cached until
 the data changes): the totals, stage counts and per-state figures, counted over the
 campuses `capex.rollup` counts — paused and cancelled left out, one row per
-suspected duplicate — each at its own planned capacity, and the ids of the
-duplicate rows not to draw. The Capex page's buyer rows can sum higher where a
+suspected duplicate, read off the same cached rollup as Capex — each at its own
+planned capacity, and the ids of the duplicate rows not to draw. The Capex page's
+buyer rows, and the company pages that divide them, can sum higher where a
 campus's buildings, listed by buyer, add up past the campus's own figure; the map
-takes the campus's. The browser cannot work this out alone, because which rows the
-Capex page counts depends on the duplicate pairs, which the dataset does not carry.
+takes the campus's. On the 2026-10-21 copy that is the whole difference: 271,716 MW
+on Capex and summed over the company pages, 263,696 MW on the map. The browser
+cannot work this out alone, because which rows the Capex page counts depends on
+the duplicate pairs, which the dataset does not carry.
 
 This design was first built as a public map on its own hostname, then moved into the
 console in its place (2026-10-17): a picture of every campus is what the console is

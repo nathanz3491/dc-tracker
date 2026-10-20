@@ -113,13 +113,15 @@ API 第 1 版的全部接口。所有接口都是 `GET`，以 JSON 返回，地�
 
 以数据形式提供的公司页面：`name`、`website`、`totals`（园区数，分别按运营商和租户身份统计，规划和运行的兆瓦数，未解决的障碍）、`states`、`phases`、它的 `projects`（每个都附有其角色、阶段、容量和障碍），以及最近两个月报道的 `updates`。slug 是公司名称的小写连字符形式，与控制台中该公司页面地址里的一样：`compass-datacenters`。
 
+`name` 是公司唯一的名称，在每个页面上都相同；每个项目除来源原文的 `company` 和 `customer` 外，还带有 `company_name` 和 `customer_name`。`totals` 中规划和运行的兆瓦数按 [Capex](capex)（资本支出）的方式计算——疑似重复的园区只算一次，暂停和取消的园区不计入，租户只计入自己的分期——`totals.counting` 把它们拆成 `capex_row`（该公司在 `/v1/capex` 中的那一行）和 `no_named_buyer`（它建设、但没有具名买方的园区），并给出因 `duplicates`（重复）、`stopped`（暂停或取消）或计入其他买方（`elsewhere`）而被搁置的园区数量。每个项目的 `counted` 说明它贡献了什么：`status`（`counted`、`part`、`elsewhere`、`duplicate` 或 `stopped`）、`mw_planned`、`mw_built`，以及 `for`（其他买方）或 `of`（重复项所归入的园区）。
+
 ## GET /v1/capex
 
 以数据形式提供的 [Capex](capex)（资本支出）。`buyers` 中每个买方一行，包括 `(no named customer)`：
 
 | 键 | 含义 |
 | --- | --- |
-| `customer`、`projects` | 买方，以及园区数量。 |
+| `customer`、`projects` | 买方（用其唯一的名称），以及园区数量。 |
 | `self_built`、`undisclosed` | 根据所有权归属的园区，以及没有点名的租户。 |
 | `mw_planned`、`mw_built` | 规划和运行的兆瓦数。 |
 | `investment_usd` | 已确认的投资。`investment_unquoted_usd`、`investment_excluded_usd` 和 `investment_out_of_scope_usd` 是已报道但处理方式不同的金额，各自单独披露。 |
@@ -138,7 +140,7 @@ API 第 1 版的全部接口。所有接口都是 `GET`，以 JSON 返回，地�
 | --- | --- |
 | `days` | 回溯天数，1–60。默认 7。 |
 
-`data` 包含已确认的动态，最重要的排在最前；`unconfirmed` 包含无人能引证的动态。每条动态都有 `kind`、`sign`（`good` 利好、`bad` 利空、`neutral` 中性）、`project_id`、`company`、`project`、`headline`、`detail`、`happened`、`reported`、`expected`、`quote`、`source_url` 和 `publisher`。`last_crawl` 说明上次抓取文章的时间。关注列表为空时，`data` 也为空。
+`data` 包含已确认的动态，最重要的排在最前；`unconfirmed` 包含无人能引证的动态。每条动态都有 `kind`、`sign`（`good` 利好、`bad` 利空、`neutral` 中性）、`project_id`、`company`（运营商唯一的名称）、`project`、`headline`、`detail`、`happened`、`reported`、`expected`、`quote`、`source_url` 和 `publisher`。`last_crawl` 说明上次抓取文章的时间。关注列表为空时，`data` 也为空。
 
 ## GET /v1/me
 

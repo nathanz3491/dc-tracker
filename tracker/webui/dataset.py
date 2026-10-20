@@ -259,7 +259,9 @@ def capex_bundle(session: Session) -> tuple[dict[str, Any], list[Any]]:
 
 def _capex_payload(session: Session, pairs: list[Any], positions: list[Any]) -> dict[str, Any]:
     from tracker import capex as capex_mod
+    from tracker.company import display_names
 
+    names = display_names(session)
     worst = capex_mod.blocking_risks(session)
     as_of = capex_mod.as_of()
     as_of_quarter = f"{as_of.year}Q{(as_of.month - 1) // 3 + 1}"
@@ -333,7 +335,7 @@ def _capex_payload(session: Session, pairs: list[Any], positions: list[Any]) -> 
             for p in positions
         ],
         "suspect": [
-            {"id": pid, "operator": operator, "customer": customer}
+            {"id": pid, "operator": names.company(operator), "customer": names.customer(customer)}
             for pid, operator, customer in capex_mod.suspect_attributions(session)
         ],
         "duplicates": {
@@ -481,7 +483,22 @@ def _kw_per_h200() -> float:
     return kw_per_h200()
 
 
-def project_payload(project: Any, *, claims: bool = False) -> dict[str, Any]:
+def _names(project: Any, names: Any) -> Any:
+    """The fleet's company names (`company.display_names`), or the ones passed in.
+
+    A list asks once and passes them to every row; a single project asks here.
+    """
+    if names is not None:
+        return names
+    from sqlalchemy.orm import object_session
+
+    from tracker.company import Names, display_names
+
+    session = object_session(project)
+    return display_names(session) if session is not None else Names()
+
+
+def project_payload(project: Any, *, claims: bool = False, names: Any = None) -> dict[str, Any]:
     """One project as the console reads it: the export shape, plus what the page adds.
 
     **Shared by the list and the single-project route on purpose.** `/api/dataset`
@@ -494,7 +511,11 @@ def project_payload(project: Any, *, claims: bool = False) -> dict[str, Any]:
     48% of the list payload — 9.2 MB of 19 MB across 300 projects — for a table
     that renders one project at a time, so the list omits it and the page, which
     is about exactly one project, includes it.
+
+    `names` is `company.display_names(session)`, which a caller building many rows
+    passes in rather than have every row count the fleet's spellings again.
     """
+    names = _names(project, names)
     payload = to_json_object(project, claims=claims)
     payload["iso"] = _iso_of(project)
     payload["nulls"] = _nulls(project)
@@ -511,14 +532,22 @@ def project_payload(project: Any, *, claims: bool = False) -> dict[str, Any]:
     payload["customer_slug"] = (
         company_slug(customer_key(project.customer)) if customer_key(project.customer) else None
     )
+    # What the page prints for them: one name per company, however this row's
+    # source spelled it. `company` and `customer` stay the source's own words —
+    # the project page shows them beside the name when they differ.
+    payload["company_name"] = names.company(project.company)
+    payload["customer_name"] = names.customer(project.customer)
     _split_serving(payload)
     return payload
 
 
 def build(session: Session, *, db_path: str, schema_version: int) -> dict[str, Any]:
     """The whole console payload for one request."""
+    from tracker.company import display_names
+
     rows = fetch_projects(session)
-    projects = [project_payload(project, claims=False) for project in rows]
+    names = display_names(session)
+    projects = [project_payload(project, claims=False, names=names) for project in rows]
 
     citations = sum(len(p["sources"]) for p in projects)
     queued = session.scalar(select(IngestUrl.id).where(IngestUrl.status == "discovered").limit(1))
@@ -623,7 +652,7 @@ RISK_LIST_FIELDS: tuple[str, ...] = ("status", "severity", "category", "summary"
 STANDING_OMITS: tuple[str, ...] = ("timeline", "binding_blocker")
 
 
-def table_row(project: Any) -> dict[str, Any]:
+def table_row(project: Any, *, names: Any = None) -> dict[str, Any]:
     """One row of the projects table.
 
     **Built by subtraction from `project_payload`, never as a second builder.**
@@ -633,7 +662,7 @@ def table_row(project: Any) -> dict[str, Any]:
     is `LIST_OMITS`, and `tests/test_webui.py` holds the subtraction to that
     exact set in both directions.
     """
-    payload = project_payload(project, claims=False)
+    payload = project_payload(project, claims=False, names=names)
     for key in LIST_OMITS:
         payload.pop(key, None)
     standing = payload.get("standing")
@@ -713,6 +742,9 @@ def index_rows(session: Session) -> list[dict[str, Any]]:
             }
         )
 
+    from tracker.company import display_names
+
+    names = display_names(session)
     rows = []
     for project in projects:
         row: dict[str, Any] = {field: getattr(project, field) for field in INDEX_FIELDS}
@@ -722,6 +754,14 @@ def index_rows(session: Session) -> list[dict[str, Any]]:
         row["risks"] = risks.get(project.id, [])
         row["delays"] = delays.get(project.id, [])
         row["n_sources"] = counts.get(project.id, 0)
+        # Who the company is, not how this row's source spelled it: the name every
+        # page prints, and the key (as its slug) the watch picker groups on. The
+        # picker grouped the stored strings and offered NTT eight times.
+        tenant = customer_key(project.customer)
+        row["company_name"] = names.company(project.company)
+        row["company_slug"] = company_slug(company_key(project.company))
+        row["customer_name"] = names.customer(project.customer)
+        row["customer_slug"] = company_slug(tenant) if tenant else None
         rows.append(row)
     return rows
 
@@ -835,9 +875,11 @@ def articles(session: Session, *, q: str = "", host: str = "") -> dict[str, Any]
     """
     from sqlalchemy.orm import selectinload
 
+    from tracker.company import display_names
     from tracker.models import Project, Source
     from tracker.sources import host_of
 
+    names = display_names(session)
     needle = q.strip().lower()
     wanted_host = host.strip().lower()
     stmt = select(Source).options(selectinload(Source.project)).order_by(Source.url, Source.id)
@@ -875,7 +917,7 @@ def articles(session: Session, *, q: str = "", host: str = "") -> dict[str, Any]
         project: Project | None = source.project
         if project is not None:
             entry["projects"].append(
-                {"id": project.id, "name": f"{project.company} — {project.name}"}
+                {"id": project.id, "name": f"{names.company(project.company)} — {project.name}"}
             )
 
     grouped: dict[str, list[dict[str, Any]]] = {}

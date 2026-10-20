@@ -172,7 +172,8 @@ function drawMap(host, { atlas, states, points, hidden, onPick, tipEl, transform
     .on("mousemove", (event, d) => {
       const p = d.p;
       const size = p.mw_planned ? `${fmtNum(p.mw_planned)} MW planned` : "size not published";
-      tip(event, `<b>${esc(p.name)}</b><span>${esc(p.company)} · ${esc(placeOf(p))}<br>`
+      // The company's one name (`company_name`), as every other page prints it.
+      tip(event, `<b>${esc(p.name)}</b><span>${esc(p.company_name || p.company)} · ${esc(placeOf(p))}<br>`
         + `${esc(STAGE_LABEL[p.phase] || p.phase)} · ${esc(size)}</span>`
         + (blocking(p) ? `<em>an obstacle is blocking it</em>` : "")
         + `<small>click to open</small>`);
