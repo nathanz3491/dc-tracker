@@ -1,8 +1,9 @@
-"""One name per company.
+"""One name per company, and one total per company.
 
 The client's complaint was that one company read as several — "META / META Inc" —
-so per-company figures did not add up. Pinned here: every surface prints a company
-under the one name `company.display_names` gives it.
+so per-company figures did not add up. Two things are pinned here: every surface
+prints a company under the one name `company.display_names` gives it, and the
+company page's megawatts are the Capex page's, campus by campus.
 """
 
 from __future__ import annotations
@@ -14,8 +15,9 @@ from collections import Counter, defaultdict
 import pytest
 
 from tracker import capex, company, feed, watchfor
+from tracker.dedup import company_slug
 from tracker.models import CapacityBlock, Project
-from tracker.webui import assets, dataset
+from tracker.webui import assets, dataset, mapsummary
 from tracker.webui import query as table
 
 NTT_SPELLINGS = (
@@ -200,3 +202,148 @@ def test_updates_and_monitor_print_the_one_name(session):
     report = watchfor.report(session, everything=True)
     assert [p.company for p in report.projects] == ["Amazon"]
     assert report.projects[0].as_json()["company_slug"] == "amazon"
+
+
+# --- one total ------------------------------------------------------------------------
+
+
+@pytest.fixture
+def fleet(session):
+    """Meta, counted three ways that used to inflate its total, and its landlord.
+
+    * Prineville is stored twice — once as Meta, once as Facebook — 1,000 MW and
+      800 MW. Capex counts one row of a suspected duplicate.
+    * Austin is cancelled. Capex leaves it out.
+    * Meta leases one 200 MW building of QTS's 600 MW Atlanta campus. Capex credits
+      Meta with that building, not the campus.
+    """
+    prineville = _project(
+        session,
+        name="Prineville Data Center",
+        company="Meta",
+        city="Prineville",
+        state="OR",
+        mw_planned=1000.0,
+        mw_built=300.0,
+    )
+    twin = _project(
+        session,
+        name="Prineville Data Center",
+        company="Facebook",
+        city="Prineville",
+        state="OR",
+        mw_planned=800.0,
+        mw_built=300.0,
+    )
+    austin = _project(
+        session, name="Austin", company="Meta", city="Austin", phase="cancelled", mw_planned=900.0
+    )
+    atlanta = _project(
+        session,
+        name="Atlanta Campus",
+        company="QTS Data Centers",
+        city="Atlanta",
+        state="GA",
+        mw_planned=600.0,
+        mw_built=250.0,
+    )
+    _block(session, atlanta, label="Building A", mw=200.0, customer="Meta", status="serving")
+    session.expire_all()
+    return {
+        "prineville": prineville.id,
+        "twin": twin.id,
+        "austin": austin.id,
+        "atlanta": atlanta.id,
+    }
+
+
+def test_a_companys_total_is_its_capex_row(session, fleet):
+    """Twin once, cancelled out, the tenant credited with its building — as on Capex."""
+    pairs = capex.suspected_duplicates(session)
+    assert capex.duplicate_groups(pairs) == [sorted([fleet["prineville"], fleet["twin"]])]
+    meta = {p.key: p for p in capex.rollup(session, pairs=pairs)}["meta"]
+
+    page = company.profile(session, "meta")
+    totals = page["totals"]
+    assert totals["mw_planned"] == pytest.approx(meta.mw_planned) == 1200.0
+    assert totals["mw_built"] == pytest.approx(meta.mw_built) == 500.0
+    assert totals["counting"]["capex_row"] == {"mw_planned": 1200.0, "mw_built": 500.0}
+    assert totals["counting"]["no_named_buyer"] == {"mw_planned": 0.0, "mw_built": 0.0}
+    assert (totals["counting"]["duplicates"], totals["counting"]["stopped"]) == (1, 1)
+
+    # Every campus is still listed, each saying what it adds and why.
+    counted = {row["id"]: row["counted"] for row in page["projects"]}
+    assert counted[fleet["prineville"]]["status"] == "counted"
+    assert counted[fleet["twin"]] == {
+        "status": "duplicate",
+        "of": fleet["prineville"],
+        "mw_planned": 0.0,
+        "mw_built": 0.0,
+    }
+    assert counted[fleet["austin"]]["status"] == "stopped"
+    assert counted[fleet["atlanta"]]["status"] == "part"
+    assert counted[fleet["atlanta"]]["mw_planned"] == 200.0
+    assert counted[fleet["atlanta"]]["for"] == ["QTS"]
+    assert page["name"] == "Meta"
+
+
+def test_a_landlord_is_credited_with_what_no_named_buyer_holds(session, fleet):
+    """QTS has no Capex row: Capex files its campus under "(no named customer)".
+
+    The company page credits that remainder to the company building it, so the
+    landlord's page is not empty and no megawatt is on two companies' pages.
+    """
+    qts = company.profile(session, "qts")
+    assert qts["name"] == "QTS"
+    assert qts["totals"]["mw_planned"] == 400.0
+    assert qts["totals"]["mw_built"] == 50.0
+    assert qts["totals"]["counting"]["capex_row"]["mw_planned"] == 0.0
+    assert qts["totals"]["counting"]["no_named_buyer"]["mw_planned"] == 400.0
+    (row,) = qts["projects"]
+    assert row["counted"]["status"] == "part" and row["counted"]["for"] == ["Meta"]
+
+    # Every megawatt Capex counts is on exactly one company's page.
+    positions = capex.rollup(session)
+    pages = sum(company.profile(session, s)["totals"]["mw_planned"] for s in ("meta", "qts"))
+    assert pages == pytest.approx(sum(p.mw_planned for p in positions)) == 1600.0
+
+
+def test_the_cached_rollup_gives_the_same_page(session, fleet):
+    """The console passes its cached rollup; the answer must not depend on that."""
+    tally = capex.counting(session)
+    assert company.profile(session, "meta", tally=tally) == company.profile(session, "meta")
+    assert tally.set_aside == {fleet["twin"]: fleet["prineville"]}
+
+
+def test_the_map_counts_the_same_rows_at_the_campus_figure(session, fleet):
+    """Same rows as Capex; each at the campus's own capacity."""
+    summary = mapsummary.build(session, tally=capex.counting(session))
+    assert summary["skipped"] == [fleet["twin"]]
+    assert summary["totals"]["campuses"] == 2
+    assert summary["totals"]["planned_mw"] == 1600.0
+
+
+def test_a_buyer_only_a_party_names_still_has_a_page(session):
+    """Its megawatts are on Capex, so they have to be on some company's page."""
+    from tracker.models import ProjectParty
+
+    site = _project(session, name="Fermi", company="Fermi America", city="Amarillo", mw_planned=500)
+    session.add(
+        ProjectParty(project_id=site.id, name="TensorWave", party_key="tensorwave", role="customer")
+    )
+    session.flush()
+    session.expire_all()
+
+    page = company.profile(session, company_slug("tensorwave"))
+    assert page is not None
+    assert [r["id"] for r in page["projects"]] == [site.id]
+    assert page["projects"][0]["via"] == "customer"
+    assert page["totals"]["mw_planned"] == 500.0
+    # And the builder's page lists it as counted for the tenant.
+    fermi = company.profile(session, "fermi-america")
+    assert fermi["projects"][0]["counted"] == {
+        "status": "elsewhere",
+        "for": ["TensorWave"],
+        "mw_planned": 0.0,
+        "mw_built": 0.0,
+    }

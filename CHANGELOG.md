@@ -268,6 +268,25 @@ initial build of the v1 PRD.
 
 ### Changed
 
+- **A company page's megawatts are the Capex page's** (`tracker/company.py`,
+  `tracker/capex.py`, `tracker/webui/server.py`, `tracker/webui/publicapi.py`,
+  `tracker/webui/mapsummary.py`, `tracker/webui/static/app.js`,
+  `tracker/webui/docs/`, `docs/console-and-export.md`). The page's planned and running
+  figures were a raw sum that counted a campus stored twice twice, kept cancelled
+  campuses in and credited the tenant of one building with the whole campus, so one
+  company had different totals on different pages: on the 2026-10-21 copy Amazon read
+  21,314 MW on its page against 29,614 MW on Capex, Microsoft 16,415 against 14,263,
+  Meta 13,829 against 12,754. They are now the Capex page's own division of each
+  campus, and those three equal their Capex rows exactly. A builder is also credited
+  with the campuses it builds that name no buyer, which Capex files under "(no named
+  customer)", so NTT, which has no Capex row, reads 1,444 MW where it read 1,844. Every
+  megawatt is on exactly one company's page and the pages add up to the Capex total,
+  271,716 MW; the map reads 263,696 MW, lower only by the buildings that, listed by
+  buyer, sum past their campus. A line under the figures says which rule they follow,
+  each campus that does not count in full says why, and a campus Capex credits to the
+  company because a source names it the tenant is now listed — Fermi America's 11 GW
+  Amarillo campus, which Capex credits to Amazon, is on Amazon's page for that reason.
+
 - **A company reads as one company on every page** (`tracker/company.py`,
   `tracker/capex.py`, `tracker/feed.py`, `tracker/watchfor.py`,
   `tracker/webui/dataset.py`, `tracker/webui/query.py`, `tracker/webui/static/app.js`,

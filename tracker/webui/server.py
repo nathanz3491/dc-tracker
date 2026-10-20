@@ -1107,6 +1107,9 @@ class Handler(BaseHTTPRequestHandler):
         if parts == ("capex",):
             payload, _positions = self._capex_bundle()
             return self._api_json(publicapi.capex(payload), extra=extra)
+        # A company's figures are counted from the cached capex rollup, read before
+        # the session opens so the two reads do not nest.
+        tally = self._capex_tally() if len(parts) == 2 and parts[0] == "companies" else None
         with self.console.read_session() as session:
             if parts == ("me",):
                 answer = publicapi.me(session, req)
@@ -1120,7 +1123,7 @@ class Handler(BaseHTTPRequestHandler):
                 project = publicapi._project(session, parts[1])
                 answer = {"project_id": project.id, "data": publicapi.project_sources(project)}
             elif len(parts) == 2 and parts[0] == "companies":
-                answer = {"data": publicapi.company(session, parts[1], prefix)}
+                answer = {"data": publicapi.company(session, parts[1], prefix, tally=tally)}
             elif parts == ("updates",):
                 answer = publicapi.updates(session, req)
             else:
@@ -1396,8 +1399,9 @@ class Handler(BaseHTTPRequestHandler):
         """The Map view's figures (`mapsummary.build`), recomputed when the data changes."""
 
         def fresh() -> dict[str, Any]:
+            tally = self._capex_tally()
             with self.console.read_session() as session:
-                return mapsummary.build(session)
+                return mapsummary.build(session, tally=tally)
 
         return self.console.cached(("map-summary",), fresh)
 
@@ -2675,7 +2679,8 @@ class Handler(BaseHTTPRequestHandler):
         "GET /api/company": {
             "answers": "one company's campuses, as builder or tenant, and their updates "
             "reported in the last 60 days",
-            "reads": "company.profile — matched the way a watchlist entry matches",
+            "reads": "company.profile — matched the way a watchlist entry matches, "
+            "megawatts counted as on Capex (capex.credits over the cached rollup)",
             "note": "?slug=compass-datacenters. The page is /companies/<slug>.",
         },
         "GET /api/company-logo": {
@@ -2935,6 +2940,17 @@ class Handler(BaseHTTPRequestHandler):
 
         return self.console.cached(("capex", capex_mod.as_of()), fresh)
 
+    def _capex_tally(self) -> Any:
+        """The cached capex rollup read back as rows (`capex.tally`).
+
+        What the company pages and the map count by, so they count the rows the
+        Capex page counts — from the same rollup, not a second run of it.
+        """
+        from tracker import capex as capex_mod
+
+        payload, positions = self._capex_bundle()
+        return capex_mod.tally(positions, payload["duplicates"]["groups"])
+
     def _articles(self, query: dict[str, list[str]]) -> None:
         """Every cited article, grouped by publisher.
 
@@ -3006,7 +3022,9 @@ class Handler(BaseHTTPRequestHandler):
         """One company's campuses and recent updates, for `/companies/<slug>`.
 
         `watching` says whether this reader follows the company as a whole — the
-        page's Watch button — and is False with nobody signed in.
+        page's Watch button — and is False with nobody signed in. The megawatts are
+        counted from the cached capex rollup (`_capex_tally`), so they are the
+        Capex page's own figures rather than a second count of the same rows.
         """
         from tracker import company, watchlist
 
@@ -3014,8 +3032,9 @@ class Handler(BaseHTTPRequestHandler):
         if not company.SLUG.fullmatch(wanted):
             return self._error(400, "slug must be lowercase letters, digits and hyphens")
         account_id = self._account_id
+        tally = self._capex_tally()
         with self.console.read_session() as session:
-            payload = company.profile(session, wanted)
+            payload = company.profile(session, wanted, tally=tally)
             if payload is None:
                 return self._error(404, f"no project is built or occupied by {wanted!r}")
             payload["watching"] = account_id is not None and any(
@@ -3040,8 +3059,9 @@ class Handler(BaseHTTPRequestHandler):
         wanted = (query.get("slug") or [""])[0]
         if not company.SLUG.fullmatch(wanted):
             return self._error(400, "slug must be lowercase letters, digits and hyphens")
+        tally = self._capex_tally()
         with self.console.read_session() as session:
-            payload = company.profile(session, wanted)
+            payload = company.profile(session, wanted, tally=tally)
         domain = payload and payload.get("domain")
         found = (
             company_logo.logo(

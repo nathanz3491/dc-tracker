@@ -358,12 +358,13 @@ def _project(session: Session, raw: str) -> Any:
     return project
 
 
-def company(session: Session, slug: str, prefix: str) -> dict[str, Any]:
+def company(session: Session, slug: str, prefix: str, *, tally: Any = None) -> dict[str, Any]:
+    """`tally` is the console's cached capex rollup (`capex.tally`); see `company.profile`."""
     from tracker import company as company_mod
 
     if not _SLUG.fullmatch(slug):
         raise ApiError(400, "bad_slug", "a company slug is lowercase letters, digits and hyphens")
-    profile = company_mod.profile(session, slug)
+    profile = company_mod.profile(session, slug, tally=tally)
     if profile is None:
         raise ApiError(404, "not_found", f"no campus is built or occupied by {slug!r}")
     return {

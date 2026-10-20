@@ -9,7 +9,23 @@ The console had a page per project and none per company, so a watchlist entry li
 each normalised by `dedup.company_key`. The page and the watch on the same name
 therefore cover the same campuses — a "Google" page that disagreed with a "Google"
 watch would be two answers to one question — and each campus says which way it
-matched, so a builder can be told from a tenant.
+matched, so a builder can be told from a tenant. One addition: a campus the Capex
+page credits to the company through a party the watch does not read (a source
+naming it the customer of a site filed under somebody else's name). Its megawatts
+are in the company's total, so the campus has to be on the page beside them — and
+a buyer that only parties name has a page for the same reason.
+
+**The megawatts are the Capex page's, campus by campus** (`capex.credits`). They
+were a raw sum of every matched campus's figures, which counted a campus stored
+twice twice, kept cancelled and paused campuses in, and credited the tenant of one
+building with the whole campus — so one company had three different totals on the
+company page, the Capex page and the map. Now a campus counts once (a suspected
+duplicate's second row is set aside, as on Capex), a paused or cancelled one counts
+nothing, and a tenant is credited with its own tranches. What the company is
+credited with is its Capex row, plus — on a campus it builds that names no buyer,
+which Capex lists under "(no named customer)" — the campus itself, because those
+megawatts are nobody else's. Every megawatt is then on exactly one company's page,
+the one Capex credits it to, so the company pages add up to the Capex total.
 
 **The slug is the key with hyphens**: `compass datacenters` → `compass-datacenters`.
 Letters, digits and hyphens only, because the server puts it into the page shell
@@ -41,7 +57,7 @@ from sqlalchemy.orm import Session, selectinload
 from tracker import capex, company_logo, feed, watchlist
 from tracker.dedup import company_slug as slug
 from tracker.models import CapacityBlock, Project, Source
-from tracker.vocab import OPEN_RISK_STATUS
+from tracker.vocab import OPEN_RISK_STATUS, PHASE_TERMINAL
 
 #: A slug as the URL and the page shell carry it. See the module docstring.
 SLUG = re.compile(r"[a-z0-9][a-z0-9-]{0,80}")
@@ -159,8 +175,54 @@ def display_names(session: Session) -> Names:
 # --- the page --------------------------------------------------------------------
 
 
-def profile(session: Session, wanted: str) -> dict[str, Any] | None:
-    """Everything the company page shows, or None when no campus matches."""
+def _counted(
+    project: Project, key: str, tally: capex.Tally, names: Names
+) -> tuple[dict[str, Any], tuple[float, float], tuple[float, float]]:
+    """What one campus adds to the company's totals, and why.
+
+    Returns the row's `counted` entry, the part that is the company's Capex row,
+    and the part that is a campus it builds with no named buyer.
+    """
+    nothing = (0.0, 0.0)
+    if project.phase in PHASE_TERMINAL:
+        return {"status": "stopped", "mw_planned": 0.0, "mw_built": 0.0}, nothing, nothing
+    if project.id in tally.set_aside:
+        entry = {"status": "duplicate", "of": tally.set_aside[project.id]}
+        return {**entry, "mw_planned": 0.0, "mw_built": 0.0}, nothing, nothing
+
+    split = capex.credits(project)
+    builds = capex.company_key(project.company) == key
+    row = split.get(key, nothing)
+    unnamed = split.get("", nothing) if builds and key else nothing
+    ours = key in split or (builds and "" in split)
+
+    def who(other: str) -> str:
+        if not other:  # the rest of a campus with no named buyer is its builder's
+            return names.company(project.company) or project.company
+        position = tally.positions.get(other)
+        return position.name if position is not None else (names.of_key(other) or other)
+
+    others = [k for k in split if k != key and not (builds and k == "")]
+    planned = row[0] + unnamed[0]
+    built = row[1] + unnamed[1]
+    if not ours:
+        entry = {"status": "elsewhere", "for": sorted({who(k) for k in others})}
+    elif any(split[k][0] > 0 for k in others):
+        entry = {"status": "part", "for": sorted({who(k) for k in others if split[k][0] > 0})}
+    else:
+        entry = {"status": "counted"}
+    return {**entry, "mw_planned": planned, "mw_built": built}, row, unnamed
+
+
+def profile(
+    session: Session, wanted: str, *, tally: capex.Tally | None = None
+) -> dict[str, Any] | None:
+    """Everything the company page shows, or None when no campus matches.
+
+    `tally` is the Capex page's rollup read back as rows (`capex.tally`). The
+    console passes the one it holds cached; without one it is computed here, which
+    costs a run of the duplicate finder.
+    """
     if not SLUG.fullmatch(wanted or ""):
         return None
     projects = session.scalars(
@@ -169,25 +231,50 @@ def profile(session: Session, wanted: str) -> dict[str, Any] | None:
             selectinload(Project.blocks),
             selectinload(Project.events),
             selectinload(Project.risks),
+            selectinload(Project.parties),
         )
         .order_by(Project.id.asc())
     ).all()
 
-    matched: list[tuple[Project, str]] = []
+    matched: dict[int, tuple[Project, str]] = {}
     keys: Counter[str] = Counter()
     for project in projects:
         for key, via in watchlist._project_keys(project):
             if key and slug(key) == wanted:
-                matched.append((project, via))
+                matched[project.id] = (project, via)
                 keys[key] += 1
                 break
+    if tally is None:
+        tally = capex.counting(session)
+    if keys:
+        key = keys.most_common(1)[0][0]
+    else:
+        # A buyer only a party names — no campus files it as operator or tenant —
+        # still has a row on Capex, so it has a page; otherwise its megawatts
+        # would be on no company's page at all.
+        key = next((k for k in tally.positions if k and slug(k) == wanted), "")
+        if not key:
+            return None
+
+    names = display_names(session)
+    position = tally.positions.get(key)
+    name = names.of_key(key) or (position.name if position is not None else key.title())
+
+    # A campus Capex credits to this company that the watch's match cannot see:
+    # a source names it the tenant of a site filed under another name, or the
+    # operator of one filed under a builder's.
+    if position is not None:
+        by_id = {p.id: p for p in projects}
+        for pid in (*position.project_ids, *position.duplicate_skipped_ids):
+            if pid in matched or pid not in by_id:
+                continue
+            _buyer, _key, self_built = capex.attribute(by_id[pid])
+            via = watchlist.VIA_OPERATOR if self_built else watchlist.VIA_CUSTOMER
+            matched[pid] = (by_id[pid], via)
     if not matched:
         return None
 
-    key = keys.most_common(1)[0][0]
-    names = display_names(session)
-    name = names.of_key(key) or key.title()
-    ids = [p.id for p, _ in matched]
+    ids = sorted(matched)
     sources = {
         row.id: row
         for row in session.scalars(
@@ -199,19 +286,28 @@ def profile(session: Session, wanted: str) -> dict[str, Any] | None:
     )
     signals = [
         s
-        for project, via in matched
+        for pid in ids
         for s in feed.signals_for(
-            project,
+            matched[pid][0],
             since=since,
             sources=sources,
             entry=name,
-            via=via,
-            company=names.company(project.company),
+            via=matched[pid][1],
+            company=names.company(matched[pid][0].company),
         )
         if s.confirmed
     ]
+
     rows = []
-    for project, via in matched:
+    in_row = [0.0, 0.0]
+    no_buyer = [0.0, 0.0]
+    for pid in ids:
+        project, via = matched[pid]
+        counted, row_part, unnamed_part = _counted(project, key, tally, names)
+        in_row[0] += row_part[0]
+        in_row[1] += row_part[1]
+        no_buyer[0] += unnamed_part[0]
+        no_buyer[1] += unnamed_part[1]
         open_risks = [r for r in project.risks if r.status == OPEN_RISK_STATUS]
         rows.append(
             {
@@ -234,15 +330,17 @@ def profile(session: Session, wanted: str) -> dict[str, Any] | None:
                 "confidence": project.confidence,
                 "via": via,
                 "open_obstacles": len(open_risks),
+                "counted": counted,
             }
         )
     rows.sort(key=lambda r: (-(r["mw_planned"] or 0), r["name"].lower()))
     # Its own website comes from the campuses it builds, where its newsroom is
     # likeliest to be cited; a tenant's page cites the landlord's site instead.
-    own = {p.id for p, via in matched if via == watchlist.VIA_OPERATOR}
+    own = {pid for pid in ids if matched[pid][1] == watchlist.VIA_OPERATOR}
     urls = [s.url for s in sources.values() if s.project_id in own] or [
         s.url for s in sources.values()
     ]
+    statuses = Counter(r["counted"]["status"] for r in rows)
     return {
         "slug": wanted,
         "key": key,
@@ -255,9 +353,18 @@ def profile(session: Session, wanted: str) -> dict[str, Any] | None:
             "projects": len(rows),
             "as_operator": sum(1 for r in rows if r["via"] == watchlist.VIA_OPERATOR),
             "as_tenant": sum(1 for r in rows if r["via"] != watchlist.VIA_OPERATOR),
-            "mw_planned": sum(r["mw_planned"] or 0 for r in rows),
-            "mw_built": sum(r["mw_built"] or 0 for r in rows),
+            # Counted as on Capex — see the module docstring. The two parts below
+            # are what a reader reconciles with the Capex page.
+            "mw_planned": in_row[0] + no_buyer[0],
+            "mw_built": in_row[1] + no_buyer[1],
             "open_obstacles": sum(r["open_obstacles"] for r in rows),
+            "counting": {
+                "capex_row": {"mw_planned": in_row[0], "mw_built": in_row[1]},
+                "no_named_buyer": {"mw_planned": no_buyer[0], "mw_built": no_buyer[1]},
+                "duplicates": statuses["duplicate"],
+                "stopped": statuses["stopped"],
+                "elsewhere": statuses["elsewhere"],
+            },
         },
         "updates": [s.as_json() for s in feed.rank(feed.fold(signals))][:20],
     }

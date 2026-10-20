@@ -16,7 +16,7 @@ Under the map, the page says how many campuses have a location and are drawn. A 
 | **Capacity operating** | The part of it already built and running. |
 | **States** | How many states those campuses are in. |
 
-A campus whose size nobody has published counts as zero, so both capacities are floors. The Capex page's buyer rows can add up to slightly more: where a campus's buildings are listed by buyer, the buildings on a few campuses sum past the campus's own figure, and the map takes the campus's.
+A campus whose size nobody has published counts as zero, so both capacities are floors. The Capex page's buyer rows can add up to slightly more, and so can the [company pages](companies), which divide those rows among companies: where a campus's buildings are listed by buyer, the buildings on a few campuses sum past the campus's own figure, and the map takes the campus's. Otherwise the three count the same campuses the same way.
 
 ## Reading the map
 

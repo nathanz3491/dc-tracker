@@ -3543,6 +3543,27 @@ function CompanyPage({ slug, data, onOpen, onGoto, onListChanged }) {
     t.as_tenant && `tenant on ${t.as_tenant}`,
     states.length && `in ${states.length} state${states.length === 1 ? "" : "s"}`,
   ].filter(Boolean).join(" · ");
+  /* Which rule the two capacity figures follow, and the parts a reader can find
+   * on the Capex page (`tracker/company.py`): its row there, and the campuses it
+   * builds that name no buyer, which Capex files under "(no named customer)". */
+  const parts = t.counting || {};
+  const inRow = parts.capex_row?.mw_planned || 0;
+  const unnamed = parts.no_named_buyer?.mw_planned || 0;
+  const countedNote = "Planned and running are counted as on the Capex page: each campus once, "
+    + "paused and cancelled campuses left out, and a tenant credited only with its own buildings"
+    + ([inRow && `${gw(inRow)} is its Capex row`,
+        unnamed && `${gw(unnamed)} is campuses it builds with no named buyer, which Capex lists as “(no named customer)”`]
+      .filter(Boolean).map((s, i) => (i ? "; " : " — ") + s).join("")) + ".";
+  /* What one campus adds to those figures, said only when it is not all of it. */
+  const countedHere = (r) => {
+    const k = r.counted || {};
+    const others = (k.for || []).join(", ") || "another buyer";
+    if (k.status === "stopped") return ` · not counted: ${r.phase}`;
+    if (k.status === "duplicate") return k.of ? ` · not counted: #${k.of} is the same campus` : " · not counted: a suspected duplicate";
+    if (k.status === "elsewhere") return ` · counted for ${others}`;
+    if (k.status === "part") return ` · ${fmtMw(k.mw_planned)} MW counted here, the rest for ${others}`;
+    return "";
+  };
 
   return html`
     <div class="dc-view dc-rise" style=${{ display: "grid", gap: 22, padding: "22px 26px 72px" }}>
@@ -3574,10 +3595,12 @@ function CompanyPage({ slug, data, onOpen, onGoto, onListChanged }) {
         <div class="dc-co-stats">
           ${stat(t.projects, t.projects === 1 ? "campus" : "campuses",
                  `${t.as_operator} built · ${t.as_tenant} as tenant`)}
-          ${stat(gw(t.mw_planned), "planned", "summed over the campuses below")}
+          ${stat(gw(t.mw_planned), "planned", "each campus once, as on Capex")}
           ${stat(gw(t.mw_built), "running", "energised and serving today")}
           ${stat(t.open_obstacles, "open obstacles", "on these campuses, however old")}
         </div>
+        <p style=${{ margin: 0, fontSize: 12.5, lineHeight: "18px", color: "var(--muted-foreground)" }}>
+          ${countedNote}</p>
       </section>
 
       <div class="dc-co-body">
@@ -3605,7 +3628,7 @@ function CompanyPage({ slug, data, onOpen, onGoto, onListChanged }) {
                       <div style=${{ fontWeight: 600 }}>${r.name}</div>
                       <div style=${{ fontSize: 12, color: "var(--muted-foreground)" }}>
                         ${[r.city || r.county, r.state].filter(Boolean).join(", ")}
-                        <span class="dc-co-role">${role(r.via)}${r.via !== "operator" && r.company ? ` · built by ${companyName(r)}` : ""}</span>
+                        <span class="dc-co-role">${role(r.via)}${r.via !== "operator" && r.company ? ` · built by ${companyName(r)}` : ""}${countedHere(r)}</span>
                       </div>
                     </td>
                     <td><span style=${chip(PHASE_TOKEN[r.phase] || "--muted-foreground")}>${r.phase}</span></td>

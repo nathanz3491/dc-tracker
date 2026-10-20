@@ -5212,6 +5212,12 @@ def test_the_company_route_answers_with_its_campuses(server):
     assert company["totals"]["projects"] == 1
     assert company["states"] == [["WI", 1]]
     assert company["domain"] == "microsoft.com"
+    # Counted from the console's cached capex rollup, so it is Microsoft's Capex row.
+    _status, capex = request(address, "/api/capex")
+    row = next(p for p in capex["positions"] if p["key"] == "microsoft")
+    assert company["totals"]["mw_planned"] == row["mw_planned"] == 900.0
+    assert company["totals"]["counting"]["capex_row"]["mw_planned"] == 900.0
+    assert company["projects"][0]["counted"]["status"] == "counted"
     # Nobody is signed in on this console, so there is no watch to offer.
     assert company["watching"] is False
 
