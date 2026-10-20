@@ -3133,6 +3133,11 @@ function BlocksTab({ p }) {
 
   const shown = [...confirmed, ...extras].reduce((sum, [, mw]) => sum + mw, 0);
   const denom = Math.max(campusTotal, shown, 1);
+  // When the tranches describe more than the campus — the whole site and the
+  // buildings in it as separate tranches, or one building under two names — the
+  // page says so once, under the bar. Abilene's legend read "Energised 1,400 MW"
+  // beside a 1,200 MW campus and its cards' running figure, without a word.
+  const describedOver = shown > campusTotal + 0.5;
   const bars = [...confirmed, ...extras];
   const barTone = (key) =>
     key.startsWith("_") ? RESIDUAL_TONE[key.slice(1)] : blockState(key).tone;
@@ -3163,11 +3168,6 @@ function BlocksTab({ p }) {
             ${" "}· ${blocks.length} tranche${blocks.length === 1 ? "" : "s"}${customers.length > 1
               ? ` · ${customers.length} customers`
               : customers.length === 1 ? ` · ${customers[0]}` : ""}</span>
-          ${overDescribed && html`
-            <span style=${{ fontSize: 12, color: "var(--muted-foreground)" }}>
-              tranches marked live add up to ${fmtMw(acct.live_mw)} MW — sources describe some
-              buildings more than once, so the campus figure is the one shown
-            </span>`}
           ${liveIsUncited && !(acct && acct.delivering) && html`
             <span style=${{ fontSize: 12, color: "var(--warning)" }}>
               ${running.length} tranche${running.length === 1 ? " is" : "s are"} running with no
@@ -3188,6 +3188,17 @@ function BlocksTab({ p }) {
                      border: key === "_gap" ? "1px solid var(--muted-foreground)" : "none" }} />
               ${barLabel(key)} <span class="dc-num">${fmtMw(mw)} MW</span></span>`)}
         </div>
+        ${(describedOver || overDescribed) && html`
+          <p style=${{ margin: "8px 0 0", fontSize: 12, lineHeight: "18px", maxWidth: "88ch",
+                       color: "var(--muted-foreground)" }}>
+            ${describedOver
+              ? `The tranches add up to ${fmtMw(shown)} MW against this ${fmtMw(campusTotal)} MW campus${
+                  overDescribed ? `, ${fmtMw(acct.live_mw)} MW of it marked live` : ""}`
+              : `The tranches marked live add up to ${fmtMw(acct.live_mw)} MW`}: sources describe
+            some buildings more than once, or the campus and its buildings separately. The bar
+            shows them as described; the headline is the campus's own running figure, the same
+            as the cards above.
+          </p>`}
       </div>
 
       <div>

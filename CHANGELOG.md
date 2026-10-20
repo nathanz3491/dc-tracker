@@ -583,7 +583,10 @@ initial build of the v1 PRD.
     the tranche panel said "1,600 MW delivering of 1,200 MW": it summed every tranche
     marked live, and the sources describe the campus once whole and again building
     by building. The headline is now the campus's running figure, the same as the
-    card; a line beneath it says when the tranches add up to more.
+    card. When the tranches add up to more than the campus — Abilene's legend still
+    reads "Energised 1,400 MW", because that is what its sources describe — a line
+    under the bar gives both figures and says why, instead of leaving two numbers
+    side by side without a word.
   The nightly drift check applies the same two rules before it compares, so it does
   not "repair" these rows back.
 
