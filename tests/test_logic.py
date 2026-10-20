@@ -1135,7 +1135,14 @@ def test_a_campus_with_no_blocks_keeps_the_old_behaviour(session):
     assert "energized_but_not_operational" in _codes(project)
 
 
-def test_a_slipped_tranche_is_named_rather_than_the_whole_campus(session):
+def test_a_slipped_tranche_is_named_and_so_is_the_campus_it_leaves_late(session):
+    """The tranche finding says which tranche; the campus finding says the campus.
+
+    The campus question used to be skipped whenever a tranche was late. With its only
+    dated tranche slipped, nothing running and nothing still to come, the campus is
+    late as a campus — the console flags it as a suspected delay, and the command
+    line has to say the same thing, because one function decides both.
+    """
     project = _project(session, phase="construction", expected_online=dt.date(2024, 1, 1))
     _blk(
         session,
@@ -1148,7 +1155,42 @@ def test_a_slipped_tranche_is_named_rather_than_the_whole_campus(session):
     session.refresh(project)
     codes = _codes(project)
     assert "block_past_its_own_date" in codes
+    assert "past_its_own_date" in codes
+
+
+def test_a_slipped_tranche_beside_a_running_one_leaves_the_campus_on_time(session):
+    """Phase 1 slipped while phase 2 serves: the tranche is late, the campus is live."""
+    project = _project(session, phase="construction", expected_online=dt.date(2024, 1, 1))
+    _blk(
+        session,
+        project,
+        label="Phase 1",
+        mw=50.0,
+        status="under_construction",
+        expected_online=dt.date(2024, 1, 1),
+    )
+    _blk(session, project, label="Phase 2", mw=50.0, status="serving")
+    session.refresh(project)
+    codes = _codes(project)
+    assert "block_past_its_own_date" in codes
     assert "past_its_own_date" not in codes
+
+
+@pytest.mark.parametrize("status", ["paused", "cancelled"])
+def test_a_stopped_tranche_is_not_late(session, status):
+    """A paused or cancelled tranche has a status of its own, not an overdue date."""
+    project = _project(session, phase="construction")
+    _blk(session, project, label="Phase 1", status=status, expected_online=dt.date(2024, 1, 1))
+    session.refresh(project)
+    assert "block_past_its_own_date" not in _codes(project)
+
+
+def test_a_tranche_dated_by_year_is_not_late_until_the_year_ends(session):
+    """The stored day was compared, so "2026" was late on 2 January 2026."""
+    project = _project(session, phase="construction")
+    _blk(session, project, label="Phase 1", expected_online=dt.date(2026, 1, 1))
+    session.refresh(project)
+    assert "block_past_its_own_date" not in _codes(project)
 
 
 def test_a_still_future_tranche_explains_a_campus_date_that_passed(session):

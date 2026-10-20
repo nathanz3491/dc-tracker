@@ -54,7 +54,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from tracker import capex, company_logo, feed, watchlist
+from tracker import capex, company_logo, delays, feed, watchlist
 from tracker.dedup import company_slug as slug
 from tracker.models import CapacityBlock, Project, Source
 from tracker.vocab import OPEN_RISK_STATUS, PHASE_TERMINAL
@@ -301,6 +301,7 @@ def profile(
     rows = []
     in_row = [0.0, 0.0]
     no_buyer = [0.0, 0.0]
+    today = delays.as_of()
     for pid in ids:
         project, via = matched[pid]
         counted, row_part, unnamed_part = _counted(project, key, tally, names)
@@ -309,6 +310,7 @@ def profile(
         no_buyer[0] += unnamed_part[0]
         no_buyer[1] += unnamed_part[1]
         open_risks = [r for r in project.risks if r.status == OPEN_RISK_STATUS]
+        late = delays.suspected_delay(project, today=today)
         rows.append(
             {
                 "id": project.id,
@@ -331,9 +333,15 @@ def profile(
                 "via": via,
                 "open_obstacles": len(open_risks),
                 "counted": counted,
+                # Null, or why this campus reads as late (`delays.assess`).
+                "suspected_delay": late.as_json() if late is not None else None,
             }
         )
     rows.sort(key=lambda r: (-(r["mw_planned"] or 0), r["name"].lower()))
+    overdue = sorted(
+        (r for r in rows if r["suspected_delay"]),
+        key=lambda r: (-r["suspected_delay"]["days_late"], r["id"]),
+    )
     # Its own website comes from the campuses it builds, where its newsroom is
     # likeliest to be cited; a tenant's page cites the landlord's site instead.
     own = {pid for pid in ids if matched[pid][1] == watchlist.VIA_OPERATOR}
@@ -367,6 +375,16 @@ def profile(
             },
         },
         "updates": [s.as_json() for s in feed.rank(feed.fold(signals))][:20],
+        # The campuses whose own online date has passed with nothing saying they
+        # run, most overdue first, and the capacity they hold — counted as the
+        # totals above count it, so a twin or a tenant's one building is not the
+        # whole campus twice. Ids only: every one is already a row of `projects`
+        # above, with its `suspected_delay`.
+        "suspected_delays": {
+            "count": len(overdue),
+            "mw_planned": sum(r["counted"]["mw_planned"] for r in overdue),
+            "project_ids": [r["id"] for r in overdue],
+        },
     }
 
 

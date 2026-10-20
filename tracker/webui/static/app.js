@@ -46,6 +46,13 @@ const TRACKED = ["name", "company", "customer", "city", "state", "mw_planned",
 const AUDIT = ["h200_equivalent", "county", "lat", "lon", "confidence", "last_verified_at"];
 const RIGHT = new Set(["mw_planned", "mw_built", "investment_usd", "h200_equivalent",
                        "confidence", "lat", "lon"]);
+/* Not a field: a column the server computes (`webui/query.py`'s `days_late`), drawn
+ * beside the phase it qualifies so it is on screen without scrolling sideways. */
+const LATE_COL = "days_late";
+const withLateColumn = (keys) => {
+  const at = keys.indexOf("phase");
+  return at < 0 ? [...keys, LATE_COL] : [...keys.slice(0, at + 1), LATE_COL, ...keys.slice(at + 1)];
+};
 
 /*: Column heading, unit, and the tooltip that says what the number is OF.
  *
@@ -85,6 +92,7 @@ const COLUMN = {
   lat: { label: "Lat", zh: "纬度" },
   lon: { label: "Lon", zh: "经度" },
   last_verified_at: { label: "Verified", zh: "核实时间", why: "When a person last signed the row off." },
+  days_late: { label: "Late", zh: "疑似延期", why: "A suspected delay: how long ago the campus's own online date passed — the whole month, quarter or year it names — with nothing reported since saying it is running. Empty when it is not one." },
 };
 
 const columnLabel = (key) => (COLUMN[key] || {}).label || key;
@@ -228,6 +236,29 @@ const chip = (token, outline) => {
           border: `1px solid color-mix(in oklab, ${t} 32%, transparent)` }),
   };
 };
+
+/*: A suspected delay: the campus's own online date has passed and nothing reported
+ * since says it is running.
+ *
+ * Drawn, never decided here. Whether "Q3 2025" is over yet, whether a tranche still
+ * to come explains the date, whether a forecast counts as news — the server answers
+ * all of it with the function `tracker logic check` uses (`tracker/delays.py`), and a
+ * second copy in the browser would part company with it on the first boundary.
+ * `days_late` counts to the payload's own `as_of`. The tooltip is the server's
+ * one-sentence reason. */
+const daysText = (n) => `${Number(n).toLocaleString()} day${n === 1 ? "" : "s"}`;
+
+function DelayChip({ delay, compact = false }) {
+  if (!delay) return null;
+  const text = compact
+    ? daysText(delay.days_late)
+    : `Suspected delay — expected online ${delay.stated}, passed ${daysText(delay.days_late)} ago, no news of going live`;
+  // The long form wraps: it is a sentence, and a pill that cannot wrap pushes the
+  // header wider than a phone.
+  const wrap = compact ? {} : { whiteSpace: "normal", height: "auto", minHeight: 22,
+                                lineHeight: "18px", padding: "2px 10px" };
+  return html`<span style=${{ ...chip("--warning"), ...wrap }} title=${delay.reason}>${text}</span>`;
+}
 
 /* Which tier a field sits at, and the sentence behind it. Both come from the
    API — `gaps.provenance()` — so the page never has to reason about evidence. */
@@ -887,6 +918,8 @@ function ProjectCard({ p, data, onOpen, onQuote }) {
       <div class="dc-pcard-meta">
         <span>${place(p)}</span><span>·</span><span>${p.phase}</span>
         ${blocking && html`<span style=${{ color: "var(--danger)" }}>· blocking</span>`}
+        ${p.suspected_delay && html`<span style=${{ color: "var(--warning)" }}
+            title=${p.suspected_delay.reason}>· late ${daysText(p.suspected_delay.days_late)}</span>`}
       </div>
       <div class="dc-pcard-facts">
         <${Value} project=${p} field="mw_planned" onQuote=${onQuote}
@@ -944,6 +977,7 @@ function projectsUrl(filters, sort, offset) {
     if (value) params.set(key, value);
   }
   if (filters.quoted) params.set("quoted", "1");
+  if (filters.delayed) params.set("delayed", "1");
   params.set("sort", sort.key);
   params.set("dir", sort.dir);
   params.set("offset", String(offset));
@@ -1064,7 +1098,8 @@ function SkeletonRows({ columns, count }) {
     </tr>`)}`;
 }
 
-const BLANK_FILTERS = { q: "", state: "", phase: "", conf: "", risk: "", severity: "", quoted: false };
+const BLANK_FILTERS = { q: "", state: "", phase: "", conf: "", risk: "", severity: "", quoted: false,
+                        delayed: false };
 
 /* The id column's width, which the second sticky column is offset by. Wider than
    the id alone because the watch star sits in it, where it stays on screen however
@@ -1091,8 +1126,12 @@ function ProjectsView({ data, onOpen, watch, onGoto }) {
     useProjectPage(f, sort);
   const sentinel = useSentinel(more, hasMore && !loading && !error);
 
-  const columns = ["id", ...cols.visible, ...(wide ? AUDIT : [])];
+  const columns = ["id", ...withLateColumn(cols.visible), ...(wide ? AUDIT : [])];
   const clean = JSON.stringify(f) === JSON.stringify(BLANK_FILTERS);
+  // The fleet's count, from the light index the shell already holds, so the switch
+  // says how many it would keep before anybody turns it on.
+  const lateCount = useMemo(
+    () => (data.projects || []).filter((p) => p.suspected_delay).length, [data.projects]);
   // Every state in the fleet, from the light index the shell already holds — a
   // filter offering only the states on the current page would hide the rest of
   // the country the moment paging arrived.
@@ -1174,6 +1213,8 @@ function ProjectsView({ data, onOpen, watch, onGoto }) {
         <div style=${{ display: filtersOpen ? "flex" : "none", flexWrap: "wrap",
                        alignItems: "center", gap: 16, padding: "0 20px 18px" }}>
           <${Switch} size="sm" label="Quoted only" checked=${f.quoted} onCheckedChange=${(v) => set("quoted")(!!v)} />
+          <${Switch} size="sm" label=${`Suspected delays only (${lateCount})`} checked=${f.delayed}
+            onCheckedChange=${(v) => set("delayed")(!!v)} />
           <${Switch} size="sm"
             label=${wide ? "All fields" : `Show ${cols.hidden} sparser field${cols.hidden === 1 ? "" : "s"}`}
             checked=${wide} onCheckedChange=${(v) => setWide(!!v)} />
@@ -1290,12 +1331,14 @@ function ProjectsView({ data, onOpen, watch, onGoto }) {
                     <td key=${key}
                         class=${`dc-cell${["name", "company", "blocker"].includes(key) ? " dc-cell--wide" : ""}${i === 0 ? " dc-sticky" : ""}`}
                         style=${i === 0 ? { left: ID_COL_W } : undefined}>
-                      <${Value} project=${p} field=${key} onQuote=${showQuote}
+                      ${key === LATE_COL
+                        ? html`<${DelayChip} delay=${p.suspected_delay} compact=${true} />`
+                        : html`<${Value} project=${p} field=${key} onQuote=${showQuote}
                         text=${key === "company" ? companyName(p) : key === "customer" ? customerName(p) : undefined}
                         extra=${{
                           ...(RIGHT.has(key) ? { fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums" } : {}),
                           ...(key === "name" || key === "company" ? { fontWeight: 600 } : {}),
-                        }} />
+                        }} />`}
                     </td>`)}
                   <td class="dc-num" title=${`${p.filled} of the 12 tracked fields are populated`}
                       style=${{ fontSize: 12, whiteSpace: "nowrap",
@@ -1506,6 +1549,7 @@ function ProjectPage({ id, data, onBack, watch, onGoto, onOpenCompany, onAllSour
           <span style=${chip(p.confidence >= 3 ? "--success" : p.confidence === 2 ? "--chart-1" : "--warning")}
                 title="How much to trust this row without going and checking it yourself. 3 needs two independent sources, or a person signing it off.">
             confidence ${p.confidence}</span>
+          <${DelayChip} delay=${p.suspected_delay} />
           ${open.length > 0 && html`
             <button type="button" style=${{ ...chip(open.some((r) => r.severity === "blocking")
                       ? "--danger" : "--warning"), cursor: "pointer", border: "none" }}
@@ -3287,17 +3331,6 @@ function BlocksTab({ p }) {
   const barLabel = (key) =>
     key.startsWith("_") ? RESIDUAL_LABEL[key.slice(1)] : blockState(key).label;
 
-  // A date in the past on a tranche that is not running is not a plan, it is news we
-  // have missed. Project 39 showed "Under construction" beside "Oct 2021" with no
-  // acknowledgement that the date had passed four years ago — a contradiction in one
-  // row, which is the whole complaint at the scale of a single line.
-  const today = new Date().toISOString().slice(0, 10);
-  const isOverdue = (b) =>
-    !b.energized_on &&
-    b.expected_online &&
-    b.expected_online < today &&
-    !["serving", "energized", "cancelled", "paused"].includes(b.status);
-
   return html`
     <div style=${{ display: "grid", gap: 16 }}>
       <!-- The headline: what is running, out of what. Replaces a paragraph of prose
@@ -3362,9 +3395,14 @@ function BlocksTab({ p }) {
           const when = sec.energized_on || sec.expected_online;
           const cap = sec.capacity;
           const live = sec.delivering || 0;
-          const overdue = !sec.energized_on && sec.expected_online
-            && new Date(sec.expected_online) < new Date()
-            && !["energized", "serving"].includes(sec.status);
+          /* A date in the past on a tranche that is not running is not a plan, it is
+           * news we have missed: project 39 showed "Under construction" beside "Oct
+           * 2021" with nothing saying the date had gone. Decided by the server with
+           * the rule tracker logic check reads tranches with (delays.tranche_state):
+           * the period a date names has to be over, so "2026" is not due in March
+           * 2026, and a paused or cancelled tranche is not late. The browser used to
+           * compare the stored day itself and flagged both. */
+          const overdue = !!sec.overdue;
           /* Only the two verdicts that mean something is *wrong* take a hue.
            * "Four sources named this building" is not a defect, so it is said in
            * words. Colour in this product means how much to believe a value, or
@@ -3712,6 +3750,12 @@ function CompanyPage({ slug, data, onOpen, onGoto, onListChanged }) {
     if (k.status === "part") return ` · ${fmtMw(k.mw_planned)} MW counted here, the rest for ${others}`;
     return "";
   };
+  // The server lists the late campuses by id, most overdue first, and every one is
+  // already a row above — looked up, not sent twice.
+  const lateIds = (c.suspected_delays || {}).project_ids || [];
+  const byId = new Map(c.projects.map((r) => [r.id, r]));
+  const lateRows = lateIds.map((id) => byId.get(id)).filter((r) => r && r.suspected_delay);
+  const lateMw = (c.suspected_delays || {}).mw_planned || 0;
 
   return html`
     <div class="dc-view dc-rise" style=${{ display: "grid", gap: 22, padding: "22px 26px 72px" }}>
@@ -3823,6 +3867,44 @@ function CompanyPage({ slug, data, onOpen, onGoto, onListChanged }) {
           </div>
         </aside>
       </div>
+
+      ${lateRows.length > 0 && html`
+        <div class="dc-co-card" style=${{ minWidth: 0 }}>
+          <div style=${{ padding: "16px 18px 6px" }}>
+            <${SectionHead} title="Suspected delays" count=${lateRows.length}>
+              Campuses whose own online date has passed — the whole month, quarter or year
+              it names — with nothing reported since saying they run${lateMw > 0
+                ? `, holding ${gw(lateMw)} planned between them` : ""}. Most overdue first;
+              hover a row for the reason.
+            <//>
+          </div>
+          <div style=${{ overflowX: "auto" }}>
+            <${Table} density="compact">
+              <${TableHeader}><${TableRow}>
+                <${TableHead}>campus<//>
+                <${TableHead}>expected online<//>
+                <${TableHead}>late by<//>
+                <${TableHead}>phase<//>
+              <//><//>
+              <${TableBody}>
+                ${lateRows.map((r) => html`
+                  <tr key=${r.id} class="dc-row" role="button" tabindex="0"
+                      title=${r.suspected_delay.reason}
+                      onClick=${() => onOpen(r.id)}
+                      onKeyDown=${(e) => { if (e.key === "Enter") onOpen(r.id); }}>
+                    <td style=${{ minWidth: 220 }}>
+                      <div style=${{ fontWeight: 600 }}>${r.name}</div>
+                      <div style=${{ fontSize: 12, color: "var(--muted-foreground)" }}>
+                        ${[r.city || r.county, r.state].filter(Boolean).join(", ")}</div>
+                    </td>
+                    <td class="dc-num">${r.suspected_delay.stated}</td>
+                    <td><${DelayChip} delay=${r.suspected_delay} compact=${true} /></td>
+                    <td><span style=${chip(PHASE_TOKEN[r.phase] || "--muted-foreground")}>${r.phase}</span></td>
+                  </tr>`)}
+              <//>
+            <//>
+          </div>
+        </div>`}
 
       <div style=${{ display: "grid", gap: 12 }}>
         <${SectionHead} title="Reported in the last two months" count=${c.updates.length}>

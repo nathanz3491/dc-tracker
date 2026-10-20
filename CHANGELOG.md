@@ -12,6 +12,32 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **A campus whose expected online date has passed with no news of it going live is
+  flagged as a suspected delay** (`tracker/delays.py`, `tracker/logic.py`,
+  `tracker/export.py`, `tracker/webui/dataset.py`, `tracker/webui/query.py`,
+  `tracker/webui/server.py`, `tracker/company.py`, `tracker/webui/publicapi.py`,
+  `tracker/webui/static/app.js`, the reader docs, `docs/workflows/logic.md`). The
+  client asked for it, and nothing a reader sees said so: the one place the condition
+  was worked out was `tracker logic check`. A project page now carries "Suspected
+  delay — expected online Q3 2025, passed 385 days ago, no news of going live"; the
+  Projects table has a **Late** column beside the phase, which sorts the most overdue
+  first, and a **Suspected delays only** switch that says how many there are; a
+  company page lists its late campuses and the capacity they hold; and the export and
+  the API carry `suspected_delay` on every campus (export schema `tracker/10`; added
+  to the API, nothing renamed). Late means the whole period the date names is over —
+  "Q3 2025" is late from 1 October — the campus is not operational, paused or
+  cancelled, nothing says it went live (no running capacity, no running tranche, no
+  energisation reported on or after the date that was more than a forecast), and no
+  tranche is still due later. One function decides it everywhere, `logic check`'s
+  `past_its_own_date` included, so the console and the command line cannot disagree.
+  On a production copy on 2026-10-20 both say 22 campuses holding 4,559 MW planned,
+  the largest Riot's 1,000 MW Corsicana facility, due October 2023. The command line
+  used to say 11: it hid 16 campuses whose only dated tranche had slipped behind that
+  tranche's own finding, and flagged 5 that were already running at least in part.
+  The finding's sentence no longer counts days: a finding the agent could not settle
+  is held back on a hash of the question, and a count that changed every midnight
+  made it a new question every night, asked again at full price.
+
 - **Operator tools for untangling two sites read as one** (`tracker rename`,
   `tracker logic rule-out ID blocks`, `tracker/cli/duplicates.py`,
   `tracker/cli/logic.py`, `tracker/blocks.py`, `tracker/upsert.py`,
@@ -639,6 +665,15 @@ initial build of the v1 PRD.
     side by side without a word.
   The nightly drift check applies the same two rules before it compares, so it does
   not "repair" these rows back.
+
+- **A tranche is "was due" only once its whole stated period is over, and never when
+  paused or cancelled** (`tracker/export.py`, `tracker/logic.py`,
+  `tracker/webui/static/app.js`, the reader docs). The page compared the stored day
+  itself, so a tranche dated "2026" was overdue on 2 January 2026, and a paused or
+  cancelled one stayed amber forever; `logic check` compared the day too, by a rule of
+  its own. Both now ask one function, `delays.tranche_state`, which also counts a
+  tranche with an energisation date as not late. On a production copy on 2026-10-20
+  the tranche findings went from 116 to 93.
 
 - **A campus is no longer moved backwards by a sentence about growing it, or by
   wording the phase check could not read** (`tracker/ingest/crawl.py`,

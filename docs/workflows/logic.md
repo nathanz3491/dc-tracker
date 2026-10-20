@@ -47,10 +47,45 @@ worth asking about, because a claim does exist there and is too low.
 `past_its_own_date` compared with the stored day called both late the morning they
 began, and its one action clears the date. On 2026-10-13 the resolver cleared two
 correct dates that way. The rule now reads `expected_online_precision` and waits for
-the end of the month, quarter, half or year (`logic._period_end`); a date on the first
+the end of the month, quarter, half or year (`delays.period_end`); a date on the first
 of a month with no recorded precision is read as the month, or on 1 January as the
 year, because the wider reading only delays a warning and the narrower one deletes a
 value. On the production copy that day it took 5 of 13 findings off the list.
+
+**A campus that is late is the same campus on the console and here.** The client
+asked for a campus whose expected date has passed, with no news of it going live, to
+be flagged on the console as a *suspected delay*. `past_its_own_date` was already
+that question, asked only here, so it now comes from the one function the console,
+the export and the API read (`delays.assess`) and the two cannot disagree about a
+campus. Three things changed in what it asks:
+
+* **News of going live counts wherever it is recorded.** Running capacity
+  (`mw_built`), a running tranche, or an energisation dated on or after the expected
+  date — not a forecast — each settle it. Before, only the phase did: on a
+  production copy on 2026-10-20, five of the eleven findings had one of these, among
+  them Novva's North Las Vegas campus with 100 of its 100 MW running.
+* **It is asked whether or not a tranche is late too.** It used to give way to
+  `block_past_its_own_date`, so a campus whose only dated tranche slipped, with
+  nothing running and nothing still to come, was reported as a tranche and never as
+  a campus — sixteen campuses on that copy, against eleven reported. The tranche
+  finding still names which tranche. A tranche still to come still explains a passed
+  campus date, which was the first phase's; a paused or cancelled one dated ahead
+  does not, and nor does the utility's plant filed as a tranche.
+* **Its sentence no longer counts days.** A finding the agent could not settle is
+  held back on a hash of the question it was shown, and "412 days ago" made that a
+  new question every midnight, re-asked at full price.
+
+On that copy the campus findings went from 11 to 22, the same 22 the console flags.
+
+`block_past_its_own_date` reads each tranche with the same rule
+(`delays.tranche_state`) as the console's amber "was due": the period has to be
+over, and a tranche that is running, has an energisation date, or was paused or
+cancelled is not late. A tranche records no precision, so its date is read the way
+an unrecorded project date is. It used to compare the stored day, so a tranche dated
+"2026" was late on 2 January, and the page kept its own copy of the test that
+disagreed with it both ways — the page flagged paused and cancelled tranches, this
+flagged ones with an energisation date. On that copy the change took the tranche
+findings from 116 to 93.
 
 ### Collisions report the policy's answer; they do not re-decide it
 
@@ -418,6 +453,7 @@ Touching any of these means the poster is in scope. Re-render with
 | --- | --- |
 | The four layers, and the spend dials | `tracker/logic.py` — `review`, `MAX_TOKENS` |
 | Rules | `tracker/logic.py` — `check_rules`, `_check_stored_against_evidence`, `dedupe`, `ERROR`, `WARNING` |
+| Suspected delays, and tranches past their date | `tracker/delays.py` — `assess`, `suspected_delay`, `suspected`, `tranche_state`, `period_end`, `read_as` |
 | Collisions and the per-field policy | `tracker/logic.py` — `check_collisions`, `why_decided`, `decision`; `tracker/upsert.py` — `FIELD_POLICY`, `Policy`, `resolve_field` |
 | Judgement and the evidence audit | `tracker/logic.py` — `examine`, `audit_evidence`, `parse_contradictions`, `parse_evidence_findings`, `AUDIT_VERDICTS`, `auditable_fields` |
 | Actions, and which codes have none | `tracker/logic.py` — `ACTIONS`, `_stating`, `resolvable`, `free_answer`, `FREE_CODES`, `_resolve_finished_obstacles`, `_reported_after_finish`, `_drop_derived_delays`, `record_decision`; `tracker/audit.py` — `_rule_against`; `tracker/upsert.py` — `_record_slippage`, `_later_date_is_newer_news` |

@@ -10,6 +10,7 @@ Every campus has its own page at `/projects/<number>`, opened from any row of [P
 - The operator, linked to its [company page](companies), and **for** the buyer when that is a different company. Each is shown under the company's one name, the same on every page; when the campus's sources spell it differently, their spelling follows in small type — *filed as “Amazon Web Services”* — so the header can be matched against the citations.
 - Where it is, and the regional grid operator area where known.
 - Its phase, its **confidence** (0–3; see [Confidence](confidence)) and how many obstacles are open — click that to jump to them.
+- **Suspected delay**, in amber, when the campus's own online date has passed and nothing reported since says it is running — for example *Suspected delay — expected online Q3 2025, passed 385 days ago, no news of going live*. The date is shown as the source stated it, and the days count from the end of the period it names. Hover it for the reason in one sentence; [Numbers and dates](numbers-and-dates) gives the full rule.
 
 ## The figures
 
@@ -57,7 +58,7 @@ Many campuses are built in pieces: buildings, phases, halls. Each is a **tranche
 
 - The headline says how many megawatts are delivering out of the campus total, across how many tranches. It is the campus's running figure — the same number as the *capacity in service* card above — because sources often describe a campus once as a whole and again building by building, and adding up every tranche marked live would count the same megawatts twice. When the tranches add up to more than the campus — the whole site and its buildings listed as separate tranches, or one building under two names — a line under the bar says so, with both figures. A campus with no running figure counts its cited live tranches instead, never past the campus total, so the headline can read 0 even when buildings are running.
 - A bar shows the tranches by state.
-- The table lists each tranche: its name, megawatts, state, customer and online date, with notes such as *also called…*, *was due* (amber when overdue) or *two sources confirm A and B — two figures, not one*.
+- The table lists each tranche: its name, megawatts, state, customer and online date, with notes such as *also called…*, *was due* or *two sources confirm A and B — two figures, not one*. *Was due*, in amber, marks a tranche whose whole stated period is over with nothing saying it runs; a paused or cancelled tranche is never marked, and neither is one dated "2026" before 2026 has ended.
 - The reconciliation rows account for every megawatt of the campus: cited per tranche, not yet itemised, stated but unconfirmed, not tied to a named building, out of scale, counted twice over. Capacity that is not counted in the total gets its own line rather than vanishing.
 - **Power serving this campus** lists the utility's plant — substations, gas or solar generation — which is never added to the campus's own figures.
 

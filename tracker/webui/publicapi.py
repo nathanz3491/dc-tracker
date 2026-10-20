@@ -75,6 +75,9 @@ SUMMARY_FIELDS: tuple[str, ...] = (
     "lat",
     "lon",
     "updated_at",
+    # Appended, as every addition to a v1 shape is: null, or why the campus reads
+    # as late (`delays.assess`) — the same answer the console's chip gives.
+    "suspected_delay",
 )
 
 #: Fields whose provenance a project's detail spells out.
@@ -105,6 +108,7 @@ LIST_PARAMS: dict[str, str] = {
     "obstacle": "risk",
     "severity": "severity",
     "quoted_only": "quoted",
+    "suspected_delay": "delayed",
     "sort": "sort",
     "order": "dir",
     "limit": "limit",
@@ -379,6 +383,7 @@ def company(session: Session, slug: str, prefix: str, *, tally: Any = None) -> d
             for row in profile["projects"]
         ],
         "updates": profile["updates"],
+        "suspected_delays": profile["suspected_delays"],
     }
 
 

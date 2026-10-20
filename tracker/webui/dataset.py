@@ -20,6 +20,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from tracker import __version__
+from tracker import delays as delays_mod
 from tracker import required as required_list
 from tracker.confidence import SOURCE_WEIGHTS
 from tracker.dedup import company_key, company_slug, customer_key
@@ -741,6 +742,11 @@ def index_rows(session: Session) -> list[dict[str, Any]]:
                 "description": event.description,
             }
         )
+    # The campuses whose own online date has passed with nothing saying they run,
+    # by the rule every other surface reads (`delays.assess`) — but in three queries
+    # for the fleet rather than a hydration per row, which is what this index exists
+    # to avoid. The projects view counts them beside its filter.
+    late = delays_mod.suspected(session)
 
     from tracker.company import display_names
 
@@ -753,6 +759,8 @@ def index_rows(session: Session) -> list[dict[str, Any]]:
         row["updated_at"] = iso(project.updated_at)
         row["risks"] = risks.get(project.id, [])
         row["delays"] = delays.get(project.id, [])
+        found = late.get(project.id)
+        row["suspected_delay"] = found.as_json() if found is not None else None
         row["n_sources"] = counts.get(project.id, 0)
         # Who the company is, not how this row's source spelled it: the name every
         # page prints, and the key (as its slug) the watch picker groups on. The

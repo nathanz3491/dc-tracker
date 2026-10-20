@@ -29,7 +29,8 @@ Campuses, as the [Projects](projects) table shows them, with the same filters.
 | `obstacle` | Campuses with an open obstacle of this kind, such as `grid_capacity`. |
 | `severity` | Campuses with an open obstacle at least this severe: `watch`, `material`, `blocking`. |
 | `quoted_only` | `true` keeps campuses with no 待确认, inferred or default value. |
-| `sort` | A field to sort by: `confidence` (the default), `mw_planned`, `investment_usd`, `expected_online`, `updated_at`, `id`, or any other tracked field. |
+| `suspected_delay` | `true` keeps campuses that are a suspected delay (see below). |
+| `sort` | A field to sort by: `confidence` (the default), `mw_planned`, `investment_usd`, `expected_online`, `updated_at`, `id`, or any other tracked field. `days_late` sorts suspected delays by how late they are, most overdue first with `desc`, every other campus after them. |
 | `order` | `desc` (the default) or `asc`. Empty values always come last. |
 | `limit` | Rows per page, 1–200. Default 30. |
 | `offset` | Rows to skip. Default 0. |
@@ -63,6 +64,7 @@ An unknown parameter, or an unknown sort field, is a `400` rather than being ign
       "lat": 32.45,
       "lon": -99.73,
       "updated_at": "2026-10-14T12:31:07",
+      "suspected_delay": null,
       "links": {"self": "/v1/projects/42"}
     }
   ]
@@ -70,6 +72,34 @@ An unknown parameter, or an unknown sort field, is a `400` rather than being ign
 ```
 
 The values above are invented, for illustration.
+
+### suspected_delay
+
+`null`, unless the campus is a suspected delay: its own online date has passed — the whole period the date names — and nothing reported since says it is running. The rule is the one the console uses, given in full in [Numbers and dates](numbers-and-dates). Then it is an object:
+
+| Key | Meaning |
+| --- | --- |
+| `expected_online` | The stored date, such as `2025-07-01`. |
+| `precision` | The precision its source recorded: `month`, `quarter`, `half`, `year`, or `null` for a day or for nothing recorded. |
+| `read_as` | The precision the rule read the date at: `precision` where one was recorded; otherwise `day`, or `month` for a first of the month, or `year` for 1 January. |
+| `stated` | The date as a reader would write it: `Q3 2025`, `H2 2026`, `2026`, `Jul 2026`, `15 Jul 2026`. |
+| `due` | The last day of that period. The campus became late the day after. |
+| `days_late` | Days from `due` to `as_of`. |
+| `as_of` | The day this was worked out. It changes daily, so `days_late` is only meaningful beside it. |
+| `reason` | One sentence saying why, in plain words. |
+
+```json
+"suspected_delay": {
+  "expected_online": "2025-07-01",
+  "precision": "quarter",
+  "read_as": "quarter",
+  "stated": "Q3 2025",
+  "due": "2025-09-30",
+  "days_late": 385,
+  "as_of": "2026-10-20",
+  "reason": "Expected online Q3 2025, a quarter that ended 385 days ago; the phase is still construction and nothing reported since says it is running."
+}
+```
 
 ## GET /v1/projects/{id}
 
@@ -111,7 +141,7 @@ Every citation: `url`, `type` (`company_filing`, `government_doc`, `trade_press`
 
 ## GET /v1/companies/{slug}
 
-A company's page as data: `name`, `website`, `totals` (campuses, as operator and as tenant, planned and running MW, open obstacles), `states`, `phases`, its `projects` (each with its role, phase, capacity and obstacles), and `updates` reported in the last two months. The slug is the company's name in lowercase with hyphens, as in the console's address for it: `compass-datacenters`.
+A company's page as data: `name`, `website`, `totals` (campuses, as operator and as tenant, planned and running MW, open obstacles), `states`, `phases`, its `projects` (each with its role, phase, capacity, obstacles and `suspected_delay`), `updates` reported in the last two months, and `suspected_delays` — `count`, the `mw_planned` those campuses hold, and their `project_ids`, most overdue first. The slug is the company's name in lowercase with hyphens, as in the console's address for it: `compass-datacenters`.
 
 `name` is the company's one name, the same on every page; each project also carries `company_name` and `customer_name` beside the source's own `company` and `customer`. The planned and running MW in `totals` are counted as on [Capex](capex) — a suspected duplicate once, paused and cancelled campuses not at all, a tenant credited with its own tranches — and `totals.counting` splits them into `capex_row` (the company's row in `/v1/capex`) and `no_named_buyer` (campuses it builds that name no buyer), with how many campuses were set aside as `duplicates`, `stopped` (paused or cancelled) or counted for another buyer (`elsewhere`). Each project's `counted` says what it adds: `status` (`counted`, `part`, `elsewhere`, `duplicate` or `stopped`), `mw_planned`, `mw_built`, and `for` (the other buyers) or `of` (the campus a duplicate is counted as).
 
