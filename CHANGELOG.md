@@ -91,7 +91,11 @@ initial build of the v1 PRD.
   a row that exists keeps receiving its news — and the crawl summary counts what it did
   not create as "dropped: not a data center". Rehearsed on a copy of production: 721
   rows to 716, the investment total $2,049.0B to $2,029.6B, megawatts unchanged, nothing
-  left behind in any table that hangs off a row.
+  left behind in any table that hangs off a row. On 2026-10-21 the name rule learned
+  generation — power station, generating station, substation, solar, wind farm, battery
+  or energy storage, reactor — after Entergy's two power stations and a solar farm built
+  to supply AWS in Mississippi turned up as three campuses with Amazon as the buyer,
+  1,588 MW on Amazon's page; against every stored name it matches those three only.
 
 - **A queued page no campus story can be in is set aside before it is read**
   (`tracker/ingest/screen.py`, `tracker/ingest/discover.py`, `tracker/cli/ingest.py`,

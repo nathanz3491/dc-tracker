@@ -88,6 +88,11 @@ def _count(session, model) -> int:
         ("Samsung Taylor Fab", "fab"),
         ("TSMC Arizona Foundry", "foundry"),
         ("Tesla Gigafactory Texas", "gigafactory"),
+        # 2026-10-21: Entergy's supply for AWS in Mississippi, stored as campuses.
+        ("Delta Blues Advanced Power Station", "power station"),
+        ("Vicksburg Advanced Power Station", "power station"),
+        ("Delta Solar", "solar"),
+        ("Palisades Reactor Restart", "reactor"),
     ],
 )
 def test_a_name_that_says_fab_factory_or_plant_is_not_a_data_center(name, word):
@@ -109,6 +114,8 @@ def test_a_name_that_says_fab_factory_or_plant_is_not_a_data_center(name, word):
         "Microsoft Mount Pleasant",
         "Vantage Prefab Data Halls",
         "Stargate Abilene",
+        "Battery Brooke Parkway Data Center Campus",
+        "SolarEdge Hub",
         None,
         "",
     ],

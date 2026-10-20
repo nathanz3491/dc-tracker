@@ -53,9 +53,15 @@ NOT_A_DATA_CENTER: Final = "not a data center"
 #: A word that names a facility of another kind. Whole words, except that a word
 #: ending in "fab" is a fab ("Terafab", "Megafab") unless it is "prefab", which is
 #: how modular data halls are sold.
+#:
+#: The generation words were added 2026-10-21: Entergy's two power stations and a
+#: solar farm built to supply AWS in Mississippi were stored as three campuses with
+#: Amazon as the buyer, 1,588 MW on Amazon's page. Checked against every stored
+#: name, they matched those three and nothing else.
 _OTHER_KIND = re.compile(
     r"\b(?:(?!prefabs?\b)\w*fabs?|foundry|foundries|(?:giga)?factory|(?:giga)?factories"
-    r"|manufacturing|plants?)\b",
+    r"|manufacturing|plants?|power\s+stations?|generating\s+stations?|substations?"
+    r"|solar|wind\s+farms?|(?:battery|energy)\s+storage|reactors?)\b",
     re.IGNORECASE,
 )
 
