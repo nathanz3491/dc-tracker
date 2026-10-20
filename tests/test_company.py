@@ -381,3 +381,14 @@ def test_a_campus_shared_by_several_buyers_counts_for_none_and_says_why(session)
     assert amd["totals"]["mw_planned"] == 0.0
     # The builder holds it, as it holds any campus no named buyer is credited with.
     assert company.profile(session, "fermi-america")["totals"]["mw_planned"] == 11000.0
+
+
+def test_the_page_reads_in_megawatts_by_stage_and_by_year(session, fleet):
+    """The client asked for a company read by its megawatts, not its campus count."""
+    page = company.profile(session, "meta")
+    stages = page["stages"]["mw"]
+    assert sum(stages.values()) == pytest.approx(page["totals"]["mw_planned"])
+    assert stages["running"] == page["totals"]["mw_built"]
+    supply = page["supply"]
+    assert {"years", "total_mw", "campuses", "concentrated", "high_risk_mw"} <= set(supply)
+    assert len(supply["years"]) == 3

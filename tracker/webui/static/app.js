@@ -3722,13 +3722,26 @@ function CompanyPage({ slug, data, onOpen, onGoto, onListChanged }) {
   const t = c.totals;
   const maxMw = Math.max(1, ...c.projects.map((r) => r.mw_planned || 0));
   const states = c.states || [];
-  const phases = c.phases || [];
   const stateMax = Math.max(1, ...states.map(([, n]) => n));
   const summary = [
+    `${t.projects} ${t.projects === 1 ? "campus" : "campuses"}`,
     t.as_operator && `builds ${t.as_operator}`,
     t.as_tenant && `tenant on ${t.as_tenant}`,
     states.length && `in ${states.length} state${states.length === 1 ? "" : "s"}`,
+    t.open_obstacles && `${t.open_obstacles} open obstacle${t.open_obstacles === 1 ? "" : "s"}`,
   ].filter(Boolean).join(" · ");
+  /* Megawatts by how far along they are (`company._by_stage`), drawn as one bar:
+   * the four parts add up to the planned figure in the header. The client reads a
+   * company by its megawatts, and a count of campuses says nothing about size. */
+  const stageMw = (c.stages || {}).mw || {};
+  const stageN = (c.stages || {}).campuses || {};
+  const STAGES = [
+    ["running", "running", PHASE_TOKEN.operational],
+    ["construction", "under construction", PHASE_TOKEN.construction],
+    ["planned", "planned or permitting", PHASE_TOKEN.permitting],
+    ["expansion", "still to come at operating campuses", PHASE_TOKEN.announced],
+  ].filter(([k]) => (stageMw[k] || 0) > 0.5);
+  const supply = c.supply || null;
   /* Which rule the two capacity figures follow, and the parts a reader can find
    * on the Capex page (`tracker/company.py`): its row there, and the campuses it
    * builds that name no buyer, which Capex files under "(no named customer)". */
@@ -3786,11 +3799,13 @@ function CompanyPage({ slug, data, onOpen, onGoto, onListChanged }) {
             </button>`}
         </div>
         <div class="dc-co-stats">
-          ${stat(t.projects, t.projects === 1 ? "campus" : "campuses",
-                 `${t.as_operator} built · ${t.as_tenant} as tenant`)}
           ${stat(gw(t.mw_planned), "planned", "each campus once, as on Capex")}
           ${stat(gw(t.mw_built), "running", "energised and serving today")}
-          ${stat(t.open_obstacles, "open obstacles", "on these campuses, however old")}
+          ${stat(gw(stageMw.construction || 0), "under construction", "not yet running, on campuses being built")}
+          ${stat(gw(supply ? supply.total_mw : 0), "due in the next three years",
+                 supply && supply.high_risk_mw > 0
+                   ? `${gw(supply.high_risk_mw)} of it at high delay risk`
+                   : "not yet running, by expected online date")}
         </div>
         <p style=${{ margin: 0, fontSize: 12.5, lineHeight: "18px", color: "var(--muted-foreground)" }}>
           ${countedNote}</p>
@@ -3854,20 +3869,31 @@ function CompanyPage({ slug, data, onOpen, onGoto, onListChanged }) {
               </div>`)}
           </div>
           <div class="dc-co-card dc-co-panel">
-            <span class="dc-co-aside-title">Stage</span>
-            <div class="dc-co-stack" role="img"
-                 aria-label=${phases.map(([ph, n]) => `${n} ${ph}`).join(", ")}>
-              ${phases.map(([ph, n]) => html`
-                <span key=${ph} title=${`${n} ${ph}`}
-                      style=${{ flex: n, background: `var(${PHASE_TOKEN[ph] || "--muted-foreground"})` }}></span>`)}
-            </div>
-            <div style=${{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-              ${phases.map(([ph, n]) => html`
-                <span key=${ph} style=${chip(PHASE_TOKEN[ph] || "--muted-foreground")}>${ph} ${n}</span>`)}
-            </div>
+            <span class="dc-co-aside-title">Stage, in megawatts</span>
+            ${STAGES.length > 0 ? html`
+              <div class="dc-co-stack" role="img"
+                   aria-label=${STAGES.map(([k, label]) => `${fmtMw(stageMw[k])} MW ${label}`).join(", ")}>
+                ${STAGES.map(([k, label, token]) => html`
+                  <span key=${k} title=${`${fmtMw(stageMw[k])} MW ${label}`}
+                        style=${{ flex: stageMw[k], background: `var(${token})` }}></span>`)}
+              </div>
+              <div style=${{ display: "grid", gap: 5 }}>
+                ${STAGES.map(([k, label, token]) => html`
+                  <div key=${k} style=${{ display: "grid", gridTemplateColumns: "10px minmax(0,1fr) auto",
+                       gap: 8, alignItems: "center", fontSize: 12.5 }}>
+                    <span style=${{ width: 8, height: 8, borderRadius: 2, background: `var(${token})` }}></span>
+                    <span>${label} <span style=${{ color: "var(--muted-foreground)" }}>
+                      · ${stageN[k]} campus${stageN[k] === 1 ? "" : "es"}</span></span>
+                    <span class="dc-num">${gw(stageMw[k])}</span>
+                  </div>`)}
+              </div>`
+            : html`<span style=${{ fontSize: 12.5, color: "var(--muted-foreground)" }}>
+                No capacity is credited to this company.</span>`}
           </div>
         </aside>
       </div>
+
+      <${CompanySupply} s=${supply} name=${c.name} onOpen=${onOpen} />
 
       ${lateRows.length > 0 && html`
         <div class="dc-co-card" style=${{ minWidth: 0 }}>
@@ -3915,6 +3941,115 @@ function CompanyPage({ slug, data, onOpen, onGoto, onListChanged }) {
           Nothing reported about these campuses in the last two months.</div>`}
         ${c.updates.map((s, i) => html`<${SignalCard} key=${s.key || i} signal=${s} onOpen=${onOpen} />`)}
       </div>
+    </div>`;
+}
+
+/* The next three years of a company's supply, and the campuses that could slip.
+ *
+ * The client's request (2026-10-21): read the company in megawatts, and say when
+ * one large campus is a big share of its near-term supply and at risk of delay.
+ * Everything here is computed on the server (`tracker/supply.py`) — the years,
+ * the shares and each campus's delay-risk level with the evidence it rests on —
+ * because a level the page worked out would be a second definition of "at risk".
+ *
+ * Colour is reserved for the two levels that mean something may be wrong, and
+ * every level is also written as a word, never carried by hue alone. */
+const RISK_TONE = { high: "--danger", elevated: "--warning", low: "--muted-foreground" };
+
+function CompanySupply({ s, name, onOpen }) {
+  if (!s || !(s.total_mw > 0 || s.later_mw > 0 || s.undated_mw > 0)) return null;
+  const gw = (mw) => (mw >= 1000 ? `${(mw / 1000).toFixed(1).replace(/\.0$/, "")} GW` : `${fmtMw(mw)} MW`);
+  const top = Math.max(1, ...s.years.map((y) => y.mw));
+  const byId = Object.fromEntries(s.campuses.map((r) => [r.id, r]));
+  const callouts = (s.concentrated || []).map((id) => byId[id]).filter(Boolean);
+  const pct = (x) => `${Math.round(x * 100)}%`;
+  const firstYear = s.years.length ? s.years[0].year : null;
+  const lastYear = s.years.length ? s.years[s.years.length - 1].year : null;
+
+  return html`
+    <div class="dc-co-card" style=${{ minWidth: 0 }}>
+      <div style=${{ padding: "16px 18px 6px" }}>
+        <${SectionHead} title=${`Supply, ${firstYear}–${lastYear}`} count=${gw(s.total_mw)}>
+          Capacity ${name} is credited with that is not yet running, by the year each
+          campus is due. A campus whose stated period has passed with nothing running is
+          overdue: still expected, and nobody has said when.
+        <//>
+      </div>
+
+      ${callouts.map((r) => html`
+        <div key=${r.id} role="note"
+             style=${{ margin: "4px 18px 10px", padding: "10px 12px", borderRadius: 10,
+                       border: `1px solid color-mix(in oklab, var(${RISK_TONE[r.risk.level]}) 40%, transparent)`,
+                       background: `color-mix(in oklab, var(${RISK_TONE[r.risk.level]}) 8%, transparent)`,
+                       fontSize: 13.5, lineHeight: "20px" }}>
+          <strong>
+            <button type="button" class="dc-linkish" onClick=${() => onOpen(r.id)}>${r.name}</button>
+            ${" "}is ${pct(r.share)} of this supply</strong>
+          ${" "}(${fmtMw(r.mw)} of ${fmtMw(s.total_mw)} MW), and is at
+          ${" "}<span style=${chip(RISK_TONE[r.risk.level])}>${r.risk.level} delay risk</span>:
+          ${" "}${r.risk.reasons.join("; ")}.
+        </div>`)}
+
+      <div style=${{ display: "grid", gap: 8, padding: "6px 18px 12px" }}>
+        ${s.years.map((y) => {
+          const overdue = y.year === firstYear ? s.overdue_mw : 0;
+          return html`
+            <div key=${y.year} style=${{ display: "grid", gridTemplateColumns: "48px minmax(0,1fr) 150px",
+                 alignItems: "center", gap: 12 }}>
+              <span class="dc-num" style=${{ fontSize: 13 }}>${y.year}</span>
+              <div style=${{ display: "flex", height: 10, borderRadius: 4, overflow: "hidden",
+                   background: "var(--border)" }}
+                   role="img" aria-label=${`${y.year}: ${fmtMw(y.mw)} MW${overdue ? `, ${fmtMw(overdue)} MW of it overdue` : ""}`}>
+                ${overdue > 0 && html`<span title=${`${fmtMw(overdue)} MW overdue`}
+                  style=${{ width: `${(100 * overdue) / top}%`, background: "var(--warning)" }}></span>`}
+                <span style=${{ width: `${(100 * (y.mw - overdue)) / top}%`, background: "var(--chart-5)",
+                                marginLeft: overdue > 0 ? 2 : 0 }}></span>
+              </div>
+              <span class="dc-num" style=${{ fontSize: 13, textAlign: "right" }}>
+                ${fmtMw(y.mw)} MW${overdue > 0 ? html`<span style=${{ color: "var(--muted-foreground)", fontSize: 12 }}>
+                  ${" "}· ${fmtMw(overdue)} overdue</span>` : ""}</span>
+            </div>`;
+        })}
+        ${(s.later_mw > 0 || s.undated_mw > 0) && html`
+          <span style=${{ fontSize: 12, color: "var(--muted-foreground)" }}>
+            ${[s.later_mw > 0 && `${gw(s.later_mw)} due after ${lastYear}`,
+               s.undated_mw > 0 && `${gw(s.undated_mw)} with no date`].filter(Boolean).join(" · ")}
+            ${" "}— not in the figures above.</span>`}
+      </div>
+
+      ${s.campuses.length > 0 && html`
+        <div style=${{ overflowX: "auto" }}>
+          <${Table} density="compact">
+            <${TableHeader}><${TableRow}>
+              <${TableHead}>campus<//>
+              <${TableHead}>due<//>
+              <${TableHead} align="right">not yet running<//>
+              <${TableHead} align="right">share<//>
+              <${TableHead}>delay risk<//>
+            <//><//>
+            <${TableBody}>
+              ${s.campuses.map((r) => html`
+                <tr key=${r.id} class="dc-row" role="button" tabindex="0"
+                    onClick=${() => onOpen(r.id)}
+                    onKeyDown=${(e) => { if (e.key === "Enter") onOpen(r.id); }}>
+                  <td style=${{ minWidth: 200 }}>
+                    <div style=${{ fontWeight: 600 }}>${r.name}</div>
+                    <div style=${{ fontSize: 12, color: "var(--muted-foreground)" }}>${r.phase}</div>
+                  </td>
+                  <td class="dc-num" style=${{ whiteSpace: "nowrap" }}>
+                    ${r.overdue ? html`<span style=${{ color: "var(--warning)" }}>overdue</span>` : r.year}</td>
+                  <td class="dc-num" style=${{ textAlign: "right" }}>${fmtMw(r.mw)} MW</td>
+                  <td class="dc-num" style=${{ textAlign: "right" }}>${pct(r.share)}</td>
+                  <td style=${{ minWidth: 220 }}>
+                    <span style=${chip(RISK_TONE[r.risk.level])}>${r.risk.level}</span>
+                    ${r.risk.reasons.length > 0 && html`
+                      <div style=${{ fontSize: 12, lineHeight: "17px", color: "var(--muted-foreground)",
+                                     marginTop: 4, maxWidth: "52ch" }}>${r.risk.reasons.join("; ")}</div>`}
+                  </td>
+                </tr>`)}
+            <//>
+          <//>
+        </div>`}
     </div>`;
 }
 

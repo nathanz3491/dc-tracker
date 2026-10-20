@@ -55,6 +55,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from tracker import capex, company_logo, delays, feed, watchlist
+from tracker import supply as supply_mod
 from tracker.dedup import company_slug as slug
 from tracker.models import CapacityBlock, Project, Source
 from tracker.vocab import OPEN_RISK_STATUS, PHASE_TERMINAL
@@ -223,6 +224,37 @@ def _counted(
     return {**entry, "mw_planned": planned, "mw_built": built}, row, unnamed
 
 
+#: A campus phase -> the stage its capacity not yet running is reported under.
+_STAGE_OF_PHASE: dict[str, str] = {
+    "construction": "construction",
+    "announced": "planned",
+    "permitting": "planned",
+    "operational": "expansion",
+}
+
+
+def _by_stage(credited: list[supply_mod.Credited]) -> dict[str, Any]:
+    """A company's counted megawatts by how far along they are.
+
+    `running` is what its campuses run; the rest of each campus's credited capacity
+    is under construction, planned (announced or permitting), or still to come at a
+    campus already operating — an expansion, or a figure nothing yet dates. The four
+    add up to the planned total, so the page can draw them as one bar.
+    """
+    mw = {"running": 0.0, "construction": 0.0, "planned": 0.0, "expansion": 0.0}
+    campuses = {"running": 0, "construction": 0, "planned": 0, "expansion": 0}
+    for c in credited:
+        if c.mw_built > 0:
+            mw["running"] += c.mw_built
+            campuses["running"] += 1
+        rest = max(c.mw_planned - c.mw_built, 0.0)
+        stage = _STAGE_OF_PHASE.get((c.project.phase or "").lower())
+        if rest > 0 and stage:
+            mw[stage] += rest
+            campuses[stage] += 1
+    return {"mw": mw, "campuses": campuses}
+
+
 def profile(
     session: Session, wanted: str, *, tally: capex.Tally | None = None
 ) -> dict[str, Any] | None:
@@ -311,6 +343,8 @@ def profile(
     in_row = [0.0, 0.0]
     no_buyer = [0.0, 0.0]
     today = delays.as_of()
+    credited: list[supply_mod.Credited] = []
+    late_by_id: dict[int, delays.SuspectedDelay] = {}
     for pid in ids:
         project, via = matched[pid]
         counted, row_part, unnamed_part = _counted(project, key, tally, names)
@@ -320,6 +354,12 @@ def profile(
         no_buyer[1] += unnamed_part[1]
         open_risks = [r for r in project.risks if r.status == OPEN_RISK_STATUS]
         late = delays.suspected_delay(project, today=today)
+        if late is not None:
+            late_by_id[project.id] = late
+        if counted["mw_planned"] > 0:
+            credited.append(
+                supply_mod.Credited(project, counted["mw_planned"], counted["mw_built"])
+            )
         rows.append(
             {
                 "id": project.id,
@@ -383,6 +423,12 @@ def profile(
                 "elsewhere": statuses["elsewhere"],
             },
         },
+        # The same megawatts by how far along they are, and the next three years
+        # of them by year with each campus's delay risk (`tracker/supply.py`): the
+        # client reads a company by its megawatts and wants to see one large,
+        # slipping campus that most of its near-term supply rests on.
+        "stages": _by_stage(credited),
+        "supply": supply_mod.supply(credited, today=today, suspected=late_by_id),
         "updates": [s.as_json() for s in feed.rank(feed.fold(signals))][:20],
         # The campuses whose own online date has passed with nothing saying they
         # run, most overdue first, and the capacity they hold — counted as the

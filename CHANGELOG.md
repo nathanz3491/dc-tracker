@@ -12,6 +12,26 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **A company page reads in megawatts, and names the campus its near-term supply rests
+  on when that campus could slip** (`tracker/supply.py`, `tracker/company.py`,
+  `tracker/webui/static/app.js`, reader docs *Company pages*). The client asked for
+  the company page by megawatts rather than project counts, and for a warning such as
+  "one project is 30% of the next three years' supply and has a major delay risk". The
+  four cards are now planned, running, under construction, and due in the next three
+  years (with how much of that is at high delay risk); the campus count moves into the
+  summary line. *Stage, in megawatts* splits the planned figure into running, under
+  construction, planned or permitting, and still to come at operating campuses. A new
+  *Supply* section files the capacity not yet running by the year each campus is due,
+  this year and the next two, with overdue capacity — exactly the suspected delays —
+  under this year in amber, and lists each campus with its share and a **delay risk**
+  of high, elevated or low with the evidence: a passed date with nothing running, two
+  slips, or an obstacle that stopped work is high; one slip, an obstacle that moved the
+  schedule, or a date within a year with no construction reported is elevated; only
+  quoted obstacles count. A campus that is a fifth or more of the window and at
+  elevated or high risk is named above the bars — on a production copy, *Aligned's
+  Conesville is 38% of this supply (600 of 1,596 MW), and is at high delay risk: its
+  stated online date (Jul 2026) passed 81 days ago with no news of it running*.
+
 - **A campus whose expected online date has passed with no news of it going live is
   flagged as a suspected delay** (`tracker/delays.py`, `tracker/logic.py`,
   `tracker/export.py`, `tracker/webui/dataset.py`, `tracker/webui/query.py`,
