@@ -952,15 +952,34 @@ def check_collisions(project: Project) -> list[Collision]:
         Policy,
         claim_value,
         claims_by_field,
+        hold_out_kilowatt_misreads,
         resolve_field,
+        settle_capacity,
     )
 
     sources = list(getattr(project, "sources", ()) or ())
     if len(sources) < 2:
         return []
 
+    # The two capacity rules the write path applies before and after resolving:
+    # kilowatts read as megawatts are held out, and running never exceeds planned.
+    # Checked against the claims alone, every row either rule moves would read as
+    # drifted and be "repaired" straight back across it every night.
+    by_field, _ = hold_out_kilowatt_misreads(claims_by_field(sources))
+    settled = dict(
+        zip(
+            ("mw_planned", "mw_built"),
+            settle_capacity(
+                resolve_field("mw_planned", by_field.get("mw_planned", []), None, ratchet=False),
+                resolve_field("mw_built", by_field.get("mw_built", []), None, ratchet=False),
+                by_field,
+            )[:2],
+            strict=True,
+        )
+    )
+
     out: list[Collision] = []
-    for name, claims in claims_by_field(sources).items():
+    for name, claims in by_field.items():
         # `blocker` and `notes` are not merged from claims at all — the first is
         # derived from the risk rows and the second is assembled. Sources record a
         # claim for `blocker` only to keep "every populated field is supported by
@@ -1001,6 +1020,8 @@ def check_collisions(project: Project) -> list[Collision]:
         # tranche after the merge. Compared against the claims, 48 rows read as
         # drifted every night and were "repaired" straight back into the same value.
         expected = chosen
+        if name in settled:
+            expected = settled[name]
         if name == "phase":
             from tracker.blocks import phase_after_blocks
 

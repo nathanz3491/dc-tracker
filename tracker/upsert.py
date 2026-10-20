@@ -27,8 +27,10 @@ import hashlib
 import json
 import logging
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from dataclasses import field as dc_field
+from dataclasses import replace as _dataclass_replace
 from enum import Enum
 from typing import Any
 
@@ -380,6 +382,10 @@ class _Claim:
     #: one building or phase (`claim_meta` scope `building`, `vocab.PART_FIELDS`).
     #: It fills the campus column only when nothing describes the whole site.
     part: bool = False
+    #: True for a capacity figure its own sentence states as a minimum — "a data
+    #: center of more than 20 megawatts" (`claim_meta` bound `at_least`). More running
+    #: than that does not contradict it; see :func:`settle_capacity`.
+    floor: bool = False
     #: How precisely a date claim was stated ("month", "quarter", "half", "year"),
     #: from the source's `claim_meta`; None for day precision or not a date. Read
     #: by `_refine_date`, so a coarse date never displaces a finer one inside it.
@@ -474,6 +480,8 @@ def claims_by_field(sources: list[Source], *, settings: Any = None) -> dict[str,
                     decided_against=name in decided,
                     tertiary=tertiary,
                     part=name in parts,
+                    floor=name in _CAPACITY_FIELDS
+                    and _recorded_axis(s, name, "bound") == "at_least",
                     precision=(
                         _recorded_precision(s, name) if name in _DATE_PRECISION_FIELDS else None
                     ),
@@ -547,6 +555,216 @@ def contenders(claims: list[_Claim]) -> list[_Claim]:
     if any(not c.tertiary for c in live):
         live = [c for c in live if not c.tertiary]
     return live
+
+
+#: How far apart two capacity figures for one campus must be for the larger to be its
+#: kilowatts read as megawatts: about a thousand times, with room either side for a
+#: figure rounded or stated for a slightly different part of the site.
+KILOWATT_RATIO: tuple[float, float] = (500.0, 2000.0)
+
+#: The smallest figure that can be such a misread. Below a gigawatt, a rival a
+#: thousand times smaller would be under a megawatt, which no campus here reports.
+KILOWATT_FLOOR_MW: float = 1000.0
+
+_CAPACITY_FIELDS: tuple[str, ...] = ("mw_planned", "mw_built")
+
+
+def _mw(value: Any) -> float | None:
+    """A capacity claim as a number, or None."""
+    if isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
+
+
+def _fmt_mw(value: float) -> str:
+    """A capacity for a note: "18,000", "6,750", "11.25", "0.5"."""
+    return f"{value:,.0f}" if value >= 100 else f"{value:g}"
+
+
+def _host(url: str | None) -> str:
+    match = re.match(r"https?://(?:www\.)?([^/]+)", url or "")
+    return match.group(1) if match else (url or "a source")
+
+
+def hold_out_kilowatt_misreads(
+    by_field: dict[str, list[_Claim]],
+) -> tuple[dict[str, list[_Claim]], list[str]]:
+    """Capacity claims that are a campus's kilowatts read as megawatts, held out.
+
+    Englewood (#72) read "18 MW planned, 6,750 MW running" on the console: Flexential's
+    own page and a digest gave its figures in kilowatts (18,000; 11,250 and 6,750), the
+    extraction stored them as megawatts, and a 待确认 figure fills a field whenever
+    nothing confirmed states it. Such a figure can never be confirmed — the evidence
+    gate accepts a megawatt figure only from a sentence that says MW or GW -- so the
+    rule is narrow: an unconfirmed figure of at least `KILOWATT_FLOOR_MW` that is
+    about a thousand times (`KILOWATT_RATIO`) a *confirmed* figure for the same
+    campus stops deciding either capacity field. Marked decided-against for this
+    merge only, never written to the citation, so a re-read starts clean; returned
+    with one note per figure held out.
+    """
+    confirmed = [
+        number
+        for name in _CAPACITY_FIELDS
+        for claim in by_field.get(name, [])
+        if claim.confirmed
+        and not claim.decided_against
+        and (number := _mw(claim.value)) is not None
+    ]
+    if not confirmed:
+        return by_field, []
+    low, high = KILOWATT_RATIO
+    out = dict(by_field)
+    notes: list[str] = []
+    for name in _CAPACITY_FIELDS:
+        claims = by_field.get(name)
+        if not claims:
+            continue
+        kept: list[_Claim] = []
+        for claim in claims:
+            number = _mw(claim.value)
+            rival = (
+                next((u for u in confirmed if low <= number / u <= high), None)
+                if number is not None
+                and number >= KILOWATT_FLOOR_MW
+                and not claim.confirmed
+                and not claim.decided_against
+                else None
+            )
+            if rival is None:
+                kept.append(claim)
+                continue
+            kept.append(_dataclass_replace(claim, decided_against=True))
+            notes.append(
+                f"{name} {_fmt_mw(number)} MW from {_host(claim.url)} held out: "
+                f"{number / rival:,.0f} times the {_fmt_mw(rival)} MW a quoted source gives — "
+                "kilowatts read as megawatts"
+            )
+        out[name] = kept
+    return out, notes
+
+
+def _support(claim: _Claim) -> int:
+    """How much a capacity figure stands on: a quote, and a source that reports.
+
+    2 for a quoted first-hand source, 1 for a directory's quote or an unquoted
+    report, 0 for an unquoted directory line.
+    """
+    return int(claim.confirmed) + int(not claim.tertiary)
+
+
+_SUPPORT_WORDS: dict[tuple[bool, bool], str] = {
+    (True, False): "a quoted first-hand source",
+    (True, True): "a directory's quote",
+    (False, False): "an unquoted report",
+    (False, True): "an unquoted directory line",
+}
+
+
+def _strongest(claims: list[_Claim]) -> _Claim | None:
+    return max(claims, key=_support, default=None)
+
+
+def _described(claim: _Claim | None) -> str:
+    if claim is None:
+        return "nothing stated"
+    return _SUPPORT_WORDS[(claim.confirmed, claim.tertiary)]
+
+
+def settle_capacity(
+    planned: float | None, built: float | None, by_field: dict[str, list[_Claim]]
+) -> tuple[float | None, float | None, list[str]]:
+    """Planned and running capacity that agree: running never exceeds planned.
+
+    Twelve rows on the 2026-10-21 copy of production showed more running than
+    planned, because each field is resolved on its own. When running exceeds
+    planned, one of the two figures is about something else, and the better
+    supported one decides which (`_support`: a quote, and a first-hand source):
+
+    * **The running figure is at least as well supported:** the plan described a
+      phase. Planned becomes the smallest stated figure that covers what runs —
+      the best supported first, never a bare unquoted directory line — and the
+      running figure itself when none does: a campus has at least what it runs.
+      IREN Childress read 600 planned against a quoted 650 running, with 750
+      quoted beside it.
+    * **The plan is better supported:** the running figure describes a bigger
+      site. It gives way to the running figures the plan covers, resolved by the
+      usual policy, or to nothing. NVA05 read 420 MW running from a directory page
+      about the whole operator, against the 200 MW STACK's own releases plan for
+      it; raising the plan to match would have taken another campus's 420.
+
+    A plan its sentence states as a minimum is not contradicted by more running, so
+    it never wins that comparison: Meta's Kuna was filed with Idaho Power as "a data
+    center of more than 20 megawatts", and a directory estimates 152 MW of it.
+
+    Pure, and the one rule both the write path (`recompute_from_sources`) and the
+    drift check (`logic.check_collisions`) apply, so a row is never "repaired" back
+    across it. Returns the pair and the notes explaining any move.
+    """
+    if planned is None or built is None or built <= planned:
+        return planned, built, []
+    built_claims = [c for c in by_field.get("mw_built", []) if not c.decided_against]
+    planned_claims = [c for c in by_field.get("mw_planned", []) if not c.decided_against]
+
+    def stating(claims: list[_Claim], keep: Callable[[float], bool]) -> list[_Claim]:
+        return [c for c in claims if (n := _mw(c.value)) is not None and keep(n)]
+
+    excess = _strongest(stating(built_claims, lambda n: n > planned))
+    plan = _strongest(
+        [c for c in stating(planned_claims, lambda n: abs(n - planned) < 0.5) if not c.floor]
+    )
+    if (_support(excess) if excess else -1) < (_support(plan) if plan else -1):
+        held = resolve_field(
+            "mw_built", stating(built_claims, lambda n: n <= planned), None, ratchet=False
+        )
+        shown = "empty" if held is None else _fmt_mw(held)
+        return (
+            planned,
+            held,
+            [
+                f"mw_built {_fmt_mw(built)} -> {shown}: it rests on {_described(excess)}, "
+                f"and exceeds the {_fmt_mw(planned)} MW planned that {_described(plan)} "
+                "states, so it describes a bigger site"
+            ],
+        )
+
+    covering = [c for c in stating(planned_claims, lambda n: n >= built) if _support(c) > 0]
+    best = max((_support(c) for c in covering), default=None)
+    raised = min((_mw(c.value) or built for c in covering if _support(c) == best), default=built)
+    return (
+        raised,
+        built,
+        [
+            f"mw_planned {_fmt_mw(planned)} -> {_fmt_mw(raised)}: below the {_fmt_mw(built)} MW running, "
+            "so it described a phase; the smallest stated figure covering what runs is used"
+        ],
+    )
+
+
+def _cap_tranche_built(project: Project, built_from_claims: float | None) -> list[str]:
+    """A running figure only the tranches supplied may not exceed the campus plan.
+
+    `blocks.reconcile` fills an empty `mw_built` from the live tranches. When no
+    source stated the figure and the tranches add up past the plan, they describe
+    some capacity twice — ORD (#1482) read 552 MW running against 300 planned — so
+    the figure is capped at the plan and the note says why.
+    """
+    if (
+        built_from_claims is not None
+        or project.mw_built is None
+        or project.mw_planned is None
+        or project.mw_built <= project.mw_planned
+    ):
+        return []
+    note = (
+        f"mw_built {_fmt_mw(project.mw_built)} -> {_fmt_mw(project.mw_planned)}: the tranches add "
+        "up past the campus plan, so they describe some capacity twice"
+    )
+    project.mw_built = project.mw_planned
+    return [note]
 
 
 def _coerce_like(value: Any, template: Any) -> Any:
@@ -1647,7 +1865,7 @@ def upsert_record(
     session.flush()
 
     # --- Recompute every field from all claims ------------------------------
-    by_field = claims_by_field(list(project.sources))
+    by_field, unit_notes = hold_out_kilowatt_misreads(claims_by_field(list(project.sources)))
     unstated = _unstated(project, by_field)
     for name in WRITABLE_FIELDS:
         if name in DERIVED_FIELDS:
@@ -1669,6 +1887,9 @@ def upsert_record(
 
     if project.phase is None:
         project.phase = DEFAULT_PHASE
+    project.mw_planned, project.mw_built, capacity_notes = settle_capacity(
+        project.mw_planned, project.mw_built, by_field
+    )
 
     apply_date_precision(project, by_field)
 
@@ -1678,7 +1899,9 @@ def upsert_record(
     from tracker import parties as parties_mod
 
     blocks_written = blocks_mod.rebuild(session, project)
+    built_from_claims = project.mw_built
     block_notes = blocks_mod.reconcile(project)
+    capacity_notes += _cap_tranche_built(project, built_from_claims)
     # Parties after the block reconcile, because both may fill a null `customer`
     # and a tranche naming its own tenant is the more specific statement. Same
     # ordering and same reason as in `recompute_from_sources`.
@@ -1691,6 +1914,7 @@ def upsert_record(
 
     # --- Notes: conflicts, path disclosures, duplicate proposals ------------
     derived, conflict_fields = _conflict_notes(by_field)
+    derived.extend(f"{NOTE_PREFIX} {line}" for line in unit_notes + capacity_notes)
     # Path disclosures and duplicate proposals are contributed, not derived: they
     # are facts about a particular citation or a particular unresolved ambiguity,
     # and must survive a later record for the same project.
@@ -2361,7 +2585,7 @@ def recompute_from_sources(session: Session, project: Project) -> list[str]:
     moved and the prose explaining them did not. Only the two ingest-only families
     survive untouched — see :data:`_INGEST_ONLY_NOTES`.
     """
-    by_field = claims_by_field(list(project.sources))
+    by_field, unit_notes = hold_out_kilowatt_misreads(claims_by_field(list(project.sources)))
     unstated = _unstated(project, by_field)
     for name in WRITABLE_FIELDS:
         if name in DERIVED_FIELDS:
@@ -2381,12 +2605,17 @@ def recompute_from_sources(session: Session, project: Project) -> list[str]:
             setattr(project, name, chosen)
     if project.phase is None:
         project.phase = DEFAULT_PHASE
+    project.mw_planned, project.mw_built, capacity_notes = settle_capacity(
+        project.mw_planned, project.mw_built, by_field
+    )
 
     from tracker import blocks as blocks_mod
     from tracker import parties as parties_mod
 
     blocks_mod.rebuild(session, project)
+    built_from_claims = project.mw_built
     block_notes = blocks_mod.reconcile(project)
+    capacity_notes += _cap_tranche_built(project, built_from_claims)
     # **Parties before the block reconcile would be wrong, and after it is right.**
     # Both may fill a null `customer`, and a tranche that names its tenant is the
     # more specific statement — Lake Mariner's 378 MW for Fluidstack beside 60 MW
@@ -2399,6 +2628,7 @@ def recompute_from_sources(session: Session, project: Project) -> list[str]:
     apply_h200_equivalent(project, by_field)
 
     derived, conflict_fields = _conflict_notes(by_field)
+    derived.extend(f"{NOTE_PREFIX} {line}" for line in unit_notes + capacity_notes)
     derived.extend(f"{NOTE_PREFIX} {line}" for line in block_notes)
     derived.extend(f"{NOTE_PREFIX} {line}" for line in party_notes)
     project.notes = _merge_notes(

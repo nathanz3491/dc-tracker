@@ -554,6 +554,39 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **Planned and running capacity now agree with each other on every page**
+  (`tracker/upsert.py`, `tracker/logic.py`, `tracker/blocks.py`, `tracker/export.py`,
+  `tracker/webui/static/app.js`, `docs/workflows/logic.md`, reader docs *Numbers and
+  dates* and *The project page*). From the client's review on 2026-10-21, three faults:
+  - *Kilowatts read as megawatts.* Englewood showed "18 MW planned, 6,750 MW running":
+    a digest wrote Flexential's kilowatts as megawatts, and running capacity takes
+    the largest figure. A figure of a gigawatt or more, about a thousand times one a
+    quoted source gives for the same campus and quoted by nothing itself, now stops
+    counting, with a note naming its source. A quoted 1,200 MW campus is never
+    touched by a small pilot figure beside it.
+  - *Running above planned.* Twelve rows ran more than they planned, and one of
+    the two figures is then about something else; the better supported one (a
+    quote, a first-hand source) decides which. When the running figure is at least
+    as well supported, the plan described a phase and gives way to the smallest
+    stated figure covering what runs — IREN Childress 600 → 750 MW, beside 650 MW
+    running in the same 10-K; Sweetwater 600 → 2,000 MW. When the plan is better
+    supported, the running figure describes a bigger site and gives way: NVA05's
+    420 MW came from a directory line about STACK's NVA02, and is gone. A plan
+    stated as a minimum ("more than 20 megawatts", Meta Kuna) is never contradicted
+    by more running. A running figure filled in from tranches alone is capped at
+    the plan, because past it the tranches count something twice (ORD read 552 MW
+    running against 300 planned). Rehearsed on a copy of production: rows with
+    running above planned 12 → 0, and none reads as drifted afterwards; total
+    running 54,025 → 23,935 MW, of which 29,250 MW is two misread kilowatt figures
+    (Denver–Parker 22,500 on a 22.5 MW campus, Englewood 6,750).
+  - *Two running figures on one page.* Abilene's cards said 240 MW running while
+    the tranche panel said "1,600 MW delivering of 1,200 MW": it summed every tranche
+    marked live, and the sources describe the campus once whole and again building
+    by building. The headline is now the campus's running figure, the same as the
+    card; a line beneath it says when the tranches add up to more.
+  The nightly drift check applies the same two rules before it compares, so it does
+  not "repair" these rows back.
+
 - **A campus is no longer moved backwards by a sentence about growing it, or by
   wording the phase check could not read** (`tracker/ingest/crawl.py`,
   `tracker/backfill.py`, `tracker backfill phase`, `tracker/vocab.py`,

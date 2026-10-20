@@ -22,7 +22,11 @@ Articles often give one building's capacity or cost: "the 36 MW first phase". Th
 
 - **Planned** is the capacity the campus is meant to have when finished, from the best available source.
 - **Running** is the capacity switched on today. It takes the **largest** figure any source gives, because running capacity only grows. It is *n/a* until something is running.
+- **Running is never more than planned.** When the two disagree, one of them is about something else, and the better-supported figure — quoted, from a source that reports rather than a directory — decides which. If the running figure is at least as well supported, the plan described one phase: the smallest stated figure that covers what runs is used instead, or the running figure itself when no source states one. If the plan is better supported, the running figure describes a bigger site and gives way, to a smaller running figure that fits or to *n/a*. A plan stated as a minimum ("more than 20 MW") is never contradicted by more running.
 - Units are converted: kilowatts and gigawatts become megawatts. A range such as "500–700 MW" is stored as its lower end, with a note.
+- **Kilowatts read as megawatts are set aside.** A figure of a gigawatt or more, about a thousand times a figure a quoted source gives for the same campus, and stated by nothing quoted itself, is almost always a kilowatt figure misread. It stops counting and the row's notes say which source it came from. A campus whose own quote says 1,200 MW is never affected by a small pilot figure beside it.
+
+These rules run every time a row is worked out from its sources, so the list, the project page, the company page and the totals all show the same two numbers.
 
 ## Investment
 

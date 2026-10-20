@@ -494,6 +494,11 @@ class Accounting:
     #: True when no source states a campus figure, so the total shown is the sum of
     #: the parts — a floor, and labelled as one rather than presented as the total.
     total_is_floor: bool = False
+    #: What the counted tranches marked live (serving, energized) add up to, as the
+    #: sources describe them. Not the campus's running figure: sources describe one
+    #: building under several names, and Abilene's live tranches summed to 1,600 MW
+    #: against a 1,200 MW campus. See `delivering`.
+    live_mw: float = 0.0
 
     @property
     def accounted_mw(self) -> float:
@@ -555,6 +560,7 @@ def account(project: Any) -> Accounting:
     unplaceable_blocks = [b for b in running(unplaced) if not implausible(b)]
 
     counted_mw = sum(b.mw for b in counted)
+    live_mw = sum(b.mw for b in counted if b.status in LIVE_STATUSES)
     itemised = counted_mw + sum(b.mw for b in unconfirmed) + sum(b.mw for b in unplaceable_blocks)
 
     cited = cited_total
@@ -590,7 +596,32 @@ def account(project: Any) -> Accounting:
         counted_mw=counted_mw,
         residuals=tuple(residuals),
         total_is_floor=floor,
+        live_mw=live_mw,
     )
+
+
+#: The tranche states that mean the capacity is running.
+LIVE_STATUSES: Final = frozenset({"serving", "energized"})
+
+
+def delivering(project: Any, got: Accounting) -> float | None:
+    """The running capacity the tranche panel's headline shows: the campus's own.
+
+    The client saw Abilene as "1,200 MW planned, 240 MW running" on the cards and
+    "1,600 MW delivering of 1,200 MW" above the tranches, on one page. The headline
+    summed every quoted tranche marked live, and the sources describe the campus as
+    a whole-site tranche and again as the buildings inside it. So the headline is
+    the row's reconciled running figure (`mw_built`), the number every other surface
+    shows; only a campus with no running figure stated falls back to its live
+    tranches, never more than the campus total. `Accounting.live_mw` keeps what the
+    tranches themselves describe, for the line that says they overlap.
+    """
+    built = getattr(project, "mw_built", None)
+    if built is not None:
+        return float(built)
+    if not got.live_mw:
+        return 0.0 if got.total is not None else None
+    return min(got.live_mw, got.total) if got.total is not None else got.live_mw
 
 
 #: What we know about whether a campus has been broken into tranches.

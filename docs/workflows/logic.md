@@ -179,6 +179,18 @@ Three stages before anything is put to a model:
    listing several operators — made it read `operational` over four quotes saying
    `announced`. The check and the recompute call the same function, so they cannot
    disagree about it.
+
+   The same holds for capacity. A row is derived with two rules applied around the
+   policy (2026-10-21): a figure of a gigawatt or more, about a thousand times one a
+   quoted source gives and quoted by nothing itself, is kilowatts read as megawatts
+   and is held out; and running capacity never exceeds planned — whichever of the two
+   is less well supported (unquoted, or only a directory's) gives way, a plan to the
+   smallest stated figure covering what runs, a running figure to one the plan
+   covers. That settles by rule what `built_exceeds_planned` used to put to the
+   agent each night. Englewood had
+   read "18 MW planned, 6,750 MW running" from a digest that wrote kilowatts as
+   megawatts. The check applies both rules before it compares, or every row either
+   rule moved would read as drifted and be "repaired" back across it each night.
 2. **Answered by comparison, free.** Held to `audit.free_answer`'s bar: a read of
    data already stored, never a judgement between two sourced figures. Three codes
    clear it, and between them they were **448 of 536** resolvable findings — which
@@ -409,7 +421,7 @@ Touching any of these means the poster is in scope. Re-render with
 | Collisions and the per-field policy | `tracker/logic.py` — `check_collisions`, `why_decided`, `decision`; `tracker/upsert.py` — `FIELD_POLICY`, `Policy`, `resolve_field` |
 | Judgement and the evidence audit | `tracker/logic.py` — `examine`, `audit_evidence`, `parse_contradictions`, `parse_evidence_findings`, `AUDIT_VERDICTS`, `auditable_fields` |
 | Actions, and which codes have none | `tracker/logic.py` — `ACTIONS`, `_stating`, `resolvable`, `free_answer`, `FREE_CODES`, `_resolve_finished_obstacles`, `_reported_after_finish`, `_drop_derived_delays`, `record_decision`; `tracker/audit.py` — `_rule_against`; `tracker/upsert.py` — `_record_slippage`, `_later_date_is_newer_news` |
-| Drift repair | `tracker/logic.py` — `resolve_drift`, `check_collisions`; `tracker/upsert.py` — `recompute_from_sources`; `tracker/blocks.py` — `phase_after_blocks`, `raise_phase` |
+| Drift repair | `tracker/logic.py` — `resolve_drift`, `check_collisions`; `tracker/upsert.py` — `recompute_from_sources`, `hold_out_kilowatt_misreads`, `settle_capacity`, `_cap_tranche_built`; `tracker/blocks.py` — `phase_after_blocks`, `raise_phase` |
 | Contested fields, the two calls, the write | `tracker/conflicts.py` — `disputes`, `solve`, `_challenge`, `supersede`, `apply_outcome`, `MAX_CALLS_PER_FIELD`, `MIN_CONFIDENCE`, `SUPERSEDED`, `MISREAD` |
 | The agent path | `tracker/triage.py` — `triage`, `apply_rule_out`, `_claims_value`, `rule_out_tool`, `leave_alone_tool`, `RULEABLE_FIELDS`, `SYSTEM` |
 | What one agent run may spend | `tracker/agent.py` — `run`, `TOOL_LIMITS`, `WRAP_UP_TURNS`, `MAX_STEPS`; `tracker/llm.py` — `without_thinking`; `tracker/ingest/search.py` — `CachedProvider` |

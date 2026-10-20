@@ -3100,6 +3100,13 @@ function BlocksTab({ p }) {
     (sum, b) => sum + (b.mw != null && !b.mw_counted ? b.mw : 0), 0,
   );
   const liveIsUncited = live === 0 && running.length > 0;
+  // The headline is the campus's running figure, the same one the cards above show
+  // (`blocks.delivering`). Summed here from the tranches marked live, Abilene read
+  // "1,600 MW delivering of 1,200 MW" under cards saying 240 MW running: its sources
+  // describe the campus as one whole-site tranche and again as the buildings in it.
+  const headline = acct && acct.delivering != null ? acct.delivering : live;
+  const overDescribed =
+    acct && acct.live_mw != null && acct.delivering != null && acct.live_mw > acct.delivering + 0.5;
 
   // The bar is the accounting, drawn: confirmed capacity by state, then what is
   // stated but unconfirmed, then the remainder nobody has itemised. It is built to
@@ -3150,13 +3157,18 @@ function BlocksTab({ p }) {
       <div>
         <div style=${{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
           <span class="dc-num" style=${{ fontFamily: "var(--font-display)", fontSize: 30, fontWeight: 500,
-                 letterSpacing: "-0.02em" }}>${fmtMw(live)} MW</span>
+                 letterSpacing: "-0.02em" }}>${fmtMw(headline)} MW</span>
           <span style=${{ fontSize: 14, color: "var(--muted-foreground)" }}>
             delivering of ${fmtMw(campusTotal)} MW${acct && acct.total_is_floor ? " (at least)" : ""}
             ${" "}· ${blocks.length} tranche${blocks.length === 1 ? "" : "s"}${customers.length > 1
               ? ` · ${customers.length} customers`
               : customers.length === 1 ? ` · ${customers[0]}` : ""}</span>
-          ${liveIsUncited && html`
+          ${overDescribed && html`
+            <span style=${{ fontSize: 12, color: "var(--muted-foreground)" }}>
+              tranches marked live add up to ${fmtMw(acct.live_mw)} MW — sources describe some
+              buildings more than once, so the campus figure is the one shown
+            </span>`}
+          ${liveIsUncited && !(acct && acct.delivering) && html`
             <span style=${{ fontSize: 12, color: "var(--warning)" }}>
               ${running.length} tranche${running.length === 1 ? " is" : "s are"} running with no
               cited MW${statedLive > 0 ? ` — ${fmtMw(statedLive)} MW stated, 待确认` : ""}

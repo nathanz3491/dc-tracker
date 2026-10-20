@@ -803,6 +803,10 @@ def _accounting_json(project: Project) -> dict[str, Any] | None:
         "total": got.total,
         "total_is_floor": got.total_is_floor,
         "counted_mw": got.counted_mw,
+        # The headline's running figure, the same one the cards show, and what the
+        # live tranches describe beside it. See `blocks.delivering`.
+        "delivering": blocks_mod.delivering(project, got),
+        "live_mw": got.live_mw,
         "closes": got.closes,
         "residuals": [
             {"reason": r.reason, "mw": r.mw, "labels": list(r.labels), "note": r.note}
