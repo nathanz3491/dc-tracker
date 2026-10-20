@@ -743,6 +743,18 @@ obstacles had passed only on a table word buried inside another word ("sue" in
 trimming article words is deliberate: a stemmer that trims "opposite" to "oppos"
 would make it opposition wording; a list of what "oppose" can become never contains it.
 
+The table is also the press's vocabulary, not the trade's, and it is widened from
+measured refusals rather than guessed. On 2026-10-20 the model's sentence was refused
+31 times in 40, and 20 of the 27 it offered again said the obstacle in plain words —
+"grid connection", "administrative pause", "County Commissioners", "annexation",
+"ERCOT", "occupy the buildings". Each went in as a pair where a single word would read
+too much: "pipeline" is also a sales pipeline (so `gas pipeline`), "commissioning" is
+a construction stage (so `public utility commission`), "certificates of occupancy" are
+a permit (so `occupy … building`). The cost is measured too: across the 754 confirmed
+obstacles on that night's production, sentences that also pass a second category went
+from 460 to 506, nearly all of them sentences about two things at once (ERCOT and a
+transmission upgrade; residents opposing a deal before the County Commissioners).
+
 Severity is `watch` / `material` / `blocking`, ordered, and that order is
 load-bearing: it decides which risk becomes `project.blocker`. A source that names an
 obstacle without stating any effect gets `watch`, the conservative direction, because

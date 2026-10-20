@@ -748,6 +748,20 @@ _PHASE_EVIDENCE: dict[str, tuple[str, ...]] = {
 #: The grid entries are the widest, and the reason is measured: three in four grid
 #: obstacles on 2026-10-19 were 待确认, because a grid "under strain", "constrained",
 #: or with "a seven-year wait" for power matched none of the fixed phrases.
+#:
+#: **The lists are the plain words the press uses, not the trade's.** On 2026-10-20,
+#: with inflections fixed, the nightly check still confirmed 5 of 40: in 31 the model
+#: had found the sentence and this table refused it. Asked again, 27 offered a
+#: sentence, and 20 of those stated the obstacle in words no entry held — "grid
+#: connection delays" where the table knew "interconnect", "the administrative pause"
+#: where it knew "moratorium", the "Planning Board", the "County Commissioners", a
+#: "Notice of Violation", an "annexation agreement", "ERCOT", "peak winter demand",
+#: "companies to occupy the buildings", a "single counterparty", "opponents" and a
+#: "ballot", "a lack of gas pipeline". Those words are entries now, as pairs where one
+#: word alone would read too much ("pipeline" is also a sales pipeline, "pause" also a
+#: financing pause). The other seven do not say the obstacle at all — "Discussions
+#: could change or end", "because of the Dominion situation", "needs both" — and are
+#: still refused.
 _RISK_EVIDENCE: dict[str, tuple[str, ...]] = {
     "grid_capacity": (
         "grid capacity",
@@ -755,7 +769,8 @@ _RISK_EVIDENCE: dict[str, tuple[str, ...]] = {
         "constraint|constrain|strain|shortage|shortfall|scarce|lack",
         "insufficient power|capacity",
         "not enough power|capacity",
-        "grid|utility|power|electricity|energy|interconnect|connection queue|wait|backlog",
+        "grid|utility|power|electricity|energy|interconnect|connection "
+        "queue|wait|backlog|delay|timeline",
         "power|electricity available|availability|unavailable",
         "queue position",
         "load growth",
@@ -763,6 +778,13 @@ _RISK_EVIDENCE: dict[str, tuple[str, ...]] = {
         "curtail",
         "outage",
         "interconnect",
+        "grid connect|hookup",
+        "powered capacity|land|site|shell|space",
+        "peak demand|load",
+        "large load",
+        "load request",
+        # The grid operators by name: a sentence about their process is about the grid.
+        "ercot|pjm|miso|caiso|nyiso",
     ),
     "transmission": (
         "transmission",
@@ -773,6 +795,9 @@ _RISK_EVIDENCE: dict[str, tuple[str, ...]] = {
         "upgrade the grid",
         "interconnect",
         "energize|energise",
+        "grid connect|hookup",
+        # Fuel for on-site power is delivered too; a pipeline alone is also a sales one.
+        "gas pipeline",
     ),
     "permitting": (
         "permit",
@@ -786,12 +811,29 @@ _RISK_EVIDENCE: dict[str, tuple[str, ...]] = {
         "project|exemption|development|campus|facility|center|site|appeal",
         "variance",
         "moratorium",
+        # A pause only with what is paused. Not "development": "halted development,
+        # citing a customer request" and "...citing capital constraints" are an offtake
+        # and a financing obstacle, and passed as permitting with it.
+        "pause|freeze|halt|hold|ban administrative|permit|application|zoning|rezone",
         "special use",
         "land use",
-        "planning commission",
+        "planning commission|board|department|staff|director",
         "board of supervisors",
+        "county|city|town|township|parish|village commission|commissioner|board|supervisor",
         "army corps",
         "council|councilman|councilwoman|councilmember|councilmen|councilwomen",
+        "annex",
+        "violate",
+        "stop work",
+        "compliance",
+        "positive declaration",
+        # Review, not impact: "opponents cite concerns over environmental impacts" is
+        # opposition, and was read as a permitting step.
+        "environmental review|assessment",
+        "regulatory commission|approval|review|filing|proceeding|condition",
+        # Three words: "utility work or commissioning" is not a regulator.
+        "public utility|utilities|service commission",
+        "ferc",
     ),
     "environmental": (
         "environmental",
@@ -804,6 +846,16 @@ _RISK_EVIDENCE: dict[str, tuple[str, ...]] = {
         "impact statement",
         "epa",
         "pollute|pollutant",
+        "runoff",
+        "erosion",
+        "sediment",
+        "silt",
+        "mud",
+        "dust",
+        # The environmental law groups by name, which a sentence often gives instead.
+        "earthjustice",
+        "selc",
+        "sierra club",
     ),
     "equipment_supply": (
         "transformer",
@@ -851,9 +903,16 @@ _RISK_EVIDENCE: dict[str, tuple[str, ...]] = {
         "prelease",
         "commitment",
         "speculative",
+        # With what is occupied: "certificates of occupancy" are a permit, and the
+        # students "who occupy the adjacent campus" are neighbours.
+        "occupy|occupant building|space|facility|hall|suite",
+        "counterparty",
+        "contract|agreement end|expire|terminate|cancel|exit",
     ),
     "community_opposition": (
         "oppose",
+        "opponent",
+        "ballot",
         "resident",
         "neighbor|neighbour|neighborhood|neighbourhood",
         "lawsuit",

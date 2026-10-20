@@ -1195,6 +1195,82 @@ def test_any_form_of_a_category_word_states_the_category(category, sentence):
     assert crawl._risk_quote_supports(category, sentence)
 
 
+# On 2026-10-20 the check still confirmed 5 of 40: in 31 the model found the sentence
+# and the table refused it, because the press says it in plain words the table did not
+# hold. Each of these is that night's sentence, cut down.
+
+
+@pytest.mark.parametrize(
+    ("category", "sentence"),
+    [
+        (
+            "transmission",
+            "The partners capped Abilene because grid connection delays ran past a year.",
+        ),
+        (
+            "grid_capacity",
+            "Regulators voted to stop data centers from connecting to the electric grid.",
+        ),
+        (
+            "grid_capacity",
+            "The harder part is finding powered capacity that can be ready for service.",
+        ),
+        ("grid_capacity", "It bypasses traditional utility upgrade timelines."),
+        ("grid_capacity", "One data center can require as much as the co-op's peak winter demand."),
+        ("grid_capacity", "ERCOT provisionally classified its request for the remaining 466 MW."),
+        ("transmission", "The site was delayed to 2029 due to a lack of gas pipeline."),
+        (
+            "permitting",
+            "The developer challenged the county's application of the administrative pause.",
+        ),
+        ("permitting", "The Orangetown Planning Board issued a positive declaration."),
+        ("permitting", "The Federal Energy Regulatory Commission was urged to require a pledge."),
+        ("permitting", "The Department issued a Notice of Violation for excess dust."),
+        (
+            "permitting",
+            "The Henderson County Commissioners passed a resolution putting projects on hold.",
+        ),
+        ("permitting", "Otherwise the annexation agreement will be null and void."),
+        ("permitting", "The city is not in compliance with the DNR shoreline standard."),
+        ("environmental", "Muddy water escaped from the construction site into five homes."),
+        ("environmental", "SELC and Earthjustice are challenging xAI in a new lawsuit."),
+        ("offtake", "That development is contingent on finding companies to occupy the buildings."),
+        ("offtake", "A shift in contract terms from a single counterparty could affect revenue."),
+        ("offtake", "If Meta left before its 20-year power contract ends, ratepayers would pay."),
+        (
+            "community_opposition",
+            "Opponents put a measure on the local ballot to bar data centers.",
+        ),
+    ],
+)
+def test_the_plain_words_the_press_uses_state_the_category(category, sentence):
+    assert crawl._risk_quote_supports(category, sentence)
+
+
+@pytest.mark.parametrize(
+    ("category", "sentence"),
+    [
+        # That night's sentences that do not say the obstacle: still refused.
+        ("transmission", "In any case, Abilene needs both to turn on the GPUs."),
+        ("transmission", "That's being put on hold because of the Dominion situation."),
+        ("water", "It abruptly stopped construction in mid-April, ahead of the IPO."),
+        # Each word the widening added, where it would have read too much alone.
+        ("permitting", "Construction, utility work or commissioning is not yet complete."),
+        ("permitting", "Crusoe halted development of the campus, citing a customer request."),
+        ("permitting", "Opponents cite concerns over environmental impacts."),
+        ("offtake", "A moratorium on zoning permits and certificates of occupancy."),
+        ("offtake", "Students and faculty occupy the adjacent campus."),
+        (
+            "community_opposition",
+            "The bill passed in June and is awaiting the governor's signature.",
+        ),
+        ("transmission", "The company has a development pipeline of 2 GW."),
+    ],
+)
+def test_a_new_word_is_not_read_where_it_means_something_else(category, sentence):
+    assert not crawl._risk_quote_supports(category, sentence)
+
+
 @pytest.mark.parametrize(
     ("category", "sentence"),
     [

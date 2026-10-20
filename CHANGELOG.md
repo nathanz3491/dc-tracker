@@ -541,6 +541,23 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **An obstacle stated in plain words is confirmed** (`tracker/ingest/crawl.py`,
+  `tracker/riskcheck.py`, `docs/analysis.md`, `docs/design-decisions.md`). With word
+  forms fixed, the night of 2026-10-20 still confirmed 5 of 40 obstacles: in 31 the
+  model had found the sentence and the category check refused it, because the press
+  says "grid connection delays", "the administrative pause", "the Planning Board", "the
+  County Commissioners", "a Notice of Violation", "an annexation agreement", "ERCOT",
+  "peak winter demand", "companies to occupy the buildings", "a single counterparty",
+  "opponents" and "a ballot", "a lack of gas pipeline" — and the table knew none of
+  them. They are entries now, as pairs wherever one word alone would read too much
+  ("gas pipeline", not a sales pipeline; "public utility commission", not
+  "commissioning"; "occupy … building", not "certificates of occupancy"). Re-asked,
+  that night's model offered 27 sentences: 21 now pass, and the six that do not say
+  the obstacle ("because of the Dominion situation", "needs both") are still refused.
+  All 733 confirmed obstacles that passed before still pass; sentences that also pass
+  a second category went from 460 to 506 of 754, nearly all genuinely about two things.
+  Every obstacle the old table refused this way is read once more by the nightly check.
+
 - **The night runs on one version of the code** (`scripts/overnight.sh`, `CLAUDE.md`).
   A deploy resets the host's checkout and runs `tracker init`; one that lands while
   the nightly loop runs swaps the code under the phases it has not reached yet, and on

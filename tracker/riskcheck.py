@@ -78,8 +78,11 @@ OFF_CATEGORY: Final = "the sentence does not state"
 #: left undecided by the model — it was decided, and overruled. Once the check has
 #: changed that is a question worth paying for again, so `fresh` stops holding it
 #: back. On 2026-10-19, 131 of the 159 obstacles held back were exactly these: the
-#: check matched raw substrings, and "approved" was not "approval".
-CATEGORY_CHECK_REVISED_AT: Final = dt.datetime(2026, 10, 20, 10, 0)
+#: check matched raw substrings, and "approved" was not "approval". On 2026-10-20 it
+#: was 31 of 40, on plain words the table lacked ("grid connection delays", "the
+#: administrative pause", "Planning Board"); this moment is after that night ended
+#: (its loop stops by 20:01 UTC), so all of them are read once more.
+CATEGORY_CHECK_REVISED_AT: Final = dt.datetime(2026, 10, 20, 20, 5)
 
 
 @dataclass

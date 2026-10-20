@@ -365,9 +365,15 @@ is permitting wording because "approve" is), in the whole sentence the quote cam
 from, and never inside another word ("issue" is not "sue"). Until 2026-10-19 it was
 a raw substring of the copied fragment, and the night that changed the check
 confirmed 2 of 26 obstacles — twenty times the model had found the sentence and the
-check refused it. An obstacle the check refused that way is offered again once after
-the check changes, however recently it was read
-(`riskcheck.CATEGORY_CHECK_REVISED_AT`); one the model itself found unclear is not.
+check refused it. The next night, with that fixed, it confirmed 5 of 40: the press
+writes "grid connection delays", "the administrative pause", "the Planning Board",
+"a Notice of Violation", "ERCOT", where the table knew "interconnect", "moratorium"
+and "planning commission". Those words are in the table now — as pairs where one
+word alone would read too much — and of that night's 27 refused sentences, 21 pass
+and the six that do not say the obstacle ("because of the Dominion situation") still
+fail. An obstacle the check refused that way is offered again once after the check
+changes, however recently it was read (`riskcheck.CATEGORY_CHECK_REVISED_AT`); one
+the model itself found unclear is not.
 
 Three outcomes: **confirmed** attaches the quote and clears the 待确认 mark;
 **refuted** marks the obstacle `superseded`, dropping it out of the open counts
