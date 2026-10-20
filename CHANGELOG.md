@@ -268,6 +268,21 @@ initial build of the v1 PRD.
 
 ### Changed
 
+- **The companies on a project page are names, not paragraphs, and new ones stand
+  out; every tracked field is named in words** (`tracker/webui/static/app.js`,
+  `tracker/parties.py`, `tracker/export.py`, reader docs *The project page*). From
+  the client's review on 2026-10-21. *Who is involved* printed every party's full
+  sentence under its name — Abilene carried 34 rows and some 1,170 words — when what
+  a reader wanted was who builds, owns, occupies and supplies the site. It is now
+  one line per role with each company as a name; hover or tap shows the sentence
+  and the date a source first named it. A company first named in the last 30 days
+  is marked *new* and listed again at the top under *Newly mentioned*, because a new
+  contractor or tenant on a known campus is news. The inference rules are unchanged:
+  a role nobody stated keeps a dashed outline, and one a sentence would not support
+  stays amber with its reason. The twelve tracked fields were headed by their stored
+  names (`mw_planned`); each now reads "Planned · MW" with "规划容量" beneath it, and
+  the stored name in small type for whoever needs it.
+
 - **A read about one campus lands on it, however the article spells it**
   (`tracker/ingest/enrich.py`, `tracker/keys.py`, `tracker/cli/ingest.py`,
   `docs/workflows/enrich.md`). Enrich reads for one row at a time and refuses to

@@ -536,3 +536,66 @@ def test_a_party_derived_customer_reads_as_derived_not_unconfirmed(session):
     assert project.customer == "Oracle"
     assert got.tier == DERIVED
     assert got.quote == "Oracle will lease the facility."
+
+
+# --- when a party was first named --------------------------------------------
+
+
+def test_a_party_is_dated_by_the_first_citation_that_named_it():
+    """The project page marks a party first cited in the last thirty days as new.
+
+    Publication date when recorded, the day it was read otherwise; inferred parties
+    count, so a party is never dated later than the citation that put it on the row.
+    """
+    import datetime as dt
+
+    def src(when, entries=None, *, published=None, claims=None):
+        return type(
+            "S",
+            (),
+            {
+                "id": 1,
+                "source_type": "trade_press",
+                "fetched_at": when,
+                "published_at": published,
+                "parties": json.dumps(entries) if entries is not None else None,
+                "claims": json.dumps(claims or {}),
+            },
+        )()
+
+    got = parties.first_cited(
+        [
+            src(
+                dt.datetime(2026, 10, 15, 9),
+                [{"name": "Turner Construction", "role": "contractor"}],
+            ),
+            src(
+                dt.datetime(2026, 10, 20, 9),
+                [{"name": "Turner Construction", "role": "contractor"}],
+                published=dt.datetime(2026, 3, 2, 12),
+            ),
+            src(dt.datetime(2026, 10, 18, 9), claims={"company": "Crusoe"}),
+            src(None, [{"name": "Oracle", "role": "customer"}]),
+        ]
+    )
+    assert got == {
+        parties.party_key("Turner Construction"): dt.date(2026, 3, 2),
+        parties.party_key("Crusoe"): dt.date(2026, 10, 18),
+    }
+
+
+def test_the_export_carries_when_each_party_was_first_named(session):
+    from tracker.export import to_json_object
+
+    project = _project(session)
+    _source(
+        session,
+        project,
+        [{"name": "Oracle", "role": "customer", "quote": "Oracle will lease the facility."}],
+    )
+    parties.rebuild(session, project)
+    session.flush()
+
+    (party,) = to_json_object(project)["parties"]
+    assert party["name"] == "Oracle"
+    assert party["first_cited"] == project.sources[0].fetched_at.date().isoformat()

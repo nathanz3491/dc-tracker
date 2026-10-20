@@ -45,6 +45,7 @@ double-counting was.
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 import logging
 from dataclasses import dataclass
@@ -252,6 +253,33 @@ def _inferred_parties(source: Any) -> list[Party]:
                 source_id=getattr(source, "id", None),
             )
         )
+    return out
+
+
+def first_cited(sources: list[Any]) -> dict[str, dt.date]:
+    """Party key -> the earliest date one of this row's citations named it.
+
+    The article's publication date where one is recorded, else the day it was read.
+    The project page marks a party first cited in the last thirty days as *new*,
+    because a new contractor or tenant on a known campus is news the client asked to
+    see apart (2026-10-21). Read over the same entries `parties_by_key` reads, the
+    inferred ones included, so a party is never dated later than the citation that
+    put it on the row.
+    """
+    out: dict[str, dt.date] = {}
+    for source in sources:
+        when = getattr(source, "published_at", None) or getattr(source, "fetched_at", None)
+        if when is None:
+            continue
+        day = when.date() if isinstance(when, dt.datetime) else when
+        declared = [
+            party_key(str(entry.get("name") or "").strip())
+            for entry in parse(getattr(source, "parties", None))
+        ]
+        keys = [key for key in declared if key] or [p.key for p in _inferred_parties(source)]
+        for key in keys:
+            if key not in out or day < out[key]:
+                out[key] = day
     return out
 
 

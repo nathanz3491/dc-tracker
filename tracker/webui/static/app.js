@@ -60,27 +60,31 @@ const RIGHT = new Set(["mw_planned", "mw_built", "investment_usd", "h200_equival
  * the thing a scanner actually needs.
  *
  * `why` is the tooltip. Each says what the figure is a figure OF, because that is
- * the question this dataset gets wrong most often — see `BASIS`. */
+ * the question this dataset gets wrong most often — see `BASIS`.
+ *
+ * `zh` is the Chinese name from the reader docs' field dictionary
+ * (`docs/zh/fields.md`), shown under the English one where a field is named on its
+ * own — the client reads in Chinese, and saw `mw_planned` where a name belonged. */
 const COLUMN = {
   id: { label: "#", why: "Row id. Hover for the identity key this row is stored under." },
-  name: { label: "Project", why: "The campus name the winning source uses." },
-  company: { label: "Operator", why: "Who runs the site. Other parties — the developer, the landowner, the tenant, the utility — are in the project drawer." },
-  customer: { label: "Buyer", why: "Who occupies the site and pays for the compute. Empty is often correct: a hyperscaler building for itself has no external tenant." },
-  city: { label: "City" },
-  county: { label: "County" },
-  state: { label: "State" },
-  phase: { label: "Phase", why: "The furthest stage any source puts the campus at." },
-  mw_planned: { label: "Planned", unit: "MW", why: "Capacity at full build. Hover a marked figure: not every megawatt is the same kind." },
-  mw_built: { label: "Running", unit: "MW", why: "Capacity a source says is energised and serving today." },
-  investment_usd: { label: "Investment", unit: "USD", why: "Only figures a source confirmed for this specific site." },
-  h200_equivalent: { label: "Compute", unit: "H200-eq", why: "The capacity restated as accelerators. Derived from MW unless a source stated a chip count." },
-  first_announced: { label: "Announced", why: "When the project first became public." },
-  expected_online: { label: "Online", why: "Expected in service. A source saying only a year normalises to 1 January, so read these as approximate." },
-  blocker: { label: "Biggest obstacle", why: "The most severe open obstacle. Most projects have none, and that is usually the truth." },
-  confidence: { label: "Confidence", unit: "0-3", why: "How much to trust this row without checking it yourself. 3 needs two independent sources or a human sign-off." },
-  lat: { label: "Lat" },
-  lon: { label: "Lon" },
-  last_verified_at: { label: "Verified", why: "When a person last signed the row off." },
+  name: { label: "Project", zh: "项目", why: "The campus name the winning source uses." },
+  company: { label: "Operator", zh: "运营商", why: "Who runs the site. Other parties — the developer, the landowner, the tenant, the utility — are in the project drawer." },
+  customer: { label: "Buyer", zh: "买方", why: "Who occupies the site and pays for the compute. Empty is often correct: a hyperscaler building for itself has no external tenant." },
+  city: { label: "City", zh: "城市" },
+  county: { label: "County", zh: "县" },
+  state: { label: "State", zh: "州" },
+  phase: { label: "Phase", zh: "阶段", why: "The furthest stage any source puts the campus at." },
+  mw_planned: { label: "Planned", zh: "规划容量", unit: "MW", why: "Capacity at full build. Hover a marked figure: not every megawatt is the same kind." },
+  mw_built: { label: "Running", zh: "运行容量", unit: "MW", why: "Capacity a source says is energised and serving today." },
+  investment_usd: { label: "Investment", zh: "投资", unit: "USD", why: "Only figures a source confirmed for this specific site." },
+  h200_equivalent: { label: "Compute", zh: "算力（H200 等效）", unit: "H200-eq", why: "The capacity restated as accelerators. Derived from MW unless a source stated a chip count." },
+  first_announced: { label: "Announced", zh: "宣布时间", why: "When the project first became public." },
+  expected_online: { label: "Online", zh: "上线时间", why: "Expected in service. A source saying only a year normalises to 1 January, so read these as approximate." },
+  blocker: { label: "Biggest obstacle", zh: "最大障碍", why: "The most severe open obstacle. Most projects have none, and that is usually the truth." },
+  confidence: { label: "Confidence", zh: "可信度", unit: "0-3", why: "How much to trust this row without checking it yourself. 3 needs two independent sources or a human sign-off." },
+  lat: { label: "Lat", zh: "纬度" },
+  lon: { label: "Lon", zh: "经度" },
+  last_verified_at: { label: "Verified", zh: "核实时间", why: "When a person last signed the row off." },
 };
 
 const columnLabel = (key) => (COLUMN[key] || {}).label || key;
@@ -1555,44 +1559,157 @@ function ProjectPage({ id, data, onBack, watch, onGoto, onOpenCompany, onAllSour
     </div>`;
 }
 
-/* The parties, given a section of their own rather than a 330px column.
+/* The parties, compact (client review, 2026-10-21).
  *
- * Unchanged in substance from the panel this replaces: a role with a sentence
- * behind it reads as a fact, and one inferred from the operator column has to
- * read as an inference, or the list launders the second into the first. What the
- * page buys is width — the quote sits beside the name instead of wrapping every
- * four words. */
+ * One line per role, the companies in it as names, and the sentence behind each a
+ * hover or a tap away rather than printed under it. Abilene carried 34 party rows
+ * and some 1,170 words of quotes, and what a reader wanted from the section was the
+ * names. A party first cited in the last thirty days is marked *new* and listed
+ * again at the top: a new contractor or tenant on a known campus is news.
+ *
+ * Unchanged in substance from the list this replaces: a role with a sentence
+ * behind it reads as a fact, and one inferred from the operator column reads as an
+ * inference — a dashed outline, and the popover says so — or the list launders the
+ * second into the first. */
+const PARTY_ROLES = [
+  ["operator", "Operator"], ["developer", "Developer"], ["owner", "Owner"],
+  ["customer", "Customer"], ["contractor", "Contractors & suppliers"], ["utility", "Utility"],
+];
+const NEW_PARTY_DAYS = 30;
+
+function partyIsNew(party, now = Date.now()) {
+  const t = party.first_cited ? Date.parse(party.first_cited) : NaN;
+  return Number.isFinite(t) && now - t <= NEW_PARTY_DAYS * 86400e3;
+}
+
+const partyRoleLabel = (role) => (PARTY_ROLES.find(([r]) => r === role) || [role, role])[1];
+
 function PartyList({ p }) {
+  const [pop, setPop] = useState(null);
+  //: Tapped stays until dismissed; hovered follows the pointer — as `useQuote`.
+  const sticky = useRef(false);
+  const parties = p.parties || [];
+  const fresh = parties.filter((x) => partyIsNew(x));
+  const roles = [...PARTY_ROLES,
+    ...[...new Set(parties.map((x) => x.role))]
+      .filter((r) => !PARTY_ROLES.some(([known]) => known === r)).map((r) => [r, r])];
+
+  const show = (event, party, opts = {}) => {
+    if (event === null) {
+      if (!sticky.current) setPop(null);
+      return;
+    }
+    const key = `${party.role}:${party.key}`;
+    if (opts.sticky) {
+      event.stopPropagation();
+      if (sticky.current && pop?.key === key) {
+        sticky.current = false;
+        return setPop(null);
+      }
+      sticky.current = true;
+    } else if (sticky.current) return;
+    const r = event.currentTarget.getBoundingClientRect();
+    const W = 400, H = 170;
+    const below = r.bottom + H + 16 < window.innerHeight;
+    setPop({ key, party, sticky: !!opts.sticky,
+      x: Math.max(10, Math.min(r.left, window.innerWidth - W - 12)),
+      y: below ? r.bottom + 8 : Math.max(10, r.top - H - 8) });
+  };
+
+  useEffect(() => {
+    if (!pop?.sticky) return;
+    const dismiss = () => { sticky.current = false; setPop(null); };
+    const onKey = (e) => { if (e.key === "Escape") dismiss(); };
+    document.addEventListener("click", dismiss);
+    document.addEventListener("keydown", onKey);
+    window.addEventListener("scroll", dismiss, { passive: true });
+    return () => {
+      document.removeEventListener("click", dismiss);
+      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("scroll", dismiss);
+    };
+  }, [pop?.sticky, pop?.key]);
+
+  const name = (party) => {
+    const inferred = party.unconfirmed === "role_inferred";
+    const refused = party.unconfirmed != null && !inferred;
+    return html`
+      <button key=${party.role + party.key} type="button" class="dc-party"
+              aria-label=${`${party.name}, ${partyRoleLabel(party.role)}: show the sentence`}
+              onMouseEnter=${(e) => show(e, party)} onMouseLeave=${() => show(null)}
+              onFocus=${(e) => show(e, party)} onBlur=${() => show(null)}
+              onClick=${(e) => show(e, party, { sticky: true })}
+              style=${{ display: "inline-flex", alignItems: "center", gap: 6, padding: "2px 10px",
+                        borderRadius: 999, border: `1px ${inferred ? "dashed" : "solid"} var(--border)`,
+                        background: "transparent", font: "inherit", fontSize: 13.5, lineHeight: "22px",
+                        cursor: "pointer", color: refused ? "var(--warning)" : "var(--foreground)" }}>
+        ${party.name}
+        ${partyIsNew(party) && html`<span style=${{ ...chip("--success"), height: 18, padding: "0 6px",
+          fontSize: 10.5 }}>new</span>`}
+        ${refused && html`<span style=${{ fontFamily: "var(--font-mono)", fontSize: 11 }}>待确认</span>`}
+      </button>`;
+  };
+
   return html`
     <${Card}>
       <div style=${{ display: "grid", gap: 0 }}>
-        ${(p.parties || []).map((party) => {
-          const inferred = party.unconfirmed === "role_inferred";
-          const refused = party.unconfirmed != null && !inferred;
+        ${fresh.length > 0 && html`
+          <div style=${{ display: "grid", gridTemplateColumns: "150px minmax(0,1fr)", gap: 14,
+                         alignItems: "baseline", padding: "10px 20px" }}>
+            <span style=${{ fontSize: 12.5, fontWeight: 600, color: "var(--success)" }}>
+              Newly mentioned</span>
+            <span style=${{ fontSize: 13, lineHeight: "20px", color: "var(--muted-foreground)" }}>
+              ${fresh.map((x) => `${x.name} (${partyRoleLabel(x.role).toLowerCase()}, first cited ${x.first_cited})`)
+                .join(" · ")}
+            </span>
+          </div>`}
+        ${roles.map(([role, label]) => {
+          const list = parties.filter((x) => x.role === role);
+          if (!list.length) return null;
           return html`
-            <div key=${party.role + party.key}
-                 style=${{ display: "grid", gridTemplateColumns: "124px minmax(0,1fr)",
-                           gap: 16, alignItems: "baseline", padding: "13px 20px",
-                           borderTop: "1px solid var(--border)" }}>
-              <span style=${{ fontFamily: "var(--font-mono)", fontSize: 12,
-                              color: "var(--muted-foreground)" }}>${party.role}</span>
-              <div style=${{ display: "grid", gap: 5, minWidth: 0 }}>
-                <div style=${{ display: "flex", alignItems: "center", gap: 9, flexWrap: "wrap" }}>
-                  <span style=${{ fontSize: 15, lineHeight: "22px", fontWeight: 500 }}>${party.name}</span>
-                  ${inferred && html`<span style=${chip("--muted-foreground", true)}
-                    title="Nobody stated this role — it is what the operator or customer column means. Shown as an inference, and never used to attribute capacity to a buyer."
-                    >inferred</span>`}
-                  ${refused && html`<span style=${chip("--warning")}
-                    title=${"A sentence was offered and would not support this role: " + party.unconfirmed}
-                    >待确认 · ${party.unconfirmed}</span>`}
-                </div>
-                ${party.quote && html`<span style=${{ fontSize: 12.5, lineHeight: "19px",
-                    color: "var(--muted-foreground)", maxWidth: "94ch" }}>"${party.quote}"</span>`}
-              </div>
+            <div key=${role} style=${{ display: "grid", gridTemplateColumns: "150px minmax(0,1fr)", gap: 14,
+                 alignItems: "baseline", padding: "9px 20px", borderTop: "1px solid var(--border)" }}>
+              <span style=${{ fontSize: 12.5, fontWeight: 600, color: "var(--muted-foreground)" }}>
+                ${label}<span style=${{ fontFamily: "var(--font-mono)", fontWeight: 400, marginLeft: 6 }}>
+                  ${list.length}</span></span>
+              <div style=${{ display: "flex", flexWrap: "wrap", gap: 6, minWidth: 0 }}>${list.map(name)}</div>
             </div>`;
         })}
+        <p style=${{ margin: 0, padding: "9px 20px 11px", borderTop: "1px solid var(--border)",
+                     fontSize: 12, color: "var(--muted-foreground)" }}>
+          Hover or tap a name for the sentence behind it. A dashed outline is a role nobody
+          stated; amber is one a sentence was offered for and would not support.</p>
       </div>
+      <${PartyPop} pop=${pop} />
     <//>`;
+}
+
+function PartyPop({ pop }) {
+  if (!pop) return null;
+  const { party } = pop;
+  const inferred = party.unconfirmed === "role_inferred";
+  const refused = party.unconfirmed != null && !inferred;
+  return html`
+    <div class="dc-pop" style=${{
+      position: "fixed", zIndex: 70, left: pop.x, top: pop.y, width: "min(400px, 86vw)",
+      padding: "13px 15px", background: "var(--surface)", border: "1px solid var(--border)",
+      borderRadius: 14, boxShadow: "var(--shadow-pop)", pointerEvents: "none" }}>
+      <div style=${{ display: "flex", alignItems: "center", gap: 8, marginBottom: 7, flexWrap: "wrap" }}>
+        <span style=${{ fontSize: 14, fontWeight: 600 }}>${party.name}</span>
+        <span style=${chip("--muted-foreground")}>${partyRoleLabel(party.role).toLowerCase()}</span>
+        ${inferred && html`<span style=${chip("--muted-foreground", true)}>inferred</span>`}
+        ${refused && html`<span style=${chip("--warning")}>待确认 · ${party.unconfirmed}</span>`}
+        ${partyIsNew(party) && html`<span style=${chip("--success")}>new</span>`}
+      </div>
+      <p style=${{ margin: 0, fontSize: 14, lineHeight: "21px" }}>
+        ${party.quote ? `“${party.quote}”`
+          : inferred ? "Nobody stated this role — it is what the operator or customer column means. Shown as an inference, and never used to attribute capacity to a buyer."
+          : "No sentence was kept for this role."}
+      </p>
+      ${party.first_cited && html`
+        <p style=${{ margin: "8px 0 0", fontFamily: "var(--font-mono)", fontSize: 11,
+                     color: "var(--muted-foreground)" }}>first cited ${party.first_cited}</p>`}
+    </div>`;
 }
 
 /* ---- Markdown, rendered to React elements ---------------------------------
@@ -2819,7 +2936,15 @@ function TrackedFields({ p, populated, onQuote, claims, onTab }) {
                  the table wider than the page. */ ""}
             <div key=${key} class="dc-field-row"
                  style=${{ padding: "11px 20px", borderTop: "1px solid var(--border)" }}>
-              <span style=${{ fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--muted-foreground)" }}>${key}</span>
+              <span style=${{ display: "grid", gap: 1, minWidth: 0 }} title=${(COLUMN[key] || {}).why || key}>
+                <span style=${{ fontSize: 13, fontWeight: 600, lineHeight: "18px" }}>
+                  ${columnLabel(key)}${(COLUMN[key] || {}).unit && html`<span
+                    style=${{ fontWeight: 400, color: "var(--muted-foreground)" }}> · ${COLUMN[key].unit}</span>`}</span>
+                <span style=${{ fontSize: 12, lineHeight: "17px", color: "var(--muted-foreground)" }}>
+                  ${(COLUMN[key] || {}).zh || ""}</span>
+                <span style=${{ fontFamily: "var(--font-mono)", fontSize: 10.5, lineHeight: "15px",
+                                color: "var(--muted-foreground)", opacity: .75 }}>${key}</span>
+              </span>
               <div style=${{ display: "grid", gap: 5, minWidth: 0 }}>
                 <div style=${{ display: "flex", alignItems: "center", gap: 9, flexWrap: "wrap" }}>
                   <span style=${{ fontSize: 16, lineHeight: "24px",

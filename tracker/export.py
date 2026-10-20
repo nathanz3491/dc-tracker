@@ -30,6 +30,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from tracker import blocks as blocks_mod
+from tracker import parties as parties_mod
 from tracker.models import Project
 from tracker.upsert import NOTE_PREFIX, SOURCE_NOTE_PREFIX
 from tracker.vocab import bound_from_quote
@@ -595,6 +596,7 @@ def to_json_object(project: Project, *, claims: bool = True) -> dict[str, Any]:
     make, and the guarantee there is that everything is in the file.
     """
     basis_map, prov_map = _provenance_json(project)
+    first_cited = parties_mod.first_cited(list(project.sources))
     return {
         "basis": basis_map,
         "prov": prov_map,
@@ -747,6 +749,9 @@ def to_json_object(project: Project, *, claims: bool = True) -> dict[str, Any]:
                 "quote": p.quote,
                 "unconfirmed": p.unconfirmed,
                 "source_id": p.source_id,
+                # When one of this row's citations first named the party, so the
+                # page can mark the ones that are news. See `parties.first_cited`.
+                "first_cited": iso(first_cited.get(p.party_key)),
             }
             for p in sorted(project.parties, key=lambda p: (p.role, p.party_key))
         ],

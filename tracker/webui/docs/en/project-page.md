@@ -30,11 +30,14 @@ The capacity cards name the **kind** of megawatt the source gave: *IT capacity* 
 
 ## Who is involved
 
-The companies named in connection with the campus, each with its role — developer, owner, operator, customer, utility or contractor — and the sentence that names it. **inferred** means no source stated the role outright; **待确认** means the sentence could not be checked, with the reason.
+The companies named in connection with the campus, one line per role — operator, developer, owner, customer, contractors and suppliers, utility — with each company as a name. Hover over a name, or tap it, for the sentence that names it and the date a source first named it.
+
+- A **dashed outline** means no source stated the role outright: it is inferred from the operator or buyer column. An **amber** name was offered with a sentence that would not support the role (**待确认**, with the reason).
+- **new** marks a company first named by one of the campus's sources in the last 30 days. They are listed again at the top, under **Newly mentioned**, with the date.
 
 ## The twelve fields
 
-All twelve tracked fields, each with its value, its label, and the sentence it rests on. The fields are listed by their internal names (for example `mw_planned`); the [Field dictionary](fields) gives each one in plain words.
+All twelve tracked fields, each with its value, its label, and the sentence it rests on. Each field is named in English and in Chinese, with its unit, and its internal name (for example `mw_planned`) in small type beneath; the [Field dictionary](fields) explains each one.
 
 - **not this site's figure** marks a number that was found to belong to something larger, such as a company's whole programme.
 - **excerpt, not this field's sentence** means the source's excerpt is shown because no sentence was recorded for this field specifically.
