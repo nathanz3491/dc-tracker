@@ -741,6 +741,75 @@ def sources_policy(
         )
 
 
+@app.command()
+def invariants(
+    key: Annotated[
+        list[str] | None,
+        typer.Option("--key", "-k", help="Only these invariants (repeatable)."),
+    ] = None,
+    limit: Annotated[int, typer.Option(help="Examples shown per invariant.")] = 5,
+) -> None:
+    """How the figures must relate (勾稽关系), and every place they do not.
+
+    The register of relationships between a company, its campuses and their
+    tranches — running never above planned, a campus's lines adding up to it,
+    tranches describing it once, a company equal to its campuses — each checked
+    across the whole database (`tracker/invariants.py`). *Held* ones are enforced
+    when a row is written, so a break is a bug; *reported* ones say what the data
+    does not yet close, most of it the campus → building → phase hierarchy that
+    Batch 4 of the client plan builds.
+
+    Free — no LLM, no network, read-only.
+    """
+    from tracker import invariants as invariants_mod
+
+    known = {i.key for i in invariants_mod.INVARIANTS}
+    unknown = sorted(set(key or ()) - known)
+    if unknown:
+        _fail(f"no invariant {', '.join(unknown)}; known: {', '.join(sorted(known))}")
+
+    engine = _read_engine()
+    with session_scope(engine, commit=False) as session:
+        findings = invariants_mod.check(session, keys=key or None)
+
+    if json_mode():
+        emit(invariants_mod.report_json(findings, limit=limit))
+        return
+
+    table = Table(
+        title="how the figures relate (勾稽关系)",
+        header_style="bold",
+        box=TABLE_BOX,
+        title_justify="left",
+    )
+    table.add_column("relationship", max_width=54)
+    table.add_column("kind", style="dim")
+    table.add_column("breaks", justify="right")
+    table.add_column("MW", justify="right")
+    table.add_column("worst", max_width=58, style="dim")
+    for f in findings:
+        inv = f.invariant
+        worst = sorted(f.violations, key=lambda v: (-v.mw, v.project_id or 0))[:limit]
+        broken = "red" if inv.kind == invariants_mod.HELD else "yellow"
+        table.add_row(
+            f"{escape(inv.statement)}\n[dim]{escape(inv.zh)}[/dim]",
+            f"{inv.level}, {inv.kind}",
+            f"[{broken}]{len(f.violations)}[/{broken}]" if f.violations else "[green]0[/green]",
+            f"{f.mw:,.0f}" if f.mw else "",
+            "\n".join(escape(f"{v.subject}: {v.detail}") for v in worst),
+        )
+    console.print(table)
+    held_broken = [f for f in findings if f.invariant.kind == invariants_mod.HELD and f.violations]
+    if held_broken:
+        console.print(
+            f"\n[red]{len(held_broken)} held relationship(s) broken[/red] — "
+            "the write path is meant to guarantee these, so each is a bug to fix."
+        )
+    else:
+        console.print("\n[green]every held relationship holds[/green]")
+    console.print("[dim]Read-only: nothing was changed.[/dim]")
+
+
 @audit_app.callback(invoke_without_command=True)
 def audit(ctx: typer.Context) -> None:
     """Find figures that are physically or economically implausible.

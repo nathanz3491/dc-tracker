@@ -4,6 +4,12 @@ Changes a reader of the console will notice, newest first. The console's version
 
 ## 21 October 2026
 
+### How the figures relate
+
+- **The relationships between the figures are written down and checked.** A new page, [How the figures relate](invariants), states the 勾稽关系 the tracker holds every figure to — running never above planned, a campus's lines adding up to it, a company equal to the sum of its campuses — and which ones the published sources do not yet close.
+- **Capex no longer credits a buyer past its campus.** Where a campus's tranches describe it more than once, buyers were credited every description: OpenAI 3,100 MW and Oracle 2,460 MW more than their campuses hold, 7,870 MW across nine campuses. See [Capex](capex).
+- **A campus's own power plant is kept out of its capacity sum**, so the arithmetic under the tranches adds up on every campus.
+
 ### A project's page, rewritten for reading
 
 - **A summary first**: planned, running, how much is still to come and when, the expected online date, the delay risk with its reasons, and the investment with its cost per megawatt; then the buyers, operator, power, what to watch for, the biggest obstacle and how well sourced the row is. Hover a figure for the sentence behind it. See [A project's page](project-page).

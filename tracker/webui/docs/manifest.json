@@ -145,6 +145,13 @@
           }
         },
         {
+          "slug": "invariants",
+          "title": {
+            "en": "How the figures relate",
+            "zh": "数字之间的勾稽关系"
+          }
+        },
+        {
           "slug": "empty-fields",
           "title": {
             "en": "Why a field is empty",

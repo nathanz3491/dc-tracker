@@ -61,6 +61,7 @@ COMMANDS = {
     "ingest manual",
     "ingest pjm",
     "init",
+    "invariants",
     "list",
     "logic",
     "logic check",

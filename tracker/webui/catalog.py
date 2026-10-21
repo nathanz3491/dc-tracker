@@ -264,7 +264,7 @@ GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "notify status",
         ),
     ),
-    ("Judge", ("review", "verify", "infer", "logic check", "audit", "audit check")),
+    ("Judge", ("review", "verify", "infer", "logic check", "audit", "audit check", "invariants")),
     (
         "Repair",
         (

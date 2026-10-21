@@ -12,6 +12,23 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **The relationships between the figures are declared and checked: `tracker
+  invariants`** (`tracker/invariants.py`, `tracker/cli/quality.py`, reader docs *How the
+  figures relate*, `tests/test_invariants.py`). The first step of Batch 4 of the client
+  plan, the master data model: the client asked for the data's 勾稽关系 to be defined
+  clearly (A4). Ten relationships between a company, its campuses and their tranches,
+  each a sentence in English and Chinese, a level, and a check that names every campus
+  breaking it with the megawatts involved. Four are *held* — running ≤ planned, a
+  campus's lines add up to its total, delivering ≤ total, a company = the sum of its
+  campuses — enforced on write, so a break is a bug; six are *reported*, what the
+  published sources do not yet close. On a copy of production the held four hold
+  (two were broken until the two fixes below) and the reported ones measure the
+  missing hierarchy: 124 campuses whose tranches describe them twice (102,286 MW),
+  77 with tranches tied to no facility (29,908 MW), 17 whose live tranches exceed the
+  campus's running figure, 15 with a tranche larger than the campus, one phase
+  behind its tranches, four online dates before the announcement. Free and read-only;
+  `--json` for the machine-readable report.
+
 - **A project's page is rewritten for reading: a summary first, sections in an
   investor's order, the low-value ones closed** (`tracker/webui/static/app.js`,
   `tracker/webui/static/app.css`, `tracker/webui/dataset.py`, `tracker/supply.py`,
