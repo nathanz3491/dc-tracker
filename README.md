@@ -462,10 +462,14 @@ directory, which is what lets `tracker init` work from anywhere.
 ## Test
 
 ```bash
-.venv/Scripts/python -m pytest
+.venv/Scripts/python -m pytest -n auto
 ```
 
-3,576 tests, about four minutes. **A fresh clone with no API key and no network access
+4,646 tests. `-n auto` (pytest-xdist) spreads them over every core: about 70 seconds on
+a 16-core machine, against five and a half minutes in one process. No single test is
+the cost — the slowest takes 5 seconds and the average 69 ms — so running them side by
+side is the only large saving. Leave `-n` off for one file or one test, where starting
+the workers takes longer than the tests. **A fresh clone with no API key and no network access
 must produce a green run.** Tests that would hit the network or spend DeepSeek
 tokens are marked `network` / `llm` and deselected by default; run them
 explicitly with `-m network` or `-m llm`. An unmarked test that reaches for the

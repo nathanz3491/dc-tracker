@@ -369,6 +369,18 @@ initial build of the v1 PRD.
 
 ### Changed
 
+- **The test suite runs in parallel: about 70 seconds instead of five and a half
+  minutes** (`pyproject.toml`, `requirements.lock`, `README.md`). Asked for on
+  2026-10-21. Profiled first: 4,646 tests took 319 s in one process, 12 s of it
+  importing and collecting, and no test dominated — the slowest is 5 s (every catalog
+  command through the parser), the next are lock-contention and timeout tests at 3-5 s,
+  and the console and terminal-interface files lead only by their size (`test_webui.py`
+  51 s over 249 slow tests, `test_tui.py` 37 s over 30). So the saving is in running
+  them side by side: `pytest -n auto` with pytest-xdist, now a dev dependency, passed
+  twice on all 16 cores of the dev machine (74 s and 67 s) with nothing written to the
+  checkout. It is not made the default in `addopts`, because a single test would then
+  wait for sixteen workers to start.
+
 - **A running campus with capacity still to come is read for delay risk on its
   evidence** (`tracker/supply.py`, reader docs *Company pages*, *A project's page*).
   Every operating campus used to read *low*, so Abilene — 421 of 1,200 MW running, two
